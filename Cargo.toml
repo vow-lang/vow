@@ -7,6 +7,6 @@ members = [
     "vow-verify",
     "vow-diag",
     "vow-runtime",
-    "vow-driver",
+    "vow",
 ]
 resolver = "2"
