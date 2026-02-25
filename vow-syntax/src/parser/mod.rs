@@ -1,7 +1,9 @@
+pub mod expr;
 pub mod items;
+pub mod types;
 
 use crate::ast::{
-    Block, Effect, Expr, ExprKind, FnDef, GenericParam, Item, Lit, Module, Param, Pat, PatKind,
+    Block, Effect, Expr, FnDef, GenericParam, Item, Module, Param, Pat, PatKind,
     Stmt, Type, UseDecl, Visibility, VowBlock, VowClause,
 };
 use crate::lexer::Lexer;
@@ -590,92 +592,7 @@ impl Parser {
     }
 
     fn parse_type(&mut self) -> Option<Type> {
-        let start = self.current_span();
-        match self.peek_kind().clone() {
-            TokenKind::Ident(name) => {
-                self.advance();
-                let name_span = start;
-                if self.at(&TokenKind::Lt) {
-                    self.advance();
-                    let mut args = Vec::new();
-                    while !self.at(&TokenKind::Gt) && !self.at_end() {
-                        if let Some(arg) = self.parse_type() {
-                            args.push(arg);
-                        } else {
-                            break;
-                        }
-                        if self.at(&TokenKind::Comma) {
-                            self.advance();
-                        } else {
-                            break;
-                        }
-                    }
-                    let end = self.current_span();
-                    self.expect(TokenKind::Gt);
-                    Some(Type::Generic {
-                        name,
-                        args,
-                        span: name_span.merge(end),
-                    })
-                } else {
-                    Some(Type::Named {
-                        name,
-                        span: name_span,
-                    })
-                }
-            }
-            TokenKind::Amp => {
-                self.advance();
-                let inner = self.parse_type()?;
-                let end = inner.span();
-                Some(Type::Reference {
-                    inner: Box::new(inner),
-                    span: start.merge(end),
-                })
-            }
-            TokenKind::LParen => {
-                self.advance();
-                if self.at(&TokenKind::RParen) {
-                    let end = self.current_span();
-                    self.advance();
-                    Some(Type::Unit {
-                        span: start.merge(end),
-                    })
-                } else {
-                    let mut elems = Vec::new();
-                    while !self.at(&TokenKind::RParen) && !self.at_end() {
-                        if let Some(t) = self.parse_type() {
-                            elems.push(t);
-                        } else {
-                            break;
-                        }
-                        if self.at(&TokenKind::Comma) {
-                            self.advance();
-                        } else {
-                            break;
-                        }
-                    }
-                    let end = self.current_span();
-                    self.expect(TokenKind::RParen);
-                    Some(Type::Tuple {
-                        elems,
-                        span: start.merge(end),
-                    })
-                }
-            }
-            TokenKind::Bang => {
-                self.advance();
-                Some(Type::Never { span: start })
-            }
-            _ => {
-                self.push_error(
-                    ErrorCode::UnexpectedToken,
-                    format!("expected type, found {:?}", self.peek_kind()),
-                    start,
-                );
-                None
-            }
-        }
+        Some(self.parse_type_inner())
     }
 
     pub(crate) fn parse_type_required(&mut self) -> Type {
@@ -735,59 +652,7 @@ impl Parser {
     }
 
     fn parse_expr(&mut self) -> Option<Expr> {
-        let span = self.current_span();
-        match self.peek_kind().clone() {
-            TokenKind::LitInt(v) => {
-                self.advance();
-                Some(Expr {
-                    kind: ExprKind::Lit(Lit::Int(v)),
-                    span,
-                })
-            }
-            TokenKind::LitIntSuffixed { value, .. } => {
-                self.advance();
-                Some(Expr {
-                    kind: ExprKind::Lit(Lit::Int(value)),
-                    span,
-                })
-            }
-            TokenKind::LitFloat(v) => {
-                self.advance();
-                Some(Expr {
-                    kind: ExprKind::Lit(Lit::Float(v)),
-                    span,
-                })
-            }
-            TokenKind::LitBool(v) => {
-                self.advance();
-                Some(Expr {
-                    kind: ExprKind::Lit(Lit::Bool(v)),
-                    span,
-                })
-            }
-            TokenKind::LitString(s) => {
-                self.advance();
-                Some(Expr {
-                    kind: ExprKind::Lit(Lit::String(s)),
-                    span,
-                })
-            }
-            TokenKind::Ident(name) => {
-                self.advance();
-                Some(Expr {
-                    kind: ExprKind::Ident(name),
-                    span,
-                })
-            }
-            _ => {
-                self.push_error(
-                    ErrorCode::UnexpectedToken,
-                    format!("expected expression, found {:?}", self.peek_kind()),
-                    span,
-                );
-                None
-            }
-        }
+        Some(self.parse_expr_inner(0))
     }
 }
 
