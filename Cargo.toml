@@ -1,0 +1,3 @@
+[workspace]
+members = ["vow-syntax"]
+resolver = "2"
