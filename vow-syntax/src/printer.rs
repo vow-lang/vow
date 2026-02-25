@@ -70,11 +70,11 @@ fn print_effects(effects: &[Effect]) -> String {
     let mut names: Vec<&str> = effects
         .iter()
         .map(|e| match e {
-            Effect::Read => "Read",
-            Effect::Write => "Write",
-            Effect::IO => "IO",
-            Effect::Panic => "Panic",
-            Effect::Unsafe => "Unsafe",
+            Effect::Read => "read",
+            Effect::Write => "write",
+            Effect::IO => "io",
+            Effect::Panic => "panic",
+            Effect::Unsafe => "unsafe",
         })
         .collect();
     names.sort_unstable();
@@ -130,24 +130,29 @@ fn print_fn(f: &FnDef, level: usize) -> String {
     };
 
     let mut out = format!(
-        "{}{}fn {}{}{{{}}}{}{} {{\n",
-        ind,
-        vis,
-        f.name,
-        generics,
-        params,
-        ret_part,
-        effects
-    );
-
-    // Replace the opening with proper formatting
-    out = format!(
-        "{}{}fn {}{}({}){}{} {{\n",
+        "{}{}fn {}{}({}){}{}",
         ind, vis, f.name, generics, params, ret_part, effects
     );
 
     if let Some(vow) = &f.vow {
-        out.push_str(&print_vow_block(vow, level + 1));
+        out.push_str(" vow {\n");
+        for clause in &vow.clauses {
+            let inner = indent(level + 1);
+            match clause {
+                VowClause::Requires { expr, .. } => {
+                    out.push_str(&format!("{}requires: {}\n", inner, print_expr(expr)));
+                }
+                VowClause::Ensures { expr, .. } => {
+                    out.push_str(&format!("{}ensures: {}\n", inner, print_expr(expr)));
+                }
+                VowClause::Invariant { expr, .. } => {
+                    out.push_str(&format!("{}invariant: {}\n", inner, print_expr(expr)));
+                }
+            }
+        }
+        out.push_str(&format!("{}}} {{\n", ind));
+    } else {
+        out.push_str(" {\n");
     }
 
     out.push_str(&print_block_body(&f.body, level + 1));
@@ -177,7 +182,9 @@ fn print_block(block: &Block, level: usize) -> String {
 fn print_stmt(stmt: &Stmt, level: usize) -> String {
     let ind = indent(level);
     match stmt {
-        Stmt::Let { pattern, ty, init, .. } => {
+        Stmt::Let {
+            pattern, ty, init, ..
+        } => {
             let pat_str = print_pat(pattern);
             let ty_str = match ty {
                 Some(t) => format!(": {}", print_type(t)),
@@ -185,7 +192,11 @@ fn print_stmt(stmt: &Stmt, level: usize) -> String {
             };
             format!("{}let {}{} = {};\n", ind, pat_str, ty_str, print_expr(init))
         }
-        Stmt::Expr { expr, has_semicolon, .. } => {
+        Stmt::Expr {
+            expr,
+            has_semicolon,
+            ..
+        } => {
             if *has_semicolon {
                 format!("{}{};\n", ind, print_expr(expr))
             } else {
@@ -266,8 +277,11 @@ fn print_trait_method(m: &TraitMethod, level: usize) -> String {
         _ => format!(" -> {}", ret),
     };
 
-    format!("{}fn {}({}){}{};  \n", ind, m.name, params, ret_part, effects)
-        .replace(";  \n", ";\n")
+    format!(
+        "{}fn {}({}){}{};  \n",
+        ind, m.name, params, ret_part, effects
+    )
+    .replace(";  \n", ";\n")
 }
 
 fn print_impl(i: &ImplBlock, level: usize) -> String {
@@ -290,7 +304,14 @@ fn print_type_alias(a: &TypeAlias, level: usize) -> String {
     let ind = indent(level);
     let vis = print_visibility(&a.vis);
     let generics = print_generics(&a.generics);
-    format!("{}{}type {}{} = {};\n", ind, vis, a.name, generics, print_type(&a.ty))
+    format!(
+        "{}{}type {}{} = {};\n",
+        ind,
+        vis,
+        a.name,
+        generics,
+        print_type(&a.ty)
+    )
 }
 
 fn print_extern(e: &ExternBlock, level: usize) -> String {
@@ -316,8 +337,11 @@ fn print_extern_fn(f: &ExternFn, level: usize) -> String {
         _ => format!(" -> {}", print_type(&f.return_ty)),
     };
 
-    format!("{}fn {}({}){}{};  \n", ind, f.name, params, ret_part, effects)
-        .replace(";  \n", ";\n")
+    format!(
+        "{}fn {}({}){}{};  \n",
+        ind, f.name, params, ret_part, effects
+    )
+    .replace(";  \n", ";\n")
 }
 
 pub fn print_type(ty: &Type) -> String {
@@ -327,7 +351,12 @@ pub fn print_type(ty: &Type) -> String {
             let arg_strs: Vec<String> = args.iter().map(print_type).collect();
             format!("{}<{}>", name, arg_strs.join(", "))
         }
-        Type::Refinement { binding, base, predicate, .. } => {
+        Type::Refinement {
+            binding,
+            base,
+            predicate,
+            ..
+        } => {
             format!(
                 "{{ {}: {} | {} }}",
                 binding,
@@ -356,7 +385,11 @@ fn binop_precedence(op: BinOp) -> u8 {
         BinOp::And => 2,
         BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => 3,
         BinOp::Add | BinOp::Sub | BinOp::AddChecked | BinOp::SubChecked => 4,
-        BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::MulChecked | BinOp::DivChecked
+        BinOp::Mul
+        | BinOp::Div
+        | BinOp::Rem
+        | BinOp::MulChecked
+        | BinOp::DivChecked
         | BinOp::RemChecked => 5,
     }
 }
@@ -436,9 +469,18 @@ pub fn print_expr(expr: &Expr) -> String {
             let args_str: Vec<String> = args.iter().map(print_expr).collect();
             format!("{}({})", print_expr(callee), args_str.join(", "))
         }
-        ExprKind::MethodCall { receiver, method, args } => {
+        ExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } => {
             let args_str: Vec<String> = args.iter().map(print_expr).collect();
-            format!("{}.{}({})", print_expr(receiver), method, args_str.join(", "))
+            format!(
+                "{}.{}({})",
+                print_expr(receiver),
+                method,
+                args_str.join(", ")
+            )
         }
         ExprKind::FieldAccess { base, field } => {
             format!("{}.{}", print_expr(base), field)
@@ -454,8 +496,16 @@ pub fn print_expr(expr: &Expr) -> String {
             out.push('}');
             out
         }
-        ExprKind::If { condition, then_branch, else_branch } => {
-            let mut out = format!("if {} {}", print_expr(condition), print_block(then_branch, 0));
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            let mut out = format!(
+                "if {} {}",
+                print_expr(condition),
+                print_block(then_branch, 0)
+            );
             if let Some(else_expr) = else_branch {
                 match &else_expr.kind {
                     ExprKind::If { .. } => {
@@ -471,22 +521,64 @@ pub fn print_expr(expr: &Expr) -> String {
             }
             out
         }
-        ExprKind::While { condition, vow, body } => {
-            let mut out = format!("while {} {{\n", print_expr(condition));
+        ExprKind::While {
+            condition,
+            vow,
+            body,
+        } => {
+            let mut out = format!("while {}", print_expr(condition));
             if let Some(v) = vow {
-                out.push_str(&print_vow_block(v, 1));
+                out.push_str(" vow {\n");
+                for clause in &v.clauses {
+                    match clause {
+                        VowClause::Requires { expr, .. } => {
+                            out.push_str(&format!("{}requires: {}\n", indent(1), print_expr(expr)));
+                        }
+                        VowClause::Ensures { expr, .. } => {
+                            out.push_str(&format!("{}ensures: {}\n", indent(1), print_expr(expr)));
+                        }
+                        VowClause::Invariant { expr, .. } => {
+                            out.push_str(&format!(
+                                "{}invariant: {}\n",
+                                indent(1),
+                                print_expr(expr)
+                            ));
+                        }
+                    }
+                }
+                out.push_str("} ");
+            } else {
+                out.push(' ');
             }
-            out.push_str(&print_block_body(body, 1));
-            out.push('}');
+            out.push_str(&print_block(body, 0));
             out
         }
         ExprKind::Loop { vow, body } => {
-            let mut out = "loop {\n".to_string();
+            let mut out = "loop".to_string();
             if let Some(v) = vow {
-                out.push_str(&print_vow_block(v, 1));
+                out.push_str(" vow {\n");
+                for clause in &v.clauses {
+                    match clause {
+                        VowClause::Requires { expr, .. } => {
+                            out.push_str(&format!("{}requires: {}\n", indent(1), print_expr(expr)));
+                        }
+                        VowClause::Ensures { expr, .. } => {
+                            out.push_str(&format!("{}ensures: {}\n", indent(1), print_expr(expr)));
+                        }
+                        VowClause::Invariant { expr, .. } => {
+                            out.push_str(&format!(
+                                "{}invariant: {}\n",
+                                indent(1),
+                                print_expr(expr)
+                            ));
+                        }
+                    }
+                }
+                out.push_str("} ");
+            } else {
+                out.push(' ');
             }
-            out.push_str(&print_block_body(body, 1));
-            out.push('}');
+            out.push_str(&print_block(body, 0));
             out
         }
         ExprKind::Break { value } => match value {
@@ -529,7 +621,12 @@ fn print_lit(lit: &Lit) -> String {
 
 fn print_match_arm(arm: &MatchArm, level: usize) -> String {
     let ind = indent(level);
-    format!("{}{} => {},\n", ind, print_pat(&arm.pattern), print_expr(&arm.body))
+    format!(
+        "{}{} => {},\n",
+        ind,
+        print_pat(&arm.pattern),
+        print_expr(&arm.body)
+    )
 }
 
 fn print_pat(pat: &Pat) -> String {
@@ -575,8 +672,8 @@ mod tests {
     use super::*;
     use crate::ast::{
         BinOp, Block, Effect, EnumDef, EnumVariant, Expr, ExprKind, ExternBlock, ExternFn, FnDef,
-        GenericParam, ImplBlock, Item, Lit, Module, Param, StructDef, TraitDef,
-        TraitMethod, Type, TypeAlias, UseDecl, VariantKind, Visibility, VowBlock, VowClause,
+        GenericParam, ImplBlock, Item, Lit, Module, Param, StructDef, TraitDef, TraitMethod, Type,
+        TypeAlias, UseDecl, VariantKind, Visibility, VowBlock, VowClause,
     };
     use crate::span::Span;
 
@@ -585,11 +682,17 @@ mod tests {
     }
 
     fn lit_expr(l: Lit) -> Expr {
-        Expr { kind: ExprKind::Lit(l), span: s() }
+        Expr {
+            kind: ExprKind::Lit(l),
+            span: s(),
+        }
     }
 
     fn ident_expr(name: &str) -> Expr {
-        Expr { kind: ExprKind::Ident(name.to_string()), span: s() }
+        Expr {
+            kind: ExprKind::Ident(name.to_string()),
+            span: s(),
+        }
     }
 
     fn binop_expr(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
@@ -604,11 +707,18 @@ mod tests {
     }
 
     fn empty_block() -> Block {
-        Block { stmts: vec![], trailing_expr: None, span: s() }
+        Block {
+            stmts: vec![],
+            trailing_expr: None,
+            span: s(),
+        }
     }
 
     fn named_ty(name: &str) -> Type {
-        Type::Named { name: name.to_string(), span: s() }
+        Type::Named {
+            name: name.to_string(),
+            span: s(),
+        }
     }
 
     fn unit_ty() -> Type {
@@ -616,7 +726,12 @@ mod tests {
     }
 
     fn empty_module(name: &str) -> Module {
-        Module { name: name.to_string(), uses: vec![], items: vec![], span: s() }
+        Module {
+            name: name.to_string(),
+            uses: vec![],
+            items: vec![],
+            span: s(),
+        }
     }
 
     #[test]
@@ -629,7 +744,10 @@ mod tests {
     fn test_module_with_use() {
         let m = Module {
             name: "Bar".to_string(),
-            uses: vec![UseDecl { path: vec!["a".to_string(), "b".to_string(), "c".to_string()], span: s() }],
+            uses: vec![UseDecl {
+                path: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+                span: s(),
+            }],
             items: vec![],
             span: s(),
         };
@@ -643,8 +761,18 @@ mod tests {
             name: "add".to_string(),
             generics: vec![],
             params: vec![
-                Param { name: "x".to_string(), ty: named_ty("i64"), refinement: None, span: s() },
-                Param { name: "y".to_string(), ty: named_ty("i64"), refinement: None, span: s() },
+                Param {
+                    name: "x".to_string(),
+                    ty: named_ty("i64"),
+                    refinement: None,
+                    span: s(),
+                },
+                Param {
+                    name: "y".to_string(),
+                    ty: named_ty("i64"),
+                    refinement: None,
+                    span: s(),
+                },
             ],
             return_ty: named_ty("i64"),
             effects: vec![],
@@ -693,7 +821,11 @@ mod tests {
             span: s(),
         };
         let out = print_module(&m);
-        assert!(out.contains("[Read, Write]"), "effects must be sorted: {}", out);
+        assert!(
+            out.contains("[read, write]"),
+            "effects must be sorted: {}",
+            out
+        );
     }
 
     #[test]
@@ -702,8 +834,14 @@ mod tests {
         let ensures_expr = binop_expr(BinOp::Gt, ident_expr("result"), ident_expr("x"));
         let vow = VowBlock {
             clauses: vec![
-                VowClause::Requires { expr: requires_expr, span: s() },
-                VowClause::Ensures { expr: ensures_expr, span: s() },
+                VowClause::Requires {
+                    expr: requires_expr,
+                    span: s(),
+                },
+                VowClause::Ensures {
+                    expr: ensures_expr,
+                    span: s(),
+                },
             ],
             span: s(),
         };
@@ -729,8 +867,16 @@ mod tests {
         };
         let out = print_fn(&f, 0);
         assert!(out.contains("vow {"), "must contain vow block: {}", out);
-        assert!(out.contains("requires: x > 0"), "must contain requires: {}", out);
-        assert!(out.contains("ensures: result > x"), "must contain ensures: {}", out);
+        assert!(
+            out.contains("requires: x > 0"),
+            "must contain requires: {}",
+            out
+        );
+        assert!(
+            out.contains("ensures: result > x"),
+            "must contain ensures: {}",
+            out
+        );
     }
 
     #[test]
@@ -741,8 +887,16 @@ mod tests {
             name: "Point".to_string(),
             generics: vec![],
             fields: vec![
-                crate::ast::FieldDef { name: "x".to_string(), ty: named_ty("i64"), span: s() },
-                crate::ast::FieldDef { name: "y".to_string(), ty: named_ty("i64"), span: s() },
+                crate::ast::FieldDef {
+                    name: "x".to_string(),
+                    ty: named_ty("i64"),
+                    span: s(),
+                },
+                crate::ast::FieldDef {
+                    name: "y".to_string(),
+                    ty: named_ty("i64"),
+                    span: s(),
+                },
             ],
             span: s(),
         };
@@ -794,7 +948,11 @@ mod tests {
             span: s(),
         };
         let out = print_enum(&e, 0);
-        assert!(out.contains("Circle { radius: f64 },"), "struct variant: {}", out);
+        assert!(
+            out.contains("Circle { radius: f64 },"),
+            "struct variant: {}",
+            out
+        );
         assert!(out.contains("Rect(f64, f64),"), "tuple variant: {}", out);
         assert!(out.contains("Point,"), "unit variant: {}", out);
     }
@@ -904,25 +1062,37 @@ mod tests {
 
     #[test]
     fn test_type_reference() {
-        let ty = Type::Reference { inner: Box::new(named_ty("i64")), span: s() };
+        let ty = Type::Reference {
+            inner: Box::new(named_ty("i64")),
+            span: s(),
+        };
         assert_eq!(print_type(&ty), "&i64");
     }
 
     #[test]
     fn test_type_slice() {
-        let ty = Type::Slice { inner: Box::new(named_ty("u8")), span: s() };
+        let ty = Type::Slice {
+            inner: Box::new(named_ty("u8")),
+            span: s(),
+        };
         assert_eq!(print_type(&ty), "[u8]");
     }
 
     #[test]
     fn test_type_tuple_empty() {
-        let ty = Type::Tuple { elems: vec![], span: s() };
+        let ty = Type::Tuple {
+            elems: vec![],
+            span: s(),
+        };
         assert_eq!(print_type(&ty), "()");
     }
 
     #[test]
     fn test_type_tuple_multi() {
-        let ty = Type::Tuple { elems: vec![named_ty("i64"), named_ty("bool")], span: s() };
+        let ty = Type::Tuple {
+            elems: vec![named_ty("i64"), named_ty("bool")],
+            span: s(),
+        };
         assert_eq!(print_type(&ty), "(i64, bool)");
     }
 
@@ -942,7 +1112,11 @@ mod tests {
         let ty = Type::Refinement {
             binding: "x".to_string(),
             base: Box::new(named_ty("i64")),
-            predicate: Box::new(binop_expr(BinOp::Gt, ident_expr("x"), lit_expr(Lit::Int(0)))),
+            predicate: Box::new(binop_expr(
+                BinOp::Gt,
+                ident_expr("x"),
+                lit_expr(Lit::Int(0)),
+            )),
             span: s(),
         };
         assert_eq!(print_type(&ty), "{ x: i64 | x > 0 }");
@@ -967,7 +1141,10 @@ mod tests {
                     refinement: None,
                     span: s(),
                 }],
-                return_ty: Type::Reference { inner: Box::new(named_ty("u8")), span: s() },
+                return_ty: Type::Reference {
+                    inner: Box::new(named_ty("u8")),
+                    span: s(),
+                },
                 effects: vec![Effect::Unsafe],
                 span: s(),
             }],
@@ -976,7 +1153,11 @@ mod tests {
         let out = print_extern(&eb, 0);
         assert!(out.starts_with("extern \"C\" {"), "header: {}", out);
         assert!(out.contains("vow {"), "vow block: {}", out);
-        assert!(out.contains("fn malloc(size: usize) -> &u8 [Unsafe];"), "fn sig: {}", out);
+        assert!(
+            out.contains("fn malloc(size: usize) -> &u8 [unsafe];"),
+            "fn sig: {}",
+            out
+        );
     }
 
     #[test]
@@ -984,7 +1165,11 @@ mod tests {
         let param = Param {
             name: "n".to_string(),
             ty: named_ty("i64"),
-            refinement: Some(Box::new(binop_expr(BinOp::Ne, ident_expr("n"), lit_expr(Lit::Int(0))))),
+            refinement: Some(Box::new(binop_expr(
+                BinOp::Ne,
+                ident_expr("n"),
+                lit_expr(Lit::Int(0)),
+            ))),
             span: s(),
         };
         let out = print_params(&[param]);
@@ -1001,7 +1186,10 @@ mod tests {
                 name: "fmt".to_string(),
                 params: vec![Param {
                     name: "self".to_string(),
-                    ty: Type::Reference { inner: Box::new(named_ty("Self")), span: s() },
+                    ty: Type::Reference {
+                        inner: Box::new(named_ty("Self")),
+                        span: s(),
+                    },
                     refinement: None,
                     span: s(),
                 }],
@@ -1013,7 +1201,7 @@ mod tests {
         };
         let out = print_trait(&tr, 0);
         assert!(out.starts_with("pub trait Display {"), "header: {}", out);
-        assert!(out.contains("fn fmt(self: &Self) [IO];"), "method: {}", out);
+        assert!(out.contains("fn fmt(self: &Self) [io];"), "method: {}", out);
     }
 
     #[test]
@@ -1037,7 +1225,11 @@ mod tests {
             span: s(),
         };
         let out = print_impl(&i, 0);
-        assert!(out.starts_with("impl MyTrait for MyStruct {"), "header: {}", out);
+        assert!(
+            out.starts_with("impl MyTrait for MyStruct {"),
+            "header: {}",
+            out
+        );
         assert!(out.contains("pub fn new() -> Self {"), "method: {}", out);
     }
 
@@ -1068,6 +1260,10 @@ mod tests {
             span: s(),
         };
         let out = print_fn(&f, 0);
-        assert!(out.contains("fn identity<T: Clone>(x: T) -> T {"), "sig: {}", out);
+        assert!(
+            out.contains("fn identity<T: Clone>(x: T) -> T {"),
+            "sig: {}",
+            out
+        );
     }
 }

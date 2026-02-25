@@ -3,8 +3,8 @@ pub mod items;
 pub mod types;
 
 use crate::ast::{
-    Block, Effect, Expr, FnDef, GenericParam, Item, Module, Param, Pat, PatKind,
-    Stmt, Type, UseDecl, Visibility, VowBlock, VowClause,
+    Block, Effect, Expr, ExprKind, FnDef, GenericParam, Item, Module, Param, Pat, PatKind, Stmt,
+    Type, UseDecl, Visibility, VowBlock, VowClause,
 };
 use crate::lexer::Lexer;
 use crate::span::Span;
@@ -102,11 +102,7 @@ impl Parser {
             let got = self.peek().span;
             self.push_error(
                 ErrorCode::UnexpectedToken,
-                format!(
-                    "expected {:?}, found {:?}",
-                    kind,
-                    self.peek_kind()
-                ),
+                format!("expected {:?}, found {:?}", kind, self.peek_kind()),
                 got,
             );
             None
@@ -134,13 +130,15 @@ impl Parser {
 
     fn expect_name_or_keyword(&mut self) -> Option<(String, Span)> {
         let span = self.peek().span;
-        let name = keyword_as_str(self.peek_kind()).map(|s| s.to_string()).or_else(|| {
-            if let TokenKind::Ident(n) = self.peek_kind() {
-                Some(n.clone())
-            } else {
-                None
-            }
-        });
+        let name = keyword_as_str(self.peek_kind())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                if let TokenKind::Ident(n) = self.peek_kind() {
+                    Some(n.clone())
+                } else {
+                    None
+                }
+            });
         match name {
             Some(n) => {
                 self.advance();
@@ -527,12 +525,22 @@ impl Parser {
                         trailing_expr = Some(Box::new(expr));
                         break;
                     } else {
+                        let is_block_like = matches!(
+                            expr.kind,
+                            ExprKind::If { .. }
+                                | ExprKind::While { .. }
+                                | ExprKind::Loop { .. }
+                                | ExprKind::Block(_)
+                                | ExprKind::Match { .. }
+                        );
                         stmts.push(Stmt::Expr {
                             span: expr_start,
                             expr,
                             has_semicolon: false,
                         });
-                        break;
+                        if !is_block_like {
+                            break;
+                        }
                     }
                 } else {
                     break;

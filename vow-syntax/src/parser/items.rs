@@ -1,6 +1,6 @@
 use crate::ast::{
-    EnumDef, EnumVariant, ExternBlock, ExternFn, FieldDef, FnDef, ImplBlock, Item, TraitDef,
-    TraitMethod, StructDef, Type, TypeAlias, VariantKind, Visibility,
+    EnumDef, EnumVariant, ExternBlock, ExternFn, FieldDef, FnDef, ImplBlock, Item, StructDef,
+    TraitDef, TraitMethod, Type, TypeAlias, VariantKind, Visibility,
 };
 use crate::span::Span;
 use crate::token::TokenKind;
@@ -16,7 +16,9 @@ impl Parser {
     }
 
     pub fn parse_struct_inner(&mut self, vis: Visibility, is_linear: bool, start: Span) -> Item {
-        let (name, _) = self.expect_ident().unwrap_or(("<error>".to_string(), start));
+        let (name, _) = self
+            .expect_ident()
+            .unwrap_or(("<error>".to_string(), start));
         let generics = self.parse_generics();
         self.expect(TokenKind::LBrace);
         let mut fields = Vec::new();
@@ -55,7 +57,9 @@ impl Parser {
     pub fn parse_enum(&mut self, vis: Visibility) -> Item {
         let start = self.current_span();
         self.advance();
-        let (name, _) = self.expect_ident().unwrap_or(("<error>".to_string(), start));
+        let (name, _) = self
+            .expect_ident()
+            .unwrap_or(("<error>".to_string(), start));
         let generics = self.parse_generics();
         self.expect(TokenKind::LBrace);
         let mut variants = Vec::new();
@@ -132,21 +136,26 @@ impl Parser {
     pub fn parse_trait(&mut self, vis: Visibility) -> Item {
         let start = self.current_span();
         self.advance();
-        let (name, _) = self.expect_ident().unwrap_or(("<error>".to_string(), start));
+        let (name, _) = self
+            .expect_ident()
+            .unwrap_or(("<error>".to_string(), start));
         let generics = self.parse_generics();
         self.expect(TokenKind::LBrace);
         let mut methods = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at_end() {
             let method_start = self.current_span();
             self.expect(TokenKind::KwFn);
-            let (method_name, _) =
-                self.expect_ident().unwrap_or(("<error>".to_string(), method_start));
+            let (method_name, _) = self
+                .expect_ident()
+                .unwrap_or(("<error>".to_string(), method_start));
             let params = self.parse_params();
             let return_ty = if self.at(&TokenKind::ThinArrow) {
                 self.advance();
                 self.parse_type_required()
             } else {
-                Type::Unit { span: self.current_span() }
+                Type::Unit {
+                    span: self.current_span(),
+                }
             };
             let effects = self.parse_effects();
             let method_end = self.current_span();
@@ -208,18 +217,25 @@ impl Parser {
                 Visibility::Private
             };
             self.expect(TokenKind::KwFn);
-            let (method_name, _) =
-                self.expect_ident().unwrap_or(("<error>".to_string(), method_start));
+            let (method_name, _) = self
+                .expect_ident()
+                .unwrap_or(("<error>".to_string(), method_start));
             let method_generics = self.parse_generics();
             let params = self.parse_params();
             let return_ty = if self.at(&TokenKind::ThinArrow) {
                 self.advance();
                 self.parse_type_required()
             } else {
-                Type::Unit { span: self.current_span() }
+                Type::Unit {
+                    span: self.current_span(),
+                }
             };
             let effects = self.parse_effects();
-            let vow = if self.at(&TokenKind::KwVow) { self.parse_vow_block() } else { None };
+            let vow = if self.at(&TokenKind::KwVow) {
+                self.parse_vow_block()
+            } else {
+                None
+            };
             let body = self.parse_block_required();
             let method_end = body.span;
             methods.push(FnDef {
@@ -248,7 +264,9 @@ impl Parser {
     pub fn parse_type_alias(&mut self, vis: Visibility) -> Item {
         let start = self.current_span();
         self.advance();
-        let (name, _) = self.expect_ident().unwrap_or(("<error>".to_string(), start));
+        let (name, _) = self
+            .expect_ident()
+            .unwrap_or(("<error>".to_string(), start));
         let generics = self.parse_generics();
         self.expect(TokenKind::Eq);
         let ty = self.parse_type_required();
@@ -278,18 +296,26 @@ impl Parser {
             _ => {}
         }
         self.expect(TokenKind::LBrace);
-        let vow = if self.at(&TokenKind::KwVow) { self.parse_vow_block() } else { None };
+        let vow = if self.at(&TokenKind::KwVow) {
+            self.parse_vow_block()
+        } else {
+            None
+        };
         let mut fns = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at_end() {
             let fn_start = self.current_span();
             self.expect(TokenKind::KwFn);
-            let (fn_name, _) = self.expect_ident().unwrap_or(("<error>".to_string(), fn_start));
+            let (fn_name, _) = self
+                .expect_ident()
+                .unwrap_or(("<error>".to_string(), fn_start));
             let params = self.parse_params();
             let return_ty = if self.at(&TokenKind::ThinArrow) {
                 self.advance();
                 self.parse_type_required()
             } else {
-                Type::Unit { span: self.current_span() }
+                Type::Unit {
+                    span: self.current_span(),
+                }
             };
             let effects = self.parse_effects();
             let fn_end = self.current_span();

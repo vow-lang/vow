@@ -58,7 +58,11 @@ impl Parser {
             }
             _ => {
                 let span = self.current_span();
-                self.push_error(vow_diag::ErrorCode::UnexpectedToken, format!("expected type, got {:?}", self.peek_kind()), span);
+                self.push_error(
+                    vow_diag::ErrorCode::UnexpectedToken,
+                    format!("expected type, got {:?}", self.peek_kind()),
+                    span,
+                );
                 Type::Named {
                     name: "<error>".to_string(),
                     span,
@@ -302,7 +306,11 @@ impl Parser {
             }
             _ => {
                 let span = self.current_span();
-                self.push_error(vow_diag::ErrorCode::UnexpectedToken, format!("expected pattern, got {:?}", self.peek_kind()), span);
+                self.push_error(
+                    vow_diag::ErrorCode::UnexpectedToken,
+                    format!("expected pattern, got {:?}", self.peek_kind()),
+                    span,
+                );
                 Pat {
                     kind: PatKind::Wildcard,
                     span,
@@ -318,29 +326,33 @@ mod tests {
     use crate::ast::{Lit, PatKind};
 
     fn parse_type(src: &str) -> Type {
-        let tokens = crate::lexer::Lexer::new(src)
-            .tokenize()
-            .expect("lex error");
+        let tokens = crate::lexer::Lexer::new(src).tokenize().expect("lex error");
         let mut parser = Parser::new(tokens, String::new());
         let ty = parser.parse_type_inner();
         assert!(
             parser.diagnostics.is_empty(),
             "unexpected errors: {:?}",
-            parser.diagnostics.iter().map(|e| &e.message).collect::<Vec<_>>()
+            parser
+                .diagnostics
+                .iter()
+                .map(|e| &e.message)
+                .collect::<Vec<_>>()
         );
         ty
     }
 
     fn parse_pat(src: &str) -> Pat {
-        let tokens = crate::lexer::Lexer::new(src)
-            .tokenize()
-            .expect("lex error");
+        let tokens = crate::lexer::Lexer::new(src).tokenize().expect("lex error");
         let mut parser = Parser::new(tokens, String::new());
         let pat = parser.parse_pat_inner();
         assert!(
             parser.diagnostics.is_empty(),
             "unexpected errors: {:?}",
-            parser.diagnostics.iter().map(|e| &e.message).collect::<Vec<_>>()
+            parser
+                .diagnostics
+                .iter()
+                .map(|e| &e.message)
+                .collect::<Vec<_>>()
         );
         pat
     }

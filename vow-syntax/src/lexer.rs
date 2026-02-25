@@ -274,8 +274,7 @@ impl<'src> Lexer<'src> {
         }
 
         // Check for float: digits followed by '.' followed by digits
-        if self.peek_byte(0) == Some(b'.')
-            && self.peek_byte(1).is_some_and(|b| b.is_ascii_digit())
+        if self.peek_byte(0) == Some(b'.') && self.peek_byte(1).is_some_and(|b| b.is_ascii_digit())
         {
             self.pos += 1; // consume '.'
             while self.pos < self.src.len() && self.current_byte().is_ascii_digit() {

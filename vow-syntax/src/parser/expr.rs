@@ -231,7 +231,11 @@ impl Parser {
             TokenKind::KwMatch => self.parse_match_expr(),
             _ => {
                 let span = self.current_span();
-                self.push_error(vow_diag::ErrorCode::UnexpectedToken, format!("expected expression, got {:?}", self.peek_kind()), span);
+                self.push_error(
+                    vow_diag::ErrorCode::UnexpectedToken,
+                    format!("expected expression, got {:?}", self.peek_kind()),
+                    span,
+                );
                 Expr {
                     kind: ExprKind::Lit(Lit::Int(0)),
                     span,
@@ -400,7 +404,11 @@ impl Parser {
         let start = self.current_span();
         self.expect(TokenKind::KwWhile);
         let condition = self.parse_expr_inner(0);
-        let vow = if self.at(&TokenKind::KwVow) { self.parse_vow_block() } else { None };
+        let vow = if self.at(&TokenKind::KwVow) {
+            self.parse_vow_block()
+        } else {
+            None
+        };
         let body = self.parse_block_required();
         let end = body.span;
         Expr {
@@ -416,7 +424,11 @@ impl Parser {
     fn parse_loop_expr(&mut self) -> Expr {
         let start = self.current_span();
         self.expect(TokenKind::KwLoop);
-        let vow = if self.at(&TokenKind::KwVow) { self.parse_vow_block() } else { None };
+        let vow = if self.at(&TokenKind::KwVow) {
+            self.parse_vow_block()
+        } else {
+            None
+        };
         let body = self.parse_block_required();
         let end = body.span;
         Expr {
@@ -490,17 +502,13 @@ mod tests {
     use crate::ast::{BinOp, Block, ExprKind, Lit, UnOp};
 
     fn parse_expr_from_source(src: &str) -> Expr {
-        let tokens = crate::lexer::Lexer::new(src)
-            .tokenize()
-            .expect("lex error");
+        let tokens = crate::lexer::Lexer::new(src).tokenize().expect("lex error");
         let mut parser = Parser::new(tokens, String::new());
         parser.parse_expr_inner(0)
     }
 
     fn parse_block_from_source(src: &str) -> Block {
-        let tokens = crate::lexer::Lexer::new(src)
-            .tokenize()
-            .expect("lex error");
+        let tokens = crate::lexer::Lexer::new(src).tokenize().expect("lex error");
         let mut parser = Parser::new(tokens, String::new());
         parser.parse_block_required()
     }
@@ -510,15 +518,17 @@ mod tests {
     }
 
     fn parse_no_errors(src: &str) -> Expr {
-        let tokens = crate::lexer::Lexer::new(src)
-            .tokenize()
-            .expect("lex error");
+        let tokens = crate::lexer::Lexer::new(src).tokenize().expect("lex error");
         let mut parser = Parser::new(tokens, String::new());
         let expr = parser.parse_expr_inner(0);
         assert!(
             parser.diagnostics.is_empty(),
             "unexpected errors: {:?}",
-            parser.diagnostics.iter().map(|e| &e.message).collect::<Vec<_>>()
+            parser
+                .diagnostics
+                .iter()
+                .map(|e| &e.message)
+                .collect::<Vec<_>>()
         );
         expr
     }
