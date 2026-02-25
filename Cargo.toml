@@ -1,0 +1,12 @@
+[workspace]
+members = [
+    "vow-syntax",
+    "vow-types",
+    "vow-ir",
+    "vow-codegen",
+    "vow-verify",
+    "vow-diag",
+    "vow-runtime",
+    "vow-driver",
+]
+resolver = "2"
