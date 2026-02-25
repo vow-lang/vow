@@ -1,1 +1,0 @@
-/home/pmatos/dev/vow-lang/target/release/libvow_syntax.rlib: /home/pmatos/dev/vow-lang/vow-syntax/src/ast.rs /home/pmatos/dev/vow-lang/vow-syntax/src/lexer.rs /home/pmatos/dev/vow-lang/vow-syntax/src/lib.rs /home/pmatos/dev/vow-lang/vow-syntax/src/span.rs /home/pmatos/dev/vow-lang/vow-syntax/src/token.rs
