@@ -1,7 +1,7 @@
 [package]
 name = "vow"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 vow-syntax = { path = "../vow-syntax" }
