@@ -174,7 +174,7 @@ impl<'src> Lexer<'src> {
                 } else {
                     self.pos += 1;
                     Err(LexError {
-                        message: format!("unexpected character '|'"),
+                        message: "unexpected character '|'".to_string(),
                         span: Span::new(start as u32, 1),
                     })
                 }
@@ -275,7 +275,7 @@ impl<'src> Lexer<'src> {
 
         // Check for float: digits followed by '.' followed by digits
         if self.peek_byte(0) == Some(b'.')
-            && self.peek_byte(1).map_or(false, |b| b.is_ascii_digit())
+            && self.peek_byte(1).is_some_and(|b| b.is_ascii_digit())
         {
             self.pos += 1; // consume '.'
             while self.pos < self.src.len() && self.current_byte().is_ascii_digit() {
@@ -342,10 +342,9 @@ impl<'src> Lexer<'src> {
         ];
 
         for (suffix_str, suffix) in suffixes {
-            if rest.starts_with(suffix_str) {
-                // Make sure the suffix isn't followed by an alphanumeric char
-                let after = rest[suffix_str.len()..].as_bytes().first().copied();
-                if after.map_or(true, |b| !b.is_ascii_alphanumeric() && b != b'_') {
+            if let Some(stripped) = rest.strip_prefix(suffix_str) {
+                let after = stripped.as_bytes().first().copied();
+                if after.is_none_or(|b| !b.is_ascii_alphanumeric() && b != b'_') {
                     self.pos += suffix_str.len();
                     return Some(*suffix);
                 }
