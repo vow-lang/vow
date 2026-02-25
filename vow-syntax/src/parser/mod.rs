@@ -1,3 +1,5 @@
+pub mod items;
+
 use crate::ast::{
     Block, Effect, Expr, ExprKind, FnDef, GenericParam, Item, Lit, Module, Param, Pat, PatKind,
     Stmt, Type, UseDecl, Visibility, VowBlock, VowClause,
@@ -237,23 +239,17 @@ impl Parser {
 
         match self.peek_kind() {
             TokenKind::KwFn => Some(Item::Fn(self.parse_fn(vis)?)),
-            TokenKind::KwStruct
-            | TokenKind::KwEnum
-            | TokenKind::KwTrait
-            | TokenKind::KwImpl
-            | TokenKind::KwType
-            | TokenKind::KwExtern
-            | TokenKind::KwLinear => {
-                let span = self.current_span();
-                self.push_error(
-                    ErrorCode::UnexpectedToken,
-                    format!(
-                        "item kind {:?} not yet implemented in this parser phase",
-                        self.peek_kind()
-                    ),
-                    span,
-                );
-                None
+            TokenKind::KwStruct => Some(self.parse_struct(vis)),
+            TokenKind::KwEnum => Some(self.parse_enum(vis)),
+            TokenKind::KwTrait => Some(self.parse_trait(vis)),
+            TokenKind::KwImpl => Some(self.parse_impl()),
+            TokenKind::KwType => Some(self.parse_type_alias(vis)),
+            TokenKind::KwExtern => Some(self.parse_extern()),
+            TokenKind::KwLinear => {
+                let start = self.current_span();
+                self.advance();
+                self.expect(TokenKind::KwStruct);
+                Some(self.parse_struct_inner(vis, true, start))
             }
             _ => {
                 let span = self.current_span();
@@ -682,6 +678,62 @@ impl Parser {
         }
     }
 
+    pub(crate) fn parse_type_required(&mut self) -> Type {
+        let span = self.current_span();
+        self.parse_type().unwrap_or(Type::Named {
+            name: "<error>".to_string(),
+            span,
+        })
+    }
+
+    pub(crate) fn parse_block_required(&mut self) -> Block {
+        let span = self.current_span();
+        self.parse_block().unwrap_or(Block {
+            stmts: vec![],
+            trailing_expr: None,
+            span,
+        })
+    }
+
+    pub(crate) fn parse_params(&mut self) -> Vec<Param> {
+        let mut params = Vec::new();
+        if self.expect(TokenKind::LParen).is_none() {
+            return params;
+        }
+        while !self.at(&TokenKind::RParen) && !self.at_end() {
+            if let Some(p) = self.parse_param() {
+                params.push(p);
+            } else {
+                break;
+            }
+            if self.at(&TokenKind::Comma) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        self.expect(TokenKind::RParen);
+        params
+    }
+
+    pub(crate) fn expect_string_literal(&mut self) -> Option<(String, Span)> {
+        let span = self.current_span();
+        match self.peek_kind().clone() {
+            TokenKind::LitString(s) => {
+                self.advance();
+                Some((s, span))
+            }
+            _ => {
+                self.push_error(
+                    ErrorCode::UnexpectedToken,
+                    format!("expected string literal, found {:?}", self.peek_kind()),
+                    span,
+                );
+                None
+            }
+        }
+    }
+
     fn parse_expr(&mut self) -> Option<Expr> {
         let span = self.current_span();
         match self.peek_kind().clone() {
@@ -737,6 +789,30 @@ impl Parser {
             }
         }
     }
+}
+
+pub fn parse_item_source(source: &str) -> (Option<Item>, Vec<Diagnostic>) {
+    let tokens = match Lexer::new(source).tokenize() {
+        Ok(toks) => toks,
+        Err(lex_err) => {
+            let diag = Diagnostic {
+                severity: Severity::Error,
+                code: ErrorCode::InvalidCharacter,
+                message: lex_err.message,
+                primary: SourceLocation {
+                    file: "<input>".to_string(),
+                    byte_offset: lex_err.span.start,
+                    byte_len: lex_err.span.len,
+                },
+                secondary: vec![],
+                blame: vow_diag::Blame::None,
+            };
+            return (None, vec![diag]);
+        }
+    };
+    let mut parser = Parser::new(tokens, source.to_string());
+    let item = parser.parse_item();
+    (item, parser.diagnostics)
 }
 
 pub fn parse_module(source: &str) -> (Module, Vec<Diagnostic>) {
