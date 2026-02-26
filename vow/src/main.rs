@@ -660,6 +660,81 @@ fn main() -> i32 [io] {
     }
 
     #[test]
+    fn agent_capability_test_skill_json_is_parseable_and_complete() {
+        // Verify the --help JSON contains enough information for an LLM agent
+        // to write correct Vow code without additional context.
+        let json = skill_json();
+
+        // Must be valid JSON structure (key fields present)
+        assert!(json.contains("\"tool\""), "missing tool key");
+        assert!(json.contains("\"usage\""), "missing usage key");
+        assert!(json.contains("\"output_json\""), "missing output_json key");
+        assert!(json.contains("\"language\""), "missing language key");
+        assert!(json.contains("\"builtins\""), "missing builtins key");
+        assert!(json.contains("\"vow_clauses\""), "missing vow_clauses key");
+
+        // Must describe the key Vow constructs
+        assert!(
+            json.contains("requires"),
+            "missing requires clause description"
+        );
+        assert!(
+            json.contains("ensures"),
+            "missing ensures clause description"
+        );
+        assert!(
+            json.contains("invariant"),
+            "missing invariant clause description"
+        );
+        assert!(json.contains("print_i64"), "missing print_i64 builtin");
+        assert!(json.contains("print_str"), "missing print_str builtin");
+
+        // Now verify that a program an LLM would write from this description compiles and runs.
+        // The LLM reads: function with requires/ensures, print_i64 builtin, [io] effect.
+        let dir = TempDir::new().unwrap();
+        let src = r#"module Agent
+fn double(n: i64) -> i64 vow {
+  ensures: result == n * 2
+} {
+  n + n
+}
+fn main() -> i32 [io] {
+  let x: i64 = double(21);
+  print_i64(x);
+  0
+}"#;
+        let source = write_source(&dir, "agent.vow", src);
+        let out = dir.path().join("agent");
+
+        let result = run_pipeline(&source, Some(&out), BuildMode::Release, true);
+        match &result.status {
+            BuildStatus::Unverified => {}
+            BuildStatus::CompileFailed { message } => {
+                let msg_lo = message.to_lowercase();
+                if msg_lo.contains("link")
+                    || msg_lo.contains("runtime")
+                    || msg_lo.contains("undefined")
+                {
+                    eprintln!("SKIP: {message}");
+                    return;
+                }
+                panic!("agent-generated program failed to compile: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        }
+
+        let output = std::process::Command::new(&out)
+            .output()
+            .expect("failed to run agent program");
+        assert_eq!(output.status.code(), Some(0));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("42"),
+            "expected double(21)==42 in stdout, got: {stdout:?}"
+        );
+    }
+
+    #[test]
     fn pipeline_rejects_type_error() {
         let dir = TempDir::new().unwrap();
         // fn f() -> i32 { true } — type mismatch

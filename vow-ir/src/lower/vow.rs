@@ -53,6 +53,9 @@ pub fn lower_requires(ctx: &mut LowerCtx, vow_block: &VowBlock) {
 }
 
 pub fn lower_ensures(ctx: &mut LowerCtx, vow_block: &VowBlock, result_id: InstId) {
+    // Bind "result" in scope so it's accessible in ensures predicates.
+    ctx.push_scope();
+    ctx.define("result".to_string(), result_id);
     for clause in &vow_block.clauses {
         if let VowClause::Ensures { span, .. } = clause {
             let desc = clause_description(clause);
@@ -67,6 +70,7 @@ pub fn lower_ensures(ctx: &mut LowerCtx, vow_block: &VowBlock, result_id: InstId
             );
         }
     }
+    ctx.pop_scope();
 }
 
 pub fn lower_invariant(ctx: &mut LowerCtx, vow_block: &VowBlock) {
