@@ -73,13 +73,13 @@ pub struct GenericParam {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Effect {
-    Read,
-    Write,
     IO,
     Panic,
+    Read,
     Unsafe,
+    Write,
 }
 
 #[derive(Debug, Clone, PartialEq)]
