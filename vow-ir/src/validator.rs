@@ -63,7 +63,61 @@ pub fn validate_function(func: &Function) -> ValidationResult {
         }
     }
 
+    let upsilon_targets: HashSet<InstId> = func
+        .blocks
+        .iter()
+        .flat_map(|b| b.insts.iter())
+        .filter(|i| i.opcode == Opcode::Upsilon)
+        .filter_map(|i| {
+            if let InstData::PhiTarget(target) = &i.data {
+                Some(*target)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for &phi_id in &phi_ids {
+        if !upsilon_targets.contains(&phi_id) {
+            errors.push(ValidationError::PhiWithoutUpsilon(phi_id));
+        }
+    }
+
+    check_linear_types(func, &mut errors);
+
     ValidationResult { errors }
+}
+
+fn check_linear_types(func: &Function, errors: &mut Vec<ValidationError>) {
+    use std::collections::HashMap;
+    let mut consume_count: HashMap<InstId, usize> = func
+        .blocks
+        .iter()
+        .flat_map(|b| b.insts.iter())
+        .filter(|i| i.ty == Ty::LinearPtr)
+        .map(|i| (i.id, 0usize))
+        .collect();
+    if consume_count.is_empty() {
+        return;
+    }
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.opcode == Opcode::LinearConsume {
+                for &arg in &inst.args {
+                    if let Some(n) = consume_count.get_mut(&arg) {
+                        *n += 1;
+                    }
+                }
+            }
+        }
+    }
+    for (id, count) in consume_count {
+        match count {
+            0 => errors.push(ValidationError::LinearNotConsumed(id)),
+            1 => {}
+            _ => errors.push(ValidationError::LinearConsumedTwice(id)),
+        }
+    }
 }
 
 fn validate_block(block: &BasicBlock, errors: &mut Vec<ValidationError>) {
@@ -233,6 +287,107 @@ mod tests {
                 .errors
                 .iter()
                 .any(|e| matches!(e, ValidationError::UpsilonTargetNotPhi(_)))
+        );
+    }
+
+    #[test]
+    fn phi_without_upsilon_fails() {
+        let insts = vec![
+            make_inst(0, Opcode::Phi, Ty::I64, vec![], InstData::None),
+            make_inst(1, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let block = BasicBlock {
+            id: BlockId(0),
+            insts,
+        };
+        let func = make_func(0, "phi_no_upsilon", vec![block]);
+        let module = Module {
+            name: "m".to_string(),
+            functions: vec![func],
+        };
+        let result = validate(&module);
+        assert!(!result.is_ok());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::PhiWithoutUpsilon(_)))
+        );
+    }
+
+    #[test]
+    fn linear_not_consumed_fails() {
+        let insts = vec![
+            make_inst(
+                0,
+                Opcode::GetArg,
+                Ty::LinearPtr,
+                vec![],
+                InstData::ArgIndex(0),
+            ),
+            make_inst(1, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let block = BasicBlock {
+            id: BlockId(0),
+            insts,
+        };
+        let func = make_func(0, "linear_no_consume", vec![block]);
+        let module = Module {
+            name: "m".to_string(),
+            functions: vec![func],
+        };
+        let result = validate(&module);
+        assert!(!result.is_ok());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::LinearNotConsumed(_)))
+        );
+    }
+
+    #[test]
+    fn linear_consumed_twice_fails() {
+        let insts = vec![
+            make_inst(
+                0,
+                Opcode::GetArg,
+                Ty::LinearPtr,
+                vec![],
+                InstData::ArgIndex(0),
+            ),
+            make_inst(
+                1,
+                Opcode::LinearConsume,
+                Ty::Unit,
+                vec![InstId(0)],
+                InstData::None,
+            ),
+            make_inst(
+                2,
+                Opcode::LinearConsume,
+                Ty::Unit,
+                vec![InstId(0)],
+                InstData::None,
+            ),
+            make_inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let block = BasicBlock {
+            id: BlockId(0),
+            insts,
+        };
+        let func = make_func(0, "linear_double_consume", vec![block]);
+        let module = Module {
+            name: "m".to_string(),
+            functions: vec![func],
+        };
+        let result = validate(&module);
+        assert!(!result.is_ok());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::LinearConsumedTwice(_)))
         );
     }
 

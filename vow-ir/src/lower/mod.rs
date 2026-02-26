@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use vow_diag::Blame;
 use vow_syntax::ast::{
     BinOp, Block, Effect, ExprKind, FnDef, Item, Lit, Module as AstModule, PatKind, Stmt,
-    Type as AstType, UnOp,
+    Type as AstType, UnOp, VowBlock,
 };
 use vow_syntax::span::Span;
 
@@ -35,6 +35,7 @@ pub struct LowerCtx {
     pub(super) current_block: BlockId,
     next_inst_id: u32,
     scope: Vec<HashMap<String, InstId>>,
+    pub(super) vow_block: Option<VowBlock>,
 }
 
 impl LowerCtx {
@@ -57,6 +58,7 @@ impl LowerCtx {
             current_block: BlockId(0),
             next_inst_id: 0,
             scope: vec![HashMap::new()],
+            vow_block: None,
         }
     }
 
@@ -270,13 +272,19 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         ExprKind::Return { value } => {
             if let Some(val_expr) = value {
                 let val = lower_expr(ctx, val_expr);
+                if let Some(vow_block) = ctx.vow_block.clone() {
+                    vow::lower_ensures(ctx, &vow_block, val);
+                }
                 ctx.emit(Opcode::Return, Ty::Unit, vec![val], InstData::None, span)
             } else {
                 let unit = ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span);
+                if let Some(vow_block) = ctx.vow_block.clone() {
+                    vow::lower_ensures(ctx, &vow_block, unit);
+                }
                 ctx.emit(Opcode::Return, Ty::Unit, vec![unit], InstData::None, span)
             }
         }
-        _ => ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span),
+        _ => todo!("IR lowering not implemented for {:?}", expr.kind),
     }
 }
 
@@ -358,6 +366,10 @@ pub fn lower_function(fn_def: &FnDef) -> Function {
 
     let mut ctx = LowerCtx::new(fn_def.name.clone(), params.clone(), return_ty, effects);
 
+    if let Some(vow) = &fn_def.vow {
+        ctx.vow_block = Some(vow.clone());
+    }
+
     for (idx, param) in fn_def.params.iter().enumerate() {
         let ty = params[idx];
         let arg_id = ctx.emit(
@@ -431,7 +443,8 @@ pub fn lower_module(module: &AstModule) -> Module {
 mod tests {
     use super::*;
     use vow_syntax::ast::{
-        Block, Effect, Expr, ExprKind, FnDef, Lit, Pat, PatKind, Stmt, Type, Visibility,
+        Block, Effect, Expr, ExprKind, FnDef, Lit, Pat, PatKind, Stmt, Type, Visibility, VowBlock,
+        VowClause,
     };
     use vow_syntax::span::Span;
 
@@ -662,5 +675,58 @@ mod tests {
         let ret = all_insts.iter().find(|i| i.opcode == Opcode::Return);
         assert!(ret.is_some(), "expected Return instruction");
         assert_eq!(func.return_ty, Ty::Unit);
+    }
+
+    #[test]
+    fn ensures_emitted_before_explicit_return() {
+        let ensures_clause = VowClause::Ensures {
+            expr: bool_expr(true),
+            span: sp(),
+        };
+        let vow_block = VowBlock {
+            clauses: vec![ensures_clause],
+            span: sp(),
+        };
+        let return_expr = Expr {
+            kind: ExprKind::Return {
+                value: Some(Box::new(int_expr(42))),
+            },
+            span: sp(),
+        };
+        let body = Block {
+            stmts: vec![Stmt::Expr {
+                expr: return_expr,
+                has_semicolon: true,
+                span: sp(),
+            }],
+            trailing_expr: None,
+            span: sp(),
+        };
+        let fn_def = FnDef {
+            vis: Visibility::Public,
+            name: "explicit_return_fn".to_string(),
+            generics: vec![],
+            params: vec![],
+            return_ty: i64_ty(),
+            effects: vec![],
+            vow: Some(vow_block),
+            body,
+            span: sp(),
+        };
+        let func = lower_function(&fn_def);
+
+        let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
+        let ens_pos = all_insts
+            .iter()
+            .position(|i| i.opcode == Opcode::VowEnsures)
+            .expect("expected VowEnsures");
+        let ret_pos = all_insts
+            .iter()
+            .position(|i| i.opcode == Opcode::Return)
+            .expect("expected Return");
+        assert!(
+            ens_pos < ret_pos,
+            "VowEnsures must appear before Return for explicit return"
+        );
     }
 }
