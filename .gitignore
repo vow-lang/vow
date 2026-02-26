@@ -1,2 +1,6 @@
 /target/
 /.claude/*.local.json
+/.claude/worktrees/
+/.claire/
+/codecov
+/lcov.info
