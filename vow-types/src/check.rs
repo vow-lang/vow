@@ -1451,8 +1451,7 @@ mod tests {
     fn question_on_option_unwraps() {
         let mut emitter = TestEmitter(vec![]);
         let mut checker = new_checker(&mut emitter);
-        let opt_i32 =
-            Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::I32]);
+        let opt_i32 = Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::I32]);
         checker.env.define("v", opt_i32);
         let ty = checker.check_expr(&make_expr(ExprKind::Question {
             expr: Box::new(ident("v")),
@@ -1770,9 +1769,7 @@ mod tests {
     fn string_literal_type() {
         let mut emitter = TestEmitter(vec![]);
         let mut checker = new_checker(&mut emitter);
-        let ty = checker.check_expr(&make_expr(ExprKind::Lit(Lit::String(
-            "hello".to_string(),
-        ))));
+        let ty = checker.check_expr(&make_expr(ExprKind::Lit(Lit::String("hello".to_string()))));
         assert_eq!(ty, Ty::Str);
         assert!(!checker.has_errors());
     }

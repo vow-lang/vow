@@ -426,8 +426,8 @@ mod tests {
     use super::*;
     use vow_diag::Diagnostic;
     use vow_syntax::ast::{
-        BinOp, Block, Expr, ExprKind, FnDef, Lit, MatchArm, Pat, PatKind, Param, Stmt, Type,
-        UnOp, Visibility,
+        BinOp, Block, Expr, ExprKind, FnDef, Lit, MatchArm, Param, Pat, PatKind, Stmt, Type, UnOp,
+        Visibility,
     };
     use vow_syntax::span::Span;
 
@@ -994,10 +994,7 @@ mod tests {
         let mut emitter = TestEmitter(vec![]);
         check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
 
-        assert!(
-            !emitter.0.is_empty(),
-            "Expected errors but got none"
-        );
+        assert!(!emitter.0.is_empty(), "Expected errors but got none");
         assert!(emitter.0.iter().any(|d| d.message.contains("one branch")));
     }
 
@@ -1043,7 +1040,8 @@ mod tests {
             emitter.0
         );
         assert!(
-            emitter.0
+            emitter
+                .0
                 .iter()
                 .any(|d| d.message.contains("one branch") || d.message.contains("never consumed"))
         );
