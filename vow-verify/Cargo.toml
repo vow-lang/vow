@@ -2,3 +2,11 @@
 name = "vow-verify"
 version = "0.1.0"
 edition = "2024"
+
+[dependencies]
+vow-ir = { path = "../vow-ir" }
+vow-diag = { path = "../vow-diag" }
+tempfile = "3"
+
+[dev-dependencies]
+vow-syntax = { path = "../vow-syntax" }
