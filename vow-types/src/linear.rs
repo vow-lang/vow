@@ -425,7 +425,10 @@ fn emit_violation(
 mod tests {
     use super::*;
     use vow_diag::Diagnostic;
-    use vow_syntax::ast::{Block, Expr, ExprKind, FnDef, Lit, Param, Stmt, Type, Visibility};
+    use vow_syntax::ast::{
+        BinOp, Block, Expr, ExprKind, FnDef, Lit, MatchArm, Pat, PatKind, Param, Stmt, Type,
+        UnOp, Visibility,
+    };
     use vow_syntax::span::Span;
 
     use crate::env::{StructInfo, TypeEnv};
@@ -721,5 +724,555 @@ mod tests {
             "Expected no errors but got: {:?}",
             emitter.0
         );
+    }
+
+    // --- Stmt::Let registration ---
+
+    #[test]
+    fn test_let_stmt_registers_linear_type() {
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![];
+        // let h: FileHandle = open(); then consume h
+        let let_stmt = Stmt::Let {
+            pattern: Pat {
+                kind: PatKind::Ident {
+                    name: "h".to_string(),
+                    is_mut: false,
+                },
+                span: dummy_span(),
+            },
+            ty: Some(named_type("FileHandle")),
+            init: Box::new(ident_expr("open")),
+            span: dummy_span(),
+        };
+        let body = Block {
+            stmts: vec![let_stmt],
+            trailing_expr: Some(Box::new(call_with("close", "h"))),
+            span: dummy_span(),
+        };
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert!(
+            emitter.0.is_empty(),
+            "Expected no errors but got: {:?}",
+            emitter.0
+        );
+    }
+
+    #[test]
+    fn test_let_stmt_linear_never_consumed_error() {
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![];
+        let let_stmt = Stmt::Let {
+            pattern: Pat {
+                kind: PatKind::Ident {
+                    name: "h".to_string(),
+                    is_mut: false,
+                },
+                span: dummy_span(),
+            },
+            ty: Some(named_type("FileHandle")),
+            init: Box::new(ident_expr("open")),
+            span: dummy_span(),
+        };
+        let body = Block {
+            stmts: vec![let_stmt],
+            trailing_expr: None,
+            span: dummy_span(),
+        };
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert_eq!(emitter.0.len(), 1);
+        assert!(emitter.0[0].message.contains("never consumed"));
+    }
+
+    #[test]
+    fn test_let_stmt_non_linear_type_not_tracked() {
+        let env = TypeEnv::new();
+        let params = vec![];
+        let let_stmt = Stmt::Let {
+            pattern: Pat {
+                kind: PatKind::Ident {
+                    name: "x".to_string(),
+                    is_mut: false,
+                },
+                span: dummy_span(),
+            },
+            ty: None,
+            init: Box::new(Expr {
+                kind: ExprKind::Lit(Lit::Int(42)),
+                span: dummy_span(),
+            }),
+            span: dummy_span(),
+        };
+        let body = Block {
+            stmts: vec![let_stmt],
+            trailing_expr: None,
+            span: dummy_span(),
+        };
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert!(emitter.0.is_empty());
+    }
+
+    // --- MethodCall ---
+
+    #[test]
+    fn test_method_call_arg_consumes_linear() {
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![make_param("h", named_type("FileHandle"))];
+        let method_call = Expr {
+            kind: ExprKind::MethodCall {
+                receiver: Box::new(Expr {
+                    kind: ExprKind::Lit(Lit::Int(0)),
+                    span: dummy_span(),
+                }),
+                method: "write".to_string(),
+                args: vec![ident_expr("h")],
+            },
+            span: dummy_span(),
+        };
+        let body = block_with_expr(method_call);
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert!(
+            emitter.0.is_empty(),
+            "Expected no errors but got: {:?}",
+            emitter.0
+        );
+    }
+
+    // --- Return ---
+
+    #[test]
+    fn test_return_consumes_linear() {
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![make_param("h", named_type("FileHandle"))];
+        let return_expr = Expr {
+            kind: ExprKind::Return {
+                value: Some(Box::new(ident_expr("h"))),
+            },
+            span: dummy_span(),
+        };
+        let body = block_with_expr(return_expr);
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert!(
+            emitter.0.is_empty(),
+            "Expected no errors but got: {:?}",
+            emitter.0
+        );
+    }
+
+    #[test]
+    fn test_return_no_value_does_not_consume() {
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![make_param("h", named_type("FileHandle"))];
+        let return_expr = Expr {
+            kind: ExprKind::Return { value: None },
+            span: dummy_span(),
+        };
+        let body = block_with_expr(return_expr);
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        // h is never consumed
+        assert_eq!(emitter.0.len(), 1);
+        assert!(emitter.0[0].message.contains("never consumed"));
+    }
+
+    // --- While ---
+
+    #[test]
+    fn test_while_loop_linear_in_body_error() {
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![make_param("h", named_type("FileHandle"))];
+        let while_expr = Expr {
+            kind: ExprKind::While {
+                condition: Box::new(Expr {
+                    kind: ExprKind::Lit(Lit::Bool(true)),
+                    span: dummy_span(),
+                }),
+                body: Box::new(block_with_expr(call_with("consume", "h"))),
+                vow: None,
+            },
+            span: dummy_span(),
+        };
+        let body = block_with_expr(while_expr);
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert_eq!(emitter.0.len(), 1);
+        assert!(emitter.0[0].message.contains("loop"));
+    }
+
+    // --- Match ---
+
+    fn make_wildcard_arm(body: Expr) -> MatchArm {
+        MatchArm {
+            pattern: Pat {
+                kind: PatKind::Wildcard,
+                span: dummy_span(),
+            },
+            body,
+            span: dummy_span(),
+        }
+    }
+
+    #[test]
+    fn test_match_all_arms_consume_linear_no_error() {
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![make_param("h", named_type("FileHandle"))];
+        let match_expr = Expr {
+            kind: ExprKind::Match {
+                scrutinee: Box::new(Expr {
+                    kind: ExprKind::Lit(Lit::Bool(true)),
+                    span: dummy_span(),
+                }),
+                arms: vec![
+                    make_wildcard_arm(call_with("consume", "h")),
+                    make_wildcard_arm(call_with("close", "h")),
+                ],
+            },
+            span: dummy_span(),
+        };
+        let body = block_with_expr(match_expr);
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert!(
+            emitter.0.is_empty(),
+            "Expected no errors but got: {:?}",
+            emitter.0
+        );
+    }
+
+    #[test]
+    fn test_match_only_some_arms_consume_linear_error() {
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![make_param("h", named_type("FileHandle"))];
+        let match_expr = Expr {
+            kind: ExprKind::Match {
+                scrutinee: Box::new(Expr {
+                    kind: ExprKind::Lit(Lit::Bool(true)),
+                    span: dummy_span(),
+                }),
+                arms: vec![
+                    make_wildcard_arm(call_with("consume", "h")),
+                    make_wildcard_arm(Expr {
+                        kind: ExprKind::Lit(Lit::Int(0)),
+                        span: dummy_span(),
+                    }),
+                ],
+            },
+            span: dummy_span(),
+        };
+        let body = block_with_expr(match_expr);
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert!(
+            !emitter.0.is_empty(),
+            "Expected errors but got none"
+        );
+        assert!(emitter.0.iter().any(|d| d.message.contains("one branch")));
+    }
+
+    // --- if-else asymmetric consumption ---
+
+    #[test]
+    fn test_if_else_only_then_consumes_error() {
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![make_param("h", named_type("FileHandle"))];
+
+        let then_block = block_with_expr(call_with("consume", "h"));
+        let else_expr = Expr {
+            kind: ExprKind::Block(Box::new(Block {
+                stmts: vec![],
+                trailing_expr: Some(Box::new(Expr {
+                    kind: ExprKind::Lit(Lit::Int(0)),
+                    span: dummy_span(),
+                })),
+                span: dummy_span(),
+            })),
+            span: dummy_span(),
+        };
+        let if_expr = Expr {
+            kind: ExprKind::If {
+                condition: Box::new(Expr {
+                    kind: ExprKind::Lit(Lit::Bool(true)),
+                    span: dummy_span(),
+                }),
+                then_branch: Box::new(then_block),
+                else_branch: Some(Box::new(else_expr)),
+            },
+            span: dummy_span(),
+        };
+        let body = block_with_expr(if_expr);
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert!(
+            emitter.0.len() >= 1,
+            "Expected at least 1 error but got: {:?}",
+            emitter.0
+        );
+        assert!(
+            emitter.0
+                .iter()
+                .any(|d| d.message.contains("one branch") || d.message.contains("never consumed"))
+        );
+    }
+
+    // --- BinaryOp, UnaryOp, FieldAccess, Index, Question, Tuple, Break ---
+
+    #[test]
+    fn test_binary_op_does_not_consume() {
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![make_param("h", named_type("FileHandle"))];
+        let binop = Expr {
+            kind: ExprKind::BinaryOp {
+                op: BinOp::Add,
+                lhs: Box::new(Expr {
+                    kind: ExprKind::Lit(Lit::Int(1)),
+                    span: dummy_span(),
+                }),
+                rhs: Box::new(Expr {
+                    kind: ExprKind::Lit(Lit::Int(2)),
+                    span: dummy_span(),
+                }),
+            },
+            span: dummy_span(),
+        };
+        let body = Block {
+            stmts: vec![Stmt::Expr {
+                expr: binop,
+                has_semicolon: true,
+                span: dummy_span(),
+            }],
+            trailing_expr: Some(Box::new(call_with("close", "h"))),
+            span: dummy_span(),
+        };
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
+    }
+
+    #[test]
+    fn test_unary_op_does_not_consume() {
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![make_param("h", named_type("FileHandle"))];
+        let unop = Expr {
+            kind: ExprKind::UnaryOp {
+                op: UnOp::Neg,
+                operand: Box::new(Expr {
+                    kind: ExprKind::Lit(Lit::Int(1)),
+                    span: dummy_span(),
+                }),
+            },
+            span: dummy_span(),
+        };
+        let body = Block {
+            stmts: vec![Stmt::Expr {
+                expr: unop,
+                has_semicolon: true,
+                span: dummy_span(),
+            }],
+            trailing_expr: Some(Box::new(call_with("close", "h"))),
+            span: dummy_span(),
+        };
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
+    }
+
+    #[test]
+    fn test_field_access_does_not_consume() {
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![make_param("h", named_type("FileHandle"))];
+        let field = Expr {
+            kind: ExprKind::FieldAccess {
+                base: Box::new(Expr {
+                    kind: ExprKind::Lit(Lit::Int(0)),
+                    span: dummy_span(),
+                }),
+                field: "len".to_string(),
+            },
+            span: dummy_span(),
+        };
+        let body = Block {
+            stmts: vec![Stmt::Expr {
+                expr: field,
+                has_semicolon: true,
+                span: dummy_span(),
+            }],
+            trailing_expr: Some(Box::new(call_with("close", "h"))),
+            span: dummy_span(),
+        };
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
+    }
+
+    #[test]
+    fn test_index_does_not_consume() {
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![make_param("h", named_type("FileHandle"))];
+        let index = Expr {
+            kind: ExprKind::Index {
+                base: Box::new(Expr {
+                    kind: ExprKind::Lit(Lit::Int(0)),
+                    span: dummy_span(),
+                }),
+                index: Box::new(Expr {
+                    kind: ExprKind::Lit(Lit::Int(1)),
+                    span: dummy_span(),
+                }),
+            },
+            span: dummy_span(),
+        };
+        let body = Block {
+            stmts: vec![Stmt::Expr {
+                expr: index,
+                has_semicolon: true,
+                span: dummy_span(),
+            }],
+            trailing_expr: Some(Box::new(call_with("close", "h"))),
+            span: dummy_span(),
+        };
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
+    }
+
+    #[test]
+    fn test_question_consumes_inner() {
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![make_param("h", named_type("FileHandle"))];
+        let question = Expr {
+            kind: ExprKind::Question {
+                expr: Box::new(ident_expr("h")),
+            },
+            span: dummy_span(),
+        };
+        let body = block_with_expr(question);
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
+    }
+
+    #[test]
+    fn test_tuple_consumes_elements() {
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![make_param("h", named_type("FileHandle"))];
+        let tuple = Expr {
+            kind: ExprKind::Tuple(vec![
+                ident_expr("h"),
+                Expr {
+                    kind: ExprKind::Lit(Lit::Int(0)),
+                    span: dummy_span(),
+                },
+            ]),
+            span: dummy_span(),
+        };
+        let body = block_with_expr(tuple);
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
+    }
+
+    #[test]
+    fn test_break_with_value_consumes_linear() {
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![make_param("h", named_type("FileHandle"))];
+        let break_expr = Expr {
+            kind: ExprKind::Break {
+                value: Some(Box::new(ident_expr("h"))),
+            },
+            span: dummy_span(),
+        };
+        let loop_body = block_with_expr(break_expr);
+        let loop_expr = Expr {
+            kind: ExprKind::Loop {
+                vow: None,
+                body: Box::new(loop_body),
+            },
+            span: dummy_span(),
+        };
+        // Note: h is not in loop tracker since loop sets in_loop=true AFTER registering h
+        // but break with value from *outside* the loop is different; this tests the Break arm
+        // We use h as a loop-external param consumed via break inside loop — should error (loop)
+        let body = block_with_expr(loop_expr);
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        // h is consumed inside a loop → error
+        assert_eq!(emitter.0.len(), 1);
+        assert!(emitter.0[0].message.contains("loop"));
+    }
+
+    #[test]
+    fn test_assign_rhs_consumes_linear() {
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![make_param("h", named_type("FileHandle"))];
+        let assign = Expr {
+            kind: ExprKind::Assign {
+                lhs: Box::new(ident_expr("x")),
+                rhs: Box::new(ident_expr("h")),
+            },
+            span: dummy_span(),
+        };
+        let body = block_with_expr(assign);
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
     }
 }
