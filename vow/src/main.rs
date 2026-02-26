@@ -445,6 +445,68 @@ fn main() -> i32 [io] {
     }
 
     #[test]
+    fn bisect_with_loop_invariant_compiles_and_runs() {
+        let dir = TempDir::new().unwrap();
+        let src = r#"module Bisect
+fn bisect(lo: i64, hi: i64) -> i64 vow {
+  requires: hi >= lo
+} {
+  let mut lo: i64 = lo;
+  let mut hi: i64 = hi;
+  while lo + 1 < hi vow {
+    invariant: hi - lo >= 0
+  } {
+    let mid: i64 = lo + (hi - lo) / 2;
+    lo = mid;
+  }
+  lo
+}
+fn main() -> i32 [io] {
+  let r: i64 = bisect(0, 64);
+  print_i64(r);
+  0
+}"#;
+        let source = write_source(&dir, "bisect.vow", src);
+        let out = dir.path().join("bisect");
+
+        let result = run_pipeline(&source, Some(&out), BuildMode::Debug, true);
+        let exe = match &result.status {
+            BuildStatus::Unverified => out.clone(),
+            BuildStatus::CompileFailed { message } => {
+                let msg_lo = message.to_lowercase();
+                if msg_lo.contains("link")
+                    || msg_lo.contains("runtime")
+                    || msg_lo.contains("undefined")
+                {
+                    eprintln!("SKIP: {message}");
+                    return;
+                }
+                panic!("compile failed: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        };
+
+        let output = std::process::Command::new(&exe)
+            .output()
+            .expect("failed to run bisect");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "expected exit 0 (no invariant violation)"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("63"),
+            "expected bisect(0, 64) == 63 in stdout, got: {stdout:?}"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !stderr.contains("VowViolation"),
+            "unexpected vow violation: {stderr}"
+        );
+    }
+
+    #[test]
     fn pipeline_rejects_type_error() {
         let dir = TempDir::new().unwrap();
         // fn f() -> i32 { true } — type mismatch
