@@ -1,4 +1,4 @@
-# Vow Language Design Sketch — v1 (25.02.2026)
+# Vow Language Design Sketch — v2 (26.02.2026)
 
 ## 1. Vision
 
@@ -40,25 +40,43 @@ When a vow is violated at runtime, the diagnostic is structured and precise: whi
 
 ### Base types: simple and decidable
 - Algebraic data types (sum and product types)
-- Generics / parametric polymorphism
+- Built-in parameterized types (`Option`, `Result`, `List`) as compiler primitives
+- **No user-defined generics** (see §4.1)
 - **No subtyping** (subtyping creates ambiguity that hurts agents)
 - **No inheritance** (composition through traits/interfaces only)
 - **No implicit arguments or typeclass resolution** — all trait implementations are explicit, no orphan instances
 
 The base type system stays decidable and fast. The agent can always know whether code type-checks without running the verifier.
 
+### 4.1. Monomorphic by design — no generics
+
+Vow deliberately excludes user-defined generics (parametric polymorphism on functions and types). This is not a deferred feature — it is a design decision that follows directly from the agent-first paradigm.
+
+**Generics solve a human problem.** Parametric polymorphism exists so that human programmers don't have to write the same algorithm N times for N types. Agents have no such constraint. An agent can stamp out `binary_search_i64`, `binary_search_u32`, and `binary_search_string` in milliseconds. DRY is a human ergonomic principle, not a machine one.
+
+**Monomorphic code is what the verification backends want.** ESBMC does bounded model checking on concrete types with concrete inputs. You cannot bounded-model-check `search<T: Ord>` — you check `search_i64` with specific values. Generics would be an indirection introduced only to be stripped away during lowering. Monomorphic code goes straight to the checker with no intermediate step.
+
+**Concrete Lean proofs are easier for agents to generate.** A Lean proof for `binary_search_i64` with concrete arithmetic is a simpler task for an agent than one wrestling with abstract `Ord` typeclass reasoning in Lean's type theory. More proofs are needed (one per type), but each is individually simpler — and agents don't get tired.
+
+**Generics add substantial toolchain complexity for zero payoff.** A generics system requires unification, substitution, trait bound checking, instantiation logic, monomorphization, and generic-aware error diagnostics. Every one of these is a source of compiler bugs and a source of ambiguity for the agent writing code. None of them improve the final executable, which is monomorphic either way.
+
+**The spec layer can still be abstract.** A module-level vow can express "this module provides sorted search for any ordered type" as a human-facing contract. The Lean model backing the spec can be parametric. The *implementations* are concrete per type, each verified against the spec. The spec is generic; the code is not.
+
+**Built-in parameterized types are not generics.** `Option<i64>`, `Result<Bytes, IoError>`, and `List<String>` are compiler-provided type constructors with known, fixed semantics. The agent writes concrete instantiations of these; it does not define new parameterized types. This gives the expressiveness needed for everyday code without exposing a general-purpose generics mechanism.
+
 ### Refinement types for specifications
 On top of the base types, refinement predicates are checked by the verification backend (ESBMC/Lean), not the type checker:
 
 ```
 fn divide(x: i64, y: i64 where y != 0) -> i64
-type NonEmptyList<T> = { xs: List<T> | length(xs) > 0 }
+type NonEmptyListI64 = { xs: List<i64> | length(xs) > 0 }
 type ValidPath = { p: Path | is_valid_utf8(p) && no_null_bytes(p) }
 ```
 
 This separation is key: types are decidable and mechanical; refinements are expressive and handled by powerful external engines. Most of the expressiveness of dependent types without the complexity.
 
 ### Deliberately excluded
+- **Generics / parametric polymorphism.** Agents generate monomorphic specializations; specs are generic, code is concrete (see §4.1).
 - **Full dependent types in surface syntax.** Too complex for agents to reason about. If the agent needs dependent types for a specific proof, it drops into Lean.
 - **Null.** `Option<T>` instead.
 - **Exceptions.** `Result<T, E>` everywhere with `?` propagation. Exceptions create invisible control flow.
@@ -216,6 +234,7 @@ The agent-first lens inverts many conventional language design decisions:
 | Formatters enforce style | Canonicalizer is a compiler pass |
 | Rich FFI for ergonomic C interop | Thin verification boundary |
 | Complex type systems for expressiveness | Simple types + refinements checked by verifier |
+| Generics eliminate code duplication | Agent generates monomorphic specializations; specs are generic, code is concrete |
 | GC or manual memory management | Region-based with verified safety |
 | Large number tower in language | Minimal hardware types; rest in stdlib |
 | Interactive debugger | Automated diagnosis via traces and contracts |
@@ -231,6 +250,7 @@ The agent-first lens inverts many conventional language design decisions:
 - **Incremental spec evolution:** When requirements change, the entire vow set may need revision. The spec agent needs to understand diffs to vow sets, not just generate from scratch.
 - **IR design:** The shared IR should facilitate both native codegen and verification. Pizlo-style instruction-value uniformity, explicit effect tracking, and SSA form with Phi/Upsilon nodes are promising directions. The IR should make mechanical reasoning straightforward.
 - **Bidirectional syntax:** Should Vow support both a machine-optimized and human-readable concrete syntax with lossless transformation between them? Early designs explored this, but the "single way to do it" principle may argue for one canonical form with good tooling for human readability.
+- **Built-in parameterized type set:** Which parameterized types does the compiler provide as primitives? `Option`, `Result`, and `List` are clear candidates. The boundary between "compiler-provided parameterized type" and "user-defined generic type" needs to stay crisp — if the set grows too large, it becomes generics by another name.
 
 ## 14. Influences and References
 
@@ -243,7 +263,16 @@ The agent-first lens inverts many conventional language design decisions:
 - **Racket/Eiffel** — contract systems and blame tracking
 - **FEX-emu** — practical compiler and DBT experience informing systems-level design decisions
 
+## Appendix A. Design Decisions Log
+
+### A.1. No generics (v2, 26.02.2026)
+
+**Decision:** Vow does not support user-defined generics. Functions and types are monomorphic. Specifications and Lean models may be parametric; implementations are concrete.
+
+**Rationale:** Generics exist to prevent humans from writing repetitive code — a problem agents don't have. The verification backends (ESBMC, Lean) operate on concrete types, so generics would be an indirection introduced only to be removed during lowering. Concrete Lean proofs are easier for agents to generate than parametric ones. The toolchain complexity of unification, substitution, trait resolution, and monomorphization is pure cost with no payoff in an agent-first paradigm.
+
+**What this replaces:** The v1 design sketch listed "Generics / parametric polymorphism" as a base type system feature, and the original motivating example (`search<T: Ord>`) assumed generics. The motivating example is now `search_i64` verified against a parametric Lean spec.
+
 ---
 
 *This document captures the current state of design thinking as of February 2026. It is a living sketch, not a specification.*
-
