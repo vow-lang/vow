@@ -479,7 +479,6 @@ mod tests {
             StructInfo {
                 fields: vec![],
                 is_linear: true,
-                generics: vec![],
             },
         );
         env
@@ -496,7 +495,6 @@ mod tests {
         FnDef {
             vis: Visibility::Private,
             name: "test_fn".to_string(),
-            generics: vec![],
             params,
             return_ty: Type::Unit { span: dummy_span() },
             effects: vec![],

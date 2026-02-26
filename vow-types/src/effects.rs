@@ -257,7 +257,6 @@ mod tests {
         FnDef {
             vis: Visibility::Private,
             name: name.to_string(),
-            generics: vec![],
             params: vec![],
             return_ty: Type::Unit { span: dummy_span() },
             effects,

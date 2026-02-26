@@ -230,19 +230,10 @@ fn strip_field_def(f: FieldDef) -> FieldDef {
     }
 }
 
-fn strip_generic_param(g: vow_syntax::ast::GenericParam) -> vow_syntax::ast::GenericParam {
-    vow_syntax::ast::GenericParam {
-        name: g.name,
-        bounds: g.bounds,
-        span: z(),
-    }
-}
-
 fn strip_fn_def(f: FnDef) -> FnDef {
     FnDef {
         vis: f.vis,
         name: f.name,
-        generics: f.generics.into_iter().map(strip_generic_param).collect(),
         params: f.params.into_iter().map(strip_param).collect(),
         return_ty: strip_type(f.return_ty),
         effects: f.effects,
@@ -257,7 +248,6 @@ fn strip_struct_def(s: StructDef) -> StructDef {
         vis: s.vis,
         is_linear: s.is_linear,
         name: s.name,
-        generics: s.generics.into_iter().map(strip_generic_param).collect(),
         fields: s.fields.into_iter().map(strip_field_def).collect(),
         span: z(),
     }
@@ -284,7 +274,6 @@ fn strip_enum_def(e: EnumDef) -> EnumDef {
     EnumDef {
         vis: e.vis,
         name: e.name,
-        generics: e.generics.into_iter().map(strip_generic_param).collect(),
         variants: e.variants.into_iter().map(strip_enum_variant).collect(),
         span: z(),
     }
@@ -304,7 +293,6 @@ fn strip_trait_def(t: TraitDef) -> TraitDef {
     TraitDef {
         vis: t.vis,
         name: t.name,
-        generics: t.generics.into_iter().map(strip_generic_param).collect(),
         methods: t.methods.into_iter().map(strip_trait_method).collect(),
         span: z(),
     }
@@ -313,7 +301,6 @@ fn strip_trait_def(t: TraitDef) -> TraitDef {
 fn strip_impl_block(i: ImplBlock) -> ImplBlock {
     ImplBlock {
         trait_name: i.trait_name,
-        generics: i.generics.into_iter().map(strip_generic_param).collect(),
         self_ty: strip_type(i.self_ty),
         methods: i.methods.into_iter().map(strip_fn_def).collect(),
         span: z(),
@@ -324,7 +311,6 @@ fn strip_type_alias(t: TypeAlias) -> TypeAlias {
     TypeAlias {
         vis: t.vis,
         name: t.name,
-        generics: t.generics.into_iter().map(strip_generic_param).collect(),
         ty: strip_type(t.ty),
         span: z(),
     }

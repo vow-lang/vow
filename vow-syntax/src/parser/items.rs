@@ -19,7 +19,6 @@ impl Parser {
         let (name, _) = self
             .expect_ident()
             .unwrap_or(("<error>".to_string(), start));
-        let generics = self.parse_generics();
         self.expect(TokenKind::LBrace);
         let mut fields = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at_end() {
@@ -48,7 +47,6 @@ impl Parser {
             vis,
             is_linear,
             name,
-            generics,
             fields,
             span: start.merge(end),
         })
@@ -60,7 +58,6 @@ impl Parser {
         let (name, _) = self
             .expect_ident()
             .unwrap_or(("<error>".to_string(), start));
-        let generics = self.parse_generics();
         self.expect(TokenKind::LBrace);
         let mut variants = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at_end() {
@@ -127,7 +124,6 @@ impl Parser {
         Item::Enum(EnumDef {
             vis,
             name,
-            generics,
             variants,
             span: start.merge(end),
         })
@@ -139,7 +135,6 @@ impl Parser {
         let (name, _) = self
             .expect_ident()
             .unwrap_or(("<error>".to_string(), start));
-        let generics = self.parse_generics();
         self.expect(TokenKind::LBrace);
         let mut methods = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at_end() {
@@ -173,7 +168,6 @@ impl Parser {
         Item::Trait(TraitDef {
             vis,
             name,
-            generics,
             methods,
             span: start.merge(end),
         })
@@ -182,7 +176,6 @@ impl Parser {
     pub fn parse_impl(&mut self) -> Item {
         let start = self.current_span();
         self.advance();
-        let generics = self.parse_generics();
 
         let first_ty = self.parse_type_required();
         let (trait_name, self_ty) = if self.at(&TokenKind::KwFor) {
@@ -220,7 +213,6 @@ impl Parser {
             let (method_name, _) = self
                 .expect_ident()
                 .unwrap_or(("<error>".to_string(), method_start));
-            let method_generics = self.parse_generics();
             let params = self.parse_params();
             let return_ty = if self.at(&TokenKind::ThinArrow) {
                 self.advance();
@@ -241,7 +233,6 @@ impl Parser {
             methods.push(FnDef {
                 vis,
                 name: method_name,
-                generics: method_generics,
                 params,
                 return_ty,
                 effects,
@@ -254,7 +245,6 @@ impl Parser {
         self.expect(TokenKind::RBrace);
         Item::Impl(ImplBlock {
             trait_name,
-            generics,
             self_ty,
             methods,
             span: start.merge(end),
@@ -267,7 +257,6 @@ impl Parser {
         let (name, _) = self
             .expect_ident()
             .unwrap_or(("<error>".to_string(), start));
-        let generics = self.parse_generics();
         self.expect(TokenKind::Eq);
         let ty = self.parse_type_required();
         let end = self.current_span();
@@ -275,7 +264,6 @@ impl Parser {
         Item::TypeAlias(TypeAlias {
             vis,
             name,
-            generics,
             ty,
             span: start.merge(end),
         })
@@ -379,20 +367,6 @@ mod tests {
         };
         assert_eq!(s.name, "Handle");
         assert!(s.is_linear);
-        assert_eq!(s.fields.len(), 1);
-    }
-
-    #[test]
-    fn parse_generic_struct() {
-        let src = "struct Foo<T> { value: T }";
-        let item = parse_item(src);
-        let s = match item {
-            Item::Struct(s) => s,
-            other => panic!("expected struct, got {:?}", other),
-        };
-        assert_eq!(s.name, "Foo");
-        assert_eq!(s.generics.len(), 1);
-        assert_eq!(s.generics[0].name, "T");
         assert_eq!(s.fields.len(), 1);
     }
 

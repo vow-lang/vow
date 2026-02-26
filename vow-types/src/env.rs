@@ -17,15 +17,12 @@ pub struct StructInfo {
     pub fields: Vec<(String, Ty)>,
     /// Whether declared with `linear struct`.
     pub is_linear: bool,
-    /// Generic parameter names (in declaration order).
-    pub generics: Vec<String>,
 }
 
 /// Information about a user-defined enum type.
 #[derive(Debug, Clone)]
 pub struct EnumInfo {
     pub variants: Vec<VariantInfo>,
-    pub generics: Vec<String>,
 }
 
 /// One variant of an enum.
@@ -280,7 +277,6 @@ mod tests {
             StructInfo {
                 fields: vec![],
                 is_linear: false,
-                generics: vec![],
             },
         );
         let ast_ty = AstType::Named {
@@ -298,32 +294,6 @@ mod tests {
             span: dummy_span(),
         };
         assert!(env.resolve(&ast_ty).is_err());
-    }
-
-    #[test]
-    fn resolve_generic() {
-        let mut env = TypeEnv::new();
-        env.define_struct(
-            "Vec",
-            StructInfo {
-                fields: vec![],
-                is_linear: false,
-                generics: vec!["T".to_string()],
-            },
-        );
-        let ast_ty = AstType::Generic {
-            name: "Vec".to_string(),
-            args: vec![AstType::Named {
-                name: "i32".to_string(),
-                span: dummy_span(),
-            }],
-            span: dummy_span(),
-        };
-        let result = env.resolve(&ast_ty).unwrap();
-        assert_eq!(
-            result,
-            Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I32])
-        );
     }
 
     #[test]

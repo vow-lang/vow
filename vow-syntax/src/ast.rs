@@ -43,7 +43,6 @@ impl Item {
 pub struct FnDef {
     pub vis: Visibility,
     pub name: String,
-    pub generics: Vec<GenericParam>,
     pub params: Vec<Param>,
     pub return_ty: Type,
     pub effects: Vec<Effect>,
@@ -64,13 +63,6 @@ pub struct Param {
 pub enum Visibility {
     Public,
     Private,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct GenericParam {
-    pub name: String,
-    pub bounds: Vec<String>,
-    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -100,7 +92,6 @@ pub struct StructDef {
     pub vis: Visibility,
     pub is_linear: bool,
     pub name: String,
-    pub generics: Vec<GenericParam>,
     pub fields: Vec<FieldDef>,
     pub span: Span,
 }
@@ -116,7 +107,6 @@ pub struct FieldDef {
 pub struct EnumDef {
     pub vis: Visibility,
     pub name: String,
-    pub generics: Vec<GenericParam>,
     pub variants: Vec<EnumVariant>,
     pub span: Span,
 }
@@ -139,7 +129,6 @@ pub enum VariantKind {
 pub struct TraitDef {
     pub vis: Visibility,
     pub name: String,
-    pub generics: Vec<GenericParam>,
     pub methods: Vec<TraitMethod>,
     pub span: Span,
 }
@@ -156,7 +145,6 @@ pub struct TraitMethod {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplBlock {
     pub trait_name: Option<String>,
-    pub generics: Vec<GenericParam>,
     pub self_ty: Type,
     pub methods: Vec<FnDef>,
     pub span: Span,
@@ -166,7 +154,6 @@ pub struct ImplBlock {
 pub struct TypeAlias {
     pub vis: Visibility,
     pub name: String,
-    pub generics: Vec<GenericParam>,
     pub ty: Type,
     pub span: Span,
 }
@@ -418,7 +405,6 @@ mod tests {
         let fn_def = FnDef {
             vis: Visibility::Public,
             name: "foo".to_string(),
-            generics: vec![],
             params: vec![],
             return_ty: Type::Unit { span: dummy_span() },
             effects: vec![],
@@ -471,7 +457,6 @@ mod tests {
             vis: Visibility::Public,
             is_linear: true,
             name: "FileHandle".to_string(),
-            generics: vec![],
             fields: vec![],
             span: dummy_span(),
         };

@@ -3,8 +3,8 @@ pub mod items;
 pub mod types;
 
 use crate::ast::{
-    Block, Effect, Expr, ExprKind, FnDef, GenericParam, Item, Module, Param, Pat, PatKind, Stmt,
-    Type, UseDecl, Visibility, VowBlock, VowClause,
+    Block, Effect, Expr, ExprKind, FnDef, Item, Module, Param, Pat, PatKind, Stmt, Type, UseDecl,
+    Visibility, VowBlock, VowClause,
 };
 use crate::lexer::Lexer;
 use crate::span::Span;
@@ -269,8 +269,6 @@ impl Parser {
 
         let (name, _) = self.expect_ident()?;
 
-        let generics = self.parse_generics();
-
         self.expect(TokenKind::LParen)?;
         let mut params = Vec::new();
         while !self.at(&TokenKind::RParen) && !self.at_end() {
@@ -310,7 +308,6 @@ impl Parser {
         Some(FnDef {
             vis,
             name,
-            generics,
             params,
             return_ty,
             effects,
@@ -341,52 +338,6 @@ impl Parser {
             refinement,
             span: start.merge(end),
         })
-    }
-
-    fn parse_generics(&mut self) -> Vec<GenericParam> {
-        if !self.at(&TokenKind::Lt) {
-            return Vec::new();
-        }
-        self.advance();
-
-        let mut params = Vec::new();
-        while !self.at(&TokenKind::Gt) && !self.at_end() {
-            let start = self.current_span();
-            let (name, name_span) = match self.expect_ident() {
-                Some(n) => n,
-                None => break,
-            };
-
-            let mut bounds = Vec::new();
-            if self.at(&TokenKind::Colon) {
-                self.advance();
-                if let Some((bound, _)) = self.expect_ident() {
-                    bounds.push(bound);
-                }
-                while self.at(&TokenKind::Plus) {
-                    self.advance();
-                    if let Some((bound, _)) = self.expect_ident() {
-                        bounds.push(bound);
-                    }
-                }
-            }
-
-            let end = self.current_span();
-            params.push(GenericParam {
-                name,
-                bounds,
-                span: start.merge(name_span).merge(end),
-            });
-
-            if self.at(&TokenKind::Comma) {
-                self.advance();
-            } else {
-                break;
-            }
-        }
-
-        self.expect(TokenKind::Gt);
-        params
     }
 
     fn parse_effects(&mut self) -> Vec<Effect> {

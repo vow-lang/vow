@@ -21,8 +21,6 @@ pub enum Ty {
     // Other primitives
     Bool,
     Str,
-    // Type variable (from generic parameters, e.g. T in fn foo<T>)
-    Var(String),
     // User-defined nominal types (by name)
     Struct(String),
     Enum(String),
@@ -66,19 +64,6 @@ impl Ty {
         matches!(self, Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64 | Ty::U128)
     }
 
-    pub fn substitute(&self, var: &str, with: &Ty) -> Ty {
-        match self {
-            Ty::Var(name) if name == var => with.clone(),
-            Ty::Applied(base, args) => Ty::Applied(
-                Box::new(base.substitute(var, with)),
-                args.iter().map(|a| a.substitute(var, with)).collect(),
-            ),
-            Ty::Reference(inner) => Ty::Reference(Box::new(inner.substitute(var, with))),
-            Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(|e| e.substitute(var, with)).collect()),
-            other => other.clone(),
-        }
-    }
-
     pub fn from_primitive_name(name: &str) -> Option<Ty> {
         match name {
             "i8" => Some(Ty::I8),
@@ -117,7 +102,6 @@ impl fmt::Display for Ty {
             Ty::F64 => write!(f, "f64"),
             Ty::Bool => write!(f, "bool"),
             Ty::Str => write!(f, "str"),
-            Ty::Var(s) => write!(f, "{s}"),
             Ty::Struct(s) | Ty::Enum(s) => write!(f, "{s}"),
             Ty::Applied(base, args) => {
                 write!(f, "{base}<")?;
@@ -196,47 +180,6 @@ mod tests {
     }
 
     #[test]
-    fn substitute_replaces_var() {
-        let ty = Ty::Var("T".to_string());
-        let result = ty.substitute("T", &Ty::I32);
-        assert_eq!(result, Ty::I32);
-    }
-
-    #[test]
-    fn substitute_no_effect_on_non_var() {
-        let ty = Ty::Bool;
-        let result = ty.substitute("T", &Ty::I32);
-        assert_eq!(result, Ty::Bool);
-    }
-
-    #[test]
-    fn substitute_recurses_into_applied() {
-        let ty = Ty::Applied(
-            Box::new(Ty::Struct("Vec".to_string())),
-            vec![Ty::Var("T".to_string())],
-        );
-        let result = ty.substitute("T", &Ty::I32);
-        assert_eq!(
-            result,
-            Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I32])
-        );
-    }
-
-    #[test]
-    fn substitute_recurses_into_tuple() {
-        let ty = Ty::Tuple(vec![Ty::Var("T".to_string()), Ty::Bool]);
-        let result = ty.substitute("T", &Ty::U64);
-        assert_eq!(result, Ty::Tuple(vec![Ty::U64, Ty::Bool]));
-    }
-
-    #[test]
-    fn substitute_recurses_into_reference() {
-        let ty = Ty::Reference(Box::new(Ty::Var("T".to_string())));
-        let result = ty.substitute("T", &Ty::Str);
-        assert_eq!(result, Ty::Reference(Box::new(Ty::Str)));
-    }
-
-    #[test]
     fn display_primitives() {
         assert_eq!(Ty::I32.to_string(), "i32");
         assert_eq!(Ty::U64.to_string(), "u64");
@@ -248,8 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn display_var_struct_enum() {
-        assert_eq!(Ty::Var("T".to_string()).to_string(), "T");
+    fn display_struct_enum() {
         assert_eq!(Ty::Struct("Foo".to_string()).to_string(), "Foo");
         assert_eq!(Ty::Enum("Bar".to_string()).to_string(), "Bar");
     }

@@ -124,7 +124,6 @@ mod tests {
         FnDef {
             vis: Visibility::Public,
             name: "test_fn".to_string(),
-            generics: vec![],
             params: vec![Param {
                 name: "x".to_string(),
                 ty: Type::Named {

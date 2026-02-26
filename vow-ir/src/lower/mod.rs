@@ -824,7 +824,6 @@ mod tests {
         FnDef {
             vis: Visibility::Public,
             name: name.to_string(),
-            generics: vec![],
             params,
             return_ty,
             effects,
@@ -1027,7 +1026,6 @@ mod tests {
         let fn_def = FnDef {
             vis: Visibility::Public,
             name: "explicit_return_fn".to_string(),
-            generics: vec![],
             params: vec![],
             return_ty: i64_ty(),
             effects: vec![],

@@ -102,7 +102,6 @@ impl<'e> Checker<'e> {
                         StructInfo {
                             fields,
                             is_linear: s.is_linear,
-                            generics: s.generics.iter().map(|g| g.name.clone()).collect(),
                         },
                     );
                 }
@@ -161,7 +160,6 @@ impl<'e> Checker<'e> {
                         &e.name,
                         EnumInfo {
                             variants,
-                            generics: e.generics.iter().map(|g| g.name.clone()).collect(),
                         },
                     );
                 }
@@ -926,7 +924,6 @@ mod tests {
         let fn_def = FnDef {
             vis: Visibility::Public,
             name: "add".to_string(),
-            generics: vec![],
             params: vec![
                 Param {
                     name: "x".to_string(),
@@ -1249,7 +1246,6 @@ mod tests {
             StructInfo {
                 fields: vec![("x".to_string(), Ty::I32), ("y".to_string(), Ty::I32)],
                 is_linear: false,
-                generics: vec![],
             },
         );
         checker.env.push_scope();
@@ -1272,7 +1268,6 @@ mod tests {
             StructInfo {
                 fields: vec![("x".to_string(), Ty::I32)],
                 is_linear: false,
-                generics: vec![],
             },
         );
         checker.env.push_scope();
@@ -1309,7 +1304,6 @@ mod tests {
             StructInfo {
                 fields: vec![],
                 is_linear: false,
-                generics: vec!["T".to_string()],
             },
         );
         checker.env.push_scope();
@@ -1614,7 +1608,6 @@ mod tests {
         let fn_def = FnDef {
             vis: Visibility::Private,
             name: "f".to_string(),
-            generics: vec![],
             params: vec![],
             return_ty: Type::Named {
                 name: "bool".to_string(),
@@ -1654,7 +1647,6 @@ mod tests {
                 vis: Visibility::Public,
                 is_linear: false,
                 name: "Point".to_string(),
-                generics: vec![],
                 fields: vec![FieldDef {
                     name: "x".to_string(),
                     ty: Type::Named {
@@ -1683,7 +1675,6 @@ mod tests {
             items: vec![Item::Enum(EnumDef {
                 vis: Visibility::Public,
                 name: "Color".to_string(),
-                generics: vec![],
                 variants: vec![
                     EnumVariant {
                         name: "Red".to_string(),

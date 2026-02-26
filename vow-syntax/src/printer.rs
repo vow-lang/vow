@@ -1,7 +1,7 @@
 use crate::ast::{
     BinOp, Block, Effect, EnumDef, EnumVariant, Expr, ExprKind, ExternBlock, ExternFn, FnDef,
-    GenericParam, ImplBlock, Item, Lit, MatchArm, Module, Param, Pat, PatKind, Stmt, StructDef,
-    TraitDef, TraitMethod, Type, TypeAlias, UnOp, VariantKind, Visibility, VowBlock, VowClause,
+    ImplBlock, Item, Lit, MatchArm, Module, Param, Pat, PatKind, Stmt, StructDef, TraitDef,
+    TraitMethod, Type, TypeAlias, UnOp, VariantKind, Visibility, VowBlock, VowClause,
 };
 
 pub fn print_module(module: &Module) -> String {
@@ -44,23 +44,6 @@ fn print_visibility(vis: &Visibility) -> &'static str {
         Visibility::Public => "pub ",
         Visibility::Private => "",
     }
-}
-
-fn print_generics(generics: &[GenericParam]) -> String {
-    if generics.is_empty() {
-        return String::new();
-    }
-    let params: Vec<String> = generics
-        .iter()
-        .map(|g| {
-            if g.bounds.is_empty() {
-                g.name.clone()
-            } else {
-                format!("{}: {}", g.name, g.bounds.join(" + "))
-            }
-        })
-        .collect();
-    format!("<{}>", params.join(", "))
 }
 
 fn print_effects(effects: &[Effect]) -> String {
@@ -119,7 +102,6 @@ fn print_vow_block(vow: &VowBlock, level: usize) -> String {
 fn print_fn(f: &FnDef, level: usize) -> String {
     let ind = indent(level);
     let vis = print_visibility(&f.vis);
-    let generics = print_generics(&f.generics);
     let params = print_params(&f.params);
     let ret = print_type(&f.return_ty);
     let effects = print_effects(&f.effects);
@@ -130,8 +112,8 @@ fn print_fn(f: &FnDef, level: usize) -> String {
     };
 
     let mut out = format!(
-        "{}{}fn {}{}({}){}{}",
-        ind, vis, f.name, generics, params, ret_part, effects
+        "{}{}fn {}({}){}{}",
+        ind, vis, f.name, params, ret_part, effects
     );
 
     if let Some(vow) = &f.vow {
@@ -210,8 +192,7 @@ fn print_struct(s: &StructDef, level: usize) -> String {
     let ind = indent(level);
     let vis = print_visibility(&s.vis);
     let linear = if s.is_linear { "linear " } else { "" };
-    let generics = print_generics(&s.generics);
-    let mut out = format!("{}{}{}struct {}{} {{\n", ind, vis, linear, s.name, generics);
+    let mut out = format!("{}{}{}struct {} {{\n", ind, vis, linear, s.name);
     for field in &s.fields {
         out.push_str(&format!(
             "{}    {}: {},\n",
@@ -227,8 +208,7 @@ fn print_struct(s: &StructDef, level: usize) -> String {
 fn print_enum(e: &EnumDef, level: usize) -> String {
     let ind = indent(level);
     let vis = print_visibility(&e.vis);
-    let generics = print_generics(&e.generics);
-    let mut out = format!("{}{}enum {}{} {{\n", ind, vis, e.name, generics);
+    let mut out = format!("{}{}enum {} {{\n", ind, vis, e.name);
     for variant in &e.variants {
         out.push_str(&print_enum_variant(variant, level + 1));
     }
@@ -257,8 +237,7 @@ fn print_enum_variant(v: &EnumVariant, level: usize) -> String {
 fn print_trait(t: &TraitDef, level: usize) -> String {
     let ind = indent(level);
     let vis = print_visibility(&t.vis);
-    let generics = print_generics(&t.generics);
-    let mut out = format!("{}{}trait {}{} {{\n", ind, vis, t.name, generics);
+    let mut out = format!("{}{}trait {} {{\n", ind, vis, t.name);
     for method in &t.methods {
         out.push_str(&print_trait_method(method, level + 1));
     }
@@ -286,11 +265,10 @@ fn print_trait_method(m: &TraitMethod, level: usize) -> String {
 
 fn print_impl(i: &ImplBlock, level: usize) -> String {
     let ind = indent(level);
-    let generics = print_generics(&i.generics);
     let self_ty = print_type(&i.self_ty);
     let header = match &i.trait_name {
-        Some(tr) => format!("{}impl{} {} for {} {{\n", ind, generics, tr, self_ty),
-        None => format!("{}impl{} {} {{\n", ind, generics, self_ty),
+        Some(tr) => format!("{}impl {} for {} {{\n", ind, tr, self_ty),
+        None => format!("{}impl {} {{\n", ind, self_ty),
     };
     let mut out = header;
     for method in &i.methods {
@@ -303,15 +281,7 @@ fn print_impl(i: &ImplBlock, level: usize) -> String {
 fn print_type_alias(a: &TypeAlias, level: usize) -> String {
     let ind = indent(level);
     let vis = print_visibility(&a.vis);
-    let generics = print_generics(&a.generics);
-    format!(
-        "{}{}type {}{} = {};\n",
-        ind,
-        vis,
-        a.name,
-        generics,
-        print_type(&a.ty)
-    )
+    format!("{}{}type {} = {};\n", ind, vis, a.name, print_type(&a.ty))
 }
 
 fn print_extern(e: &ExternBlock, level: usize) -> String {
@@ -672,8 +642,8 @@ mod tests {
     use super::*;
     use crate::ast::{
         BinOp, Block, Effect, EnumDef, EnumVariant, Expr, ExprKind, ExternBlock, ExternFn, FnDef,
-        GenericParam, ImplBlock, Item, Lit, Module, Param, StructDef, TraitDef, TraitMethod, Type,
-        TypeAlias, UseDecl, VariantKind, Visibility, VowBlock, VowClause,
+        ImplBlock, Item, Lit, Module, Param, StructDef, TraitDef, TraitMethod, Type, TypeAlias,
+        UseDecl, VariantKind, Visibility, VowBlock, VowClause,
     };
     use crate::span::Span;
 
@@ -759,7 +729,6 @@ mod tests {
         let f = FnDef {
             vis: Visibility::Private,
             name: "add".to_string(),
-            generics: vec![],
             params: vec![
                 Param {
                     name: "x".to_string(),
@@ -806,7 +775,6 @@ mod tests {
         let f = FnDef {
             vis: Visibility::Public,
             name: "work".to_string(),
-            generics: vec![],
             params: vec![],
             return_ty: unit_ty(),
             effects: vec![Effect::Write, Effect::Read],
@@ -848,7 +816,6 @@ mod tests {
         let f = FnDef {
             vis: Visibility::Public,
             name: "positive".to_string(),
-            generics: vec![],
             params: vec![Param {
                 name: "x".to_string(),
                 ty: named_ty("i64"),
@@ -885,7 +852,6 @@ mod tests {
             vis: Visibility::Public,
             is_linear: false,
             name: "Point".to_string(),
-            generics: vec![],
             fields: vec![
                 crate::ast::FieldDef {
                     name: "x".to_string(),
@@ -910,7 +876,6 @@ mod tests {
             vis: Visibility::Public,
             is_linear: true,
             name: "Handle".to_string(),
-            generics: vec![],
             fields: vec![],
             span: s(),
         };
@@ -923,7 +888,6 @@ mod tests {
         let e = EnumDef {
             vis: Visibility::Public,
             name: "Shape".to_string(),
-            generics: vec![],
             variants: vec![
                 EnumVariant {
                     name: "Circle".to_string(),
@@ -962,7 +926,6 @@ mod tests {
         let a = TypeAlias {
             vis: Visibility::Public,
             name: "MyInt".to_string(),
-            generics: vec![],
             ty: named_ty("i64"),
             span: s(),
         };
@@ -1181,7 +1144,6 @@ mod tests {
         let tr = TraitDef {
             vis: Visibility::Public,
             name: "Display".to_string(),
-            generics: vec![],
             methods: vec![TraitMethod {
                 name: "fmt".to_string(),
                 params: vec![Param {
@@ -1209,7 +1171,6 @@ mod tests {
         let f = FnDef {
             vis: Visibility::Public,
             name: "new".to_string(),
-            generics: vec![],
             params: vec![],
             return_ty: named_ty("Self"),
             effects: vec![],
@@ -1219,7 +1180,6 @@ mod tests {
         };
         let i = ImplBlock {
             trait_name: Some("MyTrait".to_string()),
-            generics: vec![],
             self_ty: named_ty("MyStruct"),
             methods: vec![f],
             span: s(),
@@ -1231,39 +1191,5 @@ mod tests {
             out
         );
         assert!(out.contains("pub fn new() -> Self {"), "method: {}", out);
-    }
-
-    #[test]
-    fn test_generic_params() {
-        let f = FnDef {
-            vis: Visibility::Private,
-            name: "identity".to_string(),
-            generics: vec![GenericParam {
-                name: "T".to_string(),
-                bounds: vec!["Clone".to_string()],
-                span: s(),
-            }],
-            params: vec![Param {
-                name: "x".to_string(),
-                ty: named_ty("T"),
-                refinement: None,
-                span: s(),
-            }],
-            return_ty: named_ty("T"),
-            effects: vec![],
-            vow: None,
-            body: Block {
-                stmts: vec![],
-                trailing_expr: Some(Box::new(ident_expr("x"))),
-                span: s(),
-            },
-            span: s(),
-        };
-        let out = print_fn(&f, 0);
-        assert!(
-            out.contains("fn identity<T: Clone>(x: T) -> T {"),
-            "sig: {}",
-            out
-        );
     }
 }

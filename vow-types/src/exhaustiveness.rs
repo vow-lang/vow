@@ -247,7 +247,6 @@ mod tests {
                     kind: VariantKind::Unit,
                 })
                 .collect(),
-            generics: vec![],
         };
         env.define_enum(name, info);
         env
