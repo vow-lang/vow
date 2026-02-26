@@ -120,6 +120,10 @@ dependencies = [
 [[package]]
 name = "vow-ir"
 version = "0.1.0"
+dependencies = [
+ "vow-diag",
+ "vow-syntax",
+]
 
 [[package]]
 name = "vow-runtime"
