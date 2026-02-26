@@ -1,4 +1,5 @@
 pub mod cranelift_backend;
+pub mod linker;
 
 use vow_ir::Module;
 
@@ -25,6 +26,8 @@ pub enum CodegenError {
     FunctionDefine(String),
     Emit(String),
     UnsupportedOpcode(String),
+    Link(String),
+    Io(String),
 }
 
 impl std::fmt::Display for CodegenError {
@@ -35,6 +38,8 @@ impl std::fmt::Display for CodegenError {
             CodegenError::FunctionDefine(s) => write!(f, "function define error: {s}"),
             CodegenError::Emit(s) => write!(f, "emit error: {s}"),
             CodegenError::UnsupportedOpcode(s) => write!(f, "unsupported opcode: {s}"),
+            CodegenError::Link(s) => write!(f, "linker error: {s}"),
+            CodegenError::Io(s) => write!(f, "I/O error: {s}"),
         }
     }
 }
