@@ -20,15 +20,128 @@ enum ModeArg {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "vowc", about = "Vow compiler")]
+#[command(name = "vowc", about = "Vow compiler", disable_help_flag = true)]
 struct Args {
-    source: PathBuf,
+    source: Option<PathBuf>,
     #[arg(short = 'o', long)]
     output: Option<PathBuf>,
     #[arg(long, value_enum, default_value = "release")]
     mode: ModeArg,
     #[arg(long)]
     no_verify: bool,
+    /// Print compiler capability description as JSON (default) or human-readable (with --human)
+    #[arg(long)]
+    help: bool,
+    /// With --help: print human-readable text instead of JSON
+    #[arg(long)]
+    human: bool,
+}
+
+// ---------------------------------------------------------------------------
+// --help skill output
+// ---------------------------------------------------------------------------
+
+fn skill_json() -> String {
+    format!(
+        r#"{{
+  "tool": "vowc",
+  "description": "Vow compiler: compiles Vow source to native executables with contract verification",
+  "usage": "vowc [OPTIONS] <source.vow>",
+  "options": {{
+    "--output <path>": "Output executable path (default: source without .vow extension)",
+    "--mode <debug|release>": "Build mode; debug inserts runtime vow checks (default: release)",
+    "--no-verify": "Skip ESBMC static verification",
+    "--help": "Print this JSON capability description",
+    "--help --human": "Print human-readable capability description"
+  }},
+  "output_json": {{
+    "status": "Verified | Unverified | CompileFailed | VerifyFailed",
+    "executable": "path to compiled binary, or null",
+    "message": "error detail (CompileFailed)",
+    "function": "function name (VerifyFailed)",
+    "counterexample": "ESBMC counterexample description (VerifyFailed)"
+  }},
+  "exit_codes": {{
+    "0": "success (Verified or Unverified)",
+    "1": "failure (CompileFailed or VerifyFailed)"
+  }},
+  "language": {{
+    "module": "module <Name>",
+    "function": "fn <name>(<params>) -> <RetTy> [<effects>] {{ <body> }}",
+    "vow_function": "fn <name>(<params>) -> <RetTy> vow {{ requires: <expr>; ensures: <expr> }} {{ <body> }}",
+    "while_with_invariant": "while <cond> vow {{ invariant: <expr> }} {{ <body> }}",
+    "types": ["i32", "i64", "f32", "f64", "bool", "()"],
+    "effects": ["io", "read", "write", "panic", "unsafe"],
+    "builtins": {{
+      "print_str": "fn(s: str) -> () [io]",
+      "print_i64": "fn(v: i64) -> () [io]"
+    }},
+    "operators": {{
+      "arithmetic": ["+", "-", "*", "/", "%"],
+      "checked_arithmetic": ["+!", "-!", "*!", "/!", "%!"],
+      "comparison": ["==", "!=", "<", "<=", ">", ">="],
+      "logical": ["&&", "||", "!"]
+    }},
+    "vow_clauses": {{
+      "requires": "precondition — blame=Caller on violation",
+      "ensures": "postcondition — blame=Callee on violation; use `result` for return value",
+      "invariant": "loop invariant — checked at top of each iteration"
+    }}
+  }}
+}}"#
+    )
+}
+
+fn skill_human() -> String {
+    "vowc — Vow compiler
+
+USAGE
+  vowc [OPTIONS] <source.vow>
+
+OPTIONS
+  -o, --output <path>   Output executable path
+  --mode <debug|release>  Build mode (default: release)
+                          debug: inserts runtime vow violation checks
+                          release: omits vow checks for performance
+  --no-verify           Skip ESBMC static verification
+  --help                Print JSON capability description (agent-friendly)
+  --help --human        Print this text
+
+OUTPUT (JSON on stdout)
+  status      : Verified | Unverified | CompileFailed | VerifyFailed
+  executable  : path to compiled binary, or null
+  message     : error detail (CompileFailed)
+  function    : function name (VerifyFailed)
+  counterexample: ESBMC counterexample (VerifyFailed)
+
+EXIT CODES
+  0  success (Verified or Unverified)
+  1  failure (CompileFailed or VerifyFailed)
+
+LANGUAGE SUMMARY
+  module Hello
+
+  fn add(x: i64, y: i64) -> i64 {{
+    x + y
+  }}
+
+  fn divide(x: i64, y: i64) -> i64 vow {{
+    requires: y != 0
+    ensures:  result * y == x
+  }} {{
+    x / y
+  }}
+
+  fn main() -> i32 [io] {{
+    print_i64(divide(10, 2));
+    0
+  }}
+
+TYPES     : i32  i64  f32  f64  bool  ()
+EFFECTS   : io  read  write  panic  unsafe
+BUILTINS  : print_str(str) [io]   print_i64(i64) [io]
+OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !"
+        .to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -246,12 +359,29 @@ pub fn run_pipeline(
 fn main() {
     let args = Args::parse();
 
+    if args.help {
+        if args.human {
+            println!("{}", skill_human());
+        } else {
+            println!("{}", skill_json());
+        }
+        return;
+    }
+
+    let source = match args.source {
+        Some(s) => s,
+        None => {
+            eprintln!("vowc: source file required (try --help)");
+            std::process::exit(1);
+        }
+    };
+
     let mode = match args.mode {
         ModeArg::Debug => BuildMode::Debug,
         ModeArg::Release => BuildMode::Release,
     };
 
-    let output = run_pipeline(&args.source, args.output.as_deref(), mode, args.no_verify);
+    let output = run_pipeline(&source, args.output.as_deref(), mode, args.no_verify);
     output.emit_json();
 
     if matches!(
@@ -503,6 +633,29 @@ fn main() -> i32 [io] {
         assert!(
             !stderr.contains("VowViolation"),
             "unexpected vow violation: {stderr}"
+        );
+    }
+
+    #[test]
+    fn help_flag_emits_json_with_tool_key() {
+        let out = skill_json();
+        assert!(out.contains("\"tool\""), "expected JSON with 'tool' key");
+        assert!(out.contains("vowc"), "expected tool name in output");
+        assert!(
+            out.contains("language"),
+            "expected language section in output"
+        );
+        assert!(out.contains("builtins"), "expected builtins in output");
+    }
+
+    #[test]
+    fn help_human_flag_emits_text() {
+        let out = skill_human();
+        assert!(out.contains("USAGE"), "expected USAGE in human help");
+        assert!(out.contains("TYPES"), "expected TYPES in human help");
+        assert!(
+            out.contains("vow"),
+            "expected vow description in human help"
         );
     }
 
