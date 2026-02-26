@@ -470,6 +470,7 @@ mod tests {
                 id: VowId(0),
                 description: "y != 0".to_string(),
                 blame: Blame::Caller,
+                bindings: vec![],
             }],
             blocks: vec![BasicBlock {
                 id: BlockId(0),
@@ -514,6 +515,7 @@ mod tests {
                 id: VowId(0),
                 description: "result".to_string(),
                 blame: Blame::Callee,
+                bindings: vec![],
             }],
             blocks: vec![BasicBlock {
                 id: BlockId(0),

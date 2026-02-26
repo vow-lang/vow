@@ -1,11 +1,11 @@
+use cranelift_codegen::Context;
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::{
-    types, AbiParam, Block, BlockArg, FuncRef, GlobalValue, InstBuilder, MemFlags, Signature,
-    TrapCode, Value,
+    AbiParam, Block, BlockArg, FuncRef, GlobalValue, InstBuilder, MemFlags, Signature, StackSlot,
+    StackSlotData, StackSlotKind, TrapCode, Value, types,
 };
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::settings::{self, Configurable};
-use cranelift_codegen::Context;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{
     DataDescription, DataId, FuncId as CraneliftFuncId, Linkage, Module as CraneliftModule,
@@ -185,6 +185,12 @@ struct LowerCtx<'a> {
     extern_func_refs: &'a HashMap<String, FuncRef>,
     // VowId → GlobalValue for description strings
     vow_desc_global_values: &'a HashMap<u32, GlobalValue>,
+    // (vow_id, binding_index) → GlobalValue for the binding's name C-string
+    vow_binding_name_gvs: &'a HashMap<(u32, u32), GlobalValue>,
+    // InstId → IrTy for all instructions in the current function
+    inst_ty_map: &'a HashMap<InstId, IrTy>,
+    // reference to current IrFunction for accessing vow entries
+    ir_func: &'a IrFunction,
 }
 
 fn lower_inst(
@@ -530,7 +536,27 @@ fn lower_inst(
                 } else {
                     1u8 // Callee
                 };
-                emit_vow_check(builder, pred, vow_id, blame_byte, ctx)?;
+                let captures: Vec<(GlobalValue, Value, IrTy)> = if let Some(vow_entry) =
+                    ctx.ir_func.vows.get(vow_id as usize)
+                {
+                    vow_entry
+                        .bindings
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(idx, (_, inst_id))| {
+                            let ir_ty = *ctx.inst_ty_map.get(inst_id)?;
+                            if matches!(ir_ty, IrTy::Ptr | IrTy::LinearPtr | IrTy::Unit) {
+                                return None;
+                            }
+                            let cl_val = *ctx.value_map.get(inst_id)?;
+                            let name_gv = *ctx.vow_binding_name_gvs.get(&(vow_id, idx as u32))?;
+                            Some((name_gv, cl_val, ir_ty))
+                        })
+                        .collect()
+                } else {
+                    vec![]
+                };
+                emit_vow_check(builder, pred, vow_id, blame_byte, &captures, ctx)?;
             }
             // In Release mode: no-op
         }
@@ -560,7 +586,7 @@ fn lower_inst(
                 _ => {
                     return Err(CodegenError::UnsupportedOpcode(
                         "Call without CallTarget or CallExtern data".to_string(),
-                    ))
+                    ));
                 }
             };
             let sig_ref = builder.func.dfg.ext_funcs[func_ref].signature;
@@ -631,14 +657,25 @@ fn emit_overflow_check(
     Ok(())
 }
 
+fn tag_for_ir_ty(ty: IrTy) -> u8 {
+    match ty {
+        IrTy::I32 => 0,
+        IrTy::I64 => 1,
+        IrTy::F32 => 2,
+        IrTy::F64 => 3,
+        IrTy::Bool => 4,
+        _ => 0,
+    }
+}
+
 fn emit_vow_check(
     builder: &mut FunctionBuilder,
     predicate: Value,
     vow_id: u32,
     blame: u8,
+    captures: &[(GlobalValue, Value, IrTy)],
     ctx: &mut LowerCtx,
 ) -> Result<(), CodegenError> {
-    // Branch on NOT predicate: if predicate is false, vow is violated
     let one = builder.ins().iconst(types::I8, 1);
     let inv = builder.ins().bxor(predicate, one);
 
@@ -658,7 +695,51 @@ fn emit_vow_check(
         } else {
             builder.ins().iconst(types::I64, 0)
         };
-        builder.ins().call(vr, &[vow_id_val, blame_val, desc_ptr]);
+
+        let n = captures.len();
+        let (bindings_ptr, count_val) = if n > 0 {
+            let slot: StackSlot = builder.create_sized_stack_slot(StackSlotData::new(
+                StackSlotKind::ExplicitSlot,
+                (24 * n) as u32,
+                3,
+            ));
+            for (i, (name_gv, cl_val, ir_ty)) in captures.iter().enumerate() {
+                let name_ptr = builder.ins().global_value(types::I64, *name_gv);
+                builder.ins().stack_store(name_ptr, slot, (i * 24) as i32);
+                let tag_val = builder
+                    .ins()
+                    .iconst(types::I8, tag_for_ir_ty(*ir_ty) as i64);
+                builder
+                    .ins()
+                    .stack_store(tag_val, slot, (i * 24 + 8) as i32);
+                let payload: Value = match ir_ty {
+                    IrTy::I32 => builder.ins().sextend(types::I64, *cl_val),
+                    IrTy::I64 => *cl_val,
+                    IrTy::F32 => {
+                        let bits = builder.ins().bitcast(types::I32, MemFlags::new(), *cl_val);
+                        builder.ins().uextend(types::I64, bits)
+                    }
+                    IrTy::F64 => builder.ins().bitcast(types::I64, MemFlags::new(), *cl_val),
+                    IrTy::Bool => builder.ins().uextend(types::I64, *cl_val),
+                    _ => builder.ins().iconst(types::I64, 0),
+                };
+                builder
+                    .ins()
+                    .stack_store(payload, slot, (i * 24 + 16) as i32);
+            }
+            let base = builder.ins().stack_addr(types::I64, slot, 0);
+            let cnt = builder.ins().iconst(types::I32, n as i64);
+            (base, cnt)
+        } else {
+            let null = builder.ins().iconst(types::I64, 0);
+            let zero = builder.ins().iconst(types::I32, 0);
+            (null, zero)
+        };
+
+        builder.ins().call(
+            vr,
+            &[vow_id_val, blame_val, desc_ptr, bindings_ptr, count_val],
+        );
     }
     builder.ins().trap(TrapCode::unwrap_user(1));
 
@@ -676,6 +757,7 @@ struct RuntimeIds {
     overflow_id: Option<CraneliftFuncId>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_ir_function(
     ctx: &mut Context,
     ir_func: &IrFunction,
@@ -737,8 +819,17 @@ fn compile_ir_function(
         string_global_values.insert(idx as u32, gv);
     }
 
+    // Build InstId → IrTy map for all instructions
+    let mut inst_ty_map: HashMap<InstId, IrTy> = HashMap::new();
+    for ir_block in &ir_func.blocks {
+        for inst in &ir_block.insts {
+            inst_ty_map.insert(inst.id, inst.ty);
+        }
+    }
+
     // Create data sections for vow description strings and map VowId → GlobalValue
     let mut vow_desc_global_values: HashMap<u32, GlobalValue> = HashMap::new();
+    let mut vow_binding_name_gvs: HashMap<(u32, u32), GlobalValue> = HashMap::new();
     if mode == BuildMode::Debug {
         for vow_entry in &ir_func.vows {
             let mut bytes = vow_entry.description.as_bytes().to_vec();
@@ -753,6 +844,21 @@ fn compile_ir_function(
                 .map_err(|e| CodegenError::FunctionDefine(e.to_string()))?;
             let gv = obj_module.declare_data_in_func(data_id, builder.func);
             vow_desc_global_values.insert(vow_entry.id.0, gv);
+
+            for (idx, (name, _)) in vow_entry.bindings.iter().enumerate() {
+                let mut name_bytes = name.as_bytes().to_vec();
+                name_bytes.push(0);
+                let mut name_desc = DataDescription::new();
+                name_desc.define(name_bytes.into_boxed_slice());
+                let name_data_id = obj_module
+                    .declare_anonymous_data(false, false)
+                    .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+                obj_module
+                    .define_data(name_data_id, &name_desc)
+                    .map_err(|e| CodegenError::FunctionDefine(e.to_string()))?;
+                let name_gv = obj_module.declare_data_in_func(name_data_id, builder.func);
+                vow_binding_name_gvs.insert((vow_entry.id.0, idx as u32), name_gv);
+            }
         }
     }
 
@@ -813,6 +919,9 @@ fn compile_ir_function(
             string_global_values: &string_global_values,
             extern_func_refs: &extern_func_refs,
             vow_desc_global_values: &vow_desc_global_values,
+            vow_binding_name_gvs: &vow_binding_name_gvs,
+            inst_ty_map: &inst_ty_map,
+            ir_func,
         };
 
         for inst in &ir_block.insts {
@@ -882,10 +991,10 @@ impl Backend for CraneliftBackend {
         for func in &module.functions {
             for block in &func.blocks {
                 for inst in &block.insts {
-                    if let InstData::CallExtern(sym) = &inst.data {
-                        if !extern_syms.contains(sym) {
-                            extern_syms.push(sym.clone());
-                        }
+                    if let InstData::CallExtern(sym) = &inst.data
+                        && !extern_syms.contains(sym)
+                    {
+                        extern_syms.push(sym.clone());
                     }
                 }
             }
@@ -920,6 +1029,8 @@ impl Backend for CraneliftBackend {
             violation_sig.params.push(AbiParam::new(types::I32)); // vow_id
             violation_sig.params.push(AbiParam::new(types::I8)); // blame
             violation_sig.params.push(AbiParam::new(types::I64)); // desc_ptr
+            violation_sig.params.push(AbiParam::new(types::I64)); // bindings_ptr
+            violation_sig.params.push(AbiParam::new(types::I32)); // binding_count
             let vv_id = obj_module
                 .declare_function("__vow_violation", Linkage::Import, &violation_sig)
                 .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
@@ -948,7 +1059,10 @@ impl Backend for CraneliftBackend {
                 mode,
                 &mut obj_module,
                 &ir_to_cl,
-                &RuntimeIds { vow_violation_id, overflow_id },
+                &RuntimeIds {
+                    vow_violation_id,
+                    overflow_id,
+                },
                 &string_data_ids,
                 &extern_func_ids,
             )?;
@@ -1181,6 +1295,7 @@ mod tests {
             id: vow_ir::VowId(0),
             description: String::new(),
             blame: vow_diag::Blame::None,
+            bindings: vec![],
         };
         let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
         assert!(result.is_ok(), "{:?}", result.err());

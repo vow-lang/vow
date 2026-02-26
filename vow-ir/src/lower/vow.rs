@@ -1,30 +1,33 @@
 use vow_diag::Blame;
-use vow_syntax::ast::{ExprKind, VowBlock, VowClause};
+use vow_syntax::ast::{Expr, ExprKind, VowBlock, VowClause};
 
 use crate::types::{InstData, InstId, Opcode, Ty};
 
 use super::LowerCtx;
 
-fn clause_description(clause: &VowClause) -> String {
+fn clause_expr(clause: &VowClause) -> &Expr {
     match clause {
-        VowClause::Requires { expr, .. } => {
-            format!("requires {}", vow_syntax::printer::print_expr(expr))
-        }
-        VowClause::Ensures { expr, .. } => {
-            format!("ensures {}", vow_syntax::printer::print_expr(expr))
-        }
-        VowClause::Invariant { expr, .. } => {
-            format!("invariant {}", vow_syntax::printer::print_expr(expr))
-        }
-    }
-}
-
-fn lower_predicate(ctx: &mut LowerCtx, clause: &VowClause, result_id: Option<InstId>) -> InstId {
-    let expr = match clause {
         VowClause::Requires { expr, .. } => expr,
         VowClause::Ensures { expr, .. } => expr,
         VowClause::Invariant { expr, .. } => expr,
+    }
+}
+
+fn clause_description(clause: &VowClause) -> String {
+    let prefix = match clause {
+        VowClause::Requires { .. } => "requires",
+        VowClause::Ensures { .. } => "ensures",
+        VowClause::Invariant { .. } => "invariant",
     };
+    format!(
+        "{} {}",
+        prefix,
+        vow_syntax::printer::print_expr(clause_expr(clause))
+    )
+}
+
+fn lower_predicate(ctx: &mut LowerCtx, clause: &VowClause, result_id: Option<InstId>) -> InstId {
+    let expr = clause_expr(clause);
     let span = expr.span;
     if matches!(expr.kind, ExprKind::Result) {
         if let Some(id) = result_id {
@@ -35,11 +38,80 @@ fn lower_predicate(ctx: &mut LowerCtx, clause: &VowClause, result_id: Option<Ins
     super::lower_expr_pub(ctx, expr)
 }
 
+fn collect_free_vars(ctx: &LowerCtx, expr: &Expr) -> Vec<(String, InstId)> {
+    let mut out: Vec<(String, InstId)> = Vec::new();
+    collect_vars_in_expr(ctx, expr, &mut out);
+    out
+}
+
+fn collect_vars_in_expr(ctx: &LowerCtx, expr: &Expr, out: &mut Vec<(String, InstId)>) {
+    match &expr.kind {
+        ExprKind::Ident(name) => {
+            if let Some(id) = ctx.lookup(name)
+                && !out.iter().any(|(n, _)| n == name)
+            {
+                out.push((name.clone(), id));
+            }
+        }
+        ExprKind::Result => {
+            if let Some(id) = ctx.lookup("result")
+                && !out.iter().any(|(n, _)| n == "result")
+            {
+                out.push(("result".to_string(), id));
+            }
+        }
+        ExprKind::BinaryOp { lhs, rhs, .. } => {
+            collect_vars_in_expr(ctx, lhs, out);
+            collect_vars_in_expr(ctx, rhs, out);
+        }
+        ExprKind::UnaryOp { operand, .. } => {
+            collect_vars_in_expr(ctx, operand, out);
+        }
+        ExprKind::Call { callee, args } => {
+            collect_vars_in_expr(ctx, callee, out);
+            for arg in args {
+                collect_vars_in_expr(ctx, arg, out);
+            }
+        }
+        ExprKind::Block(block) => {
+            for stmt in &block.stmts {
+                if let vow_syntax::ast::Stmt::Expr { expr, .. } = stmt {
+                    collect_vars_in_expr(ctx, expr, out);
+                }
+            }
+            if let Some(e) = &block.trailing_expr {
+                collect_vars_in_expr(ctx, e, out);
+            }
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_vars_in_expr(ctx, condition, out);
+            for stmt in &then_branch.stmts {
+                if let vow_syntax::ast::Stmt::Expr { expr, .. } = stmt {
+                    collect_vars_in_expr(ctx, expr, out);
+                }
+            }
+            if let Some(e) = &then_branch.trailing_expr {
+                collect_vars_in_expr(ctx, e, out);
+            }
+            if let Some(e) = else_branch {
+                collect_vars_in_expr(ctx, e, out);
+            }
+        }
+        ExprKind::Lit(_) | ExprKind::Break { .. } | ExprKind::Return { .. } => {}
+        _ => {}
+    }
+}
+
 pub fn lower_requires(ctx: &mut LowerCtx, vow_block: &VowBlock) {
     for clause in &vow_block.clauses {
         if let VowClause::Requires { span, .. } = clause {
             let desc = clause_description(clause);
-            let vow_id = ctx.alloc_vow(desc, Blame::Caller);
+            let bindings = collect_free_vars(ctx, clause_expr(clause));
+            let vow_id = ctx.alloc_vow(desc, Blame::Caller, bindings);
             let pred_id = lower_predicate(ctx, clause, None);
             ctx.emit(
                 Opcode::VowRequires,
@@ -53,13 +125,13 @@ pub fn lower_requires(ctx: &mut LowerCtx, vow_block: &VowBlock) {
 }
 
 pub fn lower_ensures(ctx: &mut LowerCtx, vow_block: &VowBlock, result_id: InstId) {
-    // Bind "result" in scope so it's accessible in ensures predicates.
     ctx.push_scope();
     ctx.define("result".to_string(), result_id);
     for clause in &vow_block.clauses {
         if let VowClause::Ensures { span, .. } = clause {
             let desc = clause_description(clause);
-            let vow_id = ctx.alloc_vow(desc, Blame::Callee);
+            let bindings = collect_free_vars(ctx, clause_expr(clause));
+            let vow_id = ctx.alloc_vow(desc, Blame::Callee, bindings);
             let pred_id = lower_predicate(ctx, clause, Some(result_id));
             ctx.emit(
                 Opcode::VowEnsures,
@@ -77,7 +149,8 @@ pub fn lower_invariant(ctx: &mut LowerCtx, vow_block: &VowBlock) {
     for clause in &vow_block.clauses {
         if let VowClause::Invariant { span, .. } = clause {
             let desc = clause_description(clause);
-            let vow_id = ctx.alloc_vow(desc, Blame::Callee);
+            let bindings = collect_free_vars(ctx, clause_expr(clause));
+            let vow_id = ctx.alloc_vow(desc, Blame::Callee, bindings);
             let pred_id = lower_predicate(ctx, clause, None);
             ctx.emit(
                 Opcode::VowInvariant,
@@ -172,6 +245,7 @@ mod tests {
 
         assert_eq!(func.vows.len(), 1);
         assert_eq!(func.vows[0].blame, Blame::Caller);
+        assert_eq!(func.vows[0].bindings, vec![]);
     }
 
     #[test]
@@ -202,6 +276,7 @@ mod tests {
             vow_ens_pos < ret_pos,
             "VowEnsures must appear before Return"
         );
+        assert_eq!(func.vows[0].bindings, vec![]);
     }
 
     #[test]
@@ -219,6 +294,7 @@ mod tests {
 
         assert_eq!(func.vows.len(), 1);
         assert_eq!(func.vows[0].blame, Blame::Caller);
+        assert_eq!(func.vows[0].bindings, vec![]);
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
         let req = all_insts
@@ -243,6 +319,7 @@ mod tests {
 
         assert_eq!(func.vows.len(), 1);
         assert_eq!(func.vows[0].blame, Blame::Callee);
+        assert_eq!(func.vows[0].bindings, vec![]);
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
         let ens = all_insts

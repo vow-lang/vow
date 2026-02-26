@@ -148,12 +148,18 @@ impl LowerCtx {
         self.current_block = block;
     }
 
-    pub(super) fn alloc_vow(&mut self, description: String, blame: Blame) -> VowId {
+    pub(super) fn alloc_vow(
+        &mut self,
+        description: String,
+        blame: Blame,
+        bindings: Vec<(String, InstId)>,
+    ) -> VowId {
         let id = VowId(self.func.vows.len() as u32);
         self.func.vows.push(VowEntry {
             id,
             description,
             blame,
+            bindings,
         });
         id
     }
@@ -209,10 +215,10 @@ fn collect_assigned_in_stmt(stmt: &Stmt, seen: &mut HashSet<String>, out: &mut V
 fn collect_assigned_in_expr(expr: &Expr, seen: &mut HashSet<String>, out: &mut Vec<String>) {
     match &expr.kind {
         ExprKind::Assign { lhs, rhs } => {
-            if let ExprKind::Ident(name) = &lhs.kind {
-                if seen.insert(name.clone()) {
-                    out.push(name.clone());
-                }
+            if let ExprKind::Ident(name) = &lhs.kind
+                && seen.insert(name.clone())
+            {
+                out.push(name.clone());
             }
             collect_assigned_in_expr(rhs, seen, out);
         }
@@ -256,11 +262,10 @@ fn collect_assigned_in_expr(expr: &Expr, seen: &mut HashSet<String>, out: &mut V
             collect_assigned_in_expr(rhs, seen, out);
         }
         ExprKind::UnaryOp { operand, .. } => collect_assigned_in_expr(operand, seen, out),
-        ExprKind::Return { value } => {
-            if let Some(v) = value {
-                collect_assigned_in_expr(v, seen, out);
-            }
+        ExprKind::Return { value: Some(v), .. } => {
+            collect_assigned_in_expr(v, seen, out);
         }
+        ExprKind::Return { value: None, .. } => {}
         _ => {}
     }
 }

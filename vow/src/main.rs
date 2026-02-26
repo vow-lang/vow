@@ -7,7 +7,7 @@ use vow_codegen::cranelift_backend::CraneliftBackend;
 use vow_codegen::linker::{find_runtime_lib, link};
 use vow_codegen::{Backend, BuildMode};
 use vow_diag::{DiagnosticEmitter, HumanEmitter, Severity};
-use vow_verify::{verify_function, VerificationResult};
+use vow_verify::{VerificationResult, verify_function};
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -42,54 +42,53 @@ struct Args {
 // ---------------------------------------------------------------------------
 
 fn skill_json() -> String {
-    format!(
-        r#"{{
+    r#"{
   "tool": "vowc",
   "description": "Vow compiler: compiles Vow source to native executables with contract verification",
   "usage": "vowc [OPTIONS] <source.vow>",
-  "options": {{
+  "options": {
     "--output <path>": "Output executable path (default: source without .vow extension)",
     "--mode <debug|release>": "Build mode; debug inserts runtime vow checks (default: release)",
     "--no-verify": "Skip ESBMC static verification",
     "--help": "Print this JSON capability description",
     "--help --human": "Print human-readable capability description"
-  }},
-  "output_json": {{
+  },
+  "output_json": {
     "status": "Verified | Unverified | CompileFailed | VerifyFailed",
     "executable": "path to compiled binary, or null",
     "message": "error detail (CompileFailed)",
     "function": "function name (VerifyFailed)",
     "counterexample": "ESBMC counterexample description (VerifyFailed)"
-  }},
-  "exit_codes": {{
+  },
+  "exit_codes": {
     "0": "success (Verified or Unverified)",
     "1": "failure (CompileFailed or VerifyFailed)"
-  }},
-  "language": {{
+  },
+  "language": {
     "module": "module <Name>",
-    "function": "fn <name>(<params>) -> <RetTy> [<effects>] {{ <body> }}",
-    "vow_function": "fn <name>(<params>) -> <RetTy> vow {{ requires: <expr>; ensures: <expr> }} {{ <body> }}",
-    "while_with_invariant": "while <cond> vow {{ invariant: <expr> }} {{ <body> }}",
+    "function": "fn <name>(<params>) -> <RetTy> [<effects>] { <body> }",
+    "vow_function": "fn <name>(<params>) -> <RetTy> vow { requires: <expr>; ensures: <expr> } { <body> }",
+    "while_with_invariant": "while <cond> vow { invariant: <expr> } { <body> }",
     "types": ["i32", "i64", "f32", "f64", "bool", "()"],
     "effects": ["io", "read", "write", "panic", "unsafe"],
-    "builtins": {{
+    "builtins": {
       "print_str": "fn(s: str) -> () [io]",
       "print_i64": "fn(v: i64) -> () [io]"
-    }},
-    "operators": {{
+    },
+    "operators": {
       "arithmetic": ["+", "-", "*", "/", "%"],
       "checked_arithmetic": ["+!", "-!", "*!", "/!", "%!"],
       "comparison": ["==", "!=", "<", "<=", ">", ">="],
       "logical": ["&&", "||", "!"]
-    }},
-    "vow_clauses": {{
+    },
+    "vow_clauses": {
       "requires": "precondition — blame=Caller on violation",
       "ensures": "postcondition — blame=Callee on violation; use `result` for return value",
       "invariant": "loop invariant — checked at top of each iteration"
-    }}
-  }}
-}}"#
-    )
+    }
+  }
+}"#
+    .to_string()
 }
 
 fn skill_human() -> String {
@@ -223,7 +222,7 @@ pub fn run_pipeline(
                     message: e.to_string(),
                 },
                 executable: None,
-            }
+            };
         }
     };
 

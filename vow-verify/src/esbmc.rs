@@ -40,11 +40,7 @@ fn which(name: &str) -> Option<PathBuf> {
     std::env::var_os("PATH").and_then(|paths| {
         std::env::split_paths(&paths).find_map(|dir| {
             let full = dir.join(name);
-            if full.is_file() {
-                Some(full)
-            } else {
-                None
-            }
+            if full.is_file() { Some(full) } else { None }
         })
     })
 }
@@ -175,6 +171,7 @@ mod tests {
                 id: VowId(0),
                 description: "true".to_string(),
                 blame: Blame::Callee,
+                bindings: vec![],
             }],
             blocks: vec![BasicBlock {
                 id: BlockId(0),
@@ -213,6 +210,7 @@ mod tests {
                 id: VowId(0),
                 description: "false".to_string(),
                 blame: Blame::Callee,
+                bindings: vec![],
             }],
             blocks: vec![BasicBlock {
                 id: BlockId(0),
@@ -279,6 +277,7 @@ mod tests {
                 id: VowId(0),
                 description: "y != 0".to_string(),
                 blame: Blame::Caller,
+                bindings: vec![],
             }],
             blocks: vec![BasicBlock {
                 id: BlockId(0),

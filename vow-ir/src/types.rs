@@ -179,6 +179,7 @@ pub struct VowEntry {
     pub id: VowId,
     pub description: String,
     pub blame: Blame,
+    pub bindings: Vec<(String, InstId)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -156,12 +156,7 @@ impl<'e> Checker<'e> {
                             }
                         })
                         .collect();
-                    self.env.define_enum(
-                        &e.name,
-                        EnumInfo {
-                            variants,
-                        },
-                    );
+                    self.env.define_enum(&e.name, EnumInfo { variants });
                 }
                 Item::TypeAlias(a) => match self.env.resolve(&a.ty) {
                     Ok(ty) => self.env.define_alias(&a.name, ty),
