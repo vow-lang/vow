@@ -1,6 +1,14 @@
+pub mod effects;
+pub mod insertion_set;
+pub mod printer;
 pub mod types;
+pub mod validator;
 
+pub use effects::{AbstractHeap, Effects, HeapSet, inst_effects};
+pub use insertion_set::InsertionSet;
+pub use printer::{print_function, print_module};
 pub use types::{
     BasicBlock, BlockId, FuncId, Function, Inst, InstData, InstId, Module, Opcode, RegionId, Ty,
     VowEntry, VowId,
 };
+pub use validator::{ValidationError, ValidationResult, validate, validate_function};

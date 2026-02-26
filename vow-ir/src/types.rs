@@ -114,6 +114,15 @@ pub enum Opcode {
     LinearBorrow,
 }
 
+impl Opcode {
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            Opcode::Branch | Opcode::Jump | Opcode::Return | Opcode::Unreachable
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum InstData {
     None,
