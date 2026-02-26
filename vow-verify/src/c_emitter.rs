@@ -51,6 +51,9 @@ fn emit_inst(inst: &Inst, out: &mut String) {
         Opcode::ConstUnit => {
             out.push_str(&format!("  int32_t v{} = 0;\n", id));
         }
+        Opcode::ConstStr => {
+            out.push_str(&format!("  void* v{} = 0; /* string not modelled */\n", id));
+        }
 
         // Arguments — emitted as parameter names at function top
         Opcode::GetArg => {}

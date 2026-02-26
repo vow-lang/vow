@@ -7,9 +7,15 @@ use super::LowerCtx;
 
 fn clause_description(clause: &VowClause) -> String {
     match clause {
-        VowClause::Requires { expr, .. } => format!("requires {:?}", expr.kind),
-        VowClause::Ensures { expr, .. } => format!("ensures {:?}", expr.kind),
-        VowClause::Invariant { expr, .. } => format!("invariant {:?}", expr.kind),
+        VowClause::Requires { expr, .. } => {
+            format!("requires {}", vow_syntax::printer::print_expr(expr))
+        }
+        VowClause::Ensures { expr, .. } => {
+            format!("ensures {}", vow_syntax::printer::print_expr(expr))
+        }
+        VowClause::Invariant { expr, .. } => {
+            format!("invariant {}", vow_syntax::printer::print_expr(expr))
+        }
     }
 }
 
@@ -143,7 +149,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn_with_vow(Some(vow_block));
-        let func = lower_function(&fn_def);
+        let (func, _) = lower_function(&fn_def, &std::collections::HashMap::new());
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
 
@@ -176,7 +182,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn_with_vow(Some(vow_block));
-        let func = lower_function(&fn_def);
+        let (func, _) = lower_function(&fn_def, &std::collections::HashMap::new());
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
 
@@ -206,7 +212,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn_with_vow(Some(vow_block));
-        let func = lower_function(&fn_def);
+        let (func, _) = lower_function(&fn_def, &std::collections::HashMap::new());
 
         assert_eq!(func.vows.len(), 1);
         assert_eq!(func.vows[0].blame, Blame::Caller);
@@ -230,7 +236,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn_with_vow(Some(vow_block));
-        let func = lower_function(&fn_def);
+        let (func, _) = lower_function(&fn_def, &std::collections::HashMap::new());
 
         assert_eq!(func.vows.len(), 1);
         assert_eq!(func.vows[0].blame, Blame::Callee);

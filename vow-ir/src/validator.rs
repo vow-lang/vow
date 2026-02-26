@@ -209,6 +209,7 @@ mod tests {
         let module = Module {
             name: "m".to_string(),
             functions: vec![func],
+            strings: vec![],
         };
         assert!(validate(&module).is_ok());
     }
@@ -219,6 +220,7 @@ mod tests {
         let module = Module {
             name: "m".to_string(),
             functions: vec![func],
+            strings: vec![],
         };
         let result = validate(&module);
         assert!(!result.is_ok());
@@ -247,6 +249,7 @@ mod tests {
         let module = Module {
             name: "m".to_string(),
             functions: vec![func],
+            strings: vec![],
         };
         let result = validate(&module);
         assert!(!result.is_ok());
@@ -279,6 +282,7 @@ mod tests {
         let module = Module {
             name: "m".to_string(),
             functions: vec![func],
+            strings: vec![],
         };
         let result = validate(&module);
         assert!(!result.is_ok());
@@ -304,6 +308,7 @@ mod tests {
         let module = Module {
             name: "m".to_string(),
             functions: vec![func],
+            strings: vec![],
         };
         let result = validate(&module);
         assert!(!result.is_ok());
@@ -335,6 +340,7 @@ mod tests {
         let module = Module {
             name: "m".to_string(),
             functions: vec![func],
+            strings: vec![],
         };
         let result = validate(&module);
         assert!(!result.is_ok());
@@ -380,6 +386,7 @@ mod tests {
         let module = Module {
             name: "m".to_string(),
             functions: vec![func],
+            strings: vec![],
         };
         let result = validate(&module);
         assert!(!result.is_ok());
@@ -405,6 +412,7 @@ mod tests {
         let module = Module {
             name: "m".to_string(),
             functions: vec![func],
+            strings: vec![],
         };
         let result = validate(&module);
         assert!(!result.is_ok());

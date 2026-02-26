@@ -25,6 +25,7 @@ fn opcode_name(opcode: &Opcode) -> &'static str {
         Opcode::ConstF32 => "ConstF32",
         Opcode::ConstF64 => "ConstF64",
         Opcode::ConstBool => "ConstBool",
+        Opcode::ConstStr => "ConstStr",
         Opcode::ConstUnit => "ConstUnit",
         Opcode::GetArg => "GetArg",
         Opcode::WrappingAddI32 => "WrappingAddI32",
@@ -111,9 +112,11 @@ fn format_data(data: &InstData) -> Option<String> {
         InstData::ConstF32(v) => Some(v.to_string()),
         InstData::ConstF64(v) => Some(v.to_string()),
         InstData::ConstBool(v) => Some(v.to_string()),
+        InstData::ConstStr(idx) => Some(format!("@{idx}")),
         InstData::ArgIndex(n) => Some(n.to_string()),
         InstData::PhiTarget(id) => Some(format!("%{}", id.0)),
         InstData::CallTarget(fid) => Some(format!("func{}", fid.0)),
+        InstData::CallExtern(sym) => Some(format!("extern:{sym}")),
         InstData::BranchTargets {
             then_block,
             else_block,
@@ -171,12 +174,20 @@ pub fn print_function(func: &Function) -> String {
 }
 
 pub fn print_module(module: &Module) -> String {
-    module
-        .functions
-        .iter()
-        .map(print_function)
-        .collect::<Vec<_>>()
-        .join("\n\n")
+    let mut parts = Vec::new();
+    if !module.strings.is_empty() {
+        let pool: Vec<String> = module
+            .strings
+            .iter()
+            .enumerate()
+            .map(|(i, s)| format!("  @{i} = {:?}", s))
+            .collect();
+        parts.push(format!("strings:\n{}", pool.join("\n")));
+    }
+    for func in &module.functions {
+        parts.push(print_function(func));
+    }
+    parts.join("\n\n")
 }
 
 fn effect_str(e: &Effect) -> &'static str {
@@ -346,6 +357,7 @@ mod tests {
         let module = Module {
             name: "m".to_string(),
             functions: vec![func],
+            strings: vec![],
         };
         let output = print_module(&module);
         assert!(output.contains("IO"));

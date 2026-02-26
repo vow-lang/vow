@@ -1,10 +1,10 @@
 pub mod vow;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use vow_diag::Blame;
 use vow_syntax::ast::{
-    BinOp, Block, Effect, ExprKind, FnDef, Item, Lit, Module as AstModule, PatKind, Stmt,
+    BinOp, Block, Effect, Expr, ExprKind, FnDef, Item, Lit, Module as AstModule, PatKind, Stmt,
     Type as AstType, UnOp, VowBlock,
 };
 use vow_syntax::span::Span;
@@ -14,7 +14,15 @@ use crate::types::{
     VowId,
 };
 
-fn lower_ty(ast_ty: &AstType) -> Ty {
+fn vow_builtin_to_runtime(name: &str) -> Option<&'static str> {
+    match name {
+        "print_str" => Some("__vow_print_str"),
+        "print_i64" => Some("__vow_print_i64"),
+        _ => None,
+    }
+}
+
+pub(crate) fn lower_ty(ast_ty: &AstType) -> Ty {
     match ast_ty {
         AstType::Named { name, .. } => match name.as_str() {
             "i32" => Ty::I32,
@@ -36,10 +44,19 @@ pub struct LowerCtx {
     next_inst_id: u32,
     scope: Vec<HashMap<String, InstId>>,
     pub(super) vow_block: Option<VowBlock>,
+    pub(super) string_pool: Vec<String>,
+    func_index: HashMap<String, (FuncId, Ty)>,
+    pub(super) current_return_ty: Ty,
 }
 
 impl LowerCtx {
-    pub fn new(name: String, params: Vec<Ty>, return_ty: Ty, effects: Vec<Effect>) -> Self {
+    pub fn new(
+        name: String,
+        params: Vec<Ty>,
+        return_ty: Ty,
+        effects: Vec<Effect>,
+        func_index: HashMap<String, (FuncId, Ty)>,
+    ) -> Self {
         let entry = BasicBlock {
             id: BlockId(0),
             insts: vec![],
@@ -54,12 +71,24 @@ impl LowerCtx {
             blocks: vec![entry],
         };
         LowerCtx {
+            current_return_ty: return_ty,
             func,
             current_block: BlockId(0),
             next_inst_id: 0,
             scope: vec![HashMap::new()],
             vow_block: None,
+            string_pool: Vec::new(),
+            func_index,
         }
+    }
+
+    pub(super) fn intern_str(&mut self, s: &str) -> u32 {
+        if let Some(idx) = self.string_pool.iter().position(|x| x == s) {
+            return idx as u32;
+        }
+        let idx = self.string_pool.len() as u32;
+        self.string_pool.push(s.to_string());
+        idx
     }
 
     pub(super) fn push_scope(&mut self) {
@@ -74,6 +103,30 @@ impl LowerCtx {
         if let Some(top) = self.scope.last_mut() {
             top.insert(name, id);
         }
+    }
+
+    /// Update an existing binding in the outermost scope frame that contains it.
+    /// If not found, creates a new binding in the current frame.
+    pub(super) fn assign(&mut self, name: &str, id: InstId) {
+        for frame in self.scope.iter_mut().rev() {
+            if frame.contains_key(name) {
+                frame.insert(name.to_string(), id);
+                return;
+            }
+        }
+        self.define(name.to_string(), id);
+    }
+
+    /// Look up the type of an already-emitted instruction.
+    pub(super) fn inst_ty(&self, id: InstId) -> Ty {
+        for block in &self.func.blocks {
+            for inst in &block.insts {
+                if inst.id == id {
+                    return inst.ty;
+                }
+            }
+        }
+        Ty::Unit
     }
 
     pub(super) fn lookup(&self, name: &str) -> Option<InstId> {
@@ -128,8 +181,87 @@ impl LowerCtx {
         id
     }
 
-    pub fn finish(self) -> Function {
-        self.func
+    pub fn finish(self) -> (Function, Vec<String>) {
+        (self.func, self.string_pool)
+    }
+}
+
+/// Collect names of variables assigned anywhere in a block (recursively).
+/// Used to identify loop-carried variables that need Phi nodes.
+fn collect_assigned_vars(block: &Block) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut result = vec![];
+    for stmt in &block.stmts {
+        collect_assigned_in_stmt(stmt, &mut seen, &mut result);
+    }
+    if let Some(e) = &block.trailing_expr {
+        collect_assigned_in_expr(e, &mut seen, &mut result);
+    }
+    result
+}
+
+fn collect_assigned_in_stmt(stmt: &Stmt, seen: &mut HashSet<String>, out: &mut Vec<String>) {
+    if let Stmt::Expr { expr, .. } = stmt {
+        collect_assigned_in_expr(expr, seen, out);
+    }
+}
+
+fn collect_assigned_in_expr(expr: &Expr, seen: &mut HashSet<String>, out: &mut Vec<String>) {
+    match &expr.kind {
+        ExprKind::Assign { lhs, rhs } => {
+            if let ExprKind::Ident(name) = &lhs.kind {
+                if seen.insert(name.clone()) {
+                    out.push(name.clone());
+                }
+            }
+            collect_assigned_in_expr(rhs, seen, out);
+        }
+        ExprKind::Block(b) => {
+            for s in &b.stmts {
+                collect_assigned_in_stmt(s, seen, out);
+            }
+            if let Some(e) = &b.trailing_expr {
+                collect_assigned_in_expr(e, seen, out);
+            }
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_assigned_in_expr(condition, seen, out);
+            for s in &then_branch.stmts {
+                collect_assigned_in_stmt(s, seen, out);
+            }
+            if let Some(e) = &then_branch.trailing_expr {
+                collect_assigned_in_expr(e, seen, out);
+            }
+            if let Some(e) = else_branch {
+                collect_assigned_in_expr(e, seen, out);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            collect_assigned_in_expr(condition, seen, out);
+            for s in &body.stmts {
+                collect_assigned_in_stmt(s, seen, out);
+            }
+            if let Some(e) = &body.trailing_expr {
+                collect_assigned_in_expr(e, seen, out);
+            }
+        }
+        ExprKind::BinaryOp { lhs, rhs, .. } => {
+            collect_assigned_in_expr(lhs, seen, out);
+            collect_assigned_in_expr(rhs, seen, out);
+        }
+        ExprKind::UnaryOp { operand, .. } => collect_assigned_in_expr(operand, seen, out),
+        ExprKind::Return { value } => {
+            if let Some(v) = value {
+                collect_assigned_in_expr(v, seen, out);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -141,13 +273,25 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
     let span = expr.span;
     match &expr.kind {
         ExprKind::Lit(lit) => match lit {
-            Lit::Int(v) => ctx.emit(
-                Opcode::ConstI64,
-                Ty::I64,
-                vec![],
-                InstData::ConstI64(*v as i64),
-                span,
-            ),
+            Lit::Int(v) => {
+                if ctx.current_return_ty == Ty::I32 {
+                    ctx.emit(
+                        Opcode::ConstI32,
+                        Ty::I32,
+                        vec![],
+                        InstData::ConstI32(*v as i32),
+                        span,
+                    )
+                } else {
+                    ctx.emit(
+                        Opcode::ConstI64,
+                        Ty::I64,
+                        vec![],
+                        InstData::ConstI64(*v as i64),
+                        span,
+                    )
+                }
+            }
             Lit::Float(v) => ctx.emit(
                 Opcode::ConstF64,
                 Ty::F64,
@@ -162,7 +306,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 InstData::ConstBool(*v),
                 span,
             ),
-            Lit::String(_) => ctx.emit(Opcode::ConstUnit, Ty::Ptr, vec![], InstData::None, span),
+            Lit::String(s) => {
+                let idx = ctx.intern_str(s);
+                ctx.emit(
+                    Opcode::ConstStr,
+                    Ty::Ptr,
+                    vec![],
+                    InstData::ConstStr(idx),
+                    span,
+                )
+            }
         },
         ExprKind::Ident(name) => ctx
             .lookup(name)
@@ -186,15 +339,33 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ),
             }
         }
-        ExprKind::Call { callee: _, args } => {
+        ExprKind::Call { callee, args } => {
             let arg_ids: Vec<InstId> = args.iter().map(|a| lower_expr(ctx, a)).collect();
-            ctx.emit(
-                Opcode::Call,
-                Ty::Unit,
-                arg_ids,
-                InstData::CallTarget(FuncId(0)),
-                span,
-            )
+            let callee_name = match &callee.kind {
+                ExprKind::Ident(name) => name.clone(),
+                _ => todo!("non-ident callee in Call lowering"),
+            };
+            let call_info = ctx.func_index.get(&callee_name).copied();
+            if let Some((fid, ret_ty)) = call_info {
+                ctx.emit(
+                    Opcode::Call,
+                    ret_ty,
+                    arg_ids,
+                    InstData::CallTarget(fid),
+                    span,
+                )
+            } else {
+                let extern_name = vow_builtin_to_runtime(&callee_name)
+                    .map(str::to_owned)
+                    .unwrap_or(callee_name);
+                ctx.emit(
+                    Opcode::Call,
+                    Ty::Unit,
+                    arg_ids,
+                    InstData::CallExtern(extern_name),
+                    span,
+                )
+            }
         }
         ExprKind::If {
             condition,
@@ -284,6 +455,121 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ctx.emit(Opcode::Return, Ty::Unit, vec![unit], InstData::None, span)
             }
         }
+        ExprKind::Assign { lhs, rhs } => {
+            let new_val = lower_expr(ctx, rhs);
+            if let ExprKind::Ident(name) = &lhs.kind {
+                ctx.assign(name, new_val);
+            }
+            new_val
+        }
+        ExprKind::While {
+            condition,
+            body,
+            vow: while_vow,
+        } => {
+            let mutated = collect_assigned_vars(body);
+
+            // Gather pre-loop (name, current_value) for mutated vars that exist in scope.
+            let loop_vars: Vec<(String, InstId)> = mutated
+                .into_iter()
+                .filter_map(|name| ctx.lookup(&name).map(|id| (name, id)))
+                .collect();
+
+            let pre_header_block = ctx.current_block;
+            let header_block = ctx.new_block();
+            let body_block = ctx.new_block();
+            let exit_block = ctx.new_block();
+
+            // Emit placeholder Upsilons for each loop var, then jump to header.
+            let mut upsilon_ids: Vec<(String, InstId)> = vec![];
+            for (name, pre_val) in &loop_vars {
+                let ty = ctx.inst_ty(*pre_val);
+                let up_id = ctx.emit(
+                    Opcode::Upsilon,
+                    ty,
+                    vec![*pre_val],
+                    InstData::PhiTarget(InstId(u32::MAX)),
+                    span,
+                );
+                upsilon_ids.push((name.clone(), up_id));
+            }
+            ctx.emit(
+                Opcode::Jump,
+                Ty::Unit,
+                vec![],
+                InstData::JumpTarget(header_block),
+                span,
+            );
+
+            // Header: emit Phis, then backpatch the pre-header Upsilons.
+            ctx.switch_to_block(header_block);
+            let mut phi_ids: Vec<(String, InstId)> = vec![];
+            for (name, pre_val) in &loop_vars {
+                let ty = ctx.inst_ty(*pre_val);
+                let phi_id = ctx.emit(Opcode::Phi, ty, vec![], InstData::None, span);
+                phi_ids.push((name.clone(), phi_id));
+            }
+            for (name, up_id) in &upsilon_ids {
+                let phi_id = phi_ids.iter().find(|(n, _)| n == name).unwrap().1;
+                backpatch_upsilon(ctx, pre_header_block, *up_id, phi_id);
+            }
+
+            // Update scope: rebind each loop var to its Phi.
+            for (name, phi_id) in &phi_ids {
+                ctx.assign(name, *phi_id);
+            }
+
+            // Lower vow invariant at top of header (before condition).
+            if let Some(wv) = while_vow {
+                vow::lower_invariant(ctx, wv);
+            }
+
+            // Lower condition, then branch.
+            let cond_id = lower_expr(ctx, condition);
+            ctx.emit(
+                Opcode::Branch,
+                Ty::Unit,
+                vec![cond_id],
+                InstData::BranchTargets {
+                    then_block: body_block,
+                    else_block: exit_block,
+                },
+                span,
+            );
+
+            // Body: lower body (push/pop scope handles lets inside body).
+            ctx.switch_to_block(body_block);
+            lower_block(ctx, body);
+
+            // Emit back-edge Upsilons with the current scope values.
+            for (name, phi_id) in &phi_ids {
+                if let Some(cur_val) = ctx.lookup(name) {
+                    ctx.emit(
+                        Opcode::Upsilon,
+                        ctx.inst_ty(cur_val),
+                        vec![cur_val],
+                        InstData::PhiTarget(*phi_id),
+                        span,
+                    );
+                }
+            }
+            ctx.emit(
+                Opcode::Jump,
+                Ty::Unit,
+                vec![],
+                InstData::JumpTarget(header_block),
+                span,
+            );
+
+            // Restore scope to Phi values so the exit block sees the loop-exit values.
+            for (name, phi_id) in &phi_ids {
+                ctx.assign(name, *phi_id);
+            }
+
+            // Exit block.
+            ctx.switch_to_block(exit_block);
+            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+        }
         _ => todo!("IR lowering not implemented for {:?}", expr.kind),
     }
 }
@@ -359,12 +645,21 @@ fn lower_block_inner(ctx: &mut LowerCtx, block: &Block) -> InstId {
     }
 }
 
-pub fn lower_function(fn_def: &FnDef) -> Function {
+pub fn lower_function(
+    fn_def: &FnDef,
+    func_index: &HashMap<String, (FuncId, Ty)>,
+) -> (Function, Vec<String>) {
     let params: Vec<Ty> = fn_def.params.iter().map(|p| lower_ty(&p.ty)).collect();
     let return_ty = lower_ty(&fn_def.return_ty);
     let effects = fn_def.effects.clone();
 
-    let mut ctx = LowerCtx::new(fn_def.name.clone(), params.clone(), return_ty, effects);
+    let mut ctx = LowerCtx::new(
+        fn_def.name.clone(),
+        params.clone(),
+        return_ty,
+        effects,
+        func_index.clone(),
+    );
 
     if let Some(vow) = &fn_def.vow {
         ctx.vow_block = Some(vow.clone());
@@ -416,25 +711,52 @@ pub fn lower_function(fn_def: &FnDef) -> Function {
 }
 
 pub fn lower_module(module: &AstModule) -> Module {
-    let functions = module
+    let fn_items: Vec<&FnDef> = module
         .items
         .iter()
         .filter_map(|item| {
             if let Item::Fn(fn_def) = item {
-                Some(lower_function(fn_def))
+                Some(fn_def)
             } else {
                 None
             }
         })
+        .collect();
+
+    let func_index: HashMap<String, (FuncId, Ty)> = fn_items
+        .iter()
         .enumerate()
-        .map(|(idx, mut func)| {
+        .map(|(idx, fn_def)| {
+            let ret_ty = lower_ty(&fn_def.return_ty);
+            (fn_def.name.clone(), (FuncId(idx as u32), ret_ty))
+        })
+        .collect();
+
+    let mut all_strings: Vec<String> = Vec::new();
+    let functions: Vec<Function> = fn_items
+        .iter()
+        .enumerate()
+        .map(|(idx, fn_def)| {
+            let (mut func, pool) = lower_function(fn_def, &func_index);
             func.id = FuncId(idx as u32);
+            let base = all_strings.len() as u32;
+            if base > 0 || !pool.is_empty() {
+                for block in &mut func.blocks {
+                    for inst in &mut block.insts {
+                        if let InstData::ConstStr(ref mut i) = inst.data {
+                            *i += base;
+                        }
+                    }
+                }
+            }
+            all_strings.extend(pool);
             func
         })
         .collect();
 
     Module {
         name: module.name.clone(),
+        strings: all_strings,
         functions,
     }
 }
@@ -529,7 +851,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn("const_fn", vec![], i64_ty(), body, vec![]);
-        let func = lower_function(&fn_def);
+        let (func, _) = lower_function(&fn_def, &HashMap::new());
 
         assert_eq!(func.name, "const_fn");
         assert_eq!(func.return_ty, Ty::I64);
@@ -564,7 +886,7 @@ mod tests {
             body,
             vec![],
         );
-        let func = lower_function(&fn_def);
+        let (func, _) = lower_function(&fn_def, &HashMap::new());
 
         let entry = &func.blocks[0];
         let get_args: Vec<_> = entry
@@ -602,7 +924,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn("let_fn", vec![], i64_ty(), body, vec![]);
-        let func = lower_function(&fn_def);
+        let (func, _) = lower_function(&fn_def, &HashMap::new());
 
         let entry = &func.blocks[0];
         let const_inst = entry.insts.iter().find(|i| i.opcode == Opcode::ConstI64);
@@ -635,7 +957,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn("if_fn", vec![], i64_ty(), body, vec![]);
-        let func = lower_function(&fn_def);
+        let (func, _) = lower_function(&fn_def, &HashMap::new());
 
         assert!(
             func.blocks.len() >= 4,
@@ -669,7 +991,7 @@ mod tests {
     #[test]
     fn lower_empty_function() {
         let fn_def = make_fn("empty_fn", vec![], unit_ty(), empty_block(), vec![]);
-        let func = lower_function(&fn_def);
+        let (func, _) = lower_function(&fn_def, &HashMap::new());
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
         let ret = all_insts.iter().find(|i| i.opcode == Opcode::Return);
@@ -713,7 +1035,7 @@ mod tests {
             body,
             span: sp(),
         };
-        let func = lower_function(&fn_def);
+        let (func, _) = lower_function(&fn_def, &HashMap::new());
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
         let ens_pos = all_insts
@@ -727,6 +1049,126 @@ mod tests {
         assert!(
             ens_pos < ret_pos,
             "VowEnsures must appear before Return for explicit return"
+        );
+    }
+
+    #[test]
+    fn lower_while_loop_emits_phi_upsilon_and_backedge() {
+        // fn countdown(n: i64) -> i64 { let mut i = n; while i > 0 { i = i - 1 }; i }
+        let i64_ty = i64_ty();
+        let param_n = make_param("n", i64_ty.clone());
+
+        // let mut i = n
+        let let_i = Stmt::Let {
+            pattern: Pat {
+                kind: PatKind::Ident {
+                    name: "i".to_string(),
+                    is_mut: true,
+                },
+                span: sp(),
+            },
+            ty: None,
+            init: Box::new(ident_expr("n")),
+            span: sp(),
+        };
+
+        // while body: i = i - 1
+        let assign_stmt = Stmt::Expr {
+            expr: Expr {
+                kind: ExprKind::Assign {
+                    lhs: Box::new(ident_expr("i")),
+                    rhs: Box::new(Expr {
+                        kind: ExprKind::BinaryOp {
+                            op: BinOp::Sub,
+                            lhs: Box::new(ident_expr("i")),
+                            rhs: Box::new(int_expr(1)),
+                        },
+                        span: sp(),
+                    }),
+                },
+                span: sp(),
+            },
+            has_semicolon: true,
+            span: sp(),
+        };
+        let while_body = Block {
+            stmts: vec![assign_stmt],
+            trailing_expr: None,
+            span: sp(),
+        };
+
+        // while i > 0 { ... }
+        let while_expr = Expr {
+            kind: ExprKind::While {
+                condition: Box::new(Expr {
+                    kind: ExprKind::BinaryOp {
+                        op: BinOp::Gt,
+                        lhs: Box::new(ident_expr("i")),
+                        rhs: Box::new(int_expr(0)),
+                    },
+                    span: sp(),
+                }),
+                vow: None,
+                body: Box::new(while_body),
+            },
+            span: sp(),
+        };
+
+        let body = Block {
+            stmts: vec![
+                let_i,
+                Stmt::Expr {
+                    expr: while_expr,
+                    has_semicolon: true,
+                    span: sp(),
+                },
+            ],
+            trailing_expr: Some(Box::new(ident_expr("i"))),
+            span: sp(),
+        };
+
+        let fn_def = make_fn("countdown", vec![param_n], i64_ty, body, vec![]);
+        let (func, _) = lower_function(&fn_def, &HashMap::new());
+
+        let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
+
+        // Must have a Phi (for loop var `i`)
+        let phi = all_insts.iter().find(|i| i.opcode == Opcode::Phi);
+        assert!(phi.is_some(), "expected Phi for loop variable");
+
+        // Must have at least 2 Upsilons: pre-loop initial feed and back-edge feed
+        let upsilons: Vec<_> = all_insts
+            .iter()
+            .filter(|i| i.opcode == Opcode::Upsilon)
+            .collect();
+        assert!(
+            upsilons.len() >= 2,
+            "expected at least 2 Upsilons for while loop"
+        );
+
+        // Must have a GtI64 for the condition
+        assert!(
+            all_insts.iter().any(|i| i.opcode == Opcode::GtI64),
+            "expected GtI64 for while condition"
+        );
+
+        // Must have Branch
+        assert!(
+            all_insts.iter().any(|i| i.opcode == Opcode::Branch),
+            "expected Branch for while loop"
+        );
+
+        // Must have at least 2 Jumps (pre-header -> header, body -> header)
+        let jumps: Vec<_> = all_insts
+            .iter()
+            .filter(|i| i.opcode == Opcode::Jump)
+            .collect();
+        assert!(jumps.len() >= 2, "expected at least 2 Jumps for while loop");
+
+        // Should produce at least 4 blocks: entry, header, body, exit
+        assert!(
+            func.blocks.len() >= 4,
+            "expected entry+header+body+exit blocks"
         );
     }
 }

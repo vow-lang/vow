@@ -50,6 +50,7 @@ fn run_exe(exe: &PathBuf) -> std::process::Output {
 fn make_main_returns_42() -> Module {
     Module {
         name: "exit42".to_string(),
+        strings: vec![],
         functions: vec![Function {
             id: FuncId(0),
             name: "main".to_string(),
@@ -189,6 +190,7 @@ fn vow_violation_exits_with_code_1_and_blames_caller() {
 
     let module = Module {
         name: "divide_test".to_string(),
+        strings: vec![],
         functions: vec![divide, main_fn],
     };
 

@@ -1,12 +1,15 @@
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::{
-    types, AbiParam, Block, BlockArg, FuncRef, InstBuilder, MemFlags, Signature, TrapCode, Value,
+    types, AbiParam, Block, BlockArg, FuncRef, GlobalValue, InstBuilder, MemFlags, Signature,
+    TrapCode, Value,
 };
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_codegen::Context;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
-use cranelift_module::{FuncId as CraneliftFuncId, Linkage, Module as CraneliftModule};
+use cranelift_module::{
+    DataDescription, DataId, FuncId as CraneliftFuncId, Linkage, Module as CraneliftModule,
+};
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -169,15 +172,19 @@ struct LowerCtx<'a> {
     value_map: &'a mut HashMap<InstId, Value>,
     block_map: &'a HashMap<BlockId, Block>,
     phi_data: &'a PhiUpsilonData,
-    // arg index → Cranelift Value for the entry block
     arg_values: &'a HashMap<u32, Value>,
     return_ty: IrTy,
     ir_func_id_to_ref: &'a HashMap<IrFuncId, FuncRef>,
     vow_violation_ref: Option<FuncRef>,
     overflow_ref: Option<FuncRef>,
     mode: BuildMode,
-    // The IR block we are currently processing (used for Upsilon lookup at jumps)
     current_ir_block: BlockId,
+    // index into module.strings → Cranelift GlobalValue (address of null-terminated string)
+    string_global_values: &'a HashMap<u32, GlobalValue>,
+    // extern symbol name → FuncRef declared in the current function
+    extern_func_refs: &'a HashMap<String, FuncRef>,
+    // VowId → GlobalValue for description strings
+    vow_desc_global_values: &'a HashMap<u32, GlobalValue>,
 }
 
 fn lower_inst(
@@ -223,6 +230,17 @@ fn lower_inst(
             let b = matches!(inst.data, InstData::ConstBool(true));
             let val = builder.ins().iconst(types::I8, b as i64);
             ctx.value_map.insert(inst.id, val);
+        }
+        Opcode::ConstStr => {
+            if let InstData::ConstStr(idx) = inst.data {
+                if let Some(&gv) = ctx.string_global_values.get(&idx) {
+                    let ptr = builder.ins().global_value(types::I64, gv);
+                    ctx.value_map.insert(inst.id, ptr);
+                } else {
+                    let null = builder.ins().iconst(types::I64, 0);
+                    ctx.value_map.insert(inst.id, null);
+                }
+            }
         }
         Opcode::ConstUnit => {
             let val = builder.ins().iconst(types::I32, 0);
@@ -521,24 +539,53 @@ fn lower_inst(
         // Function calls
         // ------------------------------------------------------------------
         Opcode::Call => {
-            let target_id = match inst.data {
-                InstData::CallTarget(f) => f,
+            let func_ref = match &inst.data {
+                InstData::CallTarget(f) => {
+                    let Some(&fr) = ctx.ir_func_id_to_ref.get(f) else {
+                        return Err(CodegenError::UnsupportedOpcode(format!(
+                            "unknown call target FuncId({:?})",
+                            f
+                        )));
+                    };
+                    fr
+                }
+                InstData::CallExtern(sym) => {
+                    let Some(&fr) = ctx.extern_func_refs.get(sym.as_str()) else {
+                        return Err(CodegenError::UnsupportedOpcode(format!(
+                            "unknown extern symbol: {sym}"
+                        )));
+                    };
+                    fr
+                }
                 _ => {
                     return Err(CodegenError::UnsupportedOpcode(
-                        "Call without CallTarget data".to_string(),
+                        "Call without CallTarget or CallExtern data".to_string(),
                     ))
                 }
             };
-            let Some(&func_ref) = ctx.ir_func_id_to_ref.get(&target_id) else {
-                return Err(CodegenError::UnsupportedOpcode(format!(
-                    "unknown call target FuncId({:?})",
-                    target_id
-                )));
-            };
+            let sig_ref = builder.func.dfg.ext_funcs[func_ref].signature;
+            let expected_types: Vec<types::Type> = builder.func.dfg.signatures[sig_ref]
+                .params
+                .iter()
+                .map(|p| p.value_type)
+                .collect();
             let call_args: Vec<Value> = inst
                 .args
                 .iter()
-                .filter_map(|id| ctx.value_map.get(id).copied())
+                .enumerate()
+                .filter_map(|(i, id)| {
+                    let v = ctx.value_map.get(id).copied()?;
+                    if let Some(&expected_ty) = expected_types.get(i) {
+                        let actual_ty = builder.func.dfg.value_type(v);
+                        if actual_ty == types::I32 && expected_ty == types::I64 {
+                            return Some(builder.ins().sextend(types::I64, v));
+                        }
+                        if actual_ty == types::I8 && expected_ty == types::I64 {
+                            return Some(builder.ins().uextend(types::I64, v));
+                        }
+                    }
+                    Some(v)
+                })
                 .collect();
             let call_inst = builder.ins().call(func_ref, &call_args);
             let results = builder.inst_results(call_inst);
@@ -606,7 +653,12 @@ fn emit_vow_check(
     if let Some(vr) = ctx.vow_violation_ref {
         let vow_id_val = builder.ins().iconst(types::I32, vow_id as i64);
         let blame_val = builder.ins().iconst(types::I8, blame as i64);
-        builder.ins().call(vr, &[vow_id_val, blame_val]);
+        let desc_ptr = if let Some(&gv) = ctx.vow_desc_global_values.get(&vow_id) {
+            builder.ins().global_value(types::I64, gv)
+        } else {
+            builder.ins().iconst(types::I64, 0)
+        };
+        builder.ins().call(vr, &[vow_id_val, blame_val, desc_ptr]);
     }
     builder.ins().trap(TrapCode::unwrap_user(1));
 
@@ -632,6 +684,8 @@ fn compile_ir_function(
     obj_module: &mut ObjectModule,
     ir_to_cl: &[(IrFuncId, CraneliftFuncId)],
     runtime: &RuntimeIds,
+    string_data_ids: &[DataId],
+    extern_func_ids: &HashMap<String, CraneliftFuncId>,
 ) -> Result<(), CodegenError> {
     let vow_violation_id = runtime.vow_violation_id;
     let overflow_id = runtime.overflow_id;
@@ -674,6 +728,39 @@ fn compile_ir_function(
     for &(ir_id, cl_id) in ir_to_cl {
         let fref = obj_module.declare_func_in_func(cl_id, builder.func);
         ir_func_id_to_ref.insert(ir_id, fref);
+    }
+
+    // Declare string data globals in this function
+    let mut string_global_values: HashMap<u32, GlobalValue> = HashMap::new();
+    for (idx, &data_id) in string_data_ids.iter().enumerate() {
+        let gv = obj_module.declare_data_in_func(data_id, builder.func);
+        string_global_values.insert(idx as u32, gv);
+    }
+
+    // Create data sections for vow description strings and map VowId → GlobalValue
+    let mut vow_desc_global_values: HashMap<u32, GlobalValue> = HashMap::new();
+    if mode == BuildMode::Debug {
+        for vow_entry in &ir_func.vows {
+            let mut bytes = vow_entry.description.as_bytes().to_vec();
+            bytes.push(0);
+            let mut desc = DataDescription::new();
+            desc.define(bytes.into_boxed_slice());
+            let data_id = obj_module
+                .declare_anonymous_data(false, false)
+                .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+            obj_module
+                .define_data(data_id, &desc)
+                .map_err(|e| CodegenError::FunctionDefine(e.to_string()))?;
+            let gv = obj_module.declare_data_in_func(data_id, builder.func);
+            vow_desc_global_values.insert(vow_entry.id.0, gv);
+        }
+    }
+
+    // Declare extern function refs in this function
+    let mut extern_func_refs: HashMap<String, FuncRef> = HashMap::new();
+    for (sym, &cl_id) in extern_func_ids {
+        let fref = obj_module.declare_func_in_func(cl_id, builder.func);
+        extern_func_refs.insert(sym.clone(), fref);
     }
 
     // Collect entry block arg Values → ArgIndex map
@@ -723,6 +810,9 @@ fn compile_ir_function(
             overflow_ref,
             mode,
             current_ir_block: ir_block.id,
+            string_global_values: &string_global_values,
+            extern_func_refs: &extern_func_refs,
+            vow_desc_global_values: &vow_desc_global_values,
         };
 
         for inst in &ir_block.insts {
@@ -733,6 +823,21 @@ fn compile_ir_function(
     builder.seal_all_blocks();
     builder.finalize();
     Ok(())
+}
+
+fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
+    let call_conv = obj_module.isa().default_call_conv();
+    let mut sig = Signature::new(call_conv);
+    match sym {
+        "__vow_print_str" => {
+            sig.params.push(AbiParam::new(types::I64)); // ptr
+        }
+        "__vow_print_i64" => {
+            sig.params.push(AbiParam::new(types::I64)); // value
+        }
+        _ => {}
+    }
+    sig
 }
 
 // ---------------------------------------------------------------------------
@@ -756,6 +861,44 @@ impl Backend for CraneliftBackend {
 
         let mut obj_module = ObjectModule::new(obj_builder);
 
+        // Create data sections for string constants
+        let mut string_data_ids: Vec<DataId> = Vec::new();
+        for s in &module.strings {
+            let mut bytes = s.as_bytes().to_vec();
+            bytes.push(0); // null terminate
+            let mut desc = DataDescription::new();
+            desc.define(bytes.into_boxed_slice());
+            let data_id = obj_module
+                .declare_anonymous_data(false, false)
+                .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+            obj_module
+                .define_data(data_id, &desc)
+                .map_err(|e| CodegenError::FunctionDefine(e.to_string()))?;
+            string_data_ids.push(data_id);
+        }
+
+        // Scan all functions for CallExtern symbols and declare them as imports
+        let mut extern_syms: Vec<String> = Vec::new();
+        for func in &module.functions {
+            for block in &func.blocks {
+                for inst in &block.insts {
+                    if let InstData::CallExtern(sym) = &inst.data {
+                        if !extern_syms.contains(sym) {
+                            extern_syms.push(sym.clone());
+                        }
+                    }
+                }
+            }
+        }
+        let mut extern_func_ids: HashMap<String, CraneliftFuncId> = HashMap::new();
+        for sym in &extern_syms {
+            let sig = make_extern_sig(sym, &obj_module);
+            let cl_id = obj_module
+                .declare_function(sym, Linkage::Import, &sig)
+                .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+            extern_func_ids.insert(sym.clone(), cl_id);
+        }
+
         // Declare all Vow functions first (needed for Call resolution)
         let mut ir_to_cl: Vec<(IrFuncId, CraneliftFuncId)> = Vec::new();
         for ir_func in &module.functions {
@@ -776,6 +919,7 @@ impl Backend for CraneliftBackend {
             let mut violation_sig = obj_module.make_signature();
             violation_sig.params.push(AbiParam::new(types::I32)); // vow_id
             violation_sig.params.push(AbiParam::new(types::I8)); // blame
+            violation_sig.params.push(AbiParam::new(types::I64)); // desc_ptr
             let vv_id = obj_module
                 .declare_function("__vow_violation", Linkage::Import, &violation_sig)
                 .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
@@ -805,6 +949,8 @@ impl Backend for CraneliftBackend {
                 &mut obj_module,
                 &ir_to_cl,
                 &RuntimeIds { vow_violation_id, overflow_id },
+                &string_data_ids,
+                &extern_func_ids,
             )?;
 
             obj_module
@@ -840,6 +986,7 @@ mod tests {
         Module {
             name: name.to_string(),
             functions: funcs,
+            strings: vec![],
         }
     }
 

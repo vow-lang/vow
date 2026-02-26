@@ -1,0 +1,6 @@
+module Hello
+
+fn main() -> i32 [io] {
+    print_str("Hello, world!");
+    0
+}

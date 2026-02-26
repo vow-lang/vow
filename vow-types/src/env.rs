@@ -63,13 +63,30 @@ impl Default for TypeEnv {
 
 impl TypeEnv {
     pub fn new() -> Self {
-        Self {
+        let mut env = Self {
             scopes: vec![HashMap::new()],
             fn_sigs: HashMap::new(),
             struct_defs: HashMap::new(),
             enum_defs: HashMap::new(),
             type_aliases: HashMap::new(),
-        }
+        };
+        env.define_fn(
+            "print_str",
+            FnSig {
+                params: vec![Ty::Str],
+                return_ty: Ty::Unit,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "print_i64",
+            FnSig {
+                params: vec![Ty::I64],
+                return_ty: Ty::Unit,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env
     }
 
     pub fn push_scope(&mut self) {

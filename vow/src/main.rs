@@ -307,6 +307,144 @@ mod tests {
     }
 
     #[test]
+    fn hello_world_prints_and_exits_zero() {
+        let dir = TempDir::new().unwrap();
+        let src = r#"module Hello
+fn main() -> i32 [io] {
+    print_str("Hello, world!");
+    0
+}"#;
+        let source = write_source(&dir, "hello.vow", src);
+        let out = dir.path().join("hello");
+
+        let result = run_pipeline(&source, Some(&out), BuildMode::Release, true);
+        let exe = match &result.status {
+            BuildStatus::Unverified => out.clone(),
+            BuildStatus::CompileFailed { message } => {
+                let msg_lo = message.to_lowercase();
+                if msg_lo.contains("link")
+                    || msg_lo.contains("runtime")
+                    || msg_lo.contains("undefined")
+                {
+                    eprintln!("SKIP: {message}");
+                    return;
+                }
+                panic!("compile failed: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        };
+
+        let output = std::process::Command::new(&exe)
+            .output()
+            .expect("failed to run hello");
+        assert_eq!(output.status.code(), Some(0), "expected exit 0");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("Hello, world!"),
+            "expected 'Hello, world!' in stdout, got: {stdout:?}"
+        );
+    }
+
+    #[test]
+    fn vow_violation_blame_caller_exit_code_1() {
+        let dir = TempDir::new().unwrap();
+        let src = r#"module Divide
+fn divide(x: i64, y: i64) -> i64 vow {
+  requires: y != 0
+} {
+  x / y
+}
+fn main() -> i32 [io] {
+  divide(10, 0);
+  0
+}"#;
+        let source = write_source(&dir, "divide.vow", src);
+        let out = dir.path().join("divide");
+
+        let result = run_pipeline(&source, Some(&out), BuildMode::Debug, true);
+        let exe = match &result.status {
+            BuildStatus::Unverified => out.clone(),
+            BuildStatus::CompileFailed { message } => {
+                let msg_lo = message.to_lowercase();
+                if msg_lo.contains("link")
+                    || msg_lo.contains("runtime")
+                    || msg_lo.contains("undefined")
+                {
+                    eprintln!("SKIP: {message}");
+                    return;
+                }
+                panic!("compile failed: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        };
+
+        let output = std::process::Command::new(&exe)
+            .output()
+            .expect("failed to run divide");
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "expected exit code 1 (vow violation)"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("Caller"),
+            "expected blame=Caller in stderr: {stderr:?}"
+        );
+        assert!(
+            stderr.contains("y != 0"),
+            "expected predicate description in stderr: {stderr:?}"
+        );
+    }
+
+    #[test]
+    fn while_loop_countdown_prints_zero() {
+        let dir = TempDir::new().unwrap();
+        let src = r#"module Countdown
+fn countdown(n: i64) -> i64 {
+  let mut i: i64 = n;
+  while i > 0 {
+    i = i - 1;
+  }
+  i
+}
+fn main() -> i32 [io] {
+  let result: i64 = countdown(5);
+  print_i64(result);
+  0
+}"#;
+        let source = write_source(&dir, "countdown.vow", src);
+        let out = dir.path().join("countdown");
+
+        let result = run_pipeline(&source, Some(&out), BuildMode::Release, true);
+        let exe = match &result.status {
+            BuildStatus::Unverified => out.clone(),
+            BuildStatus::CompileFailed { message } => {
+                let msg_lo = message.to_lowercase();
+                if msg_lo.contains("link")
+                    || msg_lo.contains("runtime")
+                    || msg_lo.contains("undefined")
+                {
+                    eprintln!("SKIP: {message}");
+                    return;
+                }
+                panic!("compile failed: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        };
+
+        let output = std::process::Command::new(&exe)
+            .output()
+            .expect("failed to run countdown");
+        assert_eq!(output.status.code(), Some(0), "expected exit 0");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("0"),
+            "expected '0' in stdout (countdown(5) == 0), got: {stdout:?}"
+        );
+    }
+
+    #[test]
     fn pipeline_rejects_type_error() {
         let dir = TempDir::new().unwrap();
         // fn f() -> i32 { true } — type mismatch

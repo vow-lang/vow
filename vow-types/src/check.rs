@@ -364,7 +364,13 @@ impl<'e> Checker<'e> {
                         Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![elem_ty])
                     }
                     BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
-                        if lhs_ty != rhs_ty && lhs_ty != Ty::Never && rhs_ty != Ty::Never {
+                        let coercible = (lhs_ty == Ty::I32 && rhs_ty.is_integer())
+                            || (rhs_ty == Ty::I32 && lhs_ty.is_integer());
+                        if lhs_ty != rhs_ty
+                            && lhs_ty != Ty::Never
+                            && rhs_ty != Ty::Never
+                            && !coercible
+                        {
                             self.emit_error(
                                 ErrorCode::TypeMismatch,
                                 format!(
@@ -460,7 +466,9 @@ impl<'e> Checker<'e> {
                 }
                 for (arg, expected_ty) in args.iter().zip(param_tys.iter()) {
                     let arg_ty = self.check_expr(arg);
-                    if arg_ty != *expected_ty && arg_ty != Ty::Never {
+                    let coercible =
+                        arg_ty == Ty::I32 && expected_ty.is_integer() && *expected_ty != Ty::I32;
+                    if arg_ty != *expected_ty && arg_ty != Ty::Never && !coercible {
                         self.emit_error(
                             ErrorCode::TypeMismatch,
                             format!(
@@ -690,6 +698,14 @@ impl<'e> Checker<'e> {
         if rhs == Ty::Never {
             return lhs;
         }
+        // Integer literal (I32) coerces to the other integer type
+        let (lhs, rhs) = if lhs == Ty::I32 && rhs.is_integer() {
+            (rhs.clone(), rhs)
+        } else if rhs == Ty::I32 && lhs.is_integer() {
+            (lhs.clone(), lhs)
+        } else {
+            (lhs, rhs)
+        };
         if !lhs.is_numeric() {
             self.emit_error(
                 ErrorCode::TypeMismatch,

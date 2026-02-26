@@ -24,6 +24,7 @@ pub enum Opcode {
     ConstF32,
     ConstF64,
     ConstBool,
+    ConstStr,
     ConstUnit,
 
     GetArg,
@@ -133,7 +134,9 @@ pub enum InstData {
     ConstBool(bool),
     ArgIndex(u32),
     PhiTarget(InstId),
+    ConstStr(u32),
     CallTarget(FuncId),
+    CallExtern(String),
     BranchTargets {
         then_block: BlockId,
         else_block: BlockId,
@@ -193,6 +196,7 @@ pub struct Function {
 pub struct Module {
     pub name: String,
     pub functions: Vec<Function>,
+    pub strings: Vec<String>,
 }
 
 #[cfg(test)]
@@ -256,6 +260,7 @@ mod tests {
         let module = Module {
             name: "test_module".to_string(),
             functions: vec![func],
+            strings: vec![],
         };
         assert_eq!(module.functions.len(), 1);
         assert_eq!(module.functions[0].blocks.len(), 1);

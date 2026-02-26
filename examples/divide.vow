@@ -1,0 +1,12 @@
+module Divide
+
+fn divide(x: i64, y: i64) -> i64 vow {
+  requires: y != 0
+} {
+  x / y
+}
+
+fn main() -> i32 [io] {
+  divide(10, 0);
+  0
+}
