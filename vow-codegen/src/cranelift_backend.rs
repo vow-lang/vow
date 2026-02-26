@@ -57,13 +57,13 @@ fn build_phi_upsilon_data(ir_func: &IrFunction) -> PhiUpsilonData {
                     phi_home.insert(inst.id, block.id);
                 }
                 Opcode::Upsilon => {
-                    if let InstData::PhiTarget(phi_id) = inst.data {
-                        if let Some(&val_id) = inst.args.first() {
-                            block_upsilons
-                                .entry(block.id)
-                                .or_default()
-                                .push((phi_id, val_id));
-                        }
+                    if let InstData::PhiTarget(phi_id) = inst.data
+                        && let Some(&val_id) = inst.args.first()
+                    {
+                        block_upsilons
+                            .entry(block.id)
+                            .or_default()
+                            .push((phi_id, val_id));
                     }
                 }
                 _ => {}
@@ -499,21 +499,20 @@ fn lower_inst(
         // Vow checks
         // ------------------------------------------------------------------
         Opcode::VowRequires | Opcode::VowEnsures | Opcode::VowInvariant => {
-            if ctx.mode == BuildMode::Debug {
-                if let Some(&pred_id) = inst.args.first() {
-                    if let Some(&pred) = ctx.value_map.get(&pred_id) {
-                        let vow_id = match inst.data {
-                            InstData::VowId(v) => v.0,
-                            _ => 0,
-                        };
-                        let blame_byte = if inst.opcode == Opcode::VowRequires {
-                            0u8 // Caller
-                        } else {
-                            1u8 // Callee
-                        };
-                        emit_vow_check(builder, pred, vow_id, blame_byte, ctx)?;
-                    }
-                }
+            if ctx.mode == BuildMode::Debug
+                && let Some(&pred_id) = inst.args.first()
+                && let Some(&pred) = ctx.value_map.get(&pred_id)
+            {
+                let vow_id = match inst.data {
+                    InstData::VowId(v) => v.0,
+                    _ => 0,
+                };
+                let blame_byte = if inst.opcode == Opcode::VowRequires {
+                    0u8 // Caller
+                } else {
+                    1u8 // Callee
+                };
+                emit_vow_check(builder, pred, vow_id, blame_byte, ctx)?;
             }
             // In Release mode: no-op
         }
@@ -620,6 +619,11 @@ fn emit_vow_check(
 // Function compilation
 // ---------------------------------------------------------------------------
 
+struct RuntimeIds {
+    vow_violation_id: Option<CraneliftFuncId>,
+    overflow_id: Option<CraneliftFuncId>,
+}
+
 fn compile_ir_function(
     ctx: &mut Context,
     ir_func: &IrFunction,
@@ -627,9 +631,10 @@ fn compile_ir_function(
     mode: BuildMode,
     obj_module: &mut ObjectModule,
     ir_to_cl: &[(IrFuncId, CraneliftFuncId)],
-    vow_violation_id: Option<CraneliftFuncId>,
-    overflow_id: Option<CraneliftFuncId>,
+    runtime: &RuntimeIds,
 ) -> Result<(), CodegenError> {
+    let vow_violation_id = runtime.vow_violation_id;
+    let overflow_id = runtime.overflow_id;
     let phi_data = build_phi_upsilon_data(ir_func);
 
     let mut builder = FunctionBuilder::new(&mut ctx.func, builder_ctx);
@@ -799,8 +804,7 @@ impl Backend for CraneliftBackend {
                 mode,
                 &mut obj_module,
                 &ir_to_cl,
-                vow_violation_id,
-                overflow_id,
+                &RuntimeIds { vow_violation_id, overflow_id },
             )?;
 
             obj_module

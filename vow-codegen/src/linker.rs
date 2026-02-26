@@ -33,12 +33,10 @@ pub fn find_runtime_lib() -> Option<PathBuf> {
         ))),
     ];
 
-    for candidate in candidates.into_iter().flatten() {
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-    None
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|candidate| candidate.exists())
 }
 
 /// Link one or more object files together with the vow runtime into an
