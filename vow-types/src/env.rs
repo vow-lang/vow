@@ -1,0 +1,356 @@
+use crate::types::Ty;
+use std::collections::{BTreeSet, HashMap};
+use vow_syntax::ast::{Effect, Type as AstType};
+
+/// Signature of a function or method known to the type checker.
+#[derive(Debug, Clone)]
+pub struct FnSig {
+    pub params: Vec<Ty>,
+    pub return_ty: Ty,
+    pub effects: BTreeSet<Effect>,
+}
+
+/// Information about a user-defined struct type.
+#[derive(Debug, Clone)]
+pub struct StructInfo {
+    /// Field name → resolved type, in declaration order.
+    pub fields: Vec<(String, Ty)>,
+    /// Whether declared with `linear struct`.
+    pub is_linear: bool,
+    /// Generic parameter names (in declaration order).
+    pub generics: Vec<String>,
+}
+
+/// Information about a user-defined enum type.
+#[derive(Debug, Clone)]
+pub struct EnumInfo {
+    pub variants: Vec<VariantInfo>,
+    pub generics: Vec<String>,
+}
+
+/// One variant of an enum.
+#[derive(Debug, Clone)]
+pub struct VariantInfo {
+    pub name: String,
+    pub kind: VariantKind,
+}
+
+/// The payload shape of an enum variant.
+#[derive(Debug, Clone)]
+pub enum VariantKind {
+    Unit,
+    Tuple(Vec<Ty>),
+    Struct(Vec<(String, Ty)>),
+}
+
+/// Scope-based type environment.
+///
+/// Maintains a stack of lexical scopes for variable bindings. Top-level definitions
+/// (functions, structs, enums) are stored separately and are always visible.
+pub struct TypeEnv {
+    scopes: Vec<HashMap<String, Ty>>,
+    fn_sigs: HashMap<String, FnSig>,
+    struct_defs: HashMap<String, StructInfo>,
+    enum_defs: HashMap<String, EnumInfo>,
+    type_aliases: HashMap<String, Ty>,
+}
+
+impl Default for TypeEnv {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TypeEnv {
+    pub fn new() -> Self {
+        Self {
+            scopes: vec![HashMap::new()],
+            fn_sigs: HashMap::new(),
+            struct_defs: HashMap::new(),
+            enum_defs: HashMap::new(),
+            type_aliases: HashMap::new(),
+        }
+    }
+
+    pub fn push_scope(&mut self) {
+        self.scopes.push(HashMap::new());
+    }
+
+    pub fn pop_scope(&mut self) {
+        assert!(self.scopes.len() > 1, "cannot pop the last scope");
+        self.scopes.pop();
+    }
+
+    pub fn define(&mut self, name: &str, ty: Ty) {
+        self.scopes
+            .last_mut()
+            .expect("at least one scope must exist")
+            .insert(name.to_string(), ty);
+    }
+
+    pub fn lookup(&self, name: &str) -> Option<&Ty> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(ty) = scope.get(name) {
+                return Some(ty);
+            }
+        }
+        None
+    }
+
+    pub fn define_fn(&mut self, name: impl Into<String>, sig: FnSig) {
+        self.fn_sigs.insert(name.into(), sig);
+    }
+
+    pub fn lookup_fn(&self, name: &str) -> Option<&FnSig> {
+        self.fn_sigs.get(name)
+    }
+
+    pub fn define_struct(&mut self, name: impl Into<String>, info: StructInfo) {
+        self.struct_defs.insert(name.into(), info);
+    }
+
+    pub fn lookup_struct(&self, name: &str) -> Option<&StructInfo> {
+        self.struct_defs.get(name)
+    }
+
+    pub fn define_enum(&mut self, name: impl Into<String>, info: EnumInfo) {
+        self.enum_defs.insert(name.into(), info);
+    }
+
+    pub fn lookup_enum(&self, name: &str) -> Option<&EnumInfo> {
+        self.enum_defs.get(name)
+    }
+
+    pub fn define_alias(&mut self, name: impl Into<String>, ty: Ty) {
+        self.type_aliases.insert(name.into(), ty);
+    }
+
+    pub fn resolve(&self, ast_ty: &AstType) -> Result<Ty, String> {
+        match ast_ty {
+            AstType::Named { name, .. } => {
+                if let Some(ty) = Ty::from_primitive_name(name) {
+                    return Ok(ty);
+                }
+                if self.lookup_struct(name).is_some() {
+                    return Ok(Ty::Struct(name.clone()));
+                }
+                if self.lookup_enum(name).is_some() {
+                    return Ok(Ty::Enum(name.clone()));
+                }
+                if let Some(ty) = self.type_aliases.get(name) {
+                    return Ok(ty.clone());
+                }
+                Err(format!("unknown type: {name}"))
+            }
+            AstType::Generic { name, args, .. } => {
+                let base = self.resolve(&AstType::Named {
+                    name: name.clone(),
+                    span: vow_syntax::span::Span::new(0, 0),
+                })?;
+                let resolved_args = args
+                    .iter()
+                    .map(|a| self.resolve(a))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Ty::Applied(Box::new(base), resolved_args))
+            }
+            AstType::Reference { inner, .. } => Ok(Ty::Reference(Box::new(self.resolve(inner)?))),
+            AstType::Tuple { elems, .. } => {
+                let resolved = elems
+                    .iter()
+                    .map(|e| self.resolve(e))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Ty::Tuple(resolved))
+            }
+            AstType::Unit { .. } => Ok(Ty::Unit),
+            AstType::Never { .. } => Ok(Ty::Never),
+            AstType::Slice { inner, .. } => Ok(Ty::Applied(
+                Box::new(Ty::Struct("Slice".to_string())),
+                vec![self.resolve(inner)?],
+            )),
+            AstType::Refinement { base, .. } => self.resolve(base),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+    use vow_syntax::span::Span;
+
+    fn dummy_span() -> Span {
+        Span::new(0, 0)
+    }
+
+    #[test]
+    fn scope_push_pop_and_lookup() {
+        let mut env = TypeEnv::new();
+        env.define("x", Ty::I32);
+        assert_eq!(env.lookup("x"), Some(&Ty::I32));
+
+        env.push_scope();
+        assert_eq!(env.lookup("x"), Some(&Ty::I32));
+        env.define("y", Ty::Bool);
+        assert_eq!(env.lookup("y"), Some(&Ty::Bool));
+
+        env.pop_scope();
+        assert_eq!(env.lookup("y"), None);
+        assert_eq!(env.lookup("x"), Some(&Ty::I32));
+    }
+
+    #[test]
+    fn variable_shadowing() {
+        let mut env = TypeEnv::new();
+        env.define("x", Ty::I32);
+
+        env.push_scope();
+        env.define("x", Ty::Bool);
+        assert_eq!(env.lookup("x"), Some(&Ty::Bool));
+
+        env.pop_scope();
+        assert_eq!(env.lookup("x"), Some(&Ty::I32));
+    }
+
+    #[test]
+    fn lookup_returns_innermost_binding() {
+        let mut env = TypeEnv::new();
+        env.define("v", Ty::U8);
+        env.push_scope();
+        env.define("v", Ty::F64);
+        env.push_scope();
+        assert_eq!(env.lookup("v"), Some(&Ty::F64));
+    }
+
+    #[test]
+    fn lookup_fn_returns_registered_signature() {
+        let mut env = TypeEnv::new();
+        let sig = FnSig {
+            params: vec![Ty::I32, Ty::I32],
+            return_ty: Ty::I32,
+            effects: BTreeSet::new(),
+        };
+        env.define_fn("add", sig.clone());
+        let found = env.lookup_fn("add").unwrap();
+        assert_eq!(found.params, sig.params);
+        assert_eq!(found.return_ty, sig.return_ty);
+    }
+
+    #[test]
+    fn resolve_primitive_i32() {
+        let env = TypeEnv::new();
+        let ast_ty = AstType::Named {
+            name: "i32".to_string(),
+            span: dummy_span(),
+        };
+        assert_eq!(env.resolve(&ast_ty), Ok(Ty::I32));
+    }
+
+    #[test]
+    fn resolve_primitive_bool() {
+        let env = TypeEnv::new();
+        let ast_ty = AstType::Named {
+            name: "bool".to_string(),
+            span: dummy_span(),
+        };
+        assert_eq!(env.resolve(&ast_ty), Ok(Ty::Bool));
+    }
+
+    #[test]
+    fn resolve_registered_struct() {
+        let mut env = TypeEnv::new();
+        env.define_struct(
+            "Foo",
+            StructInfo {
+                fields: vec![],
+                is_linear: false,
+                generics: vec![],
+            },
+        );
+        let ast_ty = AstType::Named {
+            name: "Foo".to_string(),
+            span: dummy_span(),
+        };
+        assert_eq!(env.resolve(&ast_ty), Ok(Ty::Struct("Foo".to_string())));
+    }
+
+    #[test]
+    fn resolve_returns_err_for_unknown() {
+        let env = TypeEnv::new();
+        let ast_ty = AstType::Named {
+            name: "Unknown".to_string(),
+            span: dummy_span(),
+        };
+        assert!(env.resolve(&ast_ty).is_err());
+    }
+
+    #[test]
+    fn resolve_generic() {
+        let mut env = TypeEnv::new();
+        env.define_struct(
+            "Vec",
+            StructInfo {
+                fields: vec![],
+                is_linear: false,
+                generics: vec!["T".to_string()],
+            },
+        );
+        let ast_ty = AstType::Generic {
+            name: "Vec".to_string(),
+            args: vec![AstType::Named {
+                name: "i32".to_string(),
+                span: dummy_span(),
+            }],
+            span: dummy_span(),
+        };
+        let result = env.resolve(&ast_ty).unwrap();
+        assert_eq!(
+            result,
+            Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I32])
+        );
+    }
+
+    #[test]
+    fn resolve_reference() {
+        let env = TypeEnv::new();
+        let ast_ty = AstType::Reference {
+            inner: Box::new(AstType::Named {
+                name: "i32".to_string(),
+                span: dummy_span(),
+            }),
+            span: dummy_span(),
+        };
+        assert_eq!(env.resolve(&ast_ty), Ok(Ty::Reference(Box::new(Ty::I32))));
+    }
+
+    #[test]
+    fn resolve_tuple() {
+        let env = TypeEnv::new();
+        let ast_ty = AstType::Tuple {
+            elems: vec![
+                AstType::Named {
+                    name: "i32".to_string(),
+                    span: dummy_span(),
+                },
+                AstType::Named {
+                    name: "bool".to_string(),
+                    span: dummy_span(),
+                },
+            ],
+            span: dummy_span(),
+        };
+        assert_eq!(env.resolve(&ast_ty), Ok(Ty::Tuple(vec![Ty::I32, Ty::Bool])));
+    }
+
+    #[test]
+    fn resolve_unit_and_never() {
+        let env = TypeEnv::new();
+        assert_eq!(
+            env.resolve(&AstType::Unit { span: dummy_span() }),
+            Ok(Ty::Unit)
+        );
+        assert_eq!(
+            env.resolve(&AstType::Never { span: dummy_span() }),
+            Ok(Ty::Never)
+        );
+    }
+}

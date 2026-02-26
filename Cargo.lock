@@ -135,6 +135,10 @@ dependencies = [
 [[package]]
 name = "vow-types"
 version = "0.1.0"
+dependencies = [
+ "vow-diag",
+ "vow-syntax",
+]
 
 [[package]]
 name = "vow-verify"
