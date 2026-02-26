@@ -1,5 +1,8 @@
+pub mod vow;
+
 use std::collections::HashMap;
 
+use vow_diag::Blame;
 use vow_syntax::ast::{
     BinOp, Block, Effect, ExprKind, FnDef, Item, Lit, Module as AstModule, PatKind, Stmt,
     Type as AstType, UnOp,
@@ -7,7 +10,8 @@ use vow_syntax::ast::{
 use vow_syntax::span::Span;
 
 use crate::types::{
-    BasicBlock, BlockId, FuncId, Function, Inst, InstData, InstId, Module, Opcode, Ty,
+    BasicBlock, BlockId, FuncId, Function, Inst, InstData, InstId, Module, Opcode, Ty, VowEntry,
+    VowId,
 };
 
 fn lower_ty(ast_ty: &AstType) -> Ty {
@@ -27,8 +31,8 @@ fn lower_ty(ast_ty: &AstType) -> Ty {
 }
 
 pub struct LowerCtx {
-    func: Function,
-    current_block: BlockId,
+    pub(super) func: Function,
+    pub(super) current_block: BlockId,
     next_inst_id: u32,
     scope: Vec<HashMap<String, InstId>>,
 }
@@ -56,21 +60,21 @@ impl LowerCtx {
         }
     }
 
-    fn push_scope(&mut self) {
+    pub(super) fn push_scope(&mut self) {
         self.scope.push(HashMap::new());
     }
 
-    fn pop_scope(&mut self) {
+    pub(super) fn pop_scope(&mut self) {
         self.scope.pop();
     }
 
-    fn define(&mut self, name: String, id: InstId) {
+    pub(super) fn define(&mut self, name: String, id: InstId) {
         if let Some(top) = self.scope.last_mut() {
             top.insert(name, id);
         }
     }
 
-    fn lookup(&self, name: &str) -> Option<InstId> {
+    pub(super) fn lookup(&self, name: &str) -> Option<InstId> {
         for frame in self.scope.iter().rev() {
             if let Some(&id) = frame.get(name) {
                 return Some(id);
@@ -79,17 +83,27 @@ impl LowerCtx {
         None
     }
 
-    fn new_block(&mut self) -> BlockId {
+    pub(super) fn new_block(&mut self) -> BlockId {
         let id = BlockId(self.func.blocks.len() as u32);
         self.func.blocks.push(BasicBlock { id, insts: vec![] });
         id
     }
 
-    fn switch_to_block(&mut self, block: BlockId) {
+    pub(super) fn switch_to_block(&mut self, block: BlockId) {
         self.current_block = block;
     }
 
-    fn emit(
+    pub(super) fn alloc_vow(&mut self, description: String, blame: Blame) -> VowId {
+        let id = VowId(self.func.vows.len() as u32);
+        self.func.vows.push(VowEntry {
+            id,
+            description,
+            blame,
+        });
+        id
+    }
+
+    pub(super) fn emit(
         &mut self,
         opcode: Opcode,
         ty: Ty,
@@ -115,6 +129,10 @@ impl LowerCtx {
     pub fn finish(self) -> Function {
         self.func
     }
+}
+
+pub(super) fn lower_expr_pub(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
+    lower_expr(ctx, expr)
 }
 
 fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
@@ -352,6 +370,10 @@ pub fn lower_function(fn_def: &FnDef) -> Function {
         ctx.define(param.name.clone(), arg_id);
     }
 
+    if let Some(vow_block) = &fn_def.vow {
+        vow::lower_requires(&mut ctx, vow_block);
+    }
+
     ctx.push_scope();
     let trailing = lower_block_inner(&mut ctx, &fn_def.body);
     ctx.pop_scope();
@@ -366,6 +388,9 @@ pub fn lower_function(fn_def: &FnDef) -> Function {
 
     if !has_return {
         let span = fn_def.body.span;
+        if let Some(vow_block) = &fn_def.vow {
+            vow::lower_ensures(&mut ctx, vow_block, trailing);
+        }
         ctx.emit(
             Opcode::Return,
             Ty::Unit,
