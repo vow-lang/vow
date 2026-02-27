@@ -225,7 +225,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn_with_vow(Some(vow_block));
-        let (func, _) = lower_function(&fn_def, &std::collections::HashMap::new());
+        let (func, _) = lower_function(&fn_def, &std::collections::HashMap::new(), std::collections::HashMap::new(), std::collections::HashMap::new());
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
 
@@ -259,7 +259,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn_with_vow(Some(vow_block));
-        let (func, _) = lower_function(&fn_def, &std::collections::HashMap::new());
+        let (func, _) = lower_function(&fn_def, &std::collections::HashMap::new(), std::collections::HashMap::new(), std::collections::HashMap::new());
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
 
@@ -290,7 +290,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn_with_vow(Some(vow_block));
-        let (func, _) = lower_function(&fn_def, &std::collections::HashMap::new());
+        let (func, _) = lower_function(&fn_def, &std::collections::HashMap::new(), std::collections::HashMap::new(), std::collections::HashMap::new());
 
         assert_eq!(func.vows.len(), 1);
         assert_eq!(func.vows[0].blame, Blame::Caller);
@@ -315,7 +315,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn_with_vow(Some(vow_block));
-        let (func, _) = lower_function(&fn_def, &std::collections::HashMap::new());
+        let (func, _) = lower_function(&fn_def, &std::collections::HashMap::new(), std::collections::HashMap::new(), std::collections::HashMap::new());
 
         assert_eq!(func.vows.len(), 1);
         assert_eq!(func.vows[0].blame, Blame::Callee);

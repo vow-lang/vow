@@ -7,7 +7,7 @@ use vow_codegen::cranelift_backend::CraneliftBackend;
 use vow_codegen::linker::{find_runtime_lib, link};
 use vow_codegen::{Backend, BuildMode};
 use vow_diag::{DiagnosticEmitter, HumanEmitter, Severity};
-use vow_verify::{VerificationResult, verify_function};
+use vow_verify::{verify_function, VerificationResult};
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -747,5 +747,184 @@ fn main() -> i32 [io] {
             "expected CompileFailed for type error, got {:?}",
             result.status
         );
+    }
+
+    fn compile_and_run(src: &str) -> std::process::Output {
+        let dir = TempDir::new().unwrap();
+        let source = write_source(&dir, "test.vow", src);
+        let out = dir.path().join("test_out");
+        let result = run_pipeline(&source, Some(&out), BuildMode::Release, true);
+        match &result.status {
+            BuildStatus::Unverified => {}
+            BuildStatus::CompileFailed { message } => {
+                let msg_lo = message.to_lowercase();
+                if msg_lo.contains("link")
+                    || msg_lo.contains("runtime")
+                    || msg_lo.contains("undefined")
+                {
+                    // Skip if runtime not linked in test environment.
+                    panic!("SKIP: {message}");
+                }
+                panic!("compile failed: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        }
+        std::process::Command::new(&out)
+            .output()
+            .expect("failed to run compiled program")
+    }
+
+    #[test]
+    fn struct_construction_and_field_access() {
+        let src = r#"module StructTest
+
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+pub fn make_point() -> i64 {
+    let p = Point { x: 3, y: 4 };
+    p.x
+}
+
+pub fn main() -> i32 {
+    let v = make_point();
+    0
+}
+"#;
+        let output = compile_and_run(src);
+        assert_eq!(output.status.code(), Some(0), "expected exit 0");
+    }
+
+    #[test]
+    fn enum_construction_and_match() {
+        let src = r#"module EnumTest
+
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+pub fn color_code(c: Color) -> i32 {
+    match c {
+        Color::Red => 1,
+        Color::Green => 2,
+        Color::Blue => 3,
+    }
+}
+
+pub fn main() -> i32 {
+    let g = Color::Green;
+    let n = color_code(g);
+    0
+}
+"#;
+        let output = compile_and_run(src);
+        assert_eq!(output.status.code(), Some(0), "expected exit 0");
+    }
+
+    #[test]
+    fn option_some_none_compiles_and_runs() {
+        let src = r#"module OptionTest
+
+pub fn safe_div(x: i64, y: i64) -> Option<i64> {
+    if y == 0 {
+        Option::None
+    } else {
+        Option::Some(x / y)
+    }
+}
+
+pub fn main() -> i32 {
+    let a = safe_div(10, 2);
+    let b = safe_div(5, 0);
+    0
+}
+"#;
+        let output = compile_and_run(src);
+        assert_eq!(output.status.code(), Some(0), "expected exit 0");
+    }
+
+    #[test]
+    fn question_operator_short_circuits() {
+        let src = r#"module QuestionTest
+
+pub fn safe_div(x: i64, y: i64) -> Option<i64> {
+    if y == 0 {
+        Option::None
+    } else {
+        Option::Some(x / y)
+    }
+}
+
+pub fn chain(x: i64, y: i64, z: i64) -> Option<i64> {
+    let a = safe_div(x, y)?;
+    safe_div(a, z)
+}
+
+pub fn main() -> i32 {
+    let r1 = chain(10, 2, 1);
+    let r2 = chain(10, 0, 1);
+    0
+}
+"#;
+        let output = compile_and_run(src);
+        assert_eq!(output.status.code(), Some(0), "expected exit 0");
+    }
+
+    #[test]
+    fn vec_push_len_index() {
+        let src = r#"module VecTest
+
+pub fn sum(v: Vec<i64>) -> i64 {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    let n = v.len();
+    while i < n {
+        total = total + v[i];
+        i = i + 1;
+    }
+    total
+}
+
+pub fn main() -> i32 {
+    let mut nums: Vec<i64> = Vec::new();
+    nums.push(10);
+    nums.push(20);
+    nums.push(30);
+    let s = sum(nums);
+    0
+}
+"#;
+        let output = compile_and_run(src);
+        assert_eq!(output.status.code(), Some(0), "expected exit 0");
+    }
+
+    #[test]
+    fn struct_and_vec_combined() {
+        let src = r#"module DataTest
+
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+pub fn sum_coords(p: Point) -> i64 {
+    p.x + p.y
+}
+
+pub fn main() -> i32 {
+    let p = Point { x: 3, y: 4 };
+    let s = sum_coords(p);
+    let mut v: Vec<i64> = Vec::new();
+    v.push(s);
+    let n = v.len();
+    0
+}
+"#;
+        let output = compile_and_run(src);
+        assert_eq!(output.status.code(), Some(0), "expected exit 0");
     }
 }

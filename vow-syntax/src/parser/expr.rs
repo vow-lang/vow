@@ -1,4 +1,5 @@
 use crate::ast::{BinOp, Expr, ExprKind, Lit, MatchArm, UnOp};
+use crate::span::Span;
 use crate::token::TokenKind;
 
 use super::Parser;
@@ -150,6 +151,12 @@ impl Parser {
             }
             TokenKind::Ident(name) => {
                 self.advance();
+                if self.at(&TokenKind::ColonColon) {
+                    return self.parse_enum_construct(name, start);
+                }
+                if self.at(&TokenKind::LBrace) && self.looks_like_struct_literal() {
+                    return self.parse_struct_literal(name, start);
+                }
                 Expr {
                     kind: ExprKind::Ident(name),
                     span: start,
@@ -493,6 +500,72 @@ impl Parser {
                 | TokenKind::KwLoop
                 | TokenKind::KwMatch
         )
+    }
+
+    fn looks_like_struct_literal(&self) -> bool {
+        match self.tokens.get(self.cursor + 1).map(|t| &t.kind) {
+            Some(TokenKind::RBrace) => true,
+            Some(TokenKind::Ident(_)) => matches!(
+                self.tokens.get(self.cursor + 2).map(|t| &t.kind),
+                Some(TokenKind::Colon)
+            ),
+            _ => false,
+        }
+    }
+
+    fn parse_struct_literal(&mut self, name: String, start: Span) -> Expr {
+        self.expect(TokenKind::LBrace);
+        let mut fields = Vec::new();
+        while !self.at(&TokenKind::RBrace) && !self.at_end() {
+            let field_name = self.expect_ident().map(|(n, _)| n).unwrap_or_default();
+            self.expect(TokenKind::Colon);
+            let value = self.parse_expr_inner(0);
+            fields.push((field_name, value));
+            if self.at(&TokenKind::Comma) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        let end = self.current_span();
+        self.expect(TokenKind::RBrace);
+        Expr {
+            kind: ExprKind::StructLiteral { name, fields },
+            span: start.merge(end),
+        }
+    }
+
+    fn parse_enum_construct(&mut self, first_segment: String, start: Span) -> Expr {
+        let mut path = vec![first_segment];
+        while self.at(&TokenKind::ColonColon) {
+            self.advance();
+            if let Some((segment, _)) = self.expect_ident() {
+                path.push(segment);
+            } else {
+                break;
+            }
+        }
+        let fields = if self.at(&TokenKind::LParen) {
+            self.advance();
+            let mut args = Vec::new();
+            while !self.at(&TokenKind::RParen) && !self.at_end() {
+                args.push(self.parse_expr_inner(0));
+                if self.at(&TokenKind::Comma) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect(TokenKind::RParen);
+            args
+        } else {
+            vec![]
+        };
+        let end = self.current_span();
+        Expr {
+            kind: ExprKind::EnumConstruct { path, fields },
+            span: start.merge(end),
+        }
     }
 }
 

@@ -268,14 +268,16 @@ fn emit_inst(inst: &Inst, out: &mut String) {
             }
         }
 
-        // Calls, memory, region/linear ops — not yet supported for verification
+        // Calls, memory, region/linear/field ops — not yet supported for verification
         Opcode::Call
         | Opcode::Load
         | Opcode::Store
         | Opcode::RegionAlloc
         | Opcode::RegionFree
         | Opcode::LinearConsume
-        | Opcode::LinearBorrow => {
+        | Opcode::LinearBorrow
+        | Opcode::FieldGet
+        | Opcode::FieldSet => {
             out.push_str(&format!("  /* opcode {:?} not modelled */\n", inst.opcode));
             if inst.ty != Ty::Unit {
                 out.push_str(&format!(

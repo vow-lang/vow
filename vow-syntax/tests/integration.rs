@@ -128,6 +128,17 @@ fn strip_expr(expr: Expr) -> Expr {
             rhs: Box::new(strip_expr(*rhs)),
         },
         ExprKind::Tuple(elems) => ExprKind::Tuple(elems.into_iter().map(strip_expr).collect()),
+        ExprKind::StructLiteral { name, fields } => ExprKind::StructLiteral {
+            name,
+            fields: fields
+                .into_iter()
+                .map(|(n, e)| (n, strip_expr(e)))
+                .collect(),
+        },
+        ExprKind::EnumConstruct { path, fields } => ExprKind::EnumConstruct {
+            path,
+            fields: fields.into_iter().map(strip_expr).collect(),
+        },
     };
     Expr { kind, span: z() }
 }
@@ -388,3 +399,65 @@ fn binary_search_roundtrip() {
 }
 
 const BINARY_SEARCH_SOURCE: &str = "module BinarySearch\n\nfn binary_search(slice: [i32], target: i32) -> i32 [panic] vow {\n    requires: slice.len() >= 0\n    ensures: result >= -1\n} {\n    let mut lo: i32 = 0;\n    let mut hi: i32 = slice.len();\n    while lo < hi vow {\n        invariant: lo >= 0 && hi <= slice.len()\n    } {\n        let mut mid: i32 = lo + (hi - lo) / 2;\n        if slice[mid] == target {\n            return mid;\n        } else {\n            if slice[mid] < target {\n                lo = mid + 1;\n            } else {\n                hi = mid;\n            }\n        }\n    }\n    return -1;\n}\n";
+
+#[test]
+fn struct_literal_roundtrip() {
+    roundtrip(STRUCT_LITERAL_SOURCE);
+}
+
+const STRUCT_LITERAL_SOURCE: &str = "\
+module StructTest
+
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+pub fn make_point() -> i32 {
+    let p = Point { x: 1, y: 2 };
+    0
+}
+";
+
+#[test]
+fn enum_construct_roundtrip() {
+    roundtrip(ENUM_CONSTRUCT_SOURCE);
+}
+
+const ENUM_CONSTRUCT_SOURCE: &str = "\
+module EnumTest
+
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+pub fn main() -> i32 {
+    let c = Color::Red;
+    let s = Option::Some(42);
+    let n = Option::None;
+    0
+}
+";
+
+#[test]
+fn match_on_enum_roundtrip() {
+    roundtrip(MATCH_ON_ENUM_SOURCE);
+}
+
+const MATCH_ON_ENUM_SOURCE: &str = "\
+module MatchTest
+
+enum Shape {
+    Circle,
+    Square,
+}
+
+pub fn describe(s: Shape) -> i32 {
+    match s {
+        Shape::Circle => 1,
+        Shape::Square => 2,
+    }
+}
+";

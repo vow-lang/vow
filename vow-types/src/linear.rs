@@ -224,6 +224,16 @@ fn check_expr(
             }
         }
         ExprKind::Lit(_) | ExprKind::Result => {}
+        ExprKind::StructLiteral { fields, .. } => {
+            for (_, e) in fields {
+                check_expr(e, tracker, env, file, emitter, true);
+            }
+        }
+        ExprKind::EnumConstruct { fields, .. } => {
+            for e in fields {
+                check_expr(e, tracker, env, file, emitter, true);
+            }
+        }
     }
 }
 

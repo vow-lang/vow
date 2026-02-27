@@ -1,6 +1,6 @@
 #![allow(clippy::missing_safety_doc)]
 
-use std::ffi::{CStr, c_char};
+use std::ffi::{c_char, CStr};
 use std::io::Write as _;
 
 const TAG_I32: u8 = 0;
@@ -93,4 +93,135 @@ pub extern "C" fn __vow_arithmetic_overflow() {
     let _ = writeln!(std::io::stderr(), "{json}");
     let _ = writeln!(std::io::stderr(), "arithmetic overflow");
     std::process::exit(1);
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_unwrap_panic() {
+    let json = r#"{"error":"UnwrapOnNone"}"#;
+    let _ = writeln!(std::io::stderr(), "{json}");
+    let _ = writeln!(std::io::stderr(), "unwrap on None");
+    std::process::exit(1);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_arena_alloc(size: usize, align: usize) -> *mut u8 {
+    if size == 0 {
+        return align as *mut u8;
+    }
+    let layout = unsafe { std::alloc::Layout::from_size_align_unchecked(size, align) };
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    if ptr.is_null() {
+        std::process::abort();
+    }
+    ptr
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_arena_free(_ptr: *mut u8) {
+    // MVP: no-op (memory leak); proper arena deallocation is future work
+}
+
+#[repr(C)]
+pub struct VowVec {
+    pub ptr: *mut u8,
+    pub len: usize,
+    pub cap: usize,
+}
+
+const VEC_INITIAL_CAP: usize = 8;
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_vec_new(elem_size: usize, align: usize) -> *mut u8 {
+    let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
+    let header_ptr = unsafe { std::alloc::alloc_zeroed(header_layout) } as *mut VowVec;
+    if header_ptr.is_null() {
+        std::process::abort();
+    }
+    let buf_size = VEC_INITIAL_CAP * elem_size;
+    let buf_ptr = if buf_size > 0 {
+        let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(buf_size, align) };
+        let p = unsafe { std::alloc::alloc_zeroed(buf_layout) };
+        if p.is_null() {
+            std::process::abort();
+        }
+        p
+    } else {
+        align as *mut u8
+    };
+    unsafe {
+        (*header_ptr).ptr = buf_ptr;
+        (*header_ptr).len = 0;
+        (*header_ptr).cap = VEC_INITIAL_CAP;
+    }
+    header_ptr as *mut u8
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_push(
+    vec: *mut u8,
+    elem: *const u8,
+    elem_size: usize,
+    elem_align: usize,
+) {
+    let v = unsafe { &mut *(vec as *mut VowVec) };
+    if v.len == v.cap {
+        let old_size = v.cap * elem_size;
+        let new_cap = if v.cap == 0 {
+            VEC_INITIAL_CAP
+        } else {
+            v.cap * 2
+        };
+        let new_size = new_cap * elem_size;
+        let old_layout =
+            unsafe { std::alloc::Layout::from_size_align_unchecked(old_size, elem_align) };
+        let new_ptr = if old_size == 0 {
+            let new_layout =
+                unsafe { std::alloc::Layout::from_size_align_unchecked(new_size, elem_align) };
+            unsafe { std::alloc::alloc_zeroed(new_layout) }
+        } else {
+            unsafe { std::alloc::realloc(v.ptr, old_layout, new_size) }
+        };
+        if new_ptr.is_null() {
+            std::process::abort();
+        }
+        v.ptr = new_ptr;
+        v.cap = new_cap;
+    }
+    let dest = unsafe { v.ptr.add(v.len * elem_size) };
+    unsafe { std::ptr::copy_nonoverlapping(elem, dest, elem_size) };
+    v.len += 1;
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_len(vec: *const u8) -> usize {
+    let v = unsafe { &*(vec as *const VowVec) };
+    v.len
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_push_val(vec: *mut u8, value: i64) {
+    let bytes = value.to_ne_bytes();
+    unsafe { __vow_vec_push(vec, bytes.as_ptr(), 8, 8) };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_get_val(vec: *const u8, index: usize) -> i64 {
+    let ptr = unsafe { __vow_vec_get_ptr(vec, index, 8) };
+    unsafe { *(ptr as *const i64) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_get_ptr(
+    vec: *const u8,
+    index: usize,
+    elem_size: usize,
+) -> *const u8 {
+    let v = unsafe { &*(vec as *const VowVec) };
+    if index >= v.len {
+        let json = r#"{"error":"IndexOutOfBounds"}"#;
+        let _ = writeln!(std::io::stderr(), "{json}");
+        let _ = writeln!(std::io::stderr(), "index out of bounds");
+        std::process::exit(1);
+    }
+    unsafe { v.ptr.add(index * elem_size) as *const u8 }
 }

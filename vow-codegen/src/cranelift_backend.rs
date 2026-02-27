@@ -177,6 +177,8 @@ struct LowerCtx<'a> {
     ir_func_id_to_ref: &'a HashMap<IrFuncId, FuncRef>,
     vow_violation_ref: Option<FuncRef>,
     overflow_ref: Option<FuncRef>,
+    arena_alloc_ref: FuncRef,
+    arena_free_ref: FuncRef,
     mode: BuildMode,
     current_ir_block: BlockId,
     // index into module.strings → Cranelift GlobalValue (address of null-terminated string)
@@ -624,11 +626,76 @@ fn lower_inst(
         }
 
         // ------------------------------------------------------------------
-        // Region / linear — type-system enforced; no-op in codegen
+        // Region / linear
         // ------------------------------------------------------------------
-        Opcode::RegionAlloc | Opcode::RegionFree | Opcode::LinearConsume | Opcode::LinearBorrow => {
+        Opcode::RegionAlloc => {
+            let (size, align) = if let InstData::AllocSize { size, align } = inst.data {
+                (size as i64, align as i64)
+            } else {
+                (0, 8)
+            };
+            let size_val = builder.ins().iconst(types::I64, size);
+            let align_val = builder.ins().iconst(types::I64, align);
+            let call_inst = builder.ins().call(ctx.arena_alloc_ref, &[size_val, align_val]);
+            let ptr = builder.inst_results(call_inst)[0];
+            ctx.value_map.insert(inst.id, ptr);
+        }
+        Opcode::RegionFree => {
+            if let Some(&ptr_id) = inst.args.first()
+                && let Some(&ptr_val) = ctx.value_map.get(&ptr_id)
+            {
+                builder.ins().call(ctx.arena_free_ref, &[ptr_val]);
+            }
             let unit = builder.ins().iconst(types::I32, 0);
             ctx.value_map.insert(inst.id, unit);
+        }
+        Opcode::LinearConsume | Opcode::LinearBorrow => {
+            let unit = builder.ins().iconst(types::I32, 0);
+            ctx.value_map.insert(inst.id, unit);
+        }
+
+        // ------------------------------------------------------------------
+        // Struct / enum field access
+        // ------------------------------------------------------------------
+        Opcode::FieldGet => {
+            if let InstData::FieldIndex(idx) = inst.data {
+                let base = ctx.value_map[&inst.args[0]];
+                let offset = (idx as i32) * 8;
+                let raw = builder.ins().load(types::I64, MemFlags::trusted(), base, offset);
+                let result = match ir_ty_to_cranelift(inst.ty) {
+                    Some(types::I64) | None => raw,
+                    Some(types::I32) => builder.ins().ireduce(types::I32, raw),
+                    Some(types::I8) => builder.ins().ireduce(types::I8, raw),
+                    Some(types::F64) => builder.ins().bitcast(types::F64, MemFlags::new(), raw),
+                    Some(types::F32) => {
+                        let i32v = builder.ins().ireduce(types::I32, raw);
+                        builder.ins().bitcast(types::F32, MemFlags::new(), i32v)
+                    }
+                    Some(other) => builder.ins().ireduce(other, raw),
+                };
+                ctx.value_map.insert(inst.id, result);
+            }
+        }
+        Opcode::FieldSet => {
+            if let InstData::FieldIndex(idx) = inst.data {
+                let base = ctx.value_map[&inst.args[0]];
+                let new_val = ctx.value_map[&inst.args[1]];
+                let offset = (idx as i32) * 8;
+                let src_ty = builder.func.dfg.value_type(new_val);
+                let store_val = match src_ty {
+                    types::I32 => builder.ins().sextend(types::I64, new_val),
+                    types::I8 => builder.ins().uextend(types::I64, new_val),
+                    types::F32 => {
+                        let bits = builder.ins().bitcast(types::I32, MemFlags::new(), new_val);
+                        builder.ins().uextend(types::I64, bits)
+                    }
+                    types::F64 => builder.ins().bitcast(types::I64, MemFlags::new(), new_val),
+                    _ => new_val,
+                };
+                builder.ins().store(MemFlags::trusted(), store_val, base, offset);
+                let unit = builder.ins().iconst(types::I32, 0);
+                ctx.value_map.insert(inst.id, unit);
+            }
         }
     }
     Ok(())
@@ -755,6 +822,8 @@ fn emit_vow_check(
 struct RuntimeIds {
     vow_violation_id: Option<CraneliftFuncId>,
     overflow_id: Option<CraneliftFuncId>,
+    arena_alloc_id: CraneliftFuncId,
+    arena_free_id: CraneliftFuncId,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -805,6 +874,10 @@ fn compile_ir_function(
     let vow_violation_ref =
         vow_violation_id.map(|id| obj_module.declare_func_in_func(id, builder.func));
     let overflow_ref = overflow_id.map(|id| obj_module.declare_func_in_func(id, builder.func));
+    let arena_alloc_ref =
+        obj_module.declare_func_in_func(runtime.arena_alloc_id, builder.func);
+    let arena_free_ref =
+        obj_module.declare_func_in_func(runtime.arena_free_id, builder.func);
 
     let mut ir_func_id_to_ref: HashMap<IrFuncId, FuncRef> = HashMap::new();
     for &(ir_id, cl_id) in ir_to_cl {
@@ -914,6 +987,8 @@ fn compile_ir_function(
             ir_func_id_to_ref: &ir_func_id_to_ref,
             vow_violation_ref,
             overflow_ref,
+            arena_alloc_ref,
+            arena_free_ref,
             mode,
             current_ir_block: ir_block.id,
             string_global_values: &string_global_values,
@@ -943,6 +1018,24 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         }
         "__vow_print_i64" => {
             sig.params.push(AbiParam::new(types::I64)); // value
+        }
+        "__vow_vec_new" => {
+            sig.params.push(AbiParam::new(types::I64)); // elem_size
+            sig.params.push(AbiParam::new(types::I64)); // elem_align
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec
+        }
+        "__vow_vec_len" => {
+            sig.params.push(AbiParam::new(types::I64)); // vec ptr
+            sig.returns.push(AbiParam::new(types::I64)); // len
+        }
+        "__vow_vec_push_val" => {
+            sig.params.push(AbiParam::new(types::I64)); // vec ptr
+            sig.params.push(AbiParam::new(types::I64)); // value (i64)
+        }
+        "__vow_vec_get_val" => {
+            sig.params.push(AbiParam::new(types::I64)); // vec ptr
+            sig.params.push(AbiParam::new(types::I64)); // index
+            sig.returns.push(AbiParam::new(types::I64)); // element value
         }
         _ => {}
     }
@@ -1023,6 +1116,21 @@ impl Backend for CraneliftBackend {
             ir_to_cl.push((ir_func.id, cl_id));
         }
 
+        // Declare arena runtime functions (always needed)
+        let mut arena_alloc_sig = obj_module.make_signature();
+        arena_alloc_sig.params.push(AbiParam::new(types::I64)); // size
+        arena_alloc_sig.params.push(AbiParam::new(types::I64)); // align
+        arena_alloc_sig.returns.push(AbiParam::new(types::I64)); // *mut u8
+        let arena_alloc_id = obj_module
+            .declare_function("__vow_arena_alloc", Linkage::Import, &arena_alloc_sig)
+            .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+
+        let mut arena_free_sig = obj_module.make_signature();
+        arena_free_sig.params.push(AbiParam::new(types::I64)); // *mut u8
+        let arena_free_id = obj_module
+            .declare_function("__vow_arena_free", Linkage::Import, &arena_free_sig)
+            .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+
         // Declare external runtime functions (debug mode only)
         let (vow_violation_id, overflow_id) = if mode == BuildMode::Debug {
             let mut violation_sig = obj_module.make_signature();
@@ -1062,6 +1170,8 @@ impl Backend for CraneliftBackend {
                 &RuntimeIds {
                     vow_violation_id,
                     overflow_id,
+                    arena_alloc_id,
+                    arena_free_id,
                 },
                 &string_data_ids,
                 &extern_func_ids,
@@ -1101,6 +1211,8 @@ mod tests {
             name: name.to_string(),
             functions: funcs,
             strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
         }
     }
 

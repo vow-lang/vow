@@ -299,6 +299,14 @@ pub enum ExprKind {
     },
     Tuple(Vec<Expr>),
     Result,
+    StructLiteral {
+        name: String,
+        fields: Vec<(String, Expr)>,
+    },
+    EnumConstruct {
+        path: Vec<String>,
+        fields: Vec<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

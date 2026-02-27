@@ -570,6 +570,26 @@ pub fn print_expr(expr: &Expr) -> String {
             format!("({})", elem_strs.join(", "))
         }
         ExprKind::Result => "result".to_string(),
+        ExprKind::StructLiteral { name, fields } => {
+            if fields.is_empty() {
+                format!("{} {{}}", name)
+            } else {
+                let field_strs: Vec<String> = fields
+                    .iter()
+                    .map(|(n, e)| format!("{}: {}", n, print_expr(e)))
+                    .collect();
+                format!("{} {{ {} }}", name, field_strs.join(", "))
+            }
+        }
+        ExprKind::EnumConstruct { path, fields } => {
+            let path_str = path.join("::");
+            if fields.is_empty() {
+                path_str
+            } else {
+                let args: Vec<String> = fields.iter().map(print_expr).collect();
+                format!("{}({})", path_str, args.join(", "))
+            }
+        }
     }
 }
 

@@ -89,6 +89,16 @@ fn collect_calls_in_expr<'a>(expr: &'a Expr, calls: &mut Vec<(&'a Expr, &'a str)
             }
         }
         ExprKind::Lit(_) | ExprKind::Ident(_) | ExprKind::Result => {}
+        ExprKind::StructLiteral { fields, .. } => {
+            for (_, e) in fields {
+                collect_calls_in_expr(e, calls);
+            }
+        }
+        ExprKind::EnumConstruct { fields, .. } => {
+            for e in fields {
+                collect_calls_in_expr(e, calls);
+            }
+        }
     }
 }
 

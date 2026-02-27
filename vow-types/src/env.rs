@@ -157,6 +157,42 @@ impl TypeEnv {
                 Err(format!("unknown type: {name}"))
             }
             AstType::Generic { name, args, .. } => {
+                // Builtin generic types
+                match name.as_str() {
+                    "Option" => {
+                        let arg = args
+                            .first()
+                            .ok_or_else(|| "Option requires one type argument".to_string())?;
+                        let t = self.resolve(arg)?;
+                        return Ok(Ty::Applied(
+                            Box::new(Ty::Enum("Option".to_string())),
+                            vec![t],
+                        ));
+                    }
+                    "Result" => {
+                        let t = args
+                            .first()
+                            .ok_or_else(|| "Result requires two type arguments".to_string())?;
+                        let e = args
+                            .get(1)
+                            .ok_or_else(|| "Result requires two type arguments".to_string())?;
+                        return Ok(Ty::Applied(
+                            Box::new(Ty::Enum("Result".to_string())),
+                            vec![self.resolve(t)?, self.resolve(e)?],
+                        ));
+                    }
+                    "Vec" => {
+                        let arg = args
+                            .first()
+                            .ok_or_else(|| "Vec requires one type argument".to_string())?;
+                        let t = self.resolve(arg)?;
+                        return Ok(Ty::Applied(
+                            Box::new(Ty::Struct("Vec".to_string())),
+                            vec![t],
+                        ));
+                    }
+                    _ => {}
+                }
                 let base = self.resolve(&AstType::Named {
                     name: name.clone(),
                     span: vow_syntax::span::Span::new(0, 0),
@@ -338,6 +374,72 @@ mod tests {
         assert_eq!(
             env.resolve(&AstType::Never { span: dummy_span() }),
             Ok(Ty::Never)
+        );
+    }
+
+    #[test]
+    fn resolve_option_generic() {
+        let env = TypeEnv::new();
+        let ast_ty = AstType::Generic {
+            name: "Option".to_string(),
+            args: vec![AstType::Named {
+                name: "i64".to_string(),
+                span: dummy_span(),
+            }],
+            span: dummy_span(),
+        };
+        assert_eq!(
+            env.resolve(&ast_ty),
+            Ok(Ty::Applied(
+                Box::new(Ty::Enum("Option".to_string())),
+                vec![Ty::I64]
+            ))
+        );
+    }
+
+    #[test]
+    fn resolve_result_generic() {
+        let env = TypeEnv::new();
+        let ast_ty = AstType::Generic {
+            name: "Result".to_string(),
+            args: vec![
+                AstType::Named {
+                    name: "i64".to_string(),
+                    span: dummy_span(),
+                },
+                AstType::Named {
+                    name: "bool".to_string(),
+                    span: dummy_span(),
+                },
+            ],
+            span: dummy_span(),
+        };
+        assert_eq!(
+            env.resolve(&ast_ty),
+            Ok(Ty::Applied(
+                Box::new(Ty::Enum("Result".to_string())),
+                vec![Ty::I64, Ty::Bool]
+            ))
+        );
+    }
+
+    #[test]
+    fn resolve_vec_generic() {
+        let env = TypeEnv::new();
+        let ast_ty = AstType::Generic {
+            name: "Vec".to_string(),
+            args: vec![AstType::Named {
+                name: "i32".to_string(),
+                span: dummy_span(),
+            }],
+            span: dummy_span(),
+        };
+        assert_eq!(
+            env.resolve(&ast_ty),
+            Ok(Ty::Applied(
+                Box::new(Ty::Struct("Vec".to_string())),
+                vec![Ty::I32]
+            ))
         );
     }
 }

@@ -210,6 +210,8 @@ mod tests {
             name: "m".to_string(),
             functions: vec![func],
             strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
         };
         assert!(validate(&module).is_ok());
     }
@@ -221,6 +223,8 @@ mod tests {
             name: "m".to_string(),
             functions: vec![func],
             strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
         };
         let result = validate(&module);
         assert!(!result.is_ok());
@@ -250,6 +254,8 @@ mod tests {
             name: "m".to_string(),
             functions: vec![func],
             strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
         };
         let result = validate(&module);
         assert!(!result.is_ok());
@@ -283,6 +289,8 @@ mod tests {
             name: "m".to_string(),
             functions: vec![func],
             strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
         };
         let result = validate(&module);
         assert!(!result.is_ok());
@@ -309,6 +317,8 @@ mod tests {
             name: "m".to_string(),
             functions: vec![func],
             strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
         };
         let result = validate(&module);
         assert!(!result.is_ok());
@@ -341,6 +351,8 @@ mod tests {
             name: "m".to_string(),
             functions: vec![func],
             strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
         };
         let result = validate(&module);
         assert!(!result.is_ok());
@@ -387,6 +399,8 @@ mod tests {
             name: "m".to_string(),
             functions: vec![func],
             strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
         };
         let result = validate(&module);
         assert!(!result.is_ok());
@@ -413,6 +427,8 @@ mod tests {
             name: "m".to_string(),
             functions: vec![func],
             strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
         };
         let result = validate(&module);
         assert!(!result.is_ok());

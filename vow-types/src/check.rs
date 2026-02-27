@@ -280,22 +280,32 @@ impl<'e> Checker<'e> {
                 pattern, ty, init, ..
             } => {
                 let init_ty = self.check_expr(init);
-                if let Some(ann) = ty {
+                let binding_ty = if let Some(ann) = ty {
                     match self.env.resolve(ann) {
-                        Ok(ann_ty) if ann_ty != init_ty && init_ty != Ty::Never => {
-                            self.emit_error(
-                                ErrorCode::TypeMismatch,
-                                format!(
-                                    "let binding annotated as `{ann_ty}` but initializer has type `{init_ty}`"
-                                ),
-                                ann.span(),
-                            );
+                        Ok(ann_ty) => {
+                            let coercible = init_ty == Ty::Never
+                                || ann_ty == init_ty
+                                || (init_ty == Ty::I32 && ann_ty.is_integer());
+                            if !coercible {
+                                self.emit_error(
+                                    ErrorCode::TypeMismatch,
+                                    format!(
+                                        "let binding annotated as `{ann_ty}` but initializer has type `{init_ty}`"
+                                    ),
+                                    ann.span(),
+                                );
+                            }
+                            ann_ty
                         }
-                        Err(msg) => self.emit_error(ErrorCode::TypeMismatch, msg, ann.span()),
-                        _ => {}
+                        Err(msg) => {
+                            self.emit_error(ErrorCode::TypeMismatch, msg, ann.span());
+                            init_ty
+                        }
                     }
-                }
-                self.bind_pattern(pattern, &init_ty);
+                } else {
+                    init_ty
+                };
+                self.bind_pattern(pattern, &binding_ty);
             }
             Stmt::Expr { expr, .. } => {
                 self.check_expr(expr);
@@ -473,12 +483,35 @@ impl<'e> Checker<'e> {
                 }
                 return_ty
             }
-            ExprKind::MethodCall { receiver, args, .. } => {
-                self.check_expr(receiver);
+            ExprKind::MethodCall {
+                receiver,
+                method,
+                args,
+            } => {
+                let recv_ty = self.check_expr(receiver);
                 for arg in args {
                     self.check_expr(arg);
                 }
-                Ty::Unit
+                let is_vec = matches!(&recv_ty,
+                    Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Struct(n) if n == "Vec")
+                );
+                if is_vec {
+                    match method.as_str() {
+                        "len" => Ty::I64,
+                        "push" => Ty::Unit,
+                        "get" => Ty::Applied(
+                            Box::new(Ty::Enum("Option".to_string())),
+                            vec![if let Ty::Applied(_, args) = &recv_ty {
+                                args.first().cloned().unwrap_or(Ty::I64)
+                            } else {
+                                Ty::I64
+                            }],
+                        ),
+                        _ => Ty::Unit,
+                    }
+                } else {
+                    Ty::Unit
+                }
             }
             ExprKind::FieldAccess { base, field } => {
                 let base_ty = self.check_expr(base);
@@ -681,6 +714,153 @@ impl<'e> Checker<'e> {
                 Ty::Tuple(elem_tys)
             }
             ExprKind::Result => self.current_return_ty.clone(),
+            ExprKind::StructLiteral { name, fields } => {
+                let info = self.env.lookup_struct(name).cloned();
+                match info {
+                    None => {
+                        self.emit_error(
+                            ErrorCode::TypeMismatch,
+                            format!("unknown struct `{name}`"),
+                            expr.span,
+                        );
+                        for (_, e) in fields {
+                            self.check_expr(e);
+                        }
+                        Ty::Unit
+                    }
+                    Some(info) => {
+                        for (field_name, field_expr) in fields {
+                            let actual_ty = self.check_expr(field_expr);
+                            if let Some((_, expected_ty)) =
+                                info.fields.iter().find(|(n, _)| n == field_name)
+                            {
+                                if actual_ty != *expected_ty
+                                    && actual_ty != Ty::Never
+                                    && actual_ty != Ty::I32
+                                {
+                                    self.emit_error(
+                                        ErrorCode::TypeMismatch,
+                                        format!(
+                                            "field `{field_name}` of struct `{name}` expects `{expected_ty}`, found `{actual_ty}`"
+                                        ),
+                                        field_expr.span,
+                                    );
+                                }
+                            } else {
+                                self.emit_error(
+                                    ErrorCode::TypeMismatch,
+                                    format!("struct `{name}` has no field `{field_name}`"),
+                                    field_expr.span,
+                                );
+                            }
+                        }
+                        Ty::Struct(name.clone())
+                    }
+                }
+            }
+            ExprKind::EnumConstruct { path, fields } => {
+                let enum_name = path.first().map(|s| s.as_str()).unwrap_or("");
+                let variant_name = path.get(1).map(|s| s.as_str()).unwrap_or("");
+                // Handle compiler-known builtins: Option and Result
+                match (enum_name, variant_name) {
+                    ("Option", "None") => {
+                        // None has type Never (bottom) so it unifies with any Option<T>
+                        return Ty::Never;
+                    }
+                    ("Option", "Some") => {
+                        let payload_ty = fields
+                            .first()
+                            .map(|e| self.check_expr(e))
+                            .unwrap_or(Ty::Unit);
+                        return Ty::Applied(
+                            Box::new(Ty::Enum("Option".to_string())),
+                            vec![payload_ty],
+                        );
+                    }
+                    ("Result", "Ok") => {
+                        let payload_ty = fields
+                            .first()
+                            .map(|e| self.check_expr(e))
+                            .unwrap_or(Ty::Unit);
+                        return Ty::Applied(
+                            Box::new(Ty::Enum("Result".to_string())),
+                            vec![payload_ty, Ty::Unit],
+                        );
+                    }
+                    ("Result", "Err") => {
+                        let payload_ty = fields
+                            .first()
+                            .map(|e| self.check_expr(e))
+                            .unwrap_or(Ty::Unit);
+                        // Err has unknown Ok type; use Never so it unifies with any Result<T,E>
+                        return Ty::Applied(
+                            Box::new(Ty::Enum("Result".to_string())),
+                            vec![Ty::Never, payload_ty],
+                        );
+                    }
+                    ("Vec", "new") => {
+                        // Vec::new() returns Vec<T> with unknown element type (Never)
+                        return Ty::Never;
+                    }
+                    _ => {}
+                }
+                let info = self.env.lookup_enum(enum_name).cloned();
+                match info {
+                    None => {
+                        self.emit_error(
+                            ErrorCode::TypeMismatch,
+                            format!("unknown enum `{enum_name}`"),
+                            expr.span,
+                        );
+                        for e in fields {
+                            self.check_expr(e);
+                        }
+                        Ty::Unit
+                    }
+                    Some(info) => {
+                        let variant = info.variants.iter().find(|v| v.name == variant_name).cloned();
+                        match variant {
+                            None => {
+                                self.emit_error(
+                                    ErrorCode::TypeMismatch,
+                                    format!("enum `{enum_name}` has no variant `{variant_name}`"),
+                                    expr.span,
+                                );
+                                for e in fields {
+                                    self.check_expr(e);
+                                }
+                            }
+                            Some(variant) => {
+                                use crate::env::VariantKind;
+                                let expected_tys: Vec<Ty> = match &variant.kind {
+                                    VariantKind::Unit => vec![],
+                                    VariantKind::Tuple(tys) => tys.clone(),
+                                    VariantKind::Struct(fields) => {
+                                        fields.iter().map(|(_, ty)| ty.clone()).collect()
+                                    }
+                                };
+                                for (i, field_expr) in fields.iter().enumerate() {
+                                    let actual_ty = self.check_expr(field_expr);
+                                    if let Some(expected_ty) = expected_tys.get(i)
+                                        && actual_ty != *expected_ty
+                                        && actual_ty != Ty::Never
+                                        && actual_ty != Ty::I32
+                                    {
+                                        self.emit_error(
+                                            ErrorCode::TypeMismatch,
+                                            format!(
+                                                "variant `{variant_name}` field {i} expects `{expected_ty}`, found `{actual_ty}`"
+                                            ),
+                                            field_expr.span,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        Ty::Enum(enum_name.to_string())
+                    }
+                }
+            }
         }
     }
 
@@ -1773,6 +1953,144 @@ mod tests {
         let mut checker = new_checker(&mut emitter);
         let ty = checker.check_expr(&make_expr(ExprKind::Lit(Lit::String("hello".to_string()))));
         assert_eq!(ty, Ty::Str);
+        assert!(!checker.has_errors());
+    }
+
+    // --- StructLiteral ---
+
+    #[test]
+    fn struct_literal_ok() {
+        use crate::env::StructInfo;
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.env.define_struct(
+            "Point",
+            StructInfo {
+                fields: vec![("x".to_string(), Ty::I32), ("y".to_string(), Ty::I32)],
+                is_linear: false,
+            },
+        );
+        checker.env.push_scope();
+        let ty = checker.check_expr(&make_expr(ExprKind::StructLiteral {
+            name: "Point".to_string(),
+            fields: vec![
+                ("x".to_string(), int_lit()),
+                ("y".to_string(), int_lit()),
+            ],
+        }));
+        assert_eq!(ty, Ty::Struct("Point".to_string()));
+        assert!(!checker.has_errors());
+    }
+
+    #[test]
+    fn struct_literal_wrong_field_type_error() {
+        use crate::env::StructInfo;
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.env.define_struct(
+            "Point",
+            StructInfo {
+                fields: vec![("x".to_string(), Ty::I32)],
+                is_linear: false,
+            },
+        );
+        checker.env.push_scope();
+        checker.check_expr(&make_expr(ExprKind::StructLiteral {
+            name: "Point".to_string(),
+            fields: vec![("x".to_string(), bool_lit())],
+        }));
+        assert!(checker.has_errors());
+    }
+
+    // --- EnumConstruct builtins ---
+
+    #[test]
+    fn enum_construct_option_none_is_never() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let ty = checker.check_expr(&make_expr(ExprKind::EnumConstruct {
+            path: vec!["Option".to_string(), "None".to_string()],
+            fields: vec![],
+        }));
+        assert_eq!(ty, Ty::Never);
+        assert!(!checker.has_errors());
+    }
+
+    #[test]
+    fn enum_construct_option_some_wraps_payload() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let ty = checker.check_expr(&make_expr(ExprKind::EnumConstruct {
+            path: vec!["Option".to_string(), "Some".to_string()],
+            fields: vec![int_lit()],
+        }));
+        assert_eq!(
+            ty,
+            Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::I32])
+        );
+        assert!(!checker.has_errors());
+    }
+
+    #[test]
+    fn enum_construct_result_ok_wraps_payload() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let ty = checker.check_expr(&make_expr(ExprKind::EnumConstruct {
+            path: vec!["Result".to_string(), "Ok".to_string()],
+            fields: vec![int_lit()],
+        }));
+        assert_eq!(
+            ty,
+            Ty::Applied(
+                Box::new(Ty::Enum("Result".to_string())),
+                vec![Ty::I32, Ty::Unit]
+            )
+        );
+        assert!(!checker.has_errors());
+    }
+
+    #[test]
+    fn enum_construct_result_err_wraps_payload() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let ty = checker.check_expr(&make_expr(ExprKind::EnumConstruct {
+            path: vec!["Result".to_string(), "Err".to_string()],
+            fields: vec![bool_lit()],
+        }));
+        assert_eq!(
+            ty,
+            Ty::Applied(
+                Box::new(Ty::Enum("Result".to_string())),
+                vec![Ty::Never, Ty::Bool]
+            )
+        );
+        assert!(!checker.has_errors());
+    }
+
+    // --- Let binding annotation coercion ---
+
+    #[test]
+    fn let_binding_i32_lit_coerces_to_i64_annotation() {
+        use vow_syntax::ast::{Pat, PatKind, Stmt};
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let stmt = Stmt::Let {
+            pattern: Pat {
+                kind: PatKind::Ident {
+                    name: "x".to_string(),
+                    is_mut: false,
+                },
+                span: dummy_span(),
+            },
+            ty: Some(Type::Named {
+                name: "i64".to_string(),
+                span: dummy_span(),
+            }),
+            init: Box::new(int_lit()),
+            span: dummy_span(),
+        };
+        checker.check_stmt(&stmt);
+        assert_eq!(checker.env.lookup("x"), Some(&Ty::I64));
         assert!(!checker.has_errors());
     }
 }

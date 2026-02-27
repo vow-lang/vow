@@ -107,6 +107,17 @@ pub fn inst_effects(opcode: &Opcode) -> Effects {
             e.reads.insert(AbstractHeap::Memory);
             e
         }
+        Opcode::FieldGet => {
+            let mut e = Effects::pure();
+            e.reads.insert(AbstractHeap::Memory);
+            e
+        }
+        Opcode::FieldSet => {
+            let mut e = Effects::pure();
+            e.reads.insert(AbstractHeap::Memory);
+            e.writes.insert(AbstractHeap::Memory);
+            e
+        }
         _ => Effects::pure(),
     }
 }

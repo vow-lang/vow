@@ -101,6 +101,8 @@ fn opcode_name(opcode: &Opcode) -> &'static str {
         Opcode::RegionFree => "RegionFree",
         Opcode::LinearConsume => "LinearConsume",
         Opcode::LinearBorrow => "LinearBorrow",
+        Opcode::FieldGet => "FieldGet",
+        Opcode::FieldSet => "FieldSet",
     }
 }
 
@@ -124,6 +126,8 @@ fn format_data(data: &InstData) -> Option<String> {
         InstData::JumpTarget(bid) => Some(format!("block_{}", bid.0)),
         InstData::RegionId(rid) => Some(format!("region_{}", rid.0)),
         InstData::VowId(vid) => Some(format!("vow_{}", vid.0)),
+        InstData::AllocSize { size, align } => Some(format!("size={size},align={align}")),
+        InstData::FieldIndex(idx) => Some(format!("field_{idx}")),
     }
 }
 
@@ -183,6 +187,29 @@ pub fn print_module(module: &Module) -> String {
             .map(|(i, s)| format!("  @{i} = {:?}", s))
             .collect();
         parts.push(format!("strings:\n{}", pool.join("\n")));
+    }
+    for sl in &module.struct_layouts {
+        let fields: Vec<String> = sl
+            .fields
+            .iter()
+            .map(|f| format!("{}: {}", f.name, f.ty))
+            .collect();
+        parts.push(format!("struct {} {{ {} }}", sl.name, fields.join(", ")));
+    }
+    for el in &module.enum_layouts {
+        let variants: Vec<String> = el
+            .variants
+            .iter()
+            .map(|v| {
+                if v.payload.is_empty() {
+                    format!("{}(tag={})", v.name, v.tag)
+                } else {
+                    let fields: Vec<String> = v.payload.iter().map(|f| f.ty.to_string()).collect();
+                    format!("{}(tag={}, {})", v.name, v.tag, fields.join(", "))
+                }
+            })
+            .collect();
+        parts.push(format!("enum {} {{ {} }}", el.name, variants.join(", ")));
     }
     for func in &module.functions {
         parts.push(print_function(func));
@@ -358,6 +385,8 @@ mod tests {
             name: "m".to_string(),
             functions: vec![func],
             strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
         };
         let output = print_module(&module);
         assert!(output.contains("IO"));

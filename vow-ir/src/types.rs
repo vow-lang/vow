@@ -113,6 +113,9 @@ pub enum Opcode {
 
     LinearConsume,
     LinearBorrow,
+
+    FieldGet,
+    FieldSet,
 }
 
 impl Opcode {
@@ -144,6 +147,11 @@ pub enum InstData {
     JumpTarget(BlockId),
     RegionId(RegionId),
     VowId(VowId),
+    AllocSize {
+        size: u32,
+        align: u32,
+    },
+    FieldIndex(u32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,10 +202,87 @@ pub struct Function {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct FieldLayout {
+    pub name: String,
+    pub ty: Ty,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructLayout {
+    pub name: String,
+    pub fields: Vec<FieldLayout>,
+    pub is_linear: bool,
+}
+
+impl StructLayout {
+    pub fn size_bytes(&self) -> u32 {
+        (self.fields.len() as u32) * 8
+    }
+
+    pub fn field_index(&self, field_name: &str) -> Option<u32> {
+        self.fields
+            .iter()
+            .position(|f| f.name == field_name)
+            .map(|i| i as u32)
+    }
+
+    pub fn field_ty(&self, idx: u32) -> Option<Ty> {
+        self.fields.get(idx as usize).map(|f| f.ty)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VariantLayout {
+    pub name: String,
+    pub tag: u64,
+    pub payload: Vec<FieldLayout>,
+}
+
+impl VariantLayout {
+    pub fn payload_size_bytes(&self) -> u32 {
+        (self.payload.len() as u32) * 8
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumLayout {
+    pub name: String,
+    pub variants: Vec<VariantLayout>,
+}
+
+impl EnumLayout {
+    pub fn size_bytes(&self) -> u32 {
+        let max_payload = self
+            .variants
+            .iter()
+            .map(|v| v.payload.len())
+            .max()
+            .unwrap_or(0);
+        (1 + max_payload as u32) * 8
+    }
+
+    pub fn variant_index(&self, variant_name: &str) -> Option<u32> {
+        self.variants
+            .iter()
+            .position(|v| v.name == variant_name)
+            .map(|i| i as u32)
+    }
+
+    pub fn variant_tag(&self, variant_name: &str) -> Option<u64> {
+        self.variants
+            .iter()
+            .find(|v| v.name == variant_name)
+            .map(|v| v.tag)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Module {
     pub name: String,
     pub functions: Vec<Function>,
     pub strings: Vec<String>,
+    pub struct_layouts: Vec<StructLayout>,
+    pub enum_layouts: Vec<EnumLayout>,
 }
 
 #[cfg(test)]
@@ -262,6 +347,8 @@ mod tests {
             name: "test_module".to_string(),
             functions: vec![func],
             strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
         };
         assert_eq!(module.functions.len(), 1);
         assert_eq!(module.functions[0].blocks.len(), 1);

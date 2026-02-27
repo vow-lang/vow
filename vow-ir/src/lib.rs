@@ -10,7 +10,7 @@ pub use insertion_set::InsertionSet;
 pub use lower::{lower_function, lower_module};
 pub use printer::{print_function, print_module};
 pub use types::{
-    BasicBlock, BlockId, FuncId, Function, Inst, InstData, InstId, Module, Opcode, RegionId, Ty,
-    VowEntry, VowId,
+    BasicBlock, BlockId, EnumLayout, FieldLayout, FuncId, Function, Inst, InstData, InstId, Module,
+    Opcode, RegionId, StructLayout, Ty, VariantLayout, VowEntry, VowId,
 };
 pub use validator::{ValidationError, ValidationResult, validate, validate_function};

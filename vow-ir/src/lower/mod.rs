@@ -5,13 +5,13 @@ use std::collections::{HashMap, HashSet};
 use vow_diag::Blame;
 use vow_syntax::ast::{
     BinOp, Block, Effect, Expr, ExprKind, FnDef, Item, Lit, Module as AstModule, PatKind, Stmt,
-    Type as AstType, UnOp, VowBlock,
+    Type as AstType, UnOp, VariantKind, VowBlock,
 };
 use vow_syntax::span::Span;
 
 use crate::types::{
-    BasicBlock, BlockId, FuncId, Function, Inst, InstData, InstId, Module, Opcode, Ty, VowEntry,
-    VowId,
+    BasicBlock, BlockId, EnumLayout, FieldLayout, FuncId, Function, Inst, InstData, InstId,
+    Module, Opcode, StructLayout, Ty, VariantLayout, VowEntry, VowId,
 };
 
 fn vow_builtin_to_runtime(name: &str) -> Option<&'static str> {
@@ -47,6 +47,12 @@ pub struct LowerCtx {
     pub(super) string_pool: Vec<String>,
     func_index: HashMap<String, (FuncId, Ty)>,
     pub(super) current_return_ty: Ty,
+    // struct name → field names in declaration order
+    pub(super) struct_field_map: HashMap<String, Vec<String>>,
+    // enum name → variant names in declaration order (index = tag)
+    pub(super) enum_variant_map: HashMap<String, Vec<String>>,
+    // InstId of a struct/enum allocation → type name
+    pub(super) inst_struct_type: HashMap<InstId, String>,
 }
 
 impl LowerCtx {
@@ -56,6 +62,8 @@ impl LowerCtx {
         return_ty: Ty,
         effects: Vec<Effect>,
         func_index: HashMap<String, (FuncId, Ty)>,
+        struct_field_map: HashMap<String, Vec<String>>,
+        enum_variant_map: HashMap<String, Vec<String>>,
     ) -> Self {
         let entry = BasicBlock {
             id: BlockId(0),
@@ -70,6 +78,13 @@ impl LowerCtx {
             vows: vec![],
             blocks: vec![entry],
         };
+        let mut enum_variant_map = enum_variant_map;
+        enum_variant_map
+            .entry("Option".to_string())
+            .or_insert_with(|| vec!["None".to_string(), "Some".to_string()]);
+        enum_variant_map
+            .entry("Result".to_string())
+            .or_insert_with(|| vec!["Ok".to_string(), "Err".to_string()]);
         LowerCtx {
             current_return_ty: return_ty,
             func,
@@ -79,6 +94,9 @@ impl LowerCtx {
             vow_block: None,
             string_pool: Vec::new(),
             func_index,
+            struct_field_map,
+            enum_variant_map,
+            inst_struct_type: HashMap::new(),
         }
     }
 
@@ -431,8 +449,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 span,
             );
 
+            let phi_ty = ctx.inst_ty(then_val);
             ctx.switch_to_block(merge_block);
-            let phi_id = ctx.emit(Opcode::Phi, Ty::I64, vec![], InstData::None, span);
+            let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
 
             backpatch_upsilon(ctx, then_block, then_upsilon_id, phi_id);
             backpatch_upsilon(ctx, else_block, else_upsilon_id, phi_id);
@@ -575,6 +594,428 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.switch_to_block(exit_block);
             ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
         }
+        ExprKind::FieldAccess { base, field } => {
+            let ptr_id = lower_expr(ctx, base);
+            let struct_name = ctx.inst_struct_type.get(&ptr_id).cloned().unwrap_or_default();
+            let field_idx = ctx
+                .struct_field_map
+                .get(&struct_name)
+                .and_then(|names| names.iter().position(|n| n == field))
+                .unwrap_or(0) as u32;
+            ctx.emit(
+                Opcode::FieldGet,
+                Ty::I64,
+                vec![ptr_id],
+                InstData::FieldIndex(field_idx),
+                span,
+            )
+        }
+        ExprKind::StructLiteral { name, fields } => {
+            let field_names = ctx
+                .struct_field_map
+                .get(name)
+                .cloned()
+                .unwrap_or_default();
+            let n_fields = field_names.len().max(fields.len());
+            let ptr_id = ctx.emit(
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize {
+                    size: n_fields as u32 * 8,
+                    align: 8,
+                },
+                span,
+            );
+            ctx.inst_struct_type.insert(ptr_id, name.clone());
+            for (field_name, field_expr) in fields {
+                let idx = field_names
+                    .iter()
+                    .position(|n| n == field_name)
+                    .unwrap_or(0) as u32;
+                let val_id = lower_expr(ctx, field_expr);
+                ctx.emit(
+                    Opcode::FieldSet,
+                    Ty::Unit,
+                    vec![ptr_id, val_id],
+                    InstData::FieldIndex(idx),
+                    span,
+                );
+            }
+            ptr_id
+        }
+        ExprKind::EnumConstruct { path, fields } => {
+            let enum_name = path.first().map(|s| s.as_str()).unwrap_or("");
+            let variant_name = path.get(1).map(|s| s.as_str()).unwrap_or("");
+            // Vec::new() builtin
+            if enum_name == "Vec" && variant_name == "new" {
+                let size_val = ctx.emit(
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    vec![],
+                    InstData::ConstI64(8),
+                    span,
+                );
+                let align_val = ctx.emit(
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    vec![],
+                    InstData::ConstI64(8),
+                    span,
+                );
+                return ctx.emit(
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![size_val, align_val],
+                    InstData::CallExtern("__vow_vec_new".to_string()),
+                    span,
+                );
+            }
+            let tag = ctx
+                .enum_variant_map
+                .get(enum_name)
+                .and_then(|vs| vs.iter().position(|v| v == variant_name))
+                .unwrap_or(0) as i64;
+            let n_payload = fields.len();
+            let size = (1 + n_payload) as u32 * 8;
+            let ptr_id = ctx.emit(
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size, align: 8 },
+                span,
+            );
+            ctx.inst_struct_type.insert(ptr_id, enum_name.to_string());
+            let tag_val = ctx.emit(
+                Opcode::ConstI64,
+                Ty::I64,
+                vec![],
+                InstData::ConstI64(tag),
+                span,
+            );
+            ctx.emit(
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![ptr_id, tag_val],
+                InstData::FieldIndex(0),
+                span,
+            );
+            for (i, field_expr) in fields.iter().enumerate() {
+                let val_id = lower_expr(ctx, field_expr);
+                ctx.emit(
+                    Opcode::FieldSet,
+                    Ty::Unit,
+                    vec![ptr_id, val_id],
+                    InstData::FieldIndex(1 + i as u32),
+                    span,
+                );
+            }
+            ptr_id
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            let ptr_id = lower_expr(ctx, scrutinee);
+            // Load enum discriminant (stored as i64 at field 0)
+            let tag_id = ctx.emit(
+                Opcode::FieldGet,
+                Ty::I64,
+                vec![ptr_id],
+                InstData::FieldIndex(0),
+                span,
+            );
+
+            let merge_block = ctx.new_block();
+            let mut arm_results: Vec<(BlockId, InstId, Ty)> = Vec::new();
+
+            let mut arm_iter = arms.iter().peekable();
+            while let Some(arm) = arm_iter.next() {
+                let is_last = arm_iter.peek().is_none();
+                match &arm.pattern.kind {
+                    PatKind::EnumVariant { path, inner } => {
+                        let enum_name =
+                            path.first().map(|s| s.as_str()).unwrap_or("");
+                        let variant_name =
+                            path.get(1).map(|s| s.as_str()).unwrap_or("");
+                        let expected_tag = ctx
+                            .enum_variant_map
+                            .get(enum_name)
+                            .and_then(|vs| vs.iter().position(|v| v == variant_name))
+                            .unwrap_or(0) as i64;
+
+                        let arm_block = ctx.new_block();
+                        let next_check_block = if is_last {
+                            arm_block
+                        } else {
+                            ctx.new_block()
+                        };
+
+                        let expected_id = ctx.emit(
+                            Opcode::ConstI64,
+                            Ty::I64,
+                            vec![],
+                            InstData::ConstI64(expected_tag),
+                            span,
+                        );
+                        let cmp_id = ctx.emit(
+                            Opcode::EqI64,
+                            Ty::Bool,
+                            vec![tag_id, expected_id],
+                            InstData::None,
+                            span,
+                        );
+                        ctx.emit(
+                            Opcode::Branch,
+                            Ty::Unit,
+                            vec![cmp_id],
+                            InstData::BranchTargets {
+                                then_block: arm_block,
+                                else_block: next_check_block,
+                            },
+                            span,
+                        );
+
+                        ctx.switch_to_block(arm_block);
+                        ctx.push_scope();
+                        // Bind payload fields
+                        for (i, inner_pat) in inner.iter().enumerate() {
+                            if let PatKind::Ident { name, .. } = &inner_pat.kind {
+                                let field_val = ctx.emit(
+                                    Opcode::FieldGet,
+                                    Ty::I64,
+                                    vec![ptr_id],
+                                    InstData::FieldIndex(1 + i as u32),
+                                    span,
+                                );
+                                ctx.define(name.clone(), field_val);
+                            }
+                        }
+                        let arm_result = lower_expr(ctx, &arm.body);
+                        let arm_ty = ctx.inst_ty(arm_result);
+                        ctx.pop_scope();
+                        let up_id = ctx.emit(
+                            Opcode::Upsilon,
+                            Ty::Unit,
+                            vec![arm_result],
+                            InstData::PhiTarget(InstId(u32::MAX)),
+                            span,
+                        );
+                        ctx.emit(
+                            Opcode::Jump,
+                            Ty::Unit,
+                            vec![],
+                            InstData::JumpTarget(merge_block),
+                            span,
+                        );
+                        arm_results.push((arm_block, up_id, arm_ty));
+
+                        if !is_last {
+                            ctx.switch_to_block(next_check_block);
+                        }
+                    }
+                    PatKind::Wildcard | PatKind::Ident { .. } => {
+                        // Catch-all arm — just lower the body
+                        let arm_block = ctx.current_block;
+                        if let PatKind::Ident { name, .. } = &arm.pattern.kind {
+                            ctx.push_scope();
+                            ctx.define(name.clone(), ptr_id);
+                        } else {
+                            ctx.push_scope();
+                        }
+                        let arm_result = lower_expr(ctx, &arm.body);
+                        let arm_ty = ctx.inst_ty(arm_result);
+                        ctx.pop_scope();
+                        let up_id = ctx.emit(
+                            Opcode::Upsilon,
+                            Ty::Unit,
+                            vec![arm_result],
+                            InstData::PhiTarget(InstId(u32::MAX)),
+                            span,
+                        );
+                        ctx.emit(
+                            Opcode::Jump,
+                            Ty::Unit,
+                            vec![],
+                            InstData::JumpTarget(merge_block),
+                            span,
+                        );
+                        arm_results.push((arm_block, up_id, arm_ty));
+                    }
+                    _ => {
+                        // Other patterns not yet supported; emit a unit and jump to merge
+                        let arm_block = ctx.current_block;
+                        let unit = ctx.emit(
+                            Opcode::ConstUnit,
+                            Ty::Unit,
+                            vec![],
+                            InstData::None,
+                            span,
+                        );
+                        let up_id = ctx.emit(
+                            Opcode::Upsilon,
+                            Ty::Unit,
+                            vec![unit],
+                            InstData::PhiTarget(InstId(u32::MAX)),
+                            span,
+                        );
+                        ctx.emit(
+                            Opcode::Jump,
+                            Ty::Unit,
+                            vec![],
+                            InstData::JumpTarget(merge_block),
+                            span,
+                        );
+                        arm_results.push((arm_block, up_id, Ty::Unit));
+                    }
+                }
+            }
+
+            let phi_ty = arm_results
+                .first()
+                .map(|(_, _, ty)| *ty)
+                .unwrap_or(Ty::I64);
+            ctx.switch_to_block(merge_block);
+            let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
+
+            for (arm_block, up_id, _) in arm_results {
+                backpatch_upsilon(ctx, arm_block, up_id, phi_id);
+            }
+
+            phi_id
+        }
+        ExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } => {
+            let recv_id = lower_expr(ctx, receiver);
+            match method.as_str() {
+                "len" => ctx.emit(
+                    Opcode::Call,
+                    Ty::I64,
+                    vec![recv_id],
+                    InstData::CallExtern("__vow_vec_len".to_string()),
+                    span,
+                ),
+                "push" => {
+                    let elem_id = args
+                        .first()
+                        .map(|e| lower_expr(ctx, e))
+                        .unwrap_or_else(|| {
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                        });
+                    ctx.emit(
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![recv_id, elem_id],
+                        InstData::CallExtern("__vow_vec_push_val".to_string()),
+                        span,
+                    )
+                }
+                _ => {
+                    for a in args {
+                        lower_expr(ctx, a);
+                    }
+                    ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                }
+            }
+        }
+        ExprKind::Index { base, index } => {
+            let vec_ptr = lower_expr(ctx, base);
+            let idx_id = lower_expr(ctx, index);
+            ctx.emit(
+                Opcode::Call,
+                Ty::I64,
+                vec![vec_ptr, idx_id],
+                InstData::CallExtern("__vow_vec_get_val".to_string()),
+                span,
+            )
+        }
+        // ? operator: unwrap Option::Some or short-circuit with None
+        ExprKind::Question { expr: inner } => {
+            let ptr_id = lower_expr(ctx, inner);
+            // Load discriminant from field 0
+            let tag_id = ctx.emit(
+                Opcode::FieldGet,
+                Ty::I64,
+                vec![ptr_id],
+                InstData::FieldIndex(0),
+                span,
+            );
+            let zero_id = ctx.emit(
+                Opcode::ConstI64,
+                Ty::I64,
+                vec![],
+                InstData::ConstI64(0),
+                span,
+            );
+            // tag == 0 means None (short-circuit) for Option; Ok (continue) for Result
+            let is_none = ctx.emit(
+                Opcode::EqI64,
+                Ty::Bool,
+                vec![tag_id, zero_id],
+                InstData::None,
+                span,
+            );
+            let early_return_block = ctx.new_block();
+            let continue_block = ctx.new_block();
+            ctx.emit(
+                Opcode::Branch,
+                Ty::Unit,
+                vec![is_none],
+                InstData::BranchTargets {
+                    then_block: early_return_block,
+                    else_block: continue_block,
+                },
+                span,
+            );
+
+            // Early return: wrap as None and return
+            ctx.switch_to_block(early_return_block);
+            let none_size: u32 = 8; // just the discriminant slot
+            let none_ptr = ctx.emit(
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize {
+                    size: none_size,
+                    align: 8,
+                },
+                span,
+            );
+            let none_tag = ctx.emit(
+                Opcode::ConstI64,
+                Ty::I64,
+                vec![],
+                InstData::ConstI64(0),
+                span,
+            );
+            ctx.emit(
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![none_ptr, none_tag],
+                InstData::FieldIndex(0),
+                span,
+            );
+            if let Some(vow_block) = ctx.vow_block.clone() {
+                vow::lower_ensures(ctx, &vow_block, none_ptr);
+            }
+            ctx.emit(
+                Opcode::Return,
+                Ty::Unit,
+                vec![none_ptr],
+                InstData::None,
+                span,
+            );
+
+            // Continue: extract payload from field 1
+            ctx.switch_to_block(continue_block);
+            ctx.emit(
+                Opcode::FieldGet,
+                Ty::I64,
+                vec![ptr_id],
+                InstData::FieldIndex(1),
+                span,
+            )
+        }
         _ => todo!("IR lowering not implemented for {:?}", expr.kind),
     }
 }
@@ -653,6 +1094,8 @@ fn lower_block_inner(ctx: &mut LowerCtx, block: &Block) -> InstId {
 pub fn lower_function(
     fn_def: &FnDef,
     func_index: &HashMap<String, (FuncId, Ty)>,
+    struct_field_map: HashMap<String, Vec<String>>,
+    enum_variant_map: HashMap<String, Vec<String>>,
 ) -> (Function, Vec<String>) {
     let params: Vec<Ty> = fn_def.params.iter().map(|p| lower_ty(&p.ty)).collect();
     let return_ty = lower_ty(&fn_def.return_ty);
@@ -664,6 +1107,8 @@ pub fn lower_function(
         return_ty,
         effects,
         func_index.clone(),
+        struct_field_map,
+        enum_variant_map,
     );
 
     if let Some(vow) = &fn_def.vow {
@@ -737,12 +1182,85 @@ pub fn lower_module(module: &AstModule) -> Module {
         })
         .collect();
 
+    // Build struct layout info
+    let mut struct_field_map: HashMap<String, Vec<String>> = HashMap::new();
+    let mut struct_layouts: Vec<StructLayout> = Vec::new();
+    for item in &module.items {
+        if let Item::Struct(s) = item {
+            let field_names: Vec<String> = s.fields.iter().map(|f| f.name.clone()).collect();
+            let field_layouts: Vec<FieldLayout> = s
+                .fields
+                .iter()
+                .map(|f| FieldLayout {
+                    name: f.name.clone(),
+                    ty: lower_ty(&f.ty),
+                })
+                .collect();
+            struct_field_map.insert(s.name.clone(), field_names);
+            struct_layouts.push(StructLayout {
+                name: s.name.clone(),
+                fields: field_layouts,
+                is_linear: s.is_linear,
+            });
+        }
+    }
+
+    // Build enum layout info
+    let mut enum_variant_map: HashMap<String, Vec<String>> = HashMap::new();
+    let mut enum_layouts: Vec<EnumLayout> = Vec::new();
+    for item in &module.items {
+        if let Item::Enum(e) = item {
+            let variant_names: Vec<String> =
+                e.variants.iter().map(|v| v.name.clone()).collect();
+            let variant_layouts: Vec<VariantLayout> = e
+                .variants
+                .iter()
+                .enumerate()
+                .map(|(tag, v)| {
+                    let payload: Vec<FieldLayout> = match &v.kind {
+                        VariantKind::Unit => vec![],
+                        VariantKind::Tuple(tys) => tys
+                            .iter()
+                            .enumerate()
+                            .map(|(i, ty)| FieldLayout {
+                                name: i.to_string(),
+                                ty: lower_ty(ty),
+                            })
+                            .collect(),
+                        VariantKind::Struct(fields) => fields
+                            .iter()
+                            .map(|f| FieldLayout {
+                                name: f.name.clone(),
+                                ty: lower_ty(&f.ty),
+                            })
+                            .collect(),
+                    };
+                    VariantLayout {
+                        name: v.name.clone(),
+                        tag: tag as u64,
+                        payload,
+                    }
+                })
+                .collect();
+            enum_variant_map.insert(e.name.clone(), variant_names);
+            enum_layouts.push(EnumLayout {
+                name: e.name.clone(),
+                variants: variant_layouts,
+            });
+        }
+    }
+
     let mut all_strings: Vec<String> = Vec::new();
     let functions: Vec<Function> = fn_items
         .iter()
         .enumerate()
         .map(|(idx, fn_def)| {
-            let (mut func, pool) = lower_function(fn_def, &func_index);
+            let (mut func, pool) = lower_function(
+                fn_def,
+                &func_index,
+                struct_field_map.clone(),
+                enum_variant_map.clone(),
+            );
             func.id = FuncId(idx as u32);
             let base = all_strings.len() as u32;
             if base > 0 || !pool.is_empty() {
@@ -762,6 +1280,8 @@ pub fn lower_module(module: &AstModule) -> Module {
     Module {
         name: module.name.clone(),
         strings: all_strings,
+        struct_layouts,
+        enum_layouts,
         functions,
     }
 }
@@ -855,7 +1375,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn("const_fn", vec![], i64_ty(), body, vec![]);
-        let (func, _) = lower_function(&fn_def, &HashMap::new());
+        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new());
 
         assert_eq!(func.name, "const_fn");
         assert_eq!(func.return_ty, Ty::I64);
@@ -890,7 +1410,7 @@ mod tests {
             body,
             vec![],
         );
-        let (func, _) = lower_function(&fn_def, &HashMap::new());
+        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new());
 
         let entry = &func.blocks[0];
         let get_args: Vec<_> = entry
@@ -928,7 +1448,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn("let_fn", vec![], i64_ty(), body, vec![]);
-        let (func, _) = lower_function(&fn_def, &HashMap::new());
+        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new());
 
         let entry = &func.blocks[0];
         let const_inst = entry.insts.iter().find(|i| i.opcode == Opcode::ConstI64);
@@ -961,7 +1481,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn("if_fn", vec![], i64_ty(), body, vec![]);
-        let (func, _) = lower_function(&fn_def, &HashMap::new());
+        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new());
 
         assert!(
             func.blocks.len() >= 4,
@@ -995,7 +1515,7 @@ mod tests {
     #[test]
     fn lower_empty_function() {
         let fn_def = make_fn("empty_fn", vec![], unit_ty(), empty_block(), vec![]);
-        let (func, _) = lower_function(&fn_def, &HashMap::new());
+        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new());
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
         let ret = all_insts.iter().find(|i| i.opcode == Opcode::Return);
@@ -1038,7 +1558,7 @@ mod tests {
             body,
             span: sp(),
         };
-        let (func, _) = lower_function(&fn_def, &HashMap::new());
+        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new());
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
         let ens_pos = all_insts
@@ -1131,7 +1651,7 @@ mod tests {
         };
 
         let fn_def = make_fn("countdown", vec![param_n], i64_ty, body, vec![]);
-        let (func, _) = lower_function(&fn_def, &HashMap::new());
+        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new());
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
 
