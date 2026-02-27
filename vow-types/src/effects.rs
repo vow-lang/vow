@@ -218,7 +218,7 @@ mod tests {
     use super::*;
     use vow_diag::Diagnostic;
     use vow_syntax::ast::{
-        Block, Effect, Expr, ExprKind, FnDef, Stmt, Type, Visibility, VowBlock, VowClause,
+        BinOp, Block, Effect, Expr, ExprKind, FnDef, Stmt, Type, Visibility, VowBlock, VowClause,
     };
     use vow_syntax::span::Span;
 
@@ -369,6 +369,177 @@ mod tests {
         assert_eq!(emitter.0.len(), 1);
         assert_eq!(emitter.0[0].code, ErrorCode::EffectViolation);
         assert_eq!(emitter.0[0].blame, Blame::Callee);
+    }
+
+    fn binary_op_with_call(lhs: Expr, rhs: Expr) -> Expr {
+        Expr {
+            kind: ExprKind::BinaryOp {
+                op: BinOp::Add,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            },
+            span: dummy_span(),
+        }
+    }
+
+    fn if_expr(cond: Expr, then: Block) -> Expr {
+        Expr {
+            kind: ExprKind::If {
+                condition: Box::new(cond),
+                then_branch: Box::new(then),
+                else_branch: None,
+            },
+            span: dummy_span(),
+        }
+    }
+
+    fn while_expr(cond: Expr, body: Block) -> Expr {
+        Expr {
+            kind: ExprKind::While {
+                condition: Box::new(cond),
+                body: Box::new(body),
+                vow: None,
+            },
+            span: dummy_span(),
+        }
+    }
+
+    fn method_call_expr(receiver: Expr, method: &str) -> Expr {
+        Expr {
+            kind: ExprKind::MethodCall {
+                receiver: Box::new(receiver),
+                method: method.to_string(),
+                args: vec![],
+            },
+            span: dummy_span(),
+        }
+    }
+
+    fn empty_block() -> Block {
+        Block { stmts: vec![], trailing_expr: None, span: dummy_span() }
+    }
+
+    fn block_with_call(call_name: &str) -> Block {
+        Block {
+            stmts: vec![Stmt::Expr {
+                expr: call_expr(call_name),
+                has_semicolon: true,
+                span: dummy_span(),
+            }],
+            trailing_expr: None,
+            span: dummy_span(),
+        }
+    }
+
+    #[test]
+    fn call_inside_binary_op_detected() {
+        let env = env_with_read_file();
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(binary_op_with_call(
+                call_expr("read_file"),
+                call_expr("read_file"),
+            ))),
+            span: dummy_span(),
+        };
+        let caller = make_fn("caller", vec![], body);
+        let mut emitter = TestEmitter(vec![]);
+        check_fn_effects(&caller, &env, "test.vow", &mut emitter);
+        assert!(!emitter.0.is_empty(), "should detect read_file inside binop");
+    }
+
+    #[test]
+    fn call_inside_if_condition_detected() {
+        let env = env_with_read_file();
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(if_expr(
+                call_expr("read_file"),
+                empty_block(),
+            ))),
+            span: dummy_span(),
+        };
+        let caller = make_fn("caller", vec![], body);
+        let mut emitter = TestEmitter(vec![]);
+        check_fn_effects(&caller, &env, "test.vow", &mut emitter);
+        assert!(!emitter.0.is_empty(), "should detect call in if condition");
+    }
+
+    #[test]
+    fn call_inside_if_branch_detected() {
+        let env = env_with_read_file();
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(if_expr(
+                Expr { kind: ExprKind::Ident("x".into()), span: dummy_span() },
+                block_with_call("read_file"),
+            ))),
+            span: dummy_span(),
+        };
+        let caller = make_fn("caller", vec![], body);
+        let mut emitter = TestEmitter(vec![]);
+        check_fn_effects(&caller, &env, "test.vow", &mut emitter);
+        assert!(!emitter.0.is_empty(), "should detect call in if branch");
+    }
+
+    #[test]
+    fn call_inside_while_detected() {
+        let env = env_with_read_file();
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(while_expr(
+                call_expr("read_file"),
+                empty_block(),
+            ))),
+            span: dummy_span(),
+        };
+        let caller = make_fn("caller", vec![], body);
+        let mut emitter = TestEmitter(vec![]);
+        check_fn_effects(&caller, &env, "test.vow", &mut emitter);
+        assert!(!emitter.0.is_empty(), "should detect call in while condition");
+    }
+
+    #[test]
+    fn call_inside_method_receiver_detected() {
+        let env = env_with_read_file();
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(method_call_expr(
+                call_expr("read_file"),
+                "len",
+            ))),
+            span: dummy_span(),
+        };
+        let caller = make_fn("caller", vec![], body);
+        let mut emitter = TestEmitter(vec![]);
+        check_fn_effects(&caller, &env, "test.vow", &mut emitter);
+        assert!(!emitter.0.is_empty(), "should detect call inside method receiver");
+    }
+
+    #[test]
+    fn call_inside_nested_block_detected() {
+        let env = env_with_read_file();
+        let inner_block = Block {
+            stmts: vec![Stmt::Expr {
+                expr: call_expr("read_file"),
+                has_semicolon: true,
+                span: dummy_span(),
+            }],
+            trailing_expr: None,
+            span: dummy_span(),
+        };
+        let outer_body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(Expr {
+                kind: ExprKind::Block(Box::new(inner_block)),
+                span: dummy_span(),
+            })),
+            span: dummy_span(),
+        };
+        let caller = make_fn("caller", vec![], outer_body);
+        let mut emitter = TestEmitter(vec![]);
+        check_fn_effects(&caller, &env, "test.vow", &mut emitter);
+        assert!(!emitter.0.is_empty(), "should detect call inside nested block");
     }
 
     #[test]

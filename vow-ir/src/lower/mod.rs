@@ -14,10 +14,15 @@ use crate::types::{
     Module, Opcode, StructLayout, Ty, VariantLayout, VowEntry, VowId,
 };
 
-fn vow_builtin_to_runtime(name: &str) -> Option<&'static str> {
+fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
     match name {
-        "print_str" => Some("__vow_print_str"),
-        "print_i64" => Some("__vow_print_i64"),
+        "print_str" => Some(("__vow_print_str", Ty::Unit)),
+        "print_i64" => Some(("__vow_print_i64", Ty::Unit)),
+        "eprintln_str" => Some(("__vow_eprintln_str", Ty::Unit)),
+        "fs_read" => Some(("__vow_fs_read", Ty::Ptr)),
+        "fs_write" => Some(("__vow_fs_write", Ty::I64)),
+        "args" => Some(("__vow_args", Ty::Ptr)),
+        "process_exit" => Some(("__vow_process_exit", Ty::Unit)),
         _ => None,
     }
 }
@@ -377,15 +382,20 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     InstData::CallTarget(fid),
                     span,
                 )
+            } else if let Some((sym, ret_ty)) = vow_builtin_to_runtime(&callee_name) {
+                ctx.emit(
+                    Opcode::Call,
+                    ret_ty,
+                    arg_ids,
+                    InstData::CallExtern(sym.to_string()),
+                    span,
+                )
             } else {
-                let extern_name = vow_builtin_to_runtime(&callee_name)
-                    .map(str::to_owned)
-                    .unwrap_or(callee_name);
                 ctx.emit(
                     Opcode::Call,
                     Ty::Unit,
                     arg_ids,
-                    InstData::CallExtern(extern_name),
+                    InstData::CallExtern(callee_name),
                     span,
                 )
             }
@@ -647,6 +657,32 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         ExprKind::EnumConstruct { path, fields } => {
             let enum_name = path.first().map(|s| s.as_str()).unwrap_or("");
             let variant_name = path.get(1).map(|s| s.as_str()).unwrap_or("");
+            // String::from(lit) builtin
+            if enum_name == "String" && variant_name == "from" {
+                let lit_expr = fields.first().expect("String::from requires an argument");
+                let ptr_id = lower_expr(ctx, lit_expr);
+                let result = ctx.emit(
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![ptr_id],
+                    InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    span,
+                );
+                ctx.inst_struct_type.insert(result, "String".to_string());
+                return result;
+            }
+            // HashMap::new() builtin
+            if enum_name == "HashMap" && variant_name == "new" {
+                let result = ctx.emit(
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![],
+                    InstData::CallExtern("__vow_map_new".to_string()),
+                    span,
+                );
+                ctx.inst_struct_type.insert(result, "HashMap".to_string());
+                return result;
+            }
             // Vec::new() builtin
             if enum_name == "Vec" && variant_name == "new" {
                 let size_val = ctx.emit(
@@ -887,15 +923,126 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             args,
         } => {
             let recv_id = lower_expr(ctx, receiver);
-            match method.as_str() {
-                "len" => ctx.emit(
+            let recv_struct = ctx.inst_struct_type.get(&recv_id).cloned();
+            match (recv_struct.as_deref(), method.as_str()) {
+                (Some("String"), "len") => ctx.emit(
+                    Opcode::Call,
+                    Ty::I64,
+                    vec![recv_id],
+                    InstData::CallExtern("__vow_string_len".to_string()),
+                    span,
+                ),
+                (Some("String"), "push_str") => {
+                    let arg_id = args
+                        .first()
+                        .map(|e| lower_expr(ctx, e))
+                        .unwrap_or_else(|| {
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                        });
+                    ctx.emit(
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![recv_id, arg_id],
+                        InstData::CallExtern("__vow_string_push_str".to_string()),
+                        span,
+                    )
+                }
+                (Some("String"), "eq") => {
+                    let arg_id = args
+                        .first()
+                        .map(|e| lower_expr(ctx, e))
+                        .unwrap_or_else(|| {
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                        });
+                    ctx.emit(
+                        Opcode::Call,
+                        Ty::Bool,
+                        vec![recv_id, arg_id],
+                        InstData::CallExtern("__vow_string_eq".to_string()),
+                        span,
+                    )
+                }
+                (Some("HashMap"), "len") => ctx.emit(
+                    Opcode::Call,
+                    Ty::I64,
+                    vec![recv_id],
+                    InstData::CallExtern("__vow_map_len".to_string()),
+                    span,
+                ),
+                (Some("HashMap"), "insert") => {
+                    let k_id = args
+                        .first()
+                        .map(|e| lower_expr(ctx, e))
+                        .unwrap_or_else(|| {
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                        });
+                    let v_id = args
+                        .get(1)
+                        .map(|e| lower_expr(ctx, e))
+                        .unwrap_or_else(|| {
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                        });
+                    ctx.emit(
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![recv_id, k_id, v_id],
+                        InstData::CallExtern("__vow_map_insert".to_string()),
+                        span,
+                    )
+                }
+                (Some("HashMap"), "get") => {
+                    let k_id = args
+                        .first()
+                        .map(|e| lower_expr(ctx, e))
+                        .unwrap_or_else(|| {
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                        });
+                    ctx.emit(
+                        Opcode::Call,
+                        Ty::I64,
+                        vec![recv_id, k_id],
+                        InstData::CallExtern("__vow_map_get".to_string()),
+                        span,
+                    )
+                }
+                (Some("HashMap"), "contains_key") => {
+                    let k_id = args
+                        .first()
+                        .map(|e| lower_expr(ctx, e))
+                        .unwrap_or_else(|| {
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                        });
+                    ctx.emit(
+                        Opcode::Call,
+                        Ty::Bool,
+                        vec![recv_id, k_id],
+                        InstData::CallExtern("__vow_map_contains".to_string()),
+                        span,
+                    )
+                }
+                (Some("HashMap"), "remove") => {
+                    let k_id = args
+                        .first()
+                        .map(|e| lower_expr(ctx, e))
+                        .unwrap_or_else(|| {
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                        });
+                    ctx.emit(
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![recv_id, k_id],
+                        InstData::CallExtern("__vow_map_remove".to_string()),
+                        span,
+                    )
+                }
+                (_, "len") => ctx.emit(
                     Opcode::Call,
                     Ty::I64,
                     vec![recv_id],
                     InstData::CallExtern("__vow_vec_len".to_string()),
                     span,
                 ),
-                "push" => {
+                (_, "push") => {
                     let elem_id = args
                         .first()
                         .map(|e| lower_expr(ctx, e))
@@ -1124,6 +1271,18 @@ pub fn lower_function(
             InstData::ArgIndex(idx as u32),
             fn_def.span,
         );
+        match &param.ty {
+            AstType::Named { name, .. } if name == "str" || name == "String" => {
+                ctx.inst_struct_type.insert(arg_id, "String".to_string());
+            }
+            AstType::Generic { name, .. } if name == "HashMap" => {
+                ctx.inst_struct_type.insert(arg_id, "HashMap".to_string());
+            }
+            AstType::Generic { name, .. } if name == "Vec" => {
+                ctx.inst_struct_type.insert(arg_id, "Vec".to_string());
+            }
+            _ => {}
+        }
         ctx.define(param.name.clone(), arg_id);
     }
 

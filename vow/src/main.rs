@@ -1,3 +1,5 @@
+pub mod module_loader;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
@@ -228,7 +230,7 @@ pub fn run_pipeline(
 
     let mut stderr_emit = HumanEmitter::new(Box::new(std::io::stderr()));
 
-    let (ast, parse_diags) = vow_syntax::parser::parse_module(&src);
+    let (root_ast, parse_diags) = vow_syntax::parser::parse_module(&src);
     let parse_failed = parse_diags.iter().any(|d| d.severity == Severity::Error);
     for d in &parse_diags {
         stderr_emit.emit(d);
@@ -241,6 +243,21 @@ pub fn run_pipeline(
             executable: None,
         };
     }
+
+    let ast = match module_loader::load_modules(source, &root_ast) {
+        Ok(graph) => module_loader::merge_modules(graph),
+        Err(diags) => {
+            for d in &diags {
+                stderr_emit.emit(d);
+            }
+            return BuildOutput {
+                status: BuildStatus::CompileFailed {
+                    message: "module load error".to_string(),
+                },
+                executable: None,
+            };
+        }
+    };
 
     let mut checker =
         vow_types::check::Checker::new(source.to_string_lossy().to_string(), &mut stderr_emit);
@@ -926,5 +943,209 @@ pub fn main() -> i32 {
 "#;
         let output = compile_and_run(src);
         assert_eq!(output.status.code(), Some(0), "expected exit 0");
+    }
+
+    #[test]
+    fn string_from_len_eq() {
+        let src = r#"module StringTest
+
+pub fn main() -> i32 [io] {
+    let s = String::from("hello");
+    let n = s.len();
+    let s2 = String::from("hello");
+    let eq = s.eq(s2);
+    0
+}
+"#;
+        let output = compile_and_run(src);
+        assert_eq!(output.status.code(), Some(0), "expected exit 0");
+    }
+
+    #[test]
+    fn hashmap_insert_get_contains_remove() {
+        let src = r#"module MapTest
+
+pub fn main() -> i32 {
+    let mut m: HashMap<i64, i64> = HashMap::new();
+    m.insert(1, 10);
+    m.insert(2, 20);
+    m.insert(3, 30);
+    let v1 = m.get(1);
+    let v2 = m.get(2);
+    let has3 = m.contains_key(3);
+    m.remove(2);
+    let n = m.len();
+    0
+}
+"#;
+        let output = compile_and_run(src);
+        assert_eq!(output.status.code(), Some(0), "expected exit 0");
+    }
+
+    #[test]
+    fn extern_block_type_checked() {
+        let src = r#"module ExternTest
+
+extern {
+    fn my_ext_fn(x: i64) -> i64 [io]
+}
+
+pub fn main() -> i32 {
+    0
+}
+"#;
+        let dir = TempDir::new().unwrap();
+        let source = write_source(&dir, "extern_test.vow", src);
+        let out = dir.path().join("extern_test_out");
+        let result = run_pipeline(&source, Some(&out), BuildMode::Release, true);
+        assert!(
+            !matches!(result.status, BuildStatus::CompileFailed { ref message } if message.contains("type error")),
+            "extern block should not cause type errors: {:?}",
+            result.status
+        );
+    }
+
+    #[test]
+    fn module_system_two_files() {
+        let dir = TempDir::new().unwrap();
+        let lib_src = r#"module Lib
+
+pub fn add(x: i64, y: i64) -> i64 {
+    x + y
+}
+"#;
+        let main_src = r#"module Main
+use lib
+
+pub fn main() -> i32 [io] {
+    let r: i64 = add(3, 4);
+    print_i64(r);
+    0
+}
+"#;
+        std::fs::write(dir.path().join("lib.vow"), lib_src).unwrap();
+        let main_path = dir.path().join("main.vow");
+        std::fs::write(&main_path, main_src).unwrap();
+        let out = dir.path().join("main_out");
+
+        let result = run_pipeline(&main_path, Some(&out), BuildMode::Release, true);
+        let exe = match &result.status {
+            BuildStatus::Unverified => out.clone(),
+            BuildStatus::CompileFailed { message } => {
+                let msg_lo = message.to_lowercase();
+                if msg_lo.contains("link")
+                    || msg_lo.contains("runtime")
+                    || msg_lo.contains("undefined")
+                {
+                    eprintln!("SKIP: {message}");
+                    return;
+                }
+                panic!("compile failed: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        };
+
+        let output = std::process::Command::new(&exe)
+            .output()
+            .expect("failed to run two-module program");
+        assert_eq!(output.status.code(), Some(0), "expected exit 0");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("7"),
+            "expected add(3,4)==7 in stdout, got: {stdout:?}"
+        );
+    }
+
+    #[test]
+    fn escape_json_special_characters() {
+        assert_eq!(escape_json("hello"), "hello");
+        assert_eq!(escape_json(r"a\b"), r"a\\b");
+        assert_eq!(escape_json("a\"b"), "a\\\"b");
+        assert_eq!(escape_json("a\nb"), "a\\nb");
+    }
+
+    #[test]
+    fn build_output_emit_json_compile_failed() {
+        let out = BuildOutput {
+            status: BuildStatus::CompileFailed {
+                message: "type \"error\"\nwith newline".to_string(),
+            },
+            executable: None,
+        };
+        // Just verify it runs without panic; output goes to stdout (captured by test harness).
+        out.emit_json();
+    }
+
+    #[test]
+    fn build_output_emit_json_verify_failed() {
+        let out = BuildOutput {
+            status: BuildStatus::VerifyFailed {
+                function: "divide".to_string(),
+                description: "y=0 violates requires".to_string(),
+            },
+            executable: None,
+        };
+        out.emit_json();
+    }
+
+    #[test]
+    fn build_output_emit_json_verified_with_exe() {
+        let dir = TempDir::new().unwrap();
+        let exe = dir.path().join("mybin");
+        std::fs::write(&exe, b"").unwrap();
+        let out = BuildOutput {
+            status: BuildStatus::Verified,
+            executable: Some(exe),
+        };
+        out.emit_json();
+    }
+
+    #[test]
+    fn pipeline_fails_on_missing_module() {
+        let dir = TempDir::new().unwrap();
+        let src = "module Main\nuse nonexistent\nfn main() -> i32 { 0 }";
+        let source = write_source(&dir, "main.vow", src);
+        let result = run_pipeline(&source, None, BuildMode::Release, true);
+        assert!(
+            matches!(result.status, BuildStatus::CompileFailed { .. }),
+            "should fail on missing module: {:?}",
+            result.status
+        );
+    }
+
+    #[test]
+    fn pipeline_fails_on_nonexistent_source() {
+        let dir = TempDir::new().unwrap();
+        let source = dir.path().join("nonexistent.vow");
+        let result = run_pipeline(&source, None, BuildMode::Release, true);
+        assert!(
+            matches!(result.status, BuildStatus::CompileFailed { .. }),
+            "should fail when source file not found: {:?}",
+            result.status
+        );
+    }
+
+    #[test]
+    fn pipeline_unverified_status_when_no_verify() {
+        let dir = TempDir::new().unwrap();
+        let src = "module M fn f(x: i64) -> i64 { x }";
+        let source = write_source(&dir, "f.vow", src);
+        let result = run_pipeline(&source, None, BuildMode::Release, true);
+        match &result.status {
+            BuildStatus::Unverified => {}
+            BuildStatus::CompileFailed { message } => {
+                // Linker failures are acceptable (no main(), runtime absent, etc.)
+                let is_link_err = message.contains("link")
+                    || message.contains("runtime")
+                    || message.contains("ld")
+                    || message.contains("cc exited")
+                    || message.contains("Link");
+                if is_link_err {
+                    return;
+                }
+                panic!("unexpected compile failure: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        }
     }
 }

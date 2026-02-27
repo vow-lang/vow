@@ -746,4 +746,68 @@ mod tests {
         assert_eq!(module.uses.len(), 1);
         assert_eq!(module.uses[0].path, vec!["std", "io"]);
     }
+
+    #[test]
+    fn keyword_as_str_all_variants() {
+        let pairs: &[(TokenKind, &str)] = &[
+            (TokenKind::KwFn, "fn"),
+            (TokenKind::KwLet, "let"),
+            (TokenKind::KwMut, "mut"),
+            (TokenKind::KwStruct, "struct"),
+            (TokenKind::KwEnum, "enum"),
+            (TokenKind::KwMatch, "match"),
+            (TokenKind::KwIf, "if"),
+            (TokenKind::KwElse, "else"),
+            (TokenKind::KwWhile, "while"),
+            (TokenKind::KwLoop, "loop"),
+            (TokenKind::KwBreak, "break"),
+            (TokenKind::KwReturn, "return"),
+            (TokenKind::KwPub, "pub"),
+            (TokenKind::KwUse, "use"),
+            (TokenKind::KwModule, "module"),
+            (TokenKind::KwVow, "vow"),
+            (TokenKind::KwRequires, "requires"),
+            (TokenKind::KwEnsures, "ensures"),
+            (TokenKind::KwInvariant, "invariant"),
+            (TokenKind::KwWhere, "where"),
+            (TokenKind::KwRegion, "region"),
+            (TokenKind::KwLinear, "linear"),
+            (TokenKind::KwExtern, "extern"),
+            (TokenKind::KwImpl, "impl"),
+            (TokenKind::KwTrait, "trait"),
+            (TokenKind::KwType, "type"),
+            (TokenKind::KwFor, "for"),
+            (TokenKind::KwIn, "in"),
+            (TokenKind::KwAs, "as"),
+            (TokenKind::KwRead, "read"),
+            (TokenKind::KwWrite, "write"),
+            (TokenKind::KwIO, "io"),
+            (TokenKind::KwPanic, "panic"),
+            (TokenKind::KwUnsafe, "unsafe"),
+        ];
+        for (kind, expected) in pairs {
+            assert_eq!(keyword_as_str(kind), Some(*expected), "keyword: {kind:?}");
+        }
+        assert_eq!(keyword_as_str(&TokenKind::LBrace), None);
+    }
+
+    #[test]
+    fn parse_use_with_keyword_as_path_segment() {
+        // 'io' is a keyword; expect_name_or_keyword allows it as a path component.
+        let src = "module M use std.io fn f() { 0 }";
+        let (module, diags) = parse_module(src);
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(module.uses[0].path, vec!["std", "io"]);
+    }
+
+    #[test]
+    fn parse_module_unexpected_item_produces_diagnostic() {
+        // A number literal is not a valid item start; should produce an error.
+        let src = "module M 123";
+        let (_, diags) = parse_module(src);
+        assert!(
+            !diags.is_empty(),
+            "expected diagnostic for unexpected token"
+        );
+    }
 }

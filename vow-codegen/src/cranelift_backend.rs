@@ -1037,6 +1037,82 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // index
             sig.returns.push(AbiParam::new(types::I64)); // element value
         }
+        // String runtime
+        "__vow_string_new" => {
+            sig.params.push(AbiParam::new(types::I64)); // ptr
+            sig.params.push(AbiParam::new(types::I64)); // len
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_string_from_cstr" => {
+            sig.params.push(AbiParam::new(types::I64)); // C-string ptr
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_string_len" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.returns.push(AbiParam::new(types::I64)); // len
+        }
+        "__vow_string_eq" => {
+            sig.params.push(AbiParam::new(types::I64)); // a ptr
+            sig.params.push(AbiParam::new(types::I64)); // b ptr
+            sig.returns.push(AbiParam::new(types::I8)); // bool
+        }
+        "__vow_string_push_str" => {
+            sig.params.push(AbiParam::new(types::I64)); // dest ptr
+            sig.params.push(AbiParam::new(types::I64)); // src ptr
+        }
+        "__vow_string_from_i64" => {
+            sig.params.push(AbiParam::new(types::I64)); // value
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_string_print" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+        }
+        // File I/O runtime
+        "__vow_fs_read" => {
+            sig.params.push(AbiParam::new(types::I64)); // path C-string
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8> or null
+        }
+        "__vow_fs_write" => {
+            sig.params.push(AbiParam::new(types::I64)); // path C-string
+            sig.params.push(AbiParam::new(types::I64)); // data *VowVec<u8>
+            sig.returns.push(AbiParam::new(types::I64)); // 0=ok, -1=err
+        }
+        "__vow_eprintln_str" => {
+            sig.params.push(AbiParam::new(types::I64)); // C-string ptr
+        }
+        "__vow_args" => {
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<String>
+        }
+        "__vow_process_exit" => {
+            sig.params.push(AbiParam::new(types::I64)); // exit code
+        }
+        // HashMap runtime
+        "__vow_map_new" => {
+            sig.returns.push(AbiParam::new(types::I64)); // *VowMap
+        }
+        "__vow_map_insert" => {
+            sig.params.push(AbiParam::new(types::I64)); // map ptr
+            sig.params.push(AbiParam::new(types::I64)); // key
+            sig.params.push(AbiParam::new(types::I64)); // value
+        }
+        "__vow_map_get" => {
+            sig.params.push(AbiParam::new(types::I64)); // map ptr
+            sig.params.push(AbiParam::new(types::I64)); // key
+            sig.returns.push(AbiParam::new(types::I64)); // value (0 if not found)
+        }
+        "__vow_map_contains" => {
+            sig.params.push(AbiParam::new(types::I64)); // map ptr
+            sig.params.push(AbiParam::new(types::I64)); // key
+            sig.returns.push(AbiParam::new(types::I8)); // bool
+        }
+        "__vow_map_remove" => {
+            sig.params.push(AbiParam::new(types::I64)); // map ptr
+            sig.params.push(AbiParam::new(types::I64)); // key
+        }
+        "__vow_map_len" => {
+            sig.params.push(AbiParam::new(types::I64)); // map ptr
+            sig.returns.push(AbiParam::new(types::I64)); // len
+        }
         _ => {}
     }
     sig
@@ -1199,7 +1275,10 @@ impl Backend for CraneliftBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vow_ir::{BasicBlock, BlockId, FuncId, Function, InstData, InstId, Module, Opcode, Ty};
+    use vow_ir::{
+        BasicBlock, BlockId, FuncId, Function, InstData, InstId, Module, Opcode, Ty, VowEntry,
+        VowId,
+    };
     use vow_syntax::span::Span;
 
     fn sp() -> Span {
@@ -1442,5 +1521,849 @@ mod tests {
         assert_eq!(sig.returns.len(), 1);
         assert_eq!(sig.params[0].value_type, types::I64);
         assert_eq!(sig.returns[0].value_type, types::I64);
+    }
+
+    #[test]
+    fn cranelift_backend_default_impl() {
+        let _ = CraneliftBackend::default();
+    }
+
+    fn simple_fn(id: u32, name: &str, params: Vec<Ty>, return_ty: Ty, insts: Vec<Inst>) -> Function {
+        Function {
+            id: FuncId(id),
+            name: name.to_string(),
+            params,
+            return_ty,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock { id: BlockId(0), insts }],
+        }
+    }
+
+    #[test]
+    fn compile_f32_constant() {
+        let module = make_module(
+            "test",
+            vec![simple_fn(0, "f", vec![], Ty::F32, vec![
+                inst(0, Opcode::ConstF32, Ty::F32, vec![], InstData::ConstF32(1.5f32)),
+                inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ])],
+        );
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Release);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_f64_constant() {
+        let module = make_module(
+            "test",
+            vec![simple_fn(0, "f", vec![], Ty::F64, vec![
+                inst(0, Opcode::ConstF64, Ty::F64, vec![], InstData::ConstF64(2.718f64)),
+                inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ])],
+        );
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Release);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_const_bool_and_unit() {
+        let module = make_module(
+            "test",
+            vec![simple_fn(0, "f", vec![], Ty::Bool, vec![
+                inst(0, Opcode::ConstBool, Ty::Bool, vec![], InstData::ConstBool(false)),
+                inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ])],
+        );
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_const_unit_opcode() {
+        let module = make_module(
+            "test",
+            vec![simple_fn(0, "f", vec![], Ty::Unit, vec![
+                inst(0, Opcode::ConstUnit, Ty::Unit, vec![], InstData::None),
+                inst(1, Opcode::Return, Ty::Unit, vec![], InstData::None),
+            ])],
+        );
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_const_str_opcode() {
+        let mut module = make_module(
+            "test",
+            vec![simple_fn(0, "f", vec![], Ty::Ptr, vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ])],
+        );
+        module.strings.push("hello".to_string());
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_const_str_missing_idx() {
+        // ConstStr with idx not in strings → null ptr fallback
+        let module = make_module(
+            "test",
+            vec![simple_fn(0, "f", vec![], Ty::Ptr, vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(99)),
+                inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ])],
+        );
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_unit_type_param() {
+        // GetArg where param ty is Unit → no cranelift value, fallback to iconst
+        let module = make_module(
+            "test",
+            vec![simple_fn(0, "f", vec![Ty::Unit], Ty::Unit, vec![
+                inst(0, Opcode::GetArg, Ty::Unit, vec![], InstData::ArgIndex(0)),
+                inst(1, Opcode::Return, Ty::Unit, vec![], InstData::None),
+            ])],
+        );
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_wrapping_arithmetic_i64() {
+        let module = make_module("test", vec![Function {
+            id: FuncId(0),
+            name: "arith".to_string(),
+            params: vec![Ty::I64, Ty::I64],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
+                    inst(2, Opcode::WrappingSubI64, Ty::I64, vec![0, 1], InstData::None),
+                    inst(3, Opcode::WrappingMulI64, Ty::I64, vec![0, 1], InstData::None),
+                    inst(4, Opcode::WrappingDivI64, Ty::I64, vec![0, 1], InstData::None),
+                    inst(5, Opcode::WrappingRemI64, Ty::I64, vec![0, 1], InstData::None),
+                    inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
+                ],
+            }],
+        }]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_checked_arithmetic_i64() {
+        let module = make_module("test", vec![Function {
+            id: FuncId(0),
+            name: "checked".to_string(),
+            params: vec![Ty::I64, Ty::I64],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
+                    inst(2, Opcode::CheckedAddI64, Ty::I64, vec![0, 1], InstData::None),
+                    inst(3, Opcode::CheckedSubI64, Ty::I64, vec![0, 1], InstData::None),
+                    inst(4, Opcode::CheckedMulI64, Ty::I64, vec![0, 1], InstData::None),
+                    inst(5, Opcode::CheckedDivI64, Ty::I64, vec![0, 1], InstData::None),
+                    inst(6, Opcode::CheckedRemI64, Ty::I64, vec![0, 1], InstData::None),
+                    inst(7, Opcode::Return, Ty::Unit, vec![6], InstData::None),
+                ],
+            }],
+        }]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_integer_comparisons_i64() {
+        let module = make_module("test", vec![Function {
+            id: FuncId(0),
+            name: "cmp".to_string(),
+            params: vec![Ty::I64, Ty::I64],
+            return_ty: Ty::Bool,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
+                    inst(2, Opcode::EqI64, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(3, Opcode::NeI64, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(4, Opcode::LtI64, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(5, Opcode::LeI64, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(6, Opcode::GtI64, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(7, Opcode::GeI64, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(8, Opcode::Return, Ty::Unit, vec![7], InstData::None),
+                ],
+            }],
+        }]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_float_arithmetic() {
+        let module = make_module("test", vec![Function {
+            id: FuncId(0),
+            name: "farith".to_string(),
+            params: vec![Ty::F64, Ty::F64],
+            return_ty: Ty::F64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::F64, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::GetArg, Ty::F64, vec![], InstData::ArgIndex(1)),
+                    inst(2, Opcode::AddF64, Ty::F64, vec![0, 1], InstData::None),
+                    inst(3, Opcode::SubF64, Ty::F64, vec![0, 1], InstData::None),
+                    inst(4, Opcode::MulF64, Ty::F64, vec![0, 1], InstData::None),
+                    inst(5, Opcode::DivF64, Ty::F64, vec![0, 1], InstData::None),
+                    inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
+                ],
+            }],
+        }]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_float_arithmetic_f32() {
+        let module = make_module("test", vec![Function {
+            id: FuncId(0),
+            name: "farith32".to_string(),
+            params: vec![Ty::F32, Ty::F32],
+            return_ty: Ty::F32,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::F32, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::GetArg, Ty::F32, vec![], InstData::ArgIndex(1)),
+                    inst(2, Opcode::AddF32, Ty::F32, vec![0, 1], InstData::None),
+                    inst(3, Opcode::SubF32, Ty::F32, vec![0, 1], InstData::None),
+                    inst(4, Opcode::MulF32, Ty::F32, vec![0, 1], InstData::None),
+                    inst(5, Opcode::DivF32, Ty::F32, vec![0, 1], InstData::None),
+                    inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
+                ],
+            }],
+        }]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_float_rem_returns_error() {
+        let module = make_module("test", vec![simple_fn(0, "f", vec![Ty::F64, Ty::F64], Ty::F64, vec![
+            inst(0, Opcode::GetArg, Ty::F64, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::F64, vec![], InstData::ArgIndex(1)),
+            inst(2, Opcode::RemF64, Ty::F64, vec![0, 1], InstData::None),
+            inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+        ])]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(matches!(result, Err(CodegenError::UnsupportedOpcode(_))));
+    }
+
+    #[test]
+    fn compile_float_comparisons() {
+        let module = make_module("test", vec![Function {
+            id: FuncId(0),
+            name: "fcmp".to_string(),
+            params: vec![Ty::F64, Ty::F64],
+            return_ty: Ty::Bool,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::F64, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::GetArg, Ty::F64, vec![], InstData::ArgIndex(1)),
+                    inst(2, Opcode::EqF64, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(3, Opcode::NeF64, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(4, Opcode::LtF64, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(5, Opcode::LeF64, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(6, Opcode::GtF64, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(7, Opcode::GeF64, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(8, Opcode::Return, Ty::Unit, vec![7], InstData::None),
+                ],
+            }],
+        }]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_f32_comparisons() {
+        let module = make_module("test", vec![Function {
+            id: FuncId(0),
+            name: "fcmp32".to_string(),
+            params: vec![Ty::F32, Ty::F32],
+            return_ty: Ty::Bool,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::F32, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::GetArg, Ty::F32, vec![], InstData::ArgIndex(1)),
+                    inst(2, Opcode::EqF32, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(3, Opcode::NeF32, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(4, Opcode::LtF32, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(5, Opcode::LeF32, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(6, Opcode::GtF32, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(7, Opcode::GeF32, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(8, Opcode::Return, Ty::Unit, vec![7], InstData::None),
+                ],
+            }],
+        }]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_boolean_ops() {
+        let module = make_module("test", vec![Function {
+            id: FuncId(0),
+            name: "bools".to_string(),
+            params: vec![Ty::Bool, Ty::Bool],
+            return_ty: Ty::Bool,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::Bool, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::GetArg, Ty::Bool, vec![], InstData::ArgIndex(1)),
+                    inst(2, Opcode::Not, Ty::Bool, vec![0], InstData::None),
+                    inst(3, Opcode::And, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(4, Opcode::Or, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
+                ],
+            }],
+        }]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_load_store_ops() {
+        // fn f(ptr: Ptr) -> i64 { store(ptr, 42); load(ptr) }
+        let module = make_module("test", vec![Function {
+            id: FuncId(0),
+            name: "memops".to_string(),
+            params: vec![Ty::Ptr],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(42)),
+                    inst(2, Opcode::Store, Ty::Unit, vec![0, 1], InstData::None),
+                    inst(3, Opcode::Load, Ty::I64, vec![0], InstData::None),
+                    inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+                ],
+            }],
+        }]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_unreachable_opcode() {
+        let module = make_module("test", vec![simple_fn(0, "f", vec![], Ty::Unit, vec![
+            inst(0, Opcode::Unreachable, Ty::Unit, vec![], InstData::None),
+        ])]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_vow_requires_debug_mode() {
+        // VowRequires: predicate(cond) → if false, call violation handler
+        let module = make_module("test", vec![Function {
+            id: FuncId(0),
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::Unit,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "x > 0".to_string(),
+                blame: vow_diag::Blame::Caller,
+                bindings: vec![],
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::ConstBool, Ty::Bool, vec![], InstData::ConstBool(true)),
+                    inst(1, Opcode::VowRequires, Ty::Unit, vec![0], InstData::VowId(VowId(0))),
+                    inst(2, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                ],
+            }],
+        }]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_vow_ensures_debug_mode() {
+        let module = make_module("test", vec![Function {
+            id: FuncId(0),
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::Unit,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "result >= 0".to_string(),
+                blame: vow_diag::Blame::Callee,
+                bindings: vec![],
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::ConstBool, Ty::Bool, vec![], InstData::ConstBool(true)),
+                    inst(1, Opcode::VowEnsures, Ty::Unit, vec![0], InstData::VowId(VowId(0))),
+                    inst(2, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                ],
+            }],
+        }]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_vow_invariant_debug_mode() {
+        let module = make_module("test", vec![Function {
+            id: FuncId(0),
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::Unit,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "i >= 0".to_string(),
+                blame: vow_diag::Blame::Callee,
+                bindings: vec![],
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::ConstBool, Ty::Bool, vec![], InstData::ConstBool(true)),
+                    inst(1, Opcode::VowInvariant, Ty::Unit, vec![0], InstData::VowId(VowId(0))),
+                    inst(2, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                ],
+            }],
+        }]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_vow_with_bindings_debug_mode() {
+        // VowRequires with a binding so captures loop is hit (n > 0 path)
+        let module = make_module("test", vec![Function {
+            id: FuncId(0),
+            name: "f".to_string(),
+            params: vec![Ty::I64],
+            return_ty: Ty::Unit,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "x > 0".to_string(),
+                blame: vow_diag::Blame::Caller,
+                bindings: vec![("x".to_string(), InstId(0))],
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::ConstBool, Ty::Bool, vec![], InstData::ConstBool(true)),
+                    inst(2, Opcode::VowRequires, Ty::Unit, vec![1], InstData::VowId(VowId(0))),
+                    inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                ],
+            }],
+        }]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_extern_call() {
+        // Call __vow_print_i64 via CallExtern
+        let module = make_module("test", vec![simple_fn(0, "f", vec![Ty::I64], Ty::Unit, vec![
+            inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+            inst(
+                1,
+                Opcode::Call,
+                Ty::Unit,
+                vec![0],
+                InstData::CallExtern("__vow_print_i64".to_string()),
+            ),
+            inst(2, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ])]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_extern_call_with_return() {
+        // Call __vow_vec_new which returns a ptr (covers non-empty results path)
+        let module = make_module("test", vec![simple_fn(0, "f", vec![], Ty::Ptr, vec![
+            inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+            inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0, 1],
+                InstData::CallExtern("__vow_vec_new".to_string()),
+            ),
+            inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+        ])]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_region_ops() {
+        let module = make_module("test", vec![simple_fn(0, "f", vec![], Ty::Unit, vec![
+            inst(
+                0,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 64, align: 8 },
+            ),
+            inst(1, Opcode::RegionFree, Ty::Unit, vec![0], InstData::None),
+            inst(2, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ])]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_linear_ops() {
+        let module = make_module("test", vec![simple_fn(0, "f", vec![Ty::LinearPtr], Ty::Unit, vec![
+            inst(0, Opcode::GetArg, Ty::LinearPtr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::LinearConsume, Ty::Unit, vec![0], InstData::None),
+            inst(2, Opcode::LinearBorrow, Ty::Unit, vec![], InstData::None),
+            inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ])]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_field_get_set_i64() {
+        // Struct with one i64 field at index 0
+        let module = make_module("test", vec![simple_fn(0, "f", vec![Ty::Ptr], Ty::I64, vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(99)),
+            inst(2, Opcode::FieldSet, Ty::Unit, vec![0, 1], InstData::FieldIndex(0)),
+            inst(3, Opcode::FieldGet, Ty::I64, vec![0], InstData::FieldIndex(0)),
+            inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+        ])]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_field_get_set_bool() {
+        let module = make_module("test", vec![simple_fn(0, "f", vec![Ty::Ptr], Ty::Bool, vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::ConstBool, Ty::Bool, vec![], InstData::ConstBool(true)),
+            inst(2, Opcode::FieldSet, Ty::Unit, vec![0, 1], InstData::FieldIndex(0)),
+            inst(3, Opcode::FieldGet, Ty::Bool, vec![0], InstData::FieldIndex(0)),
+            inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+        ])]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_field_get_set_i32() {
+        let module = make_module("test", vec![simple_fn(0, "f", vec![Ty::Ptr], Ty::I32, vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::ConstI32, Ty::I32, vec![], InstData::ConstI32(7)),
+            inst(2, Opcode::FieldSet, Ty::Unit, vec![0, 1], InstData::FieldIndex(1)),
+            inst(3, Opcode::FieldGet, Ty::I32, vec![0], InstData::FieldIndex(1)),
+            inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+        ])]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_field_get_set_f32() {
+        let module = make_module("test", vec![simple_fn(0, "f", vec![Ty::Ptr], Ty::F32, vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::ConstF32, Ty::F32, vec![], InstData::ConstF32(1.5f32)),
+            inst(2, Opcode::FieldSet, Ty::Unit, vec![0, 1], InstData::FieldIndex(0)),
+            inst(3, Opcode::FieldGet, Ty::F32, vec![0], InstData::FieldIndex(0)),
+            inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+        ])]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_field_get_set_f64() {
+        let module = make_module("test", vec![simple_fn(0, "f", vec![Ty::Ptr], Ty::F64, vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::ConstF64, Ty::F64, vec![], InstData::ConstF64(2.718f64)),
+            inst(2, Opcode::FieldSet, Ty::Unit, vec![0, 1], InstData::FieldIndex(0)),
+            inst(3, Opcode::FieldGet, Ty::F64, vec![0], InstData::FieldIndex(0)),
+            inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+        ])]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_release_mode() {
+        // Release mode: no violation/overflow handler declarations
+        let module = make_module(
+            "test",
+            vec![simple_fn(0, "f", vec![Ty::I64, Ty::I64], Ty::I64, vec![
+                inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
+                inst(2, Opcode::WrappingAddI64, Ty::I64, vec![0, 1], InstData::None),
+                inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+            ])],
+        );
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Release);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_string_new_extern() {
+        // __vow_string_new(ptr: I64, len: I64) -> Ptr
+        let module = make_module("test", vec![simple_fn(0, "f", vec![Ty::Ptr, Ty::I64], Ty::Ptr, vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
+            inst(2, Opcode::Call, Ty::Ptr, vec![0, 1], InstData::CallExtern("__vow_string_new".to_string())),
+            inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+        ])]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_map_new_and_fs_read_extern() {
+        // __vow_map_new() -> Ptr
+        let module = make_module("test", vec![simple_fn(0, "f", vec![], Ty::Ptr, vec![
+            inst(0, Opcode::Call, Ty::Ptr, vec![], InstData::CallExtern("__vow_map_new".to_string())),
+            inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+        ])]);
+        let r = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(r.is_ok(), "{:?}", r.err());
+
+        // __vow_fs_read(path: Ptr) -> Ptr
+        let module2 = make_module("test", vec![simple_fn(0, "f", vec![Ty::Ptr], Ty::Ptr, vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::Call, Ty::Ptr, vec![0], InstData::CallExtern("__vow_fs_read".to_string())),
+            inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+        ])]);
+        let r2 = CraneliftBackend::new().compile_module(&module2, BuildMode::Debug);
+        assert!(r2.is_ok(), "{:?}", r2.err());
+    }
+
+    #[test]
+    fn compile_extern_single_param_no_return() {
+        // __vow_eprintln_str(ptr: Ptr) -> Unit
+        let module = make_module("test", vec![simple_fn(0, "f", vec![Ty::Ptr], Ty::Unit, vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::Call, Ty::Unit, vec![0], InstData::CallExtern("__vow_eprintln_str".to_string())),
+            inst(2, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ])]);
+        let r = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(r.is_ok(), "{:?}", r.err());
+    }
+
+    #[test]
+    fn compile_map_remove_two_params_no_return() {
+        // __vow_map_remove(map: Ptr, key: I64) -> Unit
+        let module = make_module("test", vec![simple_fn(0, "f", vec![Ty::Ptr, Ty::I64], Ty::Unit, vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
+            inst(2, Opcode::Call, Ty::Unit, vec![0, 1], InstData::CallExtern("__vow_map_remove".to_string())),
+            inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ])]);
+        let r = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(r.is_ok(), "{:?}", r.err());
+    }
+
+    #[test]
+    fn compile_string_len_and_eq_externs() {
+        // __vow_string_len(str: Ptr) -> I64
+        let module = make_module("test", vec![simple_fn(0, "f", vec![Ty::Ptr], Ty::I64, vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::Call, Ty::I64, vec![0], InstData::CallExtern("__vow_string_len".to_string())),
+            inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+        ])]);
+        let r = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(r.is_ok(), "{:?}", r.err());
+
+        // __vow_string_eq(a: Ptr, b: Ptr) -> Bool (I8)
+        let module2 = make_module("test", vec![simple_fn(0, "f", vec![Ty::Ptr, Ty::Ptr], Ty::Bool, vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(2, Opcode::Call, Ty::Bool, vec![0, 1], InstData::CallExtern("__vow_string_eq".to_string())),
+            inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+        ])]);
+        let r2 = CraneliftBackend::new().compile_module(&module2, BuildMode::Debug);
+        assert!(r2.is_ok(), "{:?}", r2.err());
+    }
+
+    #[test]
+    fn compile_map_get_contains_externs() {
+        // __vow_map_get(map: Ptr, key: I64) -> I64
+        let module = make_module("test", vec![simple_fn(0, "f", vec![Ty::Ptr, Ty::I64], Ty::I64, vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
+            inst(2, Opcode::Call, Ty::I64, vec![0, 1], InstData::CallExtern("__vow_map_get".to_string())),
+            inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+        ])]);
+        let r = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(r.is_ok(), "{:?}", r.err());
+
+        // __vow_map_contains(map: Ptr, key: I64) -> Bool
+        let module2 = make_module("test", vec![simple_fn(0, "f", vec![Ty::Ptr, Ty::I64], Ty::Bool, vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
+            inst(2, Opcode::Call, Ty::Bool, vec![0, 1], InstData::CallExtern("__vow_map_contains".to_string())),
+            inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+        ])]);
+        let r2 = CraneliftBackend::new().compile_module(&module2, BuildMode::Debug);
+        assert!(r2.is_ok(), "{:?}", r2.err());
+    }
+
+    #[test]
+    fn compile_two_functions_with_call() {
+        // Two functions: callee + caller that calls callee (covers Call with CallTarget)
+        let module = make_module("test", vec![
+            Function {
+                id: FuncId(0),
+                name: "callee".to_string(),
+                params: vec![Ty::I64],
+                return_ty: Ty::I64,
+                effects: vec![],
+                vows: vec![],
+                blocks: vec![BasicBlock {
+                    id: BlockId(0),
+                    insts: vec![
+                        inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                        inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                    ],
+                }],
+            },
+            Function {
+                id: FuncId(1),
+                name: "caller".to_string(),
+                params: vec![Ty::I64],
+                return_ty: Ty::I64,
+                effects: vec![],
+                vows: vec![],
+                blocks: vec![BasicBlock {
+                    id: BlockId(0),
+                    insts: vec![
+                        inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                        inst(
+                            1,
+                            Opcode::Call,
+                            Ty::I64,
+                            vec![0],
+                            InstData::CallTarget(FuncId(0)),
+                        ),
+                        inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+                    ],
+                }],
+            },
+        ]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_const_i32_opcode() {
+        let module = make_module("test", vec![simple_fn(0, "f", vec![], Ty::I32, vec![
+            inst(0, Opcode::ConstI32, Ty::I32, vec![], InstData::ConstI32(42)),
+            inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+        ])]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_wrapping_i32_arithmetic() {
+        let module = make_module("test", vec![Function {
+            id: FuncId(0),
+            name: "i32arith".to_string(),
+            params: vec![Ty::I32, Ty::I32],
+            return_ty: Ty::I32,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::I32, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::GetArg, Ty::I32, vec![], InstData::ArgIndex(1)),
+                    inst(2, Opcode::WrappingAddI32, Ty::I32, vec![0, 1], InstData::None),
+                    inst(3, Opcode::WrappingSubI32, Ty::I32, vec![0, 1], InstData::None),
+                    inst(4, Opcode::WrappingMulI32, Ty::I32, vec![0, 1], InstData::None),
+                    inst(5, Opcode::WrappingDivI32, Ty::I32, vec![0, 1], InstData::None),
+                    inst(6, Opcode::WrappingRemI32, Ty::I32, vec![0, 1], InstData::None),
+                    inst(7, Opcode::Return, Ty::Unit, vec![6], InstData::None),
+                ],
+            }],
+        }]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_i32_comparisons() {
+        let module = make_module("test", vec![Function {
+            id: FuncId(0),
+            name: "cmpi32".to_string(),
+            params: vec![Ty::I32, Ty::I32],
+            return_ty: Ty::Bool,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::I32, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::GetArg, Ty::I32, vec![], InstData::ArgIndex(1)),
+                    inst(2, Opcode::EqI32, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(3, Opcode::NeI32, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(4, Opcode::LtI32, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(5, Opcode::LeI32, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(6, Opcode::GtI32, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(7, Opcode::GeI32, Ty::Bool, vec![0, 1], InstData::None),
+                    inst(8, Opcode::Return, Ty::Unit, vec![7], InstData::None),
+                ],
+            }],
+        }]);
+        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        assert!(result.is_ok(), "{:?}", result.err());
     }
 }

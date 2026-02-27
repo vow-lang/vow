@@ -83,6 +83,46 @@ impl TypeEnv {
                 effects: [Effect::IO].into_iter().collect(),
             },
         );
+        env.define_fn(
+            "fs_read",
+            FnSig {
+                params: vec![Ty::Str],
+                return_ty: Ty::Str,
+                effects: [Effect::Read].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "fs_write",
+            FnSig {
+                params: vec![Ty::Str, Ty::Str],
+                return_ty: Ty::I64,
+                effects: [Effect::Write].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "eprintln_str",
+            FnSig {
+                params: vec![Ty::Str],
+                return_ty: Ty::Unit,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "args",
+            FnSig {
+                params: vec![],
+                return_ty: Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::Str]),
+                effects: [Effect::Read].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "process_exit",
+            FnSig {
+                params: vec![Ty::I64],
+                return_ty: Ty::Never,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
         env
     }
 
@@ -189,6 +229,18 @@ impl TypeEnv {
                         return Ok(Ty::Applied(
                             Box::new(Ty::Struct("Vec".to_string())),
                             vec![t],
+                        ));
+                    }
+                    "HashMap" => {
+                        let k = args
+                            .first()
+                            .ok_or_else(|| "HashMap requires two type arguments".to_string())?;
+                        let v = args
+                            .get(1)
+                            .ok_or_else(|| "HashMap requires two type arguments".to_string())?;
+                        return Ok(Ty::Applied(
+                            Box::new(Ty::Struct("HashMap".to_string())),
+                            vec![self.resolve(k)?, self.resolve(v)?],
                         ));
                     }
                     _ => {}

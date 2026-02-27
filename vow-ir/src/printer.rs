@@ -231,7 +231,8 @@ fn effect_str(e: &Effect) -> &'static str {
 mod tests {
     use super::*;
     use crate::types::{
-        BasicBlock, BlockId, FuncId, Function, Inst, InstData, InstId, Module, Opcode, Ty,
+        BasicBlock, BlockId, EnumLayout, FieldLayout, FuncId, Function, Inst, InstData, InstId,
+        Module, Opcode, RegionId, StructLayout, Ty, VariantLayout, VowId,
     };
     use vow_syntax::span::Span;
 
@@ -391,5 +392,234 @@ mod tests {
         let output = print_module(&module);
         assert!(output.contains("IO"));
         assert!(output.contains("Write"));
+    }
+
+    #[test]
+    fn ty_display_all_variants() {
+        assert_eq!(Ty::I32.to_string(), "i32");
+        assert_eq!(Ty::I64.to_string(), "i64");
+        assert_eq!(Ty::F32.to_string(), "f32");
+        assert_eq!(Ty::F64.to_string(), "f64");
+        assert_eq!(Ty::Bool.to_string(), "Bool");
+        assert_eq!(Ty::Unit.to_string(), "Void");
+        assert_eq!(Ty::Ptr.to_string(), "ptr");
+        assert_eq!(Ty::LinearPtr.to_string(), "linear_ptr");
+    }
+
+    #[test]
+    fn opcode_name_all_variants() {
+        let pairs = [
+            (Opcode::ConstI32, "ConstI32"),
+            (Opcode::ConstF32, "ConstF32"),
+            (Opcode::ConstF64, "ConstF64"),
+            (Opcode::ConstBool, "ConstBool"),
+            (Opcode::ConstStr, "ConstStr"),
+            (Opcode::ConstUnit, "ConstUnit"),
+            (Opcode::WrappingAddI32, "WrappingAddI32"),
+            (Opcode::WrappingSubI32, "WrappingSubI32"),
+            (Opcode::WrappingMulI32, "WrappingMulI32"),
+            (Opcode::WrappingDivI32, "WrappingDivI32"),
+            (Opcode::WrappingRemI32, "WrappingRemI32"),
+            (Opcode::CheckedAddI32, "CheckedAddI32"),
+            (Opcode::CheckedSubI32, "CheckedSubI32"),
+            (Opcode::CheckedMulI32, "CheckedMulI32"),
+            (Opcode::CheckedDivI32, "CheckedDivI32"),
+            (Opcode::CheckedRemI32, "CheckedRemI32"),
+            (Opcode::EqI32, "EqI32"),
+            (Opcode::NeI32, "NeI32"),
+            (Opcode::LtI32, "LtI32"),
+            (Opcode::LeI32, "LeI32"),
+            (Opcode::GtI32, "GtI32"),
+            (Opcode::GeI32, "GeI32"),
+            (Opcode::WrappingSubI64, "WrappingSubI64"),
+            (Opcode::WrappingMulI64, "WrappingMulI64"),
+            (Opcode::WrappingDivI64, "WrappingDivI64"),
+            (Opcode::WrappingRemI64, "WrappingRemI64"),
+            (Opcode::CheckedAddI64, "CheckedAddI64"),
+            (Opcode::CheckedSubI64, "CheckedSubI64"),
+            (Opcode::CheckedMulI64, "CheckedMulI64"),
+            (Opcode::CheckedDivI64, "CheckedDivI64"),
+            (Opcode::CheckedRemI64, "CheckedRemI64"),
+            (Opcode::EqI64, "EqI64"),
+            (Opcode::NeI64, "NeI64"),
+            (Opcode::LtI64, "LtI64"),
+            (Opcode::LeI64, "LeI64"),
+            (Opcode::GtI64, "GtI64"),
+            (Opcode::GeI64, "GeI64"),
+            (Opcode::AddF32, "AddF32"),
+            (Opcode::SubF32, "SubF32"),
+            (Opcode::MulF32, "MulF32"),
+            (Opcode::DivF32, "DivF32"),
+            (Opcode::RemF32, "RemF32"),
+            (Opcode::EqF32, "EqF32"),
+            (Opcode::NeF32, "NeF32"),
+            (Opcode::LtF32, "LtF32"),
+            (Opcode::LeF32, "LeF32"),
+            (Opcode::GtF32, "GtF32"),
+            (Opcode::GeF32, "GeF32"),
+            (Opcode::AddF64, "AddF64"),
+            (Opcode::SubF64, "SubF64"),
+            (Opcode::MulF64, "MulF64"),
+            (Opcode::DivF64, "DivF64"),
+            (Opcode::RemF64, "RemF64"),
+            (Opcode::EqF64, "EqF64"),
+            (Opcode::NeF64, "NeF64"),
+            (Opcode::LtF64, "LtF64"),
+            (Opcode::LeF64, "LeF64"),
+            (Opcode::GtF64, "GtF64"),
+            (Opcode::GeF64, "GeF64"),
+            (Opcode::Not, "Not"),
+            (Opcode::And, "And"),
+            (Opcode::Or, "Or"),
+            (Opcode::Load, "Load"),
+            (Opcode::Store, "Store"),
+            (Opcode::Branch, "Branch"),
+            (Opcode::Jump, "Jump"),
+            (Opcode::Phi, "Phi"),
+            (Opcode::Upsilon, "Upsilon"),
+            (Opcode::VowRequires, "VowRequires"),
+            (Opcode::VowEnsures, "VowEnsures"),
+            (Opcode::VowInvariant, "VowInvariant"),
+            (Opcode::Call, "Call"),
+            (Opcode::RegionAlloc, "RegionAlloc"),
+            (Opcode::RegionFree, "RegionFree"),
+            (Opcode::LinearConsume, "LinearConsume"),
+            (Opcode::LinearBorrow, "LinearBorrow"),
+            (Opcode::FieldGet, "FieldGet"),
+            (Opcode::FieldSet, "FieldSet"),
+        ];
+        for (op, expected) in pairs {
+            assert_eq!(opcode_name(&op), expected);
+        }
+    }
+
+    #[test]
+    fn format_data_all_variants() {
+        assert_eq!(format_data(&InstData::None), None);
+        assert_eq!(format_data(&InstData::ConstI32(7)), Some("7".to_string()));
+        assert_eq!(format_data(&InstData::ConstI64(-1)), Some("-1".to_string()));
+        assert_eq!(
+            format_data(&InstData::ConstBool(false)),
+            Some("false".to_string())
+        );
+        assert_eq!(format_data(&InstData::ConstStr(3)), Some("@3".to_string()));
+        assert_eq!(format_data(&InstData::ArgIndex(2)), Some("2".to_string()));
+        assert_eq!(
+            format_data(&InstData::PhiTarget(InstId(5))),
+            Some("%5".to_string())
+        );
+        assert_eq!(
+            format_data(&InstData::CallTarget(FuncId(1))),
+            Some("func1".to_string())
+        );
+        assert_eq!(
+            format_data(&InstData::CallExtern("__foo".to_string())),
+            Some("extern:__foo".to_string())
+        );
+        assert_eq!(
+            format_data(&InstData::BranchTargets {
+                then_block: BlockId(2),
+                else_block: BlockId(3)
+            }),
+            Some("block_2, block_3".to_string())
+        );
+        assert_eq!(
+            format_data(&InstData::JumpTarget(BlockId(4))),
+            Some("block_4".to_string())
+        );
+        assert_eq!(
+            format_data(&InstData::RegionId(RegionId(0))),
+            Some("region_0".to_string())
+        );
+        assert_eq!(
+            format_data(&InstData::VowId(VowId(1))),
+            Some("vow_1".to_string())
+        );
+        assert_eq!(
+            format_data(&InstData::AllocSize { size: 8, align: 8 }),
+            Some("size=8,align=8".to_string())
+        );
+        assert_eq!(
+            format_data(&InstData::FieldIndex(0)),
+            Some("field_0".to_string())
+        );
+    }
+
+    #[test]
+    fn print_module_with_strings_structs_enums() {
+        let module = Module {
+            name: "m".to_string(),
+            functions: vec![],
+            strings: vec!["hello".to_string(), "world".to_string()],
+            struct_layouts: vec![StructLayout {
+                name: "Point".to_string(),
+                fields: vec![
+                    FieldLayout {
+                        name: "x".to_string(),
+                        ty: Ty::I64,
+                    },
+                    FieldLayout {
+                        name: "y".to_string(),
+                        ty: Ty::I64,
+                    },
+                ],
+                is_linear: false,
+            }],
+            enum_layouts: vec![EnumLayout {
+                name: "Color".to_string(),
+                variants: vec![
+                    VariantLayout {
+                        name: "Red".to_string(),
+                        tag: 0,
+                        payload: vec![],
+                    },
+                    VariantLayout {
+                        name: "Rgb".to_string(),
+                        tag: 1,
+                        payload: vec![
+                            FieldLayout {
+                                name: "r".to_string(),
+                                ty: Ty::I64,
+                            },
+                            FieldLayout {
+                                name: "g".to_string(),
+                                ty: Ty::I64,
+                            },
+                        ],
+                    },
+                ],
+            }],
+        };
+        let out = print_module(&module);
+        assert!(out.contains("strings:"), "strings section: {out}");
+        assert!(out.contains("@0 = \"hello\""), "string 0: {out}");
+        assert!(out.contains("@1 = \"world\""), "string 1: {out}");
+        assert!(out.contains("struct Point"), "struct: {out}");
+        assert!(out.contains("x: i64"), "field x: {out}");
+        assert!(out.contains("enum Color"), "enum: {out}");
+        assert!(out.contains("Red(tag=0)"), "Red variant: {out}");
+        assert!(out.contains("Rgb(tag=1"), "Rgb variant: {out}");
+    }
+
+    #[test]
+    fn print_function_with_float_const() {
+        let insts = vec![
+            make_inst(
+                0,
+                Opcode::ConstF32,
+                Ty::F32,
+                vec![],
+                InstData::ConstF32(1.5),
+            ),
+            make_inst(1, Opcode::Return, Ty::Unit, vec![InstId(0)], InstData::None),
+        ];
+        let block = BasicBlock {
+            id: BlockId(0),
+            insts,
+        };
+        let func = make_func(0, "f32_fn", vec![Ty::F32], Ty::F32, vec![], vec![block]);
+        let out = print_function(&func);
+        assert!(out.contains("ConstF32[1.5]"), "f32 const: {out}");
+        assert!(out.contains("f32"), "f32 type: {out}");
     }
 }

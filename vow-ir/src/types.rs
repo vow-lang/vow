@@ -401,6 +401,79 @@ mod tests {
     }
 
     #[test]
+    fn struct_layout_methods() {
+        let layout = StructLayout {
+            name: "Pair".to_string(),
+            fields: vec![
+                FieldLayout {
+                    name: "x".to_string(),
+                    ty: Ty::I64,
+                },
+                FieldLayout {
+                    name: "y".to_string(),
+                    ty: Ty::Bool,
+                },
+            ],
+            is_linear: false,
+        };
+        assert_eq!(layout.size_bytes(), 16);
+        assert_eq!(layout.field_index("x"), Some(0));
+        assert_eq!(layout.field_index("y"), Some(1));
+        assert_eq!(layout.field_index("z"), None);
+        assert_eq!(layout.field_ty(0), Some(Ty::I64));
+        assert_eq!(layout.field_ty(1), Some(Ty::Bool));
+        assert_eq!(layout.field_ty(2), None);
+    }
+
+    #[test]
+    fn variant_layout_payload_size() {
+        let empty = VariantLayout {
+            name: "None".to_string(),
+            tag: 0,
+            payload: vec![],
+        };
+        assert_eq!(empty.payload_size_bytes(), 0);
+        let with_payload = VariantLayout {
+            name: "Some".to_string(),
+            tag: 1,
+            payload: vec![FieldLayout {
+                name: "v".to_string(),
+                ty: Ty::I64,
+            }],
+        };
+        assert_eq!(with_payload.payload_size_bytes(), 8);
+    }
+
+    #[test]
+    fn enum_layout_methods() {
+        let layout = EnumLayout {
+            name: "Option".to_string(),
+            variants: vec![
+                VariantLayout {
+                    name: "None".to_string(),
+                    tag: 0,
+                    payload: vec![],
+                },
+                VariantLayout {
+                    name: "Some".to_string(),
+                    tag: 1,
+                    payload: vec![FieldLayout {
+                        name: "v".to_string(),
+                        ty: Ty::I64,
+                    }],
+                },
+            ],
+        };
+        assert_eq!(layout.size_bytes(), 16); // (1 discriminant + 1 payload field) * 8
+        assert_eq!(layout.variant_index("None"), Some(0));
+        assert_eq!(layout.variant_index("Some"), Some(1));
+        assert_eq!(layout.variant_index("Other"), None);
+        assert_eq!(layout.variant_tag("None"), Some(0));
+        assert_eq!(layout.variant_tag("Some"), Some(1));
+        assert_eq!(layout.variant_tag("Other"), None);
+    }
+
+    #[test]
     fn branch_inst_data() {
         let branch = Inst {
             id: InstId(5),

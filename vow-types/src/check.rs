@@ -162,7 +162,19 @@ impl<'e> Checker<'e> {
                     Ok(ty) => self.env.define_alias(&a.name, ty),
                     Err(msg) => self.emit_error(ErrorCode::TypeMismatch, msg, a.ty.span()),
                 },
-                Item::Trait(_) | Item::Impl(_) | Item::Extern(_) => {}
+                Item::Extern(block) => {
+                    for f in &block.fns {
+                        let params = f
+                            .params
+                            .iter()
+                            .map(|p| self.env.resolve(&p.ty).unwrap_or(Ty::Unit))
+                            .collect();
+                        let return_ty = self.env.resolve(&f.return_ty).unwrap_or(Ty::Unit);
+                        let effects: BTreeSet<Effect> = f.effects.iter().cloned().collect();
+                        self.env.define_fn(&f.name, FnSig { params, return_ty, effects });
+                    }
+                }
+                Item::Trait(_) | Item::Impl(_) => {}
             }
         }
 
@@ -492,10 +504,30 @@ impl<'e> Checker<'e> {
                 for arg in args {
                     self.check_expr(arg);
                 }
+                let is_str = matches!(recv_ty, Ty::Str);
                 let is_vec = matches!(&recv_ty,
                     Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Struct(n) if n == "Vec")
                 );
-                if is_vec {
+                let is_hashmap = matches!(&recv_ty,
+                    Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Struct(n) if n == "HashMap")
+                );
+                if is_str {
+                    match method.as_str() {
+                        "len" => Ty::I64,
+                        "push_str" => Ty::Unit,
+                        "eq" => Ty::Bool,
+                        _ => Ty::Unit,
+                    }
+                } else if is_hashmap {
+                    match method.as_str() {
+                        "len" => Ty::I64,
+                        "insert" => Ty::Unit,
+                        "get" => Ty::I64,
+                        "contains_key" => Ty::Bool,
+                        "remove" => Ty::Unit,
+                        _ => Ty::Unit,
+                    }
+                } else if is_vec {
                     match method.as_str() {
                         "len" => Ty::I64,
                         "push" => Ty::Unit,
@@ -761,8 +793,17 @@ impl<'e> Checker<'e> {
             ExprKind::EnumConstruct { path, fields } => {
                 let enum_name = path.first().map(|s| s.as_str()).unwrap_or("");
                 let variant_name = path.get(1).map(|s| s.as_str()).unwrap_or("");
-                // Handle compiler-known builtins: Option and Result
+                // Handle compiler-known builtins: Option, Result, Vec, String, HashMap
                 match (enum_name, variant_name) {
+                    ("String", "from") => {
+                        if let Some(arg) = fields.first() {
+                            self.check_expr(arg);
+                        }
+                        return Ty::Str;
+                    }
+                    ("HashMap", "new") => {
+                        return Ty::Never;
+                    }
                     ("Option", "None") => {
                         // None has type Never (bottom) so it unifies with any Option<T>
                         return Ty::Never;

@@ -506,6 +506,344 @@ mod tests {
     }
 
     #[test]
+    fn ir_ty_to_c_all_variants() {
+        assert_eq!(ir_ty_to_c(Ty::I32), "int32_t");
+        assert_eq!(ir_ty_to_c(Ty::I64), "int64_t");
+        assert_eq!(ir_ty_to_c(Ty::F32), "float");
+        assert_eq!(ir_ty_to_c(Ty::F64), "double");
+        assert_eq!(ir_ty_to_c(Ty::Bool), "_Bool");
+        assert_eq!(ir_ty_to_c(Ty::Unit), "int32_t");
+        assert_eq!(ir_ty_to_c(Ty::Ptr), "void*");
+        assert_eq!(ir_ty_to_c(Ty::LinearPtr), "void*");
+    }
+
+    #[test]
+    fn c_nondet_suffix_all_variants() {
+        assert_eq!(c_nondet_suffix(Ty::I32), "int");
+        assert_eq!(c_nondet_suffix(Ty::I64), "long");
+        assert_eq!(c_nondet_suffix(Ty::F32), "float");
+        assert_eq!(c_nondet_suffix(Ty::F64), "double");
+        assert_eq!(c_nondet_suffix(Ty::Bool), "bool");
+        assert_eq!(c_nondet_suffix(Ty::Ptr), "int");
+    }
+
+    fn make_func(name: &str, params: Vec<Ty>, ret: Ty, insts: Vec<Inst>) -> Function {
+        Function {
+            id: FuncId(0),
+            name: name.to_string(),
+            params,
+            return_ty: ret,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock { id: BlockId(0), insts }],
+        }
+    }
+
+    #[test]
+    fn emit_const_variants() {
+        let func = make_func(
+            "f",
+            vec![],
+            Ty::Unit,
+            vec![
+                inst(0, Opcode::ConstI32, Ty::I32, vec![], InstData::ConstI32(7)),
+                inst(1, Opcode::ConstF32, Ty::F32, vec![], InstData::ConstF32(1.5)),
+                inst(2, Opcode::ConstF64, Ty::F64, vec![], InstData::ConstF64(2.0)),
+                inst(3, Opcode::ConstBool, Ty::Bool, vec![], InstData::ConstBool(true)),
+                inst(4, Opcode::ConstBool, Ty::Bool, vec![], InstData::ConstBool(false)),
+                inst(5, Opcode::ConstUnit, Ty::Unit, vec![], InstData::None),
+                inst(6, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                inst(7, Opcode::Return, Ty::Unit, vec![], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func);
+        assert!(c.contains("int32_t v0 = 7"), "ConstI32: {c}");
+        assert!(c.contains("float v1 = 1.5f"), "ConstF32: {c}");
+        assert!(c.contains("double v2 = 2"), "ConstF64: {c}");
+        assert!(c.contains("_Bool v3 = 1"), "ConstBool true: {c}");
+        assert!(c.contains("_Bool v4 = 0"), "ConstBool false: {c}");
+        assert!(c.contains("int32_t v5 = 0"), "ConstUnit: {c}");
+        assert!(c.contains("void* v6 = 0"), "ConstStr: {c}");
+    }
+
+    #[test]
+    fn emit_arithmetic_ops() {
+        let func = make_func(
+            "arith",
+            vec![Ty::I64, Ty::I64],
+            Ty::I64,
+            vec![
+                inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
+                inst(2, Opcode::WrappingSubI64, Ty::I64, vec![0, 1], InstData::None),
+                inst(3, Opcode::WrappingMulI64, Ty::I64, vec![0, 1], InstData::None),
+                inst(4, Opcode::WrappingDivI64, Ty::I64, vec![0, 1], InstData::None),
+                inst(5, Opcode::WrappingRemI64, Ty::I64, vec![0, 1], InstData::None),
+                inst(6, Opcode::WrappingAddI32, Ty::I32, vec![0, 1], InstData::None),
+                inst(7, Opcode::WrappingSubI32, Ty::I32, vec![0, 1], InstData::None),
+                inst(8, Opcode::WrappingMulI32, Ty::I32, vec![0, 1], InstData::None),
+                inst(9, Opcode::WrappingDivI32, Ty::I32, vec![0, 1], InstData::None),
+                inst(10, Opcode::WrappingRemI32, Ty::I32, vec![0, 1], InstData::None),
+                inst(11, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func);
+        assert!(c.contains("v0 - v1"), "sub: {c}");
+        assert!(c.contains("v0 * v1"), "mul: {c}");
+        assert!(c.contains("v0 / v1"), "div: {c}");
+        assert!(c.contains("v0 % v1"), "rem: {c}");
+    }
+
+    #[test]
+    fn emit_float_arithmetic() {
+        let func = make_func(
+            "floats",
+            vec![Ty::F64, Ty::F64],
+            Ty::F64,
+            vec![
+                inst(0, Opcode::GetArg, Ty::F64, vec![], InstData::ArgIndex(0)),
+                inst(1, Opcode::GetArg, Ty::F64, vec![], InstData::ArgIndex(1)),
+                inst(2, Opcode::AddF64, Ty::F64, vec![0, 1], InstData::None),
+                inst(3, Opcode::SubF64, Ty::F64, vec![0, 1], InstData::None),
+                inst(4, Opcode::MulF64, Ty::F64, vec![0, 1], InstData::None),
+                inst(5, Opcode::DivF64, Ty::F64, vec![0, 1], InstData::None),
+                inst(6, Opcode::AddF32, Ty::F32, vec![0, 1], InstData::None),
+                inst(7, Opcode::SubF32, Ty::F32, vec![0, 1], InstData::None),
+                inst(8, Opcode::MulF32, Ty::F32, vec![0, 1], InstData::None),
+                inst(9, Opcode::DivF32, Ty::F32, vec![0, 1], InstData::None),
+                inst(10, Opcode::RemF32, Ty::F32, vec![0, 1], InstData::None),
+                inst(11, Opcode::RemF64, Ty::F64, vec![0, 1], InstData::None),
+                inst(12, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func);
+        assert!(c.contains("v0 + v1"), "fadd: {c}");
+        assert!(c.contains("v0 - v1"), "fsub: {c}");
+        assert!(c.contains("v0 * v1"), "fmul: {c}");
+        assert!(c.contains("v0 / v1"), "fdiv: {c}");
+        assert!(c.contains("float rem not modelled"), "frem32: {c}");
+        assert!(c.contains("float rem not modelled"), "frem64: {c}");
+    }
+
+    #[test]
+    fn emit_comparisons() {
+        let func = make_func(
+            "cmp",
+            vec![Ty::I64, Ty::I64],
+            Ty::Bool,
+            vec![
+                inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
+                inst(2, Opcode::EqI64, Ty::Bool, vec![0, 1], InstData::None),
+                inst(3, Opcode::NeI64, Ty::Bool, vec![0, 1], InstData::None),
+                inst(4, Opcode::LtI64, Ty::Bool, vec![0, 1], InstData::None),
+                inst(5, Opcode::LeI64, Ty::Bool, vec![0, 1], InstData::None),
+                inst(6, Opcode::GtI64, Ty::Bool, vec![0, 1], InstData::None),
+                inst(7, Opcode::GeI64, Ty::Bool, vec![0, 1], InstData::None),
+                inst(8, Opcode::EqI32, Ty::Bool, vec![0, 1], InstData::None),
+                inst(9, Opcode::NeI32, Ty::Bool, vec![0, 1], InstData::None),
+                inst(10, Opcode::LtI32, Ty::Bool, vec![0, 1], InstData::None),
+                inst(11, Opcode::LeI32, Ty::Bool, vec![0, 1], InstData::None),
+                inst(12, Opcode::GtI32, Ty::Bool, vec![0, 1], InstData::None),
+                inst(13, Opcode::GeI32, Ty::Bool, vec![0, 1], InstData::None),
+                inst(14, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func);
+        assert!(c.contains("v0 == v1"), "eq: {c}");
+        assert!(c.contains("v0 != v1"), "ne: {c}");
+        assert!(c.contains("v0 < v1"), "lt: {c}");
+        assert!(c.contains("v0 <= v1"), "le: {c}");
+        assert!(c.contains("v0 > v1"), "gt: {c}");
+        assert!(c.contains("v0 >= v1"), "ge: {c}");
+    }
+
+    #[test]
+    fn emit_boolean_ops() {
+        let func = make_func(
+            "bools",
+            vec![Ty::Bool, Ty::Bool],
+            Ty::Bool,
+            vec![
+                inst(0, Opcode::GetArg, Ty::Bool, vec![], InstData::ArgIndex(0)),
+                inst(1, Opcode::GetArg, Ty::Bool, vec![], InstData::ArgIndex(1)),
+                inst(2, Opcode::Not, Ty::Bool, vec![0], InstData::None),
+                inst(3, Opcode::And, Ty::Bool, vec![0, 1], InstData::None),
+                inst(4, Opcode::Or, Ty::Bool, vec![0, 1], InstData::None),
+                inst(5, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func);
+        assert!(c.contains("!v0"), "not: {c}");
+        assert!(c.contains("v0 && v1"), "and: {c}");
+        assert!(c.contains("v0 || v1"), "or: {c}");
+    }
+
+    #[test]
+    fn emit_control_flow_branch_jump_unreachable() {
+        use vow_ir::InstId;
+        let func = Function {
+            id: FuncId(0),
+            name: "cfg".to_string(),
+            params: vec![Ty::Bool],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![
+                BasicBlock {
+                    id: BlockId(0),
+                    insts: vec![
+                        inst(0, Opcode::GetArg, Ty::Bool, vec![], InstData::ArgIndex(0)),
+                        Inst {
+                            id: InstId(1),
+                            opcode: Opcode::Branch,
+                            ty: Ty::Unit,
+                            args: vec![InstId(0)],
+                            data: InstData::BranchTargets {
+                                then_block: BlockId(1),
+                                else_block: BlockId(2),
+                            },
+                            origin: sp(),
+                        },
+                    ],
+                },
+                BasicBlock {
+                    id: BlockId(1),
+                    insts: vec![
+                        inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                        inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                    ],
+                },
+                BasicBlock {
+                    id: BlockId(2),
+                    insts: vec![inst(4, Opcode::Unreachable, Ty::Unit, vec![], InstData::None)],
+                },
+            ],
+        };
+        let c = emit_c_function(&func);
+        assert!(c.contains("if (v0) goto block1; else goto block2;"), "branch: {c}");
+        assert!(c.contains("block2:;"), "block label: {c}");
+        assert!(c.contains("__ESBMC_assume(0)"), "unreachable: {c}");
+    }
+
+    #[test]
+    fn emit_phi_upsilon() {
+        use vow_ir::InstId;
+        let func = make_func(
+            "phi_fn",
+            vec![],
+            Ty::I64,
+            vec![
+                Inst {
+                    id: InstId(0),
+                    opcode: Opcode::Phi,
+                    ty: Ty::I64,
+                    args: vec![],
+                    data: InstData::None,
+                    origin: sp(),
+                },
+                inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(42)),
+                Inst {
+                    id: InstId(2),
+                    opcode: Opcode::Upsilon,
+                    ty: Ty::Unit,
+                    args: vec![InstId(1)],
+                    data: InstData::PhiTarget(InstId(0)),
+                    origin: sp(),
+                },
+                inst(3, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func);
+        assert!(c.contains("int64_t v0;"), "phi declaration: {c}");
+        assert!(c.contains("v0 = v1;"), "upsilon assignment: {c}");
+    }
+
+    #[test]
+    fn emit_not_modelled_ops_produce_nondet() {
+        use vow_ir::InstId;
+        let func = make_func(
+            "nd",
+            vec![],
+            Ty::I64,
+            vec![
+                Inst {
+                    id: InstId(0),
+                    opcode: Opcode::Call,
+                    ty: Ty::I64,
+                    args: vec![],
+                    data: InstData::CallTarget(FuncId(1)),
+                    origin: sp(),
+                },
+                Inst {
+                    id: InstId(1),
+                    opcode: Opcode::FieldGet,
+                    ty: Ty::I64,
+                    args: vec![InstId(0)],
+                    data: InstData::FieldIndex(0),
+                    origin: sp(),
+                },
+                inst(2, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func);
+        assert!(c.contains("not modelled"), "not modelled comment: {c}");
+        assert!(c.contains("__VERIFIER_nondet_long"), "nondet for I64: {c}");
+    }
+
+    #[test]
+    fn emit_vow_invariant_as_assert() {
+        use vow_ir::{InstId, VowId};
+        let func = make_func(
+            "inv",
+            vec![],
+            Ty::Bool,
+            vec![
+                inst(0, Opcode::ConstBool, Ty::Bool, vec![], InstData::ConstBool(true)),
+                Inst {
+                    id: InstId(1),
+                    opcode: Opcode::VowInvariant,
+                    ty: Ty::Unit,
+                    args: vec![InstId(0)],
+                    data: InstData::VowId(VowId(2)),
+                    origin: sp(),
+                },
+                inst(2, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func);
+        assert!(c.contains("__ESBMC_assert(v0, \"vow:2\")"), "invariant assert: {c}");
+    }
+
+    #[test]
+    fn emit_return_no_value() {
+        let func = make_func(
+            "void_fn",
+            vec![],
+            Ty::Unit,
+            vec![inst(0, Opcode::Return, Ty::Unit, vec![], InstData::None)],
+        );
+        let c = emit_c_function(&func);
+        assert!(c.contains("return 0;"), "void return: {c}");
+    }
+
+    #[test]
+    fn emit_c_module_wraps_multiple_functions() {
+        let f1 = make_func("f1", vec![], Ty::Unit, vec![
+            inst(0, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ]);
+        let f2 = make_func("f2", vec![Ty::I64], Ty::I64, vec![
+            inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+        ]);
+        let out = emit_c_module(&[&f1, &f2]);
+        assert!(out.contains("#include <stdint.h>"), "includes: {out}");
+        assert!(out.contains("__ESBMC_assume"), "esbmc assume: {out}");
+        assert!(out.contains("void f1(void)"), "f1 signature: {out}");
+        assert!(out.contains("f2("), "f2 signature: {out}");
+    }
+
+    #[test]
     fn emit_vow_ensures_as_assert() {
         let func = Function {
             id: FuncId(0),

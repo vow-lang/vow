@@ -51,3 +51,33 @@ pub trait Backend {
         mode: BuildMode,
     ) -> Result<CompiledObject, CodegenError>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codegen_error_display_all_variants() {
+        let cases = [
+            (CodegenError::IsaBuild("e".into()), "ISA build error: e"),
+            (CodegenError::FunctionDeclare("e".into()), "function declare error: e"),
+            (CodegenError::FunctionDefine("e".into()), "function define error: e"),
+            (CodegenError::Emit("e".into()), "emit error: e"),
+            (CodegenError::UnsupportedOpcode("e".into()), "unsupported opcode: e"),
+            (CodegenError::Link("e".into()), "linker error: e"),
+            (CodegenError::Io("e".into()), "I/O error: e"),
+        ];
+        for (err, expected) in cases {
+            assert_eq!(err.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn compiled_object_write_to_file_roundtrip() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("out.bin");
+        let obj = CompiledObject { bytes: vec![1, 2, 3, 255] };
+        obj.write_to_file(&path).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), vec![1, 2, 3, 255]);
+    }
+}
