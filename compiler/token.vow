@@ -1,0 +1,112 @@
+module Token
+
+struct Token {
+    tag: i64,
+    int_val: i64,
+    int_val2: i64,
+    str_val: String,
+    span_start: i64,
+    span_len: i64,
+}
+
+fn tok_kw_fn() -> i64 { 0 }
+fn tok_kw_let() -> i64 { 1 }
+fn tok_kw_mut() -> i64 { 2 }
+fn tok_kw_struct() -> i64 { 3 }
+fn tok_kw_enum() -> i64 { 4 }
+fn tok_kw_match() -> i64 { 5 }
+fn tok_kw_if() -> i64 { 6 }
+fn tok_kw_else() -> i64 { 7 }
+fn tok_kw_while() -> i64 { 8 }
+fn tok_kw_loop() -> i64 { 9 }
+fn tok_kw_break() -> i64 { 10 }
+fn tok_kw_return() -> i64 { 11 }
+fn tok_kw_pub() -> i64 { 12 }
+fn tok_kw_use() -> i64 { 13 }
+fn tok_kw_module() -> i64 { 14 }
+fn tok_kw_vow() -> i64 { 15 }
+fn tok_kw_requires() -> i64 { 16 }
+fn tok_kw_ensures() -> i64 { 17 }
+fn tok_kw_invariant() -> i64 { 18 }
+fn tok_kw_where() -> i64 { 19 }
+fn tok_kw_region() -> i64 { 20 }
+fn tok_kw_linear() -> i64 { 21 }
+fn tok_kw_extern() -> i64 { 22 }
+fn tok_kw_impl() -> i64 { 23 }
+fn tok_kw_trait() -> i64 { 24 }
+fn tok_kw_type() -> i64 { 25 }
+fn tok_kw_for() -> i64 { 26 }
+fn tok_kw_in() -> i64 { 27 }
+fn tok_kw_as() -> i64 { 28 }
+fn tok_kw_read() -> i64 { 29 }
+fn tok_kw_write() -> i64 { 30 }
+fn tok_kw_io() -> i64 { 31 }
+fn tok_kw_panic() -> i64 { 32 }
+fn tok_kw_unsafe() -> i64 { 33 }
+fn tok_lit_int() -> i64 { 34 }
+fn tok_lit_bool() -> i64 { 35 }
+fn tok_lit_string() -> i64 { 36 }
+fn tok_lit_int_suffixed() -> i64 { 37 }
+fn tok_ident() -> i64 { 38 }
+fn tok_plus() -> i64 { 39 }
+fn tok_minus() -> i64 { 40 }
+fn tok_star() -> i64 { 41 }
+fn tok_slash() -> i64 { 42 }
+fn tok_percent() -> i64 { 43 }
+fn tok_plus_checked() -> i64 { 44 }
+fn tok_minus_checked() -> i64 { 45 }
+fn tok_star_checked() -> i64 { 46 }
+fn tok_slash_checked() -> i64 { 47 }
+fn tok_percent_checked() -> i64 { 48 }
+fn tok_eq_eq() -> i64 { 49 }
+fn tok_bang_eq() -> i64 { 50 }
+fn tok_lt() -> i64 { 51 }
+fn tok_gt() -> i64 { 52 }
+fn tok_lt_eq() -> i64 { 53 }
+fn tok_gt_eq() -> i64 { 54 }
+fn tok_amp_amp() -> i64 { 55 }
+fn tok_pipe_pipe() -> i64 { 56 }
+fn tok_bang() -> i64 { 57 }
+fn tok_amp() -> i64 { 58 }
+fn tok_question() -> i64 { 59 }
+fn tok_fat_arrow() -> i64 { 60 }
+fn tok_thin_arrow() -> i64 { 61 }
+fn tok_eq() -> i64 { 62 }
+fn tok_lbrace() -> i64 { 63 }
+fn tok_rbrace() -> i64 { 64 }
+fn tok_lparen() -> i64 { 65 }
+fn tok_rparen() -> i64 { 66 }
+fn tok_lbracket() -> i64 { 67 }
+fn tok_rbracket() -> i64 { 68 }
+fn tok_comma() -> i64 { 69 }
+fn tok_colon() -> i64 { 70 }
+fn tok_semicolon() -> i64 { 71 }
+fn tok_dot() -> i64 { 72 }
+fn tok_colon_colon() -> i64 { 73 }
+fn tok_dot_dot() -> i64 { 74 }
+fn tok_underscore() -> i64 { 75 }
+fn tok_eof() -> i64 { 76 }
+
+fn tok_suffix_i8() -> i64 { 0 }
+fn tok_suffix_i16() -> i64 { 1 }
+fn tok_suffix_i32() -> i64 { 2 }
+fn tok_suffix_i64() -> i64 { 3 }
+fn tok_suffix_i128() -> i64 { 4 }
+fn tok_suffix_u8() -> i64 { 5 }
+fn tok_suffix_u16() -> i64 { 6 }
+fn tok_suffix_u32() -> i64 { 7 }
+fn tok_suffix_u64() -> i64 { 8 }
+fn tok_suffix_u128() -> i64 { 9 }
+fn tok_suffix_usize() -> i64 { 10 }
+fn tok_suffix_isize() -> i64 { 11 }
+
+fn make_token(tag: i64, int_val: i64, int_val2: i64, str_val: String, span_start: i64, span_len: i64) -> Token {
+    Token {
+        tag: tag,
+        int_val: int_val,
+        int_val2: int_val2,
+        str_val: str_val,
+        span_start: span_start,
+        span_len: span_len,
+    }
+}

@@ -253,7 +253,10 @@ impl<'e> Checker<'e> {
         let body_ty = self.check_block(&fn_def.body);
 
         let expected = self.current_return_ty.clone();
-        if body_ty != expected && body_ty != Ty::Never {
+        let coercible = body_ty == expected
+            || body_ty == Ty::Never
+            || (body_ty == Ty::I32 && expected.is_integer());
+        if !coercible {
             self.emit_error(
                 ErrorCode::TypeMismatch,
                 format!(
@@ -516,6 +519,8 @@ impl<'e> Checker<'e> {
                         "len" => Ty::I64,
                         "push_str" => Ty::Unit,
                         "eq" => Ty::Bool,
+                        "byte_at" => Ty::I64,
+                        "push_byte" => Ty::Unit,
                         _ => Ty::Unit,
                     }
                 } else if is_hashmap {
@@ -653,7 +658,12 @@ impl<'e> Checker<'e> {
                 match else_branch {
                     Some(else_expr) => {
                         let else_ty = self.check_expr(else_expr);
-                        if then_ty != else_ty && then_ty != Ty::Never && else_ty != Ty::Never {
+                        let compatible = then_ty == else_ty
+                            || then_ty == Ty::Never
+                            || else_ty == Ty::Never
+                            || (then_ty == Ty::I32 && else_ty.is_integer())
+                            || (else_ty == Ty::I32 && then_ty.is_integer());
+                        if !compatible {
                             self.emit_error(
                                 ErrorCode::TypeMismatch,
                                 format!(
@@ -664,6 +674,12 @@ impl<'e> Checker<'e> {
                         }
                         if then_ty == Ty::Never {
                             else_ty
+                        } else if else_ty == Ty::Never {
+                            then_ty.clone()
+                        } else if then_ty == Ty::I32 && else_ty.is_integer() {
+                            else_ty
+                        } else if else_ty == Ty::I32 && then_ty.is_integer() {
+                            then_ty.clone()
                         } else {
                             then_ty
                         }
@@ -689,7 +705,10 @@ impl<'e> Checker<'e> {
                     None => Ty::Unit,
                 };
                 let expected = self.current_return_ty.clone();
-                if val_ty != expected && val_ty != Ty::Never {
+                let coercible = val_ty == expected
+                    || val_ty == Ty::Never
+                    || (val_ty == Ty::I32 && expected.is_integer());
+                if !coercible {
                     self.emit_error(
                         ErrorCode::TypeMismatch,
                         format!(

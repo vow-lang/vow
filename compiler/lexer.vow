@@ -1,0 +1,383 @@
+module Lexer
+
+use token
+
+fn is_whitespace(b: i64) -> bool {
+    b == 32 || b == 9 || b == 10 || b == 13
+}
+
+fn is_alpha(b: i64) -> bool {
+    (b >= 65 && b <= 90) || (b >= 97 && b <= 122)
+}
+
+fn is_digit(b: i64) -> bool {
+    b >= 48 && b <= 57
+}
+
+fn is_ident_start(b: i64) -> bool {
+    is_alpha(b) || b == 95
+}
+
+fn is_ident_cont(b: i64) -> bool {
+    is_alpha(b) || is_digit(b) || b == 95
+}
+
+fn keyword_tag(s: String) -> i64 {
+    if s.eq(String::from("fn")) { tok_kw_fn() }
+    else if s.eq(String::from("let")) { tok_kw_let() }
+    else if s.eq(String::from("mut")) { tok_kw_mut() }
+    else if s.eq(String::from("struct")) { tok_kw_struct() }
+    else if s.eq(String::from("enum")) { tok_kw_enum() }
+    else if s.eq(String::from("match")) { tok_kw_match() }
+    else if s.eq(String::from("if")) { tok_kw_if() }
+    else if s.eq(String::from("else")) { tok_kw_else() }
+    else if s.eq(String::from("while")) { tok_kw_while() }
+    else if s.eq(String::from("loop")) { tok_kw_loop() }
+    else if s.eq(String::from("break")) { tok_kw_break() }
+    else if s.eq(String::from("return")) { tok_kw_return() }
+    else if s.eq(String::from("pub")) { tok_kw_pub() }
+    else if s.eq(String::from("use")) { tok_kw_use() }
+    else if s.eq(String::from("module")) { tok_kw_module() }
+    else if s.eq(String::from("vow")) { tok_kw_vow() }
+    else if s.eq(String::from("requires")) { tok_kw_requires() }
+    else if s.eq(String::from("ensures")) { tok_kw_ensures() }
+    else if s.eq(String::from("invariant")) { tok_kw_invariant() }
+    else if s.eq(String::from("where")) { tok_kw_where() }
+    else if s.eq(String::from("region")) { tok_kw_region() }
+    else if s.eq(String::from("linear")) { tok_kw_linear() }
+    else if s.eq(String::from("extern")) { tok_kw_extern() }
+    else if s.eq(String::from("impl")) { tok_kw_impl() }
+    else if s.eq(String::from("trait")) { tok_kw_trait() }
+    else if s.eq(String::from("type")) { tok_kw_type() }
+    else if s.eq(String::from("for")) { tok_kw_for() }
+    else if s.eq(String::from("in")) { tok_kw_in() }
+    else if s.eq(String::from("as")) { tok_kw_as() }
+    else if s.eq(String::from("read")) { tok_kw_read() }
+    else if s.eq(String::from("write")) { tok_kw_write() }
+    else if s.eq(String::from("io")) { tok_kw_io() }
+    else if s.eq(String::from("panic")) { tok_kw_panic() }
+    else if s.eq(String::from("unsafe")) { tok_kw_unsafe() }
+    else if s.eq(String::from("true")) { tok_lit_bool() }
+    else if s.eq(String::from("false")) { tok_lit_bool() }
+    else if s.eq(String::from("_")) { tok_underscore() }
+    else { tok_ident() }
+}
+
+fn keyword_bool_val(s: String) -> i64 {
+    if s.eq(String::from("true")) { 1 }
+    else { 0 }
+}
+
+fn try_suffix(src: String, pos: i64, src_len: i64) -> i64 {
+    if pos >= src_len { return -1; }
+    let b0: i64 = src.byte_at(pos);
+    if b0 == 105 {
+        if src.byte_at(pos + 1) == 56 && !is_ident_cont(src.byte_at(pos + 2)) {
+            return tok_suffix_i8();
+        }
+        if src.byte_at(pos + 1) == 49 && src.byte_at(pos + 2) == 50 && src.byte_at(pos + 3) == 56 && !is_ident_cont(src.byte_at(pos + 4)) {
+            return tok_suffix_i128();
+        }
+        if src.byte_at(pos + 1) == 49 && src.byte_at(pos + 2) == 54 && !is_ident_cont(src.byte_at(pos + 3)) {
+            return tok_suffix_i16();
+        }
+        if src.byte_at(pos + 1) == 51 && src.byte_at(pos + 2) == 50 && !is_ident_cont(src.byte_at(pos + 3)) {
+            return tok_suffix_i32();
+        }
+        if src.byte_at(pos + 1) == 54 && src.byte_at(pos + 2) == 52 && !is_ident_cont(src.byte_at(pos + 3)) {
+            return tok_suffix_i64();
+        }
+        if src.byte_at(pos + 1) == 115 && src.byte_at(pos + 2) == 105 && src.byte_at(pos + 3) == 122 && src.byte_at(pos + 4) == 101 && !is_ident_cont(src.byte_at(pos + 5)) {
+            return tok_suffix_isize();
+        }
+        -1
+    } else if b0 == 117 {
+        if src.byte_at(pos + 1) == 56 && !is_ident_cont(src.byte_at(pos + 2)) {
+            return tok_suffix_u8();
+        }
+        if src.byte_at(pos + 1) == 49 && src.byte_at(pos + 2) == 50 && src.byte_at(pos + 3) == 56 && !is_ident_cont(src.byte_at(pos + 4)) {
+            return tok_suffix_u128();
+        }
+        if src.byte_at(pos + 1) == 49 && src.byte_at(pos + 2) == 54 && !is_ident_cont(src.byte_at(pos + 3)) {
+            return tok_suffix_u16();
+        }
+        if src.byte_at(pos + 1) == 51 && src.byte_at(pos + 2) == 50 && !is_ident_cont(src.byte_at(pos + 3)) {
+            return tok_suffix_u32();
+        }
+        if src.byte_at(pos + 1) == 54 && src.byte_at(pos + 2) == 52 && !is_ident_cont(src.byte_at(pos + 3)) {
+            return tok_suffix_u64();
+        }
+        if src.byte_at(pos + 1) == 115 && src.byte_at(pos + 2) == 105 && src.byte_at(pos + 3) == 122 && src.byte_at(pos + 4) == 101 && !is_ident_cont(src.byte_at(pos + 5)) {
+            return tok_suffix_usize();
+        }
+        -1
+    } else {
+        -1
+    }
+}
+
+fn suffix_len(suffix: i64) -> i64 {
+    if suffix == tok_suffix_i8() { 2 }
+    else if suffix == tok_suffix_i16() { 3 }
+    else if suffix == tok_suffix_i32() { 3 }
+    else if suffix == tok_suffix_i64() { 3 }
+    else if suffix == tok_suffix_i128() { 4 }
+    else if suffix == tok_suffix_u8() { 2 }
+    else if suffix == tok_suffix_u16() { 3 }
+    else if suffix == tok_suffix_u32() { 3 }
+    else if suffix == tok_suffix_u64() { 3 }
+    else if suffix == tok_suffix_u128() { 4 }
+    else if suffix == tok_suffix_usize() { 5 }
+    else if suffix == tok_suffix_isize() { 5 }
+    else { 0 }
+}
+
+fn empty_str() -> String {
+    String::from("")
+}
+
+fn lex(src: String) -> Vec<Token> {
+    let mut pos: i64 = 0;
+    let src_len: i64 = src.len();
+    let tokens: Vec<Token> = Vec::new();
+
+    while pos < src_len {
+        let b: i64 = src.byte_at(pos);
+        let start: i64 = pos;
+
+        if is_whitespace(b) {
+            pos = pos + 1;
+        } else if is_ident_start(b) {
+            let ident: String = empty_str();
+            while pos < src_len && is_ident_cont(src.byte_at(pos)) {
+                ident.push_byte(src.byte_at(pos));
+                pos = pos + 1;
+            }
+            let tag: i64 = keyword_tag(ident);
+            let iv: i64 = if tag == tok_lit_bool() { keyword_bool_val(ident) } else { 0 };
+            let sv: String = if tag == tok_ident() { ident } else { empty_str() };
+            let tok: Token = make_token(tag, iv, 0, sv, start, pos - start);
+            tokens.push(tok);
+        } else if is_digit(b) {
+            let mut int_val: i64 = 0;
+            while pos < src_len && is_digit(src.byte_at(pos)) {
+                let d: i64 = src.byte_at(pos) - 48;
+                int_val = int_val * 10 + d;
+                pos = pos + 1;
+            }
+            let suffix: i64 = if pos < src_len { try_suffix(src, pos, src_len) } else { -1 };
+            if suffix != -1 {
+                let slen: i64 = suffix_len(suffix);
+                pos = pos + slen;
+                let tok: Token = make_token(tok_lit_int_suffixed(), int_val, suffix, empty_str(), start, pos - start);
+                tokens.push(tok);
+            } else {
+                let tok: Token = make_token(tok_lit_int(), int_val, 0, empty_str(), start, pos - start);
+                tokens.push(tok);
+            }
+        } else if b == 34 {
+            pos = pos + 1;
+            let s: String = empty_str();
+            while pos < src_len && src.byte_at(pos) != 34 {
+                s.push_byte(src.byte_at(pos));
+                pos = pos + 1;
+            }
+            if pos < src_len {
+                pos = pos + 1;
+            }
+            let tok: Token = make_token(tok_lit_string(), 0, 0, s, start, pos - start);
+            tokens.push(tok);
+        } else if b == 43 {
+            let b1: i64 = src.byte_at(pos + 1);
+            if b1 == 33 {
+                pos = pos + 2;
+                let tok: Token = make_token(tok_plus_checked(), 0, 0, empty_str(), start, 2);
+                tokens.push(tok);
+            } else {
+                pos = pos + 1;
+                let tok: Token = make_token(tok_plus(), 0, 0, empty_str(), start, 1);
+                tokens.push(tok);
+            }
+        } else if b == 45 {
+            let b1: i64 = src.byte_at(pos + 1);
+            if b1 == 33 {
+                pos = pos + 2;
+                let tok: Token = make_token(tok_minus_checked(), 0, 0, empty_str(), start, 2);
+                tokens.push(tok);
+            } else if b1 == 62 {
+                pos = pos + 2;
+                let tok: Token = make_token(tok_thin_arrow(), 0, 0, empty_str(), start, 2);
+                tokens.push(tok);
+            } else {
+                pos = pos + 1;
+                let tok: Token = make_token(tok_minus(), 0, 0, empty_str(), start, 1);
+                tokens.push(tok);
+            }
+        } else if b == 42 {
+            let b1: i64 = src.byte_at(pos + 1);
+            if b1 == 33 {
+                pos = pos + 2;
+                let tok: Token = make_token(tok_star_checked(), 0, 0, empty_str(), start, 2);
+                tokens.push(tok);
+            } else {
+                pos = pos + 1;
+                let tok: Token = make_token(tok_star(), 0, 0, empty_str(), start, 1);
+                tokens.push(tok);
+            }
+        } else if b == 47 {
+            let b1: i64 = src.byte_at(pos + 1);
+            if b1 == 33 {
+                pos = pos + 2;
+                let tok: Token = make_token(tok_slash_checked(), 0, 0, empty_str(), start, 2);
+                tokens.push(tok);
+            } else {
+                pos = pos + 1;
+                let tok: Token = make_token(tok_slash(), 0, 0, empty_str(), start, 1);
+                tokens.push(tok);
+            }
+        } else if b == 37 {
+            let b1: i64 = src.byte_at(pos + 1);
+            if b1 == 33 {
+                pos = pos + 2;
+                let tok: Token = make_token(tok_percent_checked(), 0, 0, empty_str(), start, 2);
+                tokens.push(tok);
+            } else {
+                pos = pos + 1;
+                let tok: Token = make_token(tok_percent(), 0, 0, empty_str(), start, 1);
+                tokens.push(tok);
+            }
+        } else if b == 61 {
+            let b1: i64 = src.byte_at(pos + 1);
+            if b1 == 61 {
+                pos = pos + 2;
+                let tok: Token = make_token(tok_eq_eq(), 0, 0, empty_str(), start, 2);
+                tokens.push(tok);
+            } else if b1 == 62 {
+                pos = pos + 2;
+                let tok: Token = make_token(tok_fat_arrow(), 0, 0, empty_str(), start, 2);
+                tokens.push(tok);
+            } else {
+                pos = pos + 1;
+                let tok: Token = make_token(tok_eq(), 0, 0, empty_str(), start, 1);
+                tokens.push(tok);
+            }
+        } else if b == 33 {
+            let b1: i64 = src.byte_at(pos + 1);
+            if b1 == 61 {
+                pos = pos + 2;
+                let tok: Token = make_token(tok_bang_eq(), 0, 0, empty_str(), start, 2);
+                tokens.push(tok);
+            } else {
+                pos = pos + 1;
+                let tok: Token = make_token(tok_bang(), 0, 0, empty_str(), start, 1);
+                tokens.push(tok);
+            }
+        } else if b == 60 {
+            let b1: i64 = src.byte_at(pos + 1);
+            if b1 == 61 {
+                pos = pos + 2;
+                let tok: Token = make_token(tok_lt_eq(), 0, 0, empty_str(), start, 2);
+                tokens.push(tok);
+            } else {
+                pos = pos + 1;
+                let tok: Token = make_token(tok_lt(), 0, 0, empty_str(), start, 1);
+                tokens.push(tok);
+            }
+        } else if b == 62 {
+            let b1: i64 = src.byte_at(pos + 1);
+            if b1 == 61 {
+                pos = pos + 2;
+                let tok: Token = make_token(tok_gt_eq(), 0, 0, empty_str(), start, 2);
+                tokens.push(tok);
+            } else {
+                pos = pos + 1;
+                let tok: Token = make_token(tok_gt(), 0, 0, empty_str(), start, 1);
+                tokens.push(tok);
+            }
+        } else if b == 38 {
+            let b1: i64 = src.byte_at(pos + 1);
+            if b1 == 38 {
+                pos = pos + 2;
+                let tok: Token = make_token(tok_amp_amp(), 0, 0, empty_str(), start, 2);
+                tokens.push(tok);
+            } else {
+                pos = pos + 1;
+                let tok: Token = make_token(tok_amp(), 0, 0, empty_str(), start, 1);
+                tokens.push(tok);
+            }
+        } else if b == 124 {
+            let b1: i64 = src.byte_at(pos + 1);
+            if b1 == 124 {
+                pos = pos + 2;
+                let tok: Token = make_token(tok_pipe_pipe(), 0, 0, empty_str(), start, 2);
+                tokens.push(tok);
+            } else {
+                pos = pos + 1;
+            }
+        } else if b == 58 {
+            let b1: i64 = src.byte_at(pos + 1);
+            if b1 == 58 {
+                pos = pos + 2;
+                let tok: Token = make_token(tok_colon_colon(), 0, 0, empty_str(), start, 2);
+                tokens.push(tok);
+            } else {
+                pos = pos + 1;
+                let tok: Token = make_token(tok_colon(), 0, 0, empty_str(), start, 1);
+                tokens.push(tok);
+            }
+        } else if b == 46 {
+            let b1: i64 = src.byte_at(pos + 1);
+            if b1 == 46 {
+                pos = pos + 2;
+                let tok: Token = make_token(tok_dot_dot(), 0, 0, empty_str(), start, 2);
+                tokens.push(tok);
+            } else {
+                pos = pos + 1;
+                let tok: Token = make_token(tok_dot(), 0, 0, empty_str(), start, 1);
+                tokens.push(tok);
+            }
+        } else if b == 123 {
+            pos = pos + 1;
+            let tok: Token = make_token(tok_lbrace(), 0, 0, empty_str(), start, 1);
+            tokens.push(tok);
+        } else if b == 125 {
+            pos = pos + 1;
+            let tok: Token = make_token(tok_rbrace(), 0, 0, empty_str(), start, 1);
+            tokens.push(tok);
+        } else if b == 40 {
+            pos = pos + 1;
+            let tok: Token = make_token(tok_lparen(), 0, 0, empty_str(), start, 1);
+            tokens.push(tok);
+        } else if b == 41 {
+            pos = pos + 1;
+            let tok: Token = make_token(tok_rparen(), 0, 0, empty_str(), start, 1);
+            tokens.push(tok);
+        } else if b == 91 {
+            pos = pos + 1;
+            let tok: Token = make_token(tok_lbracket(), 0, 0, empty_str(), start, 1);
+            tokens.push(tok);
+        } else if b == 93 {
+            pos = pos + 1;
+            let tok: Token = make_token(tok_rbracket(), 0, 0, empty_str(), start, 1);
+            tokens.push(tok);
+        } else if b == 44 {
+            pos = pos + 1;
+            let tok: Token = make_token(tok_comma(), 0, 0, empty_str(), start, 1);
+            tokens.push(tok);
+        } else if b == 59 {
+            pos = pos + 1;
+            let tok: Token = make_token(tok_semicolon(), 0, 0, empty_str(), start, 1);
+            tokens.push(tok);
+        } else if b == 63 {
+            pos = pos + 1;
+            let tok: Token = make_token(tok_question(), 0, 0, empty_str(), start, 1);
+            tokens.push(tok);
+        } else {
+            pos = pos + 1;
+        }
+    }
+
+    let eof: Token = make_token(tok_eof(), 0, 0, empty_str(), pos, 0);
+    tokens.push(eof);
+    tokens
+}

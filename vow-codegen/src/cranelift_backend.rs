@@ -56,8 +56,12 @@ fn build_phi_upsilon_data(ir_func: &IrFunction) -> PhiUpsilonData {
         for inst in &block.insts {
             match inst.opcode {
                 Opcode::Phi => {
-                    block_phis.entry(block.id).or_default().push(inst.id);
-                    phi_home.insert(inst.id, block.id);
+                    // Only track phis that have a Cranelift representation.
+                    // Unit-typed phis don't become block params so must be excluded.
+                    if ir_ty_to_cranelift(inst.ty).is_some() {
+                        block_phis.entry(block.id).or_default().push(inst.id);
+                        phi_home.insert(inst.id, block.id);
+                    }
                 }
                 Opcode::Upsilon => {
                     if let InstData::PhiTarget(phi_id) = inst.data
@@ -72,6 +76,17 @@ fn build_phi_upsilon_data(ir_func: &IrFunction) -> PhiUpsilonData {
                 _ => {}
             }
         }
+    }
+
+    if std::env::var("VOW_DEBUG_IR").is_ok() {
+        for block in &ir_func.blocks {
+            eprintln!("IR block {:?}:", block.id);
+            for inst in &block.insts {
+                eprintln!("  {:?} {:?} args={:?} data={:?}", inst.id, inst.opcode, inst.args, inst.data);
+            }
+        }
+        eprintln!("block_phis: {:?}", block_phis);
+        eprintln!("block_upsilons: {:?}", block_upsilons);
     }
 
     PhiUpsilonData {
@@ -162,6 +177,15 @@ fn build_signature(ir_func: &IrFunction, call_conv: cranelift_codegen::isa::Call
         sig.returns.push(AbiParam::new(cl_ty));
     }
     sig
+}
+
+fn coerce_return_value(builder: &mut FunctionBuilder<'_>, val: Value, return_ty: IrTy) -> Value {
+    let val_ty = builder.func.dfg.value_type(val);
+    match (val_ty, ir_ty_to_cranelift(return_ty)) {
+        (types::I64, Some(types::I32)) => builder.ins().ireduce(types::I32, val),
+        (types::I32, Some(types::I64)) => builder.ins().sextend(types::I64, val),
+        _ => val,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -499,6 +523,7 @@ fn lower_inst(
                 builder.ins().return_(&[]);
             } else if let Some(&val_id) = inst.args.first() {
                 if let Some(&val) = ctx.value_map.get(&val_id) {
+                    let val = coerce_return_value(builder, val, ctx.return_ty);
                     builder.ins().return_(&[val]);
                 } else {
                     builder.ins().return_(&[]);
@@ -1060,6 +1085,15 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // dest ptr
             sig.params.push(AbiParam::new(types::I64)); // src ptr
         }
+        "__vow_string_byte_at" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.params.push(AbiParam::new(types::I64)); // index
+            sig.returns.push(AbiParam::new(types::I64)); // byte value or -1
+        }
+        "__vow_string_push_byte" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.params.push(AbiParam::new(types::I64)); // byte value
+        }
         "__vow_string_from_i64" => {
             sig.params.push(AbiParam::new(types::I64)); // value
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
@@ -1253,9 +1287,9 @@ impl Backend for CraneliftBackend {
                 &extern_func_ids,
             )?;
 
-            obj_module
-                .define_function(cl_id, &mut cl_ctx)
-                .map_err(|e| CodegenError::FunctionDefine(e.to_string()))?;
+            if let Err(e) = obj_module.define_function(cl_id, &mut cl_ctx) {
+                return Err(CodegenError::FunctionDefine(e.to_string()));
+            }
             obj_module.clear_context(&mut cl_ctx);
         }
 

@@ -55,6 +55,17 @@ impl Parser {
     pub fn parse_expr_inner(&mut self, min_bp: u8) -> Expr {
         let mut lhs = self.parse_prefix();
 
+        if matches!(
+            lhs.kind,
+            ExprKind::If { .. }
+                | ExprKind::While { .. }
+                | ExprKind::Loop { .. }
+                | ExprKind::Block(_)
+                | ExprKind::Match { .. }
+        ) {
+            return lhs;
+        }
+
         loop {
             let kind = self.peek_kind().clone();
 

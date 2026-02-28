@@ -371,8 +371,32 @@ impl<'src> Lexer<'src> {
                     Span::new(start as u32, len),
                 ));
             }
-            value.push(b as char);
-            self.pos += 1;
+            if b == b'\\' {
+                self.pos += 1;
+                if self.pos >= self.src.len() {
+                    return Err(LexError {
+                        message: "unterminated string escape".to_string(),
+                        span: Span::new(start as u32, (self.pos - start) as u32),
+                    });
+                }
+                let esc = self.current_byte();
+                match esc {
+                    b'n' => value.push('\n'),
+                    b't' => value.push('\t'),
+                    b'r' => value.push('\r'),
+                    b'\\' => value.push('\\'),
+                    b'"' => value.push('"'),
+                    b'0' => value.push('\0'),
+                    _ => {
+                        value.push('\\');
+                        value.push(esc as char);
+                    }
+                }
+                self.pos += 1;
+            } else {
+                value.push(b as char);
+                self.pos += 1;
+            }
         }
     }
 }

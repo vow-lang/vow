@@ -16,7 +16,7 @@ use crate::types::{
 
 fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
     match name {
-        "print_str" => Some(("__vow_print_str", Ty::Unit)),
+        "print_str" => Some(("__vow_string_print", Ty::Unit)),
         "print_i64" => Some(("__vow_print_i64", Ty::Unit)),
         "eprintln_str" => Some(("__vow_eprintln_str", Ty::Unit)),
         "fs_read" => Some(("__vow_fs_read", Ty::Ptr)),
@@ -51,7 +51,6 @@ pub struct LowerCtx {
     pub(super) vow_block: Option<VowBlock>,
     pub(super) string_pool: Vec<String>,
     func_index: HashMap<String, (FuncId, Ty)>,
-    pub(super) current_return_ty: Ty,
     // struct name → field names in declaration order
     pub(super) struct_field_map: HashMap<String, Vec<String>>,
     // enum name → variant names in declaration order (index = tag)
@@ -91,7 +90,6 @@ impl LowerCtx {
             .entry("Result".to_string())
             .or_insert_with(|| vec!["Ok".to_string(), "Err".to_string()]);
         LowerCtx {
-            current_return_ty: return_ty,
             func,
             current_block: BlockId(0),
             next_inst_id: 0,
@@ -161,6 +159,16 @@ impl LowerCtx {
         None
     }
 
+    /// Snapshot the current scope (all variable bindings) for save/restore.
+    pub(super) fn snapshot_scope(&self) -> Vec<HashMap<String, InstId>> {
+        self.scope.clone()
+    }
+
+    /// Restore scope to a previously saved snapshot.
+    pub(super) fn restore_scope(&mut self, snap: Vec<HashMap<String, InstId>>) {
+        self.scope = snap;
+    }
+
     pub(super) fn new_block(&mut self) -> BlockId {
         let id = BlockId(self.func.blocks.len() as u32);
         self.func.blocks.push(BasicBlock { id, insts: vec![] });
@@ -208,6 +216,20 @@ impl LowerCtx {
         let block_idx = self.current_block.0 as usize;
         self.func.blocks[block_idx].insts.push(inst);
         id
+    }
+
+    pub(super) fn is_terminated(&self) -> bool {
+        let block_idx = self.current_block.0 as usize;
+        self.func.blocks[block_idx]
+            .insts
+            .last()
+            .map(|i| {
+                matches!(
+                    i.opcode,
+                    Opcode::Return | Opcode::Jump | Opcode::Branch | Opcode::Unreachable
+                )
+            })
+            .unwrap_or(false)
     }
 
     pub fn finish(self) -> (Function, Vec<String>) {
@@ -293,6 +315,30 @@ fn collect_assigned_in_expr(expr: &Expr, seen: &mut HashSet<String>, out: &mut V
     }
 }
 
+/// Return variables that are assigned in `then_branch` or `else_branch` AND
+/// currently exist in scope (so they're live across the branch).
+fn collect_if_mutations(
+    ctx: &LowerCtx,
+    then_branch: &Block,
+    else_branch: Option<&Expr>,
+) -> Vec<(String, InstId)> {
+    let mut seen = HashSet::new();
+    let mut names = vec![];
+    for s in &then_branch.stmts {
+        collect_assigned_in_stmt(s, &mut seen, &mut names);
+    }
+    if let Some(e) = &then_branch.trailing_expr {
+        collect_assigned_in_expr(e, &mut seen, &mut names);
+    }
+    if let Some(e) = else_branch {
+        collect_assigned_in_expr(e, &mut seen, &mut names);
+    }
+    names
+        .into_iter()
+        .filter_map(|name| ctx.lookup(&name).map(|id| (name, id)))
+        .collect()
+}
+
 pub(super) fn lower_expr_pub(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
     lower_expr(ctx, expr)
 }
@@ -302,23 +348,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
     match &expr.kind {
         ExprKind::Lit(lit) => match lit {
             Lit::Int(v) => {
-                if ctx.current_return_ty == Ty::I32 {
-                    ctx.emit(
-                        Opcode::ConstI32,
-                        Ty::I32,
-                        vec![],
-                        InstData::ConstI32(*v as i32),
-                        span,
-                    )
-                } else {
-                    ctx.emit(
-                        Opcode::ConstI64,
-                        Ty::I64,
-                        vec![],
-                        InstData::ConstI64(*v as i64),
-                        span,
-                    )
-                }
+                ctx.emit(
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    vec![],
+                    InstData::ConstI64(*v as i64),
+                    span,
+                )
             }
             Lit::Float(v) => ctx.emit(
                 Opcode::ConstF64,
@@ -336,13 +372,22 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ),
             Lit::String(s) => {
                 let idx = ctx.intern_str(s);
-                ctx.emit(
+                let cstr = ctx.emit(
                     Opcode::ConstStr,
                     Ty::Ptr,
                     vec![],
                     InstData::ConstStr(idx),
                     span,
-                )
+                );
+                let vow_str = ctx.emit(
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![cstr],
+                    InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    span,
+                );
+                ctx.inst_struct_type.insert(vow_str, "String".to_string());
+                vow_str
             }
         },
         ExprKind::Ident(name) => ctx
@@ -358,13 +403,22 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             let val = lower_expr(ctx, operand);
             match op {
                 UnOp::Not => ctx.emit(Opcode::Not, Ty::Bool, vec![val], InstData::None, span),
-                UnOp::Neg => ctx.emit(
-                    Opcode::WrappingSubI64,
-                    Ty::I64,
-                    vec![val],
-                    InstData::None,
-                    span,
-                ),
+                UnOp::Neg => {
+                    let zero = ctx.emit(
+                        Opcode::ConstI64,
+                        Ty::I64,
+                        vec![],
+                        InstData::ConstI64(0),
+                        span,
+                    );
+                    ctx.emit(
+                        Opcode::WrappingSubI64,
+                        Ty::I64,
+                        vec![zero, val],
+                        InstData::None,
+                        span,
+                    )
+                }
             }
         }
         ExprKind::Call { callee, args } => {
@@ -405,6 +459,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             then_branch,
             else_branch,
         } => {
+            // Collect variables that may be mutated in any branch AND exist in outer scope.
+            let mutations: Vec<(String, InstId)> =
+                collect_if_mutations(ctx, then_branch, else_branch.as_deref());
+
             let cond_id = lower_expr(ctx, condition);
             let then_block = ctx.new_block();
             let else_block = ctx.new_block();
@@ -421,52 +479,142 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 span,
             );
 
+            // Snapshot scope so then-branch mutations don't bleed into else-branch.
+            let scope_snap = ctx.snapshot_scope();
+
+            // Lower then-branch.
             ctx.switch_to_block(then_block);
             let then_val = lower_block(ctx, then_branch);
-            let then_upsilon_id = ctx.emit(
-                Opcode::Upsilon,
-                Ty::Unit,
-                vec![then_val],
-                InstData::PhiTarget(InstId(u32::MAX)),
-                span,
-            );
-            ctx.emit(
-                Opcode::Jump,
-                Ty::Unit,
-                vec![],
-                InstData::JumpTarget(merge_block),
-                span,
-            );
+            let then_terminated = ctx.is_terminated();
+            let then_upsilon_block = ctx.current_block;
+            // Capture mutation values from then-branch (or pre-if value if not modified).
+            let then_mut_vals: Vec<InstId> = mutations
+                .iter()
+                .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
+                .collect();
+            let then_upsilon_id = if !then_terminated {
+                let u = ctx.emit(
+                    Opcode::Upsilon,
+                    Ty::Unit,
+                    vec![then_val],
+                    InstData::PhiTarget(InstId(u32::MAX)),
+                    span,
+                );
+                ctx.emit(
+                    Opcode::Jump,
+                    Ty::Unit,
+                    vec![],
+                    InstData::JumpTarget(merge_block),
+                    span,
+                );
+                Some(u)
+            } else {
+                None
+            };
 
+            // Restore scope so else-branch starts from the pre-if state.
+            ctx.restore_scope(scope_snap.clone());
+
+            // Lower else-branch.
             ctx.switch_to_block(else_block);
             let else_val = if let Some(else_expr) = else_branch {
                 lower_expr(ctx, else_expr)
             } else {
                 ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
             };
-            let else_upsilon_id = ctx.emit(
-                Opcode::Upsilon,
-                Ty::Unit,
-                vec![else_val],
-                InstData::PhiTarget(InstId(u32::MAX)),
-                span,
-            );
-            ctx.emit(
-                Opcode::Jump,
-                Ty::Unit,
-                vec![],
-                InstData::JumpTarget(merge_block),
-                span,
-            );
+            let else_terminated = ctx.is_terminated();
+            let else_upsilon_block = ctx.current_block;
+            let else_mut_vals: Vec<InstId> = mutations
+                .iter()
+                .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
+                .collect();
+            let else_upsilon_id = if !else_terminated {
+                let u = ctx.emit(
+                    Opcode::Upsilon,
+                    Ty::Unit,
+                    vec![else_val],
+                    InstData::PhiTarget(InstId(u32::MAX)),
+                    span,
+                );
+                ctx.emit(
+                    Opcode::Jump,
+                    Ty::Unit,
+                    vec![],
+                    InstData::JumpTarget(merge_block),
+                    span,
+                );
+                Some(u)
+            } else {
+                None
+            };
 
-            let phi_ty = ctx.inst_ty(then_val);
+            // Restore scope before building merge.
+            ctx.restore_scope(scope_snap);
+
             ctx.switch_to_block(merge_block);
-            let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
 
-            backpatch_upsilon(ctx, then_block, then_upsilon_id, phi_id);
-            backpatch_upsilon(ctx, else_block, else_upsilon_id, phi_id);
+            // Create Phis for each mutated variable, wiring Upsilons from both branches.
+            // Upsilons are appended even after the Jump (they are no-ops in codegen but
+            // are found by collect_target_block_args which scans all instructions).
+            for (i, (name, pre_id)) in mutations.iter().enumerate() {
+                let t_val = then_mut_vals[i];
+                let e_val = else_mut_vals[i];
+                if t_val == *pre_id && e_val == *pre_id {
+                    // Variable unchanged by both branches — no phi needed.
+                    continue;
+                }
+                let phi_ty = ctx.inst_ty(t_val);
+                let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
+                if !then_terminated {
+                    ctx.switch_to_block(then_upsilon_block);
+                    ctx.emit(
+                        Opcode::Upsilon,
+                        phi_ty,
+                        vec![t_val],
+                        InstData::PhiTarget(phi_id),
+                        span,
+                    );
+                    ctx.switch_to_block(merge_block);
+                }
+                if !else_terminated {
+                    ctx.switch_to_block(else_upsilon_block);
+                    ctx.emit(
+                        Opcode::Upsilon,
+                        phi_ty,
+                        vec![e_val],
+                        InstData::PhiTarget(phi_id),
+                        span,
+                    );
+                    ctx.switch_to_block(merge_block);
+                }
+                ctx.assign(name, phi_id);
+            }
 
-            phi_id
+            match (then_upsilon_id, else_upsilon_id) {
+                (None, None) => {
+                    // Both branches terminate — merge block is unreachable.
+                    ctx.emit(Opcode::Unreachable, Ty::Unit, vec![], InstData::None, span)
+                }
+                (Some(t_up), None) => {
+                    let phi_ty = ctx.inst_ty(then_val);
+                    let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
+                    backpatch_upsilon(ctx, then_upsilon_block, t_up, phi_id);
+                    phi_id
+                }
+                (None, Some(e_up)) => {
+                    let phi_ty = ctx.inst_ty(else_val);
+                    let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
+                    backpatch_upsilon(ctx, else_upsilon_block, e_up, phi_id);
+                    phi_id
+                }
+                (Some(t_up), Some(e_up)) => {
+                    let phi_ty = ctx.inst_ty(then_val);
+                    let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
+                    backpatch_upsilon(ctx, then_upsilon_block, t_up, phi_id);
+                    backpatch_upsilon(ctx, else_upsilon_block, e_up, phi_id);
+                    phi_id
+                }
+            }
         }
         ExprKind::Block(block) => {
             ctx.push_scope();
@@ -962,6 +1110,36 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         span,
                     )
                 }
+                (Some("String"), "byte_at") => {
+                    let idx_id = args
+                        .first()
+                        .map(|e| lower_expr(ctx, e))
+                        .unwrap_or_else(|| {
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                        });
+                    ctx.emit(
+                        Opcode::Call,
+                        Ty::I64,
+                        vec![recv_id, idx_id],
+                        InstData::CallExtern("__vow_string_byte_at".to_string()),
+                        span,
+                    )
+                }
+                (Some("String"), "push_byte") => {
+                    let byte_id = args
+                        .first()
+                        .map(|e| lower_expr(ctx, e))
+                        .unwrap_or_else(|| {
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                        });
+                    ctx.emit(
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![recv_id, byte_id],
+                        InstData::CallExtern("__vow_string_push_byte".to_string()),
+                        span,
+                    )
+                }
                 (Some("HashMap"), "len") => ctx.emit(
                     Opcode::Call,
                     Ty::I64,
@@ -1202,9 +1380,25 @@ fn backpatch_upsilon(ctx: &mut LowerCtx, block_id: BlockId, upsilon_id: InstId, 
 
 fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
     match stmt {
-        Stmt::Let { pattern, init, .. } => {
+        Stmt::Let { pattern, init, ty, .. } => {
             let val = lower_expr(ctx, init);
             if let PatKind::Ident { name, .. } = &pattern.kind {
+                if let Some(ann) = ty {
+                    match ann {
+                        AstType::Named { name: type_name, .. } => {
+                            match type_name.as_str() {
+                                "i32" | "i64" | "f32" | "f64" | "bool" => {}
+                                _ => {
+                                    ctx.inst_struct_type.insert(val, type_name.clone());
+                                }
+                            }
+                        }
+                        AstType::Generic { name: type_name, .. } => {
+                            ctx.inst_struct_type.insert(val, type_name.clone());
+                        }
+                        _ => {}
+                    }
+                }
                 ctx.define(name.clone(), val);
             }
         }
@@ -1223,9 +1417,16 @@ fn lower_block(ctx: &mut LowerCtx, block: &Block) -> InstId {
 
 fn lower_block_inner(ctx: &mut LowerCtx, block: &Block) -> InstId {
     for stmt in &block.stmts {
+        if ctx.is_terminated() {
+            break;
+        }
         lower_stmt(ctx, stmt);
     }
-    if let Some(expr) = &block.trailing_expr {
+    if ctx.is_terminated() {
+        // Block already terminated (e.g. by a return statement); no trailing expr.
+        // Return a sentinel — callers that care will check is_terminated().
+        InstId(u32::MAX)
+    } else if let Some(expr) = &block.trailing_expr {
         lower_expr(ctx, expr)
     } else {
         ctx.emit(

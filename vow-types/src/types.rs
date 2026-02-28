@@ -79,7 +79,7 @@ impl Ty {
             "f32" => Some(Ty::F32),
             "f64" => Some(Ty::F64),
             "bool" => Some(Ty::Bool),
-            "str" => Some(Ty::Str),
+            "str" | "String" => Some(Ty::Str),
             _ => None,
         }
     }

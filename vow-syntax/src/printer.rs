@@ -605,7 +605,22 @@ fn print_lit(lit: &Lit) -> String {
             }
         }
         Lit::Bool(b) => b.to_string(),
-        Lit::String(s) => format!("\"{}\"", s),
+        Lit::String(s) => {
+            let mut out = "\"".to_string();
+            for ch in s.chars() {
+                match ch {
+                    '\n' => out.push_str("\\n"),
+                    '\t' => out.push_str("\\t"),
+                    '\r' => out.push_str("\\r"),
+                    '\\' => out.push_str("\\\\"),
+                    '"' => out.push_str("\\\""),
+                    '\0' => out.push_str("\\0"),
+                    c => out.push(c),
+                }
+            }
+            out.push('"');
+            out
+        }
     }
 }
 

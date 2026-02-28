@@ -1,0 +1,20 @@
+module Main
+
+use lexer
+use token
+
+fn main() -> i32 [io] {
+    let argv: Vec<String> = args();
+    let argc: i64 = argv.len();
+    if argc == 0 {
+        eprintln_str("usage: main <file.vow>");
+        return 1;
+    }
+    let path: String = argv[0];
+    let src: String = fs_read(path);
+    let tokens: Vec<Token> = lex(src);
+    let n: i64 = tokens.len();
+    print_i64(n);
+    print_str("\n");
+    0
+}

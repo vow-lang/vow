@@ -75,9 +75,10 @@ pub unsafe extern "C" fn __vow_violation(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_print_str(ptr: *const i8) {
-    let s = unsafe { CStr::from_ptr(ptr) }.to_string_lossy();
-    print!("{s}");
+pub unsafe extern "C" fn __vow_print_str(s: *const u8) {
+    let v = unsafe { &*(s as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let _ = std::io::stdout().write_all(bytes);
     let _ = std::io::stdout().flush();
 }
 
@@ -292,41 +293,69 @@ pub unsafe extern "C" fn __vow_string_print(s: *const u8) {
     let _ = std::io::stdout().flush();
 }
 
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_byte_at(s: *const u8, idx: i64) -> i64 {
+    let v = unsafe { &*(s as *const VowVec) };
+    if idx < 0 || idx as usize >= v.len {
+        return -1;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    bytes[idx as usize] as i64
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_push_byte(s: *mut u8, byte: i64) {
+    let b = byte as u8;
+    unsafe { __vow_vec_push(s, &b as *const u8, 1, 1) };
+}
+
 // ---------------------------------------------------------------------------
 // File I/O runtime
 // ---------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_fs_read(path_ptr: *const i8) -> *mut u8 {
+pub unsafe extern "C" fn __vow_fs_read(path_ptr: *const u8) -> *mut u8 {
     if path_ptr.is_null() {
         return std::ptr::null_mut();
     }
-    let path = unsafe { CStr::from_ptr(path_ptr) }.to_string_lossy();
-    match std::fs::read(path.as_ref()) {
+    let v = unsafe { &*(path_ptr as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let path = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    match std::fs::read(path) {
         Ok(bytes) => unsafe { __vow_string_new(bytes.as_ptr() as *const i8, bytes.len()) },
         Err(_) => std::ptr::null_mut(),
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_fs_write(path_ptr: *const i8, data_ptr: *const u8) -> i32 {
+pub unsafe extern "C" fn __vow_fs_write(path_ptr: *const u8, data_ptr: *const u8) -> i32 {
     if path_ptr.is_null() || data_ptr.is_null() {
         return -1;
     }
-    let path = unsafe { CStr::from_ptr(path_ptr) }.to_string_lossy();
+    let vp = unsafe { &*(path_ptr as *const VowVec) };
+    let path_bytes = unsafe { std::slice::from_raw_parts(vp.ptr, vp.len) };
+    let path = match std::str::from_utf8(path_bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
     let vd = unsafe { &*(data_ptr as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(vd.ptr, vd.len) };
-    match std::fs::write(path.as_ref(), bytes) {
+    match std::fs::write(path, bytes) {
         Ok(_) => 0,
         Err(_) => -1,
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_eprintln_str(ptr: *const i8) {
-    if !ptr.is_null() {
-        let s = unsafe { CStr::from_ptr(ptr) }.to_string_lossy();
-        let _ = writeln!(std::io::stderr(), "{s}");
+pub unsafe extern "C" fn __vow_eprintln_str(s: *const u8) {
+    if !s.is_null() {
+        let v = unsafe { &*(s as *const VowVec) };
+        let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+        let _ = std::io::stderr().write_all(bytes);
+        let _ = writeln!(std::io::stderr());
     }
 }
 
