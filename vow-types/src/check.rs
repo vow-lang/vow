@@ -749,7 +749,11 @@ impl<'e> Checker<'e> {
             ExprKind::Assign { lhs, rhs } => {
                 let lhs_ty = self.check_expr(lhs);
                 let rhs_ty = self.check_expr(rhs);
-                if lhs_ty != rhs_ty && lhs_ty != Ty::Never && rhs_ty != Ty::Never {
+                let coercible = (rhs_ty == Ty::I32 && lhs_ty.is_integer())
+                    || lhs_ty == rhs_ty
+                    || lhs_ty == Ty::Never
+                    || rhs_ty == Ty::Never;
+                if !coercible {
                     self.emit_error(
                         ErrorCode::TypeMismatch,
                         format!(

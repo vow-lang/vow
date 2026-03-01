@@ -159,6 +159,34 @@ fn arena_add_type(a: AstArena, tag: i64, av: i64, bv: i64, span: i64) -> i64 {
 }
 
 fn type_tag(a: AstArena, tid: i64) -> i64 { a.type_data[tid * 4] }
+fn type_a(a: AstArena, tid: i64) -> i64 { a.type_data[tid * 4 + 1] }
+fn type_b(a: AstArena, tid: i64) -> i64 { a.type_data[tid * 4 + 2] }
+
+fn blk_stmts(a: AstArena, bid: i64) -> i64 { a.blk_data[bid * 3] }
+fn blk_trail(a: AstArena, bid: i64) -> i64 { a.blk_data[bid * 3 + 1] }
+
+fn stmt_tag(a: AstArena, sid: i64) -> i64 { a.stmt_data[sid * 5] }
+fn stmt_a(a: AstArena, sid: i64) -> i64 { a.stmt_data[sid * 5 + 1] }
+fn stmt_b(a: AstArena, sid: i64) -> i64 { a.stmt_data[sid * 5 + 2] }
+fn stmt_c(a: AstArena, sid: i64) -> i64 { a.stmt_data[sid * 5 + 3] }
+
+fn pat_tag(a: AstArena, pid: i64) -> i64 { a.pat_data[pid * 4] }
+fn pat_a(a: AstArena, pid: i64) -> i64 { a.pat_data[pid * 4 + 1] }
+fn pat_b(a: AstArena, pid: i64) -> i64 { a.pat_data[pid * 4 + 2] }
+
+fn fn_name_sid(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 6] }
+fn fn_params_lid(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 6 + 1] }
+fn fn_ret_ast_tid(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 6 + 2] }
+fn fn_eff(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 6 + 3] }
+fn fn_body_bid(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 6 + 4] }
+
+fn sdef_name_sid(a: AstArena, sid: i64) -> i64 { a.sdef_data[sid * 4] }
+fn sdef_fields_lid(a: AstArena, sid: i64) -> i64 { a.sdef_data[sid * 4 + 1] }
+
+fn edef_name_sid(a: AstArena, eid: i64) -> i64 { a.edef_data[eid * 3] }
+fn edef_variants_lid(a: AstArena, eid: i64) -> i64 { a.edef_data[eid * 3 + 1] }
+
+fn arena_str(a: AstArena, sid: i64) -> String { a.strs[sid] }
 
 fn arena_add_stmt(a: AstArena, tag: i64, av: i64, bv: i64, cv: i64, span: i64) -> i64 {
     let sid: i64 = a.stmt_data.len() / 5;

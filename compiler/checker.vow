@@ -1,0 +1,857 @@
+module Checker
+
+use ast
+use types
+use env
+
+fn primitive_tid(ts: TyStore, name: String) -> i64 {
+    if name == String::from("i8") { return CTY_I8(); }
+    if name == String::from("i16") { return CTY_I16(); }
+    if name == String::from("i32") { return CTY_I32(); }
+    if name == String::from("i64") { return CTY_I64(); }
+    if name == String::from("i128") { return CTY_I128(); }
+    if name == String::from("u8") { return CTY_U8(); }
+    if name == String::from("u16") { return CTY_U16(); }
+    if name == String::from("u32") { return CTY_U32(); }
+    if name == String::from("u64") { return CTY_U64(); }
+    if name == String::from("u128") { return CTY_U128(); }
+    if name == String::from("f32") { return CTY_F32(); }
+    if name == String::from("f64") { return CTY_F64(); }
+    if name == String::from("bool") { return CTY_BOOL(); }
+    if name == String::from("String") { return CTY_STR(); }
+    if name == String::from("str") { return CTY_STR(); }
+    -1
+}
+
+fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
+    if ast_tid == -1 {
+        return CTY_UNIT();
+    }
+    let a: AstArena = m.arena;
+    let tag: i64 = type_tag(a, ast_tid);
+    if tag == TY_UNIT() {
+        return CTY_UNIT();
+    }
+    if tag == TY_NEVER() {
+        return CTY_NEVER();
+    }
+    if tag == TY_NAMED() {
+        let name_sid: i64 = type_a(a, ast_tid);
+        let name: String = arena_str(a, name_sid);
+        let ptid: i64 = primitive_tid(e.ts, name);
+        if ptid != -1 {
+            return ptid;
+        }
+        let sidx: i64 = env_lookup_struct(e, name);
+        if sidx != -1 {
+            return ts_make_struct(e.ts, name);
+        }
+        return ts_make_enum(e.ts, name);
+    }
+    if tag == TY_GENERIC() {
+        let name_sid: i64 = type_a(a, ast_tid);
+        let name: String = arena_str(a, name_sid);
+        let args_lid: i64 = type_b(a, ast_tid);
+        let n: i64 = list_len(a, args_lid);
+        let arg_tids: Vec<i64> = Vec::new();
+        let mut i: i64 = 0;
+        while i < n {
+            let arg_ast_tid: i64 = list_get(a, args_lid, i);
+            arg_tids.push(resolve_ast_ty(e, m, arg_ast_tid));
+            i = i + 1;
+        }
+        let base_ptid: i64 = primitive_tid(e.ts, name);
+        let base_tid: i64 = if base_ptid != -1 {
+            base_ptid
+        } else {
+            let sidx: i64 = env_lookup_struct(e, name);
+            if sidx != -1 {
+                ts_make_struct(e.ts, name)
+            } else {
+                ts_make_enum(e.ts, name)
+            }
+        };
+        return ts_make_applied(e.ts, base_tid, arg_tids);
+    }
+    if tag == TY_REF() {
+        let inner: i64 = resolve_ast_ty(e, m, type_a(a, ast_tid));
+        return ty_add(e.ts, CTY_REF(), inner, 0);
+    }
+    if tag == TY_TUPLE() {
+        let elems_lid: i64 = type_a(a, ast_tid);
+        let n: i64 = list_len(a, elems_lid);
+        let elem_tids: Vec<i64> = Vec::new();
+        let mut i: i64 = 0;
+        while i < n {
+            elem_tids.push(resolve_ast_ty(e, m, list_get(a, elems_lid, i)));
+            i = i + 1;
+        }
+        let lid: i64 = ts_add_args(e.ts, elem_tids);
+        return ty_add(e.ts, CTY_TUPLE(), lid, 0);
+    }
+    CTY_UNIT()
+}
+
+fn check_module(e: CheckEnv, m: Module) [io] {
+    let n: i64 = m.items.len();
+
+    let mut i: i64 = 0;
+    while i < n {
+        let item: i64 = m.items[i];
+        let kind: i64 = item_kind(item);
+        let id: i64 = item_id(item);
+        if kind == ITEM_FN() {
+            register_fn(e, m, id);
+        } else if kind == ITEM_STRUCT() {
+            register_struct(e, m, id);
+        } else if kind == ITEM_ENUM() {
+            register_enum(e, m, id);
+        }
+        i = i + 1;
+    }
+
+    i = 0;
+    while i < n {
+        let item: i64 = m.items[i];
+        let kind: i64 = item_kind(item);
+        let id: i64 = item_id(item);
+        if kind == ITEM_FN() {
+            check_fn(e, m, id);
+        }
+        i = i + 1;
+    }
+}
+
+fn register_fn(e: CheckEnv, m: Module, fid: i64) [io] {
+    let a: AstArena = m.arena;
+    let name_sid: i64 = fn_name_sid(a, fid);
+    let name: String = arena_str(a, name_sid);
+    let params_lid: i64 = fn_params_lid(a, fid);
+    let n_pairs: i64 = list_len(a, params_lid);
+    let n_params: i64 = n_pairs / 2;
+    let param_tids: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n_params {
+        let ast_tid: i64 = list_get(a, params_lid, i * 2 + 1);
+        param_tids.push(resolve_ast_ty(e, m, ast_tid));
+        i = i + 1;
+    }
+    let ret_ast_tid: i64 = fn_ret_ast_tid(a, fid);
+    let ret_tid: i64 = resolve_ast_ty(e, m, ret_ast_tid);
+    let eff: i64 = fn_eff(a, fid);
+    env_define_fn(e, name, param_tids, ret_tid, eff);
+}
+
+fn register_struct(e: CheckEnv, m: Module, sid: i64) [io] {
+    let a: AstArena = m.arena;
+    let name_s: i64 = sdef_name_sid(a, sid);
+    let name: String = arena_str(a, name_s);
+    let fields_lid: i64 = sdef_fields_lid(a, sid);
+    let n_pairs: i64 = list_len(a, fields_lid);
+    let n_fields: i64 = n_pairs / 2;
+    let fnames: Vec<String> = Vec::new();
+    let ftids: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n_fields {
+        let fsid: i64 = list_get(a, fields_lid, i * 2);
+        let fname: String = arena_str(a, fsid);
+        let ast_ftid: i64 = list_get(a, fields_lid, i * 2 + 1);
+        fnames.push(fname);
+        ftids.push(resolve_ast_ty(e, m, ast_ftid));
+        i = i + 1;
+    }
+    env_define_struct(e, name, fnames, ftids);
+}
+
+fn register_enum(e: CheckEnv, m: Module, eid: i64) [io] {
+    let a: AstArena = m.arena;
+    let name_s: i64 = edef_name_sid(a, eid);
+    let name: String = arena_str(a, name_s);
+    let variants_lid: i64 = edef_variants_lid(a, eid);
+    let n: i64 = list_len(a, variants_lid);
+    let vnames: Vec<String> = Vec::new();
+    let vpayloads: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n {
+        let vsid: i64 = list_get(a, variants_lid, i);
+        let vname: String = arena_str(a, vsid);
+        vnames.push(vname);
+        vpayloads.push(CTY_UNIT());
+        i = i + 1;
+    }
+    env_define_enum(e, name, vnames, vpayloads);
+}
+
+fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
+    let a: AstArena = m.arena;
+    let save_ret: i64 = e.cur_ret_tid;
+    let save_eff: i64 = e.cur_effects;
+
+    let ret_ast_tid: i64 = fn_ret_ast_tid(a, fid);
+    let ret_tid: i64 = resolve_ast_ty(e, m, ret_ast_tid);
+    e.cur_ret_tid = ret_tid;
+    e.cur_effects = fn_eff(a, fid);
+
+    env_push_scope(e);
+
+    let params_lid: i64 = fn_params_lid(a, fid);
+    let n_pairs: i64 = list_len(a, params_lid);
+    let n_params: i64 = n_pairs / 2;
+    let mut i: i64 = 0;
+    while i < n_params {
+        let psid: i64 = list_get(a, params_lid, i * 2);
+        let pname: String = arena_str(a, psid);
+        let ast_ptid: i64 = list_get(a, params_lid, i * 2 + 1);
+        let ptid: i64 = resolve_ast_ty(e, m, ast_ptid);
+        env_define_var(e, pname, ptid);
+        i = i + 1;
+    }
+
+    let body_bid: i64 = fn_body_bid(a, fid);
+    let body_tid: i64 = check_block(e, m, body_bid);
+
+    if !is_coercible(e.ts, body_tid, ret_tid) {
+        env_emit_error(e, String::from("function body type mismatch"));
+    }
+
+    env_pop_scope(e);
+
+    check_effects_fn(e, m, fid);
+
+    e.cur_ret_tid = save_ret;
+    e.cur_effects = save_eff;
+}
+
+fn check_block(e: CheckEnv, m: Module, bid: i64) -> i64 [io] {
+    let a: AstArena = m.arena;
+    env_push_scope(e);
+    let stmts_lid: i64 = blk_stmts(a, bid);
+    let n: i64 = list_len(a, stmts_lid);
+    let mut result_tid: i64 = CTY_UNIT();
+    let mut i: i64 = 0;
+    while i < n {
+        let sid: i64 = list_get(a, stmts_lid, i);
+        let stag: i64 = stmt_tag(a, sid);
+        if stag == STMT_LET() {
+            let pat_pid: i64 = stmt_a(a, sid);
+            let annot_ast_tid: i64 = stmt_b(a, sid);
+            let init_eid: i64 = stmt_c(a, sid);
+            let init_tid: i64 = check_expr(e, m, init_eid);
+            let bound_tid: i64 = if annot_ast_tid == -1 {
+                init_tid
+            } else {
+                let at_tid: i64 = resolve_ast_ty(e, m, annot_ast_tid);
+                if !is_coercible(e.ts, init_tid, at_tid) {
+                    env_emit_error(e, String::from("let binding type mismatch"));
+                }
+                at_tid
+            };
+            bind_pattern(e, m, pat_pid, bound_tid);
+            result_tid = CTY_UNIT();
+        } else {
+            let eid: i64 = stmt_a(a, sid);
+            let has_semi: i64 = stmt_b(a, sid);
+            let etid: i64 = check_expr(e, m, eid);
+            if has_semi == 0 && i == n - 1 {
+                result_tid = etid;
+            } else if etid == CTY_NEVER() {
+                result_tid = CTY_NEVER();
+            } else {
+                result_tid = CTY_UNIT();
+            }
+        }
+        i = i + 1;
+    }
+    let trail: i64 = blk_trail(a, bid);
+    let final_tid: i64 = if trail != -1 {
+        check_expr(e, m, trail)
+    } else {
+        result_tid
+    };
+    env_pop_scope(e);
+    final_tid
+}
+
+fn bind_pattern(e: CheckEnv, m: Module, pid: i64, tid: i64) [io] {
+    let a: AstArena = m.arena;
+    let tag: i64 = pat_tag(a, pid);
+    if tag == PAT_IDENT() {
+        let name_sid: i64 = pat_a(a, pid);
+        let name: String = arena_str(a, name_sid);
+        env_define_var(e, name, tid);
+    }
+}
+
+fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
+    let a: AstArena = m.arena;
+    let tag: i64 = pat_tag(a, pid);
+    if tag == PAT_WILD() {
+        return;
+    }
+    if tag == PAT_IDENT() {
+        let name_sid: i64 = pat_a(a, pid);
+        let name: String = arena_str(a, name_sid);
+        env_define_var(e, name, scrutinee_tid);
+        return;
+    }
+    if tag == PAT_LIT() {
+        return;
+    }
+    if tag == PAT_ENUM() {
+        let inner_lid: i64 = pat_b(a, pid);
+        let n_inner: i64 = list_len(a, inner_lid);
+        let mut i: i64 = 0;
+        while i < n_inner {
+            let ipid: i64 = list_get(a, inner_lid, i);
+            bind_arm_pattern(e, m, ipid, CTY_UNIT());
+            i = i + 1;
+        }
+        return;
+    }
+    if tag == PAT_STRUCT() {
+        let fields_lid: i64 = pat_b(a, pid);
+        let n_pairs: i64 = list_len(a, fields_lid);
+        let n_fields: i64 = n_pairs / 2;
+        let mut i: i64 = 0;
+        while i < n_fields {
+            let fpid: i64 = list_get(a, fields_lid, i * 2 + 1);
+            bind_arm_pattern(e, m, fpid, CTY_UNIT());
+            i = i + 1;
+        }
+        return;
+    }
+    if tag == PAT_TUPLE() {
+        let elems_lid: i64 = pat_a(a, pid);
+        let n: i64 = list_len(a, elems_lid);
+        let mut i: i64 = 0;
+        while i < n {
+            let epid: i64 = list_get(a, elems_lid, i);
+            bind_arm_pattern(e, m, epid, CTY_UNIT());
+            i = i + 1;
+        }
+        return;
+    }
+}
+
+fn check_expr(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
+    let a: AstArena = m.arena;
+    let tag: i64 = expr_tag(a, eid);
+
+    if tag == EXPR_LIT_INT() {
+        return CTY_I64();
+    }
+    if tag == EXPR_LIT_BOOL() {
+        return CTY_BOOL();
+    }
+    if tag == EXPR_LIT_STR() {
+        return CTY_STR();
+    }
+    if tag == EXPR_LIT_FLOAT() {
+        return CTY_F64();
+    }
+
+    if tag == EXPR_IDENT() {
+        let name_sid: i64 = expr_a(a, eid);
+        let name: String = arena_str(a, name_sid);
+        return env_lookup_var(e, name);
+    }
+
+    if tag == EXPR_BINOP() {
+        let op: i64 = expr_a(a, eid);
+        let lhs_eid: i64 = expr_b(a, eid);
+        let rhs_eid: i64 = expr_c(a, eid);
+        let lhs_tid: i64 = check_expr(e, m, lhs_eid);
+        let _rhs_tid: i64 = check_expr(e, m, rhs_eid);
+        if op == BINOP_AND() || op == BINOP_OR() {
+            return CTY_BOOL();
+        }
+        if op == BINOP_EQ() || op == BINOP_NE() || op == BINOP_LT() || op == BINOP_LE() || op == BINOP_GT() || op == BINOP_GE() {
+            return CTY_BOOL();
+        }
+        if ty_is_numeric(e.ts, lhs_tid) {
+            return lhs_tid;
+        }
+        return CTY_I64();
+    }
+
+    if tag == EXPR_UNOP() {
+        let op: i64 = expr_a(a, eid);
+        let operand_eid: i64 = expr_b(a, eid);
+        let operand_tid: i64 = check_expr(e, m, operand_eid);
+        if op == UNOP_NOT() {
+            return CTY_BOOL();
+        }
+        return operand_tid;
+    }
+
+    if tag == EXPR_CALL() {
+        let callee_eid: i64 = expr_a(a, eid);
+        let args_lid: i64 = expr_b(a, eid);
+        let callee_tag: i64 = expr_tag(a, callee_eid);
+        let n_args: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n_args {
+            let arg_eid: i64 = list_get(a, args_lid, i);
+            let _arg_tid: i64 = check_expr(e, m, arg_eid);
+            i = i + 1;
+        }
+        if callee_tag == EXPR_IDENT() {
+            let name_sid: i64 = expr_a(a, callee_eid);
+            let name: String = arena_str(a, name_sid);
+            let fidx: i64 = env_lookup_fn(e, name);
+            if fidx == -1 {
+                return CTY_NEVER();
+            }
+            if e.fn_param_count[fidx] != n_args {
+                env_emit_error(e, String::from("wrong argument count"));
+            }
+            return e.fn_ret_tids[fidx];
+        }
+        let _callee_tid: i64 = check_expr(e, m, callee_eid);
+        return CTY_NEVER();
+    }
+
+    if tag == EXPR_METHOD() {
+        let recv_eid: i64 = expr_a(a, eid);
+        let mname_sid: i64 = expr_b(a, eid);
+        let args_lid: i64 = expr_c(a, eid);
+        let recv_tid: i64 = check_expr(e, m, recv_eid);
+        let mname: String = arena_str(a, mname_sid);
+        let n_args: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n_args {
+            let arg_eid: i64 = list_get(a, args_lid, i);
+            let _arg_tid: i64 = check_expr(e, m, arg_eid);
+            i = i + 1;
+        }
+        if recv_tid == CTY_NEVER() {
+            return CTY_NEVER();
+        }
+        let recv_tag: i64 = ty_tag(e.ts, recv_tid);
+        if recv_tag == CTY_STR() {
+            if mname == String::from("len") { return CTY_I64(); }
+            if mname == String::from("byte_at") { return CTY_I64(); }
+            if mname == String::from("push_str") { return CTY_UNIT(); }
+            if mname == String::from("push_byte") { return CTY_UNIT(); }
+            return CTY_UNIT();
+        }
+        if recv_tag == CTY_APPLIED() {
+            let base_tid: i64 = ty_a(e.ts, recv_tid);
+            let base_tag: i64 = ty_tag(e.ts, base_tid);
+            if base_tag == CTY_ENUM() {
+                let base_name: String = ty_struct_name(e.ts, base_tid);
+                if base_name == String::from("Vec") {
+                    let hargs_lid: i64 = ty_b(e.ts, recv_tid);
+                    let inner_tid: i64 = if ts_arg_len(e.ts, hargs_lid) > 0 {
+                        ts_arg_get(e.ts, hargs_lid, 0)
+                    } else {
+                        CTY_UNIT()
+                    };
+                    if mname == String::from("len") { return CTY_I64(); }
+                    if mname == String::from("push") { return CTY_UNIT(); }
+                    if mname == String::from("get") { return inner_tid; }
+                    return CTY_UNIT();
+                }
+                if base_name == String::from("HashMap") {
+                    let hargs_lid: i64 = ty_b(e.ts, recv_tid);
+                    let val_tid: i64 = if ts_arg_len(e.ts, hargs_lid) > 1 {
+                        ts_arg_get(e.ts, hargs_lid, 1)
+                    } else {
+                        CTY_UNIT()
+                    };
+                    if mname == String::from("insert") { return CTY_UNIT(); }
+                    if mname == String::from("get") { return val_tid; }
+                    if mname == String::from("contains_key") { return CTY_BOOL(); }
+                    if mname == String::from("len") { return CTY_I64(); }
+                    return CTY_UNIT();
+                }
+            }
+        }
+        return CTY_UNIT();
+    }
+
+    if tag == EXPR_FIELD() {
+        let recv_eid: i64 = expr_a(a, eid);
+        let fname_sid: i64 = expr_b(a, eid);
+        let recv_tid: i64 = check_expr(e, m, recv_eid);
+        let fname: String = arena_str(a, fname_sid);
+        let recv_tag: i64 = ty_tag(e.ts, recv_tid);
+        if recv_tag == CTY_STRUCT() {
+            let sname: String = ty_struct_name(e.ts, recv_tid);
+            let sidx: i64 = env_lookup_struct(e, sname);
+            if sidx != -1 {
+                let fname_lid: i64 = e.sdef_field_name_lids[sidx];
+                let ftid_lid: i64 = e.sdef_field_tid_lids[sidx];
+                let nf: i64 = e.sdef_field_count[sidx];
+                let mut i: i64 = 0;
+                while i < nf {
+                    let fsid: i64 = ts_arg_get(e.ts, fname_lid, i);
+                    let ts_local: TyStore = e.ts;
+                    let fn_str: String = ts_local.strs[fsid];
+                    if fn_str == fname {
+                        return ts_arg_get(e.ts, ftid_lid, i);
+                    }
+                    i = i + 1;
+                }
+            }
+        }
+        return CTY_NEVER();
+    }
+
+    if tag == EXPR_INDEX() {
+        let recv_eid: i64 = expr_a(a, eid);
+        let idx_eid: i64 = expr_b(a, eid);
+        let recv_tid: i64 = check_expr(e, m, recv_eid);
+        let _idx_tid: i64 = check_expr(e, m, idx_eid);
+        if recv_tid == CTY_NEVER() {
+            return CTY_NEVER();
+        }
+        let recv_tag: i64 = ty_tag(e.ts, recv_tid);
+        if recv_tag == CTY_APPLIED() {
+            let hargs_lid: i64 = ty_b(e.ts, recv_tid);
+            if ts_arg_len(e.ts, hargs_lid) > 0 {
+                return ts_arg_get(e.ts, hargs_lid, 0);
+            }
+        }
+        if recv_tag == CTY_STR() {
+            return CTY_I64();
+        }
+        return CTY_UNIT();
+    }
+
+    if tag == EXPR_IF() {
+        let cond_eid: i64 = expr_a(a, eid);
+        let then_bid: i64 = expr_b(a, eid);
+        let else_eid: i64 = expr_c(a, eid);
+        let _cond_tid: i64 = check_expr(e, m, cond_eid);
+        let then_tid: i64 = check_block(e, m, then_bid);
+        if else_eid == -1 {
+            return CTY_UNIT();
+        }
+        let else_tid: i64 = check_expr(e, m, else_eid);
+        if ty_tag(e.ts, then_tid) == CTY_NEVER() {
+            return else_tid;
+        }
+        if ty_tag(e.ts, else_tid) == CTY_NEVER() {
+            return then_tid;
+        }
+        return then_tid;
+    }
+
+    if tag == EXPR_WHILE() {
+        let cond_eid: i64 = expr_a(a, eid);
+        let body_bid: i64 = expr_b(a, eid);
+        let _cond_tid: i64 = check_expr(e, m, cond_eid);
+        let _body_tid: i64 = check_block(e, m, body_bid);
+        return CTY_UNIT();
+    }
+
+    if tag == EXPR_MATCH() {
+        let scrutinee_eid: i64 = expr_a(a, eid);
+        let arms_lid: i64 = expr_b(a, eid);
+        let scrutinee_tid: i64 = check_expr(e, m, scrutinee_eid);
+        let n_pairs: i64 = list_len(a, arms_lid);
+        let n_arms: i64 = n_pairs / 2;
+        let mut result_tid: i64 = CTY_NEVER();
+        let mut i: i64 = 0;
+        while i < n_arms {
+            let pat_pid: i64 = list_get(a, arms_lid, i * 2);
+            let body_eid: i64 = list_get(a, arms_lid, i * 2 + 1);
+            env_push_scope(e);
+            bind_arm_pattern(e, m, pat_pid, scrutinee_tid);
+            let arm_tid: i64 = check_expr(e, m, body_eid);
+            env_pop_scope(e);
+            if ty_tag(e.ts, result_tid) == CTY_NEVER() {
+                result_tid = arm_tid;
+            }
+            i = i + 1;
+        }
+        return result_tid;
+    }
+
+    if tag == EXPR_RETURN() {
+        let val_eid: i64 = expr_a(a, eid);
+        if val_eid == -1 {
+            if !is_coercible(e.ts, CTY_UNIT(), e.cur_ret_tid) {
+                env_emit_error(e, String::from("return type mismatch"));
+            }
+        } else {
+            let val_tid: i64 = check_expr(e, m, val_eid);
+            if !is_coercible(e.ts, val_tid, e.cur_ret_tid) {
+                env_emit_error(e, String::from("return type mismatch"));
+            }
+        }
+        return CTY_NEVER();
+    }
+
+    if tag == EXPR_BREAK() {
+        return CTY_NEVER();
+    }
+
+    if tag == EXPR_BLOCK() {
+        let bid: i64 = expr_a(a, eid);
+        return check_block(e, m, bid);
+    }
+
+    if tag == EXPR_ASSIGN() {
+        let lhs_eid: i64 = expr_a(a, eid);
+        let rhs_eid: i64 = expr_b(a, eid);
+        let _lhs_tid: i64 = check_expr(e, m, lhs_eid);
+        let _rhs_tid: i64 = check_expr(e, m, rhs_eid);
+        return CTY_UNIT();
+    }
+
+    if tag == EXPR_SLIT() {
+        let path_lid: i64 = expr_a(a, eid);
+        let fields_lid: i64 = expr_b(a, eid);
+        let n_path: i64 = list_len(a, path_lid);
+        let last_sid: i64 = list_get(a, path_lid, n_path - 1);
+        let sname: String = arena_str(a, last_sid);
+        let n_pairs: i64 = list_len(a, fields_lid);
+        let n_fields: i64 = n_pairs / 2;
+        let mut i: i64 = 0;
+        while i < n_fields {
+            let feid: i64 = list_get(a, fields_lid, i * 2 + 1);
+            let _ftid: i64 = check_expr(e, m, feid);
+            i = i + 1;
+        }
+        let sidx: i64 = env_lookup_struct(e, sname);
+        if sidx == -1 {
+            return CTY_NEVER();
+        }
+        return ts_make_struct(e.ts, sname);
+    }
+
+    if tag == EXPR_ECTOR() {
+        let path_lid: i64 = expr_a(a, eid);
+        let args_lid: i64 = expr_b(a, eid);
+        let n_path: i64 = list_len(a, path_lid);
+        let first_sid: i64 = list_get(a, path_lid, 0);
+        let first_name: String = arena_str(a, first_sid);
+        let n_args: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n_args {
+            let arg_eid: i64 = list_get(a, args_lid, i);
+            let _arg_tid: i64 = check_expr(e, m, arg_eid);
+            i = i + 1;
+        }
+        if first_name == String::from("Option") {
+            return ts_make_enum(e.ts, String::from("Option"));
+        }
+        if first_name == String::from("Result") {
+            return ts_make_enum(e.ts, String::from("Result"));
+        }
+        if n_path > 1 {
+            return CTY_NEVER();
+        }
+        let eidx: i64 = env_lookup_enum(e, first_name);
+        if eidx != -1 {
+            return ts_make_enum(e.ts, first_name);
+        }
+        return CTY_UNIT();
+    }
+
+    if tag == EXPR_QUESTION() {
+        let inner_eid: i64 = expr_a(a, eid);
+        let _inner_tid: i64 = check_expr(e, m, inner_eid);
+        return CTY_UNIT();
+    }
+
+    if tag == EXPR_TUPLE() {
+        let elems_lid: i64 = expr_a(a, eid);
+        let n: i64 = list_len(a, elems_lid);
+        let elem_tids: Vec<i64> = Vec::new();
+        let mut i: i64 = 0;
+        while i < n {
+            elem_tids.push(check_expr(e, m, list_get(a, elems_lid, i)));
+            i = i + 1;
+        }
+        let lid: i64 = ts_add_args(e.ts, elem_tids);
+        return ty_add(e.ts, CTY_TUPLE(), lid, 0);
+    }
+
+    CTY_UNIT()
+}
+
+fn collect_calls_in_expr(e: CheckEnv, m: Module, eid: i64, calls: Vec<String>) [io] {
+    let a: AstArena = m.arena;
+    let tag: i64 = expr_tag(a, eid);
+
+    if tag == EXPR_CALL() {
+        let callee_eid: i64 = expr_a(a, eid);
+        let args_lid: i64 = expr_b(a, eid);
+        let callee_tag: i64 = expr_tag(a, callee_eid);
+        if callee_tag == EXPR_IDENT() {
+            let name_sid: i64 = expr_a(a, callee_eid);
+            let name: String = arena_str(a, name_sid);
+            calls.push(name);
+        }
+        collect_calls_in_expr(e, m, callee_eid, calls);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n {
+            collect_calls_in_expr(e, m, list_get(a, args_lid, i), calls);
+            i = i + 1;
+        }
+        return;
+    }
+
+    if tag == EXPR_METHOD() {
+        let recv_eid: i64 = expr_a(a, eid);
+        let args_lid: i64 = expr_c(a, eid);
+        collect_calls_in_expr(e, m, recv_eid, calls);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n {
+            collect_calls_in_expr(e, m, list_get(a, args_lid, i), calls);
+            i = i + 1;
+        }
+        return;
+    }
+
+    if tag == EXPR_BINOP() {
+        collect_calls_in_expr(e, m, expr_b(a, eid), calls);
+        collect_calls_in_expr(e, m, expr_c(a, eid), calls);
+        return;
+    }
+
+    if tag == EXPR_UNOP() {
+        collect_calls_in_expr(e, m, expr_b(a, eid), calls);
+        return;
+    }
+
+    if tag == EXPR_FIELD() || tag == EXPR_QUESTION() {
+        collect_calls_in_expr(e, m, expr_a(a, eid), calls);
+        return;
+    }
+
+    if tag == EXPR_INDEX() {
+        collect_calls_in_expr(e, m, expr_a(a, eid), calls);
+        collect_calls_in_expr(e, m, expr_b(a, eid), calls);
+        return;
+    }
+
+    if tag == EXPR_IF() {
+        collect_calls_in_expr(e, m, expr_a(a, eid), calls);
+        collect_calls_in_block(e, m, expr_b(a, eid), calls);
+        let else_eid: i64 = expr_c(a, eid);
+        if else_eid != -1 {
+            collect_calls_in_expr(e, m, else_eid, calls);
+        }
+        return;
+    }
+
+    if tag == EXPR_WHILE() {
+        collect_calls_in_expr(e, m, expr_a(a, eid), calls);
+        collect_calls_in_block(e, m, expr_b(a, eid), calls);
+        return;
+    }
+
+    if tag == EXPR_MATCH() {
+        collect_calls_in_expr(e, m, expr_a(a, eid), calls);
+        let arms_lid: i64 = expr_b(a, eid);
+        let n_pairs: i64 = list_len(a, arms_lid);
+        let n_arms: i64 = n_pairs / 2;
+        let mut i: i64 = 0;
+        while i < n_arms {
+            collect_calls_in_expr(e, m, list_get(a, arms_lid, i * 2 + 1), calls);
+            i = i + 1;
+        }
+        return;
+    }
+
+    if tag == EXPR_RETURN() {
+        let val_eid: i64 = expr_a(a, eid);
+        if val_eid != -1 {
+            collect_calls_in_expr(e, m, val_eid, calls);
+        }
+        return;
+    }
+
+    if tag == EXPR_BLOCK() {
+        collect_calls_in_block(e, m, expr_a(a, eid), calls);
+        return;
+    }
+
+    if tag == EXPR_ASSIGN() {
+        collect_calls_in_expr(e, m, expr_a(a, eid), calls);
+        collect_calls_in_expr(e, m, expr_b(a, eid), calls);
+        return;
+    }
+
+    if tag == EXPR_SLIT() {
+        let fields_lid: i64 = expr_b(a, eid);
+        let n_pairs: i64 = list_len(a, fields_lid);
+        let n_fields: i64 = n_pairs / 2;
+        let mut i: i64 = 0;
+        while i < n_fields {
+            collect_calls_in_expr(e, m, list_get(a, fields_lid, i * 2 + 1), calls);
+            i = i + 1;
+        }
+        return;
+    }
+
+    if tag == EXPR_ECTOR() {
+        let args_lid: i64 = expr_b(a, eid);
+        let n: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < n {
+            collect_calls_in_expr(e, m, list_get(a, args_lid, i), calls);
+            i = i + 1;
+        }
+        return;
+    }
+
+    if tag == EXPR_TUPLE() {
+        let elems_lid: i64 = expr_a(a, eid);
+        let n: i64 = list_len(a, elems_lid);
+        let mut i: i64 = 0;
+        while i < n {
+            collect_calls_in_expr(e, m, list_get(a, elems_lid, i), calls);
+            i = i + 1;
+        }
+        return;
+    }
+}
+
+fn collect_calls_in_block(e: CheckEnv, m: Module, bid: i64, calls: Vec<String>) [io] {
+    let a: AstArena = m.arena;
+    let stmts_lid: i64 = blk_stmts(a, bid);
+    let n: i64 = list_len(a, stmts_lid);
+    let mut i: i64 = 0;
+    while i < n {
+        let sid: i64 = list_get(a, stmts_lid, i);
+        let stag: i64 = stmt_tag(a, sid);
+        if stag == STMT_LET() {
+            collect_calls_in_expr(e, m, stmt_c(a, sid), calls);
+        } else {
+            collect_calls_in_expr(e, m, stmt_a(a, sid), calls);
+        }
+        i = i + 1;
+    }
+    let trail: i64 = blk_trail(a, bid);
+    if trail != -1 {
+        collect_calls_in_expr(e, m, trail, calls);
+    }
+}
+
+fn check_effects_fn(e: CheckEnv, m: Module, fid: i64) [io] {
+    let a: AstArena = m.arena;
+    let declared_eff: i64 = fn_eff(a, fid);
+    let body_bid: i64 = fn_body_bid(a, fid);
+    let calls: Vec<String> = Vec::new();
+    collect_calls_in_block(e, m, body_bid, calls);
+    let n: i64 = calls.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let cname: String = calls[i];
+        let fidx: i64 = env_lookup_fn(e, cname);
+        if fidx != -1 {
+            let needed_eff: i64 = e.fn_effects[fidx];
+            if needed_eff != 0 && !effect_covered(declared_eff, needed_eff) {
+                env_emit_error(e, String::from("effectful call from pure function"));
+            }
+        }
+        i = i + 1;
+    }
+}

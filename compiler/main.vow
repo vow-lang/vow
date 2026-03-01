@@ -4,6 +4,9 @@ use lexer
 use token
 use ast
 use parser
+use types
+use env
+use checker
 
 fn main() -> i32 [io] {
     let argv: Vec<String> = args();
@@ -18,9 +21,14 @@ fn main() -> i32 [io] {
     let n_tokens: i64 = tokens.len();
     let m: Module = parse_module(tokens);
     let n_items: i64 = m.items.len();
+    let e: CheckEnv = env_new();
+    check_module(e, m);
+    let n_errors: i64 = e.error_count;
     print_i64(n_tokens);
     print_str(" tokens, ");
     print_i64(n_items);
-    print_str(" items\n");
+    print_str(" items, ");
+    print_i64(n_errors);
+    print_str(" errors\n");
     0
 }

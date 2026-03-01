@@ -396,8 +396,33 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         ExprKind::BinaryOp { op, lhs, rhs } => {
             let lhs_id = lower_expr(ctx, lhs);
             let rhs_id = lower_expr(ctx, rhs);
-            let (opcode, ty) = binop_opcode(*op);
-            ctx.emit(opcode, ty, vec![lhs_id, rhs_id], InstData::None, span)
+            let lhs_is_str = ctx
+                .inst_struct_type
+                .get(&lhs_id)
+                .map(|s| s == "String")
+                .unwrap_or(false);
+            let rhs_is_str = ctx
+                .inst_struct_type
+                .get(&rhs_id)
+                .map(|s| s == "String")
+                .unwrap_or(false);
+            if (lhs_is_str || rhs_is_str) && (*op == BinOp::Eq || *op == BinOp::Ne) {
+                let eq_result = ctx.emit(
+                    Opcode::Call,
+                    Ty::Bool,
+                    vec![lhs_id, rhs_id],
+                    InstData::CallExtern("__vow_string_eq".to_string()),
+                    span,
+                );
+                if *op == BinOp::Ne {
+                    ctx.emit(Opcode::Not, Ty::Bool, vec![eq_result], InstData::None, span)
+                } else {
+                    eq_result
+                }
+            } else {
+                let (opcode, ty) = binop_opcode(*op);
+                ctx.emit(opcode, ty, vec![lhs_id, rhs_id], InstData::None, span)
+            }
         }
         ExprKind::UnaryOp { op, operand } => {
             let val = lower_expr(ctx, operand);

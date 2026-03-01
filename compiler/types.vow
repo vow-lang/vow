@@ -1,0 +1,193 @@
+module Types
+
+fn CTY_I8() -> i64 { 0 }
+fn CTY_I16() -> i64 { 1 }
+fn CTY_I32() -> i64 { 2 }
+fn CTY_I64() -> i64 { 3 }
+fn CTY_I128() -> i64 { 4 }
+fn CTY_U8() -> i64 { 5 }
+fn CTY_U16() -> i64 { 6 }
+fn CTY_U32() -> i64 { 7 }
+fn CTY_U64() -> i64 { 8 }
+fn CTY_U128() -> i64 { 9 }
+fn CTY_F32() -> i64 { 10 }
+fn CTY_F64() -> i64 { 11 }
+fn CTY_BOOL() -> i64 { 12 }
+fn CTY_STR() -> i64 { 13 }
+fn CTY_UNIT() -> i64 { 14 }
+fn CTY_NEVER() -> i64 { 15 }
+fn CTY_STRUCT() -> i64 { 16 }
+fn CTY_ENUM() -> i64 { 17 }
+fn CTY_APPLIED() -> i64 { 18 }
+fn CTY_REF() -> i64 { 19 }
+fn CTY_TUPLE() -> i64 { 20 }
+
+struct TyStore {
+    data: Vec<i64>,
+    strs: Vec<String>,
+    arg_data: Vec<i64>,
+    arg_head: Vec<i64>,
+    arg_size: Vec<i64>,
+}
+
+fn ty_store_new() -> TyStore {
+    let ts: TyStore = TyStore {
+        data: Vec::new(),
+        strs: Vec::new(),
+        arg_data: Vec::new(),
+        arg_head: Vec::new(),
+        arg_size: Vec::new(),
+    };
+    let mut i: i64 = 0;
+    while i < 16 {
+        ts.data.push(i);
+        ts.data.push(0);
+        ts.data.push(0);
+        i = i + 1;
+    }
+    ts
+}
+
+fn ty_tag(ts: TyStore, tid: i64) -> i64 { ts.data[tid * 3] }
+fn ty_a(ts: TyStore, tid: i64) -> i64 { ts.data[tid * 3 + 1] }
+fn ty_b(ts: TyStore, tid: i64) -> i64 { ts.data[tid * 3 + 2] }
+
+fn ty_add(ts: TyStore, tag: i64, a: i64, b: i64) -> i64 {
+    let tid: i64 = ts.data.len() / 3;
+    ts.data.push(tag);
+    ts.data.push(a);
+    ts.data.push(b);
+    tid
+}
+
+fn ts_intern_name(ts: TyStore, name: String) -> i64 {
+    let n: i64 = ts.strs.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if ts.strs[i] == name {
+            return i;
+        }
+        i = i + 1;
+    }
+    ts.strs.push(name);
+    n
+}
+
+fn ts_add_args(ts: TyStore, items: Vec<i64>) -> i64 {
+    let lid: i64 = ts.arg_head.len();
+    let head: i64 = ts.arg_data.len();
+    let n: i64 = items.len();
+    let mut i: i64 = 0;
+    while i < n {
+        ts.arg_data.push(items[i]);
+        i = i + 1;
+    }
+    ts.arg_head.push(head);
+    ts.arg_size.push(n);
+    lid
+}
+
+fn ts_arg_get(ts: TyStore, lid: i64, i: i64) -> i64 {
+    ts.arg_data[ts.arg_head[lid] + i]
+}
+
+fn ts_arg_len(ts: TyStore, lid: i64) -> i64 {
+    ts.arg_size[lid]
+}
+
+fn ts_make_struct(ts: TyStore, name: String) -> i64 {
+    let idx: i64 = ts_intern_name(ts, name);
+    ty_add(ts, CTY_STRUCT(), idx, 0)
+}
+
+fn ts_make_enum(ts: TyStore, name: String) -> i64 {
+    let idx: i64 = ts_intern_name(ts, name);
+    ty_add(ts, CTY_ENUM(), idx, 0)
+}
+
+fn ts_make_applied(ts: TyStore, base_tid: i64, args: Vec<i64>) -> i64 {
+    let lid: i64 = ts_add_args(ts, args);
+    ty_add(ts, CTY_APPLIED(), base_tid, lid)
+}
+
+fn tids_equal(ts: TyStore, a: i64, b: i64) -> bool {
+    if a == b {
+        return true;
+    }
+    let ta: i64 = ty_tag(ts, a);
+    let tb: i64 = ty_tag(ts, b);
+    if ta != tb {
+        return false;
+    }
+    if ta == CTY_STRUCT() || ta == CTY_ENUM() {
+        return ty_a(ts, a) == ty_a(ts, b);
+    }
+    if ta == CTY_APPLIED() {
+        if !tids_equal(ts, ty_a(ts, a), ty_a(ts, b)) {
+            return false;
+        }
+        let la: i64 = ty_b(ts, a);
+        let lb: i64 = ty_b(ts, b);
+        let na: i64 = ts_arg_len(ts, la);
+        let nb: i64 = ts_arg_len(ts, lb);
+        if na != nb {
+            return false;
+        }
+        let mut i: i64 = 0;
+        while i < na {
+            if !tids_equal(ts, ts_arg_get(ts, la, i), ts_arg_get(ts, lb, i)) {
+                return false;
+            }
+            i = i + 1;
+        }
+        return true;
+    }
+    if ta == CTY_REF() {
+        return tids_equal(ts, ty_a(ts, a), ty_a(ts, b));
+    }
+    if ta == CTY_TUPLE() {
+        let la: i64 = ty_a(ts, a);
+        let lb: i64 = ty_a(ts, b);
+        let na: i64 = ts_arg_len(ts, la);
+        let nb: i64 = ts_arg_len(ts, lb);
+        if na != nb {
+            return false;
+        }
+        let mut i: i64 = 0;
+        while i < na {
+            if !tids_equal(ts, ts_arg_get(ts, la, i), ts_arg_get(ts, lb, i)) {
+                return false;
+            }
+            i = i + 1;
+        }
+        return true;
+    }
+    true
+}
+
+fn ty_struct_name(ts: TyStore, tid: i64) -> String {
+    ts.strs[ty_a(ts, tid)]
+}
+
+fn ty_is_integer(ts: TyStore, tid: i64) -> bool {
+    let tag: i64 = ty_tag(ts, tid);
+    tag >= CTY_I8() && tag <= CTY_U128()
+}
+
+fn ty_is_numeric(ts: TyStore, tid: i64) -> bool {
+    let tag: i64 = ty_tag(ts, tid);
+    tag >= CTY_I8() && tag <= CTY_F64()
+}
+
+fn is_coercible(ts: TyStore, from_tid: i64, to_tid: i64) -> bool {
+    if from_tid == to_tid {
+        return true;
+    }
+    if ty_tag(ts, from_tid) == CTY_NEVER() {
+        return true;
+    }
+    if ty_tag(ts, from_tid) == CTY_I64() && ty_is_integer(ts, to_tid) {
+        return true;
+    }
+    tids_equal(ts, from_tid, to_tid)
+}
