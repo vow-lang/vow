@@ -4,3 +4,5 @@
 /.claire/
 /codecov
 /lcov.info
+compiler/*.vow.c
+compiler/*.o

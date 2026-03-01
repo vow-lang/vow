@@ -76,7 +76,8 @@ All diagnostic output flows through **`vow-diag`**, which every other crate uses
 - `span.vow`, `token.vow`, `lexer.vow` — lexer (Wave 1)
 - `ast.vow`, `parser.vow` — parser (Wave 2)
 - `types.vow`, `env.vow`, `checker.vow` — type checker (Wave 3)
-- `main.vow` — driver: runs lexer → parser → type checker, prints error count
+- `cgen.vow` — C code generator (Wave 4)
+- `main.vow` — driver: lexer → parser → type checker → C codegen, writes `<input>.c`
 
 Compile and run the self-hosted binary:
 ```bash
@@ -84,6 +85,14 @@ Compile and run the self-hosted binary:
 ./compiler/main compiler/lexer.vow                   # 3932 tokens, 11 items, 0 errors
 ./compiler/main compiler/parser.vow                  # 6760 tokens, 38 items, 0 errors
 ./compiler/main compiler/checker.vow                 # self-checks with 0 errors
+```
+
+End-to-end C code generation (Wave 4):
+```bash
+./compiler/main compiler/test_hello.vow              # generates compiler/test_hello.vow.c
+gcc compiler/test_hello.vow.c -o /tmp/test_hello \
+    -L target/release -lvow_runtime -lpthread -ldl -lm
+/tmp/test_hello                                      # Hello from self-hosted cgen!
 ```
 
 `./compiler/main` loads a single file only — no recursive `use` resolution. Cross-module
@@ -95,6 +104,12 @@ types appear as unknown (`CTY_NEVER`); errors from unresolved types are suppress
 let ts: TyStore = e.ts;
 let s: String = ts.strs[i];
 ```
+
+**Gotcha (cgen):** The self-hosted lexer does not process string escape sequences —
+`\n` in a Vow source string is stored as raw bytes `\` + `n`, not a newline byte.
+`escape_str_lit` in `cgen.vow` is designed for this raw format (only escapes `"`).
+String literals with `\"` inside (e.g. `String::from("prefix\"suffix")`) will confuse
+the self-hosted lexer, causing parse errors when self-checking `cgen.vow`.
 
 ### Examples
 
