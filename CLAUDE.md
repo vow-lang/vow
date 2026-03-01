@@ -15,12 +15,18 @@ cargo fmt --all            # format all code
 
 ## vowc CLI
 
+First build the release binary:
 ```bash
-vowc examples/divide.vow                   # compile (release, no runtime vow checks)
-vowc --mode debug examples/divide.vow      # compile with runtime vow violation checks
-vowc --no-verify examples/divide.vow       # skip ESBMC static verification
-vowc --help                                # JSON capability description (for agents)
-vowc --help --human                        # human-readable capability description
+cargo build --all --release
+```
+Then use `./target/release/vow` (or `cargo install --path vow` to get `vowc` on PATH):
+
+```bash
+./target/release/vow examples/divide.vow                   # compile (release, no runtime vow checks)
+./target/release/vow --mode debug examples/divide.vow      # compile with runtime vow violation checks
+./target/release/vow --no-verify examples/divide.vow       # skip ESBMC static verification
+./target/release/vow --help                                # JSON capability description (for agents)
+./target/release/vow --help --human                        # human-readable capability description
 ```
 
 Debug mode is required to see runtime `VowViolation` output. Release omits all vow checks.
@@ -63,6 +69,32 @@ All diagnostic output flows through **`vow-diag`**, which every other crate uses
 ### Span
 
 `Span { start: u32, len: u32 }` lives in `vow-syntax::span` and is the single source-location type. Every AST node and every token carries one.
+
+## Self-Hosted Compiler (Phase 9)
+
+`compiler/` contains a Vow implementation of the compiler front-end:
+- `span.vow`, `token.vow`, `lexer.vow` — lexer (Wave 1)
+- `ast.vow`, `parser.vow` — parser (Wave 2)
+- `types.vow`, `env.vow`, `checker.vow` — type checker (Wave 3)
+- `main.vow` — driver: runs lexer → parser → type checker, prints error count
+
+Compile and run the self-hosted binary:
+```bash
+./target/release/vow --no-verify compiler/main.vow   # compile → ./compiler/main
+./compiler/main compiler/lexer.vow                   # 3932 tokens, 11 items, 0 errors
+./compiler/main compiler/parser.vow                  # 6760 tokens, 38 items, 0 errors
+./compiler/main compiler/checker.vow                 # self-checks with 0 errors
+```
+
+`./compiler/main` loads a single file only — no recursive `use` resolution. Cross-module
+types appear as unknown (`CTY_NEVER`); errors from unresolved types are suppressed.
+
+**Gotcha:** Chained field access on struct values requires annotated `let` bindings.
+`e.ts.strs[i]` reads the wrong field index. Use:
+```vow
+let ts: TyStore = e.ts;
+let s: String = ts.strs[i];
+```
 
 ### Examples
 
