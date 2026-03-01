@@ -1,0 +1,804 @@
+module Parser
+
+use token
+use ast
+
+struct Parser {
+    tokens: Vec<Token>,
+    pos: i64,
+    arena: AstArena,
+    errors: Vec<String>,
+}
+
+fn parser_new(tokens: Vec<Token>, arena: AstArena) -> Parser {
+    Parser {
+        tokens: tokens,
+        pos: 0,
+        arena: arena,
+        errors: Vec::new(),
+    }
+}
+
+fn peek(p: Parser) -> Token {
+    p.tokens[p.pos]
+}
+
+fn peek_tag(p: Parser) -> i64 {
+    let t: Token = peek(p);
+    t.tag
+}
+
+fn at(p: Parser, tag: i64) -> bool {
+    peek_tag(p) == tag
+}
+
+fn at_end(p: Parser) -> bool {
+    peek_tag(p) == tok_eof()
+}
+
+fn advance(p: Parser) -> Token {
+    let t: Token = peek(p);
+    if p.pos + 1 < p.tokens.len() {
+        p.pos = p.pos + 1;
+    }
+    t
+}
+
+fn expect(p: Parser, tag: i64) -> bool {
+    if at(p, tag) {
+        let _adv: Token = advance(p);
+        true
+    } else {
+        push_error(p, String::from("unexpected token"));
+        false
+    }
+}
+
+fn expect_ident(p: Parser) -> i64 {
+    if at(p, tok_ident()) {
+        let t: Token = advance(p);
+        arena_intern_str(p.arena, t.str_val)
+    } else {
+        push_error(p, String::from("expected identifier"));
+        -1
+    }
+}
+
+fn span_pack(start: i64, len: i64) -> i64 {
+    start * 65536 + len
+}
+
+fn push_error(p: Parser, msg: String) {
+    p.errors.push(msg);
+}
+
+fn parse_module(tokens: Vec<Token>) -> Module [io] {
+    let arena: AstArena = arena_new();
+    let p: Parser = parser_new(tokens, arena);
+
+    if at(p, tok_kw_module()) {
+        let _kw: Token = advance(p);
+        let _nm: i64 = expect_ident(p);
+    }
+
+    let uses: Vec<i64> = Vec::new();
+    while at(p, tok_kw_use()) {
+        let _kw: Token = advance(p);
+        let path: i64 = parse_path(p);
+        uses.push(path);
+    }
+
+    let items: Vec<i64> = Vec::new();
+    while !at_end(p) {
+        if at(p, tok_kw_pub()) {
+            let _pub: Token = advance(p);
+        }
+        let item: i64 = parse_item(p);
+        if item != -1 {
+            items.push(item);
+        }
+    }
+
+    let mut ei: i64 = 0;
+    let ne: i64 = p.errors.len();
+    while ei < ne {
+        eprintln_str(p.errors[ei]);
+        ei = ei + 1;
+    }
+
+    Module {
+        name_sid: 0,
+        uses: uses,
+        items: items,
+        arena: p.arena,
+    }
+}
+
+fn parse_path(p: Parser) -> i64 {
+    let items: Vec<i64> = Vec::new();
+    let sid: i64 = expect_ident(p);
+    items.push(sid);
+    while at(p, tok_dot()) {
+        let _dot: Token = advance(p);
+        let s: i64 = expect_ident(p);
+        items.push(s);
+    }
+    arena_add_list(p.arena, items)
+}
+
+fn parse_item(p: Parser) -> i64 {
+    if at(p, tok_kw_fn()) {
+        let fid: i64 = parse_fn_def(p);
+        item_pack(ITEM_FN(), fid)
+    } else if at(p, tok_kw_linear()) {
+        let _kw: Token = advance(p);
+        let sid: i64 = parse_struct_def(p, 1);
+        item_pack(ITEM_STRUCT(), sid)
+    } else if at(p, tok_kw_struct()) {
+        let sid: i64 = parse_struct_def(p, 0);
+        item_pack(ITEM_STRUCT(), sid)
+    } else if at(p, tok_kw_enum()) {
+        let eid: i64 = parse_enum_def(p);
+        item_pack(ITEM_ENUM(), eid)
+    } else {
+        skip_unknown_item(p);
+        -1
+    }
+}
+
+fn skip_unknown_item(p: Parser) {
+    let mut depth: i64 = 0;
+    let t: Token = advance(p);
+    let tag: i64 = t.tag;
+    if tag == tok_lbrace() {
+        depth = depth + 1;
+        while depth > 0 && !at_end(p) {
+            let t2: Token = advance(p);
+            let tag2: i64 = t2.tag;
+            if tag2 == tok_lbrace() {
+                depth = depth + 1;
+            } else if tag2 == tok_rbrace() {
+                depth = depth - 1;
+            }
+        }
+    }
+}
+
+fn parse_fn_def(p: Parser) -> i64 {
+    let span_start: i64 = {
+        let t: Token = peek(p);
+        t.span_start
+    };
+    let _kw: bool = expect(p, tok_kw_fn());
+    let name_sid: i64 = expect_ident(p);
+    let params_lid: i64 = parse_params(p);
+    let mut ret_tid: i64 = -1;
+    if at(p, tok_thin_arrow()) {
+        let _arr: Token = advance(p);
+        ret_tid = parse_type(p);
+    }
+    let eff: i64 = parse_effects(p);
+    parse_vow_block(p);
+    let body_bid: i64 = parse_block(p);
+    let span: i64 = span_pack(span_start, 0);
+    arena_add_fn(p.arena, name_sid, params_lid, ret_tid, eff, body_bid, span)
+}
+
+fn parse_struct_def(p: Parser, is_linear: i64) -> i64 {
+    let span_start: i64 = {
+        let t: Token = peek(p);
+        t.span_start
+    };
+    let _kw: bool = expect(p, tok_kw_struct());
+    let name_sid: i64 = expect_ident(p);
+    let _lb: bool = expect(p, tok_lbrace());
+    let field_items: Vec<i64> = Vec::new();
+    while !at(p, tok_rbrace()) && !at_end(p) {
+        let fsid: i64 = expect_ident(p);
+        let _colon: bool = expect(p, tok_colon());
+        let ftid: i64 = parse_type(p);
+        field_items.push(fsid);
+        field_items.push(ftid);
+        if at(p, tok_comma()) {
+            let _comma: Token = advance(p);
+        }
+    }
+    let _rb: bool = expect(p, tok_rbrace());
+    let fields_lid: i64 = arena_add_list(p.arena, field_items);
+    let span: i64 = span_pack(span_start, 0);
+    arena_add_sdef(p.arena, name_sid, fields_lid, is_linear, span)
+}
+
+fn parse_enum_def(p: Parser) -> i64 {
+    let span_start: i64 = {
+        let t: Token = peek(p);
+        t.span_start
+    };
+    let _kw: bool = expect(p, tok_kw_enum());
+    let name_sid: i64 = expect_ident(p);
+    let _lb: bool = expect(p, tok_lbrace());
+    let variant_items: Vec<i64> = Vec::new();
+    while !at(p, tok_rbrace()) && !at_end(p) {
+        let vsid: i64 = expect_ident(p);
+        variant_items.push(vsid);
+        if at(p, tok_lparen()) {
+            let _lp: Token = advance(p);
+            while !at(p, tok_rparen()) && !at_end(p) {
+                let _tid: i64 = parse_type(p);
+                if at(p, tok_comma()) {
+                    let _c: Token = advance(p);
+                }
+            }
+            let _rp: bool = expect(p, tok_rparen());
+        } else if at(p, tok_lbrace()) {
+            let _lb2: Token = advance(p);
+            while !at(p, tok_rbrace()) && !at_end(p) {
+                let _fsid: i64 = expect_ident(p);
+                let _colon: bool = expect(p, tok_colon());
+                let _ftid: i64 = parse_type(p);
+                if at(p, tok_comma()) {
+                    let _c: Token = advance(p);
+                }
+            }
+            let _rb2: bool = expect(p, tok_rbrace());
+        }
+        if at(p, tok_comma()) {
+            let _comma: Token = advance(p);
+        }
+    }
+    let _rb: bool = expect(p, tok_rbrace());
+    let variants_lid: i64 = arena_add_list(p.arena, variant_items);
+    let span: i64 = span_pack(span_start, 0);
+    arena_add_edef(p.arena, name_sid, variants_lid, span)
+}
+
+fn parse_effects(p: Parser) -> i64 {
+    if !at(p, tok_lbracket()) {
+        return 0;
+    }
+    let _lb: Token = advance(p);
+    let mut eff: i64 = 0;
+    while !at(p, tok_rbracket()) && !at_end(p) {
+        let t: Token = advance(p);
+        let tag: i64 = t.tag;
+        if tag == tok_kw_io() {
+            eff = eff + EFF_IO();
+        } else if tag == tok_kw_panic() {
+            eff = eff + EFF_PANIC();
+        } else if tag == tok_kw_read() {
+            eff = eff + EFF_READ();
+        } else if tag == tok_kw_unsafe() {
+            eff = eff + EFF_UNSAFE();
+        } else if tag == tok_kw_write() {
+            eff = eff + EFF_WRITE();
+        }
+        if at(p, tok_comma()) {
+            let _c: Token = advance(p);
+        }
+    }
+    let _rb: bool = expect(p, tok_rbracket());
+    eff
+}
+
+fn parse_params(p: Parser) -> i64 {
+    let _lp: bool = expect(p, tok_lparen());
+    let items: Vec<i64> = Vec::new();
+    while !at(p, tok_rparen()) && !at_end(p) {
+        let name_sid: i64 = expect_ident(p);
+        let _colon: bool = expect(p, tok_colon());
+        let tid: i64 = parse_type(p);
+        items.push(name_sid);
+        items.push(tid);
+        if at(p, tok_comma()) {
+            let _c: Token = advance(p);
+        }
+    }
+    let _rp: bool = expect(p, tok_rparen());
+    arena_add_list(p.arena, items)
+}
+
+fn parse_vow_block(p: Parser) {
+    if !at(p, tok_kw_vow()) {
+        return;
+    }
+    let _kw: Token = advance(p);
+    let _lb: bool = expect(p, tok_lbrace());
+    let mut depth: i64 = 1;
+    while depth > 0 && !at_end(p) {
+        let t: Token = advance(p);
+        let tag: i64 = t.tag;
+        if tag == tok_lbrace() {
+            depth = depth + 1;
+        } else if tag == tok_rbrace() {
+            depth = depth - 1;
+        }
+    }
+}
+
+fn parse_type(p: Parser) -> i64 {
+    if at(p, tok_lparen()) {
+        let _lp: Token = advance(p);
+        if at(p, tok_rparen()) {
+            let _rp: Token = advance(p);
+            return arena_add_type(p.arena, TY_UNIT(), 0, 0, 0);
+        }
+        let t: i64 = parse_type(p);
+        if at(p, tok_comma()) {
+            let tup_items: Vec<i64> = Vec::new();
+            tup_items.push(t);
+            while at(p, tok_comma()) {
+                let _c: Token = advance(p);
+                tup_items.push(parse_type(p));
+            }
+            let _rp: bool = expect(p, tok_rparen());
+            let elems_lid: i64 = arena_add_list(p.arena, tup_items);
+            return arena_add_type(p.arena, TY_TUPLE(), elems_lid, 0, 0);
+        }
+        let _rp: bool = expect(p, tok_rparen());
+        return t;
+    }
+    if at(p, tok_bang()) {
+        let _bang: Token = advance(p);
+        return arena_add_type(p.arena, TY_NEVER(), 0, 0, 0);
+    }
+    if at(p, tok_amp()) {
+        let _amp: Token = advance(p);
+        let inner: i64 = parse_type(p);
+        return arena_add_type(p.arena, TY_REF(), inner, 0, 0);
+    }
+    if at(p, tok_lbracket()) {
+        let _lb: Token = advance(p);
+        let inner: i64 = parse_type(p);
+        let _rb: bool = expect(p, tok_rbracket());
+        return arena_add_type(p.arena, TY_SLICE(), inner, 0, 0);
+    }
+    let name_sid: i64 = expect_ident(p);
+    if at(p, tok_lt()) {
+        let _lt: Token = advance(p);
+        let gen_items: Vec<i64> = Vec::new();
+        while !at(p, tok_gt()) && !at_end(p) {
+            gen_items.push(parse_type(p));
+            if at(p, tok_comma()) {
+                let _c: Token = advance(p);
+            }
+        }
+        let _gt: bool = expect(p, tok_gt());
+        let args_lid: i64 = arena_add_list(p.arena, gen_items);
+        return arena_add_type(p.arena, TY_GENERIC(), name_sid, args_lid, 0);
+    }
+    arena_add_type(p.arena, TY_NAMED(), name_sid, 0, 0)
+}
+
+fn parse_block(p: Parser) -> i64 {
+    let span_start: i64 = {
+        let t: Token = peek(p);
+        t.span_start
+    };
+    let _lb: bool = expect(p, tok_lbrace());
+    let stmt_items: Vec<i64> = Vec::new();
+    while !at(p, tok_rbrace()) && !at_end(p) {
+        let s: i64 = parse_stmt(p);
+        if s != -1 {
+            stmt_items.push(s);
+        }
+    }
+    let _rb: bool = expect(p, tok_rbrace());
+    let stmts_lid: i64 = arena_add_list(p.arena, stmt_items);
+    let span: i64 = span_pack(span_start, 0);
+    arena_add_blk(p.arena, stmts_lid, -1, span)
+}
+
+fn parse_stmt(p: Parser) -> i64 {
+    if at(p, tok_kw_let()) {
+        parse_let_stmt(p)
+    } else {
+        let e: i64 = parse_expr(p);
+        let has_semi: i64 = if at(p, tok_semicolon()) {
+            let _sc: Token = advance(p);
+            1
+        } else {
+            0
+        };
+        arena_add_stmt(p.arena, STMT_EXPR(), e, has_semi, 0, 0)
+    }
+}
+
+fn parse_let_stmt(p: Parser) -> i64 {
+    let _kw: bool = expect(p, tok_kw_let());
+    let is_mut: i64 = if at(p, tok_kw_mut()) {
+        let _m: Token = advance(p);
+        1
+    } else {
+        0
+    };
+    let name_sid: i64 = expect_ident(p);
+    let mut annot_tid: i64 = -1;
+    if at(p, tok_colon()) {
+        let _c: Token = advance(p);
+        annot_tid = parse_type(p);
+    }
+    let _eq: bool = expect(p, tok_eq());
+    let init_eid: i64 = parse_expr(p);
+    if at(p, tok_semicolon()) {
+        let _sc: Token = advance(p);
+    }
+    let pat_pid: i64 = arena_add_pat(p.arena, PAT_IDENT(), name_sid, is_mut, 0);
+    arena_add_stmt(p.arena, STMT_LET(), pat_pid, annot_tid, init_eid, 0)
+}
+
+fn parse_expr(p: Parser) -> i64 {
+    parse_expr_prec(p, 0)
+}
+
+fn binop_prec(tag: i64) -> i64 {
+    if tag == tok_pipe_pipe() {
+        1
+    } else if tag == tok_amp_amp() {
+        2
+    } else if tag == tok_eq_eq() || tag == tok_bang_eq() || tag == tok_lt() || tag == tok_lt_eq() || tag == tok_gt() || tag == tok_gt_eq() {
+        3
+    } else if tag == tok_plus() || tag == tok_minus() || tag == tok_plus_checked() || tag == tok_minus_checked() {
+        4
+    } else if tag == tok_star() || tag == tok_slash() || tag == tok_percent() || tag == tok_star_checked() || tag == tok_slash_checked() || tag == tok_percent_checked() {
+        5
+    } else {
+        -1
+    }
+}
+
+fn tok_to_binop(tag: i64) -> i64 {
+    if tag == tok_plus() { BINOP_ADD() }
+    else if tag == tok_minus() { BINOP_SUB() }
+    else if tag == tok_star() { BINOP_MUL() }
+    else if tag == tok_slash() { BINOP_DIV() }
+    else if tag == tok_percent() { BINOP_REM() }
+    else if tag == tok_plus_checked() { BINOP_ADD_CHK() }
+    else if tag == tok_minus_checked() { BINOP_SUB_CHK() }
+    else if tag == tok_star_checked() { BINOP_MUL_CHK() }
+    else if tag == tok_slash_checked() { BINOP_DIV_CHK() }
+    else if tag == tok_percent_checked() { BINOP_REM_CHK() }
+    else if tag == tok_eq_eq() { BINOP_EQ() }
+    else if tag == tok_bang_eq() { BINOP_NE() }
+    else if tag == tok_lt() { BINOP_LT() }
+    else if tag == tok_lt_eq() { BINOP_LE() }
+    else if tag == tok_gt() { BINOP_GT() }
+    else if tag == tok_gt_eq() { BINOP_GE() }
+    else if tag == tok_amp_amp() { BINOP_AND() }
+    else { BINOP_OR() }
+}
+
+fn parse_expr_prec(p: Parser, min_prec: i64) -> i64 {
+    let mut lhs: i64 = parse_unary(p);
+    let mut prec: i64 = binop_prec(peek_tag(p));
+    while prec >= 0 && prec >= min_prec {
+        let op_tok: Token = advance(p);
+        let op: i64 = tok_to_binop(op_tok.tag);
+        let rhs: i64 = parse_expr_prec(p, prec + 1);
+        lhs = arena_add_expr(p.arena, EXPR_BINOP(), op, lhs, rhs, 0);
+        prec = binop_prec(peek_tag(p));
+    }
+    lhs
+}
+
+fn parse_unary(p: Parser) -> i64 {
+    if at(p, tok_bang()) {
+        let _t: Token = advance(p);
+        let operand: i64 = parse_unary(p);
+        arena_add_expr(p.arena, EXPR_UNOP(), UNOP_NOT(), operand, 0, 0)
+    } else if at(p, tok_minus()) {
+        let _t: Token = advance(p);
+        let operand: i64 = parse_unary(p);
+        arena_add_expr(p.arena, EXPR_UNOP(), UNOP_NEG(), operand, 0, 0)
+    } else {
+        parse_postfix(p)
+    }
+}
+
+fn parse_postfix(p: Parser) -> i64 {
+    let mut e: i64 = parse_primary(p);
+    let mut cont: bool = true;
+    while cont {
+        if at(p, tok_dot()) {
+            let _dot: Token = advance(p);
+            if at(p, tok_ident()) {
+                let fname: i64 = expect_ident(p);
+                if at(p, tok_lparen()) {
+                    let args_lid: i64 = parse_call_args(p);
+                    e = arena_add_expr(p.arena, EXPR_METHOD(), e, fname, args_lid, 0);
+                } else {
+                    e = arena_add_expr(p.arena, EXPR_FIELD(), e, fname, 0, 0);
+                }
+            } else {
+                cont = false;
+            }
+        } else if at(p, tok_lbracket()) {
+            let _lb: Token = advance(p);
+            let idx: i64 = parse_expr(p);
+            let _rb: bool = expect(p, tok_rbracket());
+            e = arena_add_expr(p.arena, EXPR_INDEX(), e, idx, 0, 0);
+        } else if at(p, tok_lparen()) {
+            let args_lid: i64 = parse_call_args(p);
+            e = arena_add_expr(p.arena, EXPR_CALL(), e, args_lid, 0, 0);
+        } else if at(p, tok_question()) {
+            let _q: Token = advance(p);
+            e = arena_add_expr(p.arena, EXPR_QUESTION(), e, 0, 0, 0);
+        } else if at(p, tok_eq()) {
+            let _eq: Token = advance(p);
+            let rhs: i64 = parse_expr(p);
+            e = arena_add_expr(p.arena, EXPR_ASSIGN(), e, rhs, 0, 0);
+            cont = false;
+        } else {
+            cont = false;
+        }
+    }
+    e
+}
+
+fn parse_call_args(p: Parser) -> i64 {
+    let _lp: bool = expect(p, tok_lparen());
+    let arg_items: Vec<i64> = Vec::new();
+    while !at(p, tok_rparen()) && !at_end(p) {
+        arg_items.push(parse_expr(p));
+        if at(p, tok_comma()) {
+            let _c: Token = advance(p);
+        }
+    }
+    let _rp: bool = expect(p, tok_rparen());
+    arena_add_list(p.arena, arg_items)
+}
+
+fn parse_primary(p: Parser) -> i64 {
+    let t: Token = peek(p);
+    let tag: i64 = t.tag;
+    if tag == tok_lit_int() || tag == tok_lit_int_suffixed() {
+        let _adv: Token = advance(p);
+        arena_add_expr(p.arena, EXPR_LIT_INT(), t.int_val, 0, 0, 0)
+    } else if tag == tok_lit_bool() {
+        let _adv: Token = advance(p);
+        arena_add_expr(p.arena, EXPR_LIT_BOOL(), t.int_val, 0, 0, 0)
+    } else if tag == tok_lit_string() {
+        let _adv: Token = advance(p);
+        let sid: i64 = arena_intern_str(p.arena, t.str_val);
+        arena_add_expr(p.arena, EXPR_LIT_STR(), sid, 0, 0, 0)
+    } else if tag == tok_ident() {
+        let name_str: String = t.str_val;
+        let first_byte: i64 = name_str.byte_at(0);
+        let _adv: Token = advance(p);
+        let sid: i64 = arena_intern_str(p.arena, name_str);
+        if at(p, tok_colon_colon()) {
+            parse_path_expr(p, sid)
+        } else if at(p, tok_lbrace()) && first_byte >= 65 && first_byte <= 90 {
+            let path_items: Vec<i64> = Vec::new();
+            path_items.push(sid);
+            let path_lid: i64 = arena_add_list(p.arena, path_items);
+            let _lb: Token = advance(p);
+            let field_items: Vec<i64> = Vec::new();
+            while !at(p, tok_rbrace()) && !at_end(p) {
+                let fsid: i64 = expect_ident(p);
+                let _colon: bool = expect(p, tok_colon());
+                let feid: i64 = parse_expr(p);
+                field_items.push(fsid);
+                field_items.push(feid);
+                if at(p, tok_comma()) {
+                    let _c: Token = advance(p);
+                }
+            }
+            let _rb: bool = expect(p, tok_rbrace());
+            let fields_lid: i64 = arena_add_list(p.arena, field_items);
+            arena_add_expr(p.arena, EXPR_SLIT(), path_lid, fields_lid, 0, 0)
+        } else {
+            arena_add_expr(p.arena, EXPR_IDENT(), sid, 0, 0, 0)
+        }
+    } else if tag == tok_kw_if() {
+        parse_if_expr(p)
+    } else if tag == tok_kw_while() {
+        parse_while_expr(p)
+    } else if tag == tok_kw_match() {
+        parse_match_expr(p)
+    } else if tag == tok_kw_return() {
+        let _kw: Token = advance(p);
+        if at(p, tok_semicolon()) || at(p, tok_rbrace()) {
+            arena_add_expr(p.arena, EXPR_RETURN(), -1, 0, 0, 0)
+        } else {
+            let val: i64 = parse_expr(p);
+            arena_add_expr(p.arena, EXPR_RETURN(), val, 0, 0, 0)
+        }
+    } else if tag == tok_kw_break() {
+        let _kw: Token = advance(p);
+        arena_add_expr(p.arena, EXPR_BREAK(), -1, 0, 0, 0)
+    } else if tag == tok_lbrace() {
+        let bid: i64 = parse_block(p);
+        arena_add_expr(p.arena, EXPR_BLOCK(), bid, 0, 0, 0)
+    } else if tag == tok_lparen() {
+        let _lp: Token = advance(p);
+        if at(p, tok_rparen()) {
+            let _rp: Token = advance(p);
+            arena_add_expr(p.arena, EXPR_TUPLE(), arena_add_list(p.arena, Vec::new()), 0, 0, 0)
+        } else {
+            let e: i64 = parse_expr(p);
+            if at(p, tok_comma()) {
+                let tup_items: Vec<i64> = Vec::new();
+                tup_items.push(e);
+                while at(p, tok_comma()) {
+                    let _c: Token = advance(p);
+                    tup_items.push(parse_expr(p));
+                }
+                let _rp: bool = expect(p, tok_rparen());
+                let elems_lid: i64 = arena_add_list(p.arena, tup_items);
+                arena_add_expr(p.arena, EXPR_TUPLE(), elems_lid, 0, 0, 0)
+            } else {
+                let _rp: bool = expect(p, tok_rparen());
+                e
+            }
+        }
+    } else {
+        let _skip: Token = advance(p);
+        push_error(p, String::from("unexpected token in expression"));
+        arena_add_expr(p.arena, EXPR_LIT_INT(), 0, 0, 0, 0)
+    }
+}
+
+fn parse_path_expr(p: Parser, first_sid: i64) -> i64 {
+    let path_items: Vec<i64> = Vec::new();
+    path_items.push(first_sid);
+    while at(p, tok_colon_colon()) {
+        let _cc: Token = advance(p);
+        let sid: i64 = expect_ident(p);
+        path_items.push(sid);
+    }
+    let path_lid: i64 = arena_add_list(p.arena, path_items);
+    if at(p, tok_lbrace()) {
+        let _lb: Token = advance(p);
+        let field_items: Vec<i64> = Vec::new();
+        while !at(p, tok_rbrace()) && !at_end(p) {
+            let fsid: i64 = expect_ident(p);
+            let _colon: bool = expect(p, tok_colon());
+            let feid: i64 = parse_expr(p);
+            field_items.push(fsid);
+            field_items.push(feid);
+            if at(p, tok_comma()) {
+                let _c: Token = advance(p);
+            }
+        }
+        let _rb: bool = expect(p, tok_rbrace());
+        let fields_lid: i64 = arena_add_list(p.arena, field_items);
+        arena_add_expr(p.arena, EXPR_SLIT(), path_lid, fields_lid, 0, 0)
+    } else if at(p, tok_lparen()) {
+        let args_lid: i64 = parse_call_args(p);
+        arena_add_expr(p.arena, EXPR_ECTOR(), path_lid, args_lid, 0, 0)
+    } else {
+        arena_add_expr(p.arena, EXPR_ECTOR(), path_lid, arena_add_list(p.arena, Vec::new()), 0, 0)
+    }
+}
+
+fn parse_if_expr(p: Parser) -> i64 {
+    let _kw: bool = expect(p, tok_kw_if());
+    let cond: i64 = parse_expr(p);
+    let then_bid: i64 = parse_block(p);
+    let else_eid: i64 = if at(p, tok_kw_else()) {
+        let _ekw: Token = advance(p);
+        if at(p, tok_kw_if()) {
+            parse_if_expr(p)
+        } else {
+            let else_bid: i64 = parse_block(p);
+            arena_add_expr(p.arena, EXPR_BLOCK(), else_bid, 0, 0, 0)
+        }
+    } else {
+        -1
+    };
+    arena_add_expr(p.arena, EXPR_IF(), cond, then_bid, else_eid, 0)
+}
+
+fn parse_while_expr(p: Parser) -> i64 {
+    let _kw: bool = expect(p, tok_kw_while());
+    let cond: i64 = parse_expr(p);
+    parse_vow_block(p);
+    let body_bid: i64 = parse_block(p);
+    arena_add_expr(p.arena, EXPR_WHILE(), cond, body_bid, 0, 0)
+}
+
+fn parse_match_expr(p: Parser) -> i64 {
+    let _kw: bool = expect(p, tok_kw_match());
+    let scrutinee: i64 = parse_expr(p);
+    let _lb: bool = expect(p, tok_lbrace());
+    let arm_items: Vec<i64> = Vec::new();
+    while !at(p, tok_rbrace()) && !at_end(p) {
+        let pat: i64 = parse_pattern(p);
+        let _fa: bool = expect(p, tok_fat_arrow());
+        let body: i64 = if at(p, tok_lbrace()) {
+            let bid: i64 = parse_block(p);
+            arena_add_expr(p.arena, EXPR_BLOCK(), bid, 0, 0, 0)
+        } else {
+            parse_expr(p)
+        };
+        arm_items.push(pat);
+        arm_items.push(body);
+        if at(p, tok_comma()) {
+            let _c: Token = advance(p);
+        }
+    }
+    let _rb: bool = expect(p, tok_rbrace());
+    let arms_lid: i64 = arena_add_list(p.arena, arm_items);
+    arena_add_expr(p.arena, EXPR_MATCH(), scrutinee, arms_lid, 0, 0)
+}
+
+fn parse_pattern(p: Parser) -> i64 {
+    let t: Token = peek(p);
+    let tag: i64 = t.tag;
+    if tag == tok_underscore() {
+        let _adv: Token = advance(p);
+        arena_add_pat(p.arena, PAT_WILD(), 0, 0, 0)
+    } else if tag == tok_lit_int() || tag == tok_lit_int_suffixed() {
+        let _adv: Token = advance(p);
+        arena_add_pat(p.arena, PAT_LIT(), EXPR_LIT_INT(), t.int_val, 0)
+    } else if tag == tok_lit_bool() {
+        let _adv: Token = advance(p);
+        arena_add_pat(p.arena, PAT_LIT(), EXPR_LIT_BOOL(), t.int_val, 0)
+    } else if tag == tok_ident() {
+        let _adv: Token = advance(p);
+        let sid: i64 = arena_intern_str(p.arena, t.str_val);
+        if at(p, tok_colon_colon()) {
+            let path_items: Vec<i64> = Vec::new();
+            path_items.push(sid);
+            while at(p, tok_colon_colon()) {
+                let _cc: Token = advance(p);
+                let s: i64 = expect_ident(p);
+                path_items.push(s);
+            }
+            let path_lid: i64 = arena_add_list(p.arena, path_items);
+            if at(p, tok_lparen()) {
+                let _lp: Token = advance(p);
+                let inner_items: Vec<i64> = Vec::new();
+                while !at(p, tok_rparen()) && !at_end(p) {
+                    inner_items.push(parse_pattern(p));
+                    if at(p, tok_comma()) {
+                        let _c: Token = advance(p);
+                    }
+                }
+                let _rp: bool = expect(p, tok_rparen());
+                let inner_lid: i64 = arena_add_list(p.arena, inner_items);
+                arena_add_pat(p.arena, PAT_ENUM(), path_lid, inner_lid, 0)
+            } else {
+                arena_add_pat(p.arena, PAT_ENUM(), path_lid, arena_add_list(p.arena, Vec::new()), 0)
+            }
+        } else if at(p, tok_lbrace()) {
+            let _lb: Token = advance(p);
+            let field_items: Vec<i64> = Vec::new();
+            while !at(p, tok_rbrace()) && !at_end(p) {
+                let fsid: i64 = expect_ident(p);
+                let _c2: bool = expect(p, tok_colon());
+                let fpid: i64 = parse_pattern(p);
+                field_items.push(fsid);
+                field_items.push(fpid);
+                if at(p, tok_comma()) {
+                    let _c: Token = advance(p);
+                }
+            }
+            let _rb: bool = expect(p, tok_rbrace());
+            let fields_lid: i64 = arena_add_list(p.arena, field_items);
+            arena_add_pat(p.arena, PAT_STRUCT(), sid, fields_lid, 0)
+        } else {
+            let is_mut: i64 = 0;
+            arena_add_pat(p.arena, PAT_IDENT(), sid, is_mut, 0)
+        }
+    } else if tag == tok_kw_mut() {
+        let _m: Token = advance(p);
+        let sid: i64 = expect_ident(p);
+        arena_add_pat(p.arena, PAT_IDENT(), sid, 1, 0)
+    } else if tag == tok_lparen() {
+        let _lp: Token = advance(p);
+        let elem_items: Vec<i64> = Vec::new();
+        while !at(p, tok_rparen()) && !at_end(p) {
+            elem_items.push(parse_pattern(p));
+            if at(p, tok_comma()) {
+                let _c: Token = advance(p);
+            }
+        }
+        let _rp: bool = expect(p, tok_rparen());
+        let elems_lid: i64 = arena_add_list(p.arena, elem_items);
+        arena_add_pat(p.arena, PAT_TUPLE(), elems_lid, 0, 0)
+    } else {
+        push_error(p, String::from("unexpected token in pattern"));
+        arena_add_pat(p.arena, PAT_WILD(), 0, 0, 0)
+    }
+}

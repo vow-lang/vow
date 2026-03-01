@@ -639,8 +639,28 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         }
         ExprKind::Assign { lhs, rhs } => {
             let new_val = lower_expr(ctx, rhs);
-            if let ExprKind::Ident(name) = &lhs.kind {
-                ctx.assign(name, new_val);
+            match &lhs.kind {
+                ExprKind::Ident(name) => {
+                    ctx.assign(name, new_val);
+                }
+                ExprKind::FieldAccess { base, field } => {
+                    let ptr_id = lower_expr(ctx, base);
+                    let struct_name =
+                        ctx.inst_struct_type.get(&ptr_id).cloned().unwrap_or_default();
+                    let field_idx = ctx
+                        .struct_field_map
+                        .get(&struct_name)
+                        .and_then(|names| names.iter().position(|n| n == field))
+                        .unwrap_or(0) as u32;
+                    ctx.emit(
+                        Opcode::FieldSet,
+                        Ty::Unit,
+                        vec![ptr_id, new_val],
+                        InstData::FieldIndex(field_idx),
+                        span,
+                    );
+                }
+                _ => {}
             }
             new_val
         }
@@ -805,19 +825,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         ExprKind::EnumConstruct { path, fields } => {
             let enum_name = path.first().map(|s| s.as_str()).unwrap_or("");
             let variant_name = path.get(1).map(|s| s.as_str()).unwrap_or("");
-            // String::from(lit) builtin
+            // String::from(lit) builtin: lower_expr for Lit::String already calls
+            // __vow_string_from_cstr and returns a tagged VowVec; no second call needed.
             if enum_name == "String" && variant_name == "from" {
                 let lit_expr = fields.first().expect("String::from requires an argument");
                 let ptr_id = lower_expr(ctx, lit_expr);
-                let result = ctx.emit(
-                    Opcode::Call,
-                    Ty::Ptr,
-                    vec![ptr_id],
-                    InstData::CallExtern("__vow_string_from_cstr".to_string()),
-                    span,
-                );
-                ctx.inst_struct_type.insert(result, "String".to_string());
-                return result;
+                ctx.inst_struct_type.insert(ptr_id, "String".to_string());
+                return ptr_id;
             }
             // HashMap::new() builtin
             if enum_name == "HashMap" && variant_name == "new" {
@@ -1481,6 +1495,9 @@ pub fn lower_function(
             }
             AstType::Generic { name, .. } if name == "Vec" => {
                 ctx.inst_struct_type.insert(arg_id, "Vec".to_string());
+            }
+            AstType::Named { name, .. } if ctx.struct_field_map.contains_key(name.as_str()) => {
+                ctx.inst_struct_type.insert(arg_id, name.clone());
             }
             _ => {}
         }

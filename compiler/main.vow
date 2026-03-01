@@ -2,6 +2,8 @@ module Main
 
 use lexer
 use token
+use ast
+use parser
 
 fn main() -> i32 [io] {
     let argv: Vec<String> = args();
@@ -13,8 +15,12 @@ fn main() -> i32 [io] {
     let path: String = argv[0];
     let src: String = fs_read(path);
     let tokens: Vec<Token> = lex(src);
-    let n: i64 = tokens.len();
-    print_i64(n);
-    print_str("\n");
+    let n_tokens: i64 = tokens.len();
+    let m: Module = parse_module(tokens);
+    let n_items: i64 = m.items.len();
+    print_i64(n_tokens);
+    print_str(" tokens, ");
+    print_i64(n_items);
+    print_str(" items\n");
     0
 }

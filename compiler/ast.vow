@@ -1,0 +1,235 @@
+module Ast
+
+fn EXPR_LIT_INT() -> i64 { 0 }
+fn EXPR_LIT_BOOL() -> i64 { 1 }
+fn EXPR_LIT_STR() -> i64 { 2 }
+fn EXPR_LIT_FLOAT() -> i64 { 3 }
+fn EXPR_IDENT() -> i64 { 4 }
+fn EXPR_BINOP() -> i64 { 5 }
+fn EXPR_UNOP() -> i64 { 6 }
+fn EXPR_CALL() -> i64 { 7 }
+fn EXPR_METHOD() -> i64 { 8 }
+fn EXPR_FIELD() -> i64 { 9 }
+fn EXPR_INDEX() -> i64 { 10 }
+fn EXPR_IF() -> i64 { 11 }
+fn EXPR_WHILE() -> i64 { 12 }
+fn EXPR_MATCH() -> i64 { 13 }
+fn EXPR_RETURN() -> i64 { 14 }
+fn EXPR_BREAK() -> i64 { 15 }
+fn EXPR_BLOCK() -> i64 { 16 }
+fn EXPR_ASSIGN() -> i64 { 17 }
+fn EXPR_SLIT() -> i64 { 18 }
+fn EXPR_ECTOR() -> i64 { 19 }
+fn EXPR_QUESTION() -> i64 { 20 }
+fn EXPR_TUPLE() -> i64 { 21 }
+
+fn BINOP_ADD() -> i64 { 0 }
+fn BINOP_SUB() -> i64 { 1 }
+fn BINOP_MUL() -> i64 { 2 }
+fn BINOP_DIV() -> i64 { 3 }
+fn BINOP_REM() -> i64 { 4 }
+fn BINOP_ADD_CHK() -> i64 { 5 }
+fn BINOP_SUB_CHK() -> i64 { 6 }
+fn BINOP_MUL_CHK() -> i64 { 7 }
+fn BINOP_DIV_CHK() -> i64 { 8 }
+fn BINOP_REM_CHK() -> i64 { 9 }
+fn BINOP_EQ() -> i64 { 10 }
+fn BINOP_NE() -> i64 { 11 }
+fn BINOP_LT() -> i64 { 12 }
+fn BINOP_LE() -> i64 { 13 }
+fn BINOP_GT() -> i64 { 14 }
+fn BINOP_GE() -> i64 { 15 }
+fn BINOP_AND() -> i64 { 16 }
+fn BINOP_OR() -> i64 { 17 }
+
+fn UNOP_NEG() -> i64 { 0 }
+fn UNOP_NOT() -> i64 { 1 }
+
+fn TY_NAMED() -> i64 { 0 }
+fn TY_GENERIC() -> i64 { 1 }
+fn TY_UNIT() -> i64 { 2 }
+fn TY_NEVER() -> i64 { 3 }
+fn TY_REF() -> i64 { 4 }
+fn TY_SLICE() -> i64 { 5 }
+fn TY_TUPLE() -> i64 { 6 }
+
+fn STMT_LET() -> i64 { 0 }
+fn STMT_EXPR() -> i64 { 1 }
+
+fn PAT_WILD() -> i64 { 0 }
+fn PAT_IDENT() -> i64 { 1 }
+fn PAT_LIT() -> i64 { 2 }
+fn PAT_ENUM() -> i64 { 3 }
+fn PAT_STRUCT() -> i64 { 4 }
+fn PAT_TUPLE() -> i64 { 5 }
+fn PAT_OR() -> i64 { 6 }
+
+fn ITEM_FN() -> i64 { 0 }
+fn ITEM_STRUCT() -> i64 { 1 }
+fn ITEM_ENUM() -> i64 { 2 }
+
+fn EFF_IO() -> i64 { 1 }
+fn EFF_PANIC() -> i64 { 2 }
+fn EFF_READ() -> i64 { 4 }
+fn EFF_UNSAFE() -> i64 { 8 }
+fn EFF_WRITE() -> i64 { 16 }
+
+struct AstArena {
+    expr_data: Vec<i64>,
+    type_data: Vec<i64>,
+    stmt_data: Vec<i64>,
+    pat_data: Vec<i64>,
+    blk_data: Vec<i64>,
+    fn_data: Vec<i64>,
+    sdef_data: Vec<i64>,
+    edef_data: Vec<i64>,
+    strs: Vec<String>,
+    list_data: Vec<i64>,
+    list_head: Vec<i64>,
+    list_size: Vec<i64>,
+}
+
+fn arena_new() -> AstArena {
+    AstArena {
+        expr_data: Vec::new(),
+        type_data: Vec::new(),
+        stmt_data: Vec::new(),
+        pat_data: Vec::new(),
+        blk_data: Vec::new(),
+        fn_data: Vec::new(),
+        sdef_data: Vec::new(),
+        edef_data: Vec::new(),
+        strs: Vec::new(),
+        list_data: Vec::new(),
+        list_head: Vec::new(),
+        list_size: Vec::new(),
+    }
+}
+
+fn arena_intern_str(a: AstArena, s: String) -> i64 {
+    let idx: i64 = a.strs.len();
+    a.strs.push(s);
+    idx
+}
+
+fn arena_add_list(a: AstArena, items: Vec<i64>) -> i64 {
+    let lid: i64 = a.list_head.len();
+    let head: i64 = a.list_data.len();
+    let n: i64 = items.len();
+    let mut i: i64 = 0;
+    while i < n {
+        a.list_data.push(items[i]);
+        i = i + 1;
+    }
+    a.list_head.push(head);
+    a.list_size.push(n);
+    lid
+}
+
+fn list_len(a: AstArena, lid: i64) -> i64 {
+    a.list_size[lid]
+}
+
+fn list_get(a: AstArena, lid: i64, i: i64) -> i64 {
+    a.list_data[a.list_head[lid] + i]
+}
+
+fn arena_add_expr(a: AstArena, tag: i64, av: i64, bv: i64, cv: i64, span: i64) -> i64 {
+    let eid: i64 = a.expr_data.len() / 5;
+    a.expr_data.push(tag);
+    a.expr_data.push(av);
+    a.expr_data.push(bv);
+    a.expr_data.push(cv);
+    a.expr_data.push(span);
+    eid
+}
+
+fn expr_tag(a: AstArena, eid: i64) -> i64 { a.expr_data[eid * 5] }
+fn expr_a(a: AstArena, eid: i64) -> i64 { a.expr_data[eid * 5 + 1] }
+fn expr_b(a: AstArena, eid: i64) -> i64 { a.expr_data[eid * 5 + 2] }
+fn expr_c(a: AstArena, eid: i64) -> i64 { a.expr_data[eid * 5 + 3] }
+
+fn arena_add_type(a: AstArena, tag: i64, av: i64, bv: i64, span: i64) -> i64 {
+    let tid: i64 = a.type_data.len() / 4;
+    a.type_data.push(tag);
+    a.type_data.push(av);
+    a.type_data.push(bv);
+    a.type_data.push(span);
+    tid
+}
+
+fn type_tag(a: AstArena, tid: i64) -> i64 { a.type_data[tid * 4] }
+
+fn arena_add_stmt(a: AstArena, tag: i64, av: i64, bv: i64, cv: i64, span: i64) -> i64 {
+    let sid: i64 = a.stmt_data.len() / 5;
+    a.stmt_data.push(tag);
+    a.stmt_data.push(av);
+    a.stmt_data.push(bv);
+    a.stmt_data.push(cv);
+    a.stmt_data.push(span);
+    sid
+}
+
+fn arena_add_pat(a: AstArena, tag: i64, av: i64, bv: i64, span: i64) -> i64 {
+    let pid: i64 = a.pat_data.len() / 4;
+    a.pat_data.push(tag);
+    a.pat_data.push(av);
+    a.pat_data.push(bv);
+    a.pat_data.push(span);
+    pid
+}
+
+fn arena_add_blk(a: AstArena, stmts_lid: i64, trail_eid: i64, span: i64) -> i64 {
+    let bid: i64 = a.blk_data.len() / 3;
+    a.blk_data.push(stmts_lid);
+    a.blk_data.push(trail_eid);
+    a.blk_data.push(span);
+    bid
+}
+
+fn arena_add_fn(a: AstArena, name_sid: i64, params_lid: i64, ret_tid: i64, eff: i64, body_bid: i64, span: i64) -> i64 {
+    let fid: i64 = a.fn_data.len() / 6;
+    a.fn_data.push(name_sid);
+    a.fn_data.push(params_lid);
+    a.fn_data.push(ret_tid);
+    a.fn_data.push(eff);
+    a.fn_data.push(body_bid);
+    a.fn_data.push(span);
+    fid
+}
+
+fn arena_add_sdef(a: AstArena, name_sid: i64, fields_lid: i64, is_linear: i64, span: i64) -> i64 {
+    let sid: i64 = a.sdef_data.len() / 4;
+    a.sdef_data.push(name_sid);
+    a.sdef_data.push(fields_lid);
+    a.sdef_data.push(is_linear);
+    a.sdef_data.push(span);
+    sid
+}
+
+fn arena_add_edef(a: AstArena, name_sid: i64, variants_lid: i64, span: i64) -> i64 {
+    let eid: i64 = a.edef_data.len() / 3;
+    a.edef_data.push(name_sid);
+    a.edef_data.push(variants_lid);
+    a.edef_data.push(span);
+    eid
+}
+
+fn item_pack(kind: i64, id: i64) -> i64 {
+    kind * 4294967296 + id
+}
+
+fn item_kind(v: i64) -> i64 {
+    v / 4294967296
+}
+
+fn item_id(v: i64) -> i64 {
+    v - item_kind(v) * 4294967296
+}
+
+struct Module {
+    name_sid: i64,
+    uses: Vec<i64>,
+    items: Vec<i64>,
+    arena: AstArena,
+}
