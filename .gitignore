@@ -1,4 +1,7 @@
 /target/
+compiler/main
+compiler/*.o
+compiler/*.vow.c
 /.claude/*.local.json
 /.claude/worktrees/
 /.claire/
