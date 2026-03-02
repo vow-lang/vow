@@ -1,0 +1,18 @@
+module VecBounds
+
+fn get_element(i: i64) -> i64 vow {
+  requires: i >= 0,
+  requires: i < 3
+} {
+  let v: Vec<i64> = Vec::new();
+  v.push(10);
+  v.push(20);
+  v.push(30);
+  v[i]
+}
+
+fn main() -> i32 [io] {
+  print_i64(get_element(0));
+  print_i64(get_element(2));
+  0
+}

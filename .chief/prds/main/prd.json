@@ -171,7 +171,7 @@
         "All examples placed in examples/ directory"
       ],
       "priority": 7,
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-012",

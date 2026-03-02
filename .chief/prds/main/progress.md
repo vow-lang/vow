@@ -9,7 +9,7 @@
 - `emit_inst` takes `vec_vars`, `string_vars`, and `hashmap_vars` HashSets; Phi/Return check all sets for modelled type handling
 - C emitter HashMap modeling: `__vow_hashmap_t` struct with `len` + `keys[64]` + `vals[64]` arrays; `collect_hashmap_vars()` same pattern as vec/string; insert uses concrete linear scan
 - Parameter `where` clauses: AST stores in `Param.refinement`; desugared to VowRequires in `lower_param_refinements()` (vow-ir/src/lower/vow.rs); Blame::Caller; lowered after GetArg/define, before explicit `lower_requires`
-- Vow function names must not clash with C stdlib names (`abs`, `double`, `printf`, etc.) — ESBMC C emitter uses them as-is in generated C
+- Vow function names must not clash with C reserved words OR stdlib names (`register`, `abs`, `double`, `printf`, etc.) — ESBMC C emitter uses them as-is in generated C
 - ESBMC C emitter: Phi variables are pre-declared at function top (before blocks), so Upsilon writes in earlier blocks can reference them
 - ESBMC `--unwind 10`: loop examples must iterate ≤8 times; constrain inputs with `requires: n <= 8`
 - Pre-existing formatting changes may exist in the working tree from `cargo fmt`; only commit files actually modified for the story
@@ -180,4 +180,23 @@
   - ESBMC uses `--unwind 10` for bounded model checking — loops must iterate at most ~8 times for verification to succeed. Constrain inputs with `requires: n <= 8` for loop examples.
   - `ensures: result == x + x` works for a standalone function, but cross-function ensures composition doesn't work (ESBMC verifies functions independently; Call returns nondet)
   - The if-else expression in Vow generates Upsilon/Phi IR; this was previously broken in the C emitter for ESBMC verification
+---
+
+## 2026-03-02 - US-011
+- What was implemented: Seven example programs demonstrating contracts over Vec, String, and HashMap collections. Four passing examples that compile, run, and verify successfully, plus three violation examples that produce structured counterexamples.
+- Files changed:
+  - `examples/vec_fill.vow` — Vec length contract with loop invariant: `fn fill_vec(n) -> Vec<i64> vow { requires: n >= 0, requires: n <= 8, ensures: result.len() == n }` with while loop tracking `invariant: i >= 0, invariant: i <= n`
+  - `examples/vec_bounds.vow` — Vec bounds-checking: `fn get_element(i) -> i64 vow { requires: i >= 0, requires: i < 3 }` creates 3-element Vec, accesses `v[i]`
+  - `examples/string_build.vow` — String length contract: `fn make_greeting() -> String vow { ensures: result.len() > 0 }` pushes 2 bytes
+  - `examples/map_insert.vow` — HashMap key-presence: `fn store_entry(k, v) -> HashMap<i64,i64> vow { ensures: result.contains_key(k), ensures: result.len() == 1 }`
+  - `examples/vec_overcount.vow` — Vec violation: ensures len==5 but only pushes 3 elements (counterexample shows len=3)
+  - `examples/string_empty.vow` — String violation: ensures len==0 after push_byte (counterexample shows len=1)
+  - `examples/map_missing.vow` — HashMap violation: ensures contains_key(42) but inserts key 1 (counterexample shows key mismatch)
+- **Learnings for future iterations:**
+  - `register` is a C keyword — function names in Vow must not clash with C reserved words (not just stdlib functions). Renamed to `store_entry`.
+  - Vec mutations (push) happen in-place on the `__vow_vec_t` struct in the C emitter — no Phi needed for the vec variable itself, only for scalar loop counters
+  - `result.len()` in ensures works for all three collection types: Vec falls through to `(_, "len")` → `__vow_vec_len`, String matches `(Some("String"), "len")` → `__vow_string_len`, HashMap matches `(Some("HashMap"), "len")` → `__vow_map_len`
+  - `result.contains_key(k)` in ensures works because HashMap::new() tags the result in `inst_struct_type`, and the ensures lowers `result` to the same InstId
+  - `String::from("")` in the ESBMC model creates a nondet-length string [0, 256); after push_byte, len >= 1, making `ensures: result.len() == 0` always violated
+  - Generic type annotations (`Vec<i64>`, `HashMap<i64, i64>`) tag values via `AstType::Generic` handler in `lower_stmt` (line 1449-1453 of lower/mod.rs)
 ---
