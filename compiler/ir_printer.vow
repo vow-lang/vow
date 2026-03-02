@@ -1,0 +1,431 @@
+module IrPrinter
+
+use ir
+
+fn i64_to_str(v: i64) -> String {
+    if v == 0 { return String::from("0"); }
+    let out: String = String::from("");
+    let mut n: i64 = v;
+    if n < 0 {
+        out.push_byte(45);
+        n = 0 - n;
+    }
+    let digits: Vec<i64> = Vec::new();
+    while n > 0 {
+        digits.push(n % 10);
+        n = n / 10;
+    }
+    let mut i: i64 = digits.len() - 1;
+    while i >= 0 {
+        out.push_byte(48 + digits[i]);
+        i = i - 1;
+    }
+    out
+}
+
+fn pad_right(s: String, width: i64) -> String {
+    let out: String = String::from("");
+    out.push_str(s);
+    let mut i: i64 = s.len();
+    while i < width {
+        out.push_byte(32);
+        i = i + 1;
+    }
+    out
+}
+
+fn debug_escape_str(s: String) -> String {
+    let out: String = String::from("");
+    out.push_byte(34);
+    let n: i64 = s.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let b: i64 = s.byte_at(i);
+        if b == 34 {
+            out.push_byte(92);
+            out.push_byte(34);
+        } else if b == 92 {
+            out.push_byte(92);
+            out.push_byte(92);
+        } else if b == 10 {
+            out.push_byte(92);
+            out.push_byte(110);
+        } else if b == 13 {
+            out.push_byte(92);
+            out.push_byte(114);
+        } else if b == 9 {
+            out.push_byte(92);
+            out.push_byte(116);
+        } else if b == 0 {
+            out.push_byte(92);
+            out.push_byte(48);
+        } else {
+            out.push_byte(b);
+        }
+        i = i + 1;
+    }
+    out.push_byte(34);
+    out
+}
+
+fn ir_ty_str(ty: i64) -> String {
+    if ty == ITY_I32() { return String::from("i32"); }
+    if ty == ITY_I64() { return String::from("i64"); }
+    if ty == ITY_F32() { return String::from("f32"); }
+    if ty == ITY_F64() { return String::from("f64"); }
+    if ty == ITY_BOOL() { return String::from("Bool"); }
+    if ty == ITY_UNIT() { return String::from("Void"); }
+    if ty == ITY_PTR() { return String::from("ptr"); }
+    if ty == ITY_LPTR() { return String::from("linear_ptr"); }
+    String::from("???")
+}
+
+fn opcode_name(op: i64) -> String {
+    if op == IOP_CONST_I32() { return String::from("ConstI32"); }
+    if op == IOP_CONST_I64() { return String::from("ConstI64"); }
+    if op == IOP_CONST_F32() { return String::from("ConstF32"); }
+    if op == IOP_CONST_F64() { return String::from("ConstF64"); }
+    if op == IOP_CONST_BOOL() { return String::from("ConstBool"); }
+    if op == IOP_CONST_STR() { return String::from("ConstStr"); }
+    if op == IOP_CONST_UNIT() { return String::from("ConstUnit"); }
+    if op == IOP_GET_ARG() { return String::from("GetArg"); }
+    if op == IOP_WADD_I32() { return String::from("WrappingAddI32"); }
+    if op == IOP_WSUB_I32() { return String::from("WrappingSubI32"); }
+    if op == IOP_WMUL_I32() { return String::from("WrappingMulI32"); }
+    if op == IOP_WDIV_I32() { return String::from("WrappingDivI32"); }
+    if op == IOP_WREM_I32() { return String::from("WrappingRemI32"); }
+    if op == IOP_CADD_I32() { return String::from("CheckedAddI32"); }
+    if op == IOP_CSUB_I32() { return String::from("CheckedSubI32"); }
+    if op == IOP_CMUL_I32() { return String::from("CheckedMulI32"); }
+    if op == IOP_CDIV_I32() { return String::from("CheckedDivI32"); }
+    if op == IOP_CREM_I32() { return String::from("CheckedRemI32"); }
+    if op == IOP_EQ_I32() { return String::from("EqI32"); }
+    if op == IOP_NE_I32() { return String::from("NeI32"); }
+    if op == IOP_LT_I32() { return String::from("LtI32"); }
+    if op == IOP_LE_I32() { return String::from("LeI32"); }
+    if op == IOP_GT_I32() { return String::from("GtI32"); }
+    if op == IOP_GE_I32() { return String::from("GeI32"); }
+    if op == IOP_WADD_I64() { return String::from("WrappingAddI64"); }
+    if op == IOP_WSUB_I64() { return String::from("WrappingSubI64"); }
+    if op == IOP_WMUL_I64() { return String::from("WrappingMulI64"); }
+    if op == IOP_WDIV_I64() { return String::from("WrappingDivI64"); }
+    if op == IOP_WREM_I64() { return String::from("WrappingRemI64"); }
+    if op == IOP_CADD_I64() { return String::from("CheckedAddI64"); }
+    if op == IOP_CSUB_I64() { return String::from("CheckedSubI64"); }
+    if op == IOP_CMUL_I64() { return String::from("CheckedMulI64"); }
+    if op == IOP_CDIV_I64() { return String::from("CheckedDivI64"); }
+    if op == IOP_CREM_I64() { return String::from("CheckedRemI64"); }
+    if op == IOP_EQ_I64() { return String::from("EqI64"); }
+    if op == IOP_NE_I64() { return String::from("NeI64"); }
+    if op == IOP_LT_I64() { return String::from("LtI64"); }
+    if op == IOP_LE_I64() { return String::from("LeI64"); }
+    if op == IOP_GT_I64() { return String::from("GtI64"); }
+    if op == IOP_GE_I64() { return String::from("GeI64"); }
+    if op == IOP_ADD_F32() { return String::from("AddF32"); }
+    if op == IOP_SUB_F32() { return String::from("SubF32"); }
+    if op == IOP_MUL_F32() { return String::from("MulF32"); }
+    if op == IOP_DIV_F32() { return String::from("DivF32"); }
+    if op == IOP_REM_F32() { return String::from("RemF32"); }
+    if op == IOP_EQ_F32() { return String::from("EqF32"); }
+    if op == IOP_NE_F32() { return String::from("NeF32"); }
+    if op == IOP_LT_F32() { return String::from("LtF32"); }
+    if op == IOP_LE_F32() { return String::from("LeF32"); }
+    if op == IOP_GT_F32() { return String::from("GtF32"); }
+    if op == IOP_GE_F32() { return String::from("GeF32"); }
+    if op == IOP_ADD_F64() { return String::from("AddF64"); }
+    if op == IOP_SUB_F64() { return String::from("SubF64"); }
+    if op == IOP_MUL_F64() { return String::from("MulF64"); }
+    if op == IOP_DIV_F64() { return String::from("DivF64"); }
+    if op == IOP_REM_F64() { return String::from("RemF64"); }
+    if op == IOP_EQ_F64() { return String::from("EqF64"); }
+    if op == IOP_NE_F64() { return String::from("NeF64"); }
+    if op == IOP_LT_F64() { return String::from("LtF64"); }
+    if op == IOP_LE_F64() { return String::from("LeF64"); }
+    if op == IOP_GT_F64() { return String::from("GtF64"); }
+    if op == IOP_GE_F64() { return String::from("GeF64"); }
+    if op == IOP_NOT() { return String::from("Not"); }
+    if op == IOP_AND() { return String::from("And"); }
+    if op == IOP_OR() { return String::from("Or"); }
+    if op == IOP_LOAD() { return String::from("Load"); }
+    if op == IOP_STORE() { return String::from("Store"); }
+    if op == IOP_BRANCH() { return String::from("Branch"); }
+    if op == IOP_JUMP() { return String::from("Jump"); }
+    if op == IOP_RETURN() { return String::from("Return"); }
+    if op == IOP_UNREACHABLE() { return String::from("Unreachable"); }
+    if op == IOP_PHI() { return String::from("Phi"); }
+    if op == IOP_UPSILON() { return String::from("Upsilon"); }
+    if op == IOP_VOW_REQ() { return String::from("VowRequires"); }
+    if op == IOP_VOW_ENS() { return String::from("VowEnsures"); }
+    if op == IOP_VOW_INV() { return String::from("VowInvariant"); }
+    if op == IOP_CALL() { return String::from("Call"); }
+    if op == IOP_REGION_ALLOC() { return String::from("RegionAlloc"); }
+    if op == IOP_REGION_FREE() { return String::from("RegionFree"); }
+    if op == IOP_LINEAR_CONSUME() { return String::from("LinearConsume"); }
+    if op == IOP_LINEAR_BORROW() { return String::from("LinearBorrow"); }
+    if op == IOP_FIELD_GET() { return String::from("FieldGet"); }
+    if op == IOP_FIELD_SET() { return String::from("FieldSet"); }
+    String::from("???")
+}
+
+fn effects_str(eff: i64) -> String {
+    let out: String = String::from("");
+    let mut first: i64 = 1;
+    if eff % 2 == 1 {
+        out.push_str(String::from("IO"));
+        first = 0;
+    }
+    if (eff / 2) % 2 == 1 {
+        if first == 0 { out.push_str(String::from(", ")); }
+        out.push_str(String::from("Panic"));
+        first = 0;
+    }
+    if (eff / 4) % 2 == 1 {
+        if first == 0 { out.push_str(String::from(", ")); }
+        out.push_str(String::from("Read"));
+        first = 0;
+    }
+    if (eff / 8) % 2 == 1 {
+        if first == 0 { out.push_str(String::from(", ")); }
+        out.push_str(String::from("Unsafe"));
+        first = 0;
+    }
+    if (eff / 16) % 2 == 1 {
+        if first == 0 { out.push_str(String::from(", ")); }
+        out.push_str(String::from("Write"));
+        first = 0;
+    }
+    out
+}
+
+fn format_data(inst: IrInst) -> String {
+    let dk: i64 = inst.dk;
+    if dk == IDATA_NONE() { return String::from(""); }
+    if dk == IDATA_CONST_I32() { return i64_to_str(inst.dv); }
+    if dk == IDATA_CONST_I64() { return i64_to_str(inst.dv); }
+    if dk == IDATA_CONST_F32() { return i64_to_str(inst.dv); }
+    if dk == IDATA_CONST_F64() { return i64_to_str(inst.dv); }
+    if dk == IDATA_CONST_BOOL() {
+        if inst.dv == 0 { return String::from("false"); }
+        return String::from("true");
+    }
+    if dk == IDATA_ARG_INDEX() { return i64_to_str(inst.dv); }
+    if dk == IDATA_PHI_TARGET() {
+        let out: String = String::from("%");
+        out.push_str(i64_to_str(inst.dv));
+        return out;
+    }
+    if dk == IDATA_CONST_STR() {
+        let out: String = String::from("@");
+        out.push_str(i64_to_str(inst.dv));
+        return out;
+    }
+    if dk == IDATA_CALL_TARGET() {
+        let out: String = String::from("func");
+        out.push_str(i64_to_str(inst.dv));
+        return out;
+    }
+    if dk == IDATA_CALL_EXTERN() {
+        let out: String = String::from("extern:");
+        out.push_str(inst.ds);
+        return out;
+    }
+    if dk == IDATA_BRANCH_TARGETS() {
+        let out: String = String::from("block_");
+        out.push_str(i64_to_str(inst.dv));
+        out.push_str(String::from(", block_"));
+        out.push_str(i64_to_str(inst.dv2));
+        return out;
+    }
+    if dk == IDATA_JUMP_TARGET() {
+        let out: String = String::from("block_");
+        out.push_str(i64_to_str(inst.dv));
+        return out;
+    }
+    if dk == IDATA_REGION_ID() {
+        let out: String = String::from("region_");
+        out.push_str(i64_to_str(inst.dv));
+        return out;
+    }
+    if dk == IDATA_VOW_ID() {
+        let out: String = String::from("vow_");
+        out.push_str(i64_to_str(inst.dv));
+        return out;
+    }
+    if dk == IDATA_ALLOC_SIZE() {
+        let out: String = String::from("size=");
+        out.push_str(i64_to_str(inst.dv));
+        out.push_str(String::from(",align="));
+        out.push_str(i64_to_str(inst.dv2));
+        return out;
+    }
+    if dk == IDATA_FIELD() {
+        let out: String = String::from("field_");
+        out.push_str(i64_to_str(inst.dv));
+        return out;
+    }
+    String::from("")
+}
+
+fn format_args(args: Vec<i64>) -> String {
+    let out: String = String::from("");
+    let n: i64 = args.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if i > 0 { out.push_str(String::from(", ")); }
+        out.push_byte(37);
+        out.push_str(i64_to_str(args[i]));
+        i = i + 1;
+    }
+    out
+}
+
+fn print_inst(inst: IrInst) -> String {
+    let out: String = String::from("    ");
+    out.push_str(pad_right(ir_ty_str(inst.ty), 10));
+    out.push_str(String::from("  %"));
+    out.push_str(i64_to_str(inst.id));
+    out.push_str(String::from(" = "));
+    let dstr: String = format_data(inst);
+    out.push_str(opcode_name(inst.op));
+    if dstr.len() > 0 {
+        out.push_byte(91);
+        out.push_str(dstr);
+        out.push_byte(93);
+    }
+    out.push_byte(40);
+    out.push_str(format_args(inst.args));
+    out.push_byte(41);
+    out
+}
+
+fn print_block(blk: IrBlock, is_entry: i64) -> String {
+    let out: String = String::from("");
+    if is_entry == 1 {
+        out.push_str(String::from("  entry (block "));
+        out.push_str(i64_to_str(blk.id));
+        out.push_str(String::from("):"));
+    } else {
+        out.push_str(String::from("  block_"));
+        out.push_str(i64_to_str(blk.id));
+        out.push_byte(58);
+    }
+    let n: i64 = blk.insts.len();
+    let mut i: i64 = 0;
+    while i < n {
+        out.push_byte(10);
+        let inst: IrInst = blk.insts[i];
+        out.push_str(print_inst(inst));
+        i = i + 1;
+    }
+    out
+}
+
+fn print_function(f: IrFunction) -> String {
+    let out: String = String::from("fn ");
+    out.push_str(f.name);
+    out.push_byte(40);
+    let np: i64 = f.params.len();
+    let mut i: i64 = 0;
+    while i < np {
+        if i > 0 { out.push_str(String::from(", ")); }
+        out.push_str(ir_ty_str(f.params[i]));
+        i = i + 1;
+    }
+    out.push_str(String::from(") -> "));
+    out.push_str(ir_ty_str(f.return_ty));
+    out.push_str(String::from(" ["));
+    out.push_str(effects_str(f.effects));
+    out.push_str(String::from("]:"));
+    let nb: i64 = f.blocks.len();
+    i = 0;
+    while i < nb {
+        out.push_byte(10);
+        let blk: IrBlock = f.blocks[i];
+        let is_entry: i64 = if i == 0 { 1 } else { 0 };
+        out.push_str(print_block(blk, is_entry));
+        i = i + 1;
+    }
+    out
+}
+
+fn print_module(m: IrModule) -> String {
+    let out: String = String::from("");
+    let ns: i64 = m.strings.len();
+    if ns > 0 {
+        out.push_str(String::from("strings:"));
+        let mut i: i64 = 0;
+        while i < ns {
+            out.push_str(String::from("\n  @"));
+            out.push_str(i64_to_str(i));
+            out.push_str(String::from(" = "));
+            out.push_str(debug_escape_str(m.strings[i]));
+            i = i + 1;
+        }
+    }
+
+    let nsl: i64 = m.struct_layouts.len();
+    let mut si: i64 = 0;
+    while si < nsl {
+        if out.len() > 0 { out.push_str(String::from("\n\n")); }
+        let sl: IrStructLayout = m.struct_layouts[si];
+        out.push_str(String::from("struct "));
+        out.push_str(sl.name);
+        out.push_str(String::from(" { "));
+        let nf: i64 = sl.fields.len();
+        let mut fi: i64 = 0;
+        while fi < nf {
+            if fi > 0 { out.push_str(String::from(", ")); }
+            let fld: IrFieldLayout = sl.fields[fi];
+            out.push_str(fld.name);
+            out.push_str(String::from(": "));
+            out.push_str(ir_ty_str(fld.ty));
+            fi = fi + 1;
+        }
+        out.push_str(String::from(" }"));
+        si = si + 1;
+    }
+
+    let nel: i64 = m.enum_layouts.len();
+    let mut ei: i64 = 0;
+    while ei < nel {
+        if out.len() > 0 { out.push_str(String::from("\n\n")); }
+        let el: IrEnumLayout = m.enum_layouts[ei];
+        out.push_str(String::from("enum "));
+        out.push_str(el.name);
+        out.push_str(String::from(" { "));
+        let nv: i64 = el.variants.len();
+        let mut vi: i64 = 0;
+        while vi < nv {
+            if vi > 0 { out.push_str(String::from(", ")); }
+            let vr: IrVariantLayout = el.variants[vi];
+            out.push_str(vr.name);
+            out.push_str(String::from("(tag="));
+            out.push_str(i64_to_str(vr.tag));
+            let npay: i64 = vr.payload.len();
+            if npay > 0 {
+                out.push_str(String::from(", "));
+                let mut pi: i64 = 0;
+                while pi < npay {
+                    if pi > 0 { out.push_str(String::from(", ")); }
+                    let pf: IrFieldLayout = vr.payload[pi];
+                    out.push_str(ir_ty_str(pf.ty));
+                    pi = pi + 1;
+                }
+            }
+            out.push_byte(41);
+            vi = vi + 1;
+        }
+        out.push_str(String::from(" }"));
+        ei = ei + 1;
+    }
+
+    let nfn: i64 = m.functions.len();
+    let mut fi: i64 = 0;
+    while fi < nfn {
+        if out.len() > 0 { out.push_str(String::from("\n\n")); }
+        let func: IrFunction = m.functions[fi];
+        out.push_str(print_function(func));
+        fi = fi + 1;
+    }
+    out
+}

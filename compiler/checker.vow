@@ -675,6 +675,10 @@ fn check_expr(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         return CTY_UNIT();
     }
 
+    if tag == EXPR_RESULT() {
+        return e.cur_ret_tid;
+    }
+
     if tag == EXPR_TUPLE() {
         let elems_lid: i64 = expr_a(a, eid);
         let n: i64 = list_len(a, elems_lid);

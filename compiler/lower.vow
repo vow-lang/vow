@@ -1,0 +1,1944 @@
+module Lower
+
+use ast
+use ir
+
+struct LowerCtx {
+    func: IrFunction,
+    current_block: i64,
+    next_inst_id: i64,
+    scope_vars: Vec<String>,
+    scope_vals: Vec<i64>,
+    scope_starts: Vec<i64>,
+    string_pool: Vec<String>,
+    func_names: Vec<String>,
+    func_ret_tys: Vec<i64>,
+    struct_names: Vec<String>,
+    struct_field_lists: Vec<Vec<String>>,
+    struct_field_type_names: Vec<Vec<String>>,
+    enum_names: Vec<String>,
+    enum_variant_lists: Vec<Vec<String>>,
+    tag_inst_ids: Vec<i64>,
+    tag_names: Vec<String>,
+    arena: AstArena,
+    cur_vow_lid: i64,
+}
+
+struct ScopeSnap {
+    vars_len: i64,
+    vals_len: i64,
+    starts_len: i64,
+}
+
+fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena) -> LowerCtx {
+    let f: IrFunction = ir_function_new(0, name, return_ty, effects);
+    let entry: IrBlock = ir_block_new(0);
+    f.blocks.push(entry);
+    LowerCtx {
+        func: f,
+        current_block: 0,
+        next_inst_id: 0,
+        scope_vars: Vec::new(),
+        scope_vals: Vec::new(),
+        scope_starts: Vec::new(),
+        string_pool: Vec::new(),
+        func_names: Vec::new(),
+        func_ret_tys: Vec::new(),
+        struct_names: Vec::new(),
+        struct_field_lists: Vec::new(),
+        struct_field_type_names: Vec::new(),
+        enum_names: Vec::new(),
+        enum_variant_lists: Vec::new(),
+        tag_inst_ids: Vec::new(),
+        tag_names: Vec::new(),
+        arena: arena,
+        cur_vow_lid: -1,
+    }
+}
+
+fn lctx_new_block(ctx: LowerCtx) -> i64 {
+    let bid: i64 = ctx.func.blocks.len();
+    let blk: IrBlock = ir_block_new(bid);
+    ctx.func.blocks.push(blk);
+    bid
+}
+
+fn lctx_switch_to_block(ctx: LowerCtx, bid: i64) {
+    ctx.current_block = bid;
+}
+
+fn lctx_is_terminated(ctx: LowerCtx) -> bool {
+    let blk: IrBlock = ctx.func.blocks[ctx.current_block];
+    let n: i64 = blk.insts.len();
+    if n == 0 { return false; }
+    let last: IrInst = blk.insts[n - 1];
+    iop_is_terminal(last.op)
+}
+
+fn lctx_emit(ctx: LowerCtx, op: i64, ty: i64, args: Vec<i64>, dk: i64, dv: i64, dv2: i64, ds: String) -> i64 {
+    if lctx_is_terminated(ctx) {
+        return ctx.next_inst_id;
+    }
+    let id: i64 = ctx.next_inst_id;
+    ctx.next_inst_id = id + 1;
+    let inst: IrInst = ir_inst_new(id, op, ty, args, dk, dv, dv2, ds);
+    let blk: IrBlock = ctx.func.blocks[ctx.current_block];
+    blk.insts.push(inst);
+    id
+}
+
+fn lctx_push_scope(ctx: LowerCtx) {
+    ctx.scope_starts.push(ctx.scope_vars.len());
+}
+
+fn lctx_pop_scope(ctx: LowerCtx) {
+    let n: i64 = ctx.scope_starts.len();
+    if n == 0 { return; }
+    let start: i64 = ctx.scope_starts[n - 1];
+    let cur: i64 = ctx.scope_vars.len();
+    let mut i: i64 = cur;
+    while i > start {
+        i = i - 1;
+        ctx.scope_vars.pop();
+        ctx.scope_vals.pop();
+    }
+    ctx.scope_starts.pop();
+}
+
+fn lctx_define(ctx: LowerCtx, name: String, val: i64) {
+    ctx.scope_vars.push(name);
+    ctx.scope_vals.push(val);
+}
+
+fn lctx_assign(ctx: LowerCtx, name: String, val: i64) {
+    let n: i64 = ctx.scope_vars.len();
+    let mut i: i64 = n;
+    while i > 0 {
+        i = i - 1;
+        if ctx.scope_vars[i] == name {
+            ctx.scope_vals[i] = val;
+            return;
+        }
+    }
+}
+
+fn lctx_lookup(ctx: LowerCtx, name: String) -> i64 {
+    let n: i64 = ctx.scope_vars.len();
+    let mut i: i64 = n;
+    while i > 0 {
+        i = i - 1;
+        if ctx.scope_vars[i] == name {
+            return ctx.scope_vals[i];
+        }
+    }
+    -1
+}
+
+fn lctx_snapshot(ctx: LowerCtx) -> ScopeSnap {
+    ScopeSnap {
+        vars_len: ctx.scope_vars.len(),
+        vals_len: ctx.scope_vals.len(),
+        starts_len: ctx.scope_starts.len(),
+    }
+}
+
+fn lctx_restore(ctx: LowerCtx, snap: ScopeSnap) {
+    let cur_vars: i64 = ctx.scope_vars.len();
+    let mut i: i64 = cur_vars;
+    while i > snap.vars_len {
+        i = i - 1;
+        ctx.scope_vars.pop();
+        ctx.scope_vals.pop();
+    }
+    let cur_starts: i64 = ctx.scope_starts.len();
+    let mut j: i64 = cur_starts;
+    while j > snap.starts_len {
+        j = j - 1;
+        ctx.scope_starts.pop();
+    }
+}
+
+fn lctx_tag(ctx: LowerCtx, inst_id: i64, name: String) {
+    ctx.tag_inst_ids.push(inst_id);
+    ctx.tag_names.push(name);
+}
+
+fn lctx_get_tag(ctx: LowerCtx, inst_id: i64) -> String {
+    let n: i64 = ctx.tag_inst_ids.len();
+    let mut i: i64 = n;
+    while i > 0 {
+        i = i - 1;
+        if ctx.tag_inst_ids[i] == inst_id {
+            return ctx.tag_names[i];
+        }
+    }
+    String::from("")
+}
+
+fn lctx_intern_str(ctx: LowerCtx, s: String) -> i64 {
+    let n: i64 = ctx.string_pool.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if ctx.string_pool[i] == s {
+            return i;
+        }
+        i = i + 1;
+    }
+    ctx.string_pool.push(s);
+    n
+}
+
+fn lctx_find_func(ctx: LowerCtx, name: String) -> i64 {
+    let n: i64 = ctx.func_names.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if ctx.func_names[i] == name {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn lctx_find_struct(ctx: LowerCtx, name: String) -> i64 {
+    let n: i64 = ctx.struct_names.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if ctx.struct_names[i] == name {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn lctx_find_enum(ctx: LowerCtx, name: String) -> i64 {
+    let n: i64 = ctx.enum_names.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if ctx.enum_names[i] == name {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn lctx_find_variant_tag(ctx: LowerCtx, enum_name: String, variant_name: String) -> i64 {
+    let eidx: i64 = lctx_find_enum(ctx, enum_name);
+    if eidx == -1 { return 0; }
+    let variants: Vec<String> = ctx.enum_variant_lists[eidx];
+    let n: i64 = variants.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if variants[i] == variant_name {
+            return i;
+        }
+        i = i + 1;
+    }
+    0
+}
+
+fn lctx_struct_field_index(ctx: LowerCtx, struct_name: String, field_name: String) -> i64 {
+    let sidx: i64 = lctx_find_struct(ctx, struct_name);
+    if sidx == -1 { return 0; }
+    let fields: Vec<String> = ctx.struct_field_lists[sidx];
+    let n: i64 = fields.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if fields[i] == field_name {
+            return i;
+        }
+        i = i + 1;
+    }
+    0
+}
+
+fn lctx_struct_field_type(ctx: LowerCtx, struct_name: String, field_idx: i64) -> String {
+    let sidx: i64 = lctx_find_struct(ctx, struct_name);
+    if sidx == -1 { return String::from(""); }
+    let type_names: Vec<String> = ctx.struct_field_type_names[sidx];
+    if field_idx < type_names.len() {
+        return type_names[field_idx];
+    }
+    String::from("")
+}
+
+fn lctx_alloc_vow(ctx: LowerCtx, desc: String, blame: i64, binding_ids: Vec<i64>, binding_names: Vec<String>) -> i64 {
+    let vid: i64 = ctx.func.vows.len();
+    let entry: IrVowEntry = IrVowEntry {
+        id: vid,
+        description: desc,
+        blame: blame,
+        binding_ids: binding_ids,
+        binding_names: binding_names,
+    };
+    ctx.func.vows.push(entry);
+    vid
+}
+
+fn lower_ast_ty(a: AstArena, tid: i64) -> i64 {
+    if tid == -1 { return ITY_UNIT(); }
+    let tag: i64 = type_tag(a, tid);
+    if tag == TY_UNIT() { return ITY_UNIT(); }
+    if tag == TY_NAMED() {
+        let name_sid: i64 = type_a(a, tid);
+        let name: String = arena_str(a, name_sid);
+        if name == String::from("i32") { return ITY_I32(); }
+        if name == String::from("i64") { return ITY_I64(); }
+        if name == String::from("f32") { return ITY_F32(); }
+        if name == String::from("f64") { return ITY_F64(); }
+        if name == String::from("bool") { return ITY_BOOL(); }
+        if name == String::from("String") { return ITY_PTR(); }
+        if name == String::from("str") { return ITY_PTR(); }
+        return ITY_PTR();
+    }
+    if tag == TY_GENERIC() { return ITY_PTR(); }
+    ITY_UNIT()
+}
+
+fn binop_opcode(op: i64) -> i64 {
+    if op == BINOP_ADD() { return IOP_WADD_I64(); }
+    if op == BINOP_SUB() { return IOP_WSUB_I64(); }
+    if op == BINOP_MUL() { return IOP_WMUL_I64(); }
+    if op == BINOP_DIV() { return IOP_WDIV_I64(); }
+    if op == BINOP_REM() { return IOP_WREM_I64(); }
+    if op == BINOP_ADD_CHK() { return IOP_CADD_I64(); }
+    if op == BINOP_SUB_CHK() { return IOP_CSUB_I64(); }
+    if op == BINOP_MUL_CHK() { return IOP_CMUL_I64(); }
+    if op == BINOP_DIV_CHK() { return IOP_CDIV_I64(); }
+    if op == BINOP_REM_CHK() { return IOP_CREM_I64(); }
+    if op == BINOP_EQ() { return IOP_EQ_I64(); }
+    if op == BINOP_NE() { return IOP_NE_I64(); }
+    if op == BINOP_LT() { return IOP_LT_I64(); }
+    if op == BINOP_LE() { return IOP_LE_I64(); }
+    if op == BINOP_GT() { return IOP_GT_I64(); }
+    if op == BINOP_GE() { return IOP_GE_I64(); }
+    if op == BINOP_AND() { return IOP_AND(); }
+    if op == BINOP_OR() { return IOP_OR(); }
+    IOP_WADD_I64()
+}
+
+fn binop_result_ty(op: i64) -> i64 {
+    if op == BINOP_EQ() { return ITY_BOOL(); }
+    if op == BINOP_NE() { return ITY_BOOL(); }
+    if op == BINOP_LT() { return ITY_BOOL(); }
+    if op == BINOP_LE() { return ITY_BOOL(); }
+    if op == BINOP_GT() { return ITY_BOOL(); }
+    if op == BINOP_GE() { return ITY_BOOL(); }
+    if op == BINOP_AND() { return ITY_BOOL(); }
+    if op == BINOP_OR() { return ITY_BOOL(); }
+    ITY_I64()
+}
+
+fn builtin_to_extern(name: String) -> String {
+    if name == String::from("print_str") { return String::from("__vow_string_print"); }
+    if name == String::from("print_i64") { return String::from("__vow_print_i64"); }
+    if name == String::from("eprintln_str") { return String::from("__vow_eprintln_str"); }
+    if name == String::from("fs_read") { return String::from("__vow_fs_read"); }
+    if name == String::from("fs_write") { return String::from("__vow_fs_write"); }
+    if name == String::from("args") { return String::from("__vow_args"); }
+    if name == String::from("process_exit") { return String::from("__vow_process_exit"); }
+    String::from("")
+}
+
+fn builtin_ret_ty(name: String) -> i64 {
+    if name == String::from("print_str") { return ITY_UNIT(); }
+    if name == String::from("print_i64") { return ITY_UNIT(); }
+    if name == String::from("eprintln_str") { return ITY_UNIT(); }
+    if name == String::from("fs_read") { return ITY_PTR(); }
+    if name == String::from("fs_write") { return ITY_I64(); }
+    if name == String::from("args") { return ITY_PTR(); }
+    if name == String::from("process_exit") { return ITY_UNIT(); }
+    ITY_UNIT()
+}
+
+fn collect_assigned_vars(ctx: LowerCtx, eid: i64) -> Vec<String> {
+    let result: Vec<String> = Vec::new();
+    collect_assigned_in_expr(ctx, eid, result);
+    result
+}
+
+fn collect_assigned_in_expr(ctx: LowerCtx, eid: i64, out: Vec<String>) {
+    let a: AstArena = ctx.arena;
+    let tag: i64 = expr_tag(a, eid);
+    if tag == EXPR_ASSIGN() {
+        let lhs_eid: i64 = expr_a(a, eid);
+        let lhs_tag: i64 = expr_tag(a, lhs_eid);
+        if lhs_tag == EXPR_IDENT() {
+            let name_sid: i64 = expr_a(a, lhs_eid);
+            let name: String = arena_str(a, name_sid);
+            let already: bool = vec_contains_str(out, name);
+            if !already {
+                out.push(name);
+            }
+        }
+    } else if tag == EXPR_BLOCK() {
+        let bid: i64 = expr_a(a, eid);
+        collect_assigned_in_block(ctx, bid, out);
+    } else if tag == EXPR_IF() {
+        let then_bid: i64 = expr_b(a, eid);
+        let else_eid: i64 = expr_c(a, eid);
+        collect_assigned_in_block(ctx, then_bid, out);
+        if else_eid != -1 {
+            collect_assigned_in_expr(ctx, else_eid, out);
+        }
+    } else if tag == EXPR_WHILE() {
+        let body_bid: i64 = expr_b(a, eid);
+        collect_assigned_in_block(ctx, body_bid, out);
+    }
+}
+
+fn collect_assigned_in_block(ctx: LowerCtx, bid: i64, out: Vec<String>) {
+    let a: AstArena = ctx.arena;
+    let stmts_lid: i64 = blk_stmts(a, bid);
+    let n: i64 = list_len(a, stmts_lid);
+    let mut i: i64 = 0;
+    while i < n {
+        let sid: i64 = list_get(a, stmts_lid, i);
+        let stag: i64 = stmt_tag(a, sid);
+        if stag == STMT_EXPR() {
+            let se_eid: i64 = stmt_a(a, sid);
+            collect_assigned_in_expr(ctx, se_eid, out);
+        }
+        i = i + 1;
+    }
+}
+
+fn vec_contains_str(v: Vec<String>, s: String) -> bool {
+    let n: i64 = v.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if v[i] == s {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn backpatch_upsilon(ctx: LowerCtx, block_id: i64, upsilon_id: i64, phi_id: i64) {
+    let blk: IrBlock = ctx.func.blocks[block_id];
+    let n: i64 = blk.insts.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let inst: IrInst = blk.insts[i];
+        if inst.id == upsilon_id {
+            inst.dv = phi_id;
+            return;
+        }
+        i = i + 1;
+    }
+}
+
+fn collect_if_mutations(ctx: LowerCtx, then_bid: i64, else_eid: i64) -> Vec<String> {
+    let result: Vec<String> = Vec::new();
+    collect_assigned_in_block(ctx, then_bid, result);
+    if else_eid != -1 {
+        collect_assigned_in_expr(ctx, else_eid, result);
+    }
+    let filtered: Vec<String> = Vec::new();
+    let n: i64 = result.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let name: String = result[i];
+        let val: i64 = lctx_lookup(ctx, name);
+        if val != -1 {
+            filtered.push(name);
+        }
+        i = i + 1;
+    }
+    filtered
+}
+
+fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
+    let a: AstArena = ctx.arena;
+    let tag: i64 = expr_tag(a, eid);
+
+    if tag == EXPR_LIT_INT() {
+        let val: i64 = expr_a(a, eid);
+        let args: Vec<i64> = Vec::new();
+        return lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), args, IDATA_CONST_I64(), val, 0, String::from(""));
+    }
+
+    if tag == EXPR_LIT_BOOL() {
+        let val: i64 = expr_a(a, eid);
+        let args: Vec<i64> = Vec::new();
+        return lctx_emit(ctx, IOP_CONST_BOOL(), ITY_BOOL(), args, IDATA_CONST_BOOL(), val, 0, String::from(""));
+    }
+
+    if tag == EXPR_LIT_STR() {
+        let sid: i64 = expr_a(a, eid);
+        let s: String = arena_str(a, sid);
+        let pool_idx: i64 = lctx_intern_str(ctx, s);
+        let args: Vec<i64> = Vec::new();
+        let str_id: i64 = lctx_emit(ctx, IOP_CONST_STR(), ITY_PTR(), args, IDATA_CONST_STR(), pool_idx, 0, String::from(""));
+        let call_args: Vec<i64> = Vec::new();
+        call_args.push(str_id);
+        let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_from_cstr"));
+        lctx_tag(ctx, result, String::from("String"));
+        return result;
+    }
+
+    if tag == EXPR_LIT_FLOAT() {
+        let bits: i64 = expr_a(a, eid);
+        let args: Vec<i64> = Vec::new();
+        return lctx_emit(ctx, IOP_CONST_F64(), ITY_F64(), args, IDATA_CONST_F64(), bits, 0, String::from(""));
+    }
+
+    if tag == EXPR_IDENT() {
+        let name_sid: i64 = expr_a(a, eid);
+        let name: String = arena_str(a, name_sid);
+        let val: i64 = lctx_lookup(ctx, name);
+        if val != -1 {
+            return val;
+        }
+        let args: Vec<i64> = Vec::new();
+        return lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), args, IDATA_NONE(), 0, 0, String::from(""));
+    }
+
+    if tag == EXPR_RESULT() {
+        let val: i64 = lctx_lookup(ctx, String::from("result"));
+        if val != -1 {
+            return val;
+        }
+        let args: Vec<i64> = Vec::new();
+        return lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), args, IDATA_NONE(), 0, 0, String::from(""));
+    }
+
+    if tag == EXPR_BINOP() {
+        let op: i64 = expr_a(a, eid);
+        let lhs_eid: i64 = expr_b(a, eid);
+        let rhs_eid: i64 = expr_c(a, eid);
+        let lhs_id: i64 = lower_expr(ctx, lhs_eid);
+        let rhs_id: i64 = lower_expr(ctx, rhs_eid);
+        let lhs_tag_str: String = lctx_get_tag(ctx, lhs_id);
+        let rhs_tag_str: String = lctx_get_tag(ctx, rhs_id);
+        if (op == BINOP_EQ() || op == BINOP_NE()) && (lhs_tag_str == String::from("String") || rhs_tag_str == String::from("String")) {
+            let call_args: Vec<i64> = Vec::new();
+            call_args.push(lhs_id);
+            call_args.push(rhs_id);
+            let eq_id: i64 = lctx_emit(ctx, IOP_CALL(), ITY_BOOL(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_eq"));
+            if op == BINOP_NE() {
+                let not_args: Vec<i64> = Vec::new();
+                not_args.push(eq_id);
+                return lctx_emit(ctx, IOP_NOT(), ITY_BOOL(), not_args, IDATA_NONE(), 0, 0, String::from(""));
+            }
+            return eq_id;
+        }
+        let iop: i64 = binop_opcode(op);
+        let rty: i64 = binop_result_ty(op);
+        let bin_args: Vec<i64> = Vec::new();
+        bin_args.push(lhs_id);
+        bin_args.push(rhs_id);
+        return lctx_emit(ctx, iop, rty, bin_args, IDATA_NONE(), 0, 0, String::from(""));
+    }
+
+    if tag == EXPR_UNOP() {
+        let op: i64 = expr_a(a, eid);
+        let operand_eid: i64 = expr_b(a, eid);
+        let operand_id: i64 = lower_expr(ctx, operand_eid);
+        let un_args: Vec<i64> = Vec::new();
+        un_args.push(operand_id);
+        if op == UNOP_NOT() {
+            return lctx_emit(ctx, IOP_NOT(), ITY_BOOL(), un_args, IDATA_NONE(), 0, 0, String::from(""));
+        }
+        let zero_args: Vec<i64> = Vec::new();
+        let zero_id: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), zero_args, IDATA_CONST_I64(), 0, 0, String::from(""));
+        let neg_args: Vec<i64> = Vec::new();
+        neg_args.push(zero_id);
+        neg_args.push(operand_id);
+        return lctx_emit(ctx, IOP_WSUB_I64(), ITY_I64(), neg_args, IDATA_NONE(), 0, 0, String::from(""));
+    }
+
+    if tag == EXPR_CALL() {
+        let callee_eid: i64 = expr_a(a, eid);
+        let args_lid: i64 = expr_b(a, eid);
+        let callee_tag: i64 = expr_tag(a, callee_eid);
+        let fn_name: String = String::from("");
+        if callee_tag == EXPR_IDENT() {
+            let name_sid: i64 = expr_a(a, callee_eid);
+            fn_name = arena_str(a, name_sid);
+        }
+        let ext: String = builtin_to_extern(fn_name);
+        if ext != String::from("") {
+            let ret_ty: i64 = builtin_ret_ty(fn_name);
+            let call_args: Vec<i64> = Vec::new();
+            let nargs: i64 = list_len(a, args_lid);
+            let mut ai: i64 = 0;
+            while ai < nargs {
+                let arg_eid: i64 = list_get(a, args_lid, ai);
+                let arg_id: i64 = lower_expr(ctx, arg_eid);
+                call_args.push(arg_id);
+                ai = ai + 1;
+            }
+            let result: i64 = lctx_emit(ctx, IOP_CALL(), ret_ty, call_args, IDATA_CALL_EXTERN(), 0, 0, ext);
+            if fn_name == String::from("fs_read") {
+                lctx_tag(ctx, result, String::from("String"));
+            }
+            if fn_name == String::from("args") {
+                lctx_tag(ctx, result, String::from("Vec"));
+            }
+            return result;
+        }
+        let fidx: i64 = lctx_find_func(ctx, fn_name);
+        if fidx != -1 {
+            let call_args: Vec<i64> = Vec::new();
+            let nargs: i64 = list_len(a, args_lid);
+            let mut ai: i64 = 0;
+            while ai < nargs {
+                let arg_eid: i64 = list_get(a, args_lid, ai);
+                let arg_id: i64 = lower_expr(ctx, arg_eid);
+                call_args.push(arg_id);
+                ai = ai + 1;
+            }
+            let ret_ty: i64 = ctx.func_ret_tys[fidx];
+            return lctx_emit(ctx, IOP_CALL(), ret_ty, call_args, IDATA_CALL_TARGET(), fidx, 0, String::from(""));
+        }
+        let call_args: Vec<i64> = Vec::new();
+        let nargs: i64 = list_len(a, args_lid);
+        let mut ai: i64 = 0;
+        while ai < nargs {
+            let arg_eid: i64 = list_get(a, args_lid, ai);
+            let arg_id: i64 = lower_expr(ctx, arg_eid);
+            call_args.push(arg_id);
+            ai = ai + 1;
+        }
+        return lctx_emit(ctx, IOP_CALL(), ITY_I64(), call_args, IDATA_CALL_EXTERN(), 0, 0, fn_name);
+    }
+
+    if tag == EXPR_IF() {
+        let cond_eid: i64 = expr_a(a, eid);
+        let then_bid: i64 = expr_b(a, eid);
+        let else_eid: i64 = expr_c(a, eid);
+
+        let mutations: Vec<String> = collect_if_mutations(ctx, then_bid, else_eid);
+
+        let cond_id: i64 = lower_expr(ctx, cond_eid);
+
+        let then_block: i64 = lctx_new_block(ctx);
+        let else_block: i64 = lctx_new_block(ctx);
+        let merge_block: i64 = lctx_new_block(ctx);
+
+        let br_args: Vec<i64> = Vec::new();
+        br_args.push(cond_id);
+        lctx_emit(ctx, IOP_BRANCH(), ITY_UNIT(), br_args, IDATA_BRANCH_TARGETS(), then_block, else_block, String::from(""));
+
+        let snap: ScopeSnap = lctx_snapshot(ctx);
+
+        lctx_switch_to_block(ctx, then_block);
+        let then_result: i64 = lower_block(ctx, then_bid);
+        let then_exit_block: i64 = ctx.current_block;
+
+        let mut_up_then: Vec<i64> = Vec::new();
+        let nmut: i64 = mutations.len();
+        let mut mi: i64 = 0;
+        while mi < nmut {
+            let mname: String = mutations[mi];
+            let mval: i64 = lctx_lookup(ctx, mname);
+            let up_args: Vec<i64> = Vec::new();
+            up_args.push(mval);
+            let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+            mut_up_then.push(up_id);
+            mi = mi + 1;
+        }
+
+        let then_up_args: Vec<i64> = Vec::new();
+        then_up_args.push(then_result);
+        let then_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), then_up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+
+        if !lctx_is_terminated(ctx) {
+            let jmp_args: Vec<i64> = Vec::new();
+            lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), merge_block, 0, String::from(""));
+        }
+
+        lctx_restore(ctx, snap);
+        lctx_switch_to_block(ctx, else_block);
+
+        let else_result: i64 = {
+            if else_eid != -1 {
+                lower_expr(ctx, else_eid)
+            } else {
+                let u_args: Vec<i64> = Vec::new();
+                lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
+            }
+        };
+        let else_exit_block: i64 = ctx.current_block;
+
+        let mut_up_else: Vec<i64> = Vec::new();
+        let mut mi2: i64 = 0;
+        while mi2 < nmut {
+            let mname: String = mutations[mi2];
+            let mval: i64 = lctx_lookup(ctx, mname);
+            let up_args: Vec<i64> = Vec::new();
+            up_args.push(mval);
+            let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+            mut_up_else.push(up_id);
+            mi2 = mi2 + 1;
+        }
+
+        let else_up_args: Vec<i64> = Vec::new();
+        else_up_args.push(else_result);
+        let else_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), else_up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+
+        if !lctx_is_terminated(ctx) {
+            let jmp_args: Vec<i64> = Vec::new();
+            lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), merge_block, 0, String::from(""));
+        }
+
+        lctx_restore(ctx, snap);
+        lctx_switch_to_block(ctx, merge_block);
+
+        let mut mi3: i64 = 0;
+        while mi3 < nmut {
+            let mname: String = mutations[mi3];
+            let phi_args: Vec<i64> = Vec::new();
+            let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), ITY_I64(), phi_args, IDATA_NONE(), 0, 0, String::from(""));
+            backpatch_upsilon(ctx, then_exit_block, mut_up_then[mi3], phi_id);
+            backpatch_upsilon(ctx, else_exit_block, mut_up_else[mi3], phi_id);
+            lctx_assign(ctx, mname, phi_id);
+            mi3 = mi3 + 1;
+        }
+
+        let phi_args: Vec<i64> = Vec::new();
+        let result_ty: i64 = ITY_I64();
+        let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), result_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
+        backpatch_upsilon(ctx, then_exit_block, then_up_id, phi_id);
+        backpatch_upsilon(ctx, else_exit_block, else_up_id, phi_id);
+        return phi_id;
+    }
+
+    if tag == EXPR_WHILE() {
+        let cond_eid: i64 = expr_a(a, eid);
+        let body_bid: i64 = expr_b(a, eid);
+        let vow_lid: i64 = expr_c(a, eid);
+
+        let assigned: Vec<String> = collect_assigned_vars(ctx, eid);
+
+        let header_block: i64 = lctx_new_block(ctx);
+        let body_block: i64 = lctx_new_block(ctx);
+        let exit_block: i64 = lctx_new_block(ctx);
+
+        let nassigned: i64 = assigned.len();
+        let phi_ids: Vec<i64> = Vec::new();
+        let pre_up_ids: Vec<i64> = Vec::new();
+        let pre_header_block: i64 = ctx.current_block;
+
+        let mut ai: i64 = 0;
+        while ai < nassigned {
+            let vname: String = assigned[ai];
+            let cur_val: i64 = lctx_lookup(ctx, vname);
+            let val_ty: i64 = ITY_I64();
+            let up_args: Vec<i64> = Vec::new();
+            up_args.push(cur_val);
+            let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), val_ty, up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+            pre_up_ids.push(up_id);
+            ai = ai + 1;
+        }
+
+        let jmp_args: Vec<i64> = Vec::new();
+        lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), header_block, 0, String::from(""));
+
+        lctx_switch_to_block(ctx, header_block);
+
+        let mut ai2: i64 = 0;
+        while ai2 < nassigned {
+            let vname: String = assigned[ai2];
+            let phi_args: Vec<i64> = Vec::new();
+            let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), ITY_I64(), phi_args, IDATA_NONE(), 0, 0, String::from(""));
+            phi_ids.push(phi_id);
+            lctx_assign(ctx, vname, phi_id);
+            ai2 = ai2 + 1;
+        }
+
+        if vow_lid != -1 {
+            lower_invariant_clauses(ctx, vow_lid);
+        }
+
+        let cond_id: i64 = lower_expr(ctx, cond_eid);
+        let br_args: Vec<i64> = Vec::new();
+        br_args.push(cond_id);
+        lctx_emit(ctx, IOP_BRANCH(), ITY_UNIT(), br_args, IDATA_BRANCH_TARGETS(), body_block, exit_block, String::from(""));
+
+        let mut bpi: i64 = 0;
+        while bpi < nassigned {
+            backpatch_upsilon(ctx, pre_header_block, pre_up_ids[bpi], phi_ids[bpi]);
+            bpi = bpi + 1;
+        }
+
+        lctx_switch_to_block(ctx, body_block);
+        lower_block(ctx, body_bid);
+
+        let mut ai3: i64 = 0;
+        while ai3 < nassigned {
+            let vname: String = assigned[ai3];
+            let new_val: i64 = lctx_lookup(ctx, vname);
+            let val_ty: i64 = ITY_I64();
+            let up_args: Vec<i64> = Vec::new();
+            up_args.push(new_val);
+            lctx_emit(ctx, IOP_UPSILON(), val_ty, up_args, IDATA_PHI_TARGET(), phi_ids[ai3], 0, String::from(""));
+            ai3 = ai3 + 1;
+        }
+
+        if !lctx_is_terminated(ctx) {
+            let jmp_args: Vec<i64> = Vec::new();
+            lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), header_block, 0, String::from(""));
+        }
+
+        let mut ai4: i64 = 0;
+        while ai4 < nassigned {
+            let vname: String = assigned[ai4];
+            lctx_assign(ctx, vname, phi_ids[ai4]);
+            ai4 = ai4 + 1;
+        }
+
+        lctx_switch_to_block(ctx, exit_block);
+
+        let u_args: Vec<i64> = Vec::new();
+        return lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""));
+    }
+
+    if tag == EXPR_BLOCK() {
+        let bid: i64 = expr_a(a, eid);
+        return lower_block(ctx, bid);
+    }
+
+    if tag == EXPR_RETURN() {
+        let val_eid: i64 = expr_a(a, eid);
+        let val_id: i64 = {
+            if val_eid != -1 {
+                lower_expr(ctx, val_eid)
+            } else {
+                let u_args: Vec<i64> = Vec::new();
+                lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
+            }
+        };
+        if ctx.cur_vow_lid != -1 {
+            lower_ensures_clauses(ctx, ctx.cur_vow_lid, val_id);
+        }
+        let ret_args: Vec<i64> = Vec::new();
+        ret_args.push(val_id);
+        return lctx_emit(ctx, IOP_RETURN(), ITY_UNIT(), ret_args, IDATA_NONE(), 0, 0, String::from(""));
+    }
+
+    if tag == EXPR_ASSIGN() {
+        let lhs_eid: i64 = expr_a(a, eid);
+        let rhs_eid: i64 = expr_b(a, eid);
+        let lhs_tag: i64 = expr_tag(a, lhs_eid);
+        if lhs_tag == EXPR_FIELD() {
+            let recv_eid: i64 = expr_a(a, lhs_eid);
+            let field_sid: i64 = expr_b(a, lhs_eid);
+            let field_name: String = arena_str(a, field_sid);
+            let recv_id: i64 = lower_expr(ctx, recv_eid);
+            let val_id: i64 = lower_expr(ctx, rhs_eid);
+            let recv_tag_str: String = lctx_get_tag(ctx, recv_id);
+            let fidx: i64 = lctx_struct_field_index(ctx, recv_tag_str, field_name);
+            let fs_args: Vec<i64> = Vec::new();
+            fs_args.push(recv_id);
+            fs_args.push(val_id);
+            return lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, IDATA_FIELD(), fidx, 0, String::from(""));
+        }
+        let rhs_id: i64 = lower_expr(ctx, rhs_eid);
+        if lhs_tag == EXPR_IDENT() {
+            let name_sid: i64 = expr_a(a, lhs_eid);
+            let name: String = arena_str(a, name_sid);
+            lctx_assign(ctx, name, rhs_id);
+        }
+        return rhs_id;
+    }
+
+    if tag == EXPR_FIELD() {
+        let recv_eid: i64 = expr_a(a, eid);
+        let field_sid: i64 = expr_b(a, eid);
+        let field_name: String = arena_str(a, field_sid);
+        let recv_id: i64 = lower_expr(ctx, recv_eid);
+        let recv_tag_str: String = lctx_get_tag(ctx, recv_id);
+        let fidx: i64 = lctx_struct_field_index(ctx, recv_tag_str, field_name);
+        let fg_args: Vec<i64> = Vec::new();
+        fg_args.push(recv_id);
+        let result: i64 = lctx_emit(ctx, IOP_FIELD_GET(), ITY_I64(), fg_args, IDATA_FIELD(), fidx, 0, String::from(""));
+        let field_type: String = lctx_struct_field_type(ctx, recv_tag_str, fidx);
+        if field_type != String::from("") {
+            if field_type != String::from("i32") && field_type != String::from("i64") && field_type != String::from("f32") && field_type != String::from("f64") && field_type != String::from("bool") {
+                lctx_tag(ctx, result, field_type);
+            }
+        }
+        return result;
+    }
+
+    if tag == EXPR_SLIT() {
+        let path_lid: i64 = expr_a(a, eid);
+        let fields_lid: i64 = expr_b(a, eid);
+        let name_sid: i64 = list_get(a, path_lid, 0);
+        let struct_name: String = arena_str(a, name_sid);
+        let sidx: i64 = lctx_find_struct(ctx, struct_name);
+        let field_names: Vec<String> = {
+            if sidx != -1 {
+                ctx.struct_field_lists[sidx]
+            } else {
+                Vec::new()
+            }
+        };
+        let n_fields: i64 = field_names.len();
+        let nlit: i64 = list_len(a, fields_lid) / 2;
+        let actual_n: i64 = {
+            if n_fields > nlit { n_fields } else { nlit }
+        };
+        let alloc_size: i64 = actual_n * 8;
+        let alloc_args: Vec<i64> = Vec::new();
+        let ptr_id: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), ITY_PTR(), alloc_args, IDATA_ALLOC_SIZE(), alloc_size, 8, String::from(""));
+        lctx_tag(ctx, ptr_id, struct_name);
+        let mut fi: i64 = 0;
+        while fi < nlit {
+            let fname_sid: i64 = list_get(a, fields_lid, fi * 2);
+            let fval_eid: i64 = list_get(a, fields_lid, fi * 2 + 1);
+            let fname: String = arena_str(a, fname_sid);
+            let fidx: i64 = lctx_struct_field_index(ctx, struct_name, fname);
+            let val_id: i64 = lower_expr(ctx, fval_eid);
+            let fs_args: Vec<i64> = Vec::new();
+            fs_args.push(ptr_id);
+            fs_args.push(val_id);
+            lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, IDATA_FIELD(), fidx, 0, String::from(""));
+            fi = fi + 1;
+        }
+        return ptr_id;
+    }
+
+    if tag == EXPR_ECTOR() {
+        let path_lid: i64 = expr_a(a, eid);
+        let fields_lid: i64 = expr_b(a, eid);
+        let path_len: i64 = list_len(a, path_lid);
+        let enum_name: String = {
+            if path_len > 0 {
+                let sid0: i64 = list_get(a, path_lid, 0);
+                arena_str(a, sid0)
+            } else {
+                String::from("")
+            }
+        };
+        let variant_name: String = {
+            if path_len > 1 {
+                let sid1: i64 = list_get(a, path_lid, 1);
+                arena_str(a, sid1)
+            } else {
+                String::from("")
+            }
+        };
+
+        if enum_name == String::from("String") && variant_name == String::from("from") {
+            let nargs: i64 = list_len(a, fields_lid);
+            if nargs > 0 {
+                let arg_eid: i64 = list_get(a, fields_lid, 0);
+                let ptr_id: i64 = lower_expr(ctx, arg_eid);
+                lctx_tag(ctx, ptr_id, String::from("String"));
+                return ptr_id;
+            }
+        }
+
+        if enum_name == String::from("HashMap") && variant_name == String::from("new") {
+            let call_args: Vec<i64> = Vec::new();
+            let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_map_new"));
+            lctx_tag(ctx, result, String::from("HashMap"));
+            return result;
+        }
+
+        if enum_name == String::from("Vec") && variant_name == String::from("new") {
+            let size_args: Vec<i64> = Vec::new();
+            let size_val: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), size_args, IDATA_CONST_I64(), 8, 0, String::from(""));
+            let align_args: Vec<i64> = Vec::new();
+            let align_val: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), align_args, IDATA_CONST_I64(), 8, 0, String::from(""));
+            let call_args: Vec<i64> = Vec::new();
+            call_args.push(size_val);
+            call_args.push(align_val);
+            return lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_new"));
+        }
+
+        let tag_val: i64 = lctx_find_variant_tag(ctx, enum_name, variant_name);
+        let n_payload: i64 = list_len(a, fields_lid);
+        let size: i64 = (1 + n_payload) * 8;
+        let alloc_args: Vec<i64> = Vec::new();
+        let ptr_id: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), ITY_PTR(), alloc_args, IDATA_ALLOC_SIZE(), size, 8, String::from(""));
+        lctx_tag(ctx, ptr_id, enum_name);
+
+        let tag_args: Vec<i64> = Vec::new();
+        let tag_id: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), tag_args, IDATA_CONST_I64(), tag_val, 0, String::from(""));
+        let fs_args: Vec<i64> = Vec::new();
+        fs_args.push(ptr_id);
+        fs_args.push(tag_id);
+        lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, IDATA_FIELD(), 0, 0, String::from(""));
+
+        let mut pi: i64 = 0;
+        while pi < n_payload {
+            let payload_eid: i64 = list_get(a, fields_lid, pi);
+            let val_id: i64 = lower_expr(ctx, payload_eid);
+            let pfs_args: Vec<i64> = Vec::new();
+            pfs_args.push(ptr_id);
+            pfs_args.push(val_id);
+            lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), pfs_args, IDATA_FIELD(), 1 + pi, 0, String::from(""));
+            pi = pi + 1;
+        }
+        return ptr_id;
+    }
+
+    if tag == EXPR_METHOD() {
+        let recv_eid: i64 = expr_a(a, eid);
+        let method_sid: i64 = expr_b(a, eid);
+        let args_lid: i64 = expr_c(a, eid);
+        let method_name: String = arena_str(a, method_sid);
+        let recv_id: i64 = lower_expr(ctx, recv_eid);
+        let recv_tag_str: String = lctx_get_tag(ctx, recv_id);
+
+        if recv_tag_str == String::from("String") {
+            if method_name == String::from("len") {
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(recv_id);
+                return lctx_emit(ctx, IOP_CALL(), ITY_I64(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_len"));
+            }
+            if method_name == String::from("push_str") {
+                let nargs: i64 = list_len(a, args_lid);
+                let arg_id: i64 = {
+                    if nargs > 0 {
+                        let ae: i64 = list_get(a, args_lid, 0);
+                        lower_expr(ctx, ae)
+                    } else {
+                        let u_args: Vec<i64> = Vec::new();
+                        lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
+                    }
+                };
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(recv_id);
+                call_args.push(arg_id);
+                return lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_push_str"));
+            }
+            if method_name == String::from("eq") {
+                let nargs: i64 = list_len(a, args_lid);
+                let arg_id: i64 = {
+                    if nargs > 0 {
+                        let ae: i64 = list_get(a, args_lid, 0);
+                        lower_expr(ctx, ae)
+                    } else {
+                        let u_args: Vec<i64> = Vec::new();
+                        lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
+                    }
+                };
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(recv_id);
+                call_args.push(arg_id);
+                return lctx_emit(ctx, IOP_CALL(), ITY_BOOL(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_eq"));
+            }
+            if method_name == String::from("byte_at") {
+                let nargs: i64 = list_len(a, args_lid);
+                let arg_id: i64 = {
+                    if nargs > 0 {
+                        let ae: i64 = list_get(a, args_lid, 0);
+                        lower_expr(ctx, ae)
+                    } else {
+                        let u_args: Vec<i64> = Vec::new();
+                        lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
+                    }
+                };
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(recv_id);
+                call_args.push(arg_id);
+                return lctx_emit(ctx, IOP_CALL(), ITY_I64(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_byte_at"));
+            }
+            if method_name == String::from("push_byte") {
+                let nargs: i64 = list_len(a, args_lid);
+                let arg_id: i64 = {
+                    if nargs > 0 {
+                        let ae: i64 = list_get(a, args_lid, 0);
+                        lower_expr(ctx, ae)
+                    } else {
+                        let u_args: Vec<i64> = Vec::new();
+                        lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
+                    }
+                };
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(recv_id);
+                call_args.push(arg_id);
+                return lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_push_byte"));
+            }
+        }
+
+        if recv_tag_str == String::from("HashMap") {
+            if method_name == String::from("len") {
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(recv_id);
+                return lctx_emit(ctx, IOP_CALL(), ITY_I64(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_map_len"));
+            }
+            if method_name == String::from("insert") {
+                let k_id: i64 = {
+                    let ae: i64 = list_get(a, args_lid, 0);
+                    lower_expr(ctx, ae)
+                };
+                let v_id: i64 = {
+                    let ae: i64 = list_get(a, args_lid, 1);
+                    lower_expr(ctx, ae)
+                };
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(recv_id);
+                call_args.push(k_id);
+                call_args.push(v_id);
+                return lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_map_insert"));
+            }
+            if method_name == String::from("get") {
+                let k_id: i64 = {
+                    let ae: i64 = list_get(a, args_lid, 0);
+                    lower_expr(ctx, ae)
+                };
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(recv_id);
+                call_args.push(k_id);
+                return lctx_emit(ctx, IOP_CALL(), ITY_I64(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_map_get"));
+            }
+            if method_name == String::from("contains_key") {
+                let k_id: i64 = {
+                    let ae: i64 = list_get(a, args_lid, 0);
+                    lower_expr(ctx, ae)
+                };
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(recv_id);
+                call_args.push(k_id);
+                return lctx_emit(ctx, IOP_CALL(), ITY_BOOL(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_map_contains"));
+            }
+            if method_name == String::from("remove") {
+                let k_id: i64 = {
+                    let ae: i64 = list_get(a, args_lid, 0);
+                    lower_expr(ctx, ae)
+                };
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(recv_id);
+                call_args.push(k_id);
+                return lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_map_remove"));
+            }
+        }
+
+        if method_name == String::from("len") {
+            let call_args: Vec<i64> = Vec::new();
+            call_args.push(recv_id);
+            return lctx_emit(ctx, IOP_CALL(), ITY_I64(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_len"));
+        }
+        if method_name == String::from("push") {
+            let nargs: i64 = list_len(a, args_lid);
+            let elem_id: i64 = {
+                if nargs > 0 {
+                    let ae: i64 = list_get(a, args_lid, 0);
+                    lower_expr(ctx, ae)
+                } else {
+                    let u_args: Vec<i64> = Vec::new();
+                    lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
+                }
+            };
+            let call_args: Vec<i64> = Vec::new();
+            call_args.push(recv_id);
+            call_args.push(elem_id);
+            return lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_push_val"));
+        }
+        if method_name == String::from("pop") {
+            let call_args: Vec<i64> = Vec::new();
+            call_args.push(recv_id);
+            return lctx_emit(ctx, IOP_CALL(), ITY_I64(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_pop"));
+        }
+
+        let nargs: i64 = list_len(a, args_lid);
+        let mut mai: i64 = 0;
+        while mai < nargs {
+            let ae: i64 = list_get(a, args_lid, mai);
+            lower_expr(ctx, ae);
+            mai = mai + 1;
+        }
+        let u_args: Vec<i64> = Vec::new();
+        return lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""));
+    }
+
+    if tag == EXPR_INDEX() {
+        let base_eid: i64 = expr_a(a, eid);
+        let index_eid: i64 = expr_b(a, eid);
+        let vec_ptr: i64 = lower_expr(ctx, base_eid);
+        let idx_id: i64 = lower_expr(ctx, index_eid);
+        let call_args: Vec<i64> = Vec::new();
+        call_args.push(vec_ptr);
+        call_args.push(idx_id);
+        return lctx_emit(ctx, IOP_CALL(), ITY_I64(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_get_val"));
+    }
+
+    if tag == EXPR_MATCH() {
+        let scrutinee_eid: i64 = expr_a(a, eid);
+        let arms_lid: i64 = expr_b(a, eid);
+        let ptr_id: i64 = lower_expr(ctx, scrutinee_eid);
+
+        let fg_args: Vec<i64> = Vec::new();
+        fg_args.push(ptr_id);
+        let disc_id: i64 = lctx_emit(ctx, IOP_FIELD_GET(), ITY_I64(), fg_args, IDATA_FIELD(), 0, 0, String::from(""));
+
+        let merge_block: i64 = lctx_new_block(ctx);
+        let n_arms: i64 = list_len(a, arms_lid) / 2;
+
+        let arm_exit_blocks: Vec<i64> = Vec::new();
+        let arm_up_ids: Vec<i64> = Vec::new();
+
+        let mut ai: i64 = 0;
+        while ai < n_arms {
+            let pat_id: i64 = list_get(a, arms_lid, ai * 2);
+            let body_eid: i64 = list_get(a, arms_lid, ai * 2 + 1);
+            let is_last: bool = ai == n_arms - 1;
+            let ptag: i64 = pat_tag(a, pat_id);
+
+            if ptag == PAT_ENUM() {
+                let path_lid: i64 = pat_a(a, pat_id);
+                let inner_lid: i64 = pat_b(a, pat_id);
+                let path_len: i64 = list_len(a, path_lid);
+                let en: String = {
+                    if path_len > 0 {
+                        let sid0: i64 = list_get(a, path_lid, 0);
+                        arena_str(a, sid0)
+                    } else {
+                        String::from("")
+                    }
+                };
+                let vn: String = {
+                    if path_len > 1 {
+                        let sid1: i64 = list_get(a, path_lid, 1);
+                        arena_str(a, sid1)
+                    } else {
+                        String::from("")
+                    }
+                };
+                let expected_tag: i64 = lctx_find_variant_tag(ctx, en, vn);
+
+                let arm_block: i64 = lctx_new_block(ctx);
+                let next_check: i64 = {
+                    if is_last { arm_block } else { lctx_new_block(ctx) }
+                };
+
+                let exp_args: Vec<i64> = Vec::new();
+                let exp_id: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), exp_args, IDATA_CONST_I64(), expected_tag, 0, String::from(""));
+                let cmp_args: Vec<i64> = Vec::new();
+                cmp_args.push(disc_id);
+                cmp_args.push(exp_id);
+                let cmp_id: i64 = lctx_emit(ctx, IOP_EQ_I64(), ITY_BOOL(), cmp_args, IDATA_NONE(), 0, 0, String::from(""));
+                let br_args: Vec<i64> = Vec::new();
+                br_args.push(cmp_id);
+                lctx_emit(ctx, IOP_BRANCH(), ITY_UNIT(), br_args, IDATA_BRANCH_TARGETS(), arm_block, next_check, String::from(""));
+
+                lctx_switch_to_block(ctx, arm_block);
+                lctx_push_scope(ctx);
+
+                let n_inner: i64 = list_len(a, inner_lid);
+                let mut ii: i64 = 0;
+                while ii < n_inner {
+                    let inner_pid: i64 = list_get(a, inner_lid, ii);
+                    let inner_ptag: i64 = pat_tag(a, inner_pid);
+                    if inner_ptag == PAT_IDENT() {
+                        let name_sid: i64 = pat_a(a, inner_pid);
+                        let pname: String = arena_str(a, name_sid);
+                        let fg2_args: Vec<i64> = Vec::new();
+                        fg2_args.push(ptr_id);
+                        let field_val: i64 = lctx_emit(ctx, IOP_FIELD_GET(), ITY_I64(), fg2_args, IDATA_FIELD(), 1 + ii, 0, String::from(""));
+                        lctx_define(ctx, pname, field_val);
+                    }
+                    ii = ii + 1;
+                }
+
+                let arm_result: i64 = lower_expr(ctx, body_eid);
+                lctx_pop_scope(ctx);
+
+                let up_args: Vec<i64> = Vec::new();
+                up_args.push(arm_result);
+                let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+                let jmp_args: Vec<i64> = Vec::new();
+                lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), merge_block, 0, String::from(""));
+
+                arm_exit_blocks.push(ctx.current_block);
+                arm_up_ids.push(up_id);
+
+                if !is_last {
+                    lctx_switch_to_block(ctx, next_check);
+                }
+            } else if ptag == PAT_WILD() || ptag == PAT_IDENT() {
+                lctx_push_scope(ctx);
+                if ptag == PAT_IDENT() {
+                    let name_sid: i64 = pat_a(a, pat_id);
+                    let pname: String = arena_str(a, name_sid);
+                    lctx_define(ctx, pname, ptr_id);
+                }
+                let arm_result: i64 = lower_expr(ctx, body_eid);
+                lctx_pop_scope(ctx);
+
+                let up_args: Vec<i64> = Vec::new();
+                up_args.push(arm_result);
+                let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+                let jmp_args: Vec<i64> = Vec::new();
+                lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), merge_block, 0, String::from(""));
+
+                arm_exit_blocks.push(ctx.current_block);
+                arm_up_ids.push(up_id);
+            } else {
+                let u_args: Vec<i64> = Vec::new();
+                let unit_id: i64 = lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""));
+                let up_args: Vec<i64> = Vec::new();
+                up_args.push(unit_id);
+                let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+                let jmp_args: Vec<i64> = Vec::new();
+                lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), merge_block, 0, String::from(""));
+
+                arm_exit_blocks.push(ctx.current_block);
+                arm_up_ids.push(up_id);
+            }
+
+            ai = ai + 1;
+        }
+
+        lctx_switch_to_block(ctx, merge_block);
+        let phi_args: Vec<i64> = Vec::new();
+        let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), ITY_I64(), phi_args, IDATA_NONE(), 0, 0, String::from(""));
+
+        let n_results: i64 = arm_up_ids.len();
+        let mut ri: i64 = 0;
+        while ri < n_results {
+            backpatch_upsilon(ctx, arm_exit_blocks[ri], arm_up_ids[ri], phi_id);
+            ri = ri + 1;
+        }
+
+        return phi_id;
+    }
+
+    if tag == EXPR_QUESTION() {
+        let inner_eid: i64 = expr_a(a, eid);
+        let inner_id: i64 = lower_expr(ctx, inner_eid);
+
+        let fg_args: Vec<i64> = Vec::new();
+        fg_args.push(inner_id);
+        let disc_id: i64 = lctx_emit(ctx, IOP_FIELD_GET(), ITY_I64(), fg_args, IDATA_FIELD(), 0, 0, String::from(""));
+
+        let zero_args: Vec<i64> = Vec::new();
+        let zero_id: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), zero_args, IDATA_CONST_I64(), 0, 0, String::from(""));
+        let cmp_args: Vec<i64> = Vec::new();
+        cmp_args.push(disc_id);
+        cmp_args.push(zero_id);
+        let is_none: i64 = lctx_emit(ctx, IOP_EQ_I64(), ITY_BOOL(), cmp_args, IDATA_NONE(), 0, 0, String::from(""));
+
+        let early_block: i64 = lctx_new_block(ctx);
+        let continue_block: i64 = lctx_new_block(ctx);
+        let br_args: Vec<i64> = Vec::new();
+        br_args.push(is_none);
+        lctx_emit(ctx, IOP_BRANCH(), ITY_UNIT(), br_args, IDATA_BRANCH_TARGETS(), early_block, continue_block, String::from(""));
+
+        lctx_switch_to_block(ctx, early_block);
+        let alloc_args: Vec<i64> = Vec::new();
+        let none_ptr: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), ITY_PTR(), alloc_args, IDATA_ALLOC_SIZE(), 8, 8, String::from(""));
+        let none_tag_args: Vec<i64> = Vec::new();
+        let none_tag: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), none_tag_args, IDATA_CONST_I64(), 0, 0, String::from(""));
+        let fs_args: Vec<i64> = Vec::new();
+        fs_args.push(none_ptr);
+        fs_args.push(none_tag);
+        lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, IDATA_FIELD(), 0, 0, String::from(""));
+        if ctx.cur_vow_lid != -1 {
+            lower_ensures_clauses(ctx, ctx.cur_vow_lid, none_ptr);
+        }
+        let ret_args: Vec<i64> = Vec::new();
+        ret_args.push(none_ptr);
+        lctx_emit(ctx, IOP_RETURN(), ITY_UNIT(), ret_args, IDATA_NONE(), 0, 0, String::from(""));
+
+        lctx_switch_to_block(ctx, continue_block);
+        let payload_args: Vec<i64> = Vec::new();
+        payload_args.push(inner_id);
+        return lctx_emit(ctx, IOP_FIELD_GET(), ITY_I64(), payload_args, IDATA_FIELD(), 1, 0, String::from(""));
+    }
+
+    if tag == EXPR_BREAK() {
+        let u_args: Vec<i64> = Vec::new();
+        return lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""));
+    }
+
+    let u_args: Vec<i64> = Vec::new();
+    lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
+}
+
+fn lower_stmt(ctx: LowerCtx, sid: i64) {
+    let a: AstArena = ctx.arena;
+    let tag: i64 = stmt_tag(a, sid);
+    if tag == STMT_LET() {
+        let pat_id: i64 = stmt_a(a, sid);
+        let ann_tid: i64 = stmt_b(a, sid);
+        let init_eid: i64 = stmt_c(a, sid);
+        let val: i64 = lower_expr(ctx, init_eid);
+        let ptag: i64 = pat_tag(a, pat_id);
+        if ptag == PAT_IDENT() {
+            let name_sid: i64 = pat_a(a, pat_id);
+            let name: String = arena_str(a, name_sid);
+            if ann_tid != -1 {
+                let atag: i64 = type_tag(a, ann_tid);
+                if atag == TY_NAMED() {
+                    let type_name_sid: i64 = type_a(a, ann_tid);
+                    let type_name: String = arena_str(a, type_name_sid);
+                    if type_name != String::from("i32") && type_name != String::from("i64") && type_name != String::from("f32") && type_name != String::from("f64") && type_name != String::from("bool") {
+                        lctx_tag(ctx, val, type_name);
+                    }
+                } else if atag == TY_GENERIC() {
+                    let type_name_sid: i64 = type_a(a, ann_tid);
+                    let type_name: String = arena_str(a, type_name_sid);
+                    lctx_tag(ctx, val, type_name);
+                }
+            }
+            lctx_define(ctx, name, val);
+        }
+    } else if tag == STMT_EXPR() {
+        let expr_eid: i64 = stmt_a(a, sid);
+        lower_expr(ctx, expr_eid);
+    }
+}
+
+fn lower_block(ctx: LowerCtx, bid: i64) -> i64 {
+    lctx_push_scope(ctx);
+    let result: i64 = lower_block_inner(ctx, bid);
+    lctx_pop_scope(ctx);
+    result
+}
+
+fn lower_block_inner(ctx: LowerCtx, bid: i64) -> i64 {
+    let a: AstArena = ctx.arena;
+    let stmts_lid: i64 = blk_stmts(a, bid);
+    let trail_eid: i64 = blk_trail(a, bid);
+    let n: i64 = list_len(a, stmts_lid);
+    let last_is_trail: bool = false;
+    if n > 0 {
+        let last_sid: i64 = list_get(a, stmts_lid, n - 1);
+        let last_tag: i64 = stmt_tag(a, last_sid);
+        if last_tag == STMT_EXPR() {
+            let has_semi: i64 = stmt_b(a, last_sid);
+            if has_semi == 0 {
+                last_is_trail = true;
+            }
+        }
+    }
+    let limit: i64 = {
+        if last_is_trail { n - 1 } else { n }
+    };
+    let mut i: i64 = 0;
+    while i < limit && !lctx_is_terminated(ctx) {
+        let sid: i64 = list_get(a, stmts_lid, i);
+        lower_stmt(ctx, sid);
+        i = i + 1;
+    }
+    if lctx_is_terminated(ctx) {
+        return 2147483647;
+    }
+    if last_is_trail {
+        let last_sid: i64 = list_get(a, stmts_lid, n - 1);
+        let last_eid: i64 = stmt_a(a, last_sid);
+        return lower_expr(ctx, last_eid);
+    }
+    if trail_eid != -1 {
+        return lower_expr(ctx, trail_eid);
+    }
+    let u_args: Vec<i64> = Vec::new();
+    lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
+}
+
+fn lower_block_stmts(ctx: LowerCtx, bid: i64) {
+    let a: AstArena = ctx.arena;
+    let stmts_lid: i64 = blk_stmts(a, bid);
+    let trail_eid: i64 = blk_trail(a, bid);
+    let n: i64 = list_len(a, stmts_lid);
+    let mut i: i64 = 0;
+    while i < n && !lctx_is_terminated(ctx) {
+        let sid: i64 = list_get(a, stmts_lid, i);
+        lower_stmt(ctx, sid);
+        i = i + 1;
+    }
+    if lctx_is_terminated(ctx) { return; }
+    if trail_eid != -1 {
+        lower_expr(ctx, trail_eid);
+    }
+}
+
+fn stmt_is_last_no_semi(a: AstArena, bid: i64) -> bool {
+    let stmts_lid: i64 = blk_stmts(a, bid);
+    let n: i64 = list_len(a, stmts_lid);
+    if n == 0 { return false; }
+    let last_sid: i64 = list_get(a, stmts_lid, n - 1);
+    let last_tag: i64 = stmt_tag(a, last_sid);
+    if last_tag != STMT_EXPR() { return false; }
+    let has_semi: i64 = stmt_b(a, last_sid);
+    has_semi == 0
+}
+
+fn collect_free_vars_in_expr(ctx: LowerCtx, eid: i64, out_names: Vec<String>, out_ids: Vec<i64>) {
+    let a: AstArena = ctx.arena;
+    let tag: i64 = expr_tag(a, eid);
+    if tag == EXPR_IDENT() {
+        let name_sid: i64 = expr_a(a, eid);
+        let name: String = arena_str(a, name_sid);
+        let val: i64 = lctx_lookup(ctx, name);
+        if val != -1 && !vec_contains_str(out_names, name) {
+            out_names.push(name);
+            out_ids.push(val);
+        }
+    } else if tag == EXPR_RESULT() {
+        let val: i64 = lctx_lookup(ctx, String::from("result"));
+        if val != -1 && !vec_contains_str(out_names, String::from("result")) {
+            out_names.push(String::from("result"));
+            out_ids.push(val);
+        }
+    } else if tag == EXPR_BINOP() {
+        let lhs_eid: i64 = expr_b(a, eid);
+        let rhs_eid: i64 = expr_c(a, eid);
+        collect_free_vars_in_expr(ctx, lhs_eid, out_names, out_ids);
+        collect_free_vars_in_expr(ctx, rhs_eid, out_names, out_ids);
+    } else if tag == EXPR_UNOP() {
+        let operand_eid: i64 = expr_b(a, eid);
+        collect_free_vars_in_expr(ctx, operand_eid, out_names, out_ids);
+    } else if tag == EXPR_CALL() {
+        let callee_eid: i64 = expr_a(a, eid);
+        let args_lid: i64 = expr_b(a, eid);
+        collect_free_vars_in_expr(ctx, callee_eid, out_names, out_ids);
+        let nargs: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < nargs {
+            let arg_eid: i64 = list_get(a, args_lid, i);
+            collect_free_vars_in_expr(ctx, arg_eid, out_names, out_ids);
+            i = i + 1;
+        }
+    } else if tag == EXPR_IF() {
+        let cond_eid: i64 = expr_a(a, eid);
+        collect_free_vars_in_expr(ctx, cond_eid, out_names, out_ids);
+    }
+}
+
+fn print_expr_text(a: AstArena, eid: i64) -> String {
+    let tag: i64 = expr_tag(a, eid);
+    if tag == EXPR_LIT_INT() {
+        let val: i64 = expr_a(a, eid);
+        return i64_to_string(val);
+    }
+    if tag == EXPR_LIT_BOOL() {
+        let val: i64 = expr_a(a, eid);
+        if val != 0 { return String::from("true"); }
+        return String::from("false");
+    }
+    if tag == EXPR_IDENT() {
+        let name_sid: i64 = expr_a(a, eid);
+        return arena_str(a, name_sid);
+    }
+    if tag == EXPR_RESULT() {
+        return String::from("result");
+    }
+    if tag == EXPR_BINOP() {
+        let op: i64 = expr_a(a, eid);
+        let lhs_eid: i64 = expr_b(a, eid);
+        let rhs_eid: i64 = expr_c(a, eid);
+        let lhs_s: String = print_expr_text(a, lhs_eid);
+        let rhs_s: String = print_expr_text(a, rhs_eid);
+        let op_s: String = binop_str(op);
+        let result: String = String::from("");
+        result.push_str(lhs_s);
+        result.push_str(String::from(" "));
+        result.push_str(op_s);
+        result.push_str(String::from(" "));
+        result.push_str(rhs_s);
+        return result;
+    }
+    if tag == EXPR_UNOP() {
+        let op: i64 = expr_a(a, eid);
+        let operand_eid: i64 = expr_b(a, eid);
+        let inner_s: String = print_expr_text(a, operand_eid);
+        if op == UNOP_NOT() {
+            let result: String = String::from("!");
+            result.push_str(inner_s);
+            return result;
+        }
+        let result: String = String::from("-");
+        result.push_str(inner_s);
+        return result;
+    }
+    if tag == EXPR_CALL() {
+        let callee_eid: i64 = expr_a(a, eid);
+        let args_lid: i64 = expr_b(a, eid);
+        let callee_s: String = print_expr_text(a, callee_eid);
+        let result: String = String::from("");
+        result.push_str(callee_s);
+        result.push_str(String::from("("));
+        let nargs: i64 = list_len(a, args_lid);
+        let mut i: i64 = 0;
+        while i < nargs {
+            if i > 0 { result.push_str(String::from(", ")); }
+            let arg_eid: i64 = list_get(a, args_lid, i);
+            result.push_str(print_expr_text(a, arg_eid));
+            i = i + 1;
+        }
+        result.push_str(String::from(")"));
+        return result;
+    }
+    String::from("<expr>")
+}
+
+fn binop_str(op: i64) -> String {
+    if op == BINOP_ADD() { return String::from("+"); }
+    if op == BINOP_SUB() { return String::from("-"); }
+    if op == BINOP_MUL() { return String::from("*"); }
+    if op == BINOP_DIV() { return String::from("/"); }
+    if op == BINOP_REM() { return String::from("%"); }
+    if op == BINOP_EQ() { return String::from("=="); }
+    if op == BINOP_NE() { return String::from("!="); }
+    if op == BINOP_LT() { return String::from("<"); }
+    if op == BINOP_LE() { return String::from("<="); }
+    if op == BINOP_GT() { return String::from(">"); }
+    if op == BINOP_GE() { return String::from(">="); }
+    if op == BINOP_AND() { return String::from("&&"); }
+    if op == BINOP_OR() { return String::from("||"); }
+    if op == BINOP_ADD_CHK() { return String::from("+!"); }
+    if op == BINOP_SUB_CHK() { return String::from("-!"); }
+    if op == BINOP_MUL_CHK() { return String::from("*!"); }
+    if op == BINOP_DIV_CHK() { return String::from("/!"); }
+    if op == BINOP_REM_CHK() { return String::from("%!"); }
+    String::from("?")
+}
+
+fn i64_to_string(v: i64) -> String {
+    if v == 0 { return String::from("0"); }
+    let neg: bool = v < 0;
+    let mut n: i64 = v;
+    if neg { n = 0 - n; }
+    let digits: Vec<i64> = Vec::new();
+    while n > 0 {
+        digits.push(n - (n / 10) * 10);
+        n = n / 10;
+    }
+    let result: String = String::from("");
+    if neg { result.push_byte(45); }
+    let nd: i64 = digits.len();
+    let mut i: i64 = nd;
+    while i > 0 {
+        i = i - 1;
+        result.push_byte(48 + digits[i]);
+    }
+    result
+}
+
+fn lower_requires_clauses(ctx: LowerCtx, vow_lid: i64) {
+    let a: AstArena = ctx.arena;
+    let n: i64 = list_len(a, vow_lid);
+    let mut i: i64 = 0;
+    while i < n {
+        let cid: i64 = list_get(a, vow_lid, i);
+        let kind: i64 = vow_clause_kind(a, cid);
+        if kind == CLAUSE_REQUIRES() {
+            let clause_eid: i64 = vow_clause_expr(a, cid);
+            let desc: String = String::from("requires ");
+            desc.push_str(print_expr_text(a, clause_eid));
+            let binding_names: Vec<String> = Vec::new();
+            let binding_ids: Vec<i64> = Vec::new();
+            collect_free_vars_in_expr(ctx, clause_eid, binding_names, binding_ids);
+            let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLER(), binding_ids, binding_names);
+            let pred_id: i64 = lower_expr(ctx, clause_eid);
+            let vow_args: Vec<i64> = Vec::new();
+            vow_args.push(pred_id);
+            lctx_emit(ctx, IOP_VOW_REQ(), ITY_UNIT(), vow_args, IDATA_VOW_ID(), vow_id, 0, String::from(""));
+        }
+        i = i + 1;
+    }
+}
+
+fn lower_ensures_clauses(ctx: LowerCtx, vow_lid: i64, result_id: i64) {
+    let a: AstArena = ctx.arena;
+    lctx_push_scope(ctx);
+    lctx_define(ctx, String::from("result"), result_id);
+    let n: i64 = list_len(a, vow_lid);
+    let mut i: i64 = 0;
+    while i < n {
+        let cid: i64 = list_get(a, vow_lid, i);
+        let kind: i64 = vow_clause_kind(a, cid);
+        if kind == CLAUSE_ENSURES() {
+            let clause_eid: i64 = vow_clause_expr(a, cid);
+            let desc: String = String::from("ensures ");
+            desc.push_str(print_expr_text(a, clause_eid));
+            let binding_names: Vec<String> = Vec::new();
+            let binding_ids: Vec<i64> = Vec::new();
+            collect_free_vars_in_expr(ctx, clause_eid, binding_names, binding_ids);
+            let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLEE(), binding_ids, binding_names);
+            let pred_id: i64 = lower_expr(ctx, clause_eid);
+            let vow_args: Vec<i64> = Vec::new();
+            vow_args.push(pred_id);
+            lctx_emit(ctx, IOP_VOW_ENS(), ITY_UNIT(), vow_args, IDATA_VOW_ID(), vow_id, 0, String::from(""));
+        }
+        i = i + 1;
+    }
+    lctx_pop_scope(ctx);
+}
+
+fn lower_invariant_clauses(ctx: LowerCtx, vow_lid: i64) {
+    let a: AstArena = ctx.arena;
+    let n: i64 = list_len(a, vow_lid);
+    let mut i: i64 = 0;
+    while i < n {
+        let cid: i64 = list_get(a, vow_lid, i);
+        let kind: i64 = vow_clause_kind(a, cid);
+        if kind == CLAUSE_INVARIANT() {
+            let clause_eid: i64 = vow_clause_expr(a, cid);
+            let desc: String = String::from("invariant ");
+            desc.push_str(print_expr_text(a, clause_eid));
+            let binding_names: Vec<String> = Vec::new();
+            let binding_ids: Vec<i64> = Vec::new();
+            collect_free_vars_in_expr(ctx, clause_eid, binding_names, binding_ids);
+            let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLEE(), binding_ids, binding_names);
+            let pred_id: i64 = lower_expr(ctx, clause_eid);
+            let vow_args: Vec<i64> = Vec::new();
+            vow_args.push(pred_id);
+            lctx_emit(ctx, IOP_VOW_INV(), ITY_UNIT(), vow_args, IDATA_VOW_ID(), vow_id, 0, String::from(""));
+        }
+        i = i + 1;
+    }
+}
+
+fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
+    let a: AstArena = ctx.arena;
+    let name_sid: i64 = fn_name_sid(a, fid);
+    let name: String = arena_str(a, name_sid);
+    let ret_tid: i64 = fn_ret_ast_tid(a, fid);
+    let eff: i64 = fn_eff(a, fid);
+    let body_bid: i64 = fn_body_bid(a, fid);
+    let vow_lid: i64 = fn_vow_lid(a, fid);
+    let params_lid: i64 = fn_params_lid(a, fid);
+
+    let ir_ret: i64 = lower_ast_ty(a, ret_tid);
+    let func: IrFunction = ir_function_new(0, name, ir_ret, eff);
+    let entry: IrBlock = ir_block_new(0);
+    func.blocks.push(entry);
+
+    ctx.func = func;
+    ctx.current_block = 0;
+    ctx.next_inst_id = 0;
+    ctx.scope_vars = Vec::new();
+    ctx.scope_vals = Vec::new();
+    ctx.scope_starts = Vec::new();
+    ctx.tag_inst_ids = Vec::new();
+    ctx.tag_names = Vec::new();
+
+    if vow_lid != -1 {
+        ctx.cur_vow_lid = vow_lid;
+    } else {
+        ctx.cur_vow_lid = -1;
+    }
+
+    let nparams: i64 = list_len(a, params_lid) / 2;
+    let mut pi: i64 = 0;
+    while pi < nparams {
+        let pname_sid: i64 = list_get(a, params_lid, pi * 2);
+        let ptid: i64 = list_get(a, params_lid, pi * 2 + 1);
+        let pty: i64 = lower_ast_ty(a, ptid);
+        func.params.push(pty);
+        let arg_args: Vec<i64> = Vec::new();
+        let arg_id: i64 = lctx_emit(ctx, IOP_GET_ARG(), pty, arg_args, IDATA_ARG_INDEX(), pi, 0, String::from(""));
+        let pname: String = arena_str(a, pname_sid);
+
+        if ptid != -1 {
+            let ptag: i64 = type_tag(a, ptid);
+            if ptag == TY_NAMED() {
+                let tn_sid: i64 = type_a(a, ptid);
+                let tn: String = arena_str(a, tn_sid);
+                if tn == String::from("String") || tn == String::from("str") {
+                    lctx_tag(ctx, arg_id, String::from("String"));
+                } else {
+                    let sidx: i64 = lctx_find_struct(ctx, tn);
+                    if sidx != -1 {
+                        lctx_tag(ctx, arg_id, tn);
+                    }
+                }
+            } else if ptag == TY_GENERIC() {
+                let tn_sid: i64 = type_a(a, ptid);
+                let tn: String = arena_str(a, tn_sid);
+                if tn == String::from("HashMap") {
+                    lctx_tag(ctx, arg_id, String::from("HashMap"));
+                } else if tn == String::from("Vec") {
+                    lctx_tag(ctx, arg_id, String::from("Vec"));
+                }
+            }
+        }
+
+        lctx_define(ctx, pname, arg_id);
+        pi = pi + 1;
+    }
+
+    if vow_lid != -1 {
+        lower_requires_clauses(ctx, vow_lid);
+    }
+
+    lctx_push_scope(ctx);
+    let trailing: i64 = lower_block_inner(ctx, body_bid);
+    lctx_pop_scope(ctx);
+
+    let has_return: bool = lctx_is_terminated(ctx);
+
+    if !has_return {
+        if vow_lid != -1 {
+            lower_ensures_clauses(ctx, vow_lid, trailing);
+        }
+        let ret_args: Vec<i64> = Vec::new();
+        ret_args.push(trailing);
+        lctx_emit(ctx, IOP_RETURN(), ITY_UNIT(), ret_args, IDATA_NONE(), 0, 0, String::from(""));
+    }
+
+    ctx.func
+}
+
+fn lower_module_vow(m: Module) -> IrModule {
+    let a: AstArena = m.arena;
+    let mod_name_sid: i64 = m.name_sid;
+    let mod_name: String = arena_str(a, mod_name_sid);
+    let ir_mod: IrModule = ir_module_new(mod_name);
+
+    let func_names: Vec<String> = Vec::new();
+    let func_ret_tys: Vec<i64> = Vec::new();
+    let struct_names: Vec<String> = Vec::new();
+    let struct_field_lists: Vec<Vec<String>> = Vec::new();
+    let struct_field_type_names: Vec<Vec<String>> = Vec::new();
+    let enum_names: Vec<String> = Vec::new();
+    let enum_variant_lists: Vec<Vec<String>> = Vec::new();
+
+    let n_items: i64 = m.items.len();
+    let mut ii: i64 = 0;
+    while ii < n_items {
+        let item: i64 = m.items[ii];
+        let ik: i64 = item_kind(item);
+        let iid: i64 = item_id(item);
+        if ik == ITEM_FN() {
+            let name_sid: i64 = fn_name_sid(a, iid);
+            let name: String = arena_str(a, name_sid);
+            let ret_tid: i64 = fn_ret_ast_tid(a, iid);
+            let ir_ret: i64 = lower_ast_ty(a, ret_tid);
+            func_names.push(name);
+            func_ret_tys.push(ir_ret);
+        } else if ik == ITEM_STRUCT() {
+            let sname_sid: i64 = sdef_name_sid(a, iid);
+            let sname: String = arena_str(a, sname_sid);
+            let fields_lid: i64 = sdef_fields_lid(a, iid);
+            let nf: i64 = list_len(a, fields_lid) / 2;
+            let fnames: Vec<String> = Vec::new();
+            let ftypes: Vec<String> = Vec::new();
+            let ir_fields: Vec<IrFieldLayout> = Vec::new();
+            let mut fi: i64 = 0;
+            while fi < nf {
+                let fname_sid: i64 = list_get(a, fields_lid, fi * 2);
+                let ftid: i64 = list_get(a, fields_lid, fi * 2 + 1);
+                let fname: String = arena_str(a, fname_sid);
+                fnames.push(fname);
+                let ftype_name: String = {
+                    if ftid != -1 {
+                        let ftag: i64 = type_tag(a, ftid);
+                        if ftag == TY_NAMED() || ftag == TY_GENERIC() {
+                            let ftn_sid: i64 = type_a(a, ftid);
+                            arena_str(a, ftn_sid)
+                        } else {
+                            String::from("")
+                        }
+                    } else {
+                        String::from("")
+                    }
+                };
+                ftypes.push(ftype_name);
+                let ir_ty: i64 = lower_ast_ty(a, ftid);
+                let fl: IrFieldLayout = IrFieldLayout { name: fname, ty: ir_ty };
+                ir_fields.push(fl);
+                fi = fi + 1;
+            }
+            struct_names.push(sname);
+            struct_field_lists.push(fnames);
+            struct_field_type_names.push(ftypes);
+            let is_linear: i64 = a.sdef_data[iid * 4 + 2];
+            let sl: IrStructLayout = IrStructLayout { name: sname, fields: ir_fields, is_linear: is_linear };
+            ir_mod.struct_layouts.push(sl);
+        } else if ik == ITEM_ENUM() {
+            let ename_sid: i64 = edef_name_sid(a, iid);
+            let ename: String = arena_str(a, ename_sid);
+            let variants_lid: i64 = edef_variants_lid(a, iid);
+            let nv: i64 = list_len(a, variants_lid);
+            let vnames: Vec<String> = Vec::new();
+            let ir_variants: Vec<IrVariantLayout> = Vec::new();
+            let mut vi: i64 = 0;
+            while vi < nv {
+                let vname_sid: i64 = list_get(a, variants_lid, vi);
+                let vname: String = arena_str(a, vname_sid);
+                vnames.push(vname);
+                let payload: Vec<IrFieldLayout> = Vec::new();
+                let vl: IrVariantLayout = IrVariantLayout { name: vname, tag: vi, payload: payload };
+                ir_variants.push(vl);
+                vi = vi + 1;
+            }
+            enum_names.push(ename);
+            enum_variant_lists.push(vnames);
+            let el: IrEnumLayout = IrEnumLayout { name: ename, variants: ir_variants };
+            ir_mod.enum_layouts.push(el);
+        }
+        ii = ii + 1;
+    }
+
+    enum_names.push(String::from("Option"));
+    let opt_variants: Vec<String> = Vec::new();
+    opt_variants.push(String::from("None"));
+    opt_variants.push(String::from("Some"));
+    enum_variant_lists.push(opt_variants);
+
+    enum_names.push(String::from("Result"));
+    let res_variants: Vec<String> = Vec::new();
+    res_variants.push(String::from("Ok"));
+    res_variants.push(String::from("Err"));
+    enum_variant_lists.push(res_variants);
+
+    let ctx: LowerCtx = lctx_new(String::from(""), ITY_UNIT(), 0, a);
+    ctx.func_names = func_names;
+    ctx.func_ret_tys = func_ret_tys;
+    ctx.struct_names = struct_names;
+    ctx.struct_field_lists = struct_field_lists;
+    ctx.struct_field_type_names = struct_field_type_names;
+    ctx.enum_names = enum_names;
+    ctx.enum_variant_lists = enum_variant_lists;
+
+    let all_strings: Vec<String> = Vec::new();
+    let mut func_idx: i64 = 0;
+
+    let mut ii2: i64 = 0;
+    while ii2 < n_items {
+        let item: i64 = m.items[ii2];
+        let ik: i64 = item_kind(item);
+        let iid: i64 = item_id(item);
+        if ik == ITEM_FN() {
+            let ir_func: IrFunction = lower_function_vow(ctx, iid);
+            ir_func.id = func_idx;
+
+            let base: i64 = all_strings.len();
+            if base > 0 || ctx.string_pool.len() > 0 {
+                let nb: i64 = ir_func.blocks.len();
+                let mut bi: i64 = 0;
+                while bi < nb {
+                    let blk: IrBlock = ir_func.blocks[bi];
+                    let ni: i64 = blk.insts.len();
+                    let mut ii3: i64 = 0;
+                    while ii3 < ni {
+                        let inst: IrInst = blk.insts[ii3];
+                        if inst.dk == IDATA_CONST_STR() {
+                            inst.dv = inst.dv + base;
+                        }
+                        ii3 = ii3 + 1;
+                    }
+                    bi = bi + 1;
+                }
+            }
+
+            let npool: i64 = ctx.string_pool.len();
+            let mut si: i64 = 0;
+            while si < npool {
+                all_strings.push(ctx.string_pool[si]);
+                si = si + 1;
+            }
+            ctx.string_pool = Vec::new();
+
+            ir_mod.functions.push(ir_func);
+            func_idx = func_idx + 1;
+        }
+        ii2 = ii2 + 1;
+    }
+
+    ir_mod.strings = all_strings;
+    ir_mod
+}

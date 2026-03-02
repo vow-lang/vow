@@ -1062,6 +1062,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // index
             sig.returns.push(AbiParam::new(types::I64)); // element value
         }
+        "__vow_vec_set_val" => {
+            sig.params.push(AbiParam::new(types::I64)); // vec ptr
+            sig.params.push(AbiParam::new(types::I64)); // index
+            sig.params.push(AbiParam::new(types::I64)); // value
+        }
         // String runtime
         "__vow_string_new" => {
             sig.params.push(AbiParam::new(types::I64)); // ptr

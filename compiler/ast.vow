@@ -22,6 +22,11 @@ fn EXPR_SLIT() -> i64 { 18 }
 fn EXPR_ECTOR() -> i64 { 19 }
 fn EXPR_QUESTION() -> i64 { 20 }
 fn EXPR_TUPLE() -> i64 { 21 }
+fn EXPR_RESULT() -> i64 { 22 }
+
+fn CLAUSE_REQUIRES() -> i64 { 0 }
+fn CLAUSE_ENSURES() -> i64 { 1 }
+fn CLAUSE_INVARIANT() -> i64 { 2 }
 
 fn BINOP_ADD() -> i64 { 0 }
 fn BINOP_SUB() -> i64 { 1 }
@@ -87,6 +92,7 @@ struct AstArena {
     list_data: Vec<i64>,
     list_head: Vec<i64>,
     list_size: Vec<i64>,
+    vow_data: Vec<i64>,
 }
 
 fn arena_new() -> AstArena {
@@ -103,6 +109,7 @@ fn arena_new() -> AstArena {
         list_data: Vec::new(),
         list_head: Vec::new(),
         list_size: Vec::new(),
+        vow_data: Vec::new(),
     }
 }
 
@@ -174,11 +181,12 @@ fn pat_tag(a: AstArena, pid: i64) -> i64 { a.pat_data[pid * 4] }
 fn pat_a(a: AstArena, pid: i64) -> i64 { a.pat_data[pid * 4 + 1] }
 fn pat_b(a: AstArena, pid: i64) -> i64 { a.pat_data[pid * 4 + 2] }
 
-fn fn_name_sid(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 6] }
-fn fn_params_lid(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 6 + 1] }
-fn fn_ret_ast_tid(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 6 + 2] }
-fn fn_eff(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 6 + 3] }
-fn fn_body_bid(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 6 + 4] }
+fn fn_name_sid(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 7] }
+fn fn_params_lid(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 7 + 1] }
+fn fn_ret_ast_tid(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 7 + 2] }
+fn fn_eff(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 7 + 3] }
+fn fn_body_bid(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 7 + 4] }
+fn fn_vow_lid(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 7 + 5] }
 
 fn sdef_name_sid(a: AstArena, sid: i64) -> i64 { a.sdef_data[sid * 4] }
 fn sdef_fields_lid(a: AstArena, sid: i64) -> i64 { a.sdef_data[sid * 4 + 1] }
@@ -215,16 +223,28 @@ fn arena_add_blk(a: AstArena, stmts_lid: i64, trail_eid: i64, span: i64) -> i64 
     bid
 }
 
-fn arena_add_fn(a: AstArena, name_sid: i64, params_lid: i64, ret_tid: i64, eff: i64, body_bid: i64, span: i64) -> i64 {
-    let fid: i64 = a.fn_data.len() / 6;
+fn arena_add_fn(a: AstArena, name_sid: i64, params_lid: i64, ret_tid: i64, eff: i64, body_bid: i64, vow_lid: i64, span: i64) -> i64 {
+    let fid: i64 = a.fn_data.len() / 7;
     a.fn_data.push(name_sid);
     a.fn_data.push(params_lid);
     a.fn_data.push(ret_tid);
     a.fn_data.push(eff);
     a.fn_data.push(body_bid);
+    a.fn_data.push(vow_lid);
     a.fn_data.push(span);
     fid
 }
+
+fn arena_add_vow_clause(a: AstArena, kind: i64, eid: i64, span: i64) -> i64 {
+    let cid: i64 = a.vow_data.len() / 3;
+    a.vow_data.push(kind);
+    a.vow_data.push(eid);
+    a.vow_data.push(span);
+    cid
+}
+
+fn vow_clause_kind(a: AstArena, cid: i64) -> i64 { a.vow_data[cid * 3] }
+fn vow_clause_expr(a: AstArena, cid: i64) -> i64 { a.vow_data[cid * 3 + 1] }
 
 fn arena_add_sdef(a: AstArena, name_sid: i64, fields_lid: i64, is_linear: i64, span: i64) -> i64 {
     let sid: i64 = a.sdef_data.len() / 4;

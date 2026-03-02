@@ -212,6 +212,19 @@ pub unsafe extern "C" fn __vow_vec_get_val(vec: *const u8, index: usize) -> i64 
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_set_val(vec: *mut u8, index: usize, value: i64) {
+    let v = unsafe { &*(vec as *const VowVec) };
+    if index >= v.len {
+        let json = r#"{"error":"IndexOutOfBounds"}"#;
+        let _ = writeln!(std::io::stderr(), "{json}");
+        let _ = writeln!(std::io::stderr(), "index out of bounds");
+        std::process::exit(1);
+    }
+    let elem_ptr = unsafe { v.ptr.add(index * 8) as *mut i64 };
+    unsafe { *elem_ptr = value };
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_get_ptr(
     vec: *const u8,
     index: usize,

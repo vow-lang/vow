@@ -1,0 +1,8 @@
+module TestAssign
+
+fn main() -> i32 [io] {
+    let mut x: i64 = 10;
+    x = 20;
+    print_i64(x);
+    0
+}

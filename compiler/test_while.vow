@@ -1,0 +1,10 @@
+module TestWhile
+
+fn main() -> i32 [io] {
+    let mut x: i64 = 5;
+    while x > 0 {
+        x = x - 1;
+    }
+    print_i64(x);
+    0
+}

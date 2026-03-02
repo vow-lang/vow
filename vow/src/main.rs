@@ -31,6 +31,9 @@ struct Args {
     mode: ModeArg,
     #[arg(long)]
     no_verify: bool,
+    /// Dump IR text to stdout and exit (skip codegen/verify)
+    #[arg(long)]
+    dump_ir: bool,
     /// Print compiler capability description as JSON (default) or human-readable (with --human)
     #[arg(long)]
     help: bool,
@@ -52,6 +55,7 @@ fn skill_json() -> String {
     "--output <path>": "Output executable path (default: source without .vow extension)",
     "--mode <debug|release>": "Build mode; debug inserts runtime vow checks (default: release)",
     "--no-verify": "Skip ESBMC static verification",
+    "--dump-ir": "Dump IR text to stdout and exit (skip codegen/verify)",
     "--help": "Print this JSON capability description",
     "--help --human": "Print human-readable capability description"
   },
@@ -105,6 +109,7 @@ OPTIONS
                           debug: inserts runtime vow violation checks
                           release: omits vow checks for performance
   --no-verify           Skip ESBMC static verification
+  --dump-ir             Dump IR text to stdout and exit
   --help                Print JSON capability description (agent-friendly)
   --help --human        Print this text
 
@@ -215,6 +220,7 @@ pub fn run_pipeline(
     output: Option<&Path>,
     mode: BuildMode,
     no_verify: bool,
+    dump_ir: bool,
 ) -> BuildOutput {
     let src = match std::fs::read_to_string(source) {
         Ok(s) => s,
@@ -272,6 +278,14 @@ pub fn run_pipeline(
     }
 
     let ir_module = Arc::new(vow_ir::lower_module(&ast));
+
+    if dump_ir {
+        print!("{}", vow_ir::print_module(&ir_module));
+        return BuildOutput {
+            status: BuildStatus::Unverified,
+            executable: None,
+        };
+    }
 
     // Spawn verification thread
     let module_for_verify = Arc::clone(&ir_module);
@@ -397,8 +411,17 @@ fn main() {
         ModeArg::Release => BuildMode::Release,
     };
 
-    let output = run_pipeline(&source, args.output.as_deref(), mode, args.no_verify);
-    output.emit_json();
+    let output = run_pipeline(
+        &source,
+        args.output.as_deref(),
+        mode,
+        args.no_verify,
+        args.dump_ir,
+    );
+
+    if !args.dump_ir {
+        output.emit_json();
+    }
 
     if matches!(
         &output.status,
@@ -432,7 +455,7 @@ mod tests {
         let source = write_source(&dir, "identity.vow", src);
         let out = dir.path().join("identity_out");
 
-        let result = run_pipeline(&source, Some(&out), BuildMode::Release, true);
+        let result = run_pipeline(&source, Some(&out), BuildMode::Release, true, false);
         match &result.status {
             BuildStatus::Unverified => {}
             BuildStatus::CompileFailed { message } => {
@@ -463,7 +486,7 @@ fn main() -> i32 [io] {
         let source = write_source(&dir, "hello.vow", src);
         let out = dir.path().join("hello");
 
-        let result = run_pipeline(&source, Some(&out), BuildMode::Release, true);
+        let result = run_pipeline(&source, Some(&out), BuildMode::Release, true, false);
         let exe = match &result.status {
             BuildStatus::Unverified => out.clone(),
             BuildStatus::CompileFailed { message } => {
@@ -507,7 +530,7 @@ fn main() -> i32 [io] {
         let source = write_source(&dir, "divide.vow", src);
         let out = dir.path().join("divide");
 
-        let result = run_pipeline(&source, Some(&out), BuildMode::Debug, true);
+        let result = run_pipeline(&source, Some(&out), BuildMode::Debug, true, false);
         let exe = match &result.status {
             BuildStatus::Unverified => out.clone(),
             BuildStatus::CompileFailed { message } => {
@@ -562,7 +585,7 @@ fn main() -> i32 [io] {
         let source = write_source(&dir, "countdown.vow", src);
         let out = dir.path().join("countdown");
 
-        let result = run_pipeline(&source, Some(&out), BuildMode::Release, true);
+        let result = run_pipeline(&source, Some(&out), BuildMode::Release, true, false);
         let exe = match &result.status {
             BuildStatus::Unverified => out.clone(),
             BuildStatus::CompileFailed { message } => {
@@ -615,7 +638,7 @@ fn main() -> i32 [io] {
         let source = write_source(&dir, "bisect.vow", src);
         let out = dir.path().join("bisect");
 
-        let result = run_pipeline(&source, Some(&out), BuildMode::Debug, true);
+        let result = run_pipeline(&source, Some(&out), BuildMode::Debug, true, false);
         let exe = match &result.status {
             BuildStatus::Unverified => out.clone(),
             BuildStatus::CompileFailed { message } => {
@@ -722,7 +745,7 @@ fn main() -> i32 [io] {
         let source = write_source(&dir, "agent.vow", src);
         let out = dir.path().join("agent");
 
-        let result = run_pipeline(&source, Some(&out), BuildMode::Release, true);
+        let result = run_pipeline(&source, Some(&out), BuildMode::Release, true, false);
         match &result.status {
             BuildStatus::Unverified => {}
             BuildStatus::CompileFailed { message } => {
@@ -758,7 +781,7 @@ fn main() -> i32 [io] {
         let source = write_source(&dir, "bad.vow", src);
         let out = dir.path().join("bad_out");
 
-        let result = run_pipeline(&source, Some(&out), BuildMode::Release, true);
+        let result = run_pipeline(&source, Some(&out), BuildMode::Release, true, false);
         assert!(
             matches!(result.status, BuildStatus::CompileFailed { .. }),
             "expected CompileFailed for type error, got {:?}",
@@ -770,7 +793,7 @@ fn main() -> i32 [io] {
         let dir = TempDir::new().unwrap();
         let source = write_source(&dir, "test.vow", src);
         let out = dir.path().join("test_out");
-        let result = run_pipeline(&source, Some(&out), BuildMode::Release, true);
+        let result = run_pipeline(&source, Some(&out), BuildMode::Release, true, false);
         match &result.status {
             BuildStatus::Unverified => {}
             BuildStatus::CompileFailed { message } => {
@@ -997,7 +1020,7 @@ pub fn main() -> i32 {
         let dir = TempDir::new().unwrap();
         let source = write_source(&dir, "extern_test.vow", src);
         let out = dir.path().join("extern_test_out");
-        let result = run_pipeline(&source, Some(&out), BuildMode::Release, true);
+        let result = run_pipeline(&source, Some(&out), BuildMode::Release, true, false);
         assert!(
             !matches!(result.status, BuildStatus::CompileFailed { ref message } if message.contains("type error")),
             "extern block should not cause type errors: {:?}",
@@ -1028,7 +1051,7 @@ pub fn main() -> i32 [io] {
         std::fs::write(&main_path, main_src).unwrap();
         let out = dir.path().join("main_out");
 
-        let result = run_pipeline(&main_path, Some(&out), BuildMode::Release, true);
+        let result = run_pipeline(&main_path, Some(&out), BuildMode::Release, true, false);
         let exe = match &result.status {
             BuildStatus::Unverified => out.clone(),
             BuildStatus::CompileFailed { message } => {
@@ -1105,7 +1128,7 @@ pub fn main() -> i32 [io] {
         let dir = TempDir::new().unwrap();
         let src = "module Main\nuse nonexistent\nfn main() -> i32 { 0 }";
         let source = write_source(&dir, "main.vow", src);
-        let result = run_pipeline(&source, None, BuildMode::Release, true);
+        let result = run_pipeline(&source, None, BuildMode::Release, true, false);
         assert!(
             matches!(result.status, BuildStatus::CompileFailed { .. }),
             "should fail on missing module: {:?}",
@@ -1117,7 +1140,7 @@ pub fn main() -> i32 [io] {
     fn pipeline_fails_on_nonexistent_source() {
         let dir = TempDir::new().unwrap();
         let source = dir.path().join("nonexistent.vow");
-        let result = run_pipeline(&source, None, BuildMode::Release, true);
+        let result = run_pipeline(&source, None, BuildMode::Release, true, false);
         assert!(
             matches!(result.status, BuildStatus::CompileFailed { .. }),
             "should fail when source file not found: {:?}",
@@ -1130,7 +1153,7 @@ pub fn main() -> i32 [io] {
         let dir = TempDir::new().unwrap();
         let src = "module M fn f(x: i64) -> i64 { x }";
         let source = write_source(&dir, "f.vow", src);
-        let result = run_pipeline(&source, None, BuildMode::Release, true);
+        let result = run_pipeline(&source, None, BuildMode::Release, true, false);
         match &result.status {
             BuildStatus::Unverified => {}
             BuildStatus::CompileFailed { message } => {

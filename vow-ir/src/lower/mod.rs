@@ -693,6 +693,17 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         span,
                     );
                 }
+                ExprKind::Index { base, index } => {
+                    let vec_ptr = lower_expr(ctx, base);
+                    let idx_id = lower_expr(ctx, index);
+                    ctx.emit(
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![vec_ptr, idx_id, new_val],
+                        InstData::CallExtern("__vow_vec_set_val".to_string()),
+                        span,
+                    );
+                }
                 _ => {}
             }
             new_val
