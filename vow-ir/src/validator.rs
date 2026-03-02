@@ -188,6 +188,7 @@ mod tests {
             id: FuncId(id),
             name: name.to_string(),
             params: vec![],
+            param_names: vec![],
             return_ty: Ty::Unit,
             effects: vec![],
             vows: vec![],

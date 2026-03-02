@@ -10,8 +10,8 @@ use vow_syntax::ast::{
 use vow_syntax::span::Span;
 
 use crate::types::{
-    BasicBlock, BlockId, EnumLayout, FieldLayout, FuncId, Function, Inst, InstData, InstId,
-    Module, Opcode, StructLayout, Ty, VariantLayout, VowEntry, VowId,
+    BasicBlock, BlockId, EnumLayout, FieldLayout, FuncId, Function, Inst, InstData, InstId, Module,
+    Opcode, StructLayout, Ty, VariantLayout, VowEntry, VowId,
 };
 
 fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
@@ -66,6 +66,7 @@ impl LowerCtx {
     pub fn new(
         name: String,
         params: Vec<Ty>,
+        param_names: Vec<String>,
         return_ty: Ty,
         effects: Vec<Effect>,
         func_index: HashMap<String, (FuncId, Ty)>,
@@ -81,6 +82,7 @@ impl LowerCtx {
             id: FuncId(0),
             name,
             params,
+            param_names,
             return_ty,
             effects,
             vows: vec![],
@@ -352,15 +354,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
     let span = expr.span;
     match &expr.kind {
         ExprKind::Lit(lit) => match lit {
-            Lit::Int(v) => {
-                ctx.emit(
-                    Opcode::ConstI64,
-                    Ty::I64,
-                    vec![],
-                    InstData::ConstI64(*v as i64),
-                    span,
-                )
-            }
+            Lit::Int(v) => ctx.emit(
+                Opcode::ConstI64,
+                Ty::I64,
+                vec![],
+                InstData::ConstI64(*v as i64),
+                span,
+            ),
             Lit::Float(v) => ctx.emit(
                 Opcode::ConstF64,
                 Ty::F64,
@@ -675,10 +675,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 }
                 ExprKind::FieldAccess { base, field } => {
                     let ptr_id = lower_expr(ctx, base);
-                    let struct_name =
-                        ctx.inst_struct_type.get(&ptr_id).cloned().unwrap_or_default();
+                    let struct_name = ctx
+                        .inst_struct_type
+                        .get(&ptr_id)
+                        .cloned()
+                        .unwrap_or_default();
                     if struct_name.is_empty() {
-                        eprintln!("warning: FieldSet on untagged instruction %{}, field '{}' — defaulting to index 0", ptr_id.0, field);
+                        eprintln!(
+                            "warning: FieldSet on untagged instruction %{}, field '{}' — defaulting to index 0",
+                            ptr_id.0, field
+                        );
                     }
                     let field_idx = ctx
                         .struct_field_map
@@ -818,9 +824,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         }
         ExprKind::FieldAccess { base, field } => {
             let ptr_id = lower_expr(ctx, base);
-            let struct_name = ctx.inst_struct_type.get(&ptr_id).cloned().unwrap_or_default();
+            let struct_name = ctx
+                .inst_struct_type
+                .get(&ptr_id)
+                .cloned()
+                .unwrap_or_default();
             if struct_name.is_empty() {
-                eprintln!("warning: FieldGet on untagged instruction %{}, field '{}' — defaulting to index 0", ptr_id.0, field);
+                eprintln!(
+                    "warning: FieldGet on untagged instruction %{}, field '{}' — defaulting to index 0",
+                    ptr_id.0, field
+                );
             }
             let field_idx = ctx
                 .struct_field_map
@@ -837,21 +850,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             if let Some(type_names) = ctx.struct_field_type_names.get(&struct_name)
                 && let Some(type_name) = type_names.get(field_idx as usize)
                 && !type_name.is_empty()
-                && !matches!(
-                    type_name.as_str(),
-                    "i32" | "i64" | "f32" | "f64" | "bool"
-                )
+                && !matches!(type_name.as_str(), "i32" | "i64" | "f32" | "f64" | "bool")
             {
                 ctx.inst_struct_type.insert(result_id, type_name.clone());
             }
             result_id
         }
         ExprKind::StructLiteral { name, fields } => {
-            let field_names = ctx
-                .struct_field_map
-                .get(name)
-                .cloned()
-                .unwrap_or_default();
+            let field_names = ctx.struct_field_map.get(name).cloned().unwrap_or_default();
             let n_fields = field_names.len().max(fields.len());
             let ptr_id = ctx.emit(
                 Opcode::RegionAlloc,
@@ -990,10 +996,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 let is_last = arm_iter.peek().is_none();
                 match &arm.pattern.kind {
                     PatKind::EnumVariant { path, inner } => {
-                        let enum_name =
-                            path.first().map(|s| s.as_str()).unwrap_or("");
-                        let variant_name =
-                            path.get(1).map(|s| s.as_str()).unwrap_or("");
+                        let enum_name = path.first().map(|s| s.as_str()).unwrap_or("");
+                        let variant_name = path.get(1).map(|s| s.as_str()).unwrap_or("");
                         let expected_tag = ctx
                             .enum_variant_map
                             .get(enum_name)
@@ -1001,11 +1005,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             .unwrap_or(0) as i64;
 
                         let arm_block = ctx.new_block();
-                        let next_check_block = if is_last {
-                            arm_block
-                        } else {
-                            ctx.new_block()
-                        };
+                        let next_check_block = if is_last { arm_block } else { ctx.new_block() };
 
                         let expected_id = ctx.emit(
                             Opcode::ConstI64,
@@ -1101,13 +1101,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     _ => {
                         // Other patterns not yet supported; emit a unit and jump to merge
                         let arm_block = ctx.current_block;
-                        let unit = ctx.emit(
-                            Opcode::ConstUnit,
-                            Ty::Unit,
-                            vec![],
-                            InstData::None,
-                            span,
-                        );
+                        let unit =
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span);
                         let up_id = ctx.emit(
                             Opcode::Upsilon,
                             Ty::Unit,
@@ -1127,10 +1122,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 }
             }
 
-            let phi_ty = arm_results
-                .first()
-                .map(|(_, _, ty)| *ty)
-                .unwrap_or(Ty::I64);
+            let phi_ty = arm_results.first().map(|(_, _, ty)| *ty).unwrap_or(Ty::I64);
             ctx.switch_to_block(merge_block);
             let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
 
@@ -1156,12 +1148,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 ),
                 (Some("String"), "push_str") => {
-                    let arg_id = args
-                        .first()
-                        .map(|e| lower_expr(ctx, e))
-                        .unwrap_or_else(|| {
-                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                        });
+                    let arg_id = args.first().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
+                        ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                    });
                     ctx.emit(
                         Opcode::Call,
                         Ty::Unit,
@@ -1171,12 +1160,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     )
                 }
                 (Some("String"), "eq") => {
-                    let arg_id = args
-                        .first()
-                        .map(|e| lower_expr(ctx, e))
-                        .unwrap_or_else(|| {
-                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                        });
+                    let arg_id = args.first().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
+                        ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                    });
                     ctx.emit(
                         Opcode::Call,
                         Ty::Bool,
@@ -1186,12 +1172,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     )
                 }
                 (Some("String"), "byte_at") => {
-                    let idx_id = args
-                        .first()
-                        .map(|e| lower_expr(ctx, e))
-                        .unwrap_or_else(|| {
-                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                        });
+                    let idx_id = args.first().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
+                        ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                    });
                     ctx.emit(
                         Opcode::Call,
                         Ty::I64,
@@ -1201,12 +1184,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     )
                 }
                 (Some("String"), "push_byte") => {
-                    let byte_id = args
-                        .first()
-                        .map(|e| lower_expr(ctx, e))
-                        .unwrap_or_else(|| {
-                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                        });
+                    let byte_id = args.first().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
+                        ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                    });
                     ctx.emit(
                         Opcode::Call,
                         Ty::Unit,
@@ -1223,18 +1203,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 ),
                 (Some("HashMap"), "insert") => {
-                    let k_id = args
-                        .first()
-                        .map(|e| lower_expr(ctx, e))
-                        .unwrap_or_else(|| {
-                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                        });
-                    let v_id = args
-                        .get(1)
-                        .map(|e| lower_expr(ctx, e))
-                        .unwrap_or_else(|| {
-                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                        });
+                    let k_id = args.first().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
+                        ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                    });
+                    let v_id = args.get(1).map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
+                        ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                    });
                     ctx.emit(
                         Opcode::Call,
                         Ty::Unit,
@@ -1244,12 +1218,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     )
                 }
                 (Some("HashMap"), "get") => {
-                    let k_id = args
-                        .first()
-                        .map(|e| lower_expr(ctx, e))
-                        .unwrap_or_else(|| {
-                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                        });
+                    let k_id = args.first().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
+                        ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                    });
                     ctx.emit(
                         Opcode::Call,
                         Ty::I64,
@@ -1259,12 +1230,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     )
                 }
                 (Some("HashMap"), "contains_key") => {
-                    let k_id = args
-                        .first()
-                        .map(|e| lower_expr(ctx, e))
-                        .unwrap_or_else(|| {
-                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                        });
+                    let k_id = args.first().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
+                        ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                    });
                     ctx.emit(
                         Opcode::Call,
                         Ty::Bool,
@@ -1274,12 +1242,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     )
                 }
                 (Some("HashMap"), "remove") => {
-                    let k_id = args
-                        .first()
-                        .map(|e| lower_expr(ctx, e))
-                        .unwrap_or_else(|| {
-                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                        });
+                    let k_id = args.first().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
+                        ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                    });
                     ctx.emit(
                         Opcode::Call,
                         Ty::Unit,
@@ -1296,12 +1261,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 ),
                 (_, "push") => {
-                    let elem_id = args
-                        .first()
-                        .map(|e| lower_expr(ctx, e))
-                        .unwrap_or_else(|| {
-                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
-                        });
+                    let elem_id = args.first().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
+                        ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                    });
                     ctx.emit(
                         Opcode::Call,
                         Ty::Unit,
@@ -1462,20 +1424,24 @@ fn backpatch_upsilon(ctx: &mut LowerCtx, block_id: BlockId, upsilon_id: InstId, 
 
 fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
     match stmt {
-        Stmt::Let { pattern, init, ty, .. } => {
+        Stmt::Let {
+            pattern, init, ty, ..
+        } => {
             let val = lower_expr(ctx, init);
             if let PatKind::Ident { name, .. } = &pattern.kind {
                 if let Some(ann) = ty {
                     match ann {
-                        AstType::Named { name: type_name, .. } => {
-                            match type_name.as_str() {
-                                "i32" | "i64" | "f32" | "f64" | "bool" => {}
-                                _ => {
-                                    ctx.inst_struct_type.insert(val, type_name.clone());
-                                }
+                        AstType::Named {
+                            name: type_name, ..
+                        } => match type_name.as_str() {
+                            "i32" | "i64" | "f32" | "f64" | "bool" => {}
+                            _ => {
+                                ctx.inst_struct_type.insert(val, type_name.clone());
                             }
-                        }
-                        AstType::Generic { name: type_name, .. } => {
+                        },
+                        AstType::Generic {
+                            name: type_name, ..
+                        } => {
                             ctx.inst_struct_type.insert(val, type_name.clone());
                         }
                         _ => {}
@@ -1529,12 +1495,14 @@ pub fn lower_function(
     struct_field_type_names: HashMap<String, Vec<String>>,
 ) -> (Function, Vec<String>) {
     let params: Vec<Ty> = fn_def.params.iter().map(|p| lower_ty(&p.ty)).collect();
+    let param_names: Vec<String> = fn_def.params.iter().map(|p| p.name.clone()).collect();
     let return_ty = lower_ty(&fn_def.return_ty);
     let effects = fn_def.effects.clone();
 
     let mut ctx = LowerCtx::new(
         fn_def.name.clone(),
         params.clone(),
+        param_names,
         return_ty,
         effects,
         func_index.clone(),
@@ -1674,8 +1642,7 @@ pub fn lower_module(module: &AstModule) -> Module {
     let mut enum_layouts: Vec<EnumLayout> = Vec::new();
     for item in &module.items {
         if let Item::Enum(e) = item {
-            let variant_names: Vec<String> =
-                e.variants.iter().map(|v| v.name.clone()).collect();
+            let variant_names: Vec<String> = e.variants.iter().map(|v| v.name.clone()).collect();
             let variant_layouts: Vec<VariantLayout> = e
                 .variants
                 .iter()
@@ -1840,7 +1807,13 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn("const_fn", vec![], i64_ty(), body, vec![]);
-        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new());
+        let (func, _) = lower_function(
+            &fn_def,
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
 
         assert_eq!(func.name, "const_fn");
         assert_eq!(func.return_ty, Ty::I64);
@@ -1875,7 +1848,13 @@ mod tests {
             body,
             vec![],
         );
-        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new());
+        let (func, _) = lower_function(
+            &fn_def,
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
 
         let entry = &func.blocks[0];
         let get_args: Vec<_> = entry
@@ -1913,7 +1892,13 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn("let_fn", vec![], i64_ty(), body, vec![]);
-        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new());
+        let (func, _) = lower_function(
+            &fn_def,
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
 
         let entry = &func.blocks[0];
         let const_inst = entry.insts.iter().find(|i| i.opcode == Opcode::ConstI64);
@@ -1946,7 +1931,13 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn("if_fn", vec![], i64_ty(), body, vec![]);
-        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new());
+        let (func, _) = lower_function(
+            &fn_def,
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
 
         assert!(
             func.blocks.len() >= 4,
@@ -1980,7 +1971,13 @@ mod tests {
     #[test]
     fn lower_empty_function() {
         let fn_def = make_fn("empty_fn", vec![], unit_ty(), empty_block(), vec![]);
-        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new());
+        let (func, _) = lower_function(
+            &fn_def,
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
         let ret = all_insts.iter().find(|i| i.opcode == Opcode::Return);
@@ -2023,7 +2020,13 @@ mod tests {
             body,
             span: sp(),
         };
-        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new());
+        let (func, _) = lower_function(
+            &fn_def,
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
         let ens_pos = all_insts
@@ -2116,7 +2119,13 @@ mod tests {
         };
 
         let fn_def = make_fn("countdown", vec![param_n], i64_ty, body, vec![]);
-        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new());
+        let (func, _) = lower_function(
+            &fn_def,
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        );
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
 

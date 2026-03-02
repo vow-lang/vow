@@ -239,6 +239,7 @@ mod tests {
             id: FuncId(0),
             name: "always_ok".to_string(),
             params: vec![],
+            param_names: vec![],
             return_ty: Ty::I32,
             effects: vec![],
             vows: vec![VowEntry {
@@ -278,6 +279,7 @@ mod tests {
             id: FuncId(0),
             name: "always_bad".to_string(),
             params: vec![],
+            param_names: vec![],
             return_ty: Ty::I32,
             effects: vec![],
             vows: vec![VowEntry {
@@ -341,6 +343,7 @@ mod tests {
             id: FuncId(0),
             name: "divide".to_string(),
             params: vec![Ty::I64, Ty::I64],
+            param_names: vec![],
             return_ty: Ty::I64,
             effects: vec![],
             vows: vec![VowEntry {

@@ -263,6 +263,7 @@ mod tests {
             id: FuncId(id),
             name: name.to_string(),
             params,
+            param_names: vec![],
             return_ty,
             effects,
             vows: vec![],

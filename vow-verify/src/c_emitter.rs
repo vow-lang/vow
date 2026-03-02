@@ -435,6 +435,7 @@ mod tests {
             id: FuncId(0),
             name: "add".to_string(),
             params: vec![Ty::I64, Ty::I64],
+            param_names: vec![],
             return_ty: Ty::I64,
             effects: vec![],
             vows: vec![],
@@ -466,6 +467,7 @@ mod tests {
             id: FuncId(0),
             name: "divide".to_string(),
             params: vec![Ty::I64, Ty::I64],
+            param_names: vec![],
             return_ty: Ty::I64,
             effects: vec![],
             vows: vec![VowEntry {
@@ -532,10 +534,14 @@ mod tests {
             id: FuncId(0),
             name: name.to_string(),
             params,
+            param_names: vec![],
             return_ty: ret,
             effects: vec![],
             vows: vec![],
-            blocks: vec![BasicBlock { id: BlockId(0), insts }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts,
+            }],
         }
     }
 
@@ -547,10 +553,34 @@ mod tests {
             Ty::Unit,
             vec![
                 inst(0, Opcode::ConstI32, Ty::I32, vec![], InstData::ConstI32(7)),
-                inst(1, Opcode::ConstF32, Ty::F32, vec![], InstData::ConstF32(1.5)),
-                inst(2, Opcode::ConstF64, Ty::F64, vec![], InstData::ConstF64(2.0)),
-                inst(3, Opcode::ConstBool, Ty::Bool, vec![], InstData::ConstBool(true)),
-                inst(4, Opcode::ConstBool, Ty::Bool, vec![], InstData::ConstBool(false)),
+                inst(
+                    1,
+                    Opcode::ConstF32,
+                    Ty::F32,
+                    vec![],
+                    InstData::ConstF32(1.5),
+                ),
+                inst(
+                    2,
+                    Opcode::ConstF64,
+                    Ty::F64,
+                    vec![],
+                    InstData::ConstF64(2.0),
+                ),
+                inst(
+                    3,
+                    Opcode::ConstBool,
+                    Ty::Bool,
+                    vec![],
+                    InstData::ConstBool(true),
+                ),
+                inst(
+                    4,
+                    Opcode::ConstBool,
+                    Ty::Bool,
+                    vec![],
+                    InstData::ConstBool(false),
+                ),
                 inst(5, Opcode::ConstUnit, Ty::Unit, vec![], InstData::None),
                 inst(6, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
                 inst(7, Opcode::Return, Ty::Unit, vec![], InstData::None),
@@ -575,15 +605,69 @@ mod tests {
             vec![
                 inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
                 inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
-                inst(2, Opcode::WrappingSubI64, Ty::I64, vec![0, 1], InstData::None),
-                inst(3, Opcode::WrappingMulI64, Ty::I64, vec![0, 1], InstData::None),
-                inst(4, Opcode::WrappingDivI64, Ty::I64, vec![0, 1], InstData::None),
-                inst(5, Opcode::WrappingRemI64, Ty::I64, vec![0, 1], InstData::None),
-                inst(6, Opcode::WrappingAddI32, Ty::I32, vec![0, 1], InstData::None),
-                inst(7, Opcode::WrappingSubI32, Ty::I32, vec![0, 1], InstData::None),
-                inst(8, Opcode::WrappingMulI32, Ty::I32, vec![0, 1], InstData::None),
-                inst(9, Opcode::WrappingDivI32, Ty::I32, vec![0, 1], InstData::None),
-                inst(10, Opcode::WrappingRemI32, Ty::I32, vec![0, 1], InstData::None),
+                inst(
+                    2,
+                    Opcode::WrappingSubI64,
+                    Ty::I64,
+                    vec![0, 1],
+                    InstData::None,
+                ),
+                inst(
+                    3,
+                    Opcode::WrappingMulI64,
+                    Ty::I64,
+                    vec![0, 1],
+                    InstData::None,
+                ),
+                inst(
+                    4,
+                    Opcode::WrappingDivI64,
+                    Ty::I64,
+                    vec![0, 1],
+                    InstData::None,
+                ),
+                inst(
+                    5,
+                    Opcode::WrappingRemI64,
+                    Ty::I64,
+                    vec![0, 1],
+                    InstData::None,
+                ),
+                inst(
+                    6,
+                    Opcode::WrappingAddI32,
+                    Ty::I32,
+                    vec![0, 1],
+                    InstData::None,
+                ),
+                inst(
+                    7,
+                    Opcode::WrappingSubI32,
+                    Ty::I32,
+                    vec![0, 1],
+                    InstData::None,
+                ),
+                inst(
+                    8,
+                    Opcode::WrappingMulI32,
+                    Ty::I32,
+                    vec![0, 1],
+                    InstData::None,
+                ),
+                inst(
+                    9,
+                    Opcode::WrappingDivI32,
+                    Ty::I32,
+                    vec![0, 1],
+                    InstData::None,
+                ),
+                inst(
+                    10,
+                    Opcode::WrappingRemI32,
+                    Ty::I32,
+                    vec![0, 1],
+                    InstData::None,
+                ),
                 inst(11, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
@@ -686,6 +770,7 @@ mod tests {
             id: FuncId(0),
             name: "cfg".to_string(),
             params: vec![Ty::Bool],
+            param_names: vec![],
             return_ty: Ty::I64,
             effects: vec![],
             vows: vec![],
@@ -716,12 +801,21 @@ mod tests {
                 },
                 BasicBlock {
                     id: BlockId(2),
-                    insts: vec![inst(4, Opcode::Unreachable, Ty::Unit, vec![], InstData::None)],
+                    insts: vec![inst(
+                        4,
+                        Opcode::Unreachable,
+                        Ty::Unit,
+                        vec![],
+                        InstData::None,
+                    )],
                 },
             ],
         };
         let c = emit_c_function(&func);
-        assert!(c.contains("if (v0) goto block1; else goto block2;"), "branch: {c}");
+        assert!(
+            c.contains("if (v0) goto block1; else goto block2;"),
+            "branch: {c}"
+        );
         assert!(c.contains("block2:;"), "block label: {c}");
         assert!(c.contains("__ESBMC_assume(0)"), "unreachable: {c}");
     }
@@ -799,7 +893,13 @@ mod tests {
             vec![],
             Ty::Bool,
             vec![
-                inst(0, Opcode::ConstBool, Ty::Bool, vec![], InstData::ConstBool(true)),
+                inst(
+                    0,
+                    Opcode::ConstBool,
+                    Ty::Bool,
+                    vec![],
+                    InstData::ConstBool(true),
+                ),
                 Inst {
                     id: InstId(1),
                     opcode: Opcode::VowInvariant,
@@ -812,7 +912,10 @@ mod tests {
             ],
         );
         let c = emit_c_function(&func);
-        assert!(c.contains("__ESBMC_assert(v0, \"vow:2\")"), "invariant assert: {c}");
+        assert!(
+            c.contains("__ESBMC_assert(v0, \"vow:2\")"),
+            "invariant assert: {c}"
+        );
     }
 
     #[test]
@@ -829,13 +932,21 @@ mod tests {
 
     #[test]
     fn emit_c_module_wraps_multiple_functions() {
-        let f1 = make_func("f1", vec![], Ty::Unit, vec![
-            inst(0, Opcode::Return, Ty::Unit, vec![], InstData::None),
-        ]);
-        let f2 = make_func("f2", vec![Ty::I64], Ty::I64, vec![
-            inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
-            inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
-        ]);
+        let f1 = make_func(
+            "f1",
+            vec![],
+            Ty::Unit,
+            vec![inst(0, Opcode::Return, Ty::Unit, vec![], InstData::None)],
+        );
+        let f2 = make_func(
+            "f2",
+            vec![Ty::I64],
+            Ty::I64,
+            vec![
+                inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ],
+        );
         let out = emit_c_module(&[&f1, &f2]);
         assert!(out.contains("#include <stdint.h>"), "includes: {out}");
         assert!(out.contains("__ESBMC_assume"), "esbmc assume: {out}");
@@ -849,6 +960,7 @@ mod tests {
             id: FuncId(0),
             name: "f".to_string(),
             params: vec![],
+            param_names: vec![],
             return_ty: Ty::Bool,
             effects: vec![],
             vows: vec![VowEntry {

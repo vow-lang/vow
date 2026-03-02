@@ -319,6 +319,63 @@ fn escape_json(s: &str) -> String {
 // Counterexample construction
 // ---------------------------------------------------------------------------
 
+fn build_c_to_source_name_map(
+    func: &vow_ir::Function,
+) -> std::collections::HashMap<String, String> {
+    use vow_ir::{InstData, Opcode, Ty};
+    let mut map = std::collections::HashMap::new();
+
+    // Map p{cl_idx} → source name (skipping Unit params, matching C emitter logic)
+    let mut cl_idx = 0u32;
+    for (ir_idx, &ty) in func.params.iter().enumerate() {
+        if ty != Ty::Unit {
+            if let Some(name) = func.param_names.get(ir_idx) {
+                map.insert(format!("p{cl_idx}"), name.clone());
+            }
+            cl_idx += 1;
+        }
+    }
+
+    // Map v{inst_id} → source name for GetArg instructions
+    let mut arg_var_map: Vec<(u32, u32)> = Vec::new(); // (ir_idx, cl_idx)
+    let mut ci = 0u32;
+    for (ir_idx, &ty) in func.params.iter().enumerate() {
+        if ty != Ty::Unit {
+            arg_var_map.push((ir_idx as u32, ci));
+            ci += 1;
+        }
+    }
+
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.opcode == Opcode::GetArg
+                && let InstData::ArgIndex(idx) = inst.data
+                && let Some(name) = func.param_names.get(idx as usize)
+            {
+                map.insert(format!("v{}", inst.id.0), name.clone());
+            }
+        }
+    }
+
+    map
+}
+
+fn map_counterexample_inputs(
+    inputs: &[(String, String)],
+    name_map: &std::collections::HashMap<String, String>,
+) -> Vec<(String, String)> {
+    inputs
+        .iter()
+        .map(|(c_name, value)| {
+            let source_name = name_map
+                .get(c_name)
+                .cloned()
+                .unwrap_or_else(|| format!("_esbmc_{c_name}"));
+            (source_name, value.clone())
+        })
+        .collect()
+}
+
 fn build_structured_counterexample(
     func: &vow_ir::Function,
     ce: &Counterexample,
@@ -338,9 +395,11 @@ fn build_structured_counterexample(
             offset: span.start,
             length: span.len,
         });
+    let name_map = build_c_to_source_name_map(func);
+    let mapped_inputs = map_counterexample_inputs(&ce.inputs, &name_map);
     StructuredCounterexample {
         function: func.name.clone(),
-        inputs: ce.inputs.clone(),
+        inputs: mapped_inputs,
         violation,
         vow_id: vid,
         source,
@@ -1792,5 +1851,178 @@ fn main() -> i32 {
         assert!(json.contains("\"file\":\"test.vow\""), "file: {json}");
         assert!(json.contains("\"offset\":10"), "offset: {json}");
         assert!(json.contains("\"length\":5"), "length: {json}");
+    }
+
+    #[test]
+    fn build_c_to_source_name_map_basic() {
+        use vow_ir::{BasicBlock, BlockId, FuncId, Inst, InstData, InstId, Opcode, Ty};
+        use vow_syntax::span::Span;
+        let func = vow_ir::Function {
+            id: FuncId(0),
+            name: "divide".to_string(),
+            params: vec![Ty::I64, Ty::I64],
+            param_names: vec!["x".to_string(), "y".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    Inst {
+                        id: InstId(0),
+                        opcode: Opcode::GetArg,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ArgIndex(0),
+                        origin: Span::new(0, 0),
+                    },
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::GetArg,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ArgIndex(1),
+                        origin: Span::new(0, 0),
+                    },
+                ],
+            }],
+        };
+        let map = build_c_to_source_name_map(&func);
+        assert_eq!(map.get("p0"), Some(&"x".to_string()));
+        assert_eq!(map.get("p1"), Some(&"y".to_string()));
+        assert_eq!(map.get("v0"), Some(&"x".to_string()));
+        assert_eq!(map.get("v1"), Some(&"y".to_string()));
+    }
+
+    #[test]
+    fn build_c_to_source_name_map_skips_unit_params() {
+        use vow_ir::{BasicBlock, BlockId, FuncId, Inst, InstData, InstId, Opcode, Ty};
+        use vow_syntax::span::Span;
+        let func = vow_ir::Function {
+            id: FuncId(0),
+            name: "f".to_string(),
+            params: vec![Ty::Unit, Ty::I64, Ty::I64],
+            param_names: vec!["_u".to_string(), "a".to_string(), "b".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    Inst {
+                        id: InstId(0),
+                        opcode: Opcode::GetArg,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ArgIndex(1),
+                        origin: Span::new(0, 0),
+                    },
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::GetArg,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ArgIndex(2),
+                        origin: Span::new(0, 0),
+                    },
+                ],
+            }],
+        };
+        let map = build_c_to_source_name_map(&func);
+        // p0 maps to "a" (first non-Unit), p1 maps to "b"
+        assert_eq!(map.get("p0"), Some(&"a".to_string()));
+        assert_eq!(map.get("p1"), Some(&"b".to_string()));
+        // v0 → GetArg(1) → "a", v1 → GetArg(2) → "b"
+        assert_eq!(map.get("v0"), Some(&"a".to_string()));
+        assert_eq!(map.get("v1"), Some(&"b".to_string()));
+    }
+
+    #[test]
+    fn map_counterexample_inputs_applies_mapping() {
+        let mut name_map = std::collections::HashMap::new();
+        name_map.insert("p0".to_string(), "x".to_string());
+        name_map.insert("p1".to_string(), "y".to_string());
+        name_map.insert("v0".to_string(), "x".to_string());
+        name_map.insert("v1".to_string(), "y".to_string());
+
+        let inputs = vec![
+            ("v1".to_string(), "0".to_string()),
+            ("v3".to_string(), "0".to_string()),
+        ];
+        let mapped = map_counterexample_inputs(&inputs, &name_map);
+        assert_eq!(mapped[0], ("y".to_string(), "0".to_string()));
+        assert_eq!(mapped[1], ("_esbmc_v3".to_string(), "0".to_string()));
+    }
+
+    #[test]
+    fn build_c_to_source_name_map_empty_param_names() {
+        use vow_ir::{BasicBlock, BlockId, FuncId, Ty};
+        let func = vow_ir::Function {
+            id: FuncId(0),
+            name: "f".to_string(),
+            params: vec![Ty::I64],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![],
+            }],
+        };
+        let map = build_c_to_source_name_map(&func);
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn counterexample_uses_source_names() {
+        let dir = TempDir::new().unwrap();
+        let src = r#"module BadDiv
+fn bad_div(x: i64, y: i64) -> i64 vow {
+  ensures: result > 100
+} {
+  x / y
+}
+fn main() -> i32 {
+  let r: i64 = bad_div(10, 2);
+  0
+}"#;
+        let source = write_source(&dir, "bad_div.vow", src);
+        let out = dir.path().join("bad_div");
+        let result = run_pipeline(&source, Some(&out), BuildMode::Release, false, false);
+        match &result.status {
+            BuildStatus::VerifyFailed { function, .. } => {
+                assert_eq!(function, "bad_div");
+                let ce = &result.counterexamples[0];
+                for (name, _) in &ce.inputs {
+                    assert!(
+                        name == "x" || name == "y" || name.starts_with("_esbmc_"),
+                        "expected source name or _esbmc_ prefix, got: {name}"
+                    );
+                }
+                let has_source_name = ce.inputs.iter().any(|(n, _)| n == "x" || n == "y");
+                assert!(
+                    has_source_name,
+                    "at least one input should use a source name, got: {:?}",
+                    ce.inputs,
+                );
+            }
+            BuildStatus::Unverified => {
+                eprintln!("SKIP: verification not run (esbmc not found)");
+            }
+            BuildStatus::CompileFailed { message } => {
+                let msg_lo = message.to_lowercase();
+                if msg_lo.contains("link")
+                    || msg_lo.contains("runtime")
+                    || msg_lo.contains("ld")
+                    || msg_lo.contains("cc exited")
+                {
+                    eprintln!("SKIP: {message}");
+                    return;
+                }
+                panic!("compile failed: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        }
     }
 }
