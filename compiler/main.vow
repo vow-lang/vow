@@ -7,7 +7,6 @@ use parser
 use types
 use env
 use checker
-use cgen
 
 fn main() -> i32 [io] {
     let argv: Vec<String> = args();
@@ -31,12 +30,5 @@ fn main() -> i32 [io] {
     print_str(" items, ");
     print_i64(n_errors);
     print_str(" errors\n");
-    if n_errors == 0 {
-        let c_code: String = gen_module_str(m);
-        let out_path: String = String::from("");
-        out_path.push_str(path);
-        out_path.push_str(String::from(".c"));
-        fs_write(out_path, c_code);
-    }
     0
 }

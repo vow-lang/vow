@@ -1,6 +1,0 @@
-module Main
-
-fn main() -> i32 [io] {
-    print_str("Hello from self-hosted cgen!\n");
-    0
-}
