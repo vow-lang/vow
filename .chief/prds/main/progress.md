@@ -6,7 +6,9 @@
 - Vec operations in IR: `Call` with `CallExtern("__vow_vec_*")` — new returns Ty::Ptr with 2 args (size, align), push takes (vec, elem), get takes (vec, idx), len takes (vec), pop takes (vec), set takes (vec, idx, val)
 - C emitter Vec modeling: `__vow_vec_t` struct with `len` + `data[128]` array; `collect_vec_vars()` pre-scans for vec variable IDs and propagates through Upsilon→Phi
 - C emitter String modeling: `__vow_string_t` struct with `len` + `int8_t data[256]` array; `collect_string_vars()` same pattern as vec; `from_cstr` → nondet len bounded `[0, 256)`
-- `emit_inst` takes both `vec_vars` and `string_vars` HashSets; Phi/Return check both sets for modelled type handling
+- `emit_inst` takes `vec_vars`, `string_vars`, and `hashmap_vars` HashSets; Phi/Return check all sets for modelled type handling
+- C emitter HashMap modeling: `__vow_hashmap_t` struct with `len` + `keys[64]` + `vals[64]` arrays; `collect_hashmap_vars()` same pattern as vec/string; insert uses concrete linear scan
+- Parameter `where` clauses: AST stores in `Param.refinement`; desugared to VowRequires in `lower_param_refinements()` (vow-ir/src/lower/vow.rs); Blame::Caller; lowered after GetArg/define, before explicit `lower_requires`
 - Pre-existing formatting changes may exist in the working tree from `cargo fmt`; only commit files actually modified for the story
 - `parse_module` and `parse_item_source` in vow-syntax now require a `file: &str` parameter — always pass the source file path
 - Type checker (`Checker::new`) already accepted a `file` param; effects/linear/exhaustiveness checkers also take `file: &str`
@@ -129,4 +131,33 @@
   - `__vow_string_eq` is conservatively modeled as length comparison — sufficient for verification but not exact
   - The Return comment was unified from `"/* vec return */"` to `"/* modelled type return */"` since both vec and string vars use the same `(void*)0` return pattern — existing tests needed updating
   - Adding `string_vars` to `emit_inst` follows the same pattern as `vec_vars` — the match guard approach `n.starts_with("__vow_string_")` cleanly separates String calls from Vec calls and other Call opcodes
+---
+
+## 2026-03-02 - US-008
+- What was implemented: Modeled HashMap operations in the ESBMC C emitter so contracts involving HashMap<K,V> can be verified. Added `__vow_hashmap_t` struct typedef (len + keys[64] + vals[64] arrays) to the module header. The C emitter now recognizes `__vow_map_new`, `__vow_map_len`, `__vow_map_insert`, `__vow_map_get`, `__vow_map_contains`, and `__vow_map_remove` CallExtern operations and emits modeled C code. Insert uses a concrete linear scan: if key exists, update value; if new, append and increment len. Contains_key and get use linear scans over the keys array. Remove swaps with last element and decrements len. HashMap variable IDs are tracked through Upsilon→Phi propagation. Return of hashmap variables emits `(void*)0` to avoid type mismatch.
+- Files changed:
+  - `vow-verify/src/c_emitter.rs` — Added `VOW_HASHMAP_MAX` constant, `collect_hashmap_vars()` analysis, `__vow_hashmap_t` typedef in `emit_c_module`, HashMap-specific handling in `emit_inst` for all 6 operations, hashmap-aware Phi/Return emission. Updated `emit_inst` signature to take `hashmap_vars`. 9 new unit tests.
+  - `vow-verify/src/esbmc.rs` — Added 3 ESBMC integration tests: `verify_hashmap_insert_ensures_contains` (insert then contains_key proves true), `verify_hashmap_insert_ensures_len` (insert one, ensures len==1, proves), `verify_hashmap_violated_len_contract` (empty map, ensures len==1, fails with counterexample).
+- **Learnings for future iterations:**
+  - HashMap operations in the IR use `CallExtern` with names prefixed `__vow_map_` (not `__vow_hashmap_`) — match on `n.starts_with("__vow_map_")` in the match guard
+  - `__vow_map_new` takes zero args (unlike `__vow_vec_new` which takes 2 size/align args)
+  - Insert modeling uses concrete linear scan over keys array — this is sound and ESBMC can reason about bounded loops
+  - The `__vow_hashmap_t` struct has separate `keys` and `vals` arrays (not interleaved pairs) for simpler C code generation
+  - Remove uses swap-with-last-element pattern to maintain contiguous storage (no gaps)
+  - Same pattern as Vec/String: `collect_*_vars()` + Upsilon→Phi propagation + match guard in `emit_inst` + Phi/Return awareness
+---
+
+## 2026-03-02 - US-009
+- What was implemented: Where clause syntax for parameters — `fn f(x: i64, y: i64 where y != 0)` is now fully functional. The AST, parser, and canonical printer already supported where clauses (Param.refinement field). The missing piece was IR lowering: parameter refinements were parsed but never desugared into VowRequires instructions. Added `lower_param_refinements()` in `vow-ir/src/lower/vow.rs` which synthesizes VowClause::Requires from each parameter's refinement and emits VowRequires opcodes with Blame::Caller. Description includes parameter name for clear error messages. Added roundtrip tests for parse→print→parse idempotency.
+- Files changed:
+  - `vow-ir/src/lower/vow.rs` — Added `lower_param_refinements()` function; imports `Param`; 2 new IR lowering tests (single refinement, refinement merged with explicit requires)
+  - `vow-ir/src/lower/mod.rs` — Call `lower_param_refinements()` after parameter GetArg/define, before `lower_requires`
+  - `vow-syntax/tests/integration.rs` — 3 new roundtrip tests: where clause alone, where clause with vow block, multiple where clauses
+- **Learnings for future iterations:**
+  - AST already had `Param.refinement: Option<Box<Expr>>` and parser already handled `where <expr>` — only the IR lowering was missing
+  - Where clause refinements desugar to VowRequires with Blame::Caller (same as explicit requires)
+  - Param refinements are lowered BEFORE explicit vow block requires — order: GetArg → define params → lower_param_refinements → lower_requires
+  - The printer preserves where clauses in the `Param` form (not as requires clauses in the vow block) — this ensures parse→print→parse idempotency
+  - No type checker changes needed: refinement predicates go to vow-verify, not vow-types
+  - `Block.trailing_expr` is `Option<Box<Expr>>` (boxed) in tests — easy to miss
 ---

@@ -461,3 +461,48 @@ pub fn describe(s: Shape) -> i32 {
     }
 }
 ";
+
+#[test]
+fn where_clause_roundtrip() {
+    roundtrip(WHERE_CLAUSE_SOURCE);
+}
+
+const WHERE_CLAUSE_SOURCE: &str = "\
+module WhereTest
+
+fn divide(x: i64, y: i64 where y != 0) -> i64 {
+    x / y
+}
+";
+
+#[test]
+fn where_clause_with_vow_block_roundtrip() {
+    roundtrip(WHERE_CLAUSE_WITH_VOW_SOURCE);
+}
+
+const WHERE_CLAUSE_WITH_VOW_SOURCE: &str = "\
+module WhereVowTest
+
+fn safe_divide(x: i64, y: i64 where y != 0) -> i64 vow {
+    ensures: result * y <= x
+} {
+    x / y
+}
+";
+
+#[test]
+fn multiple_where_clauses_roundtrip() {
+    roundtrip(MULTIPLE_WHERE_SOURCE);
+}
+
+const MULTIPLE_WHERE_SOURCE: &str = "\
+module MultiWhereTest
+
+fn clamp(x: i64 where x >= 0, max: i64 where max > 0) -> i64 {
+    if x > max {
+        max
+    } else {
+        x
+    }
+}
+";

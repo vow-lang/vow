@@ -1551,6 +1551,8 @@ pub fn lower_function(
         ctx.define(param.name.clone(), arg_id);
     }
 
+    vow::lower_param_refinements(&mut ctx, &fn_def.params);
+
     if let Some(vow_block) = &fn_def.vow {
         vow::lower_requires(&mut ctx, vow_block);
     }

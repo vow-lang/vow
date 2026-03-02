@@ -137,7 +137,7 @@
         "cargo clippy --all -- -D warnings passes"
       ],
       "priority": 5,
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-010",
