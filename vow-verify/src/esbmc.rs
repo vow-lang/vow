@@ -819,4 +819,261 @@ VERIFICATION FAILED";
             other => panic!("expected Failed or ToolNotFound, got {other:?}"),
         }
     }
+
+    // --- HashMap verification integration tests ---
+
+    fn hashmap_insert_ensures_contains() -> Function {
+        // fn insert_and_check() -> bool { ensures: result == true }
+        // { let m = HashMap::new(); m.insert(42, 100); m.contains_key(42) }
+        use vow_ir::InstId;
+        Function {
+            id: FuncId(0),
+            name: "insert_and_check".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::Bool,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "ensures result == true".to_string(),
+                blame: Blame::Callee,
+                bindings: vec![],
+                file: String::new(),
+                offset: 0,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    // v0 = HashMap::new()
+                    Inst {
+                        id: InstId(0),
+                        opcode: Opcode::Call,
+                        ty: Ty::Ptr,
+                        args: vec![],
+                        data: InstData::CallExtern("__vow_map_new".to_string()),
+                        origin: sp(),
+                    },
+                    // v1 = 42 (key)
+                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(42)),
+                    // v2 = 100 (value)
+                    inst(
+                        2,
+                        Opcode::ConstI64,
+                        Ty::I64,
+                        vec![],
+                        InstData::ConstI64(100),
+                    ),
+                    // m.insert(42, 100)
+                    Inst {
+                        id: InstId(3),
+                        opcode: Opcode::Call,
+                        ty: Ty::Unit,
+                        args: vec![InstId(0), InstId(1), InstId(2)],
+                        data: InstData::CallExtern("__vow_map_insert".to_string()),
+                        origin: sp(),
+                    },
+                    // v4 = 42 (key for contains_key)
+                    inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(42)),
+                    // v5 = m.contains_key(42)
+                    Inst {
+                        id: InstId(5),
+                        opcode: Opcode::Call,
+                        ty: Ty::Bool,
+                        args: vec![InstId(0), InstId(4)],
+                        data: InstData::CallExtern("__vow_map_contains".to_string()),
+                        origin: sp(),
+                    },
+                    // v6 = true
+                    inst(
+                        6,
+                        Opcode::ConstBool,
+                        Ty::Bool,
+                        vec![],
+                        InstData::ConstBool(true),
+                    ),
+                    // v7 = (v5 == v6)
+                    inst(7, Opcode::EqI64, Ty::Bool, vec![5, 6], InstData::None),
+                    // ensures: v7
+                    Inst {
+                        id: InstId(8),
+                        opcode: Opcode::VowEnsures,
+                        ty: Ty::Unit,
+                        args: vec![InstId(7)],
+                        data: InstData::VowId(VowId(0)),
+                        origin: sp(),
+                    },
+                    inst(9, Opcode::Return, Ty::Unit, vec![5], InstData::None),
+                ],
+            }],
+        }
+    }
+
+    fn hashmap_insert_ensures_len_1() -> Function {
+        // fn insert_one() -> i64 { ensures: result == 1 }
+        // { let m = HashMap::new(); m.insert(10, 20); m.len() }
+        use vow_ir::InstId;
+        Function {
+            id: FuncId(0),
+            name: "insert_one".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "ensures result == 1".to_string(),
+                blame: Blame::Callee,
+                bindings: vec![],
+                file: String::new(),
+                offset: 0,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    // v0 = HashMap::new()
+                    Inst {
+                        id: InstId(0),
+                        opcode: Opcode::Call,
+                        ty: Ty::Ptr,
+                        args: vec![],
+                        data: InstData::CallExtern("__vow_map_new".to_string()),
+                        origin: sp(),
+                    },
+                    // v1 = 10 (key)
+                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(10)),
+                    // v2 = 20 (value)
+                    inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(20)),
+                    // m.insert(10, 20)
+                    Inst {
+                        id: InstId(3),
+                        opcode: Opcode::Call,
+                        ty: Ty::Unit,
+                        args: vec![InstId(0), InstId(1), InstId(2)],
+                        data: InstData::CallExtern("__vow_map_insert".to_string()),
+                        origin: sp(),
+                    },
+                    // v4 = m.len()
+                    Inst {
+                        id: InstId(4),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(0)],
+                        data: InstData::CallExtern("__vow_map_len".to_string()),
+                        origin: sp(),
+                    },
+                    // v5 = 1
+                    inst(5, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                    // v6 = (v4 == v5)
+                    inst(6, Opcode::EqI64, Ty::Bool, vec![4, 5], InstData::None),
+                    // ensures: v6
+                    Inst {
+                        id: InstId(7),
+                        opcode: Opcode::VowEnsures,
+                        ty: Ty::Unit,
+                        args: vec![InstId(6)],
+                        data: InstData::VowId(VowId(0)),
+                        origin: sp(),
+                    },
+                    inst(8, Opcode::Return, Ty::Unit, vec![4], InstData::None),
+                ],
+            }],
+        }
+    }
+
+    fn hashmap_empty_ensures_len_1_violated() -> Function {
+        // fn empty_map() -> i64 { ensures: result == 1 }
+        // { let m = HashMap::new(); m.len() }  -- VIOLATED: len is 0
+        use vow_ir::InstId;
+        Function {
+            id: FuncId(0),
+            name: "empty_map".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "ensures result == 1".to_string(),
+                blame: Blame::Callee,
+                bindings: vec![],
+                file: String::new(),
+                offset: 0,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    // v0 = HashMap::new()
+                    Inst {
+                        id: InstId(0),
+                        opcode: Opcode::Call,
+                        ty: Ty::Ptr,
+                        args: vec![],
+                        data: InstData::CallExtern("__vow_map_new".to_string()),
+                        origin: sp(),
+                    },
+                    // v1 = m.len()
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(0)],
+                        data: InstData::CallExtern("__vow_map_len".to_string()),
+                        origin: sp(),
+                    },
+                    // v2 = 1
+                    inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                    // v3 = (v1 == v2)
+                    inst(3, Opcode::EqI64, Ty::Bool, vec![1, 2], InstData::None),
+                    // ensures: v3
+                    Inst {
+                        id: InstId(4),
+                        opcode: Opcode::VowEnsures,
+                        ty: Ty::Unit,
+                        args: vec![InstId(3)],
+                        data: InstData::VowId(VowId(0)),
+                        origin: sp(),
+                    },
+                    inst(5, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+                ],
+            }],
+        }
+    }
+
+    #[test]
+    fn verify_hashmap_insert_ensures_contains() {
+        let func = hashmap_insert_ensures_contains();
+        match verify_function(&func) {
+            VerificationResult::Proven => {}
+            VerificationResult::ToolNotFound => {
+                eprintln!("SKIP: esbmc not found");
+            }
+            other => panic!("expected Proven or ToolNotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_hashmap_insert_ensures_len() {
+        let func = hashmap_insert_ensures_len_1();
+        match verify_function(&func) {
+            VerificationResult::Proven => {}
+            VerificationResult::ToolNotFound => {
+                eprintln!("SKIP: esbmc not found");
+            }
+            other => panic!("expected Proven or ToolNotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_hashmap_violated_len_contract() {
+        let func = hashmap_empty_ensures_len_1_violated();
+        match verify_function(&func) {
+            VerificationResult::Failed(ce) => {
+                assert_eq!(ce.vow_id, Some(0), "vow_id should be 0");
+            }
+            VerificationResult::ToolNotFound => {
+                eprintln!("SKIP: esbmc not found");
+            }
+            other => panic!("expected Failed or ToolNotFound, got {other:?}"),
+        }
+    }
 }

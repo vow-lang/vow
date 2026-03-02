@@ -8,6 +8,7 @@ use vow_ir::{Function, Inst, InstData, Opcode, Ty};
 
 const VOW_VEC_MAX: usize = 128;
 const VOW_STRING_MAX: usize = 256;
+const VOW_HASHMAP_MAX: usize = 64;
 
 // ---------------------------------------------------------------------------
 // Type mapping
@@ -108,10 +109,56 @@ fn collect_string_vars(func: &Function) -> HashSet<u32> {
 }
 
 // ---------------------------------------------------------------------------
+// HashMap variable analysis
+// ---------------------------------------------------------------------------
+
+fn collect_hashmap_vars(func: &Function) -> HashSet<u32> {
+    let mut hashmap_vars = HashSet::new();
+
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.opcode == Opcode::Call
+                && let InstData::CallExtern(ref name) = inst.data
+                && name == "__vow_map_new"
+            {
+                hashmap_vars.insert(inst.id.0);
+            }
+        }
+    }
+
+    loop {
+        let mut changed = false;
+        for block in &func.blocks {
+            for inst in &block.insts {
+                if inst.opcode == Opcode::Upsilon
+                    && let InstData::PhiTarget(phi_id) = inst.data
+                    && !inst.args.is_empty()
+                    && hashmap_vars.contains(&inst.args[0].0)
+                    && hashmap_vars.insert(phi_id.0)
+                {
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    hashmap_vars
+}
+
+// ---------------------------------------------------------------------------
 // Expression / statement emission
 // ---------------------------------------------------------------------------
 
-fn emit_inst(inst: &Inst, out: &mut String, vec_vars: &HashSet<u32>, string_vars: &HashSet<u32>) {
+fn emit_inst(
+    inst: &Inst,
+    out: &mut String,
+    vec_vars: &HashSet<u32>,
+    string_vars: &HashSet<u32>,
+    hashmap_vars: &HashSet<u32>,
+) {
     let id = inst.id.0;
     match inst.opcode {
         // Constants
@@ -339,7 +386,10 @@ fn emit_inst(inst: &Inst, out: &mut String, vec_vars: &HashSet<u32>, string_vars
         }
         Opcode::Return => {
             if let Some(&val_id) = inst.args.first() {
-                if vec_vars.contains(&val_id.0) || string_vars.contains(&val_id.0) {
+                if vec_vars.contains(&val_id.0)
+                    || string_vars.contains(&val_id.0)
+                    || hashmap_vars.contains(&val_id.0)
+                {
                     out.push_str("  return (void*)0; /* modelled type return */\n");
                 } else {
                     out.push_str(&format!("  return v{};\n", val_id.0));
@@ -358,6 +408,8 @@ fn emit_inst(inst: &Inst, out: &mut String, vec_vars: &HashSet<u32>, string_vars
                 out.push_str(&format!("  __vow_vec_t v{};\n", id));
             } else if string_vars.contains(&id) {
                 out.push_str(&format!("  __vow_string_t v{};\n", id));
+            } else if hashmap_vars.contains(&id) {
+                out.push_str(&format!("  __vow_hashmap_t v{};\n", id));
             } else {
                 out.push_str(&format!("  {} v{};\n", ir_ty_to_c(inst.ty), id));
             }
@@ -466,6 +518,72 @@ fn emit_inst(inst: &Inst, out: &mut String, vec_vars: &HashSet<u32>, string_vars
             }
         }
 
+        // HashMap operations — modeled as abstract struct with len + keys/vals arrays
+        Opcode::Call if matches!(&inst.data, InstData::CallExtern(n) if n.starts_with("__vow_map_")) => {
+            if let InstData::CallExtern(ref name) = inst.data {
+                match name.as_str() {
+                    "__vow_map_new" => {
+                        out.push_str(&format!("  __vow_hashmap_t v{id};\n  v{id}.len = 0;\n"));
+                    }
+                    "__vow_map_len" => {
+                        let m = inst.args[0].0;
+                        out.push_str(&format!("  int64_t v{id} = v{m}.len;\n"));
+                    }
+                    "__vow_map_insert" => {
+                        let m = inst.args[0].0;
+                        let k = inst.args[1].0;
+                        let v = inst.args[2].0;
+                        out.push_str(&format!(
+                            "  {{\n\
+                             \x20   _Bool __found = 0;\n\
+                             \x20   for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
+                             \x20     if (v{m}.keys[__i] == v{k}) {{ v{m}.vals[__i] = v{v}; __found = 1; break; }}\n\
+                             \x20   }}\n\
+                             \x20   if (!__found) {{ v{m}.keys[v{m}.len] = v{k}; v{m}.vals[v{m}.len] = v{v}; v{m}.len++; }}\n\
+                             \x20 }}\n"
+                        ));
+                    }
+                    "__vow_map_get" => {
+                        let m = inst.args[0].0;
+                        let k = inst.args[1].0;
+                        out.push_str(&format!(
+                            "  int64_t v{id} = 0;\n\
+                             \x20 for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
+                             \x20   if (v{m}.keys[__i] == v{k}) {{ v{id} = v{m}.vals[__i]; break; }}\n\
+                             \x20 }}\n"
+                        ));
+                    }
+                    "__vow_map_contains" => {
+                        let m = inst.args[0].0;
+                        let k = inst.args[1].0;
+                        out.push_str(&format!(
+                            "  _Bool v{id} = 0;\n\
+                             \x20 for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
+                             \x20   if (v{m}.keys[__i] == v{k}) {{ v{id} = 1; break; }}\n\
+                             \x20 }}\n"
+                        ));
+                    }
+                    "__vow_map_remove" => {
+                        let m = inst.args[0].0;
+                        let k = inst.args[1].0;
+                        out.push_str(&format!(
+                            "  for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
+                             \x20   if (v{m}.keys[__i] == v{k}) {{\n\
+                             \x20     v{m}.keys[__i] = v{m}.keys[v{m}.len - 1];\n\
+                             \x20     v{m}.vals[__i] = v{m}.vals[v{m}.len - 1];\n\
+                             \x20     v{m}.len--;\n\
+                             \x20     break;\n\
+                             \x20   }}\n\
+                             \x20 }}\n"
+                        ));
+                    }
+                    _ => {
+                        emit_unmodelled(inst, out);
+                    }
+                }
+            }
+        }
+
         // Other calls, memory, region/linear/field ops — not yet supported for verification
         Opcode::Call
         | Opcode::Load
@@ -521,6 +639,7 @@ pub fn emit_c_function(func: &Function) -> String {
     let mut out = String::new();
     let vec_vars = collect_vec_vars(func);
     let string_vars = collect_string_vars(func);
+    let hashmap_vars = collect_hashmap_vars(func);
 
     // Return type
     let ret_c = if func.return_ty == Ty::Unit {
@@ -584,7 +703,7 @@ pub fn emit_c_function(func: &Function) -> String {
         }
         for inst in &block.insts {
             if inst.opcode != Opcode::GetArg {
-                emit_inst(inst, &mut out, &vec_vars, &string_vars);
+                emit_inst(inst, &mut out, &vec_vars, &string_vars, &hashmap_vars);
             }
         }
     }
@@ -609,8 +728,12 @@ pub fn emit_c_module(funcs: &[&Function]) -> String {
         VOW_VEC_MAX
     ));
     out.push_str(&format!(
-        "typedef struct {{ int64_t len; int8_t data[{}]; }} __vow_string_t;\n\n",
+        "typedef struct {{ int64_t len; int8_t data[{}]; }} __vow_string_t;\n",
         VOW_STRING_MAX
+    ));
+    out.push_str(&format!(
+        "typedef struct {{ int64_t len; int64_t keys[{}]; int64_t vals[{}]; }} __vow_hashmap_t;\n\n",
+        VOW_HASHMAP_MAX, VOW_HASHMAP_MAX
     ));
 
     for func in funcs {
@@ -1835,5 +1958,270 @@ mod tests {
             c.contains("string print not modelled"),
             "print not modelled: {c}"
         );
+    }
+
+    // --- HashMap unit tests ---
+
+    #[test]
+    fn emit_hashmap_new() {
+        use vow_ir::InstId;
+        let func = make_func(
+            "make_map",
+            vec![],
+            Ty::Ptr,
+            vec![
+                Inst {
+                    id: InstId(0),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![],
+                    data: InstData::CallExtern("__vow_map_new".to_string()),
+                    origin: sp(),
+                },
+                inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func);
+        assert!(c.contains("__vow_hashmap_t v0;"), "hashmap decl: {c}");
+        assert!(c.contains("v0.len = 0;"), "hashmap len init: {c}");
+        assert!(
+            c.contains("(void*)0; /* modelled type return */"),
+            "hashmap return: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_hashmap_len() {
+        use vow_ir::InstId;
+        let func = make_func(
+            "get_len",
+            vec![],
+            Ty::I64,
+            vec![
+                Inst {
+                    id: InstId(0),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![],
+                    data: InstData::CallExtern("__vow_map_new".to_string()),
+                    origin: sp(),
+                },
+                Inst {
+                    id: InstId(1),
+                    opcode: Opcode::Call,
+                    ty: Ty::I64,
+                    args: vec![InstId(0)],
+                    data: InstData::CallExtern("__vow_map_len".to_string()),
+                    origin: sp(),
+                },
+                inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func);
+        assert!(c.contains("int64_t v1 = v0.len;"), "hashmap len: {c}");
+    }
+
+    #[test]
+    fn emit_hashmap_insert() {
+        use vow_ir::InstId;
+        let func = make_func(
+            "insert_one",
+            vec![],
+            Ty::Ptr,
+            vec![
+                Inst {
+                    id: InstId(0),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![],
+                    data: InstData::CallExtern("__vow_map_new".to_string()),
+                    origin: sp(),
+                },
+                inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(10)),
+                inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(20)),
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(0), InstId(1), InstId(2)],
+                    data: InstData::CallExtern("__vow_map_insert".to_string()),
+                    origin: sp(),
+                },
+                inst(4, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func);
+        assert!(c.contains("v0.keys[__i] == v1"), "key search: {c}");
+        assert!(c.contains("v0.vals[__i] = v2"), "update existing: {c}");
+        assert!(c.contains("v0.keys[v0.len] = v1"), "insert new key: {c}");
+        assert!(c.contains("v0.vals[v0.len] = v2"), "insert new val: {c}");
+        assert!(c.contains("v0.len++"), "insert increments len: {c}");
+    }
+
+    #[test]
+    fn emit_hashmap_get() {
+        use vow_ir::InstId;
+        let func = make_func(
+            "get_val",
+            vec![],
+            Ty::I64,
+            vec![
+                Inst {
+                    id: InstId(0),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![],
+                    data: InstData::CallExtern("__vow_map_new".to_string()),
+                    origin: sp(),
+                },
+                inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(5)),
+                Inst {
+                    id: InstId(2),
+                    opcode: Opcode::Call,
+                    ty: Ty::I64,
+                    args: vec![InstId(0), InstId(1)],
+                    data: InstData::CallExtern("__vow_map_get".to_string()),
+                    origin: sp(),
+                },
+                inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func);
+        assert!(c.contains("int64_t v2 = 0;"), "get default: {c}");
+        assert!(c.contains("v0.keys[__i] == v1"), "get key search: {c}");
+        assert!(c.contains("v2 = v0.vals[__i]"), "get reads value: {c}");
+    }
+
+    #[test]
+    fn emit_hashmap_contains_key() {
+        use vow_ir::InstId;
+        let func = make_func(
+            "has_key",
+            vec![],
+            Ty::Bool,
+            vec![
+                Inst {
+                    id: InstId(0),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![],
+                    data: InstData::CallExtern("__vow_map_new".to_string()),
+                    origin: sp(),
+                },
+                inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(7)),
+                Inst {
+                    id: InstId(2),
+                    opcode: Opcode::Call,
+                    ty: Ty::Bool,
+                    args: vec![InstId(0), InstId(1)],
+                    data: InstData::CallExtern("__vow_map_contains".to_string()),
+                    origin: sp(),
+                },
+                inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func);
+        assert!(c.contains("_Bool v2 = 0;"), "contains default: {c}");
+        assert!(c.contains("v0.keys[__i] == v1"), "contains key search: {c}");
+        assert!(c.contains("v2 = 1"), "contains sets true: {c}");
+    }
+
+    #[test]
+    fn emit_hashmap_remove() {
+        use vow_ir::InstId;
+        let func = make_func(
+            "remove_key",
+            vec![],
+            Ty::Ptr,
+            vec![
+                Inst {
+                    id: InstId(0),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![],
+                    data: InstData::CallExtern("__vow_map_new".to_string()),
+                    origin: sp(),
+                },
+                inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(3)),
+                Inst {
+                    id: InstId(2),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(0), InstId(1)],
+                    data: InstData::CallExtern("__vow_map_remove".to_string()),
+                    origin: sp(),
+                },
+                inst(3, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func);
+        assert!(c.contains("v0.keys[__i] == v1"), "remove key search: {c}");
+        assert!(c.contains("v0.len--"), "remove decrements len: {c}");
+    }
+
+    #[test]
+    fn emit_hashmap_phi_propagation() {
+        use vow_ir::InstId;
+        let func = Function {
+            id: FuncId(0),
+            name: "map_phi".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    Inst {
+                        id: InstId(0),
+                        opcode: Opcode::Phi,
+                        ty: Ty::Ptr,
+                        args: vec![],
+                        data: InstData::None,
+                        origin: sp(),
+                    },
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::Call,
+                        ty: Ty::Ptr,
+                        args: vec![],
+                        data: InstData::CallExtern("__vow_map_new".to_string()),
+                        origin: sp(),
+                    },
+                    Inst {
+                        id: InstId(2),
+                        opcode: Opcode::Upsilon,
+                        ty: Ty::Unit,
+                        args: vec![InstId(1)],
+                        data: InstData::PhiTarget(InstId(0)),
+                        origin: sp(),
+                    },
+                    inst(3, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            }],
+        };
+        let c = emit_c_function(&func);
+        assert!(
+            c.contains("__vow_hashmap_t v0;"),
+            "phi uses hashmap type: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_hashmap_module_header() {
+        let func = make_func(
+            "f",
+            vec![],
+            Ty::Unit,
+            vec![inst(0, Opcode::Return, Ty::Unit, vec![], InstData::None)],
+        );
+        let c = emit_c_module(&[&func]);
+        assert!(
+            c.contains("__vow_hashmap_t"),
+            "hashmap typedef in header: {c}"
+        );
+        assert!(c.contains("int64_t keys["), "keys array in typedef: {c}");
+        assert!(c.contains("int64_t vals["), "vals array in typedef: {c}");
     }
 }
