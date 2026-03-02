@@ -1,0 +1,21 @@
+module CallerBlame
+
+fn safe_div(x: i64, y: i64) -> i64 vow {
+  requires: y != 0
+} {
+  x / y
+}
+
+fn half_sum(a: i64, b: i64) -> i64 {
+  safe_div(a + b, 2)
+}
+
+fn quarter(x: i64) -> i64 {
+  half_sum(x, 0) / 2
+}
+
+fn main() -> i32 [io] {
+  print_i64(quarter(100));
+  print_i64(half_sum(10, 20));
+  0
+}

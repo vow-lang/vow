@@ -402,18 +402,8 @@ fn emit_inst(
             out.push_str("  __ESBMC_assume(0); /* unreachable */\n");
         }
 
-        // Phi / Upsilon — translated as variable copies
-        Opcode::Phi => {
-            if vec_vars.contains(&id) {
-                out.push_str(&format!("  __vow_vec_t v{};\n", id));
-            } else if string_vars.contains(&id) {
-                out.push_str(&format!("  __vow_string_t v{};\n", id));
-            } else if hashmap_vars.contains(&id) {
-                out.push_str(&format!("  __vow_hashmap_t v{};\n", id));
-            } else {
-                out.push_str(&format!("  {} v{};\n", ir_ty_to_c(inst.ty), id));
-            }
-        }
+        // Phi — already pre-declared at function top; nothing to emit here
+        Opcode::Phi => {}
         Opcode::Upsilon => {
             if let InstData::PhiTarget(phi_id) = inst.data {
                 let val = inst.args[0].0;
@@ -690,6 +680,24 @@ pub fn emit_c_function(func: &Function) -> String {
                     ));
                 } else {
                     out.push_str(&format!("  int32_t v{} = 0; /* unit arg */\n", inst.id.0));
+                }
+            }
+        }
+    }
+
+    // Pre-declare Phi variables (Upsilon writes may precede the Phi block)
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.opcode == Opcode::Phi {
+                let id = inst.id.0;
+                if vec_vars.contains(&id) {
+                    out.push_str(&format!("  __vow_vec_t v{};\n", id));
+                } else if string_vars.contains(&id) {
+                    out.push_str(&format!("  __vow_string_t v{};\n", id));
+                } else if hashmap_vars.contains(&id) {
+                    out.push_str(&format!("  __vow_hashmap_t v{};\n", id));
+                } else {
+                    out.push_str(&format!("  {} v{};\n", ir_ty_to_c(inst.ty), id));
                 }
             }
         }

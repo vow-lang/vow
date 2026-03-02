@@ -9,6 +9,9 @@
 - `emit_inst` takes `vec_vars`, `string_vars`, and `hashmap_vars` HashSets; Phi/Return check all sets for modelled type handling
 - C emitter HashMap modeling: `__vow_hashmap_t` struct with `len` + `keys[64]` + `vals[64]` arrays; `collect_hashmap_vars()` same pattern as vec/string; insert uses concrete linear scan
 - Parameter `where` clauses: AST stores in `Param.refinement`; desugared to VowRequires in `lower_param_refinements()` (vow-ir/src/lower/vow.rs); Blame::Caller; lowered after GetArg/define, before explicit `lower_requires`
+- Vow function names must not clash with C stdlib names (`abs`, `double`, `printf`, etc.) — ESBMC C emitter uses them as-is in generated C
+- ESBMC C emitter: Phi variables are pre-declared at function top (before blocks), so Upsilon writes in earlier blocks can reference them
+- ESBMC `--unwind 10`: loop examples must iterate ≤8 times; constrain inputs with `requires: n <= 8`
 - Pre-existing formatting changes may exist in the working tree from `cargo fmt`; only commit files actually modified for the story
 - `parse_module` and `parse_item_source` in vow-syntax now require a `file: &str` parameter — always pass the source file path
 - Type checker (`Checker::new`) already accepted a `file` param; effects/linear/exhaustiveness checkers also take `file: &str`
@@ -160,4 +163,21 @@
   - The printer preserves where clauses in the `Param` form (not as requires clauses in the vow block) — this ensures parse→print→parse idempotency
   - No type checker changes needed: refinement predicates go to vow-verify, not vow-types
   - `Block.trailing_expr` is `Option<Box<Expr>>` (boxed) in tests — easy to miss
+---
+
+## 2026-03-02 - US-010
+- What was implemented: Five new verified example programs demonstrating base type contracts. Also fixed a bug in the ESBMC C emitter where Phi variables were declared in-block but Upsilon writes in earlier blocks referenced them before declaration.
+- Files changed:
+  - `examples/max.vow` — ensures with result keyword: `fn max_of(a, b) -> i64 vow { ensures: result >= a, ensures: result >= b }`
+  - `examples/clamp.vow` — multiple contracts per function: requires (lo <= hi) + ensures (result in [lo, hi])
+  - `examples/caller_blame.vow` — multi-function chain: `quarter` → `half_sum` → `safe_div` with `requires: y != 0` (Caller blame)
+  - `examples/callee_blame.vow` — multi-function chain: `twice` and `negate` each with ensures (Callee blame)
+  - `examples/sum_range.vow` — loop invariant with `invariant: i >= 0, invariant: i <= n` on a while loop
+  - `vow-verify/src/c_emitter.rs` — Fixed Phi pre-declaration: Phi variables are now declared at function top before blocks, so Upsilon writes in earlier blocks can reference them
+- **Learnings for future iterations:**
+  - Vow function names must not clash with C standard library names (`abs`, `double`, etc.) — ESBMC/clang will reject them
+  - ESBMC C emitter Phi/Upsilon ordering: Upsilon instructions write to Phi variables but may appear in blocks before the Phi block. Phi variables must be pre-declared at function top.
+  - ESBMC uses `--unwind 10` for bounded model checking — loops must iterate at most ~8 times for verification to succeed. Constrain inputs with `requires: n <= 8` for loop examples.
+  - `ensures: result == x + x` works for a standalone function, but cross-function ensures composition doesn't work (ESBMC verifies functions independently; Call returns nondet)
+  - The if-else expression in Vow generates Upsilon/Phi IR; this was previously broken in the C emitter for ESBMC verification
 ---
