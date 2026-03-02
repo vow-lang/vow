@@ -8,26 +8,12 @@ Each entry includes the source observation and a concrete suggestion.
 
 ## Language
 
-### 1. Chained field access on non-tagged types causes silent wrong-index bugs
+### 1. ~~Chained field access on non-tagged types causes silent wrong-index bugs~~ ADDRESSED
 
-**Observation (Phase 9 Wave 3):**
-`e.ts.strs[fsid]` caused a segfault. The intermediate result `e.ts` (a FieldGet)
-is not automatically tagged in `inst_struct_type`, so the second `.strs` lookup
-defaults to field index 0 (`data`) instead of index 1 (`strs`).
-
-The workaround is:
-```vow
-let ts_local: TyStore = e.ts;
-let fn_str: String = ts_local.strs[fsid];
-```
-
-**Suggestions:**
-- The IR lowerer should propagate struct type tags through FieldGet results
-  automatically. When a FieldGet's result type is a known struct (from the
-  struct definition), tag the result in `inst_struct_type`.
-- Alternatively, make the language require explicit annotated `let` for all
-  struct-typed intermediate values (enforce via the type checker error rather
-  than silent miscompilation).
+**Status:** Fixed in Pre-Wave 4 hardening. The IR lowerer now builds a
+`struct_field_type_names` map from AST struct definitions and auto-tags
+FieldGet results with their declared type names. Chained field access like
+`e.ts.strs[fsid]` now works without annotated `let` bindings.
 
 ---
 
@@ -53,22 +39,13 @@ This forces the type checker to be lenient:
 
 ---
 
-### 3. No distinction between "unknown type" and "diverging expression"
+### 3. ~~No distinction between "unknown type" and "diverging expression"~~ ADDRESSED
 
-**Observation (Phase 9 Wave 3):**
-The self-hosted type checker uses `CTY_NEVER` both for:
-- Expressions that truly diverge (`return`, `break`, `process_exit()`)
-- Expressions whose types cannot be determined (cross-module calls, field
-  access on unregistered structs)
-
-This conflation causes the type checker to suppress legitimate errors
-(since `CTY_NEVER` is coercible to any type).
-
-**Suggestion:**
-Introduce a `CTY_UNKNOWN` (top type / type hole) distinct from `CTY_NEVER`.
-`CTY_UNKNOWN` would be coercible to anything AND anything would be coercible
-to `CTY_UNKNOWN`, representing "type not yet known". `CTY_NEVER` would remain
-strictly for diverging expressions.
+**Status:** Fixed in Pre-Wave 4 hardening. Added `CTY_UNKNOWN` (tid 21) for
+unresolved cross-module types. `CTY_NEVER` is now reserved for diverging
+expressions only. `is_coercible` treats both `CTY_NEVER` and `CTY_UNKNOWN`
+as coercible to/from anything. `resolve_ast_ty` returns `CTY_UNKNOWN` for
+types not found in local struct/enum definitions.
 
 ---
 
@@ -91,40 +68,23 @@ This creates an incompatibility:
 
 ---
 
-### 5. Method chaining on unknown types produces `CTY_UNIT` silently
+### 5. ~~Method chaining on unknown types produces `CTY_UNIT` silently~~ ADDRESSED
 
-**Observation (Phase 9 Wave 3):**
-`m.items.len()` where `m` is an unknown struct:
-- `m.items` → `CTY_NEVER` (fixed in EXPR_FIELD)
-- `(m.items).len()` → `CTY_UNIT` (EXPR_METHOD defaulted without propagating NEVER)
-
-This caused "let binding type mismatch" for `let n: i64 = m.items.len();`.
-
-**Suggestion:**
-Any operator/method that would be applied to `CTY_NEVER` should propagate
-`CTY_NEVER` rather than returning `CTY_UNIT`. This applies to:
-- `EXPR_METHOD`
-- `EXPR_INDEX`
-- `EXPR_FIELD` (already fixed)
+**Status:** Fixed in Pre-Wave 4 hardening. All receiver-based expression handlers
+(EXPR_METHOD, EXPR_INDEX, EXPR_FIELD, EXPR_QUESTION) now use `is_opaque()` guard
+to propagate CTY_NEVER/CTY_UNKNOWN instead of defaulting to CTY_UNIT.
 
 ---
 
 ## Tooling
 
-### 6. `inst_struct_type` silently defaults to field index 0
+### 6. ~~`inst_struct_type` silently defaults to field index 0~~ ADDRESSED
 
-**Observation (Phase 9 Wave 3):**
-When a FieldGet can't find the struct type in `inst_struct_type`, the code uses
-`unwrap_or(0)` as the field index. This means a wrong struct type causes field
-access to silently read the WRONG field — leading to a crash (reading an i64 as
-a VowVec pointer) rather than an early error.
-
-**Suggestion:**
-- Emit a compile-time diagnostic (warning or error) when a FieldGet's receiver
-  is not found in `struct_field_map`. This would surface the bug at compile time
-  instead of causing a runtime segfault.
-- Alternatively, emit a runtime trap (`unreachable!()`) if the field index cannot
-  be resolved, making the failure visible and debuggable.
+**Status:** Fixed in Pre-Wave 4 hardening. The lowerer now emits `eprintln!`
+warnings when FieldGet/FieldSet receivers are not found in `inst_struct_type`,
+and when StructLiteral field names are not found in the struct definition.
+The `unwrap_or(0)` fallback remains for backwards compatibility, but the
+warning makes the issue visible during compilation.
 
 ---
 
@@ -199,36 +159,21 @@ Step 2 takes significant time. There is no incremental compilation at the Vow le
 
 ---
 
-### 11. Error messages lack source location
+### 11. ~~Error messages lack source location~~ ADDRESSED
 
-**Observation (Phase 9 Wave 3):**
-The self-hosted checker emits error strings like "let binding type mismatch" and
-"function body type mismatch" without any information about WHERE in the source
-the error occurred (which function, which line, which variable).
-
-This forces iterative debugging: add prints, narrow down, repeat.
-
-**Suggestion:**
-- Pass span information through to `env_emit_error`. The checker already has
-  access to the AST arena, which stores spans for expressions, statements,
-  and patterns.
-- Even just printing the function name where the error occurred would reduce
-  debug time significantly.
-- Format: `"error at fn <name>, stmt <sid>: <message>"`.
+**Status:** Fixed in Pre-Wave 4 hardening. `CheckEnv` now tracks `cur_fn_name`
+(set at `check_fn` entry). `env_emit_error` prepends the function name:
+`"error in fn <name>: <message>"`. Expression-level spans remain unpopulated
+(parser doesn't set them); function names are sufficient for most debugging.
 
 ---
 
-### 12. `CTY_NEVER` propagation must be implemented manually at each expression kind
+### 12. ~~`CTY_NEVER` propagation must be implemented manually at each expression kind~~ ADDRESSED
 
-**Observation (Phase 9 Wave 3):**
-After making EXPR_FIELD return `CTY_NEVER` for unknown types, we had to separately
-fix EXPR_INDEX, EXPR_METHOD, and check_block statement propagation to also handle
-`CTY_NEVER` receivers/results. Each required a separate fix.
-
-**Suggestion:**
-Add a convention: every expression handler that takes a receiver should check
-`if recv_tid == CTY_NEVER() { return CTY_NEVER(); }` at the top. Or better:
-add a general wrapper in check_expr that propagates NEVER from sub-expressions
-before dispatching to specific handlers.
+**Status:** Fixed in Pre-Wave 4 hardening. Added `is_opaque(tid)` helper that
+checks both `CTY_NEVER` and `CTY_UNKNOWN`. All receiver-based handlers
+(EXPR_FIELD, EXPR_METHOD, EXPR_INDEX, EXPR_QUESTION) and `check_block` now use
+`is_opaque()` as the standard guard pattern. If/match branch type selection
+also uses `is_opaque()` instead of checking only CTY_NEVER.
 
 ---

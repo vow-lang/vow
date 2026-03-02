@@ -21,6 +21,7 @@ fn CTY_ENUM() -> i64 { 17 }
 fn CTY_APPLIED() -> i64 { 18 }
 fn CTY_REF() -> i64 { 19 }
 fn CTY_TUPLE() -> i64 { 20 }
+fn CTY_UNKNOWN() -> i64 { 21 }
 
 struct TyStore {
     data: Vec<i64>,
@@ -39,7 +40,7 @@ fn ty_store_new() -> TyStore {
         arg_size: Vec::new(),
     };
     let mut i: i64 = 0;
-    while i < 16 {
+    while i < 22 {
         ts.data.push(i);
         ts.data.push(0);
         ts.data.push(0);
@@ -183,10 +184,15 @@ fn is_coercible(ts: TyStore, from_tid: i64, to_tid: i64) -> bool {
     if from_tid == to_tid {
         return true;
     }
-    if ty_tag(ts, from_tid) == CTY_NEVER() {
+    let from_tag: i64 = ty_tag(ts, from_tid);
+    let to_tag: i64 = ty_tag(ts, to_tid);
+    if from_tag == CTY_NEVER() || from_tag == CTY_UNKNOWN() {
         return true;
     }
-    if ty_tag(ts, from_tid) == CTY_I64() && ty_is_integer(ts, to_tid) {
+    if to_tag == CTY_UNKNOWN() {
+        return true;
+    }
+    if from_tag == CTY_I64() && ty_is_integer(ts, to_tid) {
         return true;
     }
     tids_equal(ts, from_tid, to_tid)

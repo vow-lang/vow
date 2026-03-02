@@ -46,7 +46,11 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
         if sidx != -1 {
             return ts_make_struct(e.ts, name);
         }
-        return ts_make_enum(e.ts, name);
+        let eidx: i64 = env_lookup_enum(e, name);
+        if eidx != -1 {
+            return ts_make_enum(e.ts, name);
+        }
+        return CTY_UNKNOWN();
     }
     if tag == TY_GENERIC() {
         let name_sid: i64 = type_a(a, ast_tid);
@@ -61,17 +65,18 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
             i = i + 1;
         }
         let base_ptid: i64 = primitive_tid(e.ts, name);
-        let base_tid: i64 = if base_ptid != -1 {
-            base_ptid
-        } else {
-            let sidx: i64 = env_lookup_struct(e, name);
-            if sidx != -1 {
-                ts_make_struct(e.ts, name)
-            } else {
-                ts_make_enum(e.ts, name)
-            }
-        };
-        return ts_make_applied(e.ts, base_tid, arg_tids);
+        if base_ptid != -1 {
+            return ts_make_applied(e.ts, base_ptid, arg_tids);
+        }
+        let sidx: i64 = env_lookup_struct(e, name);
+        if sidx != -1 {
+            return ts_make_applied(e.ts, ts_make_struct(e.ts, name), arg_tids);
+        }
+        let eidx: i64 = env_lookup_enum(e, name);
+        if eidx != -1 {
+            return ts_make_applied(e.ts, ts_make_enum(e.ts, name), arg_tids);
+        }
+        return CTY_UNKNOWN();
     }
     if tag == TY_REF() {
         let inner: i64 = resolve_ast_ty(e, m, type_a(a, ast_tid));
@@ -90,6 +95,10 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
         return ty_add(e.ts, CTY_TUPLE(), lid, 0);
     }
     CTY_UNIT()
+}
+
+fn is_opaque(tid: i64) -> bool {
+    tid == CTY_NEVER() || tid == CTY_UNKNOWN()
 }
 
 fn check_module(e: CheckEnv, m: Module) [io] {
@@ -187,6 +196,9 @@ fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     let save_ret: i64 = e.cur_ret_tid;
     let save_eff: i64 = e.cur_effects;
 
+    let name_sid: i64 = fn_name_sid(a, fid);
+    e.cur_fn_name = arena_str(a, name_sid);
+
     let ret_ast_tid: i64 = fn_ret_ast_tid(a, fid);
     let ret_tid: i64 = resolve_ast_ty(e, m, ret_ast_tid);
     e.cur_ret_tid = ret_tid;
@@ -254,8 +266,8 @@ fn check_block(e: CheckEnv, m: Module, bid: i64) -> i64 [io] {
             let etid: i64 = check_expr(e, m, eid);
             if has_semi == 0 && i == n - 1 {
                 result_tid = etid;
-            } else if etid == CTY_NEVER() {
-                result_tid = CTY_NEVER();
+            } else if is_opaque(etid) {
+                result_tid = etid;
             } else {
                 result_tid = CTY_UNIT();
             }
@@ -424,8 +436,8 @@ fn check_expr(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             let _arg_tid: i64 = check_expr(e, m, arg_eid);
             i = i + 1;
         }
-        if recv_tid == CTY_NEVER() {
-            return CTY_NEVER();
+        if is_opaque(recv_tid) {
+            return recv_tid;
         }
         let recv_tag: i64 = ty_tag(e.ts, recv_tid);
         if recv_tag == CTY_STR() {
@@ -474,6 +486,9 @@ fn check_expr(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let recv_eid: i64 = expr_a(a, eid);
         let fname_sid: i64 = expr_b(a, eid);
         let recv_tid: i64 = check_expr(e, m, recv_eid);
+        if is_opaque(recv_tid) {
+            return recv_tid;
+        }
         let fname: String = arena_str(a, fname_sid);
         let recv_tag: i64 = ty_tag(e.ts, recv_tid);
         if recv_tag == CTY_STRUCT() {
@@ -503,8 +518,8 @@ fn check_expr(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let idx_eid: i64 = expr_b(a, eid);
         let recv_tid: i64 = check_expr(e, m, recv_eid);
         let _idx_tid: i64 = check_expr(e, m, idx_eid);
-        if recv_tid == CTY_NEVER() {
-            return CTY_NEVER();
+        if is_opaque(recv_tid) {
+            return recv_tid;
         }
         let recv_tag: i64 = ty_tag(e.ts, recv_tid);
         if recv_tag == CTY_APPLIED() {
@@ -529,10 +544,10 @@ fn check_expr(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             return CTY_UNIT();
         }
         let else_tid: i64 = check_expr(e, m, else_eid);
-        if ty_tag(e.ts, then_tid) == CTY_NEVER() {
+        if is_opaque(then_tid) {
             return else_tid;
         }
-        if ty_tag(e.ts, else_tid) == CTY_NEVER() {
+        if is_opaque(else_tid) {
             return then_tid;
         }
         return then_tid;
@@ -561,7 +576,7 @@ fn check_expr(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             bind_arm_pattern(e, m, pat_pid, scrutinee_tid);
             let arm_tid: i64 = check_expr(e, m, body_eid);
             env_pop_scope(e);
-            if ty_tag(e.ts, result_tid) == CTY_NEVER() {
+            if is_opaque(result_tid) {
                 result_tid = arm_tid;
             }
             i = i + 1;
@@ -617,7 +632,7 @@ fn check_expr(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         }
         let sidx: i64 = env_lookup_struct(e, sname);
         if sidx == -1 {
-            return CTY_NEVER();
+            return CTY_UNKNOWN();
         }
         return ts_make_struct(e.ts, sname);
     }
@@ -642,7 +657,7 @@ fn check_expr(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             return ts_make_enum(e.ts, String::from("Result"));
         }
         if n_path > 1 {
-            return CTY_NEVER();
+            return CTY_UNKNOWN();
         }
         let eidx: i64 = env_lookup_enum(e, first_name);
         if eidx != -1 {
@@ -653,7 +668,10 @@ fn check_expr(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
 
     if tag == EXPR_QUESTION() {
         let inner_eid: i64 = expr_a(a, eid);
-        let _inner_tid: i64 = check_expr(e, m, inner_eid);
+        let inner_tid: i64 = check_expr(e, m, inner_eid);
+        if is_opaque(inner_tid) {
+            return inner_tid;
+        }
         return CTY_UNIT();
     }
 

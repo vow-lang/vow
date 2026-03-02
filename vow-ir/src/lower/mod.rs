@@ -57,9 +57,12 @@ pub struct LowerCtx {
     pub(super) enum_variant_map: HashMap<String, Vec<String>>,
     // InstId of a struct/enum allocation → type name
     pub(super) inst_struct_type: HashMap<InstId, String>,
+    // struct name → field type names (from AST declarations) for FieldGet auto-tagging
+    struct_field_type_names: HashMap<String, Vec<String>>,
 }
 
 impl LowerCtx {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,
         params: Vec<Ty>,
@@ -68,6 +71,7 @@ impl LowerCtx {
         func_index: HashMap<String, (FuncId, Ty)>,
         struct_field_map: HashMap<String, Vec<String>>,
         enum_variant_map: HashMap<String, Vec<String>>,
+        struct_field_type_names: HashMap<String, Vec<String>>,
     ) -> Self {
         let entry = BasicBlock {
             id: BlockId(0),
@@ -100,6 +104,7 @@ impl LowerCtx {
             struct_field_map,
             enum_variant_map,
             inst_struct_type: HashMap::new(),
+            struct_field_type_names,
         }
     }
 
@@ -672,6 +677,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     let ptr_id = lower_expr(ctx, base);
                     let struct_name =
                         ctx.inst_struct_type.get(&ptr_id).cloned().unwrap_or_default();
+                    if struct_name.is_empty() {
+                        eprintln!("warning: FieldSet on untagged instruction %{}, field '{}' — defaulting to index 0", ptr_id.0, field);
+                    }
                     let field_idx = ctx
                         .struct_field_map
                         .get(&struct_name)
@@ -800,18 +808,32 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         ExprKind::FieldAccess { base, field } => {
             let ptr_id = lower_expr(ctx, base);
             let struct_name = ctx.inst_struct_type.get(&ptr_id).cloned().unwrap_or_default();
+            if struct_name.is_empty() {
+                eprintln!("warning: FieldGet on untagged instruction %{}, field '{}' — defaulting to index 0", ptr_id.0, field);
+            }
             let field_idx = ctx
                 .struct_field_map
                 .get(&struct_name)
                 .and_then(|names| names.iter().position(|n| n == field))
                 .unwrap_or(0) as u32;
-            ctx.emit(
+            let result_id = ctx.emit(
                 Opcode::FieldGet,
                 Ty::I64,
                 vec![ptr_id],
                 InstData::FieldIndex(field_idx),
                 span,
-            )
+            );
+            if let Some(type_names) = ctx.struct_field_type_names.get(&struct_name)
+                && let Some(type_name) = type_names.get(field_idx as usize)
+                && !type_name.is_empty()
+                && !matches!(
+                    type_name.as_str(),
+                    "i32" | "i64" | "f32" | "f64" | "bool"
+                )
+            {
+                ctx.inst_struct_type.insert(result_id, type_name.clone());
+            }
+            result_id
         }
         ExprKind::StructLiteral { name, fields } => {
             let field_names = ctx
@@ -835,7 +857,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 let idx = field_names
                     .iter()
                     .position(|n| n == field_name)
-                    .unwrap_or(0) as u32;
+                    .unwrap_or_else(|| {
+                        eprintln!("warning: StructLiteral field '{}' not found in struct '{}' — defaulting to index 0", field_name, name);
+                        0
+                    }) as u32;
                 let val_id = lower_expr(ctx, field_expr);
                 ctx.emit(
                     Opcode::FieldSet,
@@ -1483,6 +1508,7 @@ pub fn lower_function(
     func_index: &HashMap<String, (FuncId, Ty)>,
     struct_field_map: HashMap<String, Vec<String>>,
     enum_variant_map: HashMap<String, Vec<String>>,
+    struct_field_type_names: HashMap<String, Vec<String>>,
 ) -> (Function, Vec<String>) {
     let params: Vec<Ty> = fn_def.params.iter().map(|p| lower_ty(&p.ty)).collect();
     let return_ty = lower_ty(&fn_def.return_ty);
@@ -1496,6 +1522,7 @@ pub fn lower_function(
         func_index.clone(),
         struct_field_map,
         enum_variant_map,
+        struct_field_type_names,
     );
 
     if let Some(vow) = &fn_def.vow {
@@ -1607,6 +1634,23 @@ pub fn lower_module(module: &AstModule) -> Module {
         }
     }
 
+    // Build struct field type names for FieldGet auto-tagging
+    let mut struct_field_type_names: HashMap<String, Vec<String>> = HashMap::new();
+    for item in &module.items {
+        if let Item::Struct(s) = item {
+            let type_names: Vec<String> = s
+                .fields
+                .iter()
+                .map(|f| match &f.ty {
+                    AstType::Named { name, .. } => name.clone(),
+                    AstType::Generic { name, .. } => name.clone(),
+                    _ => String::new(),
+                })
+                .collect();
+            struct_field_type_names.insert(s.name.clone(), type_names);
+        }
+    }
+
     // Build enum layout info
     let mut enum_variant_map: HashMap<String, Vec<String>> = HashMap::new();
     let mut enum_layouts: Vec<EnumLayout> = Vec::new();
@@ -1662,6 +1706,7 @@ pub fn lower_module(module: &AstModule) -> Module {
                 &func_index,
                 struct_field_map.clone(),
                 enum_variant_map.clone(),
+                struct_field_type_names.clone(),
             );
             func.id = FuncId(idx as u32);
             let base = all_strings.len() as u32;
@@ -1777,7 +1822,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn("const_fn", vec![], i64_ty(), body, vec![]);
-        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new());
+        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new());
 
         assert_eq!(func.name, "const_fn");
         assert_eq!(func.return_ty, Ty::I64);
@@ -1812,7 +1857,7 @@ mod tests {
             body,
             vec![],
         );
-        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new());
+        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new());
 
         let entry = &func.blocks[0];
         let get_args: Vec<_> = entry
@@ -1850,7 +1895,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn("let_fn", vec![], i64_ty(), body, vec![]);
-        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new());
+        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new());
 
         let entry = &func.blocks[0];
         let const_inst = entry.insts.iter().find(|i| i.opcode == Opcode::ConstI64);
@@ -1883,7 +1928,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn("if_fn", vec![], i64_ty(), body, vec![]);
-        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new());
+        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new());
 
         assert!(
             func.blocks.len() >= 4,
@@ -1917,7 +1962,7 @@ mod tests {
     #[test]
     fn lower_empty_function() {
         let fn_def = make_fn("empty_fn", vec![], unit_ty(), empty_block(), vec![]);
-        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new());
+        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new());
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
         let ret = all_insts.iter().find(|i| i.opcode == Opcode::Return);
@@ -1960,7 +2005,7 @@ mod tests {
             body,
             span: sp(),
         };
-        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new());
+        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new());
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
         let ens_pos = all_insts
@@ -2053,7 +2098,7 @@ mod tests {
         };
 
         let fn_def = make_fn("countdown", vec![param_n], i64_ty, body, vec![]);
-        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new());
+        let (func, _) = lower_function(&fn_def, &HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new());
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
 
