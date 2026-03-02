@@ -57,6 +57,8 @@ pub struct LowerCtx {
     pub(super) enum_variant_map: HashMap<String, Vec<String>>,
     // InstId of a struct/enum allocation → type name
     pub(super) inst_struct_type: HashMap<InstId, String>,
+    // source file path for vow entries
+    file: String,
     // struct name → field type names (from AST declarations) for FieldGet auto-tagging
     struct_field_type_names: HashMap<String, Vec<String>>,
 }
@@ -69,6 +71,7 @@ impl LowerCtx {
         param_names: Vec<String>,
         return_ty: Ty,
         effects: Vec<Effect>,
+        file: String,
         func_index: HashMap<String, (FuncId, Ty)>,
         struct_field_map: HashMap<String, Vec<String>>,
         enum_variant_map: HashMap<String, Vec<String>>,
@@ -106,6 +109,7 @@ impl LowerCtx {
             struct_field_map,
             enum_variant_map,
             inst_struct_type: HashMap::new(),
+            file,
             struct_field_type_names,
         }
     }
@@ -191,6 +195,7 @@ impl LowerCtx {
         description: String,
         blame: Blame,
         bindings: Vec<(String, InstId)>,
+        offset: u32,
     ) -> VowId {
         let id = VowId(self.func.vows.len() as u32);
         self.func.vows.push(VowEntry {
@@ -198,6 +203,8 @@ impl LowerCtx {
             description,
             blame,
             bindings,
+            file: self.file.clone(),
+            offset,
         });
         id
     }
@@ -1489,6 +1496,7 @@ fn lower_block_inner(ctx: &mut LowerCtx, block: &Block) -> InstId {
 
 pub fn lower_function(
     fn_def: &FnDef,
+    file: &str,
     func_index: &HashMap<String, (FuncId, Ty)>,
     struct_field_map: HashMap<String, Vec<String>>,
     enum_variant_map: HashMap<String, Vec<String>>,
@@ -1505,6 +1513,7 @@ pub fn lower_function(
         param_names,
         return_ty,
         effects,
+        file.to_string(),
         func_index.clone(),
         struct_field_map,
         enum_variant_map,
@@ -1575,7 +1584,7 @@ pub fn lower_function(
     ctx.finish()
 }
 
-pub fn lower_module(module: &AstModule) -> Module {
+pub fn lower_module(module: &AstModule, file: &str) -> Module {
     let fn_items: Vec<&FnDef> = module
         .items
         .iter()
@@ -1688,6 +1697,7 @@ pub fn lower_module(module: &AstModule) -> Module {
         .map(|(idx, fn_def)| {
             let (mut func, pool) = lower_function(
                 fn_def,
+                file,
                 &func_index,
                 struct_field_map.clone(),
                 enum_variant_map.clone(),
@@ -1809,6 +1819,7 @@ mod tests {
         let fn_def = make_fn("const_fn", vec![], i64_ty(), body, vec![]);
         let (func, _) = lower_function(
             &fn_def,
+            "",
             &HashMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -1850,6 +1861,7 @@ mod tests {
         );
         let (func, _) = lower_function(
             &fn_def,
+            "",
             &HashMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -1894,6 +1906,7 @@ mod tests {
         let fn_def = make_fn("let_fn", vec![], i64_ty(), body, vec![]);
         let (func, _) = lower_function(
             &fn_def,
+            "",
             &HashMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -1933,6 +1946,7 @@ mod tests {
         let fn_def = make_fn("if_fn", vec![], i64_ty(), body, vec![]);
         let (func, _) = lower_function(
             &fn_def,
+            "",
             &HashMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -1973,6 +1987,7 @@ mod tests {
         let fn_def = make_fn("empty_fn", vec![], unit_ty(), empty_block(), vec![]);
         let (func, _) = lower_function(
             &fn_def,
+            "",
             &HashMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -2022,6 +2037,7 @@ mod tests {
         };
         let (func, _) = lower_function(
             &fn_def,
+            "",
             &HashMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -2121,6 +2137,7 @@ mod tests {
         let fn_def = make_fn("countdown", vec![param_n], i64_ty, body, vec![]);
         let (func, _) = lower_function(
             &fn_def,
+            "",
             &HashMap::new(),
             HashMap::new(),
             HashMap::new(),

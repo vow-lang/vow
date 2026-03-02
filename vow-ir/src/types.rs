@@ -188,6 +188,8 @@ pub struct VowEntry {
     pub description: String,
     pub blame: Blame,
     pub bindings: Vec<(String, InstId)>,
+    pub file: String,
+    pub offset: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]

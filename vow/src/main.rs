@@ -511,7 +511,7 @@ pub fn run_pipeline(
         };
     }
 
-    let ir_module = Arc::new(vow_ir::lower_module(&ast));
+    let ir_module = Arc::new(vow_ir::lower_module(&ast, &source.to_string_lossy()));
 
     if dump_ir {
         print!("{}", vow_ir::print_module(&ir_module));

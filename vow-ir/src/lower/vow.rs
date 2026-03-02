@@ -111,7 +111,7 @@ pub fn lower_requires(ctx: &mut LowerCtx, vow_block: &VowBlock) {
         if let VowClause::Requires { span, .. } = clause {
             let desc = clause_description(clause);
             let bindings = collect_free_vars(ctx, clause_expr(clause));
-            let vow_id = ctx.alloc_vow(desc, Blame::Caller, bindings);
+            let vow_id = ctx.alloc_vow(desc, Blame::Caller, bindings, span.start);
             let pred_id = lower_predicate(ctx, clause, None);
             ctx.emit(
                 Opcode::VowRequires,
@@ -131,7 +131,7 @@ pub fn lower_ensures(ctx: &mut LowerCtx, vow_block: &VowBlock, result_id: InstId
         if let VowClause::Ensures { span, .. } = clause {
             let desc = clause_description(clause);
             let bindings = collect_free_vars(ctx, clause_expr(clause));
-            let vow_id = ctx.alloc_vow(desc, Blame::Callee, bindings);
+            let vow_id = ctx.alloc_vow(desc, Blame::Callee, bindings, span.start);
             let pred_id = lower_predicate(ctx, clause, Some(result_id));
             ctx.emit(
                 Opcode::VowEnsures,
@@ -150,7 +150,7 @@ pub fn lower_invariant(ctx: &mut LowerCtx, vow_block: &VowBlock) {
         if let VowClause::Invariant { span, .. } = clause {
             let desc = clause_description(clause);
             let bindings = collect_free_vars(ctx, clause_expr(clause));
-            let vow_id = ctx.alloc_vow(desc, Blame::Callee, bindings);
+            let vow_id = ctx.alloc_vow(desc, Blame::Callee, bindings, span.start);
             let pred_id = lower_predicate(ctx, clause, None);
             ctx.emit(
                 Opcode::VowInvariant,
@@ -225,7 +225,14 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn_with_vow(Some(vow_block));
-        let (func, _) = lower_function(&fn_def, &std::collections::HashMap::new(), std::collections::HashMap::new(), std::collections::HashMap::new(), std::collections::HashMap::new());
+        let (func, _) = lower_function(
+            &fn_def,
+            "",
+            &std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+        );
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
 
@@ -259,7 +266,14 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn_with_vow(Some(vow_block));
-        let (func, _) = lower_function(&fn_def, &std::collections::HashMap::new(), std::collections::HashMap::new(), std::collections::HashMap::new(), std::collections::HashMap::new());
+        let (func, _) = lower_function(
+            &fn_def,
+            "",
+            &std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+        );
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
 
@@ -290,7 +304,14 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn_with_vow(Some(vow_block));
-        let (func, _) = lower_function(&fn_def, &std::collections::HashMap::new(), std::collections::HashMap::new(), std::collections::HashMap::new(), std::collections::HashMap::new());
+        let (func, _) = lower_function(
+            &fn_def,
+            "",
+            &std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+        );
 
         assert_eq!(func.vows.len(), 1);
         assert_eq!(func.vows[0].blame, Blame::Caller);
@@ -315,7 +336,14 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn_with_vow(Some(vow_block));
-        let (func, _) = lower_function(&fn_def, &std::collections::HashMap::new(), std::collections::HashMap::new(), std::collections::HashMap::new(), std::collections::HashMap::new());
+        let (func, _) = lower_function(
+            &fn_def,
+            "",
+            &std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+        );
 
         assert_eq!(func.vows.len(), 1);
         assert_eq!(func.vows[0].blame, Blame::Callee);

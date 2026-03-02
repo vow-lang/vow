@@ -247,6 +247,8 @@ mod tests {
                 description: "true".to_string(),
                 blame: Blame::Callee,
                 bindings: vec![],
+                file: String::new(),
+                offset: 0,
             }],
             blocks: vec![BasicBlock {
                 id: BlockId(0),
@@ -287,6 +289,8 @@ mod tests {
                 description: "false".to_string(),
                 blame: Blame::Callee,
                 bindings: vec![],
+                file: String::new(),
+                offset: 0,
             }],
             blocks: vec![BasicBlock {
                 id: BlockId(0),
@@ -351,6 +355,8 @@ mod tests {
                 description: "y != 0".to_string(),
                 blame: Blame::Caller,
                 bindings: vec![],
+                file: String::new(),
+                offset: 0,
             }],
             blocks: vec![BasicBlock {
                 id: BlockId(0),

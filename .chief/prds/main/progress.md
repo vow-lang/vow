@@ -10,6 +10,9 @@
 - IR `Function` struct has `param_names: Vec<String>` — populated during lowering from AST `fn_def.params[].name`; empty in test code (use `param_names: vec![]`)
 - C emitter names params `p{cl_idx}` (skipping Unit) and instructions `v{id}`; `build_c_to_source_name_map()` maps both back to source names
 - Unmappable ESBMC variables get `_esbmc_` prefix (e.g., `_esbmc_v3`)
+- `VowEntry` has `file: String` and `offset: u32` — in test code use `file: String::new(), offset: 0`
+- `lower_function` and `lower_module` take `file: &str` — pass `""` in tests, actual path in pipeline
+- `__vow_violation` runtime takes 7 args: vow_id, blame, desc_ptr, bindings_ptr, binding_count, file_ptr, offset
 
 ---
 
@@ -75,4 +78,24 @@
   - `param_names` comes from AST `fn_def.params[i].name` during `lower_function` — the AST is not available later in the verification pipeline
   - Clippy enforces `collapsible_if` — use `if a && let b = c && let d = e { ... }` style for chained conditions
   - Pre-existing `cargo fmt` changes in cranelift_backend.rs and lower/mod.rs get mixed into the commit when adding new fields — unavoidable since formatting is needed for the new code
+---
+
+## 2026-03-02 - US-005
+- What was implemented: Added source location (file path and byte offset) to runtime VowViolation JSON output. VowEntry in vow-ir now carries `file: String` and `offset: u32`. LowerCtx stores the file path and passes it through to each VowEntry. The `__vow_violation` runtime function takes two new parameters (`file_ptr`, `offset`) and emits them in both JSON and human-readable output. Codegen creates data sections for file path strings and passes them through to the runtime call.
+- Files changed:
+  - `vow-ir/src/types.rs` — Added `file: String` and `offset: u32` fields to `VowEntry`
+  - `vow-ir/src/lower/mod.rs` — Added `file: String` to `LowerCtx`, updated `LowerCtx::new`, `alloc_vow`, `lower_function`, `lower_module` to accept/pass file path
+  - `vow-ir/src/lower/vow.rs` — Updated `lower_requires`, `lower_ensures`, `lower_invariant` to pass `span.start` as offset to `alloc_vow`
+  - `vow-runtime/src/lib.rs` — Added `file_ptr: *const i8` and `offset: u32` params to `__vow_violation`; updated JSON/human output format
+  - `vow-codegen/src/cranelift_backend.rs` — Added `file_ptr` and `offset` to violation signature; created data sections for vow file paths; added `vow_file_global_values` to `LowerCtx`; updated `emit_vow_check` to pass file_ptr and offset
+  - `vow-codegen/tests/e2e.rs` — Updated 2 test VowEntry constructors
+  - `vow-verify/src/c_emitter.rs` — Updated 2 test VowEntry constructors
+  - `vow-verify/src/esbmc.rs` — Updated 3 test VowEntry constructors
+  - `vow/src/main.rs` — Updated `lower_module` call to pass file path
+- **Learnings for future iterations:**
+  - VowEntry fields propagate to ~15+ test construction sites across 5 crates — always add `field: default_value` to all of them
+  - `LowerCtx` in vow-ir (IR lowering) and `LowerCtx` in cranelift_backend (codegen) are different structs with the same name — changes may be needed in both
+  - The vow clause `span.start` gives the byte offset of the `requires:`/`ensures:`/`invariant:` keyword in the source
+  - File path data sections in codegen follow the same pattern as description strings: create anonymous data → define → declare in func → get GlobalValue
+  - `lower_module` and `lower_function` are public API of vow-ir — changing their signatures affects the main pipeline caller in `vow/src/main.rs`
 ---

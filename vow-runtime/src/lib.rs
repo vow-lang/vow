@@ -1,6 +1,6 @@
 #![allow(clippy::missing_safety_doc)]
 
-use std::ffi::{c_char, CStr};
+use std::ffi::{CStr, c_char};
 use std::io::Write as _;
 
 const TAG_I32: u8 = 0;
@@ -35,12 +35,19 @@ pub unsafe extern "C" fn __vow_violation(
     desc_ptr: *const i8,
     bindings_ptr: *const VowBinding,
     binding_count: u32,
+    file_ptr: *const i8,
+    offset: u32,
 ) {
     let blame_str = if blame == 0 { "Caller" } else { "Callee" };
     let desc = if desc_ptr.is_null() {
         std::borrow::Cow::Borrowed("")
     } else {
         unsafe { CStr::from_ptr(desc_ptr) }.to_string_lossy()
+    };
+    let file = if file_ptr.is_null() {
+        std::borrow::Cow::Borrowed("")
+    } else {
+        unsafe { CStr::from_ptr(file_ptr) }.to_string_lossy()
     };
 
     let (values_json, values_human) = if binding_count > 0 {
@@ -66,9 +73,11 @@ pub unsafe extern "C" fn __vow_violation(
     };
 
     let json = format!(
-        r#"{{"error":"VowViolation","vow_id":{vow_id},"blame":"{blame_str}","description":"{desc}"{values_json}}}"#
+        r#"{{"error":"VowViolation","vow_id":{vow_id},"blame":"{blame_str}","description":"{desc}","file":"{file}","offset":{offset}{values_json}}}"#
     );
-    let human = format!("vow violation: {desc}, blame={blame_str}{values_human}");
+    let human = format!(
+        "vow violation: {desc}, blame={blame_str}, file={file}, offset={offset}{values_human}"
+    );
     let _ = writeln!(std::io::stderr(), "{json}");
     let _ = writeln!(std::io::stderr(), "{human}");
     std::process::exit(1);
@@ -293,11 +302,7 @@ pub unsafe extern "C" fn __vow_string_eq(a: *const u8, b: *const u8) -> i64 {
     }
     let sa = unsafe { std::slice::from_raw_parts(va.ptr, va.len) };
     let sb = unsafe { std::slice::from_raw_parts(vb.ptr, vb.len) };
-    if sa == sb {
-        1
-    } else {
-        0
-    }
+    if sa == sb { 1 } else { 0 }
 }
 
 #[unsafe(no_mangle)]

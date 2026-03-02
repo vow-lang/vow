@@ -214,6 +214,8 @@ struct LowerCtx<'a> {
     extern_func_refs: &'a HashMap<String, FuncRef>,
     // VowId → GlobalValue for description strings
     vow_desc_global_values: &'a HashMap<u32, GlobalValue>,
+    // VowId → GlobalValue for file path strings
+    vow_file_global_values: &'a HashMap<u32, GlobalValue>,
     // (vow_id, binding_index) → GlobalValue for the binding's name C-string
     vow_binding_name_gvs: &'a HashMap<(u32, u32), GlobalValue>,
     // InstId → IrTy for all instructions in the current function
@@ -566,6 +568,12 @@ fn lower_inst(
                 } else {
                     1u8 // Callee
                 };
+                let vow_offset = ctx
+                    .ir_func
+                    .vows
+                    .get(vow_id as usize)
+                    .map(|v| v.offset)
+                    .unwrap_or(0);
                 let captures: Vec<(GlobalValue, Value, IrTy)> = if let Some(vow_entry) =
                     ctx.ir_func.vows.get(vow_id as usize)
                 {
@@ -586,7 +594,9 @@ fn lower_inst(
                 } else {
                     vec![]
                 };
-                emit_vow_check(builder, pred, vow_id, blame_byte, &captures, ctx)?;
+                emit_vow_check(
+                    builder, pred, vow_id, blame_byte, &captures, vow_offset, ctx,
+                )?;
             }
             // In Release mode: no-op
         }
@@ -775,6 +785,7 @@ fn emit_vow_check(
     vow_id: u32,
     blame: u8,
     captures: &[(GlobalValue, Value, IrTy)],
+    vow_offset: u32,
     ctx: &mut LowerCtx,
 ) -> Result<(), CodegenError> {
     let one = builder.ins().iconst(types::I8, 1);
@@ -837,9 +848,24 @@ fn emit_vow_check(
             (null, zero)
         };
 
+        let file_ptr = if let Some(&gv) = ctx.vow_file_global_values.get(&vow_id) {
+            builder.ins().global_value(types::I64, gv)
+        } else {
+            builder.ins().iconst(types::I64, 0)
+        };
+        let offset_val = builder.ins().iconst(types::I32, vow_offset as i64);
+
         builder.ins().call(
             vr,
-            &[vow_id_val, blame_val, desc_ptr, bindings_ptr, count_val],
+            &[
+                vow_id_val,
+                blame_val,
+                desc_ptr,
+                bindings_ptr,
+                count_val,
+                file_ptr,
+                offset_val,
+            ],
         );
     }
     builder.ins().trap(TrapCode::unwrap_user(1));
@@ -934,6 +960,7 @@ fn compile_ir_function(
 
     // Create data sections for vow description strings and map VowId → GlobalValue
     let mut vow_desc_global_values: HashMap<u32, GlobalValue> = HashMap::new();
+    let mut vow_file_global_values: HashMap<u32, GlobalValue> = HashMap::new();
     let mut vow_binding_name_gvs: HashMap<(u32, u32), GlobalValue> = HashMap::new();
     if mode == BuildMode::Debug {
         for vow_entry in &ir_func.vows {
@@ -949,6 +976,19 @@ fn compile_ir_function(
                 .map_err(|e| CodegenError::FunctionDefine(e.to_string()))?;
             let gv = obj_module.declare_data_in_func(data_id, builder.func);
             vow_desc_global_values.insert(vow_entry.id.0, gv);
+
+            let mut file_bytes = vow_entry.file.as_bytes().to_vec();
+            file_bytes.push(0);
+            let mut file_desc = DataDescription::new();
+            file_desc.define(file_bytes.into_boxed_slice());
+            let file_data_id = obj_module
+                .declare_anonymous_data(false, false)
+                .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+            obj_module
+                .define_data(file_data_id, &file_desc)
+                .map_err(|e| CodegenError::FunctionDefine(e.to_string()))?;
+            let file_gv = obj_module.declare_data_in_func(file_data_id, builder.func);
+            vow_file_global_values.insert(vow_entry.id.0, file_gv);
 
             for (idx, (name, _)) in vow_entry.bindings.iter().enumerate() {
                 let mut name_bytes = name.as_bytes().to_vec();
@@ -1026,6 +1066,7 @@ fn compile_ir_function(
             string_global_values: &string_global_values,
             extern_func_refs: &extern_func_refs,
             vow_desc_global_values: &vow_desc_global_values,
+            vow_file_global_values: &vow_file_global_values,
             vow_binding_name_gvs: &vow_binding_name_gvs,
             inst_ty_map: &inst_ty_map,
             ir_func,
@@ -1264,6 +1305,8 @@ impl Backend for CraneliftBackend {
             violation_sig.params.push(AbiParam::new(types::I64)); // desc_ptr
             violation_sig.params.push(AbiParam::new(types::I64)); // bindings_ptr
             violation_sig.params.push(AbiParam::new(types::I32)); // binding_count
+            violation_sig.params.push(AbiParam::new(types::I64)); // file_ptr
+            violation_sig.params.push(AbiParam::new(types::I32)); // offset
             let vv_id = obj_module
                 .declare_function("__vow_violation", Linkage::Import, &violation_sig)
                 .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
@@ -1540,6 +1583,8 @@ mod tests {
             description: String::new(),
             blame: vow_diag::Blame::None,
             bindings: vec![],
+            file: String::new(),
+            offset: 0,
         };
         let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
         assert!(result.is_ok(), "{:?}", result.err());
@@ -2147,6 +2192,8 @@ mod tests {
                     description: "x > 0".to_string(),
                     blame: vow_diag::Blame::Caller,
                     bindings: vec![],
+                    file: String::new(),
+                    offset: 0,
                 }],
                 blocks: vec![BasicBlock {
                     id: BlockId(0),
@@ -2190,6 +2237,8 @@ mod tests {
                     description: "result >= 0".to_string(),
                     blame: vow_diag::Blame::Callee,
                     bindings: vec![],
+                    file: String::new(),
+                    offset: 0,
                 }],
                 blocks: vec![BasicBlock {
                     id: BlockId(0),
@@ -2233,6 +2282,8 @@ mod tests {
                     description: "i >= 0".to_string(),
                     blame: vow_diag::Blame::Callee,
                     bindings: vec![],
+                    file: String::new(),
+                    offset: 0,
                 }],
                 blocks: vec![BasicBlock {
                     id: BlockId(0),
@@ -2277,6 +2328,8 @@ mod tests {
                     description: "x > 0".to_string(),
                     blame: vow_diag::Blame::Caller,
                     bindings: vec![("x".to_string(), InstId(0))],
+                    file: String::new(),
+                    offset: 0,
                 }],
                 blocks: vec![BasicBlock {
                     id: BlockId(0),
