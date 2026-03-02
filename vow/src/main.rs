@@ -8,8 +8,8 @@ use clap::Parser;
 use vow_codegen::cranelift_backend::CraneliftBackend;
 use vow_codegen::linker::{find_runtime_lib, link};
 use vow_codegen::{Backend, BuildMode};
-use vow_diag::{DiagnosticEmitter, HumanEmitter, Severity};
-use vow_verify::{verify_function, VerificationResult};
+use vow_diag::{CollectingEmitter, Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
+use vow_verify::{VerificationResult, verify_function};
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -62,6 +62,7 @@ fn skill_json() -> String {
   "output_json": {
     "status": "Verified | Unverified | CompileFailed | VerifyFailed",
     "executable": "path to compiled binary, or null",
+    "diagnostics": "[array of {error_code, message, severity, span: {file, offset, length}}]",
     "message": "error detail (CompileFailed)",
     "function": "function name (VerifyFailed)",
     "counterexample": "ESBMC counterexample description (VerifyFailed)"
@@ -116,6 +117,7 @@ OPTIONS
 OUTPUT (JSON on stdout)
   status      : Verified | Unverified | CompileFailed | VerifyFailed
   executable  : path to compiled binary, or null
+  diagnostics : array of {{error_code, message, severity, span: {{file, offset, length}}}}
   message     : error detail (CompileFailed)
   function    : function name (VerifyFailed)
   counterexample: ESBMC counterexample (VerifyFailed)
@@ -171,6 +173,7 @@ pub enum BuildStatus {
 pub struct BuildOutput {
     pub status: BuildStatus,
     pub executable: Option<PathBuf>,
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 impl BuildOutput {
@@ -201,8 +204,34 @@ impl BuildOutput {
             }
             _ => String::new(),
         };
-        println!("{{\"status\":\"{status_str}\",\"executable\":{exe_json}{extra}}}");
+        let diags_json = format_diagnostics_json(&self.diagnostics);
+        println!(
+            "{{\"status\":\"{status_str}\",\"executable\":{exe_json},\"diagnostics\":[{diags_json}]{extra}}}"
+        );
     }
+}
+
+fn format_diagnostics_json(diagnostics: &[Diagnostic]) -> String {
+    diagnostics
+        .iter()
+        .map(|d| {
+            let severity = match d.severity {
+                Severity::Error => "error",
+                Severity::Warning => "warning",
+                Severity::Note => "note",
+            };
+            format!(
+                "{{\"error_code\":\"{:?}\",\"message\":\"{}\",\"severity\":\"{}\",\"span\":{{\"file\":\"{}\",\"offset\":{},\"length\":{}}}}}",
+                d.code,
+                escape_json(&d.message),
+                severity,
+                escape_json(&d.primary.file),
+                d.primary.byte_offset,
+                d.primary.byte_len,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn escape_json(s: &str) -> String {
@@ -230,23 +259,27 @@ pub fn run_pipeline(
                     message: e.to_string(),
                 },
                 executable: None,
+                diagnostics: vec![],
             };
         }
     };
 
     let mut stderr_emit = HumanEmitter::new(Box::new(std::io::stderr()));
+    let mut all_diagnostics: Vec<Diagnostic> = Vec::new();
 
     let (root_ast, parse_diags) = vow_syntax::parser::parse_module(&src);
     let parse_failed = parse_diags.iter().any(|d| d.severity == Severity::Error);
     for d in &parse_diags {
         stderr_emit.emit(d);
     }
+    all_diagnostics.extend(parse_diags);
     if parse_failed {
         return BuildOutput {
             status: BuildStatus::CompileFailed {
                 message: "parse error".to_string(),
             },
             executable: None,
+            diagnostics: all_diagnostics,
         };
     }
 
@@ -256,24 +289,31 @@ pub fn run_pipeline(
             for d in &diags {
                 stderr_emit.emit(d);
             }
+            all_diagnostics.extend(diags);
             return BuildOutput {
                 status: BuildStatus::CompileFailed {
                     message: "module load error".to_string(),
                 },
                 executable: None,
+                diagnostics: all_diagnostics,
             };
         }
     };
 
+    let mut collecting_emit = CollectingEmitter::new(&mut stderr_emit);
     let mut checker =
-        vow_types::check::Checker::new(source.to_string_lossy().to_string(), &mut stderr_emit);
+        vow_types::check::Checker::new(source.to_string_lossy().to_string(), &mut collecting_emit);
     checker.check_module(&ast);
-    if checker.has_errors() {
+    let has_errors = checker.has_errors();
+    drop(checker);
+    all_diagnostics.extend(collecting_emit.into_diagnostics());
+    if has_errors {
         return BuildOutput {
             status: BuildStatus::CompileFailed {
                 message: "type error".to_string(),
             },
             executable: None,
+            diagnostics: all_diagnostics,
         };
     }
 
@@ -284,6 +324,7 @@ pub fn run_pipeline(
         return BuildOutput {
             status: BuildStatus::Unverified,
             executable: None,
+            diagnostics: all_diagnostics,
         };
     }
 
@@ -323,6 +364,7 @@ pub fn run_pipeline(
                     message: format!("{e:?}"),
                 },
                 executable: None,
+                diagnostics: all_diagnostics,
             };
         }
     };
@@ -341,6 +383,7 @@ pub fn run_pipeline(
                         message: e.to_string(),
                     },
                     executable: None,
+                    diagnostics: all_diagnostics,
                 };
             }
             match link(&[&obj_path], &runtime, &output_path) {
@@ -355,6 +398,7 @@ pub fn run_pipeline(
                             message: format!("{e:?}"),
                         },
                         executable: None,
+                        diagnostics: all_diagnostics,
                     };
                 }
             }
@@ -379,6 +423,7 @@ pub fn run_pipeline(
     BuildOutput {
         status,
         executable: exe_path,
+        diagnostics: all_diagnostics,
     }
 }
 
@@ -1094,8 +1139,8 @@ pub fn main() -> i32 [io] {
                 message: "type \"error\"\nwith newline".to_string(),
             },
             executable: None,
+            diagnostics: vec![],
         };
-        // Just verify it runs without panic; output goes to stdout (captured by test harness).
         out.emit_json();
     }
 
@@ -1107,6 +1152,7 @@ pub fn main() -> i32 [io] {
                 description: "y=0 violates requires".to_string(),
             },
             executable: None,
+            diagnostics: vec![],
         };
         out.emit_json();
     }
@@ -1119,8 +1165,100 @@ pub fn main() -> i32 [io] {
         let out = BuildOutput {
             status: BuildStatus::Verified,
             executable: Some(exe),
+            diagnostics: vec![],
         };
         out.emit_json();
+    }
+
+    #[test]
+    fn build_output_json_contains_diagnostics_array() {
+        use vow_diag::{ErrorCode, SourceLocation};
+        let diag = Diagnostic {
+            severity: Severity::Error,
+            code: ErrorCode::TypeMismatch,
+            message: "expected i32, got bool".to_string(),
+            primary: SourceLocation {
+                file: "test.vow".to_string(),
+                byte_offset: 42,
+                byte_len: 4,
+            },
+            secondary: vec![],
+            blame: vow_diag::Blame::None,
+        };
+        let out = BuildOutput {
+            status: BuildStatus::CompileFailed {
+                message: "type error".to_string(),
+            },
+            executable: None,
+            diagnostics: vec![diag],
+        };
+        out.emit_json();
+    }
+
+    #[test]
+    fn build_output_json_empty_diagnostics_on_success() {
+        let out = BuildOutput {
+            status: BuildStatus::Verified,
+            executable: None,
+            diagnostics: vec![],
+        };
+        out.emit_json();
+    }
+
+    #[test]
+    fn pipeline_parse_error_populates_diagnostics() {
+        let dir = TempDir::new().unwrap();
+        let src = "module M 123";
+        let source = write_source(&dir, "bad_parse.vow", src);
+        let result = run_pipeline(&source, None, BuildMode::Release, true, false);
+        assert!(matches!(result.status, BuildStatus::CompileFailed { .. }));
+        assert!(
+            !result.diagnostics.is_empty(),
+            "diagnostics should contain parse errors"
+        );
+        assert_eq!(result.diagnostics[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn pipeline_type_error_populates_diagnostics() {
+        let dir = TempDir::new().unwrap();
+        let src = "module Bad fn f() -> i32 { true }";
+        let source = write_source(&dir, "bad_type.vow", src);
+        let result = run_pipeline(&source, None, BuildMode::Release, true, false);
+        assert!(matches!(result.status, BuildStatus::CompileFailed { .. }));
+        assert!(
+            !result.diagnostics.is_empty(),
+            "diagnostics should contain type errors"
+        );
+    }
+
+    #[test]
+    fn pipeline_success_has_empty_diagnostics() {
+        let dir = TempDir::new().unwrap();
+        let src = "module M fn f(x: i64) -> i64 { x }";
+        let source = write_source(&dir, "ok.vow", src);
+        let result = run_pipeline(&source, None, BuildMode::Release, true, false);
+        match &result.status {
+            BuildStatus::Unverified => {
+                assert!(
+                    result.diagnostics.is_empty(),
+                    "successful compilation should have empty diagnostics, got: {:?}",
+                    result.diagnostics
+                );
+            }
+            BuildStatus::CompileFailed { message } => {
+                let msg_lo = message.to_lowercase();
+                if msg_lo.contains("link")
+                    || msg_lo.contains("runtime")
+                    || msg_lo.contains("ld")
+                    || msg_lo.contains("cc exited")
+                {
+                    return;
+                }
+                panic!("unexpected compile failure: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        }
     }
 
     #[test]

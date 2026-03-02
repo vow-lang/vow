@@ -82,6 +82,35 @@ impl DiagnosticEmitter for JsonEmitter {
     }
 }
 
+pub struct CollectingEmitter<'a> {
+    inner: &'a mut dyn DiagnosticEmitter,
+    collected: Vec<Diagnostic>,
+}
+
+impl<'a> CollectingEmitter<'a> {
+    pub fn new(inner: &'a mut dyn DiagnosticEmitter) -> Self {
+        Self {
+            inner,
+            collected: Vec::new(),
+        }
+    }
+
+    pub fn into_diagnostics(self) -> Vec<Diagnostic> {
+        self.collected
+    }
+}
+
+impl DiagnosticEmitter for CollectingEmitter<'_> {
+    fn emit(&mut self, diagnostic: &Diagnostic) {
+        self.inner.emit(diagnostic);
+        self.collected.push(diagnostic.clone());
+    }
+
+    fn finish(&mut self) {
+        self.inner.finish();
+    }
+}
+
 pub struct HumanEmitter {
     output: Box<dyn std::io::Write>,
 }
