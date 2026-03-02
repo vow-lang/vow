@@ -3,6 +3,8 @@
 - Diagnostics flow: parse returns Vec<Diagnostic>, module loader returns Err(Vec<Diagnostic>), type checker uses DiagnosticEmitter trait
 - `CollectingEmitter` in vow-diag wraps another emitter and collects diagnostics — use this to capture type checker output
 - All `BuildOutput` constructors must include `diagnostics`, `counterexamples`, `verify_status`, `verify_message` fields
+- Vec operations in IR: `Call` with `CallExtern("__vow_vec_*")` — new returns Ty::Ptr with 2 args (size, align), push takes (vec, elem), get takes (vec, idx), len takes (vec), pop takes (vec), set takes (vec, idx, val)
+- C emitter Vec modeling: `__vow_vec_t` struct with `len` + `data[128]` array; `collect_vec_vars()` pre-scans for vec variable IDs and propagates through Upsilon→Phi
 - Pre-existing formatting changes may exist in the working tree from `cargo fmt`; only commit files actually modified for the story
 - `parse_module` and `parse_item_source` in vow-syntax now require a `file: &str` parameter — always pass the source file path
 - Type checker (`Checker::new`) already accepted a `file` param; effects/linear/exhaustiveness checkers also take `file: &str`
@@ -98,4 +100,18 @@
   - The vow clause `span.start` gives the byte offset of the `requires:`/`ensures:`/`invariant:` keyword in the source
   - File path data sections in codegen follow the same pattern as description strings: create anonymous data → define → declare in func → get GlobalValue
   - `lower_module` and `lower_function` are public API of vow-ir — changing their signatures affects the main pipeline caller in `vow/src/main.rs`
+---
+
+## 2026-03-02 - US-006
+- What was implemented: Modeled Vec operations in the ESBMC C emitter so contracts involving Vec<T> can be verified. Added `__vow_vec_t` struct typedef (len + data[128] array) to the module header. The C emitter now recognizes `__vow_vec_new`, `__vow_vec_push_val`, `__vow_vec_get_val`, `__vow_vec_len`, `__vow_vec_pop`, and `__vow_vec_set_val` CallExtern operations and emits modeled C code instead of nondet. Get and set operations include bounds assertions. Vec variable IDs are tracked through Upsilon→Phi propagation. Return of vec variables emits a dummy pointer to avoid struct/pointer type mismatch.
+- Files changed:
+  - `vow-verify/src/c_emitter.rs` — Added `collect_vec_vars()` analysis, `emit_unmodelled()` helper, Vec-specific handling in `emit_inst` for all 6 Vec operations, vec-aware Phi/Return emission, `__vow_vec_t` typedef in `emit_c_module`. 9 new unit tests.
+  - `vow-verify/src/esbmc.rs` — Added 2 ESBMC integration tests: `verify_vec_push_ensures_len` (push one element, ensures len==1, proves) and `verify_vec_violated_len_contract` (empty vec, ensures len==1, fails with counterexample).
+- **Learnings for future iterations:**
+  - Vec operations in the IR use `CallExtern` with names like `__vow_vec_new`, `__vow_vec_push_val`, etc. — match on the string name to intercept them before the generic "not modelled" fallback
+  - `__vow_vec_new` takes 2 args (size and align constants from IR lowering) but these are irrelevant for the model — just initialize len=0
+  - Vec variables (Ty::Ptr) need to be tracked across Upsilon→Phi propagation to correctly type Phi declarations as `__vow_vec_t`
+  - Return of a vec variable must emit `(void*)0` since the function signature says `void*` but the local is `__vow_vec_t` — verification assertions happen before Return so this is sound
+  - The `emit_inst` function needed a `vec_vars: &HashSet<u32>` parameter — all callers updated accordingly
+  - Match guard `if matches!(&inst.data, InstData::CallExtern(n) if n.starts_with("__vow_vec_"))` correctly splits Vec calls from other Call opcodes in the match
 ---

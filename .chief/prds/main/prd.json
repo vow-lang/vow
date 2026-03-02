@@ -90,7 +90,7 @@
         "cargo test --all passes"
       ],
       "priority": 4,
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-007",

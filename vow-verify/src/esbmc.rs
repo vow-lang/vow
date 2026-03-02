@@ -501,4 +501,164 @@ VERIFICATION FAILED";
     fn parse_assignment_line_empty() {
         assert_eq!(parse_assignment_line(""), None);
     }
+
+    // --- Vec verification integration tests ---
+
+    fn vec_push_one_ensures_len_1() -> Function {
+        // fn make_one() -> Vec<i64> { ensures: result.len() == 1 }
+        // { let v = Vec::new(); v.push(42); v }
+        //
+        // IR: create vec, push, get len, assert len==1, return
+        use vow_ir::InstId;
+        Function {
+            id: FuncId(0),
+            name: "make_one".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "ensures result.len() == 1".to_string(),
+                blame: Blame::Callee,
+                bindings: vec![],
+                file: String::new(),
+                offset: 0,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    // v0, v1 = size/align constants for vec_new
+                    inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                    // v2 = Vec::new()
+                    Inst {
+                        id: InstId(2),
+                        opcode: Opcode::Call,
+                        ty: Ty::Ptr,
+                        args: vec![InstId(0), InstId(1)],
+                        data: InstData::CallExtern("__vow_vec_new".to_string()),
+                        origin: sp(),
+                    },
+                    // v3 = 42
+                    inst(3, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(42)),
+                    // v.push(42)
+                    Inst {
+                        id: InstId(4),
+                        opcode: Opcode::Call,
+                        ty: Ty::Unit,
+                        args: vec![InstId(2), InstId(3)],
+                        data: InstData::CallExtern("__vow_vec_push_val".to_string()),
+                        origin: sp(),
+                    },
+                    // v5 = v.len()
+                    Inst {
+                        id: InstId(5),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(2)],
+                        data: InstData::CallExtern("__vow_vec_len".to_string()),
+                        origin: sp(),
+                    },
+                    // v6 = 1
+                    inst(6, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                    // v7 = (v5 == v6)
+                    inst(7, Opcode::EqI64, Ty::Bool, vec![5, 6], InstData::None),
+                    // ensures: v7
+                    Inst {
+                        id: InstId(8),
+                        opcode: Opcode::VowEnsures,
+                        ty: Ty::Unit,
+                        args: vec![InstId(7)],
+                        data: InstData::VowId(VowId(0)),
+                        origin: sp(),
+                    },
+                    inst(9, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                ],
+            }],
+        }
+    }
+
+    fn vec_empty_ensures_len_1_violated() -> Function {
+        // fn make_empty() -> Vec<i64> { ensures: result.len() == 1 }
+        // { let v = Vec::new(); v }  -- VIOLATED: len is 0 not 1
+        use vow_ir::InstId;
+        Function {
+            id: FuncId(0),
+            name: "make_empty".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "ensures result.len() == 1".to_string(),
+                blame: Blame::Callee,
+                bindings: vec![],
+                file: String::new(),
+                offset: 0,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                    Inst {
+                        id: InstId(2),
+                        opcode: Opcode::Call,
+                        ty: Ty::Ptr,
+                        args: vec![InstId(0), InstId(1)],
+                        data: InstData::CallExtern("__vow_vec_new".to_string()),
+                        origin: sp(),
+                    },
+                    // v3 = v.len()
+                    Inst {
+                        id: InstId(3),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(2)],
+                        data: InstData::CallExtern("__vow_vec_len".to_string()),
+                        origin: sp(),
+                    },
+                    inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                    inst(5, Opcode::EqI64, Ty::Bool, vec![3, 4], InstData::None),
+                    Inst {
+                        id: InstId(6),
+                        opcode: Opcode::VowEnsures,
+                        ty: Ty::Unit,
+                        args: vec![InstId(5)],
+                        data: InstData::VowId(VowId(0)),
+                        origin: sp(),
+                    },
+                    inst(7, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                ],
+            }],
+        }
+    }
+
+    #[test]
+    fn verify_vec_push_ensures_len() {
+        let func = vec_push_one_ensures_len_1();
+        match verify_function(&func) {
+            VerificationResult::Proven => {}
+            VerificationResult::ToolNotFound => {
+                eprintln!("SKIP: esbmc not found");
+            }
+            other => panic!("expected Proven or ToolNotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_vec_violated_len_contract() {
+        let func = vec_empty_ensures_len_1_violated();
+        match verify_function(&func) {
+            VerificationResult::Failed(ce) => {
+                assert_eq!(ce.vow_id, Some(0), "vow_id should be 0");
+            }
+            VerificationResult::ToolNotFound => {
+                eprintln!("SKIP: esbmc not found");
+            }
+            other => panic!("expected Failed or ToolNotFound, got {other:?}"),
+        }
+    }
 }
