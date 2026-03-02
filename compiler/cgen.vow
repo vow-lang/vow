@@ -6,6 +6,13 @@ struct CGen {
     out: String,
     indent: i64,
     tmp_count: i64,
+    snames: Vec<String>,
+    sfld_names: Vec<String>,
+    sfld_offsets: Vec<i64>,
+    sfld_counts: Vec<i64>,
+    sfld_types: Vec<String>,
+    var_names: Vec<String>,
+    var_types: Vec<String>,
 }
 
 fn cgen_new() -> CGen {
@@ -13,7 +20,141 @@ fn cgen_new() -> CGen {
         out: String::from(""),
         indent: 0,
         tmp_count: 0,
+        snames: Vec::new(),
+        sfld_names: Vec::new(),
+        sfld_offsets: Vec::new(),
+        sfld_counts: Vec::new(),
+        sfld_types: Vec::new(),
+        var_names: Vec::new(),
+        var_types: Vec::new(),
     }
+}
+
+fn cg_register_struct(g: CGen, a: AstArena, sid: i64) {
+    let name: String = arena_str(a, sdef_name_sid(a, sid));
+    let snames: Vec<String> = g.snames;
+    snames.push(name);
+    let sfld_offsets: Vec<i64> = g.sfld_offsets;
+    let sfld_names: Vec<String> = g.sfld_names;
+    let sfld_types: Vec<String> = g.sfld_types;
+    sfld_offsets.push(sfld_names.len());
+    let fields_lid: i64 = sdef_fields_lid(a, sid);
+    let nf: i64 = list_len(a, fields_lid);
+    let sfld_counts: Vec<i64> = g.sfld_counts;
+    sfld_counts.push(nf / 2);
+    let mut fi: i64 = 0;
+    while fi < nf {
+        let fname: String = arena_str(a, list_get(a, fields_lid, fi));
+        sfld_names.push(fname);
+        let ftid: i64 = list_get(a, fields_lid, fi + 1);
+        let ftype: String = cg_type_name_from_tid(g, a, ftid);
+        sfld_types.push(ftype);
+        fi = fi + 2;
+    }
+}
+
+fn cg_find_struct_index(g: CGen, name: String) -> i64 {
+    let snames: Vec<String> = g.snames;
+    let n: i64 = snames.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if snames[i] == name { return i; }
+        i = i + 1;
+    }
+    -1
+}
+
+fn cg_field_index(g: CGen, struct_name: String, field_name: String) -> i64 {
+    let si: i64 = cg_find_struct_index(g, struct_name);
+    if si == -1 { return 0; }
+    let sfld_offsets: Vec<i64> = g.sfld_offsets;
+    let sfld_counts: Vec<i64> = g.sfld_counts;
+    let sfld_names: Vec<String> = g.sfld_names;
+    let start: i64 = sfld_offsets[si];
+    let count: i64 = sfld_counts[si];
+    let mut i: i64 = 0;
+    while i < count {
+        if sfld_names[start + i] == field_name { return i; }
+        i = i + 1;
+    }
+    0
+}
+
+fn cg_struct_field_count(g: CGen, struct_name: String) -> i64 {
+    let si: i64 = cg_find_struct_index(g, struct_name);
+    if si == -1 { return 1; }
+    let sfld_counts: Vec<i64> = g.sfld_counts;
+    sfld_counts[si]
+}
+
+fn cg_field_type(g: CGen, struct_name: String, field_name: String) -> String {
+    let si: i64 = cg_find_struct_index(g, struct_name);
+    if si == -1 { return String::from(""); }
+    let sfld_offsets: Vec<i64> = g.sfld_offsets;
+    let sfld_counts: Vec<i64> = g.sfld_counts;
+    let sfld_names: Vec<String> = g.sfld_names;
+    let sfld_types: Vec<String> = g.sfld_types;
+    let start: i64 = sfld_offsets[si];
+    let count: i64 = sfld_counts[si];
+    let mut i: i64 = 0;
+    while i < count {
+        if sfld_names[start + i] == field_name { return sfld_types[start + i]; }
+        i = i + 1;
+    }
+    String::from("")
+}
+
+fn cg_expr_struct_type(g: CGen, a: AstArena, eid: i64) -> String {
+    let etag: i64 = expr_tag(a, eid);
+    if etag == EXPR_IDENT() {
+        let vn: String = arena_str(a, expr_a(a, eid));
+        return cg_lookup_var_type(g, sanitize_ident(vn));
+    }
+    if etag == EXPR_FIELD() {
+        let recv_type: String = cg_expr_struct_type(g, a, expr_a(a, eid));
+        if recv_type.len() > 0 {
+            let fname: String = arena_str(a, expr_b(a, eid));
+            return cg_field_type(g, recv_type, fname);
+        }
+    }
+    if etag == EXPR_SLIT() {
+        let path_lid: i64 = expr_a(a, eid);
+        let plen: i64 = list_len(a, path_lid);
+        if plen > 0 {
+            return arena_str(a, list_get(a, path_lid, plen - 1));
+        }
+    }
+    String::from("")
+}
+
+fn cg_register_var(g: CGen, name: String, type_name: String) {
+    let var_names: Vec<String> = g.var_names;
+    let var_types: Vec<String> = g.var_types;
+    var_names.push(name);
+    var_types.push(type_name);
+}
+
+fn cg_lookup_var_type(g: CGen, name: String) -> String {
+    let var_names: Vec<String> = g.var_names;
+    let var_types: Vec<String> = g.var_types;
+    let n: i64 = var_names.len();
+    let mut i: i64 = n - 1;
+    while i >= 0 {
+        if var_names[i] == name { return var_types[i]; }
+        i = i - 1;
+    }
+    String::from("")
+}
+
+fn cg_type_name_from_tid(g: CGen, a: AstArena, tid: i64) -> String {
+    if tid == -1 { return String::from(""); }
+    let tag: i64 = type_tag(a, tid);
+    if tag != TY_NAMED() { return String::from(""); }
+    let name_sid: i64 = type_a(a, tid);
+    let name: String = arena_str(a, name_sid);
+    if name == String::from("String") { return name; }
+    if cg_find_struct_index(g, name) >= 0 { return name; }
+    String::from("")
 }
 
 fn cg_emit(g: CGen, s: String) {
@@ -184,7 +325,7 @@ fn binop_to_c(op: i64) -> String {
     else { String::from("||") }
 }
 
-fn is_string_expr(a: AstArena, eid: i64) -> i64 {
+fn is_string_expr(g: CGen, a: AstArena, eid: i64) -> i64 {
     let tag: i64 = expr_tag(a, eid);
     if tag == EXPR_LIT_STR() { return 1; }
     if tag == EXPR_ECTOR() {
@@ -194,6 +335,24 @@ fn is_string_expr(a: AstArena, eid: i64) -> i64 {
             let first: String = arena_str(a, first_sid);
             if first == String::from("String") { return 1; }
         }
+    }
+    if tag == EXPR_IDENT() {
+        let vn: String = arena_str(a, expr_a(a, eid));
+        let vt: String = cg_lookup_var_type(g, sanitize_ident(vn));
+        if vt == String::from("String") { return 1; }
+    }
+    if tag == EXPR_CALL() {
+        let callee_eid: i64 = expr_a(a, eid);
+        if expr_tag(a, callee_eid) == EXPR_IDENT() {
+            let fn_name: String = arena_str(a, expr_a(a, callee_eid));
+            if fn_name == String::from("arena_str") { return 1; }
+            if fn_name == String::from("empty_str") { return 1; }
+        }
+    }
+    if tag == EXPR_METHOD() {
+        let mname_sid: i64 = expr_b(a, eid);
+        let mn: String = arena_str(a, mname_sid);
+        if mn == String::from("eq") { return 0; }
     }
     0
 }
@@ -244,7 +403,7 @@ fn gen_type(a: AstArena, tid: i64) -> String {
         if name == String::from("str") { return String::from("long"); }
         if name == String::from("Vec") { return String::from("long"); }
         if name == String::from("HashMap") { return String::from("long"); }
-        return name;
+        return String::from("long");
     }
     String::from("long")
 }
@@ -266,7 +425,7 @@ fn gen_ector(g: CGen, a: AstArena, path_lid: i64, args_lid: i64) -> String {
         let second_sid: i64 = list_get(a, path_lid, 1);
         let second: String = arena_str(a, second_sid);
         if first == String::from("Vec") && second == String::from("new") {
-            return String::from("__vow_vec_new()");
+            return String::from("__vow_vec_new_val()");
         }
         if first == String::from("HashMap") && second == String::from("new") {
             return String::from("__vow_map_new()");
@@ -326,9 +485,9 @@ fn gen_method_call(g: CGen, a: AstArena, recv_eid: i64, mname_sid: i64, args_lid
     }
     if mname == String::from("byte_at") {
         if has_args != 0 {
-            return str5(String::from("__vow_vec_get_val("), recv_c, String::from(", "), args_str, String::from(")"));
+            return str5(String::from("__vow_string_byte_at("), recv_c, String::from(", "), args_str, String::from(")"));
         }
-        return str3(String::from("__vow_vec_get_val("), recv_c, String::from(")"));
+        return str3(String::from("__vow_string_byte_at("), recv_c, String::from(")"));
     }
     if mname == String::from("eq") {
         if has_args != 0 {
@@ -347,6 +506,9 @@ fn gen_method_call(g: CGen, a: AstArena, recv_eid: i64, mname_sid: i64, args_lid
             return str5(String::from("__vow_map_insert("), recv_c, String::from(", "), args_str, String::from(")"));
         }
         return str3(String::from("__vow_map_insert("), recv_c, String::from(")"));
+    }
+    if mname == String::from("pop") {
+        return str3(String::from("__vow_vec_pop("), recv_c, String::from(")"));
     }
     if mname == String::from("get") {
         if has_args != 0 {
@@ -377,18 +539,18 @@ fn gen_expr(g: CGen, a: AstArena, eid: i64) -> String {
     if tag == EXPR_IDENT() {
         let sid: i64 = expr_a(a, eid);
         let name: String = arena_str(a, sid);
-        return sanitize_ident(builtin_to_c(name));
+        return sanitize_ident(name);
     }
     if tag == EXPR_BINOP() {
         let op: i64 = expr_a(a, eid);
         let lhs_eid: i64 = expr_b(a, eid);
         let rhs_eid: i64 = expr_c(a, eid);
-        if op == BINOP_EQ() && (is_string_expr(a, lhs_eid) != 0 || is_string_expr(a, rhs_eid) != 0) {
+        if op == BINOP_EQ() && (is_string_expr(g, a, lhs_eid) != 0 || is_string_expr(g, a, rhs_eid) != 0) {
             let lhs_c: String = gen_expr(g, a, lhs_eid);
             let rhs_c: String = gen_expr(g, a, rhs_eid);
             return str5(String::from("__vow_string_eq("), lhs_c, String::from(", "), rhs_c, String::from(")"));
         }
-        if op == BINOP_NE() && (is_string_expr(a, lhs_eid) != 0 || is_string_expr(a, rhs_eid) != 0) {
+        if op == BINOP_NE() && (is_string_expr(g, a, lhs_eid) != 0 || is_string_expr(g, a, rhs_eid) != 0) {
             let lhs_c2: String = gen_expr(g, a, lhs_eid);
             let rhs_c2: String = gen_expr(g, a, rhs_eid);
             return str5(String::from("(!__vow_string_eq("), lhs_c2, String::from(", "), rhs_c2, String::from("))"));
@@ -428,8 +590,14 @@ fn gen_expr(g: CGen, a: AstArena, eid: i64) -> String {
         return gen_method_call(g, a, recv_eid, mname_sid, margs_lid);
     }
     if tag == EXPR_FIELD() {
-        let recv_c: String = gen_expr(g, a, expr_a(a, eid));
+        let field_recv_eid: i64 = expr_a(a, eid);
         let fname: String = arena_str(a, expr_b(a, eid));
+        let recv_c: String = gen_expr(g, a, field_recv_eid);
+        let recv_type: String = cg_expr_struct_type(g, a, field_recv_eid);
+        if recv_type.len() > 0 {
+            let fidx: i64 = cg_field_index(g, recv_type, fname);
+            return str5(String::from("((long*)"), recv_c, String::from(")["), cg_i64_to_str(fidx), String::from("]"));
+        }
         return str3(recv_c, String::from("."), fname);
     }
     if tag == EXPR_INDEX() {
@@ -555,7 +723,17 @@ fn gen_expr(g: CGen, a: AstArena, eid: i64) -> String {
         return String::from("");
     }
     if tag == EXPR_BLOCK() {
-        return gen_block_body(g, a, expr_a(a, eid));
+        let blk_tmp: String = fresh_tmp(g);
+        cg_iline(g, str3(String::from("long "), blk_tmp, String::from(";")));
+        cg_iline(g, String::from("{"));
+        g.indent = g.indent + 1;
+        let bval: String = gen_block_body(g, a, expr_a(a, eid));
+        if bval.len() > 0 {
+            cg_iline(g, str4(blk_tmp, String::from(" = "), bval, String::from(";")));
+        }
+        g.indent = g.indent - 1;
+        cg_iline(g, String::from("}"));
+        return blk_tmp;
     }
     if tag == EXPR_ASSIGN() {
         let lhs_eid: i64 = expr_a(a, eid);
@@ -565,9 +743,16 @@ fn gen_expr(g: CGen, a: AstArena, eid: i64) -> String {
             let lname: String = arena_str(a, expr_a(a, lhs_eid));
             cg_iline(g, str4(sanitize_ident(lname), String::from(" = "), rhs_c, String::from(";")));
         } else if lhs_tag == EXPR_FIELD() {
-            let frecv_c: String = gen_expr(g, a, expr_a(a, lhs_eid));
+            let frecv_eid: i64 = expr_a(a, lhs_eid);
             let ffield: String = arena_str(a, expr_b(a, lhs_eid));
-            cg_iline(g, str5(frecv_c, String::from("."), ffield, String::from(" = "), str2(rhs_c, String::from(";"))));
+            let frecv_c: String = gen_expr(g, a, frecv_eid);
+            let frecv_type: String = cg_expr_struct_type(g, a, frecv_eid);
+            if frecv_type.len() > 0 {
+                let fidx: i64 = cg_field_index(g, frecv_type, ffield);
+                cg_iline(g, str6(String::from("((long*)"), frecv_c, String::from(")["), cg_i64_to_str(fidx), String::from("] = "), str2(rhs_c, String::from(";"))));
+            } else {
+                cg_iline(g, str5(frecv_c, String::from("."), ffield, String::from(" = "), str2(rhs_c, String::from(";"))));
+            }
         } else if lhs_tag == EXPR_INDEX() {
             let irecv_c: String = gen_expr(g, a, expr_a(a, lhs_eid));
             let iidx_c: String = gen_expr(g, a, expr_b(a, lhs_eid));
@@ -584,14 +769,16 @@ fn gen_expr(g: CGen, a: AstArena, eid: i64) -> String {
         let plen: i64 = list_len(a, path_lid);
         if plen == 0 { return String::from("0L"); }
         let type_name: String = arena_str(a, list_get(a, path_lid, plen - 1));
+        let n_fields: i64 = cg_struct_field_count(g, type_name);
         let tmp: String = fresh_tmp(g);
-        cg_iline(g, str4(type_name, String::from(" "), tmp, String::from(";")));
+        cg_iline(g, str4(String::from("long "), tmp, String::from(" = (long)calloc("), str2(cg_i64_to_str(n_fields), String::from(", sizeof(long));"))));
         let nf: i64 = list_len(a, fields_lid);
         let mut fi: i64 = 0;
         while fi < nf {
             let fname: String = arena_str(a, list_get(a, fields_lid, fi));
             let fval: String = gen_expr(g, a, list_get(a, fields_lid, fi + 1));
-            cg_iline(g, str6(tmp, String::from("."), fname, String::from(" = "), fval, String::from(";")));
+            let fidx: i64 = cg_field_index(g, type_name, fname);
+            cg_iline(g, str6(String::from("((long*)"), tmp, String::from(")["), cg_i64_to_str(fidx), String::from("] = "), str2(fval, String::from(";"))));
             fi = fi + 2;
         }
         return tmp;
@@ -659,6 +846,10 @@ fn gen_stmt(g: CGen, a: AstArena, sid: i64) {
             let name: String = sanitize_ident(arena_str(a, pat_a(a, pat_pid)));
             let type_c: String = gen_type(a, annot_tid);
             cg_iline(g, str6(type_c, String::from(" "), name, String::from(" = "), init_c, String::from(";")));
+            let vtype: String = cg_type_name_from_tid(g, a, annot_tid);
+            if vtype.len() > 0 {
+                cg_register_var(g, name, vtype);
+            }
         } else {
             cg_iline(g, str3(String::from("long _let = "), init_c, String::from(";")));
         }
@@ -708,13 +899,28 @@ fn gen_fn_proto(g: CGen, a: AstArena, fid: i64) {
 }
 
 fn gen_fn(g: CGen, a: AstArena, fid: i64) {
+    g.var_names = Vec::new();
+    g.var_types = Vec::new();
     let name: String = arena_str(a, fn_name_sid(a, fid));
     let ret_tid: i64 = fn_ret_ast_tid(a, fid);
     let body_bid: i64 = fn_body_bid(a, fid);
     let ret_type: String = gen_ret_type(a, ret_tid);
     let cname: String = sanitize_ident(name);
-    let params_str: String = gen_fn_params(g, a, fn_params_lid(a, fid));
+    let params_lid: i64 = fn_params_lid(a, fid);
+    let params_str: String = gen_fn_params(g, a, params_lid);
     cg_line(g, str5(ret_type, String::from(" "), cname, String::from("("), str2(params_str, String::from(") {"))));
+    let pn: i64 = list_len(a, params_lid);
+    let mut pi: i64 = 0;
+    while pi < pn {
+        let pname_sid: i64 = list_get(a, params_lid, pi);
+        let ptid: i64 = list_get(a, params_lid, pi + 1);
+        let pname: String = sanitize_ident(arena_str(a, pname_sid));
+        let ptype: String = cg_type_name_from_tid(g, a, ptid);
+        if ptype.len() > 0 {
+            cg_register_var(g, pname, ptype);
+        }
+        pi = pi + 2;
+    }
     g.indent = 1;
     let trail_val: String = gen_block_body(g, a, body_bid);
     if fn_is_void(a, ret_tid) == 0 && trail_val.len() > 0 {
@@ -726,6 +932,7 @@ fn gen_fn(g: CGen, a: AstArena, fid: i64) {
 }
 
 fn gen_struct_def(g: CGen, a: AstArena, sid: i64) {
+    cg_register_struct(g, a, sid);
     let name: String = arena_str(a, sdef_name_sid(a, sid));
     let fields_lid: i64 = sdef_fields_lid(a, sid);
     cg_line(g, String::from("typedef struct {"));
@@ -788,11 +995,12 @@ fn vow_runtime_header() -> String {
     h.push_str(String::from("extern long __vow_string_byte_at(long s, long i);\n"));
     h.push_str(String::from("extern void __vow_print_str(long s);\n"));
     h.push_str(String::from("extern void __vow_print_i64(long v);\n"));
-    h.push_str(String::from("extern long __vow_vec_new(void);\n"));
+    h.push_str(String::from("extern long __vow_vec_new_val(void);\n"));
     h.push_str(String::from("extern void __vow_vec_push_val(long v, long val);\n"));
     h.push_str(String::from("extern long __vow_vec_get_val(long v, long i);\n"));
     h.push_str(String::from("extern long __vow_vec_len(long v);\n"));
     h.push_str(String::from("extern void __vow_vec_set_val(long v, long i, long val);\n"));
+    h.push_str(String::from("extern void __vow_vec_pop(long v);\n"));
     h.push_str(String::from("extern long __vow_map_new(void);\n"));
     h.push_str(String::from("extern void __vow_map_insert(long m, long k, long v);\n"));
     h.push_str(String::from("extern long __vow_map_get(long m, long k);\n"));

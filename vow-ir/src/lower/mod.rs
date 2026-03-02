@@ -1310,6 +1310,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         span,
                     )
                 }
+                (_, "pop") => ctx.emit(
+                    Opcode::Call,
+                    Ty::Unit,
+                    vec![recv_id],
+                    InstData::CallExtern("__vow_vec_pop".to_string()),
+                    span,
+                ),
                 _ => {
                     for a in args {
                         lower_expr(ctx, a);

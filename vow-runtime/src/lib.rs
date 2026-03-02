@@ -158,6 +158,11 @@ pub extern "C" fn __vow_vec_new(elem_size: usize, align: usize) -> *mut u8 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn __vow_vec_new_val() -> *mut u8 {
+    __vow_vec_new(8, 8)
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_push(
     vec: *mut u8,
     elem: *const u8,
@@ -209,6 +214,14 @@ pub unsafe extern "C" fn __vow_vec_push_val(vec: *mut u8, value: i64) {
 pub unsafe extern "C" fn __vow_vec_get_val(vec: *const u8, index: usize) -> i64 {
     let ptr = unsafe { __vow_vec_get_ptr(vec, index, 8) };
     unsafe { *(ptr as *const i64) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_pop(vec: *mut u8) {
+    let v = unsafe { &mut *(vec as *mut VowVec) };
+    if v.len > 0 {
+        v.len -= 1;
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -272,15 +285,19 @@ pub unsafe extern "C" fn __vow_string_len(s: *const u8) -> usize {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_string_eq(a: *const u8, b: *const u8) -> bool {
+pub unsafe extern "C" fn __vow_string_eq(a: *const u8, b: *const u8) -> i64 {
     let va = unsafe { &*(a as *const VowVec) };
     let vb = unsafe { &*(b as *const VowVec) };
     if va.len != vb.len {
-        return false;
+        return 0;
     }
     let sa = unsafe { std::slice::from_raw_parts(va.ptr, va.len) };
     let sb = unsafe { std::slice::from_raw_parts(vb.ptr, vb.len) };
-    sa == sb
+    if sa == sb {
+        1
+    } else {
+        0
+    }
 }
 
 #[unsafe(no_mangle)]
