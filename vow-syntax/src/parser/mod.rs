@@ -56,15 +56,17 @@ struct Parser {
     cursor: usize,
     #[allow(dead_code)]
     source: String,
+    file: String,
     diagnostics: Vec<Diagnostic>,
 }
 
 impl Parser {
-    fn new(tokens: Vec<Token>, source: String) -> Self {
+    fn new(tokens: Vec<Token>, source: String, file: String) -> Self {
         Self {
             tokens,
             cursor: 0,
             source,
+            file,
             diagnostics: Vec::new(),
         }
     }
@@ -161,7 +163,7 @@ impl Parser {
             code,
             message,
             primary: SourceLocation {
-                file: "<input>".to_string(),
+                file: self.file.clone(),
                 byte_offset: span.start,
                 byte_len: span.len,
             },
@@ -615,7 +617,7 @@ impl Parser {
     }
 }
 
-pub fn parse_item_source(source: &str) -> (Option<Item>, Vec<Diagnostic>) {
+pub fn parse_item_source(source: &str, file: &str) -> (Option<Item>, Vec<Diagnostic>) {
     let tokens = match Lexer::new(source).tokenize() {
         Ok(toks) => toks,
         Err(lex_err) => {
@@ -624,7 +626,7 @@ pub fn parse_item_source(source: &str) -> (Option<Item>, Vec<Diagnostic>) {
                 code: ErrorCode::InvalidCharacter,
                 message: lex_err.message,
                 primary: SourceLocation {
-                    file: "<input>".to_string(),
+                    file: file.to_string(),
                     byte_offset: lex_err.span.start,
                     byte_len: lex_err.span.len,
                 },
@@ -634,12 +636,12 @@ pub fn parse_item_source(source: &str) -> (Option<Item>, Vec<Diagnostic>) {
             return (None, vec![diag]);
         }
     };
-    let mut parser = Parser::new(tokens, source.to_string());
+    let mut parser = Parser::new(tokens, source.to_string(), file.to_string());
     let item = parser.parse_item();
     (item, parser.diagnostics)
 }
 
-pub fn parse_module(source: &str) -> (Module, Vec<Diagnostic>) {
+pub fn parse_module(source: &str, file: &str) -> (Module, Vec<Diagnostic>) {
     let tokens = match Lexer::new(source).tokenize() {
         Ok(toks) => toks,
         Err(lex_err) => {
@@ -648,7 +650,7 @@ pub fn parse_module(source: &str) -> (Module, Vec<Diagnostic>) {
                 code: ErrorCode::InvalidCharacter,
                 message: lex_err.message,
                 primary: SourceLocation {
-                    file: "<input>".to_string(),
+                    file: file.to_string(),
                     byte_offset: lex_err.span.start,
                     byte_len: lex_err.span.len,
                 },
@@ -665,7 +667,7 @@ pub fn parse_module(source: &str) -> (Module, Vec<Diagnostic>) {
         }
     };
 
-    let mut parser = Parser::new(tokens, source.to_string());
+    let mut parser = Parser::new(tokens, source.to_string(), file.to_string());
     let module = parser.parse_module_inner();
     (module, parser.diagnostics)
 }
@@ -677,7 +679,7 @@ mod tests {
     #[test]
     fn parse_module_no_items() {
         let src = "module Foo";
-        let (module, diags) = parse_module(src);
+        let (module, diags) = parse_module(src, "<test>");
         assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
         assert_eq!(module.name, "Foo");
         assert!(module.uses.is_empty());
@@ -687,7 +689,7 @@ mod tests {
     #[test]
     fn parse_module_single_pure_fn() {
         let src = "module Bar fn add(x: i32, y: i32) -> i32 { x }";
-        let (module, diags) = parse_module(src);
+        let (module, diags) = parse_module(src, "<test>");
         assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
         assert_eq!(module.name, "Bar");
         assert_eq!(module.items.len(), 1);
@@ -707,7 +709,7 @@ mod tests {
     #[test]
     fn parse_fn_with_effects() {
         let src = "module Baz fn do_io() [read, write] { 0 }";
-        let (module, diags) = parse_module(src);
+        let (module, diags) = parse_module(src, "<test>");
         assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
         assert_eq!(module.items.len(), 1);
         match &module.items[0] {
@@ -723,7 +725,7 @@ mod tests {
     #[test]
     fn parse_fn_with_vow_block() {
         let src = "module Qux fn safe_div(x: i32, y: i32) -> i32 vow { requires: y, ensures: result } { x }";
-        let (module, diags) = parse_module(src);
+        let (module, diags) = parse_module(src, "<test>");
         assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
         assert_eq!(module.items.len(), 1);
         match &module.items[0] {
@@ -741,7 +743,7 @@ mod tests {
     #[test]
     fn parse_module_with_use() {
         let src = "module M use std.io fn f() { 0 }";
-        let (module, diags) = parse_module(src);
+        let (module, diags) = parse_module(src, "<test>");
         assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
         assert_eq!(module.uses.len(), 1);
         assert_eq!(module.uses[0].path, vec!["std", "io"]);
@@ -795,19 +797,26 @@ mod tests {
     fn parse_use_with_keyword_as_path_segment() {
         // 'io' is a keyword; expect_name_or_keyword allows it as a path component.
         let src = "module M use std.io fn f() { 0 }";
-        let (module, diags) = parse_module(src);
+        let (module, diags) = parse_module(src, "<test>");
         assert!(diags.is_empty(), "{diags:?}");
         assert_eq!(module.uses[0].path, vec!["std", "io"]);
     }
 
     #[test]
     fn parse_module_unexpected_item_produces_diagnostic() {
-        // A number literal is not a valid item start; should produce an error.
         let src = "module M 123";
-        let (_, diags) = parse_module(src);
+        let (_, diags) = parse_module(src, "<test>");
         assert!(
             !diags.is_empty(),
             "expected diagnostic for unexpected token"
         );
+    }
+
+    #[test]
+    fn parse_module_diagnostic_contains_file_path() {
+        let src = "module M 123";
+        let (_, diags) = parse_module(src, "my_file.vow");
+        assert!(!diags.is_empty());
+        assert_eq!(diags[0].primary.file, "my_file.vow");
     }
 }

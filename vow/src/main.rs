@@ -267,7 +267,8 @@ pub fn run_pipeline(
     let mut stderr_emit = HumanEmitter::new(Box::new(std::io::stderr()));
     let mut all_diagnostics: Vec<Diagnostic> = Vec::new();
 
-    let (root_ast, parse_diags) = vow_syntax::parser::parse_module(&src);
+    let file_str = source.to_string_lossy();
+    let (root_ast, parse_diags) = vow_syntax::parser::parse_module(&src, &file_str);
     let parse_failed = parse_diags.iter().any(|d| d.severity == Severity::Error);
     for d in &parse_diags {
         stderr_emit.emit(d);
@@ -1217,6 +1218,34 @@ pub fn main() -> i32 [io] {
             "diagnostics should contain parse errors"
         );
         assert_eq!(result.diagnostics[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn pipeline_parse_error_contains_file_path() {
+        let dir = TempDir::new().unwrap();
+        let src = "module M 123";
+        let source = write_source(&dir, "bad_parse.vow", src);
+        let result = run_pipeline(&source, None, BuildMode::Release, true, false);
+        assert!(!result.diagnostics.is_empty());
+        let file = &result.diagnostics[0].primary.file;
+        assert!(
+            file.ends_with("bad_parse.vow"),
+            "diagnostic file field should contain the source path, got: {file}"
+        );
+    }
+
+    #[test]
+    fn pipeline_type_error_contains_file_path() {
+        let dir = TempDir::new().unwrap();
+        let src = "module Bad fn f() -> i32 { true }";
+        let source = write_source(&dir, "bad_type.vow", src);
+        let result = run_pipeline(&source, None, BuildMode::Release, true, false);
+        assert!(!result.diagnostics.is_empty());
+        let file = &result.diagnostics[0].primary.file;
+        assert!(
+            file.ends_with("bad_type.vow"),
+            "diagnostic file field should contain the source path, got: {file}"
+        );
     }
 
     #[test]

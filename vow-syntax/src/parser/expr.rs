@@ -587,13 +587,13 @@ mod tests {
 
     fn parse_expr_from_source(src: &str) -> Expr {
         let tokens = crate::lexer::Lexer::new(src).tokenize().expect("lex error");
-        let mut parser = Parser::new(tokens, String::new());
+        let mut parser = Parser::new(tokens, String::new(), "<test>".to_string());
         parser.parse_expr_inner(0)
     }
 
     fn parse_block_from_source(src: &str) -> Block {
         let tokens = crate::lexer::Lexer::new(src).tokenize().expect("lex error");
-        let mut parser = Parser::new(tokens, String::new());
+        let mut parser = Parser::new(tokens, String::new(), "<test>".to_string());
         parser.parse_block_required()
     }
 
@@ -603,7 +603,7 @@ mod tests {
 
     fn parse_no_errors(src: &str) -> Expr {
         let tokens = crate::lexer::Lexer::new(src).tokenize().expect("lex error");
-        let mut parser = Parser::new(tokens, String::new());
+        let mut parser = Parser::new(tokens, String::new(), "<test>".to_string());
         let expr = parser.parse_expr_inner(0);
         assert!(
             parser.diagnostics.is_empty(),
@@ -916,7 +916,7 @@ mod tests {
         let tokens = crate::lexer::Lexer::new("break")
             .tokenize()
             .expect("lex error");
-        let mut parser = Parser::new(tokens, String::new());
+        let mut parser = Parser::new(tokens, String::new(), "<test>".to_string());
         let expr = parser.parse_expr_inner(0);
         assert!(matches!(&expr.kind, ExprKind::Break { value: None }));
     }

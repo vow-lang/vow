@@ -40,7 +40,8 @@ fn load_deps(
         }
         match std::fs::read_to_string(&file_path) {
             Ok(src) => {
-                let (dep_ast, diags) = vow_syntax::parser::parse_module(&src);
+                let file_str = file_path.to_string_lossy();
+                let (dep_ast, diags) = vow_syntax::parser::parse_module(&src, &file_str);
                 let has_error = diags.iter().any(|d| d.severity == Severity::Error);
                 if has_error {
                     errors.extend(diags);
@@ -91,7 +92,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let src = "module Main\nuse nonexistent\nfn f() -> i32 { 0 }";
         let path = write_vow(&dir, "main.vow", src);
-        let (ast, diags) = vow_syntax::parser::parse_module(src);
+        let (ast, diags) = vow_syntax::parser::parse_module(src, &path.to_string_lossy());
         assert!(diags.is_empty());
         let result = load_modules(&path, &ast);
         assert!(result.is_err(), "should fail when import not found");
@@ -106,7 +107,7 @@ mod tests {
         write_vow(&dir, "lib.vow", "module Lib\nfn helper() -> i32 { 0 }");
         let src = "module Main\nuse lib\nuse lib\nfn f() -> i32 { 0 }";
         let path = write_vow(&dir, "main.vow", src);
-        let (ast, diags) = vow_syntax::parser::parse_module(src);
+        let (ast, diags) = vow_syntax::parser::parse_module(src, &path.to_string_lossy());
         assert!(diags.is_empty());
         let result = load_modules(&path, &ast);
         assert!(result.is_ok(), "should succeed with duplicate import");
@@ -125,7 +126,7 @@ mod tests {
         write_vow(&dir, "lib.vow", "module Lib\nfn helper() -> i32 { 0 }");
         let src = "module Main\nuse lib\nfn main_fn() -> i32 { 0 }";
         let path = write_vow(&dir, "main.vow", src);
-        let (ast, _) = vow_syntax::parser::parse_module(src);
+        let (ast, _) = vow_syntax::parser::parse_module(src, &path.to_string_lossy());
         let graph = load_modules(&path, &ast).unwrap();
         let merged = merge_modules(graph);
         assert_eq!(merged.name, "Main");

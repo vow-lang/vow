@@ -374,14 +374,14 @@ fn strip_module(m: Module) -> Module {
 }
 
 fn roundtrip(src: &str) {
-    let (ast1, diags1) = parse_module(src);
+    let (ast1, diags1) = parse_module(src, "<test>");
     assert!(
         diags1.is_empty(),
         "parse errors on first parse: {:?}",
         diags1.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
     let printed1 = print_module(&ast1);
-    let (ast2, diags2) = parse_module(&printed1);
+    let (ast2, diags2) = parse_module(&printed1, "<test>");
     assert!(
         diags2.is_empty(),
         "parse errors on second parse: {:?}\nsource was:\n{}",
