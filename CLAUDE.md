@@ -72,29 +72,53 @@ All diagnostic output flows through **`vow-diag`**, which every other crate uses
 
 ## Self-Hosted Compiler (Phase 9)
 
-`compiler/` contains a Vow implementation of the compiler front-end:
+`compiler/` contains a complete Vow implementation of the compiler (6276 lines across 13 modules). The bootstrap triple test passes: the self-hosted compiler is a verified fixed point.
+
+### Modules
+
 - `span.vow`, `token.vow`, `lexer.vow` — lexer (Wave 1)
 - `ast.vow`, `parser.vow` — parser (Wave 2)
 - `types.vow`, `env.vow`, `checker.vow` — type checker (Wave 3)
-- `main.vow` — driver: runs lexer → parser → type checker, prints error count
+- `ir.vow`, `ir_printer.vow`, `lower.vow` — IR lowering and printing (Wave 4)
+- `cgen.vow` — C code generator (AST → C, pointer-based struct representation)
+- `main.vow` — driver with `--cgen` flag for C output or IR output
 
-Compile and run the self-hosted binary:
+### Building and running
+
 ```bash
 ./target/release/vow --no-verify compiler/main.vow   # compile → ./compiler/main
-./compiler/main compiler/lexer.vow                   # 3932 tokens, 11 items, 0 errors
-./compiler/main compiler/parser.vow                  # 6760 tokens, 38 items, 0 errors
-./compiler/main compiler/checker.vow                 # self-checks with 0 errors
+./compiler/main compiler/lexer.vow                    # type-check, print IR
+./compiler/main --cgen compiler/lexer.vow             # generate lexer.vow.c
 ```
 
 `./compiler/main` loads a single file only — no recursive `use` resolution. Cross-module
 types appear as unknown (`CTY_NEVER`); errors from unresolved types are suppressed.
 
-**Gotcha:** Chained field access on struct values requires annotated `let` bindings.
-`e.ts.strs[i]` reads the wrong field index. Use:
-```vow
-let ts: TyStore = e.ts;
-let s: String = ts.strs[i];
+### Bootstrap triple test
+
+`scripts/concat_vow.sh` merges all compiler modules into a single file (stripping `module`/`use` headers), avoiding the need for module loading.
+
+```bash
+./scripts/concat_vow.sh cgen > /tmp/compiler_cgen.vow          # concatenate all modules
+./target/release/vow --no-verify /tmp/compiler_cgen.vow -o /tmp/compiler_a  # Stage 0: Rust → Binary A
+ulimit -v 2000000; /tmp/compiler_a --cgen /tmp/compiler_cgen.vow            # Stage 1: A → stage1.c
+gcc /tmp/compiler_cgen.vow.c -L target/release -lvow_runtime -lpthread -ldl -lm -o /tmp/compiler_b
+ulimit -v 2000000; /tmp/compiler_b --cgen /tmp/compiler_cgen.vow            # Stage 2: B → stage2.c
+diff /tmp/stage1.c /tmp/stage2.c                                            # must be empty
 ```
+
+**Important:** Always use `ulimit -v 2000000` when running self-compiled binaries to cap memory.
+
+### Gotchas
+
+- Chained field access on struct values requires annotated `let` bindings.
+  `e.ts.strs[i]` reads the wrong field index. Use:
+  ```vow
+  let ts: TyStore = e.ts;
+  let s: String = ts.strs[i];
+  ```
+- cgen.vow uses pointer-based structs: `calloc(n_fields, sizeof(long))`, fields accessed via `((long*)ptr)[index]`. Variable types are tracked per-function in CGen for string equality dispatch (`__vow_string_eq` vs pointer `==`).
+- `__vow_string_eq` returns `i64` (not `bool`) to avoid C ABI mismatch with Rust's 1-byte bool.
 
 ### Examples
 
