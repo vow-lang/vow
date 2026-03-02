@@ -89,10 +89,10 @@ fn str6(a: String, b: String, c: String, d: String, e: String, f: String) -> Str
 
 fn fresh_tmp(g: CGen) -> String {
     g.tmp_count = g.tmp_count + 1;
-    str2(String::from("_t"), i64_to_str(g.tmp_count))
+    str2(String::from("_t"), cg_i64_to_str(g.tmp_count))
 }
 
-fn i64_to_str(n: i64) -> String {
+fn cg_i64_to_str(n: i64) -> String {
     if n == 0 { return String::from("0"); }
     let digits: Vec<i64> = Vec::new();
     let mut neg: i64 = 0;
@@ -363,7 +363,7 @@ fn gen_method_call(g: CGen, a: AstArena, recv_eid: i64, mname_sid: i64, args_lid
 fn gen_expr(g: CGen, a: AstArena, eid: i64) -> String {
     let tag: i64 = expr_tag(a, eid);
     if tag == EXPR_LIT_INT() {
-        return i64_to_str(expr_a(a, eid));
+        return cg_i64_to_str(expr_a(a, eid));
     }
     if tag == EXPR_LIT_BOOL() {
         if expr_a(a, eid) != 0 { return String::from("1"); }
@@ -512,7 +512,7 @@ fn gen_expr(g: CGen, a: AstArena, eid: i64) -> String {
                 g.indent = g.indent + 1;
             } else if ptag == PAT_ENUM() {
                 let enum_tag_idx: i64 = ai / 2;
-                let tag_check: String = str4(String::from("((long*)"), scrut_tmp, String::from(")[0] == "), i64_to_str(enum_tag_idx));
+                let tag_check: String = str4(String::from("((long*)"), scrut_tmp, String::from(")[0] == "), cg_i64_to_str(enum_tag_idx));
                 if is_first != 0 { cg_iline(g, str3(String::from("if ("), tag_check, String::from(") {"))); }
                 else { cg_iline(g, str3(String::from("} else if ("), tag_check, String::from(") {"))); }
                 g.indent = g.indent + 1;
@@ -523,7 +523,7 @@ fn gen_expr(g: CGen, a: AstArena, eid: i64) -> String {
                     let ep_pid: i64 = list_get(a, epayload_lid, epi);
                     if pat_tag(a, ep_pid) == PAT_IDENT() {
                         let ep_name: String = arena_str(a, pat_a(a, ep_pid));
-                        cg_iline(g, str6(String::from("long "), ep_name, String::from(" = ((long*)"), scrut_tmp, str2(String::from(")["), i64_to_str(epi + 1)), str2(String::from("]"), String::from(";"))));
+                        cg_iline(g, str6(String::from("long "), ep_name, String::from(" = ((long*)"), scrut_tmp, str2(String::from(")["), cg_i64_to_str(epi + 1)), str2(String::from("]"), String::from(";"))));
                     }
                     epi = epi + 1;
                 }
@@ -666,13 +666,13 @@ fn gen_stmt(g: CGen, a: AstArena, sid: i64) {
     }
     if stag == STMT_EXPR() {
         let expr_eid: i64 = stmt_a(a, sid);
-        let has_semi: i64 = stmt_b(a, sid);
-        let expr_c: String = gen_expr(g, a, expr_eid);
-        if expr_c.len() > 0 {
-            if has_semi != 0 {
+        let etag: i64 = expr_tag(a, expr_eid);
+        if etag == EXPR_WHILE() || etag == EXPR_IF() || etag == EXPR_MATCH() {
+            gen_expr(g, a, expr_eid);
+        } else {
+            let expr_c: String = gen_expr(g, a, expr_eid);
+            if expr_c.len() > 0 {
                 cg_iline(g, str2(expr_c, String::from(";")));
-            } else {
-                cg_iline(g, expr_c);
             }
         }
     }
@@ -753,7 +753,7 @@ fn gen_enum_def(g: CGen, a: AstArena, eid: i64) {
     let mut vi: i64 = 0;
     while vi < n_variants {
         let vname: String = arena_str(a, list_get(a, variants_lid, vi));
-        cg_line(g, str6(String::from("#define "), str2(name, str2(String::from("_"), vname)), String::from("(...) (("), str2(name, String::from("){")), String::from("._tag="), str2(i64_to_str(vi), String::from(", ._payload={__VA_ARGS__}})"))));
+        cg_line(g, str6(String::from("#define "), str2(name, str2(String::from("_"), vname)), String::from("(...) (("), str2(name, String::from("){")), String::from("._tag="), str2(cg_i64_to_str(vi), String::from(", ._payload={__VA_ARGS__}})"))));
         vi = vi + 1;
     }
     cg_line(g, String::from(""));

@@ -10,6 +10,19 @@ use checker
 use ir
 use ir_printer
 use lower
+use cgen
+
+fn has_flag(argv: Vec<String>, flag: String) -> bool {
+    let mut i: i64 = 0;
+    let found: bool = false;
+    while i < argv.len() {
+        if argv[i] == flag {
+            found = true;
+        }
+        i = i + 1;
+    }
+    found
+}
 
 fn main() -> i32 [io] {
     let argv: Vec<String> = args();
@@ -18,7 +31,8 @@ fn main() -> i32 [io] {
         eprintln_str("usage: main <file.vow>");
         return 1;
     }
-    let path: String = argv[0];
+    let cgen_mode: bool = has_flag(argv, String::from("--cgen"));
+    let path: String = argv[argc - 1];
     let src: String = fs_read(path);
     let tokens: Vec<Token> = lex(src);
     let n_tokens: i64 = tokens.len();
@@ -34,9 +48,15 @@ fn main() -> i32 [io] {
     print_i64(n_errors);
     print_str(" errors\n");
     if n_errors == 0 {
-        let ir_mod: IrModule = lower_module_vow(m);
-        let ir_text: String = print_module(ir_mod);
-        print_str(ir_text);
+        if cgen_mode {
+            let c_code: String = gen_module_str(m);
+            let out_path: String = str2(path, String::from(".c"));
+            fs_write(out_path, c_code);
+        } else {
+            let ir_mod: IrModule = lower_module_vow(m);
+            let ir_text: String = print_module(ir_mod);
+            print_str(ir_text);
+        }
     }
     0
 }
