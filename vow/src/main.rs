@@ -2025,4 +2025,147 @@ fn main() -> i32 {
             other => panic!("unexpected status: {other:?}"),
         }
     }
+
+    #[test]
+    fn cegis_loop_end_to_end() {
+        let dir = TempDir::new().unwrap();
+
+        // Step 1: Compile a program with an intentional contract violation.
+        // safe_sub(a, b) ensures result >= 0, but `a` is unconstrained so a - b can be negative.
+        let broken_src = r#"module CegisBroken
+
+fn safe_sub(a: i64, b: i64 where b >= 0) -> i64 vow {
+  ensures: result >= 0
+} {
+  a - b
+}
+
+fn main() -> i32 {
+  let r: i64 = safe_sub(10, 3);
+  0
+}"#;
+        let broken_path = write_source(&dir, "cegis_broken.vow", broken_src);
+        let broken_out = dir.path().join("cegis_broken");
+        let broken_result =
+            run_pipeline(&broken_path, Some(&broken_out), BuildMode::Release, false, false);
+
+        match &broken_result.status {
+            BuildStatus::VerifyFailed { function, .. } => {
+                assert_eq!(function, "safe_sub");
+
+                // AC2: diagnostics array present (empty since no compile errors)
+                assert!(
+                    broken_result.diagnostics.is_empty(),
+                    "diagnostics should be empty (no compile errors), got: {:?}",
+                    broken_result.diagnostics,
+                );
+
+                // AC3: counterexamples array with at least one entry
+                assert!(
+                    !broken_result.counterexamples.is_empty(),
+                    "counterexamples should not be empty on verify failure"
+                );
+
+                let ce = &broken_result.counterexamples[0];
+
+                // AC4a: inputs with source-level variable names
+                let has_source_name = ce
+                    .inputs
+                    .iter()
+                    .any(|(name, _)| name == "a" || name == "b");
+                assert!(
+                    has_source_name,
+                    "counterexample inputs should use source names (a, b), got: {:?}",
+                    ce.inputs,
+                );
+                for (name, _) in &ce.inputs {
+                    assert!(
+                        name == "a" || name == "b" || name.starts_with("_esbmc_"),
+                        "unexpected variable name: {name}"
+                    );
+                }
+
+                // AC4b: violation predicate text
+                assert!(
+                    ce.violation.contains("result >= 0"),
+                    "violation should contain predicate text, got: {}",
+                    ce.violation,
+                );
+
+                // AC4c: source location
+                assert!(
+                    ce.source.is_some(),
+                    "counterexample should have source location"
+                );
+                let src_loc = ce.source.as_ref().unwrap();
+                assert!(
+                    src_loc.file.contains("cegis_broken.vow"),
+                    "source file should reference cegis_broken.vow, got: {}",
+                    src_loc.file,
+                );
+
+                // Step 2: Compile the corrected version and assert verification passes.
+                let fixed_src = r#"module CegisFixed
+
+fn safe_sub(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {
+  requires: a >= b,
+  ensures: result >= 0
+} {
+  a - b
+}
+
+fn main() -> i32 {
+  let r: i64 = safe_sub(10, 3);
+  0
+}"#;
+                let fixed_path = write_source(&dir, "cegis_fixed.vow", fixed_src);
+                let fixed_out = dir.path().join("cegis_fixed");
+                let fixed_result =
+                    run_pipeline(&fixed_path, Some(&fixed_out), BuildMode::Release, false, false);
+
+                // AC5: corrected version verifies with empty counterexamples
+                match &fixed_result.status {
+                    BuildStatus::Verified => {
+                        assert!(
+                            fixed_result.counterexamples.is_empty(),
+                            "counterexamples should be empty after fix"
+                        );
+                        assert!(
+                            fixed_result.diagnostics.is_empty(),
+                            "diagnostics should be empty for fixed version"
+                        );
+                    }
+                    BuildStatus::CompileFailed { message } => {
+                        let msg_lo = message.to_lowercase();
+                        if msg_lo.contains("link")
+                            || msg_lo.contains("runtime")
+                            || msg_lo.contains("ld")
+                            || msg_lo.contains("cc exited")
+                        {
+                            eprintln!("SKIP fixed (link): {message}");
+                            return;
+                        }
+                        panic!("fixed version compile failed: {message}");
+                    }
+                    other => panic!("fixed version unexpected status: {other:?}"),
+                }
+            }
+            BuildStatus::Unverified => {
+                eprintln!("SKIP: verification not run (esbmc not found)");
+            }
+            BuildStatus::CompileFailed { message } => {
+                let msg_lo = message.to_lowercase();
+                if msg_lo.contains("link")
+                    || msg_lo.contains("runtime")
+                    || msg_lo.contains("ld")
+                    || msg_lo.contains("cc exited")
+                {
+                    eprintln!("SKIP: {message}");
+                    return;
+                }
+                panic!("compile failed: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        }
+    }
 }
