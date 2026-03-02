@@ -661,4 +661,162 @@ VERIFICATION FAILED";
             other => panic!("expected Failed or ToolNotFound, got {other:?}"),
         }
     }
+
+    // --- String verification integration tests ---
+
+    fn string_push_byte_ensures_len_gt_0() -> Function {
+        // fn make_nonempty() -> String { ensures: result.len() > 0 }
+        // { let s = String::from(""); s.push_byte(65); s }
+        //
+        // from_cstr → nondet len >= 0; push_byte increments len; ensures len > 0
+        use vow_ir::InstId;
+        Function {
+            id: FuncId(0),
+            name: "make_nonempty".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "ensures result.len() > 0".to_string(),
+                blame: Blame::Callee,
+                bindings: vec![],
+                file: String::new(),
+                offset: 0,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    // v0 = ConstStr (the literal pointer)
+                    inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                    // v1 = String::from(v0)
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::Call,
+                        ty: Ty::Ptr,
+                        args: vec![InstId(0)],
+                        data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                        origin: sp(),
+                    },
+                    // v2 = 65 (byte 'A')
+                    inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(65)),
+                    // s.push_byte(65)
+                    Inst {
+                        id: InstId(3),
+                        opcode: Opcode::Call,
+                        ty: Ty::Unit,
+                        args: vec![InstId(1), InstId(2)],
+                        data: InstData::CallExtern("__vow_string_push_byte".to_string()),
+                        origin: sp(),
+                    },
+                    // v4 = s.len()
+                    Inst {
+                        id: InstId(4),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(1)],
+                        data: InstData::CallExtern("__vow_string_len".to_string()),
+                        origin: sp(),
+                    },
+                    // v5 = 0
+                    inst(5, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    // v6 = (v4 > v5)
+                    inst(6, Opcode::GtI64, Ty::Bool, vec![4, 5], InstData::None),
+                    // ensures: v6
+                    Inst {
+                        id: InstId(7),
+                        opcode: Opcode::VowEnsures,
+                        ty: Ty::Unit,
+                        args: vec![InstId(6)],
+                        data: InstData::VowId(VowId(0)),
+                        origin: sp(),
+                    },
+                    inst(8, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+                ],
+            }],
+        }
+    }
+
+    fn string_empty_ensures_len_gt_0_violated() -> Function {
+        // fn make_empty() -> String { ensures: result.len() > 0 }
+        // { let s = String::from(""); s }  -- VIOLATED: from_cstr gives nondet len >= 0
+        use vow_ir::InstId;
+        Function {
+            id: FuncId(0),
+            name: "make_empty".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "ensures result.len() > 0".to_string(),
+                blame: Blame::Callee,
+                bindings: vec![],
+                file: String::new(),
+                offset: 0,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::Call,
+                        ty: Ty::Ptr,
+                        args: vec![InstId(0)],
+                        data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                        origin: sp(),
+                    },
+                    // v2 = s.len()
+                    Inst {
+                        id: InstId(2),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(1)],
+                        data: InstData::CallExtern("__vow_string_len".to_string()),
+                        origin: sp(),
+                    },
+                    inst(3, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(4, Opcode::GtI64, Ty::Bool, vec![2, 3], InstData::None),
+                    Inst {
+                        id: InstId(5),
+                        opcode: Opcode::VowEnsures,
+                        ty: Ty::Unit,
+                        args: vec![InstId(4)],
+                        data: InstData::VowId(VowId(0)),
+                        origin: sp(),
+                    },
+                    inst(6, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+                ],
+            }],
+        }
+    }
+
+    #[test]
+    fn verify_string_push_byte_ensures_len() {
+        let func = string_push_byte_ensures_len_gt_0();
+        match verify_function(&func) {
+            VerificationResult::Proven => {}
+            VerificationResult::ToolNotFound => {
+                eprintln!("SKIP: esbmc not found");
+            }
+            other => panic!("expected Proven or ToolNotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_string_violated_len_contract() {
+        let func = string_empty_ensures_len_gt_0_violated();
+        match verify_function(&func) {
+            VerificationResult::Failed(ce) => {
+                assert_eq!(ce.vow_id, Some(0), "vow_id should be 0");
+            }
+            VerificationResult::ToolNotFound => {
+                eprintln!("SKIP: esbmc not found");
+            }
+            other => panic!("expected Failed or ToolNotFound, got {other:?}"),
+        }
+    }
 }

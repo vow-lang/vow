@@ -7,6 +7,7 @@ use vow_ir::{Function, Inst, InstData, Opcode, Ty};
 // ---------------------------------------------------------------------------
 
 const VOW_VEC_MAX: usize = 128;
+const VOW_STRING_MAX: usize = 256;
 
 // ---------------------------------------------------------------------------
 // Type mapping
@@ -67,10 +68,50 @@ fn collect_vec_vars(func: &Function) -> HashSet<u32> {
 }
 
 // ---------------------------------------------------------------------------
+// String variable analysis
+// ---------------------------------------------------------------------------
+
+fn collect_string_vars(func: &Function) -> HashSet<u32> {
+    let mut string_vars = HashSet::new();
+
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.opcode == Opcode::Call
+                && let InstData::CallExtern(ref name) = inst.data
+                && name == "__vow_string_from_cstr"
+            {
+                string_vars.insert(inst.id.0);
+            }
+        }
+    }
+
+    loop {
+        let mut changed = false;
+        for block in &func.blocks {
+            for inst in &block.insts {
+                if inst.opcode == Opcode::Upsilon
+                    && let InstData::PhiTarget(phi_id) = inst.data
+                    && !inst.args.is_empty()
+                    && string_vars.contains(&inst.args[0].0)
+                    && string_vars.insert(phi_id.0)
+                {
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    string_vars
+}
+
+// ---------------------------------------------------------------------------
 // Expression / statement emission
 // ---------------------------------------------------------------------------
 
-fn emit_inst(inst: &Inst, out: &mut String, vec_vars: &HashSet<u32>) {
+fn emit_inst(inst: &Inst, out: &mut String, vec_vars: &HashSet<u32>, string_vars: &HashSet<u32>) {
     let id = inst.id.0;
     match inst.opcode {
         // Constants
@@ -298,8 +339,8 @@ fn emit_inst(inst: &Inst, out: &mut String, vec_vars: &HashSet<u32>) {
         }
         Opcode::Return => {
             if let Some(&val_id) = inst.args.first() {
-                if vec_vars.contains(&val_id.0) {
-                    out.push_str("  return (void*)0; /* vec return */\n");
+                if vec_vars.contains(&val_id.0) || string_vars.contains(&val_id.0) {
+                    out.push_str("  return (void*)0; /* modelled type return */\n");
                 } else {
                     out.push_str(&format!("  return v{};\n", val_id.0));
                 }
@@ -315,6 +356,8 @@ fn emit_inst(inst: &Inst, out: &mut String, vec_vars: &HashSet<u32>) {
         Opcode::Phi => {
             if vec_vars.contains(&id) {
                 out.push_str(&format!("  __vow_vec_t v{};\n", id));
+            } else if string_vars.contains(&id) {
+                out.push_str(&format!("  __vow_string_t v{};\n", id));
             } else {
                 out.push_str(&format!("  {} v{};\n", ir_ty_to_c(inst.ty), id));
             }
@@ -364,6 +407,57 @@ fn emit_inst(inst: &Inst, out: &mut String, vec_vars: &HashSet<u32>) {
                             "  __ESBMC_assert(v{idx} >= 0 && v{idx} < v{vec}.len, \"vec bounds\");\n\
                              \x20 v{vec}.data[v{idx}] = v{val};\n"
                         ));
+                    }
+                    _ => {
+                        emit_unmodelled(inst, out);
+                    }
+                }
+            }
+        }
+
+        // String operations — modeled as abstract struct with len + data array
+        Opcode::Call if matches!(&inst.data, InstData::CallExtern(n) if n.starts_with("__vow_string_")) => {
+            if let InstData::CallExtern(ref name) = inst.data {
+                match name.as_str() {
+                    "__vow_string_from_cstr" => {
+                        out.push_str(&format!(
+                            "  __vow_string_t v{id};\n\
+                             \x20 v{id}.len = __VERIFIER_nondet_long();\n\
+                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < {});\n",
+                            VOW_STRING_MAX
+                        ));
+                    }
+                    "__vow_string_len" => {
+                        let s = inst.args[0].0;
+                        out.push_str(&format!("  int64_t v{id} = v{s}.len;\n"));
+                    }
+                    "__vow_string_push_str" => {
+                        let dest = inst.args[0].0;
+                        let src = inst.args[1].0;
+                        out.push_str(&format!("  v{dest}.len += v{src}.len;\n"));
+                    }
+                    "__vow_string_push_byte" => {
+                        let s = inst.args[0].0;
+                        let byte = inst.args[1].0;
+                        out.push_str(&format!(
+                            "  v{s}.data[v{s}.len] = (int8_t)v{byte};\n  v{s}.len++;\n"
+                        ));
+                    }
+                    "__vow_string_byte_at" => {
+                        let s = inst.args[0].0;
+                        let idx = inst.args[1].0;
+                        out.push_str(&format!(
+                            "  __ESBMC_assert(v{idx} >= 0 && v{idx} < v{s}.len, \"string bounds\");\n\
+                             \x20 int64_t v{id} = (int64_t)v{s}.data[v{idx}];\n"
+                        ));
+                    }
+                    "__vow_string_eq" => {
+                        let a = inst.args[0].0;
+                        let b = inst.args[1].0;
+                        out.push_str(&format!("  _Bool v{id} = (v{a}.len == v{b}.len);\n"));
+                    }
+                    "__vow_string_print" => {
+                        out.push_str("  /* string print not modelled */\n");
                     }
                     _ => {
                         emit_unmodelled(inst, out);
@@ -426,6 +520,7 @@ fn c_nondet_suffix(ty: Ty) -> &'static str {
 pub fn emit_c_function(func: &Function) -> String {
     let mut out = String::new();
     let vec_vars = collect_vec_vars(func);
+    let string_vars = collect_string_vars(func);
 
     // Return type
     let ret_c = if func.return_ty == Ty::Unit {
@@ -489,7 +584,7 @@ pub fn emit_c_function(func: &Function) -> String {
         }
         for inst in &block.insts {
             if inst.opcode != Opcode::GetArg {
-                emit_inst(inst, &mut out, &vec_vars);
+                emit_inst(inst, &mut out, &vec_vars, &string_vars);
             }
         }
     }
@@ -510,8 +605,12 @@ pub fn emit_c_module(funcs: &[&Function]) -> String {
     out.push_str("extern double __VERIFIER_nondet_double(void);\n");
     out.push_str("extern _Bool __VERIFIER_nondet_bool(void);\n\n");
     out.push_str(&format!(
-        "typedef struct {{ int64_t len; int64_t data[{}]; }} __vow_vec_t;\n\n",
+        "typedef struct {{ int64_t len; int64_t data[{}]; }} __vow_vec_t;\n",
         VOW_VEC_MAX
+    ));
+    out.push_str(&format!(
+        "typedef struct {{ int64_t len; int8_t data[{}]; }} __vow_string_t;\n\n",
+        VOW_STRING_MAX
     ));
 
     for func in funcs {
@@ -1151,7 +1250,10 @@ mod tests {
         let c = emit_c_function(&func);
         assert!(c.contains("__vow_vec_t v2;"), "vec struct decl: {c}");
         assert!(c.contains("v2.len = 0;"), "vec len init: {c}");
-        assert!(c.contains("(void*)0; /* vec return */"), "vec return: {c}");
+        assert!(
+            c.contains("(void*)0; /* modelled type return */"),
+            "vec return: {c}"
+        );
     }
 
     #[test]
@@ -1404,6 +1506,334 @@ mod tests {
         assert!(
             c.contains("__VERIFIER_nondet_long"),
             "nondet for non-vec: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_c_module_includes_string_typedef() {
+        let f = make_func(
+            "f",
+            vec![],
+            Ty::Unit,
+            vec![inst(0, Opcode::Return, Ty::Unit, vec![], InstData::None)],
+        );
+        let out = emit_c_module(&[&f]);
+        assert!(out.contains("__vow_string_t"), "string typedef: {out}");
+        assert!(out.contains("int8_t data["), "string data field: {out}");
+    }
+
+    #[test]
+    fn emit_string_from_cstr() {
+        use vow_ir::InstId;
+        let func = make_func(
+            "make_str",
+            vec![],
+            Ty::Ptr,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                Inst {
+                    id: InstId(1),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                },
+                inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func);
+        assert!(c.contains("__vow_string_t v1;"), "string struct decl: {c}");
+        assert!(
+            c.contains("v1.len = __VERIFIER_nondet_long()"),
+            "nondet len: {c}"
+        );
+        assert!(
+            c.contains("__ESBMC_assume(v1.len >= 0 && v1.len < 256)"),
+            "len bounded: {c}"
+        );
+        assert!(
+            c.contains("(void*)0; /* modelled type return */"),
+            "string return: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_string_len() {
+        use vow_ir::InstId;
+        let func = make_func(
+            "str_len",
+            vec![],
+            Ty::I64,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                Inst {
+                    id: InstId(1),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                },
+                Inst {
+                    id: InstId(2),
+                    opcode: Opcode::Call,
+                    ty: Ty::I64,
+                    args: vec![InstId(1)],
+                    data: InstData::CallExtern("__vow_string_len".to_string()),
+                    origin: sp(),
+                },
+                inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func);
+        assert!(c.contains("int64_t v2 = v1.len;"), "string len: {c}");
+    }
+
+    #[test]
+    fn emit_string_push_byte() {
+        use vow_ir::InstId;
+        let func = make_func(
+            "push_byte",
+            vec![],
+            Ty::Ptr,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                Inst {
+                    id: InstId(1),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                },
+                inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(65)),
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(1), InstId(2)],
+                    data: InstData::CallExtern("__vow_string_push_byte".to_string()),
+                    origin: sp(),
+                },
+                inst(4, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func);
+        assert!(
+            c.contains("v1.data[v1.len] = (int8_t)v2;"),
+            "push_byte store: {c}"
+        );
+        assert!(c.contains("v1.len++;"), "push_byte increment: {c}");
+    }
+
+    #[test]
+    fn emit_string_push_str() {
+        use vow_ir::InstId;
+        let func = make_func(
+            "cat",
+            vec![],
+            Ty::Ptr,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                Inst {
+                    id: InstId(1),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                },
+                inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(2)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                },
+                Inst {
+                    id: InstId(4),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(1), InstId(3)],
+                    data: InstData::CallExtern("__vow_string_push_str".to_string()),
+                    origin: sp(),
+                },
+                inst(5, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func);
+        assert!(c.contains("v1.len += v3.len;"), "push_str: {c}");
+    }
+
+    #[test]
+    fn emit_string_byte_at_with_bounds() {
+        use vow_ir::InstId;
+        let func = make_func(
+            "get_byte",
+            vec![],
+            Ty::I64,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                Inst {
+                    id: InstId(1),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                },
+                inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::Call,
+                    ty: Ty::I64,
+                    args: vec![InstId(1), InstId(2)],
+                    data: InstData::CallExtern("__vow_string_byte_at".to_string()),
+                    origin: sp(),
+                },
+                inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func);
+        assert!(
+            c.contains("__ESBMC_assert(v2 >= 0 && v2 < v1.len"),
+            "bounds check: {c}"
+        );
+        assert!(
+            c.contains("int64_t v3 = (int64_t)v1.data[v2]"),
+            "byte_at access: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_string_eq() {
+        use vow_ir::InstId;
+        let func = make_func(
+            "cmp_str",
+            vec![],
+            Ty::Bool,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                Inst {
+                    id: InstId(1),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                },
+                inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(2)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                },
+                Inst {
+                    id: InstId(4),
+                    opcode: Opcode::Call,
+                    ty: Ty::Bool,
+                    args: vec![InstId(1), InstId(3)],
+                    data: InstData::CallExtern("__vow_string_eq".to_string()),
+                    origin: sp(),
+                },
+                inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func);
+        assert!(
+            c.contains("_Bool v4 = (v1.len == v3.len)"),
+            "string eq: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_string_phi_propagation() {
+        use vow_ir::InstId;
+        let func = Function {
+            id: FuncId(0),
+            name: "str_phi".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    Inst {
+                        id: InstId(0),
+                        opcode: Opcode::Phi,
+                        ty: Ty::Ptr,
+                        args: vec![],
+                        data: InstData::None,
+                        origin: sp(),
+                    },
+                    inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                    Inst {
+                        id: InstId(2),
+                        opcode: Opcode::Call,
+                        ty: Ty::Ptr,
+                        args: vec![InstId(1)],
+                        data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                        origin: sp(),
+                    },
+                    Inst {
+                        id: InstId(3),
+                        opcode: Opcode::Upsilon,
+                        ty: Ty::Unit,
+                        args: vec![InstId(2)],
+                        data: InstData::PhiTarget(InstId(0)),
+                        origin: sp(),
+                    },
+                    inst(4, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            }],
+        };
+        let c = emit_c_function(&func);
+        assert!(
+            c.contains("__vow_string_t v0;"),
+            "phi uses string type: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_string_print_not_modelled() {
+        use vow_ir::InstId;
+        let func = make_func(
+            "print_it",
+            vec![],
+            Ty::Unit,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                Inst {
+                    id: InstId(1),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                },
+                Inst {
+                    id: InstId(2),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(1)],
+                    data: InstData::CallExtern("__vow_string_print".to_string()),
+                    origin: sp(),
+                },
+                inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func);
+        assert!(
+            c.contains("string print not modelled"),
+            "print not modelled: {c}"
         );
     }
 }

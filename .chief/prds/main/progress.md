@@ -5,6 +5,8 @@
 - All `BuildOutput` constructors must include `diagnostics`, `counterexamples`, `verify_status`, `verify_message` fields
 - Vec operations in IR: `Call` with `CallExtern("__vow_vec_*")` — new returns Ty::Ptr with 2 args (size, align), push takes (vec, elem), get takes (vec, idx), len takes (vec), pop takes (vec), set takes (vec, idx, val)
 - C emitter Vec modeling: `__vow_vec_t` struct with `len` + `data[128]` array; `collect_vec_vars()` pre-scans for vec variable IDs and propagates through Upsilon→Phi
+- C emitter String modeling: `__vow_string_t` struct with `len` + `int8_t data[256]` array; `collect_string_vars()` same pattern as vec; `from_cstr` → nondet len bounded `[0, 256)`
+- `emit_inst` takes both `vec_vars` and `string_vars` HashSets; Phi/Return check both sets for modelled type handling
 - Pre-existing formatting changes may exist in the working tree from `cargo fmt`; only commit files actually modified for the story
 - `parse_module` and `parse_item_source` in vow-syntax now require a `file: &str` parameter — always pass the source file path
 - Type checker (`Checker::new`) already accepted a `file` param; effects/linear/exhaustiveness checkers also take `file: &str`
@@ -114,4 +116,17 @@
   - Return of a vec variable must emit `(void*)0` since the function signature says `void*` but the local is `__vow_vec_t` — verification assertions happen before Return so this is sound
   - The `emit_inst` function needed a `vec_vars: &HashSet<u32>` parameter — all callers updated accordingly
   - Match guard `if matches!(&inst.data, InstData::CallExtern(n) if n.starts_with("__vow_vec_"))` correctly splits Vec calls from other Call opcodes in the match
+---
+
+## 2026-03-02 - US-007
+- What was implemented: Modeled String operations in the ESBMC C emitter so contracts involving String can be verified. Added `__vow_string_t` struct typedef (len + int8_t data[256] array) to the module header. The C emitter now recognizes `__vow_string_from_cstr`, `__vow_string_len`, `__vow_string_push_str`, `__vow_string_push_byte`, `__vow_string_byte_at`, `__vow_string_eq`, and `__vow_string_print` CallExtern operations. String variable IDs are tracked through Upsilon→Phi propagation. `from_cstr` models string creation with nondeterministic but bounded length [0, 256).
+- Files changed:
+  - `vow-verify/src/c_emitter.rs` — Added `VOW_STRING_MAX` constant, `collect_string_vars()` analysis, `__vow_string_t` typedef in `emit_c_module`, String-specific handling in `emit_inst` for 7 String operations, string-aware Phi/Return emission. Updated `emit_inst` signature to take `string_vars`. 9 new unit tests.
+  - `vow-verify/src/esbmc.rs` — Added 2 ESBMC integration tests: `verify_string_push_byte_ensures_len` (push byte, ensures len>0, proves) and `verify_string_violated_len_contract` (no push, ensures len>0, fails with counterexample).
+- **Learnings for future iterations:**
+  - String operations in the IR use `CallExtern` with names like `__vow_string_from_cstr`, `__vow_string_len`, etc. — same pattern as Vec operations
+  - `__vow_string_from_cstr` must bound the nondet length to avoid integer overflow: `len >= 0 && len < VOW_STRING_MAX`. Without the upper bound, ESBMC finds counterexamples where `len = INT64_MAX` and `len++` overflows to `INT64_MIN`
+  - `__vow_string_eq` is conservatively modeled as length comparison — sufficient for verification but not exact
+  - The Return comment was unified from `"/* vec return */"` to `"/* modelled type return */"` since both vec and string vars use the same `(void*)0` return pattern — existing tests needed updating
+  - Adding `string_vars` to `emit_inst` follows the same pattern as `vec_vars` — the match guard approach `n.starts_with("__vow_string_")` cleanly separates String calls from Vec calls and other Call opcodes
 ---
