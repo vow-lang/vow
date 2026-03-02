@@ -200,3 +200,17 @@
   - `String::from("")` in the ESBMC model creates a nondet-length string [0, 256); after push_byte, len >= 1, making `ensures: result.len() == 0` always violated
   - Generic type annotations (`Vec<i64>`, `HashMap<i64, i64>`) tag values via `AstType::Generic` handler in `lower_stmt` (line 1449-1453 of lower/mod.rs)
 ---
+
+## 2026-03-02 - US-012
+- What was implemented: Four example programs demonstrating where clause syntax and combined patterns, plus a CEGIS-style repair cycle pair (broken + fixed).
+- Files changed:
+  - `examples/where_divide.vow` — Where clause on parameters: `fn safe_div(x: i64, y: i64 where y != 0)` and `fn safe_mod(x: i64, m: i64 where m > 0)`
+  - `examples/where_clamp.vow` — Where clauses combined with explicit ensures: `fn bounded_add(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow { requires: a <= 100, requires: b <= 100, ensures: result >= 0, ensures: result <= 200 }`
+  - `examples/cegis_broken.vow` — CEGIS broken version: `fn safe_sub(a: i64, b: i64 where b >= 0) -> i64 vow { ensures: result >= 0 }` with `a - b` — ESBMC finds counterexample (a=INT64_MIN, b=0 → result < 0)
+  - `examples/cegis_fixed.vow` — CEGIS fixed version: adds `where a >= 0` and `requires: a >= b` — verifies successfully
+- **Learnings for future iterations:**
+  - Arithmetic overflow is the most common source of ESBMC counterexamples for unbounded i64 inputs — always add bounds when using `+` or `-` in ensures/requires
+  - Where clauses desugar to requires with Blame::Caller — they work identically to explicit requires blocks for verification
+  - CEGIS repair cycle demo: broken version → ESBMC finds counterexample → fix is to add missing preconditions → fixed version verifies. The counterexample clearly points to the issue (unbounded `a` allows negative values)
+  - `where` + `requires` + `ensures` can all coexist on the same function — where clauses are lowered first, then explicit requires, then ensures
+---
