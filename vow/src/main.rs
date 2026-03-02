@@ -9,7 +9,7 @@ use vow_codegen::cranelift_backend::CraneliftBackend;
 use vow_codegen::linker::{find_runtime_lib, link};
 use vow_codegen::{Backend, BuildMode};
 use vow_diag::{CollectingEmitter, Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
-use vow_verify::{VerificationResult, verify_function};
+use vow_verify::{Counterexample, VerificationResult, verify_function};
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -169,11 +169,48 @@ pub enum BuildStatus {
     },
 }
 
+#[derive(Debug, Clone)]
+pub struct CeSource {
+    pub file: String,
+    pub offset: u32,
+    pub length: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructuredCounterexample {
+    pub function: String,
+    pub inputs: Vec<(String, String)>,
+    pub violation: String,
+    pub vow_id: u32,
+    pub source: Option<CeSource>,
+}
+
+enum VerifyOutcome {
+    Skipped,
+    Proven,
+    Failed {
+        function: String,
+        description: String,
+        counterexamples: Vec<StructuredCounterexample>,
+    },
+    Timeout {
+        function: String,
+    },
+    Error {
+        function: String,
+        message: String,
+    },
+    ToolNotFound,
+}
+
 #[derive(Debug)]
 pub struct BuildOutput {
     pub status: BuildStatus,
     pub executable: Option<PathBuf>,
     pub diagnostics: Vec<Diagnostic>,
+    pub counterexamples: Vec<StructuredCounterexample>,
+    pub verify_status: Option<String>,
+    pub verify_message: Option<String>,
 }
 
 impl BuildOutput {
@@ -188,7 +225,7 @@ impl BuildOutput {
             Some(p) => format!("\"{}\"", p.display()),
             None => "null".to_string(),
         };
-        let extra = match &self.status {
+        let mut extra = match &self.status {
             BuildStatus::CompileFailed { message } => {
                 format!(",\"message\":\"{}\"", escape_json(message))
             }
@@ -205,6 +242,14 @@ impl BuildOutput {
             _ => String::new(),
         };
         let diags_json = format_diagnostics_json(&self.diagnostics);
+        let ce_json = format_counterexamples_json(&self.counterexamples);
+        extra.push_str(&format!(",\"counterexamples\":[{ce_json}]"));
+        if let Some(vs) = &self.verify_status {
+            extra.push_str(&format!(",\"verify_status\":\"{}\"", escape_json(vs)));
+        }
+        if let Some(vm) = &self.verify_message {
+            extra.push_str(&format!(",\"verify_message\":\"{}\"", escape_json(vm)));
+        }
         println!(
             "{{\"status\":\"{status_str}\",\"executable\":{exe_json},\"diagnostics\":[{diags_json}]{extra}}}"
         );
@@ -234,10 +279,87 @@ fn format_diagnostics_json(diagnostics: &[Diagnostic]) -> String {
         .join(",")
 }
 
+fn format_counterexamples_json(counterexamples: &[StructuredCounterexample]) -> String {
+    counterexamples
+        .iter()
+        .map(|ce| {
+            let inputs_json = ce
+                .inputs
+                .iter()
+                .map(|(k, v)| format!("\"{}\":\"{}\"", escape_json(k), escape_json(v)))
+                .collect::<Vec<_>>()
+                .join(",");
+            let source_json = match &ce.source {
+                Some(s) => format!(
+                    "{{\"file\":\"{}\",\"offset\":{},\"length\":{}}}",
+                    escape_json(&s.file),
+                    s.offset,
+                    s.length
+                ),
+                None => "null".to_string(),
+            };
+            format!(
+                "{{\"function\":\"{}\",\"inputs\":{{{inputs_json}}},\"violation\":\"{}\",\"vow_id\":{},\"source\":{source_json}}}",
+                escape_json(&ce.function),
+                escape_json(&ce.violation),
+                ce.vow_id,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 fn escape_json(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('"', "\\\"")
         .replace('\n', "\\n")
+}
+
+// ---------------------------------------------------------------------------
+// Counterexample construction
+// ---------------------------------------------------------------------------
+
+fn build_structured_counterexample(
+    func: &vow_ir::Function,
+    ce: &Counterexample,
+    file: &str,
+) -> StructuredCounterexample {
+    let vid = ce.vow_id.unwrap_or(0);
+    let violation = ce
+        .vow_id
+        .and_then(|id| func.vows.iter().find(|v| v.id.0 == id))
+        .map(|v| v.description.clone())
+        .unwrap_or_else(|| ce.description.clone());
+    let source = ce
+        .vow_id
+        .and_then(|id| find_vow_span(func, id))
+        .map(|span| CeSource {
+            file: file.to_string(),
+            offset: span.start,
+            length: span.len,
+        });
+    StructuredCounterexample {
+        function: func.name.clone(),
+        inputs: ce.inputs.clone(),
+        violation,
+        vow_id: vid,
+        source,
+    }
+}
+
+fn find_vow_span(func: &vow_ir::Function, vow_id: u32) -> Option<vow_syntax::span::Span> {
+    use vow_ir::{InstData, Opcode};
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if matches!(inst.opcode, Opcode::VowEnsures | Opcode::VowInvariant)
+                && let InstData::VowId(vid) = inst.data
+                && vid.0 == vow_id
+            {
+                return Some(inst.origin);
+            }
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -260,6 +382,9 @@ pub fn run_pipeline(
                 },
                 executable: None,
                 diagnostics: vec![],
+                counterexamples: vec![],
+                verify_status: None,
+                verify_message: None,
             };
         }
     };
@@ -281,6 +406,9 @@ pub fn run_pipeline(
             },
             executable: None,
             diagnostics: all_diagnostics,
+            counterexamples: vec![],
+            verify_status: None,
+            verify_message: None,
         };
     }
 
@@ -297,6 +425,9 @@ pub fn run_pipeline(
                 },
                 executable: None,
                 diagnostics: all_diagnostics,
+                counterexamples: vec![],
+                verify_status: None,
+                verify_message: None,
             };
         }
     };
@@ -315,6 +446,9 @@ pub fn run_pipeline(
             },
             executable: None,
             diagnostics: all_diagnostics,
+            counterexamples: vec![],
+            verify_status: None,
+            verify_message: None,
         };
     }
 
@@ -326,14 +460,18 @@ pub fn run_pipeline(
             status: BuildStatus::Unverified,
             executable: None,
             diagnostics: all_diagnostics,
+            counterexamples: vec![],
+            verify_status: None,
+            verify_message: None,
         };
     }
 
     // Spawn verification thread
     let module_for_verify = Arc::clone(&ir_module);
-    let verify_handle = thread::spawn(move || -> Option<(String, String)> {
+    let file_for_verify = source.to_string_lossy().to_string();
+    let verify_handle = thread::spawn(move || -> VerifyOutcome {
         if no_verify {
-            return None;
+            return VerifyOutcome::Skipped;
         }
         for func in &module_for_verify.functions {
             if func.vows.is_empty() {
@@ -341,17 +479,31 @@ pub fn run_pipeline(
             }
             match verify_function(func) {
                 VerificationResult::Failed(ce) => {
-                    return Some((func.name.clone(), ce.description));
+                    let sce = build_structured_counterexample(func, &ce, &file_for_verify);
+                    return VerifyOutcome::Failed {
+                        function: func.name.clone(),
+                        description: ce.description.clone(),
+                        counterexamples: vec![sce],
+                    };
                 }
                 VerificationResult::ToolError(e) => {
-                    return Some((func.name.clone(), format!("esbmc error: {e}")));
+                    return VerifyOutcome::Error {
+                        function: func.name.clone(),
+                        message: e,
+                    };
                 }
-                VerificationResult::Proven
-                | VerificationResult::Timeout
-                | VerificationResult::ToolNotFound => {}
+                VerificationResult::Timeout => {
+                    return VerifyOutcome::Timeout {
+                        function: func.name.clone(),
+                    };
+                }
+                VerificationResult::Proven => {}
+                VerificationResult::ToolNotFound => {
+                    return VerifyOutcome::ToolNotFound;
+                }
             }
         }
-        None
+        VerifyOutcome::Proven
     });
 
     // Codegen
@@ -366,6 +518,9 @@ pub fn run_pipeline(
                 },
                 executable: None,
                 diagnostics: all_diagnostics,
+                counterexamples: vec![],
+                verify_status: None,
+                verify_message: None,
             };
         }
     };
@@ -385,6 +540,9 @@ pub fn run_pipeline(
                     },
                     executable: None,
                     diagnostics: all_diagnostics,
+                    counterexamples: vec![],
+                    verify_status: None,
+                    verify_message: None,
                 };
             }
             match link(&[&obj_path], &runtime, &output_path) {
@@ -400,6 +558,9 @@ pub fn run_pipeline(
                         },
                         executable: None,
                         diagnostics: all_diagnostics,
+                        counterexamples: vec![],
+                        verify_status: None,
+                        verify_message: None,
                     };
                 }
             }
@@ -408,23 +569,52 @@ pub fn run_pipeline(
     };
 
     // Collect verification result
-    let verify_failure = verify_handle.join().unwrap_or(None);
+    let verify_outcome = verify_handle.join().unwrap_or(VerifyOutcome::Skipped);
 
-    let status = if let Some((func, desc)) = verify_failure {
-        BuildStatus::VerifyFailed {
-            function: func,
-            description: desc,
-        }
-    } else if no_verify {
-        BuildStatus::Unverified
-    } else {
-        BuildStatus::Verified
+    let (status, counterexamples, verify_status, verify_message) = match verify_outcome {
+        VerifyOutcome::Failed {
+            function,
+            description,
+            counterexamples,
+        } => (
+            BuildStatus::VerifyFailed {
+                function,
+                description,
+            },
+            counterexamples,
+            None,
+            None,
+        ),
+        VerifyOutcome::Timeout { function } => (
+            BuildStatus::VerifyFailed {
+                function,
+                description: "verification timed out".to_string(),
+            },
+            vec![],
+            Some("timeout".to_string()),
+            None,
+        ),
+        VerifyOutcome::Error { function, message } => (
+            BuildStatus::VerifyFailed {
+                function,
+                description: format!("esbmc error: {message}"),
+            },
+            vec![],
+            Some("error".to_string()),
+            Some(message),
+        ),
+        VerifyOutcome::Skipped => (BuildStatus::Unverified, vec![], None, None),
+        VerifyOutcome::Proven => (BuildStatus::Verified, vec![], None, None),
+        VerifyOutcome::ToolNotFound => (BuildStatus::Unverified, vec![], None, None),
     };
 
     BuildOutput {
         status,
         executable: exe_path,
         diagnostics: all_diagnostics,
+        counterexamples,
+        verify_status,
+        verify_message,
     }
 }
 
@@ -1141,6 +1331,9 @@ pub fn main() -> i32 [io] {
             },
             executable: None,
             diagnostics: vec![],
+            counterexamples: vec![],
+            verify_status: None,
+            verify_message: None,
         };
         out.emit_json();
     }
@@ -1154,6 +1347,15 @@ pub fn main() -> i32 [io] {
             },
             executable: None,
             diagnostics: vec![],
+            counterexamples: vec![StructuredCounterexample {
+                function: "divide".to_string(),
+                inputs: vec![("p1".to_string(), "0".to_string())],
+                violation: "y != 0".to_string(),
+                vow_id: 0,
+                source: None,
+            }],
+            verify_status: None,
+            verify_message: None,
         };
         out.emit_json();
     }
@@ -1167,6 +1369,9 @@ pub fn main() -> i32 [io] {
             status: BuildStatus::Verified,
             executable: Some(exe),
             diagnostics: vec![],
+            counterexamples: vec![],
+            verify_status: None,
+            verify_message: None,
         };
         out.emit_json();
     }
@@ -1192,6 +1397,9 @@ pub fn main() -> i32 [io] {
             },
             executable: None,
             diagnostics: vec![diag],
+            counterexamples: vec![],
+            verify_status: None,
+            verify_message: None,
         };
         out.emit_json();
     }
@@ -1202,6 +1410,9 @@ pub fn main() -> i32 [io] {
             status: BuildStatus::Verified,
             executable: None,
             diagnostics: vec![],
+            counterexamples: vec![],
+            verify_status: None,
+            verify_message: None,
         };
         out.emit_json();
     }
@@ -1324,7 +1535,6 @@ pub fn main() -> i32 [io] {
         match &result.status {
             BuildStatus::Unverified => {}
             BuildStatus::CompileFailed { message } => {
-                // Linker failures are acceptable (no main(), runtime absent, etc.)
                 let is_link_err = message.contains("link")
                     || message.contains("runtime")
                     || message.contains("ld")
@@ -1337,5 +1547,250 @@ pub fn main() -> i32 [io] {
             }
             other => panic!("unexpected status: {other:?}"),
         }
+    }
+
+    #[test]
+    fn counterexamples_empty_on_compile_failure() {
+        let dir = TempDir::new().unwrap();
+        let src = "module M 123";
+        let source = write_source(&dir, "bad.vow", src);
+        let result = run_pipeline(&source, None, BuildMode::Release, true, false);
+        assert!(
+            matches!(result.status, BuildStatus::CompileFailed { .. }),
+            "expected CompileFailed"
+        );
+        assert!(
+            result.counterexamples.is_empty(),
+            "counterexamples should be empty on compile failure"
+        );
+        assert!(
+            result.verify_status.is_none(),
+            "verify_status should be None on compile failure"
+        );
+    }
+
+    #[test]
+    fn counterexamples_empty_when_no_verify() {
+        let dir = TempDir::new().unwrap();
+        let src = "module M fn f(x: i64) -> i64 { x }";
+        let source = write_source(&dir, "ok.vow", src);
+        let result = run_pipeline(&source, None, BuildMode::Release, true, false);
+        match &result.status {
+            BuildStatus::Unverified => {
+                assert!(
+                    result.counterexamples.is_empty(),
+                    "counterexamples should be empty when --no-verify"
+                );
+            }
+            BuildStatus::CompileFailed { message } => {
+                let msg_lo = message.to_lowercase();
+                if msg_lo.contains("link")
+                    || msg_lo.contains("runtime")
+                    || msg_lo.contains("ld")
+                    || msg_lo.contains("cc exited")
+                {
+                    return;
+                }
+                panic!("unexpected compile failure: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn counterexamples_populated_on_verify_failure() {
+        let dir = TempDir::new().unwrap();
+        let src = r#"module Bad
+fn always_bad() -> i64 vow {
+  ensures: result > 100
+} {
+  42
+}
+fn main() -> i32 {
+  let x: i64 = always_bad();
+  0
+}"#;
+        let source = write_source(&dir, "bad_ensures.vow", src);
+        let out = dir.path().join("bad_ensures");
+        let result = run_pipeline(&source, Some(&out), BuildMode::Release, false, false);
+        match &result.status {
+            BuildStatus::VerifyFailed { function, .. } => {
+                assert_eq!(function, "always_bad");
+                assert!(
+                    !result.counterexamples.is_empty(),
+                    "counterexamples should not be empty on verify failure"
+                );
+                let ce = &result.counterexamples[0];
+                assert_eq!(ce.function, "always_bad");
+                assert_eq!(ce.vow_id, 0);
+                assert!(
+                    ce.violation.contains("result > 100"),
+                    "violation should contain predicate text, got: {}",
+                    ce.violation,
+                );
+            }
+            BuildStatus::Unverified => {
+                eprintln!("SKIP: verification not run (esbmc not found or no vows)");
+            }
+            BuildStatus::CompileFailed { message } => {
+                let msg_lo = message.to_lowercase();
+                if msg_lo.contains("link")
+                    || msg_lo.contains("runtime")
+                    || msg_lo.contains("ld")
+                    || msg_lo.contains("cc exited")
+                {
+                    eprintln!("SKIP: {message}");
+                    return;
+                }
+                panic!("compile failed: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn counterexamples_empty_on_verify_success() {
+        let dir = TempDir::new().unwrap();
+        let src = r#"module Good
+fn always_true() -> i64 vow {
+  ensures: result == 42
+} {
+  42
+}
+fn main() -> i32 {
+  let x: i64 = always_true();
+  0
+}"#;
+        let source = write_source(&dir, "good_ensures.vow", src);
+        let out = dir.path().join("good_ensures");
+        let result = run_pipeline(&source, Some(&out), BuildMode::Release, false, false);
+        match &result.status {
+            BuildStatus::Verified => {
+                assert!(
+                    result.counterexamples.is_empty(),
+                    "counterexamples should be empty on verification success"
+                );
+            }
+            BuildStatus::Unverified => {
+                eprintln!("SKIP: verification not run (esbmc not found)");
+            }
+            BuildStatus::CompileFailed { message } => {
+                let msg_lo = message.to_lowercase();
+                if msg_lo.contains("link")
+                    || msg_lo.contains("runtime")
+                    || msg_lo.contains("ld")
+                    || msg_lo.contains("cc exited")
+                {
+                    eprintln!("SKIP: {message}");
+                    return;
+                }
+                panic!("compile failed: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_output_json_counterexamples_array() {
+        let out = BuildOutput {
+            status: BuildStatus::VerifyFailed {
+                function: "divide".to_string(),
+                description: "y=0".to_string(),
+            },
+            executable: None,
+            diagnostics: vec![],
+            counterexamples: vec![StructuredCounterexample {
+                function: "divide".to_string(),
+                inputs: vec![
+                    ("p0".to_string(), "42".to_string()),
+                    ("p1".to_string(), "0".to_string()),
+                ],
+                violation: "y != 0".to_string(),
+                vow_id: 0,
+                source: Some(CeSource {
+                    file: "test.vow".to_string(),
+                    offset: 50,
+                    length: 6,
+                }),
+            }],
+            verify_status: None,
+            verify_message: None,
+        };
+        out.emit_json();
+    }
+
+    #[test]
+    fn build_output_json_timeout_status() {
+        let out = BuildOutput {
+            status: BuildStatus::VerifyFailed {
+                function: "f".to_string(),
+                description: "verification timed out".to_string(),
+            },
+            executable: None,
+            diagnostics: vec![],
+            counterexamples: vec![],
+            verify_status: Some("timeout".to_string()),
+            verify_message: None,
+        };
+        out.emit_json();
+    }
+
+    #[test]
+    fn build_output_json_error_status() {
+        let out = BuildOutput {
+            status: BuildStatus::VerifyFailed {
+                function: "f".to_string(),
+                description: "esbmc error: segfault".to_string(),
+            },
+            executable: None,
+            diagnostics: vec![],
+            counterexamples: vec![],
+            verify_status: Some("error".to_string()),
+            verify_message: Some("segfault".to_string()),
+        };
+        out.emit_json();
+    }
+
+    #[test]
+    fn format_counterexamples_json_empty() {
+        let json = format_counterexamples_json(&[]);
+        assert_eq!(json, "");
+    }
+
+    #[test]
+    fn format_counterexamples_json_one_entry() {
+        let json = format_counterexamples_json(&[StructuredCounterexample {
+            function: "f".to_string(),
+            inputs: vec![("x".to_string(), "0".to_string())],
+            violation: "x > 0".to_string(),
+            vow_id: 1,
+            source: None,
+        }]);
+        assert!(json.contains("\"function\":\"f\""), "function: {json}");
+        assert!(json.contains("\"x\":\"0\""), "inputs: {json}");
+        assert!(
+            json.contains("\"violation\":\"x > 0\""),
+            "violation: {json}"
+        );
+        assert!(json.contains("\"vow_id\":1"), "vow_id: {json}");
+        assert!(json.contains("\"source\":null"), "source null: {json}");
+    }
+
+    #[test]
+    fn format_counterexamples_json_with_source() {
+        let json = format_counterexamples_json(&[StructuredCounterexample {
+            function: "f".to_string(),
+            inputs: vec![],
+            violation: "result".to_string(),
+            vow_id: 0,
+            source: Some(CeSource {
+                file: "test.vow".to_string(),
+                offset: 10,
+                length: 5,
+            }),
+        }]);
+        assert!(json.contains("\"file\":\"test.vow\""), "file: {json}");
+        assert!(json.contains("\"offset\":10"), "offset: {json}");
+        assert!(json.contains("\"length\":5"), "length: {json}");
     }
 }

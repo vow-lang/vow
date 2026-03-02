@@ -10,9 +10,12 @@ use crate::c_emitter::emit_c_module;
 // Public types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Counterexample {
     pub description: String,
+    pub vow_id: Option<u32>,
+    pub inputs: Vec<(String, String)>,
+    pub raw_output: String,
 }
 
 #[derive(Debug)]
@@ -75,6 +78,84 @@ fn emit_harness(func: &Function) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// ESBMC output parsing
+// ---------------------------------------------------------------------------
+
+pub fn parse_esbmc_output(output: &str) -> Counterexample {
+    let vow_id = extract_vow_id(output);
+    let inputs = extract_variable_assignments(output);
+    let description = output
+        .lines()
+        .find(|l| l.contains("Counterexample") || l.contains("violation") || l.contains("FAILED"))
+        .unwrap_or("unknown counterexample")
+        .to_string();
+
+    Counterexample {
+        description,
+        vow_id,
+        inputs,
+        raw_output: output.to_string(),
+    }
+}
+
+fn extract_vow_id(output: &str) -> Option<u32> {
+    let mut in_violated = false;
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed == "Violated property:" {
+            in_violated = true;
+            continue;
+        }
+        if in_violated
+            && let Some(rest) = trimmed.strip_prefix("vow:")
+            && let Ok(id) = rest.parse::<u32>()
+        {
+            return Some(id);
+        }
+    }
+    None
+}
+
+fn extract_variable_assignments(output: &str) -> Vec<(String, String)> {
+    let mut assignments = Vec::new();
+    let mut in_counterexample = false;
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[Counterexample]" {
+            in_counterexample = true;
+            continue;
+        }
+        if trimmed == "Violated property:" {
+            break;
+        }
+        if !in_counterexample {
+            continue;
+        }
+
+        if let Some((name, value)) = parse_assignment_line(trimmed) {
+            assignments.push((name, value));
+        }
+    }
+    assignments
+}
+
+fn parse_assignment_line(line: &str) -> Option<(String, String)> {
+    let eq_pos = line.find('=')?;
+    let name = line[..eq_pos].trim().to_string();
+    if name.is_empty() || !name.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    let value_part = line[eq_pos + 1..].trim();
+    let value = if let Some(paren_pos) = value_part.find(" (") {
+        value_part[..paren_pos].trim().to_string()
+    } else {
+        value_part.to_string()
+    };
+    Some((name, value))
+}
+
+// ---------------------------------------------------------------------------
 // Verification entry point
 // ---------------------------------------------------------------------------
 
@@ -118,14 +199,7 @@ pub fn verify_function(func: &Function) -> VerificationResult {
     if combined.contains("VERIFICATION SUCCESSFUL") {
         VerificationResult::Proven
     } else if combined.contains("VERIFICATION FAILED") {
-        let desc = combined
-            .lines()
-            .find(|l| {
-                l.contains("Counterexample") || l.contains("violation") || l.contains("FAILED")
-            })
-            .unwrap_or("unknown counterexample")
-            .to_string();
-        VerificationResult::Failed(Counterexample { description: desc })
+        VerificationResult::Failed(parse_esbmc_output(&combined))
     } else if combined.to_lowercase().contains("timeout") {
         VerificationResult::Timeout
     } else {
@@ -263,10 +337,6 @@ mod tests {
 
     #[test]
     fn verify_divide_with_requires() {
-        // fn divide(x: i64, y: i64) -> i64  requires y != 0 { x / y }
-        // With the __ESBMC_assume(y != 0) precondition, ESBMC should prove
-        // no division-by-zero can occur (if div-by-zero checking is enabled).
-        // We at minimum expect Proven or ToolNotFound.
         let func = Function {
             id: FuncId(0),
             name: "divide".to_string(),
@@ -309,5 +379,117 @@ mod tests {
             VerificationResult::Proven | VerificationResult::ToolNotFound => {}
             other => panic!("expected Proven or ToolNotFound, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn verify_trivially_false_has_structured_counterexample() {
+        let func = trivially_false_func();
+        match verify_function(&func) {
+            VerificationResult::Failed(ce) => {
+                assert_eq!(ce.vow_id, Some(0), "vow_id should be 0");
+                assert!(!ce.raw_output.is_empty(), "raw_output should be non-empty");
+            }
+            VerificationResult::ToolNotFound => {
+                eprintln!("SKIP: esbmc not found");
+            }
+            other => panic!("expected Failed or ToolNotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_esbmc_counterexample_output() {
+        let output = "\
+ESBMC version 8.0.0 64-bit x86_64 linux
+Starting Bounded Model Checking
+
+[Counterexample]
+
+
+State 1 file /tmp/test.c line 9 column 3 function divide thread 0
+----------------------------------------------------
+  v1 = 0 (00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000)
+
+State 2 file /tmp/test.c line 11 column 3 function divide thread 0
+----------------------------------------------------
+  v3 = 0
+
+State 3 file /tmp/test.c line 12 column 3 function divide thread 0
+----------------------------------------------------
+Violated property:
+  file /tmp/test.c line 12 column 3 function divide
+  vow:0
+  v3
+
+
+VERIFICATION FAILED";
+
+        let ce = parse_esbmc_output(output);
+        assert_eq!(ce.vow_id, Some(0));
+        assert_eq!(ce.inputs.len(), 2);
+        assert_eq!(ce.inputs[0], ("v1".to_string(), "0".to_string()));
+        assert_eq!(ce.inputs[1], ("v3".to_string(), "0".to_string()));
+        assert!(ce.description.contains("Counterexample"));
+    }
+
+    #[test]
+    fn parse_esbmc_counterexample_with_vow_id_2() {
+        let output = "\
+[Counterexample]
+
+State 1 file /tmp/test.c line 5 column 3 function f thread 0
+----------------------------------------------------
+  v0 = 42
+
+State 2 file /tmp/test.c line 8 column 3 function f thread 0
+----------------------------------------------------
+Violated property:
+  file /tmp/test.c line 8 column 3 function f
+  vow:2
+  v0
+
+
+VERIFICATION FAILED";
+
+        let ce = parse_esbmc_output(output);
+        assert_eq!(ce.vow_id, Some(2));
+        assert_eq!(ce.inputs.len(), 1);
+        assert_eq!(ce.inputs[0], ("v0".to_string(), "42".to_string()));
+    }
+
+    #[test]
+    fn parse_esbmc_no_counterexample_section() {
+        let output = "VERIFICATION FAILED\nsome other error";
+        let ce = parse_esbmc_output(output);
+        assert_eq!(ce.vow_id, None);
+        assert!(ce.inputs.is_empty());
+    }
+
+    #[test]
+    fn parse_assignment_line_basic() {
+        assert_eq!(
+            parse_assignment_line("  v1 = 0"),
+            Some(("v1".to_string(), "0".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_assignment_line_with_binary() {
+        assert_eq!(
+            parse_assignment_line("  v1 = 0 (00000000 00000000)"),
+            Some(("v1".to_string(), "0".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_assignment_line_separator() {
+        assert_eq!(
+            parse_assignment_line("----------------------------------------------------"),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_assignment_line_empty() {
+        assert_eq!(parse_assignment_line(""), None);
     }
 }
