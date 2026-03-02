@@ -180,9 +180,15 @@ fn lex(src: String) -> Vec<Token> {
             let s: String = empty_str();
             while pos < src_len && src.byte_at(pos) != 34 {
                 if src.byte_at(pos) == 92 && pos + 1 < src_len {
-                    s.push_byte(src.byte_at(pos));
                     pos = pos + 1;
-                    s.push_byte(src.byte_at(pos));
+                    let esc: i64 = src.byte_at(pos);
+                    if esc == 110 { s.push_byte(10); }
+                    else if esc == 116 { s.push_byte(9); }
+                    else if esc == 114 { s.push_byte(13); }
+                    else if esc == 92 { s.push_byte(92); }
+                    else if esc == 34 { s.push_byte(34); }
+                    else if esc == 48 { s.push_byte(0); }
+                    else { s.push_byte(92); s.push_byte(esc); }
                     pos = pos + 1;
                 } else {
                     s.push_byte(src.byte_at(pos));

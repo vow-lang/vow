@@ -75,6 +75,33 @@ fn lctx_is_terminated(ctx: LowerCtx) -> bool {
     iop_is_terminal(last.op)
 }
 
+fn lctx_block_terminated(ctx: LowerCtx, block_id: i64) -> bool {
+    let blk: IrBlock = ctx.func.blocks[block_id];
+    let n: i64 = blk.insts.len();
+    if n == 0 { return false; }
+    let last: IrInst = blk.insts[n - 1];
+    iop_is_terminal(last.op)
+}
+
+fn lctx_inst_ty(ctx: LowerCtx, inst_id: i64) -> i64 {
+    let nb: i64 = ctx.func.blocks.len();
+    let mut bi: i64 = 0;
+    while bi < nb {
+        let blk: IrBlock = ctx.func.blocks[bi];
+        let ni: i64 = blk.insts.len();
+        let mut ii: i64 = 0;
+        while ii < ni {
+            let inst: IrInst = blk.insts[ii];
+            if inst.id == inst_id {
+                return inst.ty;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    ITY_I64()
+}
+
 fn lctx_emit(ctx: LowerCtx, op: i64, ty: i64, args: Vec<i64>, dk: i64, dv: i64, dv2: i64, ds: String) -> i64 {
     if lctx_is_terminated(ctx) {
         return ctx.next_inst_id;
@@ -628,6 +655,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
         lctx_switch_to_block(ctx, then_block);
         let then_result: i64 = lower_block(ctx, then_bid);
+        let then_terminated: bool = lctx_is_terminated(ctx);
         let then_exit_block: i64 = ctx.current_block;
 
         let mut_up_then: Vec<i64> = Vec::new();
@@ -663,6 +691,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
             }
         };
+        let else_terminated: bool = lctx_is_terminated(ctx);
         let else_exit_block: i64 = ctx.current_block;
 
         let mut_up_else: Vec<i64> = Vec::new();
@@ -700,8 +729,26 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             mi3 = mi3 + 1;
         }
 
+        if then_terminated && else_terminated {
+            let u_args: Vec<i64> = Vec::new();
+            return lctx_emit(ctx, IOP_UNREACHABLE(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""));
+        }
+        if then_terminated {
+            let phi_args: Vec<i64> = Vec::new();
+            let result_ty: i64 = lctx_inst_ty(ctx, else_result);
+            let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), result_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
+            backpatch_upsilon(ctx, else_exit_block, else_up_id, phi_id);
+            return phi_id;
+        }
+        if else_terminated {
+            let phi_args: Vec<i64> = Vec::new();
+            let result_ty: i64 = lctx_inst_ty(ctx, then_result);
+            let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), result_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
+            backpatch_upsilon(ctx, then_exit_block, then_up_id, phi_id);
+            return phi_id;
+        }
         let phi_args: Vec<i64> = Vec::new();
-        let result_ty: i64 = ITY_I64();
+        let result_ty: i64 = lctx_inst_ty(ctx, then_result);
         let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), result_ty, phi_args, IDATA_NONE(), 0, 0, String::from(""));
         backpatch_upsilon(ctx, then_exit_block, then_up_id, phi_id);
         backpatch_upsilon(ctx, else_exit_block, else_up_id, phi_id);

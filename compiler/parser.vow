@@ -494,8 +494,14 @@ fn tok_to_binop(tag: i64) -> i64 {
     else { BINOP_OR() }
 }
 
+fn is_block_expr(a: AstArena, eid: i64) -> bool {
+    let tag: i64 = expr_tag(a, eid);
+    tag == EXPR_IF() || tag == EXPR_WHILE() || tag == EXPR_MATCH() || tag == EXPR_BLOCK()
+}
+
 fn parse_expr_prec(p: Parser, min_prec: i64) -> i64 {
     let mut lhs: i64 = parse_unary(p);
+    if is_block_expr(p.arena, lhs) { return lhs; }
     let mut prec: i64 = binop_prec(peek_tag(p));
     while prec >= 0 && prec >= min_prec {
         let op_tok: Token = advance(p);

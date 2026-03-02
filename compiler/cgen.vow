@@ -135,7 +135,12 @@ fn escape_str_lit(s: String) -> String {
     let mut i: i64 = 0;
     while i < n {
         let b: i64 = s.byte_at(i);
-        if b == 34 { result.push_str(String::from("\\\"")); }
+        if b == 10 { result.push_byte(92); result.push_byte(110); }
+        else if b == 9 { result.push_byte(92); result.push_byte(116); }
+        else if b == 13 { result.push_byte(92); result.push_byte(114); }
+        else if b == 0 { result.push_byte(92); result.push_byte(48); }
+        else if b == 92 { result.push_byte(92); result.push_byte(92); }
+        else if b == 34 { result.push_byte(92); result.push_byte(34); }
         else { result.push_byte(b); }
         i = i + 1;
     }
