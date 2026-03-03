@@ -1,0 +1,16 @@
+module StringBuild
+
+fn make_greeting() -> String vow {
+  ensures: result.len() > 0
+} {
+  let s: String = String::from("");
+  s.push_byte(72);
+  s.push_byte(105);
+  s
+}
+
+fn main() -> i32 [io] {
+  let s: String = make_greeting();
+  print_i64(s.len());
+  0
+}

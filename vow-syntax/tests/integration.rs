@@ -374,14 +374,14 @@ fn strip_module(m: Module) -> Module {
 }
 
 fn roundtrip(src: &str) {
-    let (ast1, diags1) = parse_module(src);
+    let (ast1, diags1) = parse_module(src, "<test>");
     assert!(
         diags1.is_empty(),
         "parse errors on first parse: {:?}",
         diags1.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
     let printed1 = print_module(&ast1);
-    let (ast2, diags2) = parse_module(&printed1);
+    let (ast2, diags2) = parse_module(&printed1, "<test>");
     assert!(
         diags2.is_empty(),
         "parse errors on second parse: {:?}\nsource was:\n{}",
@@ -458,6 +458,51 @@ pub fn describe(s: Shape) -> i32 {
     match s {
         Shape::Circle => 1,
         Shape::Square => 2,
+    }
+}
+";
+
+#[test]
+fn where_clause_roundtrip() {
+    roundtrip(WHERE_CLAUSE_SOURCE);
+}
+
+const WHERE_CLAUSE_SOURCE: &str = "\
+module WhereTest
+
+fn divide(x: i64, y: i64 where y != 0) -> i64 {
+    x / y
+}
+";
+
+#[test]
+fn where_clause_with_vow_block_roundtrip() {
+    roundtrip(WHERE_CLAUSE_WITH_VOW_SOURCE);
+}
+
+const WHERE_CLAUSE_WITH_VOW_SOURCE: &str = "\
+module WhereVowTest
+
+fn safe_divide(x: i64, y: i64 where y != 0) -> i64 vow {
+    ensures: result * y <= x
+} {
+    x / y
+}
+";
+
+#[test]
+fn multiple_where_clauses_roundtrip() {
+    roundtrip(MULTIPLE_WHERE_SOURCE);
+}
+
+const MULTIPLE_WHERE_SOURCE: &str = "\
+module MultiWhereTest
+
+fn clamp(x: i64 where x >= 0, max: i64 where max > 0) -> i64 {
+    if x > max {
+        max
+    } else {
+        x
     }
 }
 ";

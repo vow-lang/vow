@@ -1,0 +1,13 @@
+module CegisFixed
+
+fn safe_sub(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {
+  requires: a >= b,
+  ensures: result >= 0
+} {
+  a - b
+}
+
+fn main() -> i32 [io] {
+  print_i64(safe_sub(10, 3));
+  0
+}

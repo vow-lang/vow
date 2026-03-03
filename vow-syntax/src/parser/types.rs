@@ -327,7 +327,7 @@ mod tests {
 
     fn parse_type(src: &str) -> Type {
         let tokens = crate::lexer::Lexer::new(src).tokenize().expect("lex error");
-        let mut parser = Parser::new(tokens, String::new());
+        let mut parser = Parser::new(tokens, String::new(), "<test>".to_string());
         let ty = parser.parse_type_inner();
         assert!(
             parser.diagnostics.is_empty(),
@@ -343,7 +343,7 @@ mod tests {
 
     fn parse_pat(src: &str) -> Pat {
         let tokens = crate::lexer::Lexer::new(src).tokenize().expect("lex error");
-        let mut parser = Parser::new(tokens, String::new());
+        let mut parser = Parser::new(tokens, String::new(), "<test>".to_string());
         let pat = parser.parse_pat_inner();
         assert!(
             parser.diagnostics.is_empty(),

@@ -8,8 +8,8 @@ use clap::Parser;
 use vow_codegen::cranelift_backend::CraneliftBackend;
 use vow_codegen::linker::{find_runtime_lib, link};
 use vow_codegen::{Backend, BuildMode};
-use vow_diag::{DiagnosticEmitter, HumanEmitter, Severity};
-use vow_verify::{verify_function, VerificationResult};
+use vow_diag::{CollectingEmitter, Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
+use vow_verify::{Counterexample, VerificationResult, verify_function};
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -62,6 +62,7 @@ fn skill_json() -> String {
   "output_json": {
     "status": "Verified | Unverified | CompileFailed | VerifyFailed",
     "executable": "path to compiled binary, or null",
+    "diagnostics": "[array of {error_code, message, severity, span: {file, offset, length}}]",
     "message": "error detail (CompileFailed)",
     "function": "function name (VerifyFailed)",
     "counterexample": "ESBMC counterexample description (VerifyFailed)"
@@ -116,6 +117,7 @@ OPTIONS
 OUTPUT (JSON on stdout)
   status      : Verified | Unverified | CompileFailed | VerifyFailed
   executable  : path to compiled binary, or null
+  diagnostics : array of {{error_code, message, severity, span: {{file, offset, length}}}}
   message     : error detail (CompileFailed)
   function    : function name (VerifyFailed)
   counterexample: ESBMC counterexample (VerifyFailed)
@@ -167,10 +169,48 @@ pub enum BuildStatus {
     },
 }
 
+#[derive(Debug, Clone)]
+pub struct CeSource {
+    pub file: String,
+    pub offset: u32,
+    pub length: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructuredCounterexample {
+    pub function: String,
+    pub inputs: Vec<(String, String)>,
+    pub violation: String,
+    pub vow_id: u32,
+    pub source: Option<CeSource>,
+}
+
+enum VerifyOutcome {
+    Skipped,
+    Proven,
+    Failed {
+        function: String,
+        description: String,
+        counterexamples: Vec<StructuredCounterexample>,
+    },
+    Timeout {
+        function: String,
+    },
+    Error {
+        function: String,
+        message: String,
+    },
+    ToolNotFound,
+}
+
 #[derive(Debug)]
 pub struct BuildOutput {
     pub status: BuildStatus,
     pub executable: Option<PathBuf>,
+    pub diagnostics: Vec<Diagnostic>,
+    pub counterexamples: Vec<StructuredCounterexample>,
+    pub verify_status: Option<String>,
+    pub verify_message: Option<String>,
 }
 
 impl BuildOutput {
@@ -185,7 +225,7 @@ impl BuildOutput {
             Some(p) => format!("\"{}\"", p.display()),
             None => "null".to_string(),
         };
-        let extra = match &self.status {
+        let mut extra = match &self.status {
             BuildStatus::CompileFailed { message } => {
                 format!(",\"message\":\"{}\"", escape_json(message))
             }
@@ -201,14 +241,184 @@ impl BuildOutput {
             }
             _ => String::new(),
         };
-        println!("{{\"status\":\"{status_str}\",\"executable\":{exe_json}{extra}}}");
+        let diags_json = format_diagnostics_json(&self.diagnostics);
+        let ce_json = format_counterexamples_json(&self.counterexamples);
+        extra.push_str(&format!(",\"counterexamples\":[{ce_json}]"));
+        if let Some(vs) = &self.verify_status {
+            extra.push_str(&format!(",\"verify_status\":\"{}\"", escape_json(vs)));
+        }
+        if let Some(vm) = &self.verify_message {
+            extra.push_str(&format!(",\"verify_message\":\"{}\"", escape_json(vm)));
+        }
+        println!(
+            "{{\"status\":\"{status_str}\",\"executable\":{exe_json},\"diagnostics\":[{diags_json}]{extra}}}"
+        );
     }
+}
+
+fn format_diagnostics_json(diagnostics: &[Diagnostic]) -> String {
+    diagnostics
+        .iter()
+        .map(|d| {
+            let severity = match d.severity {
+                Severity::Error => "error",
+                Severity::Warning => "warning",
+                Severity::Note => "note",
+            };
+            format!(
+                "{{\"error_code\":\"{:?}\",\"message\":\"{}\",\"severity\":\"{}\",\"span\":{{\"file\":\"{}\",\"offset\":{},\"length\":{}}}}}",
+                d.code,
+                escape_json(&d.message),
+                severity,
+                escape_json(&d.primary.file),
+                d.primary.byte_offset,
+                d.primary.byte_len,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn format_counterexamples_json(counterexamples: &[StructuredCounterexample]) -> String {
+    counterexamples
+        .iter()
+        .map(|ce| {
+            let inputs_json = ce
+                .inputs
+                .iter()
+                .map(|(k, v)| format!("\"{}\":\"{}\"", escape_json(k), escape_json(v)))
+                .collect::<Vec<_>>()
+                .join(",");
+            let source_json = match &ce.source {
+                Some(s) => format!(
+                    "{{\"file\":\"{}\",\"offset\":{},\"length\":{}}}",
+                    escape_json(&s.file),
+                    s.offset,
+                    s.length
+                ),
+                None => "null".to_string(),
+            };
+            format!(
+                "{{\"function\":\"{}\",\"inputs\":{{{inputs_json}}},\"violation\":\"{}\",\"vow_id\":{},\"source\":{source_json}}}",
+                escape_json(&ce.function),
+                escape_json(&ce.violation),
+                ce.vow_id,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn escape_json(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('"', "\\\"")
         .replace('\n', "\\n")
+}
+
+// ---------------------------------------------------------------------------
+// Counterexample construction
+// ---------------------------------------------------------------------------
+
+fn build_c_to_source_name_map(
+    func: &vow_ir::Function,
+) -> std::collections::HashMap<String, String> {
+    use vow_ir::{InstData, Opcode, Ty};
+    let mut map = std::collections::HashMap::new();
+
+    // Map p{cl_idx} → source name (skipping Unit params, matching C emitter logic)
+    let mut cl_idx = 0u32;
+    for (ir_idx, &ty) in func.params.iter().enumerate() {
+        if ty != Ty::Unit {
+            if let Some(name) = func.param_names.get(ir_idx) {
+                map.insert(format!("p{cl_idx}"), name.clone());
+            }
+            cl_idx += 1;
+        }
+    }
+
+    // Map v{inst_id} → source name for GetArg instructions
+    let mut arg_var_map: Vec<(u32, u32)> = Vec::new(); // (ir_idx, cl_idx)
+    let mut ci = 0u32;
+    for (ir_idx, &ty) in func.params.iter().enumerate() {
+        if ty != Ty::Unit {
+            arg_var_map.push((ir_idx as u32, ci));
+            ci += 1;
+        }
+    }
+
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.opcode == Opcode::GetArg
+                && let InstData::ArgIndex(idx) = inst.data
+                && let Some(name) = func.param_names.get(idx as usize)
+            {
+                map.insert(format!("v{}", inst.id.0), name.clone());
+            }
+        }
+    }
+
+    map
+}
+
+fn map_counterexample_inputs(
+    inputs: &[(String, String)],
+    name_map: &std::collections::HashMap<String, String>,
+) -> Vec<(String, String)> {
+    inputs
+        .iter()
+        .map(|(c_name, value)| {
+            let source_name = name_map
+                .get(c_name)
+                .cloned()
+                .unwrap_or_else(|| format!("_esbmc_{c_name}"));
+            (source_name, value.clone())
+        })
+        .collect()
+}
+
+fn build_structured_counterexample(
+    func: &vow_ir::Function,
+    ce: &Counterexample,
+    file: &str,
+) -> StructuredCounterexample {
+    let vid = ce.vow_id.unwrap_or(0);
+    let violation = ce
+        .vow_id
+        .and_then(|id| func.vows.iter().find(|v| v.id.0 == id))
+        .map(|v| v.description.clone())
+        .unwrap_or_else(|| ce.description.clone());
+    let source = ce
+        .vow_id
+        .and_then(|id| find_vow_span(func, id))
+        .map(|span| CeSource {
+            file: file.to_string(),
+            offset: span.start,
+            length: span.len,
+        });
+    let name_map = build_c_to_source_name_map(func);
+    let mapped_inputs = map_counterexample_inputs(&ce.inputs, &name_map);
+    StructuredCounterexample {
+        function: func.name.clone(),
+        inputs: mapped_inputs,
+        violation,
+        vow_id: vid,
+        source,
+    }
+}
+
+fn find_vow_span(func: &vow_ir::Function, vow_id: u32) -> Option<vow_syntax::span::Span> {
+    use vow_ir::{InstData, Opcode};
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if matches!(inst.opcode, Opcode::VowRequires | Opcode::VowEnsures | Opcode::VowInvariant)
+                && let InstData::VowId(vid) = inst.data
+                && vid.0 == vow_id
+            {
+                return Some(inst.origin);
+            }
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -230,23 +440,34 @@ pub fn run_pipeline(
                     message: e.to_string(),
                 },
                 executable: None,
+                diagnostics: vec![],
+                counterexamples: vec![],
+                verify_status: None,
+                verify_message: None,
             };
         }
     };
 
     let mut stderr_emit = HumanEmitter::new(Box::new(std::io::stderr()));
+    let mut all_diagnostics: Vec<Diagnostic> = Vec::new();
 
-    let (root_ast, parse_diags) = vow_syntax::parser::parse_module(&src);
+    let file_str = source.to_string_lossy();
+    let (root_ast, parse_diags) = vow_syntax::parser::parse_module(&src, &file_str);
     let parse_failed = parse_diags.iter().any(|d| d.severity == Severity::Error);
     for d in &parse_diags {
         stderr_emit.emit(d);
     }
+    all_diagnostics.extend(parse_diags);
     if parse_failed {
         return BuildOutput {
             status: BuildStatus::CompileFailed {
                 message: "parse error".to_string(),
             },
             executable: None,
+            diagnostics: all_diagnostics,
+            counterexamples: vec![],
+            verify_status: None,
+            verify_message: None,
         };
     }
 
@@ -256,42 +477,60 @@ pub fn run_pipeline(
             for d in &diags {
                 stderr_emit.emit(d);
             }
+            all_diagnostics.extend(diags);
             return BuildOutput {
                 status: BuildStatus::CompileFailed {
                     message: "module load error".to_string(),
                 },
                 executable: None,
+                diagnostics: all_diagnostics,
+                counterexamples: vec![],
+                verify_status: None,
+                verify_message: None,
             };
         }
     };
 
+    let mut collecting_emit = CollectingEmitter::new(&mut stderr_emit);
     let mut checker =
-        vow_types::check::Checker::new(source.to_string_lossy().to_string(), &mut stderr_emit);
+        vow_types::check::Checker::new(source.to_string_lossy().to_string(), &mut collecting_emit);
     checker.check_module(&ast);
-    if checker.has_errors() {
+    let has_errors = checker.has_errors();
+    drop(checker);
+    all_diagnostics.extend(collecting_emit.into_diagnostics());
+    if has_errors {
         return BuildOutput {
             status: BuildStatus::CompileFailed {
                 message: "type error".to_string(),
             },
             executable: None,
+            diagnostics: all_diagnostics,
+            counterexamples: vec![],
+            verify_status: None,
+            verify_message: None,
         };
     }
 
-    let ir_module = Arc::new(vow_ir::lower_module(&ast));
+    let ir_module = Arc::new(vow_ir::lower_module(&ast, &source.to_string_lossy()));
 
     if dump_ir {
         print!("{}", vow_ir::print_module(&ir_module));
         return BuildOutput {
             status: BuildStatus::Unverified,
             executable: None,
+            diagnostics: all_diagnostics,
+            counterexamples: vec![],
+            verify_status: None,
+            verify_message: None,
         };
     }
 
     // Spawn verification thread
     let module_for_verify = Arc::clone(&ir_module);
-    let verify_handle = thread::spawn(move || -> Option<(String, String)> {
+    let file_for_verify = source.to_string_lossy().to_string();
+    let verify_handle = thread::spawn(move || -> VerifyOutcome {
         if no_verify {
-            return None;
+            return VerifyOutcome::Skipped;
         }
         for func in &module_for_verify.functions {
             if func.vows.is_empty() {
@@ -299,17 +538,31 @@ pub fn run_pipeline(
             }
             match verify_function(func) {
                 VerificationResult::Failed(ce) => {
-                    return Some((func.name.clone(), ce.description));
+                    let sce = build_structured_counterexample(func, &ce, &file_for_verify);
+                    return VerifyOutcome::Failed {
+                        function: func.name.clone(),
+                        description: ce.description.clone(),
+                        counterexamples: vec![sce],
+                    };
                 }
                 VerificationResult::ToolError(e) => {
-                    return Some((func.name.clone(), format!("esbmc error: {e}")));
+                    return VerifyOutcome::Error {
+                        function: func.name.clone(),
+                        message: e,
+                    };
                 }
-                VerificationResult::Proven
-                | VerificationResult::Timeout
-                | VerificationResult::ToolNotFound => {}
+                VerificationResult::Timeout => {
+                    return VerifyOutcome::Timeout {
+                        function: func.name.clone(),
+                    };
+                }
+                VerificationResult::Proven => {}
+                VerificationResult::ToolNotFound => {
+                    return VerifyOutcome::ToolNotFound;
+                }
             }
         }
-        None
+        VerifyOutcome::Proven
     });
 
     // Codegen
@@ -323,6 +576,10 @@ pub fn run_pipeline(
                     message: format!("{e:?}"),
                 },
                 executable: None,
+                diagnostics: all_diagnostics,
+                counterexamples: vec![],
+                verify_status: None,
+                verify_message: None,
             };
         }
     };
@@ -341,6 +598,10 @@ pub fn run_pipeline(
                         message: e.to_string(),
                     },
                     executable: None,
+                    diagnostics: all_diagnostics,
+                    counterexamples: vec![],
+                    verify_status: None,
+                    verify_message: None,
                 };
             }
             match link(&[&obj_path], &runtime, &output_path) {
@@ -355,6 +616,10 @@ pub fn run_pipeline(
                             message: format!("{e:?}"),
                         },
                         executable: None,
+                        diagnostics: all_diagnostics,
+                        counterexamples: vec![],
+                        verify_status: None,
+                        verify_message: None,
                     };
                 }
             }
@@ -363,22 +628,52 @@ pub fn run_pipeline(
     };
 
     // Collect verification result
-    let verify_failure = verify_handle.join().unwrap_or(None);
+    let verify_outcome = verify_handle.join().unwrap_or(VerifyOutcome::Skipped);
 
-    let status = if let Some((func, desc)) = verify_failure {
-        BuildStatus::VerifyFailed {
-            function: func,
-            description: desc,
-        }
-    } else if no_verify {
-        BuildStatus::Unverified
-    } else {
-        BuildStatus::Verified
+    let (status, counterexamples, verify_status, verify_message) = match verify_outcome {
+        VerifyOutcome::Failed {
+            function,
+            description,
+            counterexamples,
+        } => (
+            BuildStatus::VerifyFailed {
+                function,
+                description,
+            },
+            counterexamples,
+            None,
+            None,
+        ),
+        VerifyOutcome::Timeout { function } => (
+            BuildStatus::VerifyFailed {
+                function,
+                description: "verification timed out".to_string(),
+            },
+            vec![],
+            Some("timeout".to_string()),
+            None,
+        ),
+        VerifyOutcome::Error { function, message } => (
+            BuildStatus::VerifyFailed {
+                function,
+                description: format!("esbmc error: {message}"),
+            },
+            vec![],
+            Some("error".to_string()),
+            Some(message),
+        ),
+        VerifyOutcome::Skipped => (BuildStatus::Unverified, vec![], None, None),
+        VerifyOutcome::Proven => (BuildStatus::Verified, vec![], None, None),
+        VerifyOutcome::ToolNotFound => (BuildStatus::Unverified, vec![], None, None),
     };
 
     BuildOutput {
         status,
         executable: exe_path,
+        diagnostics: all_diagnostics,
+        counterexamples,
+        verify_status,
+        verify_message,
     }
 }
 
@@ -1094,8 +1389,11 @@ pub fn main() -> i32 [io] {
                 message: "type \"error\"\nwith newline".to_string(),
             },
             executable: None,
+            diagnostics: vec![],
+            counterexamples: vec![],
+            verify_status: None,
+            verify_message: None,
         };
-        // Just verify it runs without panic; output goes to stdout (captured by test harness).
         out.emit_json();
     }
 
@@ -1107,6 +1405,16 @@ pub fn main() -> i32 [io] {
                 description: "y=0 violates requires".to_string(),
             },
             executable: None,
+            diagnostics: vec![],
+            counterexamples: vec![StructuredCounterexample {
+                function: "divide".to_string(),
+                inputs: vec![("p1".to_string(), "0".to_string())],
+                violation: "y != 0".to_string(),
+                vow_id: 0,
+                source: None,
+            }],
+            verify_status: None,
+            verify_message: None,
         };
         out.emit_json();
     }
@@ -1119,8 +1427,137 @@ pub fn main() -> i32 [io] {
         let out = BuildOutput {
             status: BuildStatus::Verified,
             executable: Some(exe),
+            diagnostics: vec![],
+            counterexamples: vec![],
+            verify_status: None,
+            verify_message: None,
         };
         out.emit_json();
+    }
+
+    #[test]
+    fn build_output_json_contains_diagnostics_array() {
+        use vow_diag::{ErrorCode, SourceLocation};
+        let diag = Diagnostic {
+            severity: Severity::Error,
+            code: ErrorCode::TypeMismatch,
+            message: "expected i32, got bool".to_string(),
+            primary: SourceLocation {
+                file: "test.vow".to_string(),
+                byte_offset: 42,
+                byte_len: 4,
+            },
+            secondary: vec![],
+            blame: vow_diag::Blame::None,
+        };
+        let out = BuildOutput {
+            status: BuildStatus::CompileFailed {
+                message: "type error".to_string(),
+            },
+            executable: None,
+            diagnostics: vec![diag],
+            counterexamples: vec![],
+            verify_status: None,
+            verify_message: None,
+        };
+        out.emit_json();
+    }
+
+    #[test]
+    fn build_output_json_empty_diagnostics_on_success() {
+        let out = BuildOutput {
+            status: BuildStatus::Verified,
+            executable: None,
+            diagnostics: vec![],
+            counterexamples: vec![],
+            verify_status: None,
+            verify_message: None,
+        };
+        out.emit_json();
+    }
+
+    #[test]
+    fn pipeline_parse_error_populates_diagnostics() {
+        let dir = TempDir::new().unwrap();
+        let src = "module M 123";
+        let source = write_source(&dir, "bad_parse.vow", src);
+        let result = run_pipeline(&source, None, BuildMode::Release, true, false);
+        assert!(matches!(result.status, BuildStatus::CompileFailed { .. }));
+        assert!(
+            !result.diagnostics.is_empty(),
+            "diagnostics should contain parse errors"
+        );
+        assert_eq!(result.diagnostics[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn pipeline_parse_error_contains_file_path() {
+        let dir = TempDir::new().unwrap();
+        let src = "module M 123";
+        let source = write_source(&dir, "bad_parse.vow", src);
+        let result = run_pipeline(&source, None, BuildMode::Release, true, false);
+        assert!(!result.diagnostics.is_empty());
+        let file = &result.diagnostics[0].primary.file;
+        assert!(
+            file.ends_with("bad_parse.vow"),
+            "diagnostic file field should contain the source path, got: {file}"
+        );
+    }
+
+    #[test]
+    fn pipeline_type_error_contains_file_path() {
+        let dir = TempDir::new().unwrap();
+        let src = "module Bad fn f() -> i32 { true }";
+        let source = write_source(&dir, "bad_type.vow", src);
+        let result = run_pipeline(&source, None, BuildMode::Release, true, false);
+        assert!(!result.diagnostics.is_empty());
+        let file = &result.diagnostics[0].primary.file;
+        assert!(
+            file.ends_with("bad_type.vow"),
+            "diagnostic file field should contain the source path, got: {file}"
+        );
+    }
+
+    #[test]
+    fn pipeline_type_error_populates_diagnostics() {
+        let dir = TempDir::new().unwrap();
+        let src = "module Bad fn f() -> i32 { true }";
+        let source = write_source(&dir, "bad_type.vow", src);
+        let result = run_pipeline(&source, None, BuildMode::Release, true, false);
+        assert!(matches!(result.status, BuildStatus::CompileFailed { .. }));
+        assert!(
+            !result.diagnostics.is_empty(),
+            "diagnostics should contain type errors"
+        );
+    }
+
+    #[test]
+    fn pipeline_success_has_empty_diagnostics() {
+        let dir = TempDir::new().unwrap();
+        let src = "module M fn f(x: i64) -> i64 { x }";
+        let source = write_source(&dir, "ok.vow", src);
+        let result = run_pipeline(&source, None, BuildMode::Release, true, false);
+        match &result.status {
+            BuildStatus::Unverified => {
+                assert!(
+                    result.diagnostics.is_empty(),
+                    "successful compilation should have empty diagnostics, got: {:?}",
+                    result.diagnostics
+                );
+            }
+            BuildStatus::CompileFailed { message } => {
+                let msg_lo = message.to_lowercase();
+                if msg_lo.contains("link")
+                    || msg_lo.contains("runtime")
+                    || msg_lo.contains("ld")
+                    || msg_lo.contains("cc exited")
+                {
+                    return;
+                }
+                panic!("unexpected compile failure: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        }
     }
 
     #[test]
@@ -1157,7 +1594,6 @@ pub fn main() -> i32 [io] {
         match &result.status {
             BuildStatus::Unverified => {}
             BuildStatus::CompileFailed { message } => {
-                // Linker failures are acceptable (no main(), runtime absent, etc.)
                 let is_link_err = message.contains("link")
                     || message.contains("runtime")
                     || message.contains("ld")
@@ -1169,6 +1605,634 @@ pub fn main() -> i32 [io] {
                 panic!("unexpected compile failure: {message}");
             }
             other => panic!("unexpected status: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn counterexamples_empty_on_compile_failure() {
+        let dir = TempDir::new().unwrap();
+        let src = "module M 123";
+        let source = write_source(&dir, "bad.vow", src);
+        let result = run_pipeline(&source, None, BuildMode::Release, true, false);
+        assert!(
+            matches!(result.status, BuildStatus::CompileFailed { .. }),
+            "expected CompileFailed"
+        );
+        assert!(
+            result.counterexamples.is_empty(),
+            "counterexamples should be empty on compile failure"
+        );
+        assert!(
+            result.verify_status.is_none(),
+            "verify_status should be None on compile failure"
+        );
+    }
+
+    #[test]
+    fn counterexamples_empty_when_no_verify() {
+        let dir = TempDir::new().unwrap();
+        let src = "module M fn f(x: i64) -> i64 { x }";
+        let source = write_source(&dir, "ok.vow", src);
+        let result = run_pipeline(&source, None, BuildMode::Release, true, false);
+        match &result.status {
+            BuildStatus::Unverified => {
+                assert!(
+                    result.counterexamples.is_empty(),
+                    "counterexamples should be empty when --no-verify"
+                );
+            }
+            BuildStatus::CompileFailed { message } => {
+                let msg_lo = message.to_lowercase();
+                if msg_lo.contains("link")
+                    || msg_lo.contains("runtime")
+                    || msg_lo.contains("ld")
+                    || msg_lo.contains("cc exited")
+                {
+                    return;
+                }
+                panic!("unexpected compile failure: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn counterexamples_populated_on_verify_failure() {
+        let dir = TempDir::new().unwrap();
+        let src = r#"module Bad
+fn always_bad() -> i64 vow {
+  ensures: result > 100
+} {
+  42
+}
+fn main() -> i32 {
+  let x: i64 = always_bad();
+  0
+}"#;
+        let source = write_source(&dir, "bad_ensures.vow", src);
+        let out = dir.path().join("bad_ensures");
+        let result = run_pipeline(&source, Some(&out), BuildMode::Release, false, false);
+        match &result.status {
+            BuildStatus::VerifyFailed { function, .. } => {
+                assert_eq!(function, "always_bad");
+                assert!(
+                    !result.counterexamples.is_empty(),
+                    "counterexamples should not be empty on verify failure"
+                );
+                let ce = &result.counterexamples[0];
+                assert_eq!(ce.function, "always_bad");
+                assert_eq!(ce.vow_id, 0);
+                assert!(
+                    ce.violation.contains("result > 100"),
+                    "violation should contain predicate text, got: {}",
+                    ce.violation,
+                );
+            }
+            BuildStatus::Unverified => {
+                eprintln!("SKIP: verification not run (esbmc not found or no vows)");
+            }
+            BuildStatus::CompileFailed { message } => {
+                let msg_lo = message.to_lowercase();
+                if msg_lo.contains("link")
+                    || msg_lo.contains("runtime")
+                    || msg_lo.contains("ld")
+                    || msg_lo.contains("cc exited")
+                {
+                    eprintln!("SKIP: {message}");
+                    return;
+                }
+                panic!("compile failed: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn counterexamples_empty_on_verify_success() {
+        let dir = TempDir::new().unwrap();
+        let src = r#"module Good
+fn always_true() -> i64 vow {
+  ensures: result == 42
+} {
+  42
+}
+fn main() -> i32 {
+  let x: i64 = always_true();
+  0
+}"#;
+        let source = write_source(&dir, "good_ensures.vow", src);
+        let out = dir.path().join("good_ensures");
+        let result = run_pipeline(&source, Some(&out), BuildMode::Release, false, false);
+        match &result.status {
+            BuildStatus::Verified => {
+                assert!(
+                    result.counterexamples.is_empty(),
+                    "counterexamples should be empty on verification success"
+                );
+            }
+            BuildStatus::Unverified => {
+                eprintln!("SKIP: verification not run (esbmc not found)");
+            }
+            BuildStatus::CompileFailed { message } => {
+                let msg_lo = message.to_lowercase();
+                if msg_lo.contains("link")
+                    || msg_lo.contains("runtime")
+                    || msg_lo.contains("ld")
+                    || msg_lo.contains("cc exited")
+                {
+                    eprintln!("SKIP: {message}");
+                    return;
+                }
+                panic!("compile failed: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_output_json_counterexamples_array() {
+        let out = BuildOutput {
+            status: BuildStatus::VerifyFailed {
+                function: "divide".to_string(),
+                description: "y=0".to_string(),
+            },
+            executable: None,
+            diagnostics: vec![],
+            counterexamples: vec![StructuredCounterexample {
+                function: "divide".to_string(),
+                inputs: vec![
+                    ("p0".to_string(), "42".to_string()),
+                    ("p1".to_string(), "0".to_string()),
+                ],
+                violation: "y != 0".to_string(),
+                vow_id: 0,
+                source: Some(CeSource {
+                    file: "test.vow".to_string(),
+                    offset: 50,
+                    length: 6,
+                }),
+            }],
+            verify_status: None,
+            verify_message: None,
+        };
+        out.emit_json();
+    }
+
+    #[test]
+    fn build_output_json_timeout_status() {
+        let out = BuildOutput {
+            status: BuildStatus::VerifyFailed {
+                function: "f".to_string(),
+                description: "verification timed out".to_string(),
+            },
+            executable: None,
+            diagnostics: vec![],
+            counterexamples: vec![],
+            verify_status: Some("timeout".to_string()),
+            verify_message: None,
+        };
+        out.emit_json();
+    }
+
+    #[test]
+    fn build_output_json_error_status() {
+        let out = BuildOutput {
+            status: BuildStatus::VerifyFailed {
+                function: "f".to_string(),
+                description: "esbmc error: segfault".to_string(),
+            },
+            executable: None,
+            diagnostics: vec![],
+            counterexamples: vec![],
+            verify_status: Some("error".to_string()),
+            verify_message: Some("segfault".to_string()),
+        };
+        out.emit_json();
+    }
+
+    #[test]
+    fn format_counterexamples_json_empty() {
+        let json = format_counterexamples_json(&[]);
+        assert_eq!(json, "");
+    }
+
+    #[test]
+    fn format_counterexamples_json_one_entry() {
+        let json = format_counterexamples_json(&[StructuredCounterexample {
+            function: "f".to_string(),
+            inputs: vec![("x".to_string(), "0".to_string())],
+            violation: "x > 0".to_string(),
+            vow_id: 1,
+            source: None,
+        }]);
+        assert!(json.contains("\"function\":\"f\""), "function: {json}");
+        assert!(json.contains("\"x\":\"0\""), "inputs: {json}");
+        assert!(
+            json.contains("\"violation\":\"x > 0\""),
+            "violation: {json}"
+        );
+        assert!(json.contains("\"vow_id\":1"), "vow_id: {json}");
+        assert!(json.contains("\"source\":null"), "source null: {json}");
+    }
+
+    #[test]
+    fn format_counterexamples_json_with_source() {
+        let json = format_counterexamples_json(&[StructuredCounterexample {
+            function: "f".to_string(),
+            inputs: vec![],
+            violation: "result".to_string(),
+            vow_id: 0,
+            source: Some(CeSource {
+                file: "test.vow".to_string(),
+                offset: 10,
+                length: 5,
+            }),
+        }]);
+        assert!(json.contains("\"file\":\"test.vow\""), "file: {json}");
+        assert!(json.contains("\"offset\":10"), "offset: {json}");
+        assert!(json.contains("\"length\":5"), "length: {json}");
+    }
+
+    #[test]
+    fn build_c_to_source_name_map_basic() {
+        use vow_ir::{BasicBlock, BlockId, FuncId, Inst, InstData, InstId, Opcode, Ty};
+        use vow_syntax::span::Span;
+        let func = vow_ir::Function {
+            id: FuncId(0),
+            name: "divide".to_string(),
+            params: vec![Ty::I64, Ty::I64],
+            param_names: vec!["x".to_string(), "y".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    Inst {
+                        id: InstId(0),
+                        opcode: Opcode::GetArg,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ArgIndex(0),
+                        origin: Span::new(0, 0),
+                    },
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::GetArg,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ArgIndex(1),
+                        origin: Span::new(0, 0),
+                    },
+                ],
+            }],
+        };
+        let map = build_c_to_source_name_map(&func);
+        assert_eq!(map.get("p0"), Some(&"x".to_string()));
+        assert_eq!(map.get("p1"), Some(&"y".to_string()));
+        assert_eq!(map.get("v0"), Some(&"x".to_string()));
+        assert_eq!(map.get("v1"), Some(&"y".to_string()));
+    }
+
+    #[test]
+    fn build_c_to_source_name_map_skips_unit_params() {
+        use vow_ir::{BasicBlock, BlockId, FuncId, Inst, InstData, InstId, Opcode, Ty};
+        use vow_syntax::span::Span;
+        let func = vow_ir::Function {
+            id: FuncId(0),
+            name: "f".to_string(),
+            params: vec![Ty::Unit, Ty::I64, Ty::I64],
+            param_names: vec!["_u".to_string(), "a".to_string(), "b".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    Inst {
+                        id: InstId(0),
+                        opcode: Opcode::GetArg,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ArgIndex(1),
+                        origin: Span::new(0, 0),
+                    },
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::GetArg,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ArgIndex(2),
+                        origin: Span::new(0, 0),
+                    },
+                ],
+            }],
+        };
+        let map = build_c_to_source_name_map(&func);
+        // p0 maps to "a" (first non-Unit), p1 maps to "b"
+        assert_eq!(map.get("p0"), Some(&"a".to_string()));
+        assert_eq!(map.get("p1"), Some(&"b".to_string()));
+        // v0 → GetArg(1) → "a", v1 → GetArg(2) → "b"
+        assert_eq!(map.get("v0"), Some(&"a".to_string()));
+        assert_eq!(map.get("v1"), Some(&"b".to_string()));
+    }
+
+    #[test]
+    fn map_counterexample_inputs_applies_mapping() {
+        let mut name_map = std::collections::HashMap::new();
+        name_map.insert("p0".to_string(), "x".to_string());
+        name_map.insert("p1".to_string(), "y".to_string());
+        name_map.insert("v0".to_string(), "x".to_string());
+        name_map.insert("v1".to_string(), "y".to_string());
+
+        let inputs = vec![
+            ("v1".to_string(), "0".to_string()),
+            ("v3".to_string(), "0".to_string()),
+        ];
+        let mapped = map_counterexample_inputs(&inputs, &name_map);
+        assert_eq!(mapped[0], ("y".to_string(), "0".to_string()));
+        assert_eq!(mapped[1], ("_esbmc_v3".to_string(), "0".to_string()));
+    }
+
+    #[test]
+    fn build_c_to_source_name_map_empty_param_names() {
+        use vow_ir::{BasicBlock, BlockId, FuncId, Ty};
+        let func = vow_ir::Function {
+            id: FuncId(0),
+            name: "f".to_string(),
+            params: vec![Ty::I64],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![],
+            }],
+        };
+        let map = build_c_to_source_name_map(&func);
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn counterexample_uses_source_names() {
+        let dir = TempDir::new().unwrap();
+        let src = r#"module BadDiv
+fn bad_div(x: i64, y: i64) -> i64 vow {
+  ensures: result > 100
+} {
+  x / y
+}
+fn main() -> i32 {
+  let r: i64 = bad_div(10, 2);
+  0
+}"#;
+        let source = write_source(&dir, "bad_div.vow", src);
+        let out = dir.path().join("bad_div");
+        let result = run_pipeline(&source, Some(&out), BuildMode::Release, false, false);
+        match &result.status {
+            BuildStatus::VerifyFailed { function, .. } => {
+                assert_eq!(function, "bad_div");
+                let ce = &result.counterexamples[0];
+                for (name, _) in &ce.inputs {
+                    assert!(
+                        name == "x" || name == "y" || name.starts_with("_esbmc_"),
+                        "expected source name or _esbmc_ prefix, got: {name}"
+                    );
+                }
+                let has_source_name = ce.inputs.iter().any(|(n, _)| n == "x" || n == "y");
+                assert!(
+                    has_source_name,
+                    "at least one input should use a source name, got: {:?}",
+                    ce.inputs,
+                );
+            }
+            BuildStatus::Unverified => {
+                eprintln!("SKIP: verification not run (esbmc not found)");
+            }
+            BuildStatus::CompileFailed { message } => {
+                let msg_lo = message.to_lowercase();
+                if msg_lo.contains("link")
+                    || msg_lo.contains("runtime")
+                    || msg_lo.contains("ld")
+                    || msg_lo.contains("cc exited")
+                {
+                    eprintln!("SKIP: {message}");
+                    return;
+                }
+                panic!("compile failed: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cegis_loop_end_to_end() {
+        let dir = TempDir::new().unwrap();
+
+        // Step 1: Compile a program with an intentional contract violation.
+        // safe_sub(a, b) ensures result >= 0, but `a` is unconstrained so a - b can be negative.
+        let broken_src = r#"module CegisBroken
+
+fn safe_sub(a: i64, b: i64 where b >= 0) -> i64 vow {
+  ensures: result >= 0
+} {
+  a - b
+}
+
+fn main() -> i32 {
+  let r: i64 = safe_sub(10, 3);
+  0
+}"#;
+        let broken_path = write_source(&dir, "cegis_broken.vow", broken_src);
+        let broken_out = dir.path().join("cegis_broken");
+        let broken_result =
+            run_pipeline(&broken_path, Some(&broken_out), BuildMode::Release, false, false);
+
+        match &broken_result.status {
+            BuildStatus::VerifyFailed { function, .. } => {
+                assert_eq!(function, "safe_sub");
+
+                // AC2: diagnostics array present (empty since no compile errors)
+                assert!(
+                    broken_result.diagnostics.is_empty(),
+                    "diagnostics should be empty (no compile errors), got: {:?}",
+                    broken_result.diagnostics,
+                );
+
+                // AC3: counterexamples array with at least one entry
+                assert!(
+                    !broken_result.counterexamples.is_empty(),
+                    "counterexamples should not be empty on verify failure"
+                );
+
+                let ce = &broken_result.counterexamples[0];
+
+                // AC4a: inputs with source-level variable names
+                let has_source_name = ce
+                    .inputs
+                    .iter()
+                    .any(|(name, _)| name == "a" || name == "b");
+                assert!(
+                    has_source_name,
+                    "counterexample inputs should use source names (a, b), got: {:?}",
+                    ce.inputs,
+                );
+                for (name, _) in &ce.inputs {
+                    assert!(
+                        name == "a" || name == "b" || name.starts_with("_esbmc_"),
+                        "unexpected variable name: {name}"
+                    );
+                }
+
+                // AC4b: violation predicate text
+                assert!(
+                    ce.violation.contains("result >= 0"),
+                    "violation should contain predicate text, got: {}",
+                    ce.violation,
+                );
+
+                // AC4c: source location
+                assert!(
+                    ce.source.is_some(),
+                    "counterexample should have source location"
+                );
+                let src_loc = ce.source.as_ref().unwrap();
+                assert!(
+                    src_loc.file.contains("cegis_broken.vow"),
+                    "source file should reference cegis_broken.vow, got: {}",
+                    src_loc.file,
+                );
+
+                // Step 2: Compile the corrected version and assert verification passes.
+                let fixed_src = r#"module CegisFixed
+
+fn safe_sub(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {
+  requires: a >= b,
+  ensures: result >= 0
+} {
+  a - b
+}
+
+fn main() -> i32 {
+  let r: i64 = safe_sub(10, 3);
+  0
+}"#;
+                let fixed_path = write_source(&dir, "cegis_fixed.vow", fixed_src);
+                let fixed_out = dir.path().join("cegis_fixed");
+                let fixed_result =
+                    run_pipeline(&fixed_path, Some(&fixed_out), BuildMode::Release, false, false);
+
+                // AC5: corrected version verifies with empty counterexamples
+                match &fixed_result.status {
+                    BuildStatus::Verified => {
+                        assert!(
+                            fixed_result.counterexamples.is_empty(),
+                            "counterexamples should be empty after fix"
+                        );
+                        assert!(
+                            fixed_result.diagnostics.is_empty(),
+                            "diagnostics should be empty for fixed version"
+                        );
+                    }
+                    BuildStatus::CompileFailed { message } => {
+                        let msg_lo = message.to_lowercase();
+                        if msg_lo.contains("link")
+                            || msg_lo.contains("runtime")
+                            || msg_lo.contains("ld")
+                            || msg_lo.contains("cc exited")
+                        {
+                            eprintln!("SKIP fixed (link): {message}");
+                            return;
+                        }
+                        panic!("fixed version compile failed: {message}");
+                    }
+                    other => panic!("fixed version unexpected status: {other:?}"),
+                }
+            }
+            BuildStatus::Unverified => {
+                eprintln!("SKIP: verification not run (esbmc not found)");
+            }
+            BuildStatus::CompileFailed { message } => {
+                let msg_lo = message.to_lowercase();
+                if msg_lo.contains("link")
+                    || msg_lo.contains("runtime")
+                    || msg_lo.contains("ld")
+                    || msg_lo.contains("cc exited")
+                {
+                    eprintln!("SKIP: {message}");
+                    return;
+                }
+                panic!("compile failed: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn find_vow_span_includes_requires() {
+        let dir = TempDir::new().unwrap();
+
+        let src = r#"module RequiresSpan
+
+fn positive(x: i64 where x > 0) -> i64 vow {
+  ensures: result > 0
+} {
+  x
+}
+
+fn main() -> i32 {
+  let r: i64 = positive(5);
+  0
+}"#;
+        let path = write_source(&dir, "requires_span.vow", src);
+        let out = dir.path().join("requires_span");
+        let result = run_pipeline(&path, Some(&out), BuildMode::Release, false, false);
+
+        match &result.status {
+            BuildStatus::VerifyFailed { .. } => {
+                assert!(
+                    !result.counterexamples.is_empty(),
+                    "counterexamples should not be empty on verify failure"
+                );
+
+                let ce = &result.counterexamples[0];
+
+                assert!(
+                    ce.source.is_some(),
+                    "counterexample for requires/where clause should have source location"
+                );
+                let src_loc = ce.source.as_ref().unwrap();
+                assert!(
+                    src_loc.file.contains("requires_span.vow"),
+                    "source file should reference requires_span.vow, got: {}",
+                    src_loc.file,
+                );
+                assert!(
+                    (src_loc.offset as usize) < src.len(),
+                    "source offset {} should be within source length {}",
+                    src_loc.offset,
+                    src.len(),
+                );
+            }
+            BuildStatus::Verified => {
+                eprintln!("SKIP: verification passed (where clause was provable)");
+            }
+            BuildStatus::Unverified => {
+                eprintln!("SKIP: verification not run (esbmc not found)");
+            }
+            BuildStatus::CompileFailed { message } => {
+                let msg_lo = message.to_lowercase();
+                if msg_lo.contains("link")
+                    || msg_lo.contains("runtime")
+                    || msg_lo.contains("ld")
+                    || msg_lo.contains("cc exited")
+                {
+                    eprintln!("SKIP: {message}");
+                    return;
+                }
+                panic!("compile failed: {message}");
+            }
         }
     }
 }

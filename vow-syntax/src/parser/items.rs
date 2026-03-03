@@ -332,7 +332,7 @@ mod tests {
     use crate::parser::parse_item_source;
 
     fn parse_item(src: &str) -> Item {
-        let (item, diags) = parse_item_source(src);
+        let (item, diags) = parse_item_source(src, "<test>");
         assert!(
             diags.is_empty(),
             "parse errors: {:?}",

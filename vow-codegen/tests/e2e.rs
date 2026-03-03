@@ -60,6 +60,7 @@ fn make_main_returns_42() -> Module {
             id: FuncId(0),
             name: "main".to_string(),
             params: vec![],
+            param_names: vec![],
             return_ty: Ty::I32,
             effects: vec![],
             vows: vec![],
@@ -125,6 +126,7 @@ fn vow_violation_exits_with_code_1_and_blames_caller() {
         id: FuncId(0),
         name: "divide".to_string(),
         params: vec![Ty::I64, Ty::I64],
+        param_names: vec![],
         return_ty: Ty::I64,
         effects: vec![],
         vows: vec![VowEntry {
@@ -132,6 +134,8 @@ fn vow_violation_exits_with_code_1_and_blames_caller() {
             description: "y != 0".to_string(),
             blame: Blame::Caller,
             bindings: vec![("y".to_string(), InstId(1))],
+            file: String::new(),
+            offset: 0,
         }],
         blocks: vec![BasicBlock {
             id: BlockId(0),
@@ -165,6 +169,7 @@ fn vow_violation_exits_with_code_1_and_blames_caller() {
         id: FuncId(1),
         name: "main".to_string(),
         params: vec![],
+        param_names: vec![],
         return_ty: Ty::I32,
         effects: vec![],
         vows: vec![],
@@ -243,6 +248,7 @@ fn vow_violation_reports_variable_values() {
         id: FuncId(0),
         name: "nonneg".to_string(),
         params: vec![Ty::I64],
+        param_names: vec![],
         return_ty: Ty::I64,
         effects: vec![],
         vows: vec![VowEntry {
@@ -250,6 +256,8 @@ fn vow_violation_reports_variable_values() {
             description: "ensures result > 0".to_string(),
             blame: Blame::Callee,
             bindings: vec![("result".to_string(), InstId(0))],
+            file: String::new(),
+            offset: 0,
         }],
         blocks: vec![BasicBlock {
             id: BlockId(0),
@@ -274,6 +282,7 @@ fn vow_violation_reports_variable_values() {
         id: FuncId(1),
         name: "main".to_string(),
         params: vec![],
+        param_names: vec![],
         return_ty: Ty::I32,
         effects: vec![],
         vows: vec![],

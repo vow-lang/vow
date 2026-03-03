@@ -188,6 +188,8 @@ pub struct VowEntry {
     pub description: String,
     pub blame: Blame,
     pub bindings: Vec<(String, InstId)>,
+    pub file: String,
+    pub offset: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -195,6 +197,7 @@ pub struct Function {
     pub id: FuncId,
     pub name: String,
     pub params: Vec<Ty>,
+    pub param_names: Vec<String>,
     pub return_ty: Ty,
     pub effects: Vec<Effect>,
     pub vows: Vec<VowEntry>,
@@ -338,6 +341,7 @@ mod tests {
             id: FuncId(0),
             name: "main".to_string(),
             params: vec![],
+            param_names: vec![],
             return_ty: Ty::Unit,
             effects: vec![],
             vows: vec![],
@@ -381,6 +385,7 @@ mod tests {
             id: FuncId(1),
             name: "answer".to_string(),
             params: vec![],
+            param_names: vec![],
             return_ty: Ty::I32,
             effects: vec![],
             vows: vec![],

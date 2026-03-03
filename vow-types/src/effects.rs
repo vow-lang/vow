@@ -416,7 +416,11 @@ mod tests {
     }
 
     fn empty_block() -> Block {
-        Block { stmts: vec![], trailing_expr: None, span: dummy_span() }
+        Block {
+            stmts: vec![],
+            trailing_expr: None,
+            span: dummy_span(),
+        }
     }
 
     fn block_with_call(call_name: &str) -> Block {
@@ -445,7 +449,10 @@ mod tests {
         let caller = make_fn("caller", vec![], body);
         let mut emitter = TestEmitter(vec![]);
         check_fn_effects(&caller, &env, "test.vow", &mut emitter);
-        assert!(!emitter.0.is_empty(), "should detect read_file inside binop");
+        assert!(
+            !emitter.0.is_empty(),
+            "should detect read_file inside binop"
+        );
     }
 
     #[test]
@@ -453,10 +460,7 @@ mod tests {
         let env = env_with_read_file();
         let body = Block {
             stmts: vec![],
-            trailing_expr: Some(Box::new(if_expr(
-                call_expr("read_file"),
-                empty_block(),
-            ))),
+            trailing_expr: Some(Box::new(if_expr(call_expr("read_file"), empty_block()))),
             span: dummy_span(),
         };
         let caller = make_fn("caller", vec![], body);
@@ -471,7 +475,10 @@ mod tests {
         let body = Block {
             stmts: vec![],
             trailing_expr: Some(Box::new(if_expr(
-                Expr { kind: ExprKind::Ident("x".into()), span: dummy_span() },
+                Expr {
+                    kind: ExprKind::Ident("x".into()),
+                    span: dummy_span(),
+                },
                 block_with_call("read_file"),
             ))),
             span: dummy_span(),
@@ -487,16 +494,16 @@ mod tests {
         let env = env_with_read_file();
         let body = Block {
             stmts: vec![],
-            trailing_expr: Some(Box::new(while_expr(
-                call_expr("read_file"),
-                empty_block(),
-            ))),
+            trailing_expr: Some(Box::new(while_expr(call_expr("read_file"), empty_block()))),
             span: dummy_span(),
         };
         let caller = make_fn("caller", vec![], body);
         let mut emitter = TestEmitter(vec![]);
         check_fn_effects(&caller, &env, "test.vow", &mut emitter);
-        assert!(!emitter.0.is_empty(), "should detect call in while condition");
+        assert!(
+            !emitter.0.is_empty(),
+            "should detect call in while condition"
+        );
     }
 
     #[test]
@@ -504,16 +511,16 @@ mod tests {
         let env = env_with_read_file();
         let body = Block {
             stmts: vec![],
-            trailing_expr: Some(Box::new(method_call_expr(
-                call_expr("read_file"),
-                "len",
-            ))),
+            trailing_expr: Some(Box::new(method_call_expr(call_expr("read_file"), "len"))),
             span: dummy_span(),
         };
         let caller = make_fn("caller", vec![], body);
         let mut emitter = TestEmitter(vec![]);
         check_fn_effects(&caller, &env, "test.vow", &mut emitter);
-        assert!(!emitter.0.is_empty(), "should detect call inside method receiver");
+        assert!(
+            !emitter.0.is_empty(),
+            "should detect call inside method receiver"
+        );
     }
 
     #[test]
@@ -539,7 +546,10 @@ mod tests {
         let caller = make_fn("caller", vec![], outer_body);
         let mut emitter = TestEmitter(vec![]);
         check_fn_effects(&caller, &env, "test.vow", &mut emitter);
-        assert!(!emitter.0.is_empty(), "should detect call inside nested block");
+        assert!(
+            !emitter.0.is_empty(),
+            "should detect call inside nested block"
+        );
     }
 
     #[test]

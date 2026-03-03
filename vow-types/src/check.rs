@@ -171,7 +171,14 @@ impl<'e> Checker<'e> {
                             .collect();
                         let return_ty = self.env.resolve(&f.return_ty).unwrap_or(Ty::Unit);
                         let effects: BTreeSet<Effect> = f.effects.iter().cloned().collect();
-                        self.env.define_fn(&f.name, FnSig { params, return_ty, effects });
+                        self.env.define_fn(
+                            &f.name,
+                            FnSig {
+                                params,
+                                return_ty,
+                                effects,
+                            },
+                        );
                     }
                 }
                 Item::Trait(_) | Item::Impl(_) => {}
@@ -882,7 +889,11 @@ impl<'e> Checker<'e> {
                         Ty::Unit
                     }
                     Some(info) => {
-                        let variant = info.variants.iter().find(|v| v.name == variant_name).cloned();
+                        let variant = info
+                            .variants
+                            .iter()
+                            .find(|v| v.name == variant_name)
+                            .cloned();
                         match variant {
                             None => {
                                 self.emit_error(
@@ -2037,10 +2048,7 @@ mod tests {
         checker.env.push_scope();
         let ty = checker.check_expr(&make_expr(ExprKind::StructLiteral {
             name: "Point".to_string(),
-            fields: vec![
-                ("x".to_string(), int_lit()),
-                ("y".to_string(), int_lit()),
-            ],
+            fields: vec![("x".to_string(), int_lit()), ("y".to_string(), int_lit())],
         }));
         assert_eq!(ty, Ty::Struct("Point".to_string()));
         assert!(!checker.has_errors());
