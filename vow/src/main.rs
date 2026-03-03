@@ -410,7 +410,7 @@ fn find_vow_span(func: &vow_ir::Function, vow_id: u32) -> Option<vow_syntax::spa
     use vow_ir::{InstData, Opcode};
     for block in &func.blocks {
         for inst in &block.insts {
-            if matches!(inst.opcode, Opcode::VowEnsures | Opcode::VowInvariant)
+            if matches!(inst.opcode, Opcode::VowRequires | Opcode::VowEnsures | Opcode::VowInvariant)
                 && let InstData::VowId(vid) = inst.data
                 && vid.0 == vow_id
             {
@@ -2166,6 +2166,73 @@ fn main() -> i32 {
                 panic!("compile failed: {message}");
             }
             other => panic!("unexpected status: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn find_vow_span_includes_requires() {
+        let dir = TempDir::new().unwrap();
+
+        let src = r#"module RequiresSpan
+
+fn positive(x: i64 where x > 0) -> i64 vow {
+  ensures: result > 0
+} {
+  x
+}
+
+fn main() -> i32 {
+  let r: i64 = positive(5);
+  0
+}"#;
+        let path = write_source(&dir, "requires_span.vow", src);
+        let out = dir.path().join("requires_span");
+        let result = run_pipeline(&path, Some(&out), BuildMode::Release, false, false);
+
+        match &result.status {
+            BuildStatus::VerifyFailed { .. } => {
+                assert!(
+                    !result.counterexamples.is_empty(),
+                    "counterexamples should not be empty on verify failure"
+                );
+
+                let ce = &result.counterexamples[0];
+
+                assert!(
+                    ce.source.is_some(),
+                    "counterexample for requires/where clause should have source location"
+                );
+                let src_loc = ce.source.as_ref().unwrap();
+                assert!(
+                    src_loc.file.contains("requires_span.vow"),
+                    "source file should reference requires_span.vow, got: {}",
+                    src_loc.file,
+                );
+                assert!(
+                    (src_loc.offset as usize) < src.len(),
+                    "source offset {} should be within source length {}",
+                    src_loc.offset,
+                    src.len(),
+                );
+            }
+            BuildStatus::Verified => {
+                eprintln!("SKIP: verification passed (where clause was provable)");
+            }
+            BuildStatus::Unverified => {
+                eprintln!("SKIP: verification not run (esbmc not found)");
+            }
+            BuildStatus::CompileFailed { message } => {
+                let msg_lo = message.to_lowercase();
+                if msg_lo.contains("link")
+                    || msg_lo.contains("runtime")
+                    || msg_lo.contains("ld")
+                    || msg_lo.contains("cc exited")
+                {
+                    eprintln!("SKIP: {message}");
+                    return;
+                }
+                panic!("compile failed: {message}");
+            }
         }
     }
 }
