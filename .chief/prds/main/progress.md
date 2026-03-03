@@ -214,3 +214,14 @@
   - CEGIS repair cycle demo: broken version → ESBMC finds counterexample → fix is to add missing preconditions → fixed version verifies. The counterexample clearly points to the issue (unbounded `a` allows negative values)
   - `where` + `requires` + `ensures` can all coexist on the same function — where clauses are lowered first, then explicit requires, then ensures
 ---
+
+## 2026-03-02 - US-013
+- What was implemented: End-to-end CEGIS loop integration test exercising the full verify-fix cycle. The test compiles a broken program (safe_sub with unconstrained `a`, ensures result >= 0), asserts the build output contains an empty diagnostics array, a non-empty counterexamples array with source-level variable names (a, b), the violation predicate text ("result >= 0"), and a source location pointing to the .vow file. Then it compiles the fixed version (adding `where a >= 0` + `requires: a >= b`) and asserts verification passes with empty counterexamples and diagnostics.
+- Files changed:
+  - `vow/src/main.rs` — Added `cegis_loop_end_to_end` test function (143 lines) exercising the full CEGIS pipeline
+- **Learnings for future iterations:**
+  - The CEGIS test pattern follows existing ESBMC-dependent tests: match on `BuildStatus::Unverified` to skip when ESBMC is not installed, and `CompileFailed` with link/runtime messages to skip on missing runtime library
+  - All ESBMC-dependent tests use `run_pipeline` with `no_verify=false` (5th arg) — the pipeline spawns a verification thread that returns `VerifyOutcome`
+  - Both broken and fixed programs need `main()` returning `i32` for the pipeline to succeed past codegen
+  - The test nests the fixed-version compilation inside the `VerifyFailed` match arm of the broken version, ensuring both phases run only when ESBMC is available
+---

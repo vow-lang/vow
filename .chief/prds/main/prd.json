@@ -200,7 +200,7 @@
         "Test runs as part of cargo test --all"
       ],
       "priority": 8,
-      "passes": false
+      "passes": true
     }
   ]
 }
