@@ -91,10 +91,13 @@ All sub-tasks done:
 
 ### 11.1 DFS module loading in self-hosted compiler — COMPLETE
 
-### 11.2 Basic build commands
+### 11.2 Basic build commands — COMPLETE
 
-`vow build`, `vow verify`, `vow test` as top-level commands for Vow programs
-(distinct from Cargo, which is for the Rust reference compiler).
+`vow build`, `vow verify`, `vow test` as proper clap subcommands in the Rust
+reference compiler CLI. `vow build` verifies by default (`--no-verify` to skip).
+`vow verify` runs only the frontend + verification pipeline (no codegen).
+`vow test` reserved as placeholder (not yet implemented).
+Legacy bare `vow file.vow` still works (equivalent to `vow build`).
 
 ---
 

@@ -1449,7 +1449,10 @@ mod tests {
             ],
         );
         let c = emit_c_function(&func);
-        assert!(c.contains("__ESBMC_assert(v2.len < 128, \"vec capacity\")"), "push capacity: {c}");
+        assert!(
+            c.contains("__ESBMC_assert(v2.len < 128, \"vec capacity\")"),
+            "push capacity: {c}"
+        );
         assert!(c.contains("v2.data[v2.len] = v3;"), "push store: {c}");
         assert!(c.contains("v2.len++;"), "push increment: {c}");
     }
@@ -2146,7 +2149,10 @@ mod tests {
         let c = emit_c_function(&func);
         assert!(c.contains("v0.keys[__i] == v1"), "key search: {c}");
         assert!(c.contains("v0.vals[__i] = v2"), "update existing: {c}");
-        assert!(c.contains("__ESBMC_assert(v0.len < 64, \"hashmap capacity\")"), "insert capacity: {c}");
+        assert!(
+            c.contains("__ESBMC_assert(v0.len < 64, \"hashmap capacity\")"),
+            "insert capacity: {c}"
+        );
         assert!(c.contains("v0.keys[v0.len] = v1"), "insert new key: {c}");
         assert!(c.contains("v0.vals[v0.len] = v2"), "insert new val: {c}");
         assert!(c.contains("v0.len++"), "insert increments len: {c}");

@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::{
-    types, AbiParam, Block, FuncRef, GlobalValue, InstBuilder, MemFlags, Signature,
-    StackSlot, StackSlotData, StackSlotKind, TrapCode, Value,
+    AbiParam, Block, FuncRef, GlobalValue, InstBuilder, MemFlags, Signature, StackSlot,
+    StackSlotData, StackSlotKind, TrapCode, Value, types,
 };
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::settings::{self, Configurable};
@@ -985,9 +985,7 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
                         let else_bi = dv2 as usize;
                         let then_cl = cl_blocks[then_bi];
                         let else_cl = cl_blocks[else_bi];
-                        builder
-                            .ins()
-                            .brif(cond, then_cl, &[], else_cl, &[]);
+                        builder.ins().brif(cond, then_cl, &[], else_cl, &[]);
                     }
                 }
                 IOP_JUMP => {

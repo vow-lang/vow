@@ -22,8 +22,16 @@ enum ModeArg {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "vowc", about = "Vow compiler", disable_help_flag = true)]
+#[command(
+    name = "vow",
+    about = "Vow compiler",
+    disable_help_flag = true,
+    args_conflicts_with_subcommands = true
+)]
 struct Args {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     source: Option<PathBuf>,
     #[arg(short = 'o', long)]
     output: Option<PathBuf>,
@@ -31,15 +39,45 @@ struct Args {
     mode: ModeArg,
     #[arg(long)]
     no_verify: bool,
-    /// Dump IR text to stdout and exit (skip codegen/verify)
     #[arg(long)]
     dump_ir: bool,
-    /// Print compiler capability description as JSON (default) or human-readable (with --human)
     #[arg(long)]
     help: bool,
-    /// With --help: print human-readable text instead of JSON
     #[arg(long)]
     human: bool,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum Command {
+    /// Compile source to a native executable (verifies contracts by default)
+    Build(BuildArgs),
+    /// Verify contracts without producing an executable
+    Verify(VerifyArgs),
+    /// Run tests (not yet implemented)
+    Test(TestArgs),
+}
+
+#[derive(clap::Args, Debug)]
+struct BuildArgs {
+    source: PathBuf,
+    #[arg(short = 'o', long)]
+    output: Option<PathBuf>,
+    #[arg(long, value_enum, default_value = "release")]
+    mode: ModeArg,
+    #[arg(long)]
+    no_verify: bool,
+    #[arg(long)]
+    dump_ir: bool,
+}
+
+#[derive(clap::Args, Debug)]
+struct VerifyArgs {
+    source: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
+struct TestArgs {
+    source: Option<PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
@@ -48,14 +86,22 @@ struct Args {
 
 fn skill_json() -> String {
     r#"{
-  "tool": "vowc",
+  "tool": "vow",
   "description": "Vow compiler: compiles Vow source to native executables with contract verification",
-  "usage": "vowc [OPTIONS] <source.vow>",
-  "options": {
-    "--output <path>": "Output executable path (default: source without .vow extension)",
+  "usage": "vow <command> [OPTIONS] <source.vow>",
+  "commands": {
+    "build": "Compile source to native executable (verifies by default; use --no-verify to skip)",
+    "verify": "Verify contracts without producing an executable",
+    "test": "Run tests (not yet implemented)"
+  },
+  "legacy_usage": "vow [OPTIONS] <source.vow> (equivalent to vow build)",
+  "build_options": {
+    "-o, --output <path>": "Output executable path (default: source without .vow extension)",
     "--mode <debug|release>": "Build mode; debug inserts runtime vow checks (default: release)",
     "--no-verify": "Skip ESBMC static verification",
-    "--dump-ir": "Dump IR text to stdout and exit (skip codegen/verify)",
+    "--dump-ir": "Dump IR text to stdout and exit (skip codegen/verify)"
+  },
+  "global_options": {
     "--help": "Print this JSON capability description",
     "--help --human": "Print human-readable capability description"
   },
@@ -99,18 +145,23 @@ fn skill_json() -> String {
 }
 
 fn skill_human() -> String {
-    "vowc — Vow compiler
+    "vow — Vow compiler
 
 USAGE
-  vowc [OPTIONS] <source.vow>
+  vow build [OPTIONS] <source.vow>    Compile to native executable
+  vow verify <source.vow>             Verify contracts only (no executable)
+  vow test [<source.vow>]             Run tests (not yet implemented)
+  vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)
 
-OPTIONS
+BUILD OPTIONS
   -o, --output <path>   Output executable path
   --mode <debug|release>  Build mode (default: release)
                           debug: inserts runtime vow violation checks
                           release: omits vow checks for performance
   --no-verify           Skip ESBMC static verification
   --dump-ir             Dump IR text to stdout and exit
+
+GLOBAL OPTIONS
   --help                Print JSON capability description (agent-friendly)
   --help --human        Print this text
 
@@ -410,8 +461,10 @@ fn find_vow_span(func: &vow_ir::Function, vow_id: u32) -> Option<vow_syntax::spa
     use vow_ir::{InstData, Opcode};
     for block in &func.blocks {
         for inst in &block.insts {
-            if matches!(inst.opcode, Opcode::VowRequires | Opcode::VowEnsures | Opcode::VowInvariant)
-                && let InstData::VowId(vid) = inst.data
+            if matches!(
+                inst.opcode,
+                Opcode::VowRequires | Opcode::VowEnsures | Opcode::VowInvariant
+            ) && let InstData::VowId(vid) = inst.data
                 && vid.0 == vow_id
             {
                 return Some(inst.origin);
@@ -422,20 +475,19 @@ fn find_vow_span(func: &vow_ir::Function, vow_id: u32) -> Option<vow_syntax::spa
 }
 
 // ---------------------------------------------------------------------------
-// Pipeline
+// Frontend (parse → module load → type check → IR lower)
 // ---------------------------------------------------------------------------
 
-pub fn run_pipeline(
-    source: &Path,
-    output: Option<&Path>,
-    mode: BuildMode,
-    no_verify: bool,
-    dump_ir: bool,
-) -> BuildOutput {
+struct FrontendResult {
+    ir_module: Arc<vow_ir::Module>,
+    diagnostics: Vec<Diagnostic>,
+}
+
+fn compile_frontend(source: &Path) -> Result<FrontendResult, Box<BuildOutput>> {
     let src = match std::fs::read_to_string(source) {
         Ok(s) => s,
         Err(e) => {
-            return BuildOutput {
+            return Err(Box::new(BuildOutput {
                 status: BuildStatus::CompileFailed {
                     message: e.to_string(),
                 },
@@ -444,7 +496,7 @@ pub fn run_pipeline(
                 counterexamples: vec![],
                 verify_status: None,
                 verify_message: None,
-            };
+            }));
         }
     };
 
@@ -459,7 +511,7 @@ pub fn run_pipeline(
     }
     all_diagnostics.extend(parse_diags);
     if parse_failed {
-        return BuildOutput {
+        return Err(Box::new(BuildOutput {
             status: BuildStatus::CompileFailed {
                 message: "parse error".to_string(),
             },
@@ -468,7 +520,7 @@ pub fn run_pipeline(
             counterexamples: vec![],
             verify_status: None,
             verify_message: None,
-        };
+        }));
     }
 
     let ast = match module_loader::load_modules(source, &root_ast) {
@@ -478,7 +530,7 @@ pub fn run_pipeline(
                 stderr_emit.emit(d);
             }
             all_diagnostics.extend(diags);
-            return BuildOutput {
+            return Err(Box::new(BuildOutput {
                 status: BuildStatus::CompileFailed {
                     message: "module load error".to_string(),
                 },
@@ -487,7 +539,7 @@ pub fn run_pipeline(
                 counterexamples: vec![],
                 verify_status: None,
                 verify_message: None,
-            };
+            }));
         }
     };
 
@@ -499,7 +551,7 @@ pub fn run_pipeline(
     drop(checker);
     all_diagnostics.extend(collecting_emit.into_diagnostics());
     if has_errors {
-        return BuildOutput {
+        return Err(Box::new(BuildOutput {
             status: BuildStatus::CompileFailed {
                 message: "type error".to_string(),
             },
@@ -508,10 +560,140 @@ pub fn run_pipeline(
             counterexamples: vec![],
             verify_status: None,
             verify_message: None,
-        };
+        }));
     }
 
     let ir_module = Arc::new(vow_ir::lower_module(&ast, &source.to_string_lossy()));
+
+    Ok(FrontendResult {
+        ir_module,
+        diagnostics: all_diagnostics,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Verification (synchronous)
+// ---------------------------------------------------------------------------
+
+fn run_verification_sync(ir_module: &vow_ir::Module, file: &str) -> VerifyOutcome {
+    for func in &ir_module.functions {
+        if func.vows.is_empty() {
+            continue;
+        }
+        match verify_function(func) {
+            VerificationResult::Failed(ce) => {
+                let sce = build_structured_counterexample(func, &ce, file);
+                return VerifyOutcome::Failed {
+                    function: func.name.clone(),
+                    description: ce.description.clone(),
+                    counterexamples: vec![sce],
+                };
+            }
+            VerificationResult::ToolError(e) => {
+                return VerifyOutcome::Error {
+                    function: func.name.clone(),
+                    message: e,
+                };
+            }
+            VerificationResult::Timeout => {
+                return VerifyOutcome::Timeout {
+                    function: func.name.clone(),
+                };
+            }
+            VerificationResult::Proven => {}
+            VerificationResult::ToolNotFound => {
+                return VerifyOutcome::ToolNotFound;
+            }
+        }
+    }
+    VerifyOutcome::Proven
+}
+
+fn verify_outcome_to_output(
+    outcome: VerifyOutcome,
+    diagnostics: Vec<Diagnostic>,
+    executable: Option<PathBuf>,
+) -> BuildOutput {
+    let (status, counterexamples, verify_status, verify_message) = match outcome {
+        VerifyOutcome::Failed {
+            function,
+            description,
+            counterexamples,
+        } => (
+            BuildStatus::VerifyFailed {
+                function,
+                description,
+            },
+            counterexamples,
+            None,
+            None,
+        ),
+        VerifyOutcome::Timeout { function } => (
+            BuildStatus::VerifyFailed {
+                function,
+                description: "verification timed out".to_string(),
+            },
+            vec![],
+            Some("timeout".to_string()),
+            None,
+        ),
+        VerifyOutcome::Error { function, message } => (
+            BuildStatus::VerifyFailed {
+                function,
+                description: format!("esbmc error: {message}"),
+            },
+            vec![],
+            Some("error".to_string()),
+            Some(message),
+        ),
+        VerifyOutcome::Skipped => (BuildStatus::Unverified, vec![], None, None),
+        VerifyOutcome::Proven => (BuildStatus::Verified, vec![], None, None),
+        VerifyOutcome::ToolNotFound => (BuildStatus::Unverified, vec![], None, None),
+    };
+
+    BuildOutput {
+        status,
+        executable,
+        diagnostics,
+        counterexamples,
+        verify_status,
+        verify_message,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Verify-only pipeline (vow verify)
+// ---------------------------------------------------------------------------
+
+pub fn run_verify_only(source: &Path) -> BuildOutput {
+    let frontend = match compile_frontend(source) {
+        Ok(f) => f,
+        Err(output) => return *output,
+    };
+
+    let file = source.to_string_lossy().to_string();
+    let outcome = run_verification_sync(&frontend.ir_module, &file);
+    verify_outcome_to_output(outcome, frontend.diagnostics, None)
+}
+
+// ---------------------------------------------------------------------------
+// Full build pipeline (vow build / legacy)
+// ---------------------------------------------------------------------------
+
+pub fn run_pipeline(
+    source: &Path,
+    output: Option<&Path>,
+    mode: BuildMode,
+    no_verify: bool,
+    dump_ir: bool,
+) -> BuildOutput {
+    let frontend = match compile_frontend(source) {
+        Ok(f) => f,
+        Err(output) => return *output,
+    };
+
+    let all_diagnostics = frontend.diagnostics;
+    let ir_module = frontend.ir_module;
 
     if dump_ir {
         print!("{}", vow_ir::print_module(&ir_module));
@@ -532,37 +714,7 @@ pub fn run_pipeline(
         if no_verify {
             return VerifyOutcome::Skipped;
         }
-        for func in &module_for_verify.functions {
-            if func.vows.is_empty() {
-                continue;
-            }
-            match verify_function(func) {
-                VerificationResult::Failed(ce) => {
-                    let sce = build_structured_counterexample(func, &ce, &file_for_verify);
-                    return VerifyOutcome::Failed {
-                        function: func.name.clone(),
-                        description: ce.description.clone(),
-                        counterexamples: vec![sce],
-                    };
-                }
-                VerificationResult::ToolError(e) => {
-                    return VerifyOutcome::Error {
-                        function: func.name.clone(),
-                        message: e,
-                    };
-                }
-                VerificationResult::Timeout => {
-                    return VerifyOutcome::Timeout {
-                        function: func.name.clone(),
-                    };
-                }
-                VerificationResult::Proven => {}
-                VerificationResult::ToolNotFound => {
-                    return VerifyOutcome::ToolNotFound;
-                }
-            }
-        }
-        VerifyOutcome::Proven
+        run_verification_sync(&module_for_verify, &file_for_verify)
     });
 
     // Codegen
@@ -604,7 +756,12 @@ pub fn run_pipeline(
                     verify_message: None,
                 };
             }
-            match link(&[&obj_path], &runtime, find_shim_lib().as_deref(), &output_path) {
+            match link(
+                &[&obj_path],
+                &runtime,
+                find_shim_lib().as_deref(),
+                &output_path,
+            ) {
                 Ok(()) => {
                     let _ = std::fs::remove_file(&obj_path);
                     Some(output_path)
@@ -627,102 +784,93 @@ pub fn run_pipeline(
         None => None,
     };
 
-    // Collect verification result
     let verify_outcome = verify_handle.join().unwrap_or(VerifyOutcome::Skipped);
-
-    let (status, counterexamples, verify_status, verify_message) = match verify_outcome {
-        VerifyOutcome::Failed {
-            function,
-            description,
-            counterexamples,
-        } => (
-            BuildStatus::VerifyFailed {
-                function,
-                description,
-            },
-            counterexamples,
-            None,
-            None,
-        ),
-        VerifyOutcome::Timeout { function } => (
-            BuildStatus::VerifyFailed {
-                function,
-                description: "verification timed out".to_string(),
-            },
-            vec![],
-            Some("timeout".to_string()),
-            None,
-        ),
-        VerifyOutcome::Error { function, message } => (
-            BuildStatus::VerifyFailed {
-                function,
-                description: format!("esbmc error: {message}"),
-            },
-            vec![],
-            Some("error".to_string()),
-            Some(message),
-        ),
-        VerifyOutcome::Skipped => (BuildStatus::Unverified, vec![], None, None),
-        VerifyOutcome::Proven => (BuildStatus::Verified, vec![], None, None),
-        VerifyOutcome::ToolNotFound => (BuildStatus::Unverified, vec![], None, None),
-    };
-
-    BuildOutput {
-        status,
-        executable: exe_path,
-        diagnostics: all_diagnostics,
-        counterexamples,
-        verify_status,
-        verify_message,
-    }
+    verify_outcome_to_output(verify_outcome, all_diagnostics, exe_path)
 }
 
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
-fn main() {
-    let args = Args::parse();
-
-    if args.help {
-        if args.human {
-            println!("{}", skill_human());
-        } else {
-            println!("{}", skill_json());
-        }
-        return;
+fn run_build_command(
+    source: &Path,
+    output: Option<&Path>,
+    mode: BuildMode,
+    no_verify: bool,
+    dump_ir: bool,
+) {
+    let result = run_pipeline(source, output, mode, no_verify, dump_ir);
+    if !dump_ir {
+        result.emit_json();
     }
-
-    let source = match args.source {
-        Some(s) => s,
-        None => {
-            eprintln!("vowc: source file required (try --help)");
-            std::process::exit(1);
-        }
-    };
-
-    let mode = match args.mode {
-        ModeArg::Debug => BuildMode::Debug,
-        ModeArg::Release => BuildMode::Release,
-    };
-
-    let output = run_pipeline(
-        &source,
-        args.output.as_deref(),
-        mode,
-        args.no_verify,
-        args.dump_ir,
-    );
-
-    if !args.dump_ir {
-        output.emit_json();
-    }
-
     if matches!(
-        &output.status,
+        &result.status,
         BuildStatus::CompileFailed { .. } | BuildStatus::VerifyFailed { .. }
     ) {
         std::process::exit(1);
+    }
+}
+
+fn run_verify_command(source: &Path) {
+    let result = run_verify_only(source);
+    result.emit_json();
+    if matches!(
+        &result.status,
+        BuildStatus::CompileFailed { .. } | BuildStatus::VerifyFailed { .. }
+    ) {
+        std::process::exit(1);
+    }
+}
+
+fn main() {
+    let args = Args::parse();
+
+    match args.command {
+        Some(Command::Build(b)) => {
+            let mode = match b.mode {
+                ModeArg::Debug => BuildMode::Debug,
+                ModeArg::Release => BuildMode::Release,
+            };
+            run_build_command(&b.source, b.output.as_deref(), mode, b.no_verify, b.dump_ir);
+        }
+        Some(Command::Verify(v)) => {
+            run_verify_command(&v.source);
+        }
+        Some(Command::Test(_)) => {
+            eprintln!("vow test: not yet implemented");
+            std::process::exit(1);
+        }
+        None => {
+            if args.help {
+                if args.human {
+                    println!("{}", skill_human());
+                } else {
+                    println!("{}", skill_json());
+                }
+                return;
+            }
+
+            let source = match args.source {
+                Some(s) => s,
+                None => {
+                    eprintln!("vow: source file required (try --help or use a subcommand)");
+                    std::process::exit(1);
+                }
+            };
+
+            let mode = match args.mode {
+                ModeArg::Debug => BuildMode::Debug,
+                ModeArg::Release => BuildMode::Release,
+            };
+
+            run_build_command(
+                &source,
+                args.output.as_deref(),
+                mode,
+                args.no_verify,
+                args.dump_ir,
+            );
+        }
     }
 }
 
@@ -974,12 +1122,21 @@ fn main() -> i32 [io] {
     fn help_flag_emits_json_with_tool_key() {
         let out = skill_json();
         assert!(out.contains("\"tool\""), "expected JSON with 'tool' key");
-        assert!(out.contains("vowc"), "expected tool name in output");
+        assert!(out.contains("\"vow\""), "expected tool name in output");
         assert!(
             out.contains("language"),
             "expected language section in output"
         );
         assert!(out.contains("builtins"), "expected builtins in output");
+        assert!(
+            out.contains("\"commands\""),
+            "expected commands section in JSON"
+        );
+        assert!(out.contains("\"build\""), "expected build command in JSON");
+        assert!(
+            out.contains("\"verify\""),
+            "expected verify command in JSON"
+        );
     }
 
     #[test]
@@ -2046,8 +2203,13 @@ fn main() -> i32 {
 }"#;
         let broken_path = write_source(&dir, "cegis_broken.vow", broken_src);
         let broken_out = dir.path().join("cegis_broken");
-        let broken_result =
-            run_pipeline(&broken_path, Some(&broken_out), BuildMode::Release, false, false);
+        let broken_result = run_pipeline(
+            &broken_path,
+            Some(&broken_out),
+            BuildMode::Release,
+            false,
+            false,
+        );
 
         match &broken_result.status {
             BuildStatus::VerifyFailed { function, .. } => {
@@ -2069,10 +2231,7 @@ fn main() -> i32 {
                 let ce = &broken_result.counterexamples[0];
 
                 // AC4a: inputs with source-level variable names
-                let has_source_name = ce
-                    .inputs
-                    .iter()
-                    .any(|(name, _)| name == "a" || name == "b");
+                let has_source_name = ce.inputs.iter().any(|(name, _)| name == "a" || name == "b");
                 assert!(
                     has_source_name,
                     "counterexample inputs should use source names (a, b), got: {:?}",
@@ -2120,8 +2279,13 @@ fn main() -> i32 {
 }"#;
                 let fixed_path = write_source(&dir, "cegis_fixed.vow", fixed_src);
                 let fixed_out = dir.path().join("cegis_fixed");
-                let fixed_result =
-                    run_pipeline(&fixed_path, Some(&fixed_out), BuildMode::Release, false, false);
+                let fixed_result = run_pipeline(
+                    &fixed_path,
+                    Some(&fixed_out),
+                    BuildMode::Release,
+                    false,
+                    false,
+                );
 
                 // AC5: corrected version verifies with empty counterexamples
                 match &fixed_result.status {
@@ -2233,6 +2397,113 @@ fn main() -> i32 {
                 }
                 panic!("compile failed: {message}");
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 11.2: subcommand tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn verify_only_proven() {
+        let dir = TempDir::new().unwrap();
+        let src = r#"module Good
+fn always_true() -> i64 vow {
+  ensures: result == 42
+} {
+  42
+}
+fn main() -> i32 {
+  let x: i64 = always_true();
+  0
+}"#;
+        let source = write_source(&dir, "good.vow", src);
+        let result = run_verify_only(&source);
+        match &result.status {
+            BuildStatus::Verified => {
+                assert!(
+                    result.executable.is_none(),
+                    "verify-only should not produce executable"
+                );
+                assert!(result.counterexamples.is_empty());
+            }
+            BuildStatus::Unverified => {
+                eprintln!("SKIP: esbmc not found");
+            }
+            BuildStatus::CompileFailed { message } => {
+                panic!("unexpected compile failure: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_only_failed() {
+        let dir = TempDir::new().unwrap();
+        let src = r#"module Bad
+fn always_bad() -> i64 vow {
+  ensures: result > 100
+} {
+  42
+}
+fn main() -> i32 {
+  let x: i64 = always_bad();
+  0
+}"#;
+        let source = write_source(&dir, "bad.vow", src);
+        let result = run_verify_only(&source);
+        match &result.status {
+            BuildStatus::VerifyFailed { function, .. } => {
+                assert_eq!(function, "always_bad");
+                assert!(
+                    result.executable.is_none(),
+                    "verify-only should not produce executable"
+                );
+            }
+            BuildStatus::Unverified => {
+                eprintln!("SKIP: esbmc not found");
+            }
+            BuildStatus::CompileFailed { message } => {
+                panic!("unexpected compile failure: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_only_compile_error() {
+        let dir = TempDir::new().unwrap();
+        let src = "module Bad fn f() -> i32 { true }";
+        let source = write_source(&dir, "bad_type.vow", src);
+        let result = run_verify_only(&source);
+        assert!(
+            matches!(result.status, BuildStatus::CompileFailed { .. }),
+            "expected CompileFailed for type error via verify-only, got {:?}",
+            result.status
+        );
+        assert!(result.executable.is_none());
+    }
+
+    #[test]
+    fn legacy_mode_still_works() {
+        let dir = TempDir::new().unwrap();
+        let src = "module M fn f(x: i64) -> i64 { x }";
+        let source = write_source(&dir, "legacy.vow", src);
+        let result = run_pipeline(&source, None, BuildMode::Release, true, false);
+        match &result.status {
+            BuildStatus::Unverified => {}
+            BuildStatus::CompileFailed { message } => {
+                let msg_lo = message.to_lowercase();
+                if msg_lo.contains("link")
+                    || msg_lo.contains("runtime")
+                    || msg_lo.contains("ld")
+                    || msg_lo.contains("cc exited")
+                {
+                    return;
+                }
+                panic!("unexpected compile failure: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
         }
     }
 }

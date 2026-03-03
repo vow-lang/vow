@@ -13,23 +13,35 @@ cargo clippy --all -- -D warnings      # lint (CI enforces zero warnings)
 cargo fmt --all            # format all code
 ```
 
-## vowc CLI
+## vow CLI
 
 First build the release binary:
 ```bash
 cargo build --all --release
 ```
-Then use `./target/release/vow` (or `cargo install --path vow` to get `vowc` on PATH):
+Then use `./target/release/vow` (or `cargo install --path vow` to get `vow` on PATH):
 
 ```bash
-./target/release/vow examples/divide.vow                   # compile (release, no runtime vow checks)
-./target/release/vow --mode debug examples/divide.vow      # compile with runtime vow violation checks
-./target/release/vow --no-verify examples/divide.vow       # skip ESBMC static verification
-./target/release/vow --help                                # JSON capability description (for agents)
-./target/release/vow --help --human                        # human-readable capability description
+# Subcommands
+./target/release/vow build examples/divide.vow                   # compile + verify (default)
+./target/release/vow build --no-verify examples/divide.vow       # compile, skip verification
+./target/release/vow build --mode debug examples/divide.vow      # compile with runtime vow checks
+./target/release/vow verify examples/divide.vow                  # verify contracts only (no executable)
+./target/release/vow test                                        # run tests (not yet implemented)
+
+# Legacy mode (equivalent to `vow build`)
+./target/release/vow examples/divide.vow                         # compile + verify
+./target/release/vow --no-verify examples/divide.vow             # compile, skip verification
+./target/release/vow --mode debug examples/divide.vow            # compile with runtime vow checks
+
+# Help
+./target/release/vow --help                                      # JSON capability description (for agents)
+./target/release/vow --help --human                              # human-readable capability description
 ```
 
 Debug mode is required to see runtime `VowViolation` output. Release omits all vow checks.
+`vow build` verifies by default; use `--no-verify` to skip ESBMC verification.
+`vow verify` runs only the frontend + verification pipeline (no codegen, no executable output).
 
 ## Architecture
 
