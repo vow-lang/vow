@@ -1137,6 +1137,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // b ptr
             sig.returns.push(AbiParam::new(types::I8)); // bool
         }
+        "__vow_string_contains" => {
+            sig.params.push(AbiParam::new(types::I64)); // haystack ptr
+            sig.params.push(AbiParam::new(types::I64)); // needle ptr
+            sig.returns.push(AbiParam::new(types::I8)); // bool
+        }
         "__vow_string_push_str" => {
             sig.params.push(AbiParam::new(types::I64)); // dest ptr
             sig.params.push(AbiParam::new(types::I64)); // src ptr

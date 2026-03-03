@@ -1768,11 +1768,11 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
         ctx.cur_vow_lid = -1;
     }
 
-    let nparams: i64 = list_len(a, params_lid) / 2;
+    let nparams: i64 = list_len(a, params_lid) / 3;
     let mut pi: i64 = 0;
     while pi < nparams {
-        let pname_sid: i64 = list_get(a, params_lid, pi * 2);
-        let ptid: i64 = list_get(a, params_lid, pi * 2 + 1);
+        let pname_sid: i64 = list_get(a, params_lid, pi * 3);
+        let ptid: i64 = list_get(a, params_lid, pi * 3 + 1);
         let pty: i64 = lower_ast_ty(a, ptid);
         func.params.push(pty);
         let arg_args: Vec<i64> = Vec::new();
@@ -1805,6 +1805,29 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
 
         lctx_define(ctx, pname, arg_id);
         pi = pi + 1;
+    }
+
+    let mut ri: i64 = 0;
+    while ri < nparams {
+        let ref_eid: i64 = list_get(a, params_lid, ri * 3 + 2);
+        if ref_eid != -1 {
+            let rpname_sid: i64 = list_get(a, params_lid, ri * 3);
+            let rpname: String = arena_str(a, rpname_sid);
+            let desc: String = String::from("requires ");
+            desc.push_str(print_expr_text(a, ref_eid));
+            desc.push_str(String::from(" (where on parameter "));
+            desc.push_str(rpname);
+            desc.push_str(String::from(")"));
+            let binding_names: Vec<String> = Vec::new();
+            let binding_ids: Vec<i64> = Vec::new();
+            collect_free_vars_in_expr(ctx, ref_eid, binding_names, binding_ids);
+            let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLER(), binding_ids, binding_names);
+            let pred_id: i64 = lower_expr(ctx, ref_eid);
+            let vow_args: Vec<i64> = Vec::new();
+            vow_args.push(pred_id);
+            lctx_emit(ctx, IOP_VOW_REQ(), ITY_UNIT(), vow_args, IDATA_VOW_ID(), vow_id, 0, String::from(""));
+        }
+        ri = ri + 1;
     }
 
     if vow_lid != -1 {

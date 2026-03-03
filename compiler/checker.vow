@@ -137,11 +137,11 @@ fn register_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     let name: String = arena_str(a, name_sid);
     let params_lid: i64 = fn_params_lid(a, fid);
     let n_pairs: i64 = list_len(a, params_lid);
-    let n_params: i64 = n_pairs / 2;
+    let n_params: i64 = n_pairs / 3;
     let param_tids: Vec<i64> = Vec::new();
     let mut i: i64 = 0;
     while i < n_params {
-        let ast_tid: i64 = list_get(a, params_lid, i * 2 + 1);
+        let ast_tid: i64 = list_get(a, params_lid, i * 3 + 1);
         param_tids.push(resolve_ast_ty(e, m, ast_tid));
         i = i + 1;
     }
@@ -208,12 +208,12 @@ fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
 
     let params_lid: i64 = fn_params_lid(a, fid);
     let n_pairs: i64 = list_len(a, params_lid);
-    let n_params: i64 = n_pairs / 2;
+    let n_params: i64 = n_pairs / 3;
     let mut i: i64 = 0;
     while i < n_params {
-        let psid: i64 = list_get(a, params_lid, i * 2);
+        let psid: i64 = list_get(a, params_lid, i * 3);
         let pname: String = arena_str(a, psid);
-        let ast_ptid: i64 = list_get(a, params_lid, i * 2 + 1);
+        let ast_ptid: i64 = list_get(a, params_lid, i * 3 + 1);
         let ptid: i64 = resolve_ast_ty(e, m, ast_ptid);
         env_define_var(e, pname, ptid);
         i = i + 1;

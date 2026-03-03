@@ -526,6 +526,7 @@ impl<'e> Checker<'e> {
                         "len" => Ty::I64,
                         "push_str" => Ty::Unit,
                         "eq" => Ty::Bool,
+                        "contains" => Ty::Bool,
                         "byte_at" => Ty::I64,
                         "push_byte" => Ty::Unit,
                         _ => Ty::Unit,

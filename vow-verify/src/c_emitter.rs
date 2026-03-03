@@ -422,7 +422,9 @@ fn emit_inst(
                         let vec = inst.args[0].0;
                         let val = inst.args[1].0;
                         out.push_str(&format!(
-                            "  v{vec}.data[v{vec}.len] = v{val};\n  v{vec}.len++;\n"
+                            "  __ESBMC_assert(v{vec}.len < {}, \"vec capacity\");\n\
+                             \x20 v{vec}.data[v{vec}.len] = v{val};\n  v{vec}.len++;\n",
+                            VOW_VEC_MAX
                         ));
                     }
                     "__vow_vec_get_val" => {
@@ -482,7 +484,9 @@ fn emit_inst(
                         let s = inst.args[0].0;
                         let byte = inst.args[1].0;
                         out.push_str(&format!(
-                            "  v{s}.data[v{s}.len] = (int8_t)v{byte};\n  v{s}.len++;\n"
+                            "  __ESBMC_assert(v{s}.len < {}, \"string capacity\");\n\
+                             \x20 v{s}.data[v{s}.len] = (int8_t)v{byte};\n  v{s}.len++;\n",
+                            VOW_STRING_MAX
                         ));
                     }
                     "__vow_string_byte_at" => {
@@ -496,7 +500,31 @@ fn emit_inst(
                     "__vow_string_eq" => {
                         let a = inst.args[0].0;
                         let b = inst.args[1].0;
-                        out.push_str(&format!("  _Bool v{id} = (v{a}.len == v{b}.len);\n"));
+                        out.push_str(&format!(
+                            "  _Bool v{id} = (v{a}.len == v{b}.len);\n\
+                             \x20 if (v{id}) {{\n\
+                             \x20   for (int64_t __i = 0; __i < v{a}.len; __i++) {{\n\
+                             \x20     if (v{a}.data[__i] != v{b}.data[__i]) {{ v{id} = 0; break; }}\n\
+                             \x20   }}\n\
+                             \x20 }}\n"
+                        ));
+                    }
+                    "__vow_string_contains" => {
+                        let h = inst.args[0].0;
+                        let n = inst.args[1].0;
+                        out.push_str(&format!(
+                            "  _Bool v{id} = 0;\n\
+                             \x20 if (v{n}.len == 0) {{ v{id} = 1; }}\n\
+                             \x20 else if (v{n}.len <= v{h}.len) {{\n\
+                             \x20   for (int64_t __i = 0; __i <= v{h}.len - v{n}.len; __i++) {{\n\
+                             \x20     _Bool __match = 1;\n\
+                             \x20     for (int64_t __j = 0; __j < v{n}.len; __j++) {{\n\
+                             \x20       if (v{h}.data[__i + __j] != v{n}.data[__j]) {{ __match = 0; break; }}\n\
+                             \x20     }}\n\
+                             \x20     if (__match) {{ v{id} = 1; break; }}\n\
+                             \x20   }}\n\
+                             \x20 }}\n"
+                        ));
                     }
                     "__vow_string_print" => {
                         out.push_str("  /* string print not modelled */\n");
@@ -529,7 +557,10 @@ fn emit_inst(
                              \x20   for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
                              \x20     if (v{m}.keys[__i] == v{k}) {{ v{m}.vals[__i] = v{v}; __found = 1; break; }}\n\
                              \x20   }}\n\
-                             \x20   if (!__found) {{ v{m}.keys[v{m}.len] = v{k}; v{m}.vals[v{m}.len] = v{v}; v{m}.len++; }}\n\
+                             \x20   if (!__found) {{\n\
+                             \x20     __ESBMC_assert(v{m}.len < {VOW_HASHMAP_MAX}, \"hashmap capacity\");\n\
+                             \x20     v{m}.keys[v{m}.len] = v{k}; v{m}.vals[v{m}.len] = v{v}; v{m}.len++;\n\
+                             \x20   }}\n\
                              \x20 }}\n"
                         ));
                     }
@@ -1418,6 +1449,7 @@ mod tests {
             ],
         );
         let c = emit_c_function(&func);
+        assert!(c.contains("__ESBMC_assert(v2.len < 128, \"vec capacity\")"), "push capacity: {c}");
         assert!(c.contains("v2.data[v2.len] = v3;"), "push store: {c}");
         assert!(c.contains("v2.len++;"), "push increment: {c}");
     }
@@ -1752,6 +1784,10 @@ mod tests {
         );
         let c = emit_c_function(&func);
         assert!(
+            c.contains("__ESBMC_assert(v1.len < 256, \"string capacity\")"),
+            "push_byte capacity: {c}"
+        );
+        assert!(
             c.contains("v1.data[v1.len] = (int8_t)v2;"),
             "push_byte store: {c}"
         );
@@ -1879,7 +1915,56 @@ mod tests {
         let c = emit_c_function(&func);
         assert!(
             c.contains("_Bool v4 = (v1.len == v3.len)"),
-            "string eq: {c}"
+            "string eq length check: {c}"
+        );
+        assert!(
+            c.contains("v1.data[__i] != v3.data[__i]"),
+            "string eq byte comparison: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_string_contains() {
+        use vow_ir::InstId;
+        let func = make_func(
+            "has_sub",
+            vec![],
+            Ty::Bool,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                Inst {
+                    id: InstId(1),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                },
+                inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(2)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                },
+                Inst {
+                    id: InstId(4),
+                    opcode: Opcode::Call,
+                    ty: Ty::Bool,
+                    args: vec![InstId(1), InstId(3)],
+                    data: InstData::CallExtern("__vow_string_contains".to_string()),
+                    origin: sp(),
+                },
+                inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func);
+        assert!(c.contains("_Bool v4 = 0;"), "contains init: {c}");
+        assert!(
+            c.contains("v1.data[__i + __j] != v3.data[__j]"),
+            "contains byte comparison: {c}"
         );
     }
 
@@ -2061,6 +2146,7 @@ mod tests {
         let c = emit_c_function(&func);
         assert!(c.contains("v0.keys[__i] == v1"), "key search: {c}");
         assert!(c.contains("v0.vals[__i] = v2"), "update existing: {c}");
+        assert!(c.contains("__ESBMC_assert(v0.len < 64, \"hashmap capacity\")"), "insert capacity: {c}");
         assert!(c.contains("v0.keys[v0.len] = v1"), "insert new key: {c}");
         assert!(c.contains("v0.vals[v0.len] = v2"), "insert new val: {c}");
         assert!(c.contains("v0.len++"), "insert increments len: {c}");

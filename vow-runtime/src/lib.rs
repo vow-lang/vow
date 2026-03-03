@@ -1,6 +1,6 @@
 #![allow(clippy::missing_safety_doc)]
 
-use std::ffi::{CStr, c_char};
+use std::ffi::{c_char, CStr};
 use std::io::Write as _;
 
 const TAG_I32: u8 = 0;
@@ -302,7 +302,31 @@ pub unsafe extern "C" fn __vow_string_eq(a: *const u8, b: *const u8) -> i64 {
     }
     let sa = unsafe { std::slice::from_raw_parts(va.ptr, va.len) };
     let sb = unsafe { std::slice::from_raw_parts(vb.ptr, vb.len) };
-    if sa == sb { 1 } else { 0 }
+    if sa == sb {
+        1
+    } else {
+        0
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_contains(haystack: *const u8, needle: *const u8) -> i64 {
+    let vh = unsafe { &*(haystack as *const VowVec) };
+    let vn = unsafe { &*(needle as *const VowVec) };
+    let sh = unsafe { std::slice::from_raw_parts(vh.ptr, vh.len) };
+    let sn = unsafe { std::slice::from_raw_parts(vn.ptr, vn.len) };
+    if sn.is_empty() {
+        return 1;
+    }
+    if vn.len > vh.len {
+        return 0;
+    }
+    for i in 0..=(vh.len - vn.len) {
+        if sh[i..i + vn.len] == *sn {
+            return 1;
+        }
+    }
+    0
 }
 
 #[unsafe(no_mangle)]

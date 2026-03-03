@@ -1178,6 +1178,18 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         span,
                     )
                 }
+                (Some("String"), "contains") => {
+                    let arg_id = args.first().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
+                        ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                    });
+                    ctx.emit(
+                        Opcode::Call,
+                        Ty::Bool,
+                        vec![recv_id, arg_id],
+                        InstData::CallExtern("__vow_string_contains".to_string()),
+                        span,
+                    )
+                }
                 (Some("String"), "byte_at") => {
                     let idx_id = args.first().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
                         ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)

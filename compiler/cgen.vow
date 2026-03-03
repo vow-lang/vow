@@ -884,7 +884,7 @@ fn gen_fn_params(g: CGen, a: AstArena, params_lid: i64) -> String {
         result.push_str(gen_type(a, param_tid));
         result.push_str(String::from(" "));
         result.push_str(sanitize_ident(arena_str(a, name_sid)));
-        i = i + 2;
+        i = i + 3;
     }
     let _unused2: CGen = g;
     result
@@ -919,7 +919,7 @@ fn gen_fn(g: CGen, a: AstArena, fid: i64) {
         if ptype.len() > 0 {
             cg_register_var(g, pname, ptype);
         }
-        pi = pi + 2;
+        pi = pi + 3;
     }
     g.indent = 1;
     let trail_val: String = gen_block_body(g, a, body_bid);

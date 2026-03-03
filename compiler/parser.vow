@@ -289,8 +289,14 @@ fn parse_params(p: Parser) -> i64 {
         let name_sid: i64 = expect_ident(p);
         let _colon: bool = expect(p, tok_colon());
         let tid: i64 = parse_type(p);
+        let mut refinement_eid: i64 = -1;
+        if at(p, tok_kw_where()) {
+            let _w: Token = advance(p);
+            refinement_eid = parse_expr(p);
+        }
         items.push(name_sid);
         items.push(tid);
+        items.push(refinement_eid);
         if at(p, tok_comma()) {
             let _c: Token = advance(p);
         }
