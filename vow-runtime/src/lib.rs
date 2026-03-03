@@ -375,17 +375,17 @@ pub unsafe extern "C" fn __vow_string_push_byte(s: *mut u8, byte: i64) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_fs_read(path_ptr: *const u8) -> *mut u8 {
     if path_ptr.is_null() {
-        return std::ptr::null_mut();
+        return __vow_vec_new(1, 1);
     }
     let v = unsafe { &*(path_ptr as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let path = match std::str::from_utf8(bytes) {
         Ok(s) => s,
-        Err(_) => return std::ptr::null_mut(),
+        Err(_) => return __vow_vec_new(1, 1),
     };
     match std::fs::read(path) {
         Ok(bytes) => unsafe { __vow_string_new(bytes.as_ptr() as *const i8, bytes.len()) },
-        Err(_) => std::ptr::null_mut(),
+        Err(_) => __vow_vec_new(1, 1),
     }
 }
 

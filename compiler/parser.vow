@@ -76,6 +76,10 @@ fn push_error(p: Parser, msg: String) {
 
 fn parse_module(tokens: Vec<Token>) -> Module [io] {
     let arena: AstArena = arena_new();
+    parse_module_into(tokens, arena)
+}
+
+fn parse_module_into(tokens: Vec<Token>, arena: AstArena) -> Module [io] {
     let p: Parser = parser_new(tokens, arena);
 
     if at(p, tok_kw_module()) {

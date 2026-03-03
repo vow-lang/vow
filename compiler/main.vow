@@ -24,6 +24,75 @@ fn has_flag(argv: Vec<String>, flag: String) -> bool {
     found
 }
 
+fn get_dir_path(path: String) -> String {
+    let mut last_slash: i64 = -1;
+    let mut i: i64 = 0;
+    let n: i64 = path.len();
+    while i < n {
+        if path.byte_at(i) == 47 {
+            last_slash = i;
+        }
+        i = i + 1;
+    }
+    if last_slash == -1 {
+        String::from(".")
+    } else {
+        let r: String = String::from("");
+        let mut j: i64 = 0;
+        while j < last_slash {
+            r.push_byte(path.byte_at(j));
+            j = j + 1;
+        }
+        r
+    }
+}
+
+fn resolve_use_path(arena: AstArena, root_dir: String, use_lid: i64) -> String {
+    let r: String = String::from("");
+    r.push_str(root_dir);
+    let n: i64 = list_len(arena, use_lid);
+    let mut i: i64 = 0;
+    while i < n {
+        let sid: i64 = list_get(arena, use_lid, i);
+        let component: String = arena.strs[sid];
+        r.push_byte(47);
+        r.push_str(component);
+        i = i + 1;
+    }
+    r.push_str(String::from(".vow"));
+    r
+}
+
+fn load_deps(root_dir: String, m: Module, arena: AstArena, all_items: Vec<i64>, visited: Vec<String>) [io] {
+    let uses: Vec<i64> = m.uses;
+    let n_uses: i64 = uses.len();
+    let mut ui: i64 = 0;
+    while ui < n_uses {
+        let use_lid: i64 = uses[ui];
+        let dep_path: String = resolve_use_path(arena, root_dir, use_lid);
+        if !vec_contains_str(visited, dep_path) {
+            visited.push(dep_path);
+            let src: String = fs_read(dep_path);
+            if src.len() == 0 {
+                let msg: String = str2(String::from("error: cannot read "), dep_path);
+                eprintln_str(msg);
+            } else {
+                let tokens: Vec<Token> = lex(src);
+                let dep_m: Module = parse_module_into(tokens, arena);
+                load_deps(root_dir, dep_m, arena, all_items, visited);
+                let dep_items: Vec<i64> = dep_m.items;
+                let n_dep: i64 = dep_items.len();
+                let mut di: i64 = 0;
+                while di < n_dep {
+                    all_items.push(dep_items[di]);
+                    di = di + 1;
+                }
+            }
+        }
+        ui = ui + 1;
+    }
+}
+
 fn main() -> i32 [io] {
     let argv: Vec<String> = args();
     let argc: i64 = argv.len();
@@ -35,25 +104,41 @@ fn main() -> i32 [io] {
     let path: String = argv[argc - 1];
     let src: String = fs_read(path);
     let tokens: Vec<Token> = lex(src);
-    let n_tokens: i64 = tokens.len();
-    let m: Module = parse_module(tokens);
-    let n_items: i64 = m.items.len();
+    let arena: AstArena = arena_new();
+    let m: Module = parse_module_into(tokens, arena);
+    let root_dir: String = get_dir_path(path);
+    let all_items: Vec<i64> = Vec::new();
+    let visited: Vec<String> = Vec::new();
+    visited.push(path);
+    load_deps(root_dir, m, arena, all_items, visited);
+    let root_items: Vec<i64> = m.items;
+    let n_root: i64 = root_items.len();
+    let mut ri: i64 = 0;
+    while ri < n_root {
+        all_items.push(root_items[ri]);
+        ri = ri + 1;
+    }
+    let merged: Module = Module {
+        name_sid: 0,
+        uses: Vec::new(),
+        items: all_items,
+        arena: arena,
+    };
+    let n_items: i64 = all_items.len();
     let e: CheckEnv = env_new();
-    check_module(e, m);
+    check_module(e, merged);
     let n_errors: i64 = e.error_count;
-    print_i64(n_tokens);
-    print_str(" tokens, ");
     print_i64(n_items);
     print_str(" items, ");
     print_i64(n_errors);
     print_str(" errors\n");
     if n_errors == 0 {
         if cgen_mode {
-            let c_code: String = gen_module_str(m);
+            let c_code: String = gen_module_str(merged);
             let out_path: String = str2(path, String::from(".c"));
             fs_write(out_path, c_code);
         } else {
-            let ir_mod: IrModule = lower_module_vow(m);
+            let ir_mod: IrModule = lower_module_vow(merged);
             let ir_text: String = print_module(ir_mod);
             print_str(ir_text);
         }
