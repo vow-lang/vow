@@ -4,6 +4,7 @@ compiler/*.o
 compiler/*.vow.c
 /.claude/*.local.json
 /.claude/worktrees/
+/.chief/
 /.claire/
 /codecov
 /lcov.info
