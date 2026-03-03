@@ -49,7 +49,7 @@ All diagnostic output flows through **`vow-diag`**, which every other crate uses
 - **`vow-ir`** — Pizlo-style SSA IR with instruction-value uniformity. Every `Inst` is a value. Phi/Upsilon nodes (not traditional SSA Phi). `InsertionSet` is the standard IR mutation primitive.
 - **`vow-codegen`** — `Backend` trait + Cranelift backend. Debug builds emit runtime vow checks via `__vow_violation`; release builds omit them entirely.
 - **`vow-verify`** — ESBMC integration. Extracts verification conditions from IR, invokes ESBMC, maps counterexamples back to source via `Origin` metadata.
-- **`vow-clif-shim`** — `extern "C"` FFI shims wrapping Cranelift for the self-hosted compiler. The self-hosted `clif.vow` calls these shims to produce native object files directly.
+- **`vow-clif-shim`** — `extern "C"` FFI shims wrapping Cranelift for the self-hosted compiler. The self-hosted `clif.vow` calls these shims to produce native object files directly. Uses stack slots (not SSA) to bypass Cranelift dominance requirements for cross-block references in the self-hosted IR.
 - **`vow-runtime`** — vow violation handler (`__vow_violation`), print helpers (`__vow_print_str`, `__vow_print_i64`), arithmetic overflow handler.
 - **`vow`** — CLI driver (`vowc`). Orchestrates the parallel codegen + verification pipeline. Structured JSON build output.
 - **`vow-diag`** — `Diagnostic`, `ErrorCode`, `Blame` (Caller/Callee), `JsonEmitter`, `HumanEmitter`.
@@ -108,6 +108,24 @@ sha256sum /tmp/compiler_b /tmp/compiler_c              # must be identical (bina
 
 **Important:** Always use `ulimit -v 2000000` when running self-compiled binaries to cap memory.
 
+### vow-clif-shim architecture
+
+The shim exposes a medium-granularity FFI API: module-level operations are separate calls
+(`__vow_clif_create`, `__vow_clif_add_string`, `__vow_clif_declare_function`, `__vow_clif_finish`,
+`__vow_clif_link`), while per-function compilation is a single call (`__vow_clif_compile_function`)
+that receives the function's IR as flattened parallel arrays (ids, ops, types, data kinds, values,
+strings, args). This avoids Cranelift `FunctionBuilder` lifetime issues across FFI boundaries.
+
+The shim uses stack slots instead of SSA values for all instruction results. This is necessary
+because the self-hosted IR has cross-block references between sibling branches (e.g., an else
+branch referencing a value from the then branch), which violates Cranelift's SSA dominance
+requirements. Each instruction result is stored in a stack slot; reads load from the slot.
+`BTreeMap` (not `HashMap`) is used for `slot_map` to ensure deterministic codegen for binary
+fixed-point reproducibility.
+
+VowVec layout: `{ ptr: *mut u8, len: usize, cap: usize }` = 24 bytes. The shim reads Vec and
+String values directly through this layout. All FFI parameters are `i64` (opaque pointers or values).
+
 ### Gotchas
 
 - Chained field access on struct values requires annotated `let` bindings.
@@ -117,6 +135,11 @@ sha256sum /tmp/compiler_b /tmp/compiler_c              # must be identical (bina
   let s: String = ts.strs[i];
   ```
 - `__vow_string_eq` returns `i64` (not `bool`) to avoid C ABI mismatch with Rust's 1-byte bool.
+- `lctx_assign` in `lower.vow` does in-place mutation of `scope_vals[i]`. `lctx_restore` only
+  pops entries by vector length — it cannot undo in-place mutations. When lowering if-else,
+  mutation variable values must be explicitly saved before and restored after each branch.
+- Vec indexed assignment (`v[i] = val`) in Vow emits `__vow_vec_set_val(v, i, val)`. Both the
+  Rust IR lowerer and self-hosted `lower.vow` handle EXPR_INDEX on the LHS of assignments.
 
 ### Examples
 
