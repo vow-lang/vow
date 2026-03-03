@@ -75,71 +75,21 @@ code, prove it correct, blame-track any failure, counterexample-guide the fix.
 
 ---
 
-## Phase 10: Close the CEGIS Loop (~4 weeks)
+## Phase 10: Close the CEGIS Loop — COMPLETE
 
-The highest-leverage work. Make this workflow end-to-end:
-
-    agent writes spec -> writes code -> compile -> ALL errors as JSON ->
-    fix -> verify -> structured counterexample -> fix -> verify passes
-
-### 10.1 All diagnostics in build JSON (hours)
-
-The JsonEmitter already collects all diagnostics. The CLI driver just doesn't
-expose them in the build output JSON. Add a `"diagnostics": [...]` array.
-
-Impact: Agents can batch-fix all errors in one pass (50% faster feedback loop).
-
-### 10.2 Structured ESBMC counterexamples as JSON (~1 week)
-
-Parse ESBMC output (XML or text) into structured JSON:
-`{"inputs": {"y": 0}, "violation": "y != 0", "source": {"file": "divide.vow", "offset": 42}}`
-
-Impact: Verification failures become actionable. Agents can suggest specific fixes.
-
-### 10.3 Source location in runtime VowViolation (days)
-
-Codegen already emits vow_id and blame. Add file path and byte offset to the
-VowEntry metadata, thread it through to `__vow_violation`.
-
-Impact: Agents can jump directly to violation source.
-
-### 10.4 Vec/String/HashMap ESBMC models (~2 weeks)
-
-Extend vow-verify/src/c_emitter.rs to model collection operations:
-- `v.len()`, `v.push()`, `v.get()` for Vec
-- `s.len()`, `s.contains()` for String
-- `m.contains_key()`, `m.len()` for HashMap
-
-Impact: Unlocks contract verification for real programs (not just integer arithmetic).
-
-### 10.5 `where` clause / refinement type syntax (days)
-
-`fn divide(x: i64, y: i64 where y != 0) -> i64` desugars to `requires: y != 0`.
-
-`type NonZero = { x: i64 | x > 0 }` as refinement type syntax.
-
-Parser changes + desugaring to existing vow block infrastructure.
-
-### 10.6 Verified example programs (~1 week)
-
-Write 10-15 programs demonstrating the full contract-verify loop:
-- `ensures` with `result` keyword
-- Multiple contracts per function
-- Vec/String predicates
-- Multi-function call chains with blame tracking
-- Loop invariants on collection iteration
+All sub-tasks done:
+- 10.1 All diagnostics in build JSON
+- 10.2 Structured ESBMC counterexamples as JSON
+- 10.3 Source location in runtime VowViolation
+- 10.4 Vec/String/HashMap ESBMC models
+- 10.5 `where` clause / refinement type syntax
+- 10.6 Verified example programs (~20 programs in `examples/`)
 
 ---
 
 ## Phase 11: Module Loading + Build System (~2 weeks)
 
-### 11.1 DFS module loading in self-hosted compiler (~300 lines)
-
-Implement recursive `use` resolution in compiler/main.vow, mirroring the
-Rust module_loader.rs logic. Parse `use foo.bar` -> resolve to `foo/bar.vow`
--> read -> parse -> merge all items.
-
-Removes the concat_vow.sh crutch. Enables multi-file Vow projects.
+### 11.1 DFS module loading in self-hosted compiler — COMPLETE
 
 ### 11.2 Basic build commands
 
