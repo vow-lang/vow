@@ -10,7 +10,7 @@ use checker
 use ir
 use ir_printer
 use lower
-use cgen
+use clif
 
 fn has_flag(argv: Vec<String>, flag: String) -> bool {
     let mut i: i64 = 0;
@@ -22,6 +22,60 @@ fn has_flag(argv: Vec<String>, flag: String) -> bool {
         i = i + 1;
     }
     found
+}
+
+fn get_flag_arg(argv: Vec<String>, flag: String) -> String {
+    let mut i: i64 = 0;
+    while i < argv.len() - 1 {
+        if argv[i] == flag {
+            return argv[i + 1];
+        }
+        i = i + 1;
+    }
+    String::from("")
+}
+
+fn get_source_path(argv: Vec<String>) -> String {
+    let argc: i64 = argv.len();
+    let mut i: i64 = argc - 1;
+    while i >= 0 {
+        let a: String = argv[i];
+        let first_byte: i64 = a.byte_at(0);
+        if first_byte != 45 {
+            if i > 0 {
+                let prev: String = argv[i - 1];
+                if prev == String::from("-o") {
+                    i = i - 1;
+                } else {
+                    return a;
+                }
+            } else {
+                return a;
+            }
+        }
+        i = i - 1;
+    }
+    String::from("")
+}
+
+fn strip_vow_ext(path: String) -> String {
+    let n: i64 = path.len();
+    if n > 4 {
+        let d: i64 = path.byte_at(n - 4);
+        let v: i64 = path.byte_at(n - 3);
+        let o: i64 = path.byte_at(n - 2);
+        let w: i64 = path.byte_at(n - 1);
+        if d == 46 && v == 118 && o == 111 && w == 119 {
+            let r: String = String::from("");
+            let mut i: i64 = 0;
+            while i < n - 4 {
+                r.push_byte(path.byte_at(i));
+                i = i + 1;
+            }
+            return r;
+        }
+    }
+    path
 }
 
 fn get_dir_path(path: String) -> String {
@@ -97,11 +151,15 @@ fn main() -> i32 [io] {
     let argv: Vec<String> = args();
     let argc: i64 = argv.len();
     if argc == 0 {
-        eprintln_str("usage: main <file.vow>");
+        eprintln_str("usage: main [-o <output>] <file.vow>");
         return 1;
     }
-    let cgen_mode: bool = has_flag(argv, String::from("--cgen"));
-    let path: String = argv[argc - 1];
+    let has_output: bool = has_flag(argv, String::from("-o"));
+    let path: String = get_source_path(argv);
+    if path.len() == 0 {
+        eprintln_str("usage: main [-o <output>] <file.vow>");
+        return 1;
+    }
     let src: String = fs_read(path);
     let tokens: Vec<Token> = lex(src);
     let arena: AstArena = arena_new();
@@ -133,10 +191,14 @@ fn main() -> i32 [io] {
     print_i64(n_errors);
     print_str(" errors\n");
     if n_errors == 0 {
-        if cgen_mode {
-            let c_code: String = gen_module_str(merged);
-            let out_path: String = str2(path, String::from(".c"));
-            fs_write(out_path, c_code);
+        if has_output {
+            let out: String = get_flag_arg(argv, String::from("-o"));
+            let ir_mod: IrModule = lower_module_vow(merged);
+            let result: i64 = clif_emit_module(ir_mod, out, 0);
+            if result != 0 {
+                eprintln_str(String::from("compilation failed"));
+                return 1;
+            }
         } else {
             let ir_mod: IrModule = lower_module_vow(merged);
             let ir_text: String = print_module(ir_mod);

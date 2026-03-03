@@ -23,6 +23,14 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "fs_write" => Some(("__vow_fs_write", Ty::I64)),
         "args" => Some(("__vow_args", Ty::Ptr)),
         "process_exit" => Some(("__vow_process_exit", Ty::Unit)),
+        "__vow_clif_create" => Some(("__vow_clif_create", Ty::I64)),
+        "__vow_clif_add_string" => Some(("__vow_clif_add_string", Ty::Unit)),
+        "__vow_clif_declare_extern" => Some(("__vow_clif_declare_extern", Ty::Unit)),
+        "__vow_clif_declare_function" => Some(("__vow_clif_declare_function", Ty::Unit)),
+        "__vow_clif_compile_function" => Some(("__vow_clif_compile_function", Ty::I64)),
+        "__vow_clif_finish" => Some(("__vow_clif_finish", Ty::I64)),
+        "__vow_clif_link" => Some(("__vow_clif_link", Ty::I64)),
+        "__vow_clif_destroy" => Some(("__vow_clif_destroy", Ty::Unit)),
         _ => None,
     }
 }

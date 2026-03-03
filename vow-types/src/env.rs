@@ -123,6 +123,105 @@ impl TypeEnv {
                 effects: [Effect::IO].into_iter().collect(),
             },
         );
+
+        // Cranelift shim FFI functions (used by the self-hosted compiler's clif.vow)
+        env.define_fn(
+            "__vow_clif_create",
+            FnSig {
+                params: vec![Ty::I64],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "__vow_clif_add_string",
+            FnSig {
+                params: vec![Ty::I64, Ty::Str],
+                return_ty: Ty::Unit,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "__vow_clif_declare_extern",
+            FnSig {
+                params: vec![Ty::I64, Ty::Str],
+                return_ty: Ty::Unit,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "__vow_clif_declare_function",
+            FnSig {
+                params: vec![
+                    Ty::I64,
+                    Ty::I64,
+                    Ty::Str,
+                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
+                    Ty::I64,
+                    Ty::I64,
+                    Ty::I64,
+                ],
+                return_ty: Ty::Unit,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "__vow_clif_compile_function",
+            FnSig {
+                params: vec![
+                    Ty::I64,
+                    Ty::I64,
+                    Ty::I64,
+                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
+                    Ty::I64,
+                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
+                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
+                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
+                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
+                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
+                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
+                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
+                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
+                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::Str]),
+                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
+                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
+                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
+                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
+                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
+                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::Str]),
+                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
+                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
+                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::Str]),
+                ],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "__vow_clif_finish",
+            FnSig {
+                params: vec![Ty::I64, Ty::Str],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "__vow_clif_link",
+            FnSig {
+                params: vec![Ty::Str, Ty::Str],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "__vow_clif_destroy",
+            FnSig {
+                params: vec![Ty::I64],
+                return_ty: Ty::Unit,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+
         env
     }
 

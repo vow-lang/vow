@@ -1,0 +1,201 @@
+module Clif
+
+use ir
+
+fn str2(a: String, b: String) -> String {
+    let r: String = String::from("");
+    r.push_str(a);
+    r.push_str(b);
+    r
+}
+
+fn collect_extern_syms(m: IrModule) -> Vec<String> {
+    let result: Vec<String> = Vec::new();
+    let fns: Vec<IrFunction> = m.functions;
+    let mut fi: i64 = 0;
+    while fi < fns.len() {
+        let f: IrFunction = fns[fi];
+        let blocks: Vec<IrBlock> = f.blocks;
+        let mut bi: i64 = 0;
+        while bi < blocks.len() {
+            let blk: IrBlock = blocks[bi];
+            let insts: Vec<IrInst> = blk.insts;
+            let mut ii: i64 = 0;
+            while ii < insts.len() {
+                let inst: IrInst = insts[ii];
+                if inst.dk == IDATA_CALL_EXTERN() {
+                    let sym: String = inst.ds;
+                    if !vec_contains_str(result, sym) {
+                        result.push(sym);
+                    }
+                }
+                ii = ii + 1;
+            }
+            bi = bi + 1;
+        }
+        fi = fi + 1;
+    }
+    result
+}
+
+fn clif_compile_function(ctx: i64, func_idx: i64, f: IrFunction) -> i64 [io] {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let n_blocks: i64 = blocks.len();
+
+    let block_starts: Vec<i64> = Vec::new();
+    let block_lengths: Vec<i64> = Vec::new();
+    let inst_ids: Vec<i64> = Vec::new();
+    let inst_ops: Vec<i64> = Vec::new();
+    let inst_tys: Vec<i64> = Vec::new();
+    let inst_dks: Vec<i64> = Vec::new();
+    let inst_dvs: Vec<i64> = Vec::new();
+    let inst_dv2s: Vec<i64> = Vec::new();
+    let inst_ds: Vec<String> = Vec::new();
+    let all_args: Vec<i64> = Vec::new();
+    let arg_offsets: Vec<i64> = Vec::new();
+    let arg_lengths: Vec<i64> = Vec::new();
+
+    let mut bi: i64 = 0;
+    while bi < n_blocks {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let n_insts: i64 = insts.len();
+        block_starts.push(inst_ids.len());
+        block_lengths.push(n_insts);
+
+        let mut ii: i64 = 0;
+        while ii < n_insts {
+            let inst: IrInst = insts[ii];
+            inst_ids.push(inst.id);
+            inst_ops.push(inst.op);
+            inst_tys.push(inst.ty);
+            inst_dks.push(inst.dk);
+            inst_dvs.push(inst.dv);
+            inst_dv2s.push(inst.dv2);
+            inst_ds.push(inst.ds);
+
+            let args: Vec<i64> = inst.args;
+            let n_args: i64 = args.len();
+            arg_offsets.push(all_args.len());
+            arg_lengths.push(n_args);
+            let mut ai: i64 = 0;
+            while ai < n_args {
+                all_args.push(args[ai]);
+                ai = ai + 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+
+    let vows: Vec<IrVowEntry> = f.vows;
+    let n_vows: i64 = vows.len();
+    let vow_ids: Vec<i64> = Vec::new();
+    let vow_blames: Vec<i64> = Vec::new();
+    let vow_descs: Vec<String> = Vec::new();
+    let binding_counts: Vec<i64> = Vec::new();
+    let binding_inst_ids: Vec<i64> = Vec::new();
+    let binding_names: Vec<String> = Vec::new();
+
+    let mut vi: i64 = 0;
+    while vi < n_vows {
+        let ve: IrVowEntry = vows[vi];
+        vow_ids.push(ve.id);
+        vow_blames.push(ve.blame);
+        vow_descs.push(ve.description);
+
+        let bids: Vec<i64> = ve.binding_ids;
+        let bnames: Vec<String> = ve.binding_names;
+        let bc: i64 = bids.len();
+        binding_counts.push(bc);
+        let mut bj: i64 = 0;
+        while bj < bc {
+            binding_inst_ids.push(bids[bj]);
+            binding_names.push(bnames[bj]);
+            bj = bj + 1;
+        }
+        vi = vi + 1;
+    }
+
+    let params: Vec<i64> = f.params;
+
+    __vow_clif_compile_function(
+        ctx, func_idx, f.return_ty, params,
+        n_blocks, block_starts, block_lengths,
+        inst_ids, inst_ops, inst_tys, inst_dks,
+        inst_dvs, inst_dv2s, inst_ds,
+        all_args, arg_offsets, arg_lengths,
+        vow_ids, vow_blames, vow_descs,
+        binding_counts, binding_inst_ids, binding_names
+    )
+}
+
+fn str_eq_lit(s: String, lit: String) -> bool {
+    s == lit
+}
+
+fn clif_emit_module(m: IrModule, output_path: String, mode: i64) -> i64 [io] {
+    let ctx: i64 = __vow_clif_create(mode);
+    if ctx == 0 {
+        eprintln_str(String::from("clif: failed to create context"));
+        return -1;
+    }
+
+    let strings: Vec<String> = m.strings;
+    let mut si: i64 = 0;
+    while si < strings.len() {
+        __vow_clif_add_string(ctx, strings[si]);
+        si = si + 1;
+    }
+
+    let extern_syms: Vec<String> = collect_extern_syms(m);
+    let mut ei: i64 = 0;
+    while ei < extern_syms.len() {
+        __vow_clif_declare_extern(ctx, extern_syms[ei]);
+        ei = ei + 1;
+    }
+
+    let fns: Vec<IrFunction> = m.functions;
+    let n_fns: i64 = fns.len();
+    let mut fi: i64 = 0;
+    while fi < n_fns {
+        let f: IrFunction = fns[fi];
+        let is_main: i64 = {
+            if str_eq_lit(f.name, String::from("main")) {
+                1
+            } else {
+                0
+            }
+        };
+        __vow_clif_declare_function(ctx, fi, f.name, f.params, f.params.len(), f.return_ty, is_main);
+        fi = fi + 1;
+    }
+
+    let mut ci: i64 = 0;
+    while ci < n_fns {
+        let f: IrFunction = fns[ci];
+        let result: i64 = clif_compile_function(ctx, ci, f);
+        if result != 0 {
+            let msg: String = str2(String::from("clif: compile_function failed for "), f.name);
+            eprintln_str(msg);
+            __vow_clif_destroy(ctx);
+            return -1;
+        }
+        ci = ci + 1;
+    }
+
+    let obj_path: String = str2(output_path, String::from(".o"));
+    let finish_result: i64 = __vow_clif_finish(ctx, obj_path);
+    if finish_result != 0 {
+        eprintln_str(String::from("clif: finish failed"));
+        return -1;
+    }
+
+    let link_result: i64 = __vow_clif_link(obj_path, output_path);
+    if link_result != 0 {
+        eprintln_str(String::from("clif: link failed"));
+        return -1;
+    }
+
+    0
+}

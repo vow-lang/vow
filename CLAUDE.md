@@ -49,6 +49,7 @@ All diagnostic output flows through **`vow-diag`**, which every other crate uses
 - **`vow-ir`** — Pizlo-style SSA IR with instruction-value uniformity. Every `Inst` is a value. Phi/Upsilon nodes (not traditional SSA Phi). `InsertionSet` is the standard IR mutation primitive.
 - **`vow-codegen`** — `Backend` trait + Cranelift backend. Debug builds emit runtime vow checks via `__vow_violation`; release builds omit them entirely.
 - **`vow-verify`** — ESBMC integration. Extracts verification conditions from IR, invokes ESBMC, maps counterexamples back to source via `Origin` metadata.
+- **`vow-clif-shim`** — `extern "C"` FFI shims wrapping Cranelift for the self-hosted compiler. The self-hosted `clif.vow` calls these shims to produce native object files directly.
 - **`vow-runtime`** — vow violation handler (`__vow_violation`), print helpers (`__vow_print_str`, `__vow_print_i64`), arithmetic overflow handler.
 - **`vow`** — CLI driver (`vowc`). Orchestrates the parallel codegen + verification pipeline. Structured JSON build output.
 - **`vow-diag`** — `Diagnostic`, `ErrorCode`, `Blame` (Caller/Callee), `JsonEmitter`, `HumanEmitter`.
@@ -72,7 +73,7 @@ All diagnostic output flows through **`vow-diag`**, which every other crate uses
 
 ## Self-Hosted Compiler (Phase 9)
 
-`compiler/` contains a complete Vow implementation of the compiler (6276 lines across 13 modules). The bootstrap triple test passes: the self-hosted compiler is a verified fixed point.
+`compiler/` contains a complete Vow implementation of the compiler (13 modules). The bootstrap triple test passes: the self-hosted compiler is a verified fixed point producing byte-identical binaries.
 
 ### Modules
 
@@ -80,31 +81,29 @@ All diagnostic output flows through **`vow-diag`**, which every other crate uses
 - `ast.vow`, `parser.vow` — parser (Wave 2)
 - `types.vow`, `env.vow`, `checker.vow` — type checker (Wave 3)
 - `ir.vow`, `ir_printer.vow`, `lower.vow` — IR lowering and printing (Wave 4)
-- `cgen.vow` — C code generator (AST → C, pointer-based struct representation)
-- `main.vow` — driver with `--cgen` flag for C output or IR output
+- `clif.vow` — Cranelift backend via FFI shims (`vow-clif-shim` crate)
+- `main.vow` — driver with `-o <path>` for native compilation or IR text output
 
 ### Building and running
 
 ```bash
 ./target/release/vow --no-verify compiler/main.vow   # compile → ./compiler/main
 ./compiler/main compiler/lexer.vow                    # type-check, print IR
-./compiler/main --cgen compiler/lexer.vow             # generate lexer.vow.c
+./compiler/main -o /tmp/lexer compiler/lexer.vow      # compile to native binary
 ```
 
-`./compiler/main` loads a single file only — no recursive `use` resolution. Cross-module
-types appear as unknown (`CTY_NEVER`); errors from unresolved types are suppressed.
+The self-hosted compiler supports DFS module loading via `use` declarations.
 
 ### Bootstrap triple test
 
 `scripts/concat_vow.sh` merges all compiler modules into a single file (stripping `module`/`use` headers), avoiding the need for module loading.
 
 ```bash
-./scripts/concat_vow.sh cgen > /tmp/compiler_cgen.vow          # concatenate all modules
-./target/release/vow --no-verify /tmp/compiler_cgen.vow -o /tmp/compiler_a  # Stage 0: Rust → Binary A
-ulimit -v 2000000; /tmp/compiler_a --cgen /tmp/compiler_cgen.vow            # Stage 1: A → stage1.c
-gcc /tmp/compiler_cgen.vow.c -L target/release -lvow_runtime -lpthread -ldl -lm -o /tmp/compiler_b
-ulimit -v 2000000; /tmp/compiler_b --cgen /tmp/compiler_cgen.vow            # Stage 2: B → stage2.c
-diff /tmp/stage1.c /tmp/stage2.c                                            # must be empty
+./scripts/concat_vow.sh clif > /tmp/compiler_clif.vow
+./target/release/vow --no-verify /tmp/compiler_clif.vow -o /tmp/compiler_a  # Stage 0: Rust → Binary A
+ulimit -v 2000000; /tmp/compiler_a -o /tmp/compiler_b /tmp/compiler_clif.vow  # Stage 1: A → B
+ulimit -v 2000000; /tmp/compiler_b -o /tmp/compiler_c /tmp/compiler_clif.vow  # Stage 2: B → C
+sha256sum /tmp/compiler_b /tmp/compiler_c              # must be identical (binary fixed point)
 ```
 
 **Important:** Always use `ulimit -v 2000000` when running self-compiled binaries to cap memory.
@@ -117,7 +116,6 @@ diff /tmp/stage1.c /tmp/stage2.c                                            # mu
   let ts: TyStore = e.ts;
   let s: String = ts.strs[i];
   ```
-- cgen.vow uses pointer-based structs: `calloc(n_fields, sizeof(long))`, fields accessed via `((long*)ptr)[index]`. Variable types are tracked per-function in CGen for string equality dispatch (`__vow_string_eq` vs pointer `==`).
 - `__vow_string_eq` returns `i64` (not `bool`) to avoid C ABI mismatch with Rust's 1-byte bool.
 
 ### Examples

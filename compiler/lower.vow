@@ -641,6 +641,14 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
         let mutations: Vec<String> = collect_if_mutations(ctx, then_bid, else_eid);
 
+        let nmut: i64 = mutations.len();
+        let saved_mut_vals: Vec<i64> = Vec::new();
+        let mut smi: i64 = 0;
+        while smi < nmut {
+            saved_mut_vals.push(lctx_lookup(ctx, mutations[smi]));
+            smi = smi + 1;
+        }
+
         let cond_id: i64 = lower_expr(ctx, cond_eid);
 
         let then_block: i64 = lctx_new_block(ctx);
@@ -659,7 +667,6 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let then_exit_block: i64 = ctx.current_block;
 
         let mut_up_then: Vec<i64> = Vec::new();
-        let nmut: i64 = mutations.len();
         let mut mi: i64 = 0;
         while mi < nmut {
             let mname: String = mutations[mi];
@@ -681,6 +688,11 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
 
         lctx_restore(ctx, snap);
+        let mut rmi: i64 = 0;
+        while rmi < nmut {
+            lctx_assign(ctx, mutations[rmi], saved_mut_vals[rmi]);
+            rmi = rmi + 1;
+        }
         lctx_switch_to_block(ctx, else_block);
 
         let else_result: i64 = {
@@ -716,6 +728,11 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
 
         lctx_restore(ctx, snap);
+        let mut rmi2: i64 = 0;
+        while rmi2 < nmut {
+            lctx_assign(ctx, mutations[rmi2], saved_mut_vals[rmi2]);
+            rmi2 = rmi2 + 1;
+        }
         lctx_switch_to_block(ctx, merge_block);
 
         let mut mi3: i64 = 0;
@@ -884,6 +901,18 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             fs_args.push(recv_id);
             fs_args.push(val_id);
             return lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, IDATA_FIELD(), fidx, 0, String::from(""));
+        }
+        if lhs_tag == EXPR_INDEX() {
+            let recv_eid: i64 = expr_a(a, lhs_eid);
+            let idx_eid: i64 = expr_b(a, lhs_eid);
+            let recv_id: i64 = lower_expr(ctx, recv_eid);
+            let idx_id: i64 = lower_expr(ctx, idx_eid);
+            let val_id: i64 = lower_expr(ctx, rhs_eid);
+            let set_args: Vec<i64> = Vec::new();
+            set_args.push(recv_id);
+            set_args.push(idx_id);
+            set_args.push(val_id);
+            return lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), set_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_set_val"));
         }
         let rhs_id: i64 = lower_expr(ctx, rhs_eid);
         if lhs_tag == EXPR_IDENT() {

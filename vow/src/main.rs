@@ -6,7 +6,7 @@ use std::thread;
 
 use clap::Parser;
 use vow_codegen::cranelift_backend::CraneliftBackend;
-use vow_codegen::linker::{find_runtime_lib, link};
+use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode};
 use vow_diag::{CollectingEmitter, Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{Counterexample, VerificationResult, verify_function};
@@ -604,7 +604,7 @@ pub fn run_pipeline(
                     verify_message: None,
                 };
             }
-            match link(&[&obj_path], &runtime, &output_path) {
+            match link(&[&obj_path], &runtime, find_shim_lib().as_deref(), &output_path) {
                 Ok(()) => {
                     let _ = std::fs::remove_file(&obj_path);
                     Some(output_path)

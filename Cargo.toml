@@ -8,5 +8,6 @@ members = [
     "vow-diag",
     "vow-runtime",
     "vow",
+    "vow-clif-shim",
 ]
 resolver = "2"

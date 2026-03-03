@@ -38,7 +38,7 @@ fn compile_and_link(module: &Module, mode: BuildMode, dir: &TempDir) -> Option<P
     obj.write_to_file(&obj_path).expect("write obj failed");
 
     let exe_path = dir.path().join("out");
-    link(&[&obj_path], &runtime, &exe_path).expect("link failed");
+    link(&[&obj_path], &runtime, None, &exe_path).expect("link failed");
 
     Some(exe_path)
 }

@@ -1208,6 +1208,47 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // map ptr
             sig.returns.push(AbiParam::new(types::I64)); // len
         }
+        // Cranelift shim FFI (used by self-hosted compiler)
+        "__vow_clif_create" => {
+            sig.params.push(AbiParam::new(types::I64)); // mode
+            sig.returns.push(AbiParam::new(types::I64)); // ctx handle
+        }
+        "__vow_clif_add_string" => {
+            sig.params.push(AbiParam::new(types::I64)); // ctx
+            sig.params.push(AbiParam::new(types::I64)); // str VowVec ptr
+        }
+        "__vow_clif_declare_extern" => {
+            sig.params.push(AbiParam::new(types::I64)); // ctx
+            sig.params.push(AbiParam::new(types::I64)); // sym VowVec ptr
+        }
+        "__vow_clif_declare_function" => {
+            sig.params.push(AbiParam::new(types::I64)); // ctx
+            sig.params.push(AbiParam::new(types::I64)); // idx
+            sig.params.push(AbiParam::new(types::I64)); // name VowVec ptr
+            sig.params.push(AbiParam::new(types::I64)); // param_tys Vec
+            sig.params.push(AbiParam::new(types::I64)); // n_params
+            sig.params.push(AbiParam::new(types::I64)); // ret_ty
+            sig.params.push(AbiParam::new(types::I64)); // is_main
+        }
+        "__vow_clif_compile_function" => {
+            for _ in 0..23 {
+                sig.params.push(AbiParam::new(types::I64));
+            }
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_clif_finish" => {
+            sig.params.push(AbiParam::new(types::I64)); // ctx
+            sig.params.push(AbiParam::new(types::I64)); // obj_path VowVec ptr
+            sig.returns.push(AbiParam::new(types::I64)); // result
+        }
+        "__vow_clif_link" => {
+            sig.params.push(AbiParam::new(types::I64)); // obj_path VowVec ptr
+            sig.params.push(AbiParam::new(types::I64)); // output_path VowVec ptr
+            sig.returns.push(AbiParam::new(types::I64)); // result
+        }
+        "__vow_clif_destroy" => {
+            sig.params.push(AbiParam::new(types::I64)); // ctx
+        }
         _ => {}
     }
     sig

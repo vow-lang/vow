@@ -674,6 +674,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "vow-clif-shim"
+version = "0.1.0"
+dependencies = [
+ "cranelift-codegen",
+ "cranelift-frontend",
+ "cranelift-module",
+ "cranelift-native",
+ "cranelift-object",
+]
+
+[[package]]
 name = "vow-codegen"
 version = "0.1.0"
 dependencies = [

@@ -4,8 +4,8 @@ set -euo pipefail
 MODE="${1:-}"
 DIR="$(cd "$(dirname "$0")/.." && pwd)/compiler"
 
-if [[ "$MODE" != "ir" && "$MODE" != "cgen" ]]; then
-    echo "Usage: $0 {ir|cgen}" >&2
+if [[ "$MODE" != "ir" && "$MODE" != "clif" ]]; then
+    echo "Usage: $0 {ir|clif}" >&2
     exit 1
 fi
 
@@ -18,9 +18,9 @@ echo "module Compiler"
 echo
 
 if [[ "$MODE" == "ir" ]]; then
-    FILES=(span token lexer ast parser types env checker ir ir_printer lower cgen main)
-elif [[ "$MODE" == "cgen" ]]; then
-    FILES=(span token lexer ast parser types env checker ir ir_printer lower cgen main)
+    FILES=(span token lexer ast parser types env checker ir ir_printer lower main)
+elif [[ "$MODE" == "clif" ]]; then
+    FILES=(span token lexer ast parser types env checker ir ir_printer lower clif main)
 fi
 
 for f in "${FILES[@]}"; do
