@@ -4,7 +4,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 
+use std::collections::BTreeMap;
+
 use clap::Parser;
+use serde::Serialize;
 use vow_codegen::cranelift_backend::CraneliftBackend;
 use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode};
@@ -264,106 +267,132 @@ pub struct BuildOutput {
     pub verify_message: Option<String>,
 }
 
+// ---------------------------------------------------------------------------
+// Serde JSON output types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SpanJson {
+    pub file: String,
+    pub offset: u32,
+    pub length: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DiagnosticJson {
+    pub error_code: String,
+    pub message: String,
+    pub severity: String,
+    pub span: SpanJson,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CounterexampleJson {
+    pub function: String,
+    pub inputs: BTreeMap<String, String>,
+    pub violation: String,
+    pub vow_id: u32,
+    pub source: Option<SpanJson>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BuildResult {
+    pub status: String,
+    pub executable: Option<String>,
+    pub diagnostics: Vec<DiagnosticJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub counterexample: Option<String>,
+    pub counterexamples: Vec<CounterexampleJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verify_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verify_message: Option<String>,
+}
+
+impl DiagnosticJson {
+    fn from_diagnostic(d: &Diagnostic) -> Self {
+        Self {
+            error_code: format!("{:?}", d.code),
+            message: d.message.clone(),
+            severity: match d.severity {
+                Severity::Error => "error".to_string(),
+                Severity::Warning => "warning".to_string(),
+                Severity::Note => "note".to_string(),
+            },
+            span: SpanJson {
+                file: d.primary.file.clone(),
+                offset: d.primary.byte_offset,
+                length: d.primary.byte_len,
+            },
+        }
+    }
+}
+
+impl CounterexampleJson {
+    fn from_structured(ce: &StructuredCounterexample) -> Self {
+        Self {
+            function: ce.function.clone(),
+            inputs: ce.inputs.iter().cloned().collect(),
+            violation: ce.violation.clone(),
+            vow_id: ce.vow_id,
+            source: ce.source.as_ref().map(|s| SpanJson {
+                file: s.file.clone(),
+                offset: s.offset,
+                length: s.length,
+            }),
+        }
+    }
+}
+
 impl BuildOutput {
-    pub fn emit_json(&self) {
-        let status_str = match &self.status {
+    pub fn to_build_result(&self) -> BuildResult {
+        let status = match &self.status {
             BuildStatus::Verified => "Verified",
             BuildStatus::Unverified => "Unverified",
             BuildStatus::CompileFailed { .. } => "CompileFailed",
             BuildStatus::VerifyFailed { .. } => "VerifyFailed",
-        };
-        let exe_json = match &self.executable {
-            Some(p) => format!("\"{}\"", p.display()),
-            None => "null".to_string(),
-        };
-        let mut extra = match &self.status {
-            BuildStatus::CompileFailed { message } => {
-                format!(",\"message\":\"{}\"", escape_json(message))
-            }
+        }
+        .to_string();
+
+        let (message, function, counterexample) = match &self.status {
+            BuildStatus::CompileFailed { message } => (Some(message.clone()), None, None),
             BuildStatus::VerifyFailed {
                 function,
                 description,
-            } => {
-                format!(
-                    ",\"function\":\"{}\",\"counterexample\":\"{}\"",
-                    escape_json(function),
-                    escape_json(description)
-                )
-            }
-            _ => String::new(),
+            } => (None, Some(function.clone()), Some(description.clone())),
+            _ => (None, None, None),
         };
-        let diags_json = format_diagnostics_json(&self.diagnostics);
-        let ce_json = format_counterexamples_json(&self.counterexamples);
-        extra.push_str(&format!(",\"counterexamples\":[{ce_json}]"));
-        if let Some(vs) = &self.verify_status {
-            extra.push_str(&format!(",\"verify_status\":\"{}\"", escape_json(vs)));
-        }
-        if let Some(vm) = &self.verify_message {
-            extra.push_str(&format!(",\"verify_message\":\"{}\"", escape_json(vm)));
-        }
-        println!(
-            "{{\"status\":\"{status_str}\",\"executable\":{exe_json},\"diagnostics\":[{diags_json}]{extra}}}"
-        );
-    }
-}
 
-fn format_diagnostics_json(diagnostics: &[Diagnostic]) -> String {
-    diagnostics
-        .iter()
-        .map(|d| {
-            let severity = match d.severity {
-                Severity::Error => "error",
-                Severity::Warning => "warning",
-                Severity::Note => "note",
-            };
-            format!(
-                "{{\"error_code\":\"{:?}\",\"message\":\"{}\",\"severity\":\"{}\",\"span\":{{\"file\":\"{}\",\"offset\":{},\"length\":{}}}}}",
-                d.code,
-                escape_json(&d.message),
-                severity,
-                escape_json(&d.primary.file),
-                d.primary.byte_offset,
-                d.primary.byte_len,
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-fn format_counterexamples_json(counterexamples: &[StructuredCounterexample]) -> String {
-    counterexamples
-        .iter()
-        .map(|ce| {
-            let inputs_json = ce
-                .inputs
+        BuildResult {
+            status,
+            executable: self.executable.as_ref().map(|p| p.display().to_string()),
+            diagnostics: self
+                .diagnostics
                 .iter()
-                .map(|(k, v)| format!("\"{}\":\"{}\"", escape_json(k), escape_json(v)))
-                .collect::<Vec<_>>()
-                .join(",");
-            let source_json = match &ce.source {
-                Some(s) => format!(
-                    "{{\"file\":\"{}\",\"offset\":{},\"length\":{}}}",
-                    escape_json(&s.file),
-                    s.offset,
-                    s.length
-                ),
-                None => "null".to_string(),
-            };
-            format!(
-                "{{\"function\":\"{}\",\"inputs\":{{{inputs_json}}},\"violation\":\"{}\",\"vow_id\":{},\"source\":{source_json}}}",
-                escape_json(&ce.function),
-                escape_json(&ce.violation),
-                ce.vow_id,
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",")
-}
+                .map(DiagnosticJson::from_diagnostic)
+                .collect(),
+            message,
+            function,
+            counterexample,
+            counterexamples: self
+                .counterexamples
+                .iter()
+                .map(CounterexampleJson::from_structured)
+                .collect(),
+            verify_status: self.verify_status.clone(),
+            verify_message: self.verify_message.clone(),
+        }
+    }
 
-fn escape_json(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
+    pub fn emit_json(&self) {
+        let result = self.to_build_result();
+        let json = serde_json::to_string(&result).expect("BuildResult must be serializable");
+        println!("{json}");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1532,11 +1561,20 @@ pub fn main() -> i32 [io] {
     }
 
     #[test]
-    fn escape_json_special_characters() {
-        assert_eq!(escape_json("hello"), "hello");
-        assert_eq!(escape_json(r"a\b"), r"a\\b");
-        assert_eq!(escape_json("a\"b"), "a\\\"b");
-        assert_eq!(escape_json("a\nb"), "a\\nb");
+    fn serde_json_escapes_special_characters() {
+        let result = BuildResult {
+            status: "CompileFailed".to_string(),
+            executable: None,
+            diagnostics: vec![],
+            message: Some("type \"error\"\nwith newline".to_string()),
+            function: None,
+            counterexample: None,
+            counterexamples: vec![],
+            verify_status: None,
+            verify_message: None,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains(r#"type \"error\"\nwith newline"#));
     }
 
     #[test]
@@ -1968,20 +2006,35 @@ fn main() -> i32 {
     }
 
     #[test]
-    fn format_counterexamples_json_empty() {
-        let json = format_counterexamples_json(&[]);
-        assert_eq!(json, "");
+    fn counterexample_json_empty() {
+        let result = BuildResult {
+            status: "Verified".to_string(),
+            executable: None,
+            diagnostics: vec![],
+            message: None,
+            function: None,
+            counterexample: None,
+            counterexamples: vec![],
+            verify_status: None,
+            verify_message: None,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(
+            json.contains("\"counterexamples\":[]"),
+            "empty counterexamples: {json}"
+        );
     }
 
     #[test]
-    fn format_counterexamples_json_one_entry() {
-        let json = format_counterexamples_json(&[StructuredCounterexample {
+    fn counterexample_json_one_entry() {
+        let ce = CounterexampleJson::from_structured(&StructuredCounterexample {
             function: "f".to_string(),
             inputs: vec![("x".to_string(), "0".to_string())],
             violation: "x > 0".to_string(),
             vow_id: 1,
             source: None,
-        }]);
+        });
+        let json = serde_json::to_string(&ce).unwrap();
         assert!(json.contains("\"function\":\"f\""), "function: {json}");
         assert!(json.contains("\"x\":\"0\""), "inputs: {json}");
         assert!(
@@ -1993,8 +2046,8 @@ fn main() -> i32 {
     }
 
     #[test]
-    fn format_counterexamples_json_with_source() {
-        let json = format_counterexamples_json(&[StructuredCounterexample {
+    fn counterexample_json_with_source() {
+        let ce = CounterexampleJson::from_structured(&StructuredCounterexample {
             function: "f".to_string(),
             inputs: vec![],
             violation: "result".to_string(),
@@ -2004,10 +2057,146 @@ fn main() -> i32 {
                 offset: 10,
                 length: 5,
             }),
-        }]);
+        });
+        let json = serde_json::to_string(&ce).unwrap();
         assert!(json.contains("\"file\":\"test.vow\""), "file: {json}");
         assert!(json.contains("\"offset\":10"), "offset: {json}");
         assert!(json.contains("\"length\":5"), "length: {json}");
+    }
+
+    #[test]
+    fn build_result_serde_roundtrip_verified() {
+        let out = BuildOutput {
+            status: BuildStatus::Verified,
+            executable: Some(PathBuf::from("/tmp/test")),
+            diagnostics: vec![],
+            counterexamples: vec![],
+            verify_status: None,
+            verify_message: None,
+        };
+        let result = out.to_build_result();
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["status"], "Verified");
+        assert_eq!(parsed["executable"], "/tmp/test");
+        assert!(parsed["diagnostics"].as_array().unwrap().is_empty());
+        assert!(parsed["counterexamples"].as_array().unwrap().is_empty());
+        assert!(parsed.get("message").is_none());
+        assert!(parsed.get("function").is_none());
+    }
+
+    #[test]
+    fn build_result_serde_roundtrip_compile_failed() {
+        use vow_diag::{ErrorCode, SourceLocation};
+        let diag = Diagnostic {
+            severity: Severity::Error,
+            code: ErrorCode::TypeMismatch,
+            message: "expected i32, got bool".to_string(),
+            primary: SourceLocation {
+                file: "test.vow".to_string(),
+                byte_offset: 42,
+                byte_len: 4,
+            },
+            secondary: vec![],
+            blame: vow_diag::Blame::None,
+        };
+        let out = BuildOutput {
+            status: BuildStatus::CompileFailed {
+                message: "type error".to_string(),
+            },
+            executable: None,
+            diagnostics: vec![diag],
+            counterexamples: vec![],
+            verify_status: None,
+            verify_message: None,
+        };
+        let result = out.to_build_result();
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["status"], "CompileFailed");
+        assert!(parsed["executable"].is_null());
+        assert_eq!(parsed["message"], "type error");
+        assert_eq!(parsed["diagnostics"].as_array().unwrap().len(), 1);
+        let d = &parsed["diagnostics"][0];
+        assert_eq!(d["error_code"], "TypeMismatch");
+        assert_eq!(d["severity"], "error");
+        assert_eq!(d["span"]["file"], "test.vow");
+        assert_eq!(d["span"]["offset"], 42);
+        assert_eq!(d["span"]["length"], 4);
+    }
+
+    #[test]
+    fn build_result_serde_roundtrip_verify_failed() {
+        let out = BuildOutput {
+            status: BuildStatus::VerifyFailed {
+                function: "divide".to_string(),
+                description: "y=0 violates requires".to_string(),
+            },
+            executable: None,
+            diagnostics: vec![],
+            counterexamples: vec![StructuredCounterexample {
+                function: "divide".to_string(),
+                inputs: vec![("y".to_string(), "0".to_string())],
+                violation: "y != 0".to_string(),
+                vow_id: 0,
+                source: Some(CeSource {
+                    file: "divide.vow".to_string(),
+                    offset: 50,
+                    length: 10,
+                }),
+            }],
+            verify_status: None,
+            verify_message: None,
+        };
+        let result = out.to_build_result();
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["status"], "VerifyFailed");
+        assert_eq!(parsed["function"], "divide");
+        assert_eq!(parsed["counterexample"], "y=0 violates requires");
+        let ces = parsed["counterexamples"].as_array().unwrap();
+        assert_eq!(ces.len(), 1);
+        assert_eq!(ces[0]["function"], "divide");
+        assert_eq!(ces[0]["inputs"]["y"], "0");
+        assert_eq!(ces[0]["violation"], "y != 0");
+        assert_eq!(ces[0]["vow_id"], 0);
+        assert_eq!(ces[0]["source"]["file"], "divide.vow");
+    }
+
+    #[test]
+    fn pipeline_verified_produces_valid_build_result() {
+        let dir = TempDir::new().unwrap();
+        let src = "module M\n\nfn f(x: i64) -> i64 { x }";
+        let source = write_source(&dir, "ok.vow", src);
+        let result = run_pipeline(&source, None, BuildMode::Release, true, false);
+        let build_result = result.to_build_result();
+        let json = serde_json::to_string(&build_result).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let status = parsed["status"].as_str().unwrap();
+        assert!(
+            status == "Verified" || status == "Unverified" || status == "CompileFailed",
+            "unexpected status: {status}"
+        );
+        assert!(parsed["diagnostics"].is_array());
+        assert!(parsed["counterexamples"].is_array());
+    }
+
+    #[test]
+    fn pipeline_compile_failed_produces_valid_build_result() {
+        let dir = TempDir::new().unwrap();
+        let src = "module M 123";
+        let source = write_source(&dir, "bad.vow", src);
+        let result = run_pipeline(&source, None, BuildMode::Release, true, false);
+        let build_result = result.to_build_result();
+        let json = serde_json::to_string(&build_result).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["status"], "CompileFailed");
+        assert!(parsed["message"].is_string());
+        assert!(parsed["diagnostics"].is_array());
+        assert!(
+            !parsed["diagnostics"].as_array().unwrap().is_empty(),
+            "compile failure should have diagnostics"
+        );
     }
 
     #[test]

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vow-lang.dev/schemas/counterexample.schema.json",
+  "title": "Counterexample",
+  "description": "A structured counterexample from ESBMC verification failure",
+  "type": "object",
+  "required": ["function", "inputs", "violation", "vow_id", "source"],
+  "properties": {
+    "function": {
+      "type": "string",
+      "description": "Name of the function where verification failed"
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Map of parameter names to counterexample values"
+    },
+    "violation": {
+      "type": "string",
+      "description": "Description of the violated contract"
+    },
+    "vow_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Numeric ID of the violated vow (matches vow_id in VowViolation)"
+    },
+    "source": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["file", "offset", "length"],
+          "properties": {
+            "file": { "type": "string", "description": "Source file path" },
+            "offset": { "type": "integer", "minimum": 0, "description": "Byte offset of the vow clause" },
+            "length": { "type": "integer", "minimum": 0, "description": "Byte length of the vow clause" }
+          },
+          "additionalProperties": false
+        },
+        { "type": "null" }
+      ],
+      "description": "Source location of the violated vow clause, or null"
+    }
+  },
+  "additionalProperties": false
+}

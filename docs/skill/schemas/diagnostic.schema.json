@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vow-lang.dev/schemas/diagnostic.schema.json",
+  "title": "Diagnostic",
+  "description": "A single compiler diagnostic (error, warning, or note)",
+  "type": "object",
+  "required": ["error_code", "message", "severity", "span"],
+  "properties": {
+    "error_code": {
+      "type": "string",
+      "enum": [
+        "UnterminatedString",
+        "InvalidCharacter",
+        "UnexpectedToken",
+        "MissingDelimiter",
+        "TypeMismatch",
+        "EffectViolation",
+        "LinearTypeViolation",
+        "NonExhaustiveMatch",
+        "VowRequiresViolated",
+        "VowEnsuresViolated",
+        "VowInvariantViolated"
+      ],
+      "description": "Machine-readable error code"
+    },
+    "message": {
+      "type": "string",
+      "description": "Human-readable error message"
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["error", "warning", "note"],
+      "description": "Diagnostic severity"
+    },
+    "span": {
+      "type": "object",
+      "required": ["file", "offset", "length"],
+      "properties": {
+        "file": { "type": "string", "description": "Source file path" },
+        "offset": { "type": "integer", "minimum": 0, "description": "Byte offset from start of file" },
+        "length": { "type": "integer", "minimum": 0, "description": "Byte length of the span" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
