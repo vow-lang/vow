@@ -9,6 +9,13 @@ pub enum BuildMode {
     Release,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TraceMode {
+    Off,
+    Calls,
+    Full,
+}
+
 pub struct CompiledObject {
     pub bytes: Vec<u8>,
 }
@@ -49,6 +56,7 @@ pub trait Backend {
         &self,
         module: &Module,
         mode: BuildMode,
+        trace: TraceMode,
     ) -> Result<CompiledObject, CodegenError>;
 }
 

@@ -18,7 +18,7 @@ use vow_ir::{
     Module as IrModule, Opcode, Ty as IrTy,
 };
 
-use crate::{Backend, BuildMode, CodegenError, CompiledObject};
+use crate::{Backend, BuildMode, CodegenError, CompiledObject, TraceMode};
 
 pub struct CraneliftBackend;
 
@@ -207,21 +207,18 @@ struct LowerCtx<'a> {
     arena_alloc_ref: FuncRef,
     arena_free_ref: FuncRef,
     mode: BuildMode,
+    trace: TraceMode,
     current_ir_block: BlockId,
-    // index into module.strings → Cranelift GlobalValue (address of null-terminated string)
     string_global_values: &'a HashMap<u32, GlobalValue>,
-    // extern symbol name → FuncRef declared in the current function
     extern_func_refs: &'a HashMap<String, FuncRef>,
-    // VowId → GlobalValue for description strings
     vow_desc_global_values: &'a HashMap<u32, GlobalValue>,
-    // VowId → GlobalValue for file path strings
     vow_file_global_values: &'a HashMap<u32, GlobalValue>,
-    // (vow_id, binding_index) → GlobalValue for the binding's name C-string
     vow_binding_name_gvs: &'a HashMap<(u32, u32), GlobalValue>,
-    // InstId → IrTy for all instructions in the current function
     inst_ty_map: &'a HashMap<InstId, IrTy>,
-    // reference to current IrFunction for accessing vow entries
     ir_func: &'a IrFunction,
+    trace_exit_ref: Option<FuncRef>,
+    trace_vow_ref: Option<FuncRef>,
+    fn_name_gv: Option<GlobalValue>,
 }
 
 fn lower_inst(
@@ -524,6 +521,12 @@ fn lower_inst(
             builder.ins().jump(target_cl, &args);
         }
         Opcode::Return => {
+            if ctx.trace != TraceMode::Off
+                && let (Some(exit_ref), Some(gv)) = (ctx.trace_exit_ref, ctx.fn_name_gv)
+            {
+                let name_ptr = builder.ins().global_value(types::I64, gv);
+                builder.ins().call(exit_ref, &[name_ptr]);
+            }
             if ctx.return_ty == IrTy::Unit {
                 builder.ins().return_(&[]);
             } else if let Some(&val_id) = inst.args.first() {
@@ -797,8 +800,53 @@ fn emit_vow_check(
         .ins()
         .brif(inv, violation_block, &[], cont_block, &[]);
 
+    // Trace vow check result in Full mode (pass branch)
+    if ctx.trace == TraceMode::Full
+        && let (Some(vow_ref), Some(gv)) = (ctx.trace_vow_ref, ctx.fn_name_gv)
+    {
+        // Emit on cont_block (pass)
+        builder.switch_to_block(cont_block);
+        builder.seal_block(cont_block);
+        let name_ptr = builder.ins().global_value(types::I64, gv);
+        let vid = builder.ins().iconst(types::I64, vow_id as i64);
+        let passed = builder.ins().iconst(types::I64, 1);
+        builder.ins().call(vow_ref, &[name_ptr, vid, passed]);
+        let cont2 = builder.create_block();
+        builder.ins().jump(cont2, &[]);
+
+        // Emit on violation_block (fail) before violation call
+        builder.switch_to_block(violation_block);
+        builder.seal_block(violation_block);
+        let name_ptr2 = builder.ins().global_value(types::I64, gv);
+        let vid2 = builder.ins().iconst(types::I64, vow_id as i64);
+        let failed = builder.ins().iconst(types::I64, 0);
+        builder.ins().call(vow_ref, &[name_ptr2, vid2, failed]);
+        emit_vow_violation_body(builder, vow_id, blame, captures, vow_offset, ctx)?;
+        builder.ins().trap(TrapCode::unwrap_user(1));
+
+        builder.switch_to_block(cont2);
+        builder.seal_block(cont2);
+        return Ok(());
+    }
+
     builder.switch_to_block(violation_block);
     builder.seal_block(violation_block);
+    emit_vow_violation_body(builder, vow_id, blame, captures, vow_offset, ctx)?;
+    builder.ins().trap(TrapCode::unwrap_user(1));
+
+    builder.switch_to_block(cont_block);
+    builder.seal_block(cont_block);
+    Ok(())
+}
+
+fn emit_vow_violation_body(
+    builder: &mut FunctionBuilder,
+    vow_id: u32,
+    blame: u8,
+    captures: &[(GlobalValue, Value, IrTy)],
+    vow_offset: u32,
+    ctx: &mut LowerCtx,
+) -> Result<(), CodegenError> {
     if let Some(vr) = ctx.vow_violation_ref {
         let vow_id_val = builder.ins().iconst(types::I32, vow_id as i64);
         let blame_val = builder.ins().iconst(types::I8, blame as i64);
@@ -868,10 +916,6 @@ fn emit_vow_check(
             ],
         );
     }
-    builder.ins().trap(TrapCode::unwrap_user(1));
-
-    builder.switch_to_block(cont_block);
-    builder.seal_block(cont_block);
     Ok(())
 }
 
@@ -884,6 +928,9 @@ struct RuntimeIds {
     overflow_id: Option<CraneliftFuncId>,
     arena_alloc_id: CraneliftFuncId,
     arena_free_id: CraneliftFuncId,
+    trace_enter_id: Option<CraneliftFuncId>,
+    trace_exit_id: Option<CraneliftFuncId>,
+    trace_vow_id: Option<CraneliftFuncId>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -892,6 +939,7 @@ fn compile_ir_function(
     ir_func: &IrFunction,
     builder_ctx: &mut FunctionBuilderContext,
     mode: BuildMode,
+    trace: TraceMode,
     obj_module: &mut ObjectModule,
     ir_to_cl: &[(IrFuncId, CraneliftFuncId)],
     runtime: &RuntimeIds,
@@ -1014,6 +1062,32 @@ fn compile_ir_function(
         extern_func_refs.insert(sym.clone(), fref);
     }
 
+    // Trace function refs and function name data
+    let trace_enter_ref = runtime
+        .trace_enter_id
+        .map(|id| obj_module.declare_func_in_func(id, builder.func));
+    let trace_exit_ref = runtime
+        .trace_exit_id
+        .map(|id| obj_module.declare_func_in_func(id, builder.func));
+    let trace_vow_ref = runtime
+        .trace_vow_id
+        .map(|id| obj_module.declare_func_in_func(id, builder.func));
+    let fn_name_gv = if trace != TraceMode::Off {
+        let mut name_bytes = ir_func.name.as_bytes().to_vec();
+        name_bytes.push(0);
+        let mut desc = DataDescription::new();
+        desc.define(name_bytes.into_boxed_slice());
+        let data_id = obj_module
+            .declare_anonymous_data(false, false)
+            .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+        obj_module
+            .define_data(data_id, &desc)
+            .map_err(|e| CodegenError::FunctionDefine(e.to_string()))?;
+        Some(obj_module.declare_data_in_func(data_id, builder.func))
+    } else {
+        None
+    };
+
     // Collect entry block arg Values → ArgIndex map
     let mut arg_values: HashMap<u32, Value> = HashMap::new();
     if let Some(first) = ir_func.blocks.first() {
@@ -1026,6 +1100,12 @@ fn compile_ir_function(
                 arg_values.insert(ir_idx as u32, entry_params[cl_idx]);
                 cl_idx += 1;
             }
+        }
+        if trace != TraceMode::Off
+            && let (Some(enter_ref), Some(gv)) = (trace_enter_ref, fn_name_gv)
+        {
+            let name_ptr = builder.ins().global_value(types::I64, gv);
+            builder.ins().call(enter_ref, &[name_ptr]);
         }
     }
 
@@ -1062,6 +1142,7 @@ fn compile_ir_function(
             arena_alloc_ref,
             arena_free_ref,
             mode,
+            trace,
             current_ir_block: ir_block.id,
             string_global_values: &string_global_values,
             extern_func_refs: &extern_func_refs,
@@ -1070,6 +1151,9 @@ fn compile_ir_function(
             vow_binding_name_gvs: &vow_binding_name_gvs,
             inst_ty_map: &inst_ty_map,
             ir_func,
+            trace_exit_ref,
+            trace_vow_ref,
+            fn_name_gv,
         };
 
         for inst in &ir_block.insts {
@@ -1249,6 +1333,15 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_clif_destroy" => {
             sig.params.push(AbiParam::new(types::I64)); // ctx
         }
+        // Trace instrumentation
+        "__vow_trace_enter" | "__vow_trace_exit" => {
+            sig.params.push(AbiParam::new(types::I64)); // fn_name C-string ptr
+        }
+        "__vow_trace_vow" => {
+            sig.params.push(AbiParam::new(types::I64)); // fn_name C-string ptr
+            sig.params.push(AbiParam::new(types::I64)); // vow_id
+            sig.params.push(AbiParam::new(types::I64)); // passed (0 or 1)
+        }
         _ => {}
     }
     sig
@@ -1263,6 +1356,7 @@ impl Backend for CraneliftBackend {
         &self,
         module: &IrModule,
         mode: BuildMode,
+        trace: TraceMode,
     ) -> Result<CompiledObject, CodegenError> {
         let isa = make_isa(mode)?;
 
@@ -1367,6 +1461,30 @@ impl Backend for CraneliftBackend {
             (None, None)
         };
 
+        // Declare trace runtime functions
+        let (trace_enter_id, trace_exit_id, trace_vow_id) = if trace != TraceMode::Off {
+            let enter_sig = make_extern_sig("__vow_trace_enter", &obj_module);
+            let enter_id = obj_module
+                .declare_function("__vow_trace_enter", Linkage::Import, &enter_sig)
+                .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+            let exit_sig = make_extern_sig("__vow_trace_exit", &obj_module);
+            let exit_id = obj_module
+                .declare_function("__vow_trace_exit", Linkage::Import, &exit_sig)
+                .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+            let vow_sig = if trace == TraceMode::Full {
+                let s = make_extern_sig("__vow_trace_vow", &obj_module);
+                let id = obj_module
+                    .declare_function("__vow_trace_vow", Linkage::Import, &s)
+                    .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+                Some(id)
+            } else {
+                None
+            };
+            (Some(enter_id), Some(exit_id), vow_sig)
+        } else {
+            (None, None, None)
+        };
+
         // Compile each function
         let mut builder_ctx = FunctionBuilderContext::new();
         for (ir_func, &(_, cl_id)) in module.functions.iter().zip(ir_to_cl.iter()) {
@@ -1379,6 +1497,7 @@ impl Backend for CraneliftBackend {
                 ir_func,
                 &mut builder_ctx,
                 mode,
+                trace,
                 &mut obj_module,
                 &ir_to_cl,
                 &RuntimeIds {
@@ -1386,6 +1505,9 @@ impl Backend for CraneliftBackend {
                     overflow_id,
                     arena_alloc_id,
                     arena_free_id,
+                    trace_enter_id,
+                    trace_exit_id,
+                    trace_vow_id,
                 },
                 &string_data_ids,
                 &extern_func_ids,
@@ -1462,7 +1584,8 @@ mod tests {
                 }],
             }],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
         assert!(!result.unwrap().bytes.is_empty());
     }
@@ -1490,7 +1613,8 @@ mod tests {
                 }],
             }],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -1525,7 +1649,8 @@ mod tests {
                 }],
             }],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -1632,7 +1757,8 @@ mod tests {
             file: String::new(),
             offset: 0,
         };
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -1716,7 +1842,8 @@ mod tests {
                 ],
             )],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Release);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Release, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -1741,7 +1868,8 @@ mod tests {
                 ],
             )],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Release);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Release, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -1766,7 +1894,8 @@ mod tests {
                 ],
             )],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -1785,7 +1914,8 @@ mod tests {
                 ],
             )],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -1805,7 +1935,8 @@ mod tests {
             )],
         );
         module.strings.push("hello".to_string());
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -1825,7 +1956,8 @@ mod tests {
                 ],
             )],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -1845,7 +1977,8 @@ mod tests {
                 ],
             )],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -1899,7 +2032,8 @@ mod tests {
                 }],
             }],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -1960,7 +2094,8 @@ mod tests {
                 }],
             }],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -1992,7 +2127,8 @@ mod tests {
                 }],
             }],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -2022,7 +2158,8 @@ mod tests {
                 }],
             }],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -2052,7 +2189,8 @@ mod tests {
                 }],
             }],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -2073,7 +2211,8 @@ mod tests {
                 ],
             )],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(matches!(result, Err(CodegenError::UnsupportedOpcode(_))));
     }
 
@@ -2105,7 +2244,8 @@ mod tests {
                 }],
             }],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -2137,7 +2277,8 @@ mod tests {
                 }],
             }],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -2166,7 +2307,8 @@ mod tests {
                 }],
             }],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -2195,7 +2337,8 @@ mod tests {
                 }],
             }],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -2217,7 +2360,8 @@ mod tests {
                 )],
             )],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -2263,7 +2407,8 @@ mod tests {
                 }],
             }],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -2308,7 +2453,8 @@ mod tests {
                 }],
             }],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -2353,7 +2499,8 @@ mod tests {
                 }],
             }],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -2400,7 +2547,8 @@ mod tests {
                 }],
             }],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -2427,7 +2575,8 @@ mod tests {
                 ],
             )],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -2455,7 +2604,8 @@ mod tests {
                 ],
             )],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -2481,7 +2631,8 @@ mod tests {
                 ],
             )],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -2508,7 +2659,8 @@ mod tests {
                 ],
             )],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -2543,7 +2695,8 @@ mod tests {
                 ],
             )],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -2583,7 +2736,8 @@ mod tests {
                 ],
             )],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -2617,7 +2771,8 @@ mod tests {
                 ],
             )],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -2657,7 +2812,8 @@ mod tests {
                 ],
             )],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -2697,7 +2853,8 @@ mod tests {
                 ],
             )],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -2725,7 +2882,8 @@ mod tests {
                 ],
             )],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Release);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Release, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -2753,7 +2911,8 @@ mod tests {
                 ],
             )],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -2779,7 +2938,7 @@ mod tests {
                 ],
             )],
         );
-        let r = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let r = CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(r.is_ok(), "{:?}", r.err());
 
         // __vow_fs_read(path: Ptr) -> Ptr
@@ -2803,7 +2962,7 @@ mod tests {
                 ],
             )],
         );
-        let r2 = CraneliftBackend::new().compile_module(&module2, BuildMode::Debug);
+        let r2 = CraneliftBackend::new().compile_module(&module2, BuildMode::Debug, TraceMode::Off);
         assert!(r2.is_ok(), "{:?}", r2.err());
     }
 
@@ -2830,7 +2989,7 @@ mod tests {
                 ],
             )],
         );
-        let r = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let r = CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(r.is_ok(), "{:?}", r.err());
     }
 
@@ -2858,7 +3017,7 @@ mod tests {
                 ],
             )],
         );
-        let r = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let r = CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(r.is_ok(), "{:?}", r.err());
     }
 
@@ -2885,7 +3044,7 @@ mod tests {
                 ],
             )],
         );
-        let r = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let r = CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(r.is_ok(), "{:?}", r.err());
 
         // __vow_string_eq(a: Ptr, b: Ptr) -> Bool (I8)
@@ -2910,7 +3069,7 @@ mod tests {
                 ],
             )],
         );
-        let r2 = CraneliftBackend::new().compile_module(&module2, BuildMode::Debug);
+        let r2 = CraneliftBackend::new().compile_module(&module2, BuildMode::Debug, TraceMode::Off);
         assert!(r2.is_ok(), "{:?}", r2.err());
     }
 
@@ -2938,7 +3097,7 @@ mod tests {
                 ],
             )],
         );
-        let r = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let r = CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(r.is_ok(), "{:?}", r.err());
 
         // __vow_map_contains(map: Ptr, key: I64) -> Bool
@@ -2963,7 +3122,7 @@ mod tests {
                 ],
             )],
         );
-        let r2 = CraneliftBackend::new().compile_module(&module2, BuildMode::Debug);
+        let r2 = CraneliftBackend::new().compile_module(&module2, BuildMode::Debug, TraceMode::Off);
         assert!(r2.is_ok(), "{:?}", r2.err());
     }
 
@@ -3014,7 +3173,8 @@ mod tests {
                 },
             ],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -3033,7 +3193,8 @@ mod tests {
                 ],
             )],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -3094,7 +3255,8 @@ mod tests {
                 }],
             }],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -3126,7 +3288,8 @@ mod tests {
                 }],
             }],
         );
-        let result = CraneliftBackend::new().compile_module(&module, BuildMode::Debug);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 }

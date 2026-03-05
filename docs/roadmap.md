@@ -26,16 +26,17 @@ Strengths:
 - ~20 verified example programs (Phase 10.6)
 - DFS module loading in self-hosted compiler (Phase 11.1)
 - `vow build`, `vow verify`, `vow test` subcommands (Phase 11.2)
+- Vow Toolchain Skill document (Phase 12.1)
+- Structured `--help` JSON on all subcommands (Phase 12.2)
+- `--debug-trace=calls|full` structured execution traces (Phase 12.3)
+- Incremental compilation caching (Phase 12.4)
+- Level 1 agent capability integration tests (Phase 12.5)
 
 Critical gaps:
-- No skill document — agents cannot learn the toolchain without training data
 - Self-hosted compiler uses zero vow blocks (credibility gap)
 - No cross-module type resolution in self-hosted checker (ideas #2, #4, #8)
-- No structured execution traces / `--debug-trace` (ideas #9)
-- No incremental compilation (ideas #10 — main iteration bottleneck)
 - String equality still depends on IR tagging rather than type-level dispatch (ideas #7)
 - Counterexample → fix suggestion pipeline lacks full blame chain
-- No concrete agent capability test protocol
 
 ---
 
@@ -114,12 +115,12 @@ breaks the agent's workflow.
 
 ---
 
-## Phase 12 (revised): Toolchain Skill + Agent Interface (~3 weeks)
+## Phase 12 (revised): Toolchain Skill + Agent Interface — COMPLETE
 
 **Goal:** An agent with no prior Vow training data can load the skill, write a
 verified program, and close a CEGIS loop. Level 1 capability.
 
-### 12.1 Write the Vow Toolchain Skill
+### 12.1 Write the Vow Toolchain Skill ✔
 
 The single highest-leverage item. A structured document (machine-readable,
 loadable into an agent's context) covering:
@@ -147,13 +148,13 @@ loadable into an agent's context) covering:
 This is NOT documentation for humans. It is a skill that an agent loads to
 learn the toolchain — analogous to how `--help` returns JSON, not prose.
 
-### 12.2 Structured `--help` on all CLI subcommands
+### 12.2 Structured `--help` on all CLI subcommands ✔
 
 Ensure every subcommand returns machine-readable JSON via `--help` (or a
 `--help-json` flag). The skill document references these, but the agent
 should also be able to query capabilities at runtime.
 
-### 12.3 `--debug-trace` flag for structured execution traces
+### 12.3 `--debug-trace` flag for structured execution traces ✔
 
 From ideas-improvement.md #9. Currently debugging requires manual
 `eprintln_str` instrumentation. Implement a compile-time flag that instruments
@@ -166,7 +167,7 @@ values, return value). Two modes:
 Output is JSON lines to stderr, parseable by the agent. Zero overhead when
 the flag is off (traces compiled out entirely in production builds).
 
-### 12.4 Incremental compilation caching
+### 12.4 Incremental compilation caching ✔
 
 From ideas-improvement.md #10. This is the main development bottleneck:
 every change requires recompiling the entire project. Implement module-level
@@ -176,7 +177,7 @@ Cache the compiled module artifacts alongside the source.
 This directly affects CEGIS iteration speed. If each iteration takes 30
 seconds instead of 3, the agent's effectiveness drops by an order of magnitude.
 
-### 12.5 Level 1 Agent Capability Test
+### 12.5 Level 1 Agent Capability Test ✔
 
 Run the test: give an agent (Claude or equivalent) the skill document and
 ask it to write a single-module program with 3+ contracts, compile it, verify

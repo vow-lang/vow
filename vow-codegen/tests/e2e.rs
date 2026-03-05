@@ -3,7 +3,7 @@ use std::process::Command;
 use tempfile::TempDir;
 use vow_codegen::cranelift_backend::CraneliftBackend;
 use vow_codegen::linker::{find_runtime_lib, link};
-use vow_codegen::{Backend, BuildMode};
+use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_ir::{
     BasicBlock, BlockId, FuncId, Function, Inst, InstData, InstId, Module, Opcode, Ty, VowEntry,
     VowId,
@@ -31,7 +31,7 @@ fn compile_and_link(module: &Module, mode: BuildMode, dir: &TempDir) -> Option<P
 
     let backend = CraneliftBackend::new();
     let obj = backend
-        .compile_module(module, mode)
+        .compile_module(module, mode, TraceMode::Off)
         .expect("codegen failed");
 
     let obj_path = dir.path().join("out.o");

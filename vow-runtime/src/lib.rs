@@ -113,6 +113,41 @@ pub unsafe extern "C" fn __vow_unwrap_panic() {
     std::process::exit(1);
 }
 
+// ---------------------------------------------------------------------------
+// Trace instrumentation
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_trace_enter(fn_name_ptr: *const i8) {
+    if fn_name_ptr.is_null() {
+        return;
+    }
+    let name = unsafe { CStr::from_ptr(fn_name_ptr) }.to_string_lossy();
+    let _ = writeln!(std::io::stderr(), r#"{{"event":"enter","fn":"{name}"}}"#);
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_trace_exit(fn_name_ptr: *const i8) {
+    if fn_name_ptr.is_null() {
+        return;
+    }
+    let name = unsafe { CStr::from_ptr(fn_name_ptr) }.to_string_lossy();
+    let _ = writeln!(std::io::stderr(), r#"{{"event":"exit","fn":"{name}"}}"#);
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_trace_vow(fn_name_ptr: *const i8, vow_id: i64, passed: i64) {
+    if fn_name_ptr.is_null() {
+        return;
+    }
+    let name = unsafe { CStr::from_ptr(fn_name_ptr) }.to_string_lossy();
+    let p = if passed != 0 { "true" } else { "false" };
+    let _ = writeln!(
+        std::io::stderr(),
+        r#"{{"event":"vow","fn":"{name}","vow_id":{vow_id},"passed":{p}}}"#
+    );
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_arena_alloc(size: usize, align: usize) -> *mut u8 {
     if size == 0 {

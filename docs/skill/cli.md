@@ -20,6 +20,7 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--mode release`  | (default)   | Omit all vow checks for performance       |
 | `--no-verify`     | (off)       | Skip ESBMC static verification            |
 | `--dump-ir`       | (off)       | Print IR text to stdout and exit (no JSON output, no codegen) |
+| `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
 
 ### `vow verify`
 
@@ -36,8 +37,10 @@ Not yet implemented.
 ### `vow --help`
 
 ```
-vow --help          # JSON capability description (for agents)
-vow --help --human  # human-readable text
+vow --help               # JSON capability description (for agents)
+vow --help --human       # human-readable text
+vow build --help         # same JSON (works on all subcommands)
+vow verify --help --human  # same human text (works on all subcommands)
 ```
 
 ## Exit Codes
@@ -134,6 +137,25 @@ vow --help --human  # human-readable text
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
 | `verify_status`    | string              | On timeout/error  | "timeout" or "error"                      |
 | `verify_message`   | string              | On error          | ESBMC error message                       |
+
+## Trace Output (stderr, --debug-trace)
+
+When `--debug-trace=calls` or `--debug-trace=full` is used, the compiled binary emits JSON lines to stderr:
+
+### calls mode
+```json
+{"event":"enter","fn":"main"}
+{"event":"enter","fn":"divide"}
+{"event":"exit","fn":"divide"}
+{"event":"exit","fn":"main"}
+```
+
+### full mode (adds vow check results)
+```json
+{"event":"enter","fn":"divide"}
+{"event":"vow","fn":"divide","vow_id":0,"passed":true}
+{"event":"exit","fn":"divide"}
+```
 
 ## Runtime Error JSON (stderr, debug mode only)
 
