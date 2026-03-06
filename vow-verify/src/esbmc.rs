@@ -2,9 +2,11 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 
-use vow_ir::{Function, Ty};
+use std::collections::HashMap;
 
-use crate::c_emitter::emit_c_module;
+use vow_ir::{FuncId, Function, Module, Ty};
+
+use crate::c_emitter::{ConstantValue, detect_constant_functions, emit_c_module};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -180,12 +182,25 @@ fn parse_assignment_line(line: &str) -> Option<(String, String)> {
 // ---------------------------------------------------------------------------
 
 pub fn verify_function(func: &Function) -> VerificationResult {
+    let empty: HashMap<FuncId, ConstantValue> = HashMap::new();
+    verify_function_inner(func, &empty)
+}
+
+pub fn verify_function_with_module(func: &Function, module: &Module) -> VerificationResult {
+    let const_fns = detect_constant_functions(module);
+    verify_function_inner(func, &const_fns)
+}
+
+fn verify_function_inner(
+    func: &Function,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+) -> VerificationResult {
     let esbmc = match find_esbmc() {
         Some(p) => p,
         None => return VerificationResult::ToolNotFound,
     };
 
-    let mut c_src = emit_c_module(&[func]);
+    let mut c_src = emit_c_module(&[func], const_fns);
     c_src.push_str(&emit_harness(func));
 
     let mut tmp = match tempfile::Builder::new().suffix(".c").tempfile() {
