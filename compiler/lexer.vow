@@ -2,23 +2,38 @@ module Lexer
 
 use token
 
-fn is_whitespace(b: i64) -> bool {
+fn is_whitespace(b: i64) -> bool vow {
+    requires: b >= 0,
+    requires: b <= 255
+} {
     b == 32 || b == 9 || b == 10 || b == 13
 }
 
-fn is_alpha(b: i64) -> bool {
+fn is_alpha(b: i64) -> bool vow {
+    requires: b >= 0,
+    requires: b <= 255
+} {
     (b >= 65 && b <= 90) || (b >= 97 && b <= 122)
 }
 
-fn is_digit(b: i64) -> bool {
+fn is_digit(b: i64) -> bool vow {
+    requires: b >= 0,
+    requires: b <= 255
+} {
     b >= 48 && b <= 57
 }
 
-fn is_ident_start(b: i64) -> bool {
+fn is_ident_start(b: i64) -> bool vow {
+    requires: b >= 0,
+    requires: b <= 255
+} {
     is_alpha(b) || b == 95
 }
 
-fn is_ident_cont(b: i64) -> bool {
+fn is_ident_cont(b: i64) -> bool vow {
+    requires: b >= 0,
+    requires: b <= 255
+} {
     is_alpha(b) || is_digit(b) || b == 95
 }
 
@@ -116,7 +131,11 @@ fn try_suffix(src: String, pos: i64, src_len: i64) -> i64 {
     }
 }
 
-fn suffix_len(suffix: i64) -> i64 {
+fn suffix_len(suffix: i64) -> i64 vow {
+    requires: suffix >= -1,
+    ensures: result >= 0,
+    ensures: result <= 5
+} {
     if suffix == tok_suffix_i8() { 2 }
     else if suffix == tok_suffix_i16() { 3 }
     else if suffix == tok_suffix_i32() { 3 }

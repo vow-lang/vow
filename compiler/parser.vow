@@ -66,7 +66,13 @@ fn expect_ident(p: Parser) -> i64 {
     }
 }
 
-fn span_pack(start: i64, len: i64) -> i64 {
+fn span_pack(start: i64, len: i64) -> i64 vow {
+    requires: start >= 0,
+    requires: len >= 0,
+    requires: start < 65536,
+    requires: len < 65536,
+    ensures: result >= 0
+} {
     start * 65536 + len
 }
 
@@ -346,6 +352,9 @@ fn parse_vow_block(p: Parser) -> i64 {
         }
         if at(p, tok_semicolon()) {
             let _sc: Token = advance(p);
+        }
+        if at(p, tok_comma()) {
+            let _cm: Token = advance(p);
         }
     }
     let _rb: bool = expect(p, tok_rbrace());

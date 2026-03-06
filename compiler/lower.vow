@@ -338,7 +338,9 @@ fn lower_ast_ty(a: AstArena, tid: i64) -> i64 {
     ITY_UNIT()
 }
 
-fn binop_opcode(op: i64) -> i64 {
+fn binop_opcode(op: i64) -> i64 vow {
+    requires: op >= 0
+} {
     if op == BINOP_ADD() { return IOP_WADD_I64(); }
     if op == BINOP_SUB() { return IOP_WSUB_I64(); }
     if op == BINOP_MUL() { return IOP_WMUL_I64(); }
@@ -360,7 +362,9 @@ fn binop_opcode(op: i64) -> i64 {
     IOP_WADD_I64()
 }
 
-fn binop_result_ty(op: i64) -> i64 {
+fn binop_result_ty(op: i64) -> i64 vow {
+    requires: op >= 0
+} {
     if op == BINOP_EQ() { return ITY_BOOL(); }
     if op == BINOP_NE() { return ITY_BOOL(); }
     if op == BINOP_LT() { return ITY_BOOL(); }

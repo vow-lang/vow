@@ -263,15 +263,24 @@ fn arena_add_edef(a: AstArena, name_sid: i64, variants_lid: i64, span: i64) -> i
     eid
 }
 
-fn item_pack(kind: i64, id: i64) -> i64 {
+fn item_pack(kind: i64, id: i64) -> i64 vow {
+    requires: kind >= 0,
+    requires: kind <= 2,
+    requires: id >= 0
+} {
     kind * 4294967296 + id
 }
 
-fn item_kind(v: i64) -> i64 {
+fn item_kind(v: i64) -> i64 vow {
+    requires: v >= 0,
+    ensures: result >= 0
+} {
     v / 4294967296
 }
 
-fn item_id(v: i64) -> i64 {
+fn item_id(v: i64) -> i64 vow {
+    requires: v >= 0
+} {
     v - item_kind(v) * 4294967296
 }
 

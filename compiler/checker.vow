@@ -100,7 +100,9 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
     CTY_UNIT()
 }
 
-fn is_opaque(tid: i64) -> bool {
+fn is_opaque(tid: i64) -> bool vow {
+    requires: tid >= 0
+} {
     tid == CTY_NEVER() || tid == CTY_UNKNOWN()
 }
 

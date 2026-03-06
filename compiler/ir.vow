@@ -98,7 +98,9 @@ fn IOP_LINEAR_BORROW() -> i64 { 80 }
 fn IOP_FIELD_GET() -> i64 { 81 }
 fn IOP_FIELD_SET() -> i64 { 82 }
 
-fn iop_is_terminal(op: i64) -> bool {
+fn iop_is_terminal(op: i64) -> bool vow {
+    requires: op >= 0
+} {
     op == IOP_BRANCH() || op == IOP_JUMP() || op == IOP_RETURN() || op == IOP_UNREACHABLE()
 }
 
