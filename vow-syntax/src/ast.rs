@@ -49,6 +49,7 @@ pub struct FnDef {
     pub vow: Option<VowBlock>,
     pub body: Block,
     pub span: Span,
+    pub is_declaration: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -423,6 +424,7 @@ mod tests {
                 span: dummy_span(),
             },
             span: Span::new(10, 20),
+            is_declaration: false,
         };
         let item = Item::Fn(fn_def);
         assert_eq!(item.span(), Span::new(10, 20));

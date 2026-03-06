@@ -22,6 +22,7 @@ struct LowerCtx {
     tag_names: Vec<String>,
     arena: AstArena,
     cur_vow_lid: i64,
+    str_eids: Vec<i64>,
 }
 
 struct ScopeSnap {
@@ -30,7 +31,7 @@ struct ScopeSnap {
     starts_len: i64,
 }
 
-fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena) -> LowerCtx {
+fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eids: Vec<i64>) -> LowerCtx {
     let f: IrFunction = ir_function_new(0, name, return_ty, effects);
     let entry: IrBlock = ir_block_new(0);
     f.blocks.push(entry);
@@ -53,6 +54,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena) -> Lowe
         tag_names: Vec::new(),
         arena: arena,
         cur_vow_lid: -1,
+        str_eids: str_eids,
     }
 }
 
@@ -200,6 +202,18 @@ fn lctx_get_tag(ctx: LowerCtx, inst_id: i64) -> String {
         }
     }
     String::from("")
+}
+
+fn lctx_is_str_eid(ctx: LowerCtx, eid: i64) -> bool {
+    let n: i64 = ctx.str_eids.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if ctx.str_eids[i] == eid {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
 }
 
 fn lctx_intern_str(ctx: LowerCtx, s: String) -> i64 {
@@ -539,9 +553,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let rhs_eid: i64 = expr_c(a, eid);
         let lhs_id: i64 = lower_expr(ctx, lhs_eid);
         let rhs_id: i64 = lower_expr(ctx, rhs_eid);
-        let lhs_tag_str: String = lctx_get_tag(ctx, lhs_id);
-        let rhs_tag_str: String = lctx_get_tag(ctx, rhs_id);
-        if (op == BINOP_EQ() || op == BINOP_NE()) && (lhs_tag_str == String::from("String") || rhs_tag_str == String::from("String")) {
+        let lhs_is_str: bool = lctx_is_str_eid(ctx, lhs_eid);
+        let rhs_is_str: bool = lctx_is_str_eid(ctx, rhs_eid);
+        if (op == BINOP_EQ() || op == BINOP_NE()) && (lhs_is_str || rhs_is_str) {
             let call_args: Vec<i64> = Vec::new();
             call_args.push(lhs_id);
             call_args.push(rhs_id);
@@ -1881,7 +1895,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     ctx.func
 }
 
-fn lower_module_vow(m: Module) -> IrModule {
+fn lower_module_vow(m: Module, str_eids: Vec<i64>) -> IrModule {
     let a: AstArena = m.arena;
     let mod_name_sid: i64 = m.name_sid;
     let mod_name: String = arena_str(a, mod_name_sid);
@@ -1984,7 +1998,7 @@ fn lower_module_vow(m: Module) -> IrModule {
     res_variants.push(String::from("Err"));
     enum_variant_lists.push(res_variants);
 
-    let ctx: LowerCtx = lctx_new(String::from(""), ITY_UNIT(), 0, a);
+    let ctx: LowerCtx = lctx_new(String::from(""), ITY_UNIT(), 0, a, str_eids);
     ctx.func_names = func_names;
     ctx.func_ret_tys = func_ret_tys;
     ctx.struct_names = struct_names;

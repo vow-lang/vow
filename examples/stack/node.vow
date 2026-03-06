@@ -1,0 +1,18 @@
+module Node
+
+struct Node {
+    value: i64,
+    next: i64,
+}
+
+fn node_new(value: i64, next: i64) -> Node {
+    Node { value: value, next: next }
+}
+
+fn node_value(n: Node) -> i64 {
+    n.value
+}
+
+fn node_next(n: Node) -> i64 {
+    n.next
+}

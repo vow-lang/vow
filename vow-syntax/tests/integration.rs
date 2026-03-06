@@ -251,6 +251,7 @@ fn strip_fn_def(f: FnDef) -> FnDef {
         vow: f.vow.map(strip_vow_block),
         body: strip_block(f.body),
         span: z(),
+        is_declaration: f.is_declaration,
     }
 }
 

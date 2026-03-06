@@ -193,14 +193,16 @@ fn main() -> i32 [io] {
     if n_errors == 0 {
         if has_output {
             let out: String = get_flag_arg(argv, String::from("-o"));
-            let ir_mod: IrModule = lower_module_vow(merged);
+            let str_eids: Vec<i64> = e.expr_str_eids;
+            let ir_mod: IrModule = lower_module_vow(merged, str_eids);
             let result: i64 = clif_emit_module(ir_mod, out, 0);
             if result != 0 {
                 eprintln_str(String::from("compilation failed"));
                 return 1;
             }
         } else {
-            let ir_mod: IrModule = lower_module_vow(merged);
+            let str_eids: Vec<i64> = e.expr_str_eids;
+            let ir_mod: IrModule = lower_module_vow(merged, str_eids);
             let ir_text: String = print_module(ir_mod);
             print_str(ir_text);
         }

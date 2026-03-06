@@ -304,6 +304,26 @@ impl Parser {
             None
         };
 
+        if self.at(&TokenKind::Semicolon) {
+            let end = self.current_span();
+            self.advance();
+            return Some(FnDef {
+                vis,
+                name,
+                params,
+                return_ty,
+                effects,
+                vow,
+                body: Block {
+                    stmts: vec![],
+                    trailing_expr: None,
+                    span: end,
+                },
+                span: start.merge(end),
+                is_declaration: true,
+            });
+        }
+
         let body = self.parse_block()?;
 
         let end = body.span;
@@ -316,6 +336,7 @@ impl Parser {
             vow,
             body,
             span: start.merge(end),
+            is_declaration: false,
         })
     }
 

@@ -511,6 +511,7 @@ mod tests {
             vow: None,
             body,
             span: dummy_span(),
+            is_declaration: false,
         }
     }
 

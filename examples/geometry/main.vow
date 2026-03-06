@@ -1,0 +1,19 @@
+module Main
+use point
+use shape
+
+fn main() -> i32 [io] {
+    let p1: Point = point_new(3, 4);
+    let p2: Point = point_new(6, 8);
+    let d: i64 = point_distance_sq(p1, p2);
+    print_i64(d);
+
+    print_i64(circle_area(5));
+    print_i64(rect_area(3, 4));
+    print_i64(rect_perimeter(3, 4));
+
+    let sp: Point = shape_at(point_new(1, 2));
+    print_i64(point_x(sp));
+    print_i64(point_y(sp));
+    0
+}

@@ -2,6 +2,8 @@ pub mod vow;
 
 use std::collections::{HashMap, HashSet};
 
+pub type StringExprSet = HashSet<usize>;
+
 use vow_diag::Blame;
 use vow_syntax::ast::{
     BinOp, Block, Effect, Expr, ExprKind, FnDef, Item, Lit, Module as AstModule, PatKind, Stmt,
@@ -69,6 +71,8 @@ pub struct LowerCtx {
     file: String,
     // struct name → field type names (from AST declarations) for FieldGet auto-tagging
     struct_field_type_names: HashMap<String, Vec<String>>,
+    // expr addresses whose resolved type is String (from checker)
+    string_exprs: StringExprSet,
 }
 
 impl LowerCtx {
@@ -84,6 +88,7 @@ impl LowerCtx {
         struct_field_map: HashMap<String, Vec<String>>,
         enum_variant_map: HashMap<String, Vec<String>>,
         struct_field_type_names: HashMap<String, Vec<String>>,
+        string_exprs: StringExprSet,
     ) -> Self {
         let entry = BasicBlock {
             id: BlockId(0),
@@ -119,6 +124,7 @@ impl LowerCtx {
             inst_struct_type: HashMap::new(),
             file,
             struct_field_type_names,
+            string_exprs,
         }
     }
 
@@ -417,15 +423,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             let lhs_id = lower_expr(ctx, lhs);
             let rhs_id = lower_expr(ctx, rhs);
             let lhs_is_str = ctx
-                .inst_struct_type
-                .get(&lhs_id)
-                .map(|s| s == "String")
-                .unwrap_or(false);
+                .string_exprs
+                .contains(&(lhs.as_ref() as *const Expr as usize));
             let rhs_is_str = ctx
-                .inst_struct_type
-                .get(&rhs_id)
-                .map(|s| s == "String")
-                .unwrap_or(false);
+                .string_exprs
+                .contains(&(rhs.as_ref() as *const Expr as usize));
             if (lhs_is_str || rhs_is_str) && (*op == BinOp::Eq || *op == BinOp::Ne) {
                 let eq_result = ctx.emit(
                     Opcode::Call,
@@ -1521,6 +1523,7 @@ pub fn lower_function(
     struct_field_map: HashMap<String, Vec<String>>,
     enum_variant_map: HashMap<String, Vec<String>>,
     struct_field_type_names: HashMap<String, Vec<String>>,
+    string_exprs: &StringExprSet,
 ) -> (Function, Vec<String>) {
     let params: Vec<Ty> = fn_def.params.iter().map(|p| lower_ty(&p.ty)).collect();
     let param_names: Vec<String> = fn_def.params.iter().map(|p| p.name.clone()).collect();
@@ -1538,6 +1541,7 @@ pub fn lower_function(
         struct_field_map,
         enum_variant_map,
         struct_field_type_names,
+        string_exprs.clone(),
     );
 
     if let Some(vow) = &fn_def.vow {
@@ -1606,12 +1610,14 @@ pub fn lower_function(
     ctx.finish()
 }
 
-pub fn lower_module(module: &AstModule, file: &str) -> Module {
+pub fn lower_module(module: &AstModule, file: &str, string_exprs: &StringExprSet) -> Module {
     let fn_items: Vec<&FnDef> = module
         .items
         .iter()
         .filter_map(|item| {
-            if let Item::Fn(fn_def) = item {
+            if let Item::Fn(fn_def) = item
+                && !fn_def.is_declaration
+            {
                 Some(fn_def)
             } else {
                 None
@@ -1724,6 +1730,7 @@ pub fn lower_module(module: &AstModule, file: &str) -> Module {
                 struct_field_map.clone(),
                 enum_variant_map.clone(),
                 struct_field_type_names.clone(),
+                string_exprs,
             );
             func.id = FuncId(idx as u32);
             let base = all_strings.len() as u32;
@@ -1819,6 +1826,7 @@ mod tests {
             vow: None,
             body,
             span: sp(),
+            is_declaration: false,
         }
     }
 
@@ -1846,6 +1854,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
+            &HashSet::new(),
         );
 
         assert_eq!(func.name, "const_fn");
@@ -1888,6 +1897,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
+            &HashSet::new(),
         );
 
         let entry = &func.blocks[0];
@@ -1933,6 +1943,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
+            &HashSet::new(),
         );
 
         let entry = &func.blocks[0];
@@ -1973,6 +1984,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
+            &HashSet::new(),
         );
 
         assert!(
@@ -2014,6 +2026,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
+            &HashSet::new(),
         );
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
@@ -2056,6 +2069,7 @@ mod tests {
             vow: Some(vow_block),
             body,
             span: sp(),
+            is_declaration: false,
         };
         let (func, _) = lower_function(
             &fn_def,
@@ -2064,6 +2078,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
+            &HashSet::new(),
         );
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
@@ -2164,6 +2179,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
+            &HashSet::new(),
         );
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();

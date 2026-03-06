@@ -70,6 +70,8 @@ enum Command {
     Verify(VerifyArgs),
     /// Run tests (not yet implemented)
     Test(TestArgs),
+    /// Emit declaration file (.vow.d) with type signatures only
+    Decl(DeclArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -114,6 +116,18 @@ struct TestArgs {
     human: bool,
 }
 
+#[derive(clap::Args, Debug)]
+#[command(disable_help_flag = true)]
+struct DeclArgs {
+    source: Option<PathBuf>,
+    #[arg(short = 'o', long)]
+    output: Option<PathBuf>,
+    #[arg(long)]
+    help: bool,
+    #[arg(long)]
+    human: bool,
+}
+
 // ---------------------------------------------------------------------------
 // --help skill output
 // ---------------------------------------------------------------------------
@@ -126,7 +140,8 @@ fn skill_json() -> String {
   "commands": {
     "build": "Compile source to native executable (verifies by default; use --no-verify to skip)",
     "verify": "Verify contracts without producing an executable",
-    "test": "Run tests (not yet implemented)"
+    "test": "Run tests (not yet implemented)",
+    "decl": "Emit declaration file (.vow.d) with type signatures only"
   },
   "legacy_usage": "vow [OPTIONS] <source.vow> (equivalent to vow build)",
   "build_options": {
@@ -186,6 +201,7 @@ USAGE
   vow build [OPTIONS] <source.vow>    Compile to native executable
   vow verify <source.vow>             Verify contracts only (no executable)
   vow test [<source.vow>]             Run tests (not yet implemented)
+  vow decl [OPTIONS] <source.vow>    Emit declaration file (.vow.d)
   vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)
 
 BUILD OPTIONS
@@ -614,7 +630,7 @@ fn compile_frontend(source: &Path) -> Result<FrontendResult, Box<BuildOutput>> {
         vow_types::check::Checker::new(source.to_string_lossy().to_string(), &mut collecting_emit);
     checker.check_module(&ast);
     let has_errors = checker.has_errors();
-    drop(checker);
+    let string_exprs = checker.into_string_exprs();
     all_diagnostics.extend(collecting_emit.into_diagnostics());
     if has_errors {
         return Err(Box::new(BuildOutput {
@@ -629,7 +645,11 @@ fn compile_frontend(source: &Path) -> Result<FrontendResult, Box<BuildOutput>> {
         }));
     }
 
-    let ir_module = Arc::new(vow_ir::lower_module(&ast, &source.to_string_lossy()));
+    let ir_module = Arc::new(vow_ir::lower_module(
+        &ast,
+        &source.to_string_lossy(),
+        &string_exprs,
+    ));
 
     Ok(FrontendResult {
         ir_module,
@@ -910,6 +930,72 @@ fn run_build_command(
     }
 }
 
+fn run_decl_command(source: &Path, output: Option<&Path>) {
+    let src = match std::fs::read_to_string(source) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("vow decl: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let file_str = source.to_string_lossy();
+    let (root_ast, parse_diags) = vow_syntax::parser::parse_module(&src, &file_str);
+    let mut stderr_emit = HumanEmitter::new(Box::new(std::io::stderr()));
+    let parse_failed = parse_diags.iter().any(|d| d.severity == Severity::Error);
+    for d in &parse_diags {
+        stderr_emit.emit(d);
+    }
+    if parse_failed {
+        eprintln!("vow decl: parse errors");
+        std::process::exit(1);
+    }
+
+    let (ast, _source_files) = match module_loader::load_modules(source, &root_ast) {
+        Ok(graph) => {
+            let files: Vec<PathBuf> = graph.modules.iter().map(|(p, _)| p.clone()).collect();
+            (module_loader::merge_modules(graph), files)
+        }
+        Err(diags) => {
+            for d in &diags {
+                stderr_emit.emit(d);
+            }
+            eprintln!("vow decl: module load error");
+            std::process::exit(1);
+        }
+    };
+
+    let mut collecting_emit = CollectingEmitter::new(&mut stderr_emit);
+    let mut checker =
+        vow_types::check::Checker::new(source.to_string_lossy().to_string(), &mut collecting_emit);
+    checker.check_module(&ast);
+    if checker.has_errors() {
+        eprintln!("vow decl: type errors");
+        std::process::exit(1);
+    }
+
+    let decl_text = vow_syntax::printer::print_declarations(&ast);
+
+    let out_path = match output {
+        Some(p) => p.to_path_buf(),
+        None => {
+            let mut p = source.to_path_buf();
+            let new_ext = match p.extension() {
+                Some(ext) => format!("{}.d", ext.to_string_lossy()),
+                None => "d".to_string(),
+            };
+            p.set_extension(new_ext);
+            p
+        }
+    };
+
+    if let Err(e) = std::fs::write(&out_path, &decl_text) {
+        eprintln!("vow decl: {}", e);
+        std::process::exit(1);
+    }
+    eprintln!("wrote {}", out_path.display());
+}
+
 fn run_verify_command(source: &Path) {
     let result = run_verify_only(source);
     result.emit_json();
@@ -989,6 +1075,24 @@ fn main() {
             }
             eprintln!("vow test: not yet implemented");
             std::process::exit(1);
+        }
+        Some(Command::Decl(d)) => {
+            if d.help {
+                if d.human {
+                    println!("{}", skill_human());
+                } else {
+                    println!("{}", skill_json());
+                }
+                return;
+            }
+            let source = match d.source {
+                Some(s) => s,
+                None => {
+                    eprintln!("vow decl: source file required (try --help)");
+                    std::process::exit(1);
+                }
+            };
+            run_decl_command(&source, d.output.as_deref());
         }
         None => {
             if args.help {

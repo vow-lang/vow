@@ -237,6 +237,7 @@ mod tests {
             vow,
             body: empty_block(),
             span: sp(),
+            is_declaration: false,
         }
     }
 
@@ -258,6 +259,7 @@ mod tests {
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
         );
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
@@ -299,6 +301,7 @@ mod tests {
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
         );
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
@@ -337,6 +340,7 @@ mod tests {
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
         );
 
         assert_eq!(func.vows.len(), 1);
@@ -369,6 +373,7 @@ mod tests {
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
         );
 
         assert_eq!(func.vows.len(), 1);
@@ -436,6 +441,7 @@ mod tests {
                 span: sp(),
             },
             span: sp(),
+            is_declaration: false,
         };
         let (func, _) = lower_function(
             &fn_def,
@@ -444,6 +450,7 @@ mod tests {
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
         );
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
@@ -537,6 +544,7 @@ mod tests {
                 span: sp(),
             },
             span: sp(),
+            is_declaration: false,
         };
         let (func, _) = lower_function(
             &fn_def,
@@ -545,6 +553,7 @@ mod tests {
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
         );
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();

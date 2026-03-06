@@ -239,6 +239,7 @@ impl Parser {
                 vow,
                 body,
                 span: method_start.merge(method_end),
+                is_declaration: false,
             });
         }
         let end = self.current_span();

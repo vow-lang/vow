@@ -50,6 +50,9 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
         if eidx != -1 {
             return ts_make_enum(e.ts, name);
         }
+        let err_msg: String = String::from("unknown type: ");
+        err_msg.push_str(name);
+        env_emit_error(e, err_msg);
         return CTY_UNKNOWN();
     }
     if tag == TY_GENERIC() {
@@ -109,12 +112,34 @@ fn check_module(e: CheckEnv, m: Module) [io] {
         let item: i64 = m.items[i];
         let kind: i64 = item_kind(item);
         let id: i64 = item_id(item);
-        if kind == ITEM_FN() {
-            register_fn(e, m, id);
-        } else if kind == ITEM_STRUCT() {
+        if kind == ITEM_STRUCT() {
+            register_struct_name(e, m, id);
+        } else if kind == ITEM_ENUM() {
+            register_enum_name(e, m, id);
+        }
+        i = i + 1;
+    }
+
+    i = 0;
+    while i < n {
+        let item: i64 = m.items[i];
+        let kind: i64 = item_kind(item);
+        let id: i64 = item_id(item);
+        if kind == ITEM_STRUCT() {
             register_struct(e, m, id);
         } else if kind == ITEM_ENUM() {
             register_enum(e, m, id);
+        }
+        i = i + 1;
+    }
+
+    i = 0;
+    while i < n {
+        let item: i64 = m.items[i];
+        let kind: i64 = item_kind(item);
+        let id: i64 = item_id(item);
+        if kind == ITEM_FN() {
+            register_fn(e, m, id);
         }
         i = i + 1;
     }
@@ -151,6 +176,20 @@ fn register_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     env_define_fn(e, name, param_tids, ret_tid, eff);
 }
 
+fn register_struct_name(e: CheckEnv, m: Module, sid: i64) [io] {
+    let a: AstArena = m.arena;
+    let name_s: i64 = sdef_name_sid(a, sid);
+    let name: String = arena_str(a, name_s);
+    env_define_struct_name(e, name);
+}
+
+fn register_enum_name(e: CheckEnv, m: Module, eid: i64) [io] {
+    let a: AstArena = m.arena;
+    let name_s: i64 = edef_name_sid(a, eid);
+    let name: String = arena_str(a, name_s);
+    env_define_enum_name(e, name);
+}
+
 fn register_struct(e: CheckEnv, m: Module, sid: i64) [io] {
     let a: AstArena = m.arena;
     let name_s: i64 = sdef_name_sid(a, sid);
@@ -169,7 +208,7 @@ fn register_struct(e: CheckEnv, m: Module, sid: i64) [io] {
         ftids.push(resolve_ast_ty(e, m, ast_ftid));
         i = i + 1;
     }
-    env_define_struct(e, name, fnames, ftids);
+    env_update_struct(e, name, fnames, ftids);
 }
 
 fn register_enum(e: CheckEnv, m: Module, eid: i64) [io] {
@@ -188,7 +227,7 @@ fn register_enum(e: CheckEnv, m: Module, eid: i64) [io] {
         vpayloads.push(CTY_UNIT());
         i = i + 1;
     }
-    env_define_enum(e, name, vnames, vpayloads);
+    env_update_enum(e, name, vnames, vpayloads);
 }
 
 fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
@@ -346,6 +385,14 @@ fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
 }
 
 fn check_expr(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
+    let tid: i64 = check_expr_inner(e, m, eid);
+    if tid == CTY_STR() {
+        env_record_str_expr(e, eid);
+    }
+    tid
+}
+
+fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
     let a: AstArena = m.arena;
     let tag: i64 = expr_tag(a, eid);
 

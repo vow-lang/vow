@@ -1,0 +1,17 @@
+module Main
+use node
+use stack
+
+fn main() -> i32 [io] {
+    let s0: Stack = stack_new();
+    let s1: Stack = stack_push(s0, 10);
+    let s2: Stack = stack_push(s1, 20);
+    let s3: Stack = stack_push(s2, 30);
+
+    print_i64(stack_size(s3));
+    print_i64(stack_peek(s3));
+
+    let n: Node = node_new(42, 0);
+    print_i64(node_value(n));
+    0
+}

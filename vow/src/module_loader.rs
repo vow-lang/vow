@@ -34,7 +34,13 @@ fn load_deps(
     errors: &mut Vec<Diagnostic>,
 ) {
     for use_decl in &module.uses {
-        let file_path = resolve_use(root_dir, &use_decl.path);
+        let vow_path = resolve_use(root_dir, &use_decl.path);
+        let decl_path = vow_path.with_extension("vow.d");
+        let file_path = if decl_path.exists() {
+            decl_path
+        } else {
+            vow_path
+        };
         if !visited.insert(file_path.clone()) {
             continue;
         }

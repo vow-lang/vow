@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use vow_diag::{Blame, Diagnostic, DiagnosticEmitter, ErrorCode, Severity, SourceLocation};
 use vow_syntax::ast::{
@@ -9,6 +9,9 @@ use vow_syntax::span::Span;
 use crate::env::{EnumInfo, FnSig, StructInfo, TypeEnv, VariantInfo, VariantKind};
 use crate::types::Ty;
 
+/// Set of expression addresses (`*const Expr as usize`) whose resolved type is `Ty::Str`.
+pub type StringExprSet = HashSet<usize>;
+
 pub struct Checker<'e> {
     pub(crate) env: TypeEnv,
     pub(crate) current_return_ty: Ty,
@@ -16,6 +19,7 @@ pub struct Checker<'e> {
     pub(crate) error_count: usize,
     pub(crate) file: String,
     pub(crate) emitter: &'e mut dyn DiagnosticEmitter,
+    string_exprs: StringExprSet,
 }
 
 impl<'e> Checker<'e> {
@@ -27,7 +31,12 @@ impl<'e> Checker<'e> {
             error_count: 0,
             file: file.into(),
             emitter,
+            string_exprs: HashSet::new(),
         }
+    }
+
+    pub fn into_string_exprs(self) -> StringExprSet {
+        self.string_exprs
     }
 
     pub fn has_errors(&self) -> bool {
@@ -51,37 +60,29 @@ impl<'e> Checker<'e> {
     }
 
     pub fn check_module(&mut self, module: &Module) {
-        // Registration pass
+        // Pass 1a: Register type names (structs and enums, no fields yet)
         for item in &module.items {
             match item {
-                Item::Fn(fn_def) => {
-                    let params: Vec<Ty> = fn_def
-                        .params
-                        .iter()
-                        .map(|p| match self.env.resolve(&p.ty) {
-                            Ok(ty) => ty,
-                            Err(msg) => {
-                                self.emit_error(ErrorCode::TypeMismatch, msg, p.span);
-                                Ty::Unit
-                            }
-                        })
-                        .collect();
-                    let return_ty = match self.env.resolve(&fn_def.return_ty) {
-                        Ok(ty) => ty,
-                        Err(msg) => {
-                            self.emit_error(ErrorCode::TypeMismatch, msg, fn_def.return_ty.span());
-                            Ty::Unit
-                        }
-                    };
-                    self.env.define_fn(
-                        &fn_def.name,
-                        FnSig {
-                            params,
-                            return_ty,
-                            effects: fn_def.effects.iter().cloned().collect(),
+                Item::Struct(s) => {
+                    self.env.define_struct(
+                        &s.name,
+                        StructInfo {
+                            fields: vec![],
+                            is_linear: s.is_linear,
                         },
                     );
                 }
+                Item::Enum(e) => {
+                    self.env
+                        .define_enum(&e.name, EnumInfo { variants: vec![] });
+                }
+                _ => {}
+            }
+        }
+
+        // Pass 1b: Resolve struct fields, enum variants, and type aliases
+        for item in &module.items {
+            match item {
                 Item::Struct(s) => {
                     let fields: Vec<(String, Ty)> = s
                         .fields
@@ -162,6 +163,41 @@ impl<'e> Checker<'e> {
                     Ok(ty) => self.env.define_alias(&a.name, ty),
                     Err(msg) => self.emit_error(ErrorCode::TypeMismatch, msg, a.ty.span()),
                 },
+                _ => {}
+            }
+        }
+
+        // Pass 1c: Register function signatures (all types now resolvable)
+        for item in &module.items {
+            match item {
+                Item::Fn(fn_def) => {
+                    let params: Vec<Ty> = fn_def
+                        .params
+                        .iter()
+                        .map(|p| match self.env.resolve(&p.ty) {
+                            Ok(ty) => ty,
+                            Err(msg) => {
+                                self.emit_error(ErrorCode::TypeMismatch, msg, p.span);
+                                Ty::Unit
+                            }
+                        })
+                        .collect();
+                    let return_ty = match self.env.resolve(&fn_def.return_ty) {
+                        Ok(ty) => ty,
+                        Err(msg) => {
+                            self.emit_error(ErrorCode::TypeMismatch, msg, fn_def.return_ty.span());
+                            Ty::Unit
+                        }
+                    };
+                    self.env.define_fn(
+                        &fn_def.name,
+                        FnSig {
+                            params,
+                            return_ty,
+                            effects: fn_def.effects.iter().cloned().collect(),
+                        },
+                    );
+                }
                 Item::Extern(block) => {
                     for f in &block.fns {
                         let params = f
@@ -181,52 +217,21 @@ impl<'e> Checker<'e> {
                         );
                     }
                 }
-                Item::Trait(_) | Item::Impl(_) => {}
+                _ => {}
             }
         }
 
-        // Check pass
+        // Pass 2: Check function bodies
         for item in &module.items {
             self.check_item(item);
         }
     }
 
     fn check_item(&mut self, item: &Item) {
-        match item {
-            Item::Fn(fn_def) => self.check_fn(fn_def),
-            Item::Struct(s) => self.check_struct(s),
-            Item::Enum(e) => self.check_enum(e),
-            _ => {}
-        }
-    }
-
-    fn check_struct(&mut self, s: &vow_syntax::ast::StructDef) {
-        for f in &s.fields {
-            if let Err(msg) = self.env.resolve(&f.ty) {
-                self.emit_error(ErrorCode::TypeMismatch, msg, f.span);
-            }
-        }
-    }
-
-    fn check_enum(&mut self, e: &vow_syntax::ast::EnumDef) {
-        for v in &e.variants {
-            match &v.kind {
-                vow_syntax::ast::VariantKind::Unit => {}
-                vow_syntax::ast::VariantKind::Tuple(types) => {
-                    for t in types {
-                        if let Err(msg) = self.env.resolve(t) {
-                            self.emit_error(ErrorCode::TypeMismatch, msg, t.span());
-                        }
-                    }
-                }
-                vow_syntax::ast::VariantKind::Struct(fields) => {
-                    for f in fields {
-                        if let Err(msg) = self.env.resolve(&f.ty) {
-                            self.emit_error(ErrorCode::TypeMismatch, msg, f.span);
-                        }
-                    }
-                }
-            }
+        if let Item::Fn(fn_def) = item
+            && !fn_def.is_declaration
+        {
+            self.check_fn(fn_def);
         }
     }
 
@@ -237,23 +242,18 @@ impl<'e> Checker<'e> {
         );
         let outer_return_ty = self.current_return_ty.clone();
 
-        self.current_return_ty = match self.env.resolve(&fn_def.return_ty) {
-            Ok(ty) => ty,
-            Err(msg) => {
-                self.emit_error(ErrorCode::TypeMismatch, msg, fn_def.return_ty.span());
-                Ty::Unit
-            }
-        };
+        let sig = self.env.lookup_fn(&fn_def.name).cloned();
+        self.current_return_ty = sig
+            .as_ref()
+            .map(|s| s.return_ty.clone())
+            .unwrap_or(Ty::Unit);
 
         self.env.push_scope();
-        for param in &fn_def.params {
-            let ty = match self.env.resolve(&param.ty) {
-                Ok(ty) => ty,
-                Err(msg) => {
-                    self.emit_error(ErrorCode::TypeMismatch, msg, param.span);
-                    Ty::Unit
-                }
-            };
+        for (i, param) in fn_def.params.iter().enumerate() {
+            let ty = sig
+                .as_ref()
+                .and_then(|s| s.params.get(i).cloned())
+                .unwrap_or(Ty::Unit);
             self.env.define(&param.name, ty);
         }
 
@@ -355,6 +355,14 @@ impl<'e> Checker<'e> {
     }
 
     fn check_expr(&mut self, expr: &Expr) -> Ty {
+        let ty = self.check_expr_inner(expr);
+        if ty == Ty::Str {
+            self.string_exprs.insert(expr as *const Expr as usize);
+        }
+        ty
+    }
+
+    fn check_expr_inner(&mut self, expr: &Expr) -> Ty {
         match &expr.kind {
             ExprKind::Lit(lit) => match lit {
                 Lit::Int(_) => Ty::I32,
@@ -1201,6 +1209,7 @@ mod tests {
             },
             effects: vec![],
             vow: None,
+            is_declaration: false,
             body,
             span: dummy_span(),
         };
@@ -1872,6 +1881,7 @@ mod tests {
                 span: dummy_span(),
             },
             span: dummy_span(),
+            is_declaration: false,
         };
         let module = Module {
             name: "test".to_string(),

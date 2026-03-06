@@ -436,8 +436,8 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
     for bi in 0..nb {
         let start = block_starts[bi] as usize;
         let len = block_lengths[bi] as usize;
-        for ii in start..start + len {
-            inst_block.insert(inst_ids[ii], bi);
+        for &iid in &inst_ids[start..start + len] {
+            inst_block.insert(iid, bi);
         }
     }
 
@@ -659,8 +659,7 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
     // Allocate stack slots for cross-block referenced values.
     // Each slot holds one i64 (8 bytes), which is sufficient for all Vow types.
     let mut slot_map: BTreeMap<i64, StackSlot> = BTreeMap::new();
-    for ii in 0..n_insts {
-        let iid = inst_ids[ii];
+    for &iid in &inst_ids[..n_insts] {
         if cross_block_refs.contains(&iid) {
             let slot = builder.create_sized_stack_slot(StackSlotData::new(
                 StackSlotKind::ExplicitSlot,
@@ -1022,16 +1021,16 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
                     if dk == IDATA_PHI_TARGET && alen > 0 {
                         let phi_id = dv;
                         let val_id = all_args[aoff];
-                        if let Some(&slot) = slot_map.get(&phi_id) {
-                            if let Some(&val) = value_map.get(&val_id) {
-                                let src_ty = builder.func.dfg.value_type(val);
-                                let store_val = match src_ty {
-                                    types::I32 => builder.ins().sextend(types::I64, val),
-                                    types::I8 => builder.ins().uextend(types::I64, val),
-                                    _ => val,
-                                };
-                                builder.ins().stack_store(store_val, slot, 0);
-                            }
+                        if let Some(&slot) = slot_map.get(&phi_id)
+                            && let Some(&val) = value_map.get(&val_id)
+                        {
+                            let src_ty = builder.func.dfg.value_type(val);
+                            let store_val = match src_ty {
+                                types::I32 => builder.ins().sextend(types::I64, val),
+                                types::I8 => builder.ins().uextend(types::I64, val),
+                                _ => val,
+                            };
+                            builder.ins().stack_store(store_val, slot, 0);
                         }
                     }
                 }

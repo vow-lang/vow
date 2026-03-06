@@ -1,0 +1,24 @@
+module Point
+
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+fn point_new(x: i64, y: i64) -> Point {
+    Point { x: x, y: y }
+}
+
+fn point_x(p: Point) -> i64 {
+    p.x
+}
+
+fn point_y(p: Point) -> i64 {
+    p.y
+}
+
+fn point_distance_sq(a: Point, b: Point) -> i64 {
+    let dx: i64 = a.x - b.x;
+    let dy: i64 = a.y - b.y;
+    dx * dx + dy * dy
+}

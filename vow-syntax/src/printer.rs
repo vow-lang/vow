@@ -23,6 +23,69 @@ pub fn print_module(module: &Module) -> String {
     out
 }
 
+pub fn print_declarations(module: &Module) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("module {}\n", module.name));
+    for u in &module.uses {
+        out.push_str(&format!("use {}\n", u.path.join(".")));
+    }
+    if !module.items.is_empty() {
+        out.push('\n');
+    }
+    let mut items = module.items.iter().peekable();
+    while let Some(item) = items.next() {
+        out.push_str(&print_decl_item(item, 0));
+        if items.peek().is_some() {
+            out.push('\n');
+        }
+    }
+    out
+}
+
+fn print_decl_item(item: &Item, level: usize) -> String {
+    match item {
+        Item::Fn(f) => print_fn_decl(f, level),
+        Item::Struct(s) => print_struct(s, level),
+        Item::Enum(e) => print_enum(e, level),
+        Item::Trait(t) => print_trait(t, level),
+        Item::Impl(i) => print_impl_decl(i, level),
+        Item::TypeAlias(a) => print_type_alias(a, level),
+        Item::Extern(e) => print_extern(e, level),
+    }
+}
+
+fn print_fn_decl(f: &FnDef, level: usize) -> String {
+    let ind = indent(level);
+    let vis = print_visibility(&f.vis);
+    let params = print_params(&f.params);
+    let ret = print_type(&f.return_ty);
+    let effects = print_effects(&f.effects);
+
+    let ret_part = match &f.return_ty {
+        Type::Unit { .. } => String::new(),
+        _ => format!(" -> {}", ret),
+    };
+
+    format!(
+        "{}{}fn {}({}){}{};\n",
+        ind, vis, f.name, params, ret_part, effects
+    )
+}
+
+fn print_impl_decl(i: &ImplBlock, level: usize) -> String {
+    let ind = indent(level);
+    let self_ty = print_type(&i.self_ty);
+    let mut out = match &i.trait_name {
+        Some(t) => format!("{}impl {} for {} {{\n", ind, t, self_ty),
+        None => format!("{}impl {} {{\n", ind, self_ty),
+    };
+    for m in &i.methods {
+        out.push_str(&print_fn_decl(m, level + 1));
+    }
+    out.push_str(&format!("{}}}\n", ind));
+    out
+}
+
 fn indent(level: usize) -> String {
     "    ".repeat(level)
 }
@@ -115,6 +178,11 @@ fn print_fn(f: &FnDef, level: usize) -> String {
         "{}{}fn {}({}){}{}",
         ind, vis, f.name, params, ret_part, effects
     );
+
+    if f.is_declaration {
+        out.push_str(";\n");
+        return out;
+    }
 
     if let Some(vow) = &f.vow {
         out.push_str(" vow {\n");
@@ -791,6 +859,7 @@ mod tests {
                 span: s(),
             },
             span: s(),
+            is_declaration: false,
         };
         let m = Module {
             name: "M".to_string(),
@@ -816,6 +885,7 @@ mod tests {
             vow: None,
             body: empty_block(),
             span: s(),
+            is_declaration: false,
         };
         let m = Module {
             name: "M".to_string(),
@@ -866,6 +936,7 @@ mod tests {
                 span: s(),
             },
             span: s(),
+            is_declaration: false,
         };
         let out = print_fn(&f, 0);
         assert!(out.contains("vow {"), "must contain vow block: {}", out);
@@ -1212,6 +1283,7 @@ mod tests {
             vow: None,
             body: empty_block(),
             span: s(),
+            is_declaration: false,
         };
         let i = ImplBlock {
             trait_name: Some("MyTrait".to_string()),
