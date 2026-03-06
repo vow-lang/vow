@@ -304,7 +304,7 @@ pub struct CeBranchDecision {
 #[derive(Debug, Clone)]
 pub struct StructuredCounterexample {
     pub function: String,
-    pub inputs: Vec<(String, String)>,
+    pub values: Vec<(String, String)>,
     pub violation: String,
     pub vow_id: u32,
     pub source: Option<CeSource>,
@@ -405,7 +405,7 @@ pub struct CeBranchDecisionJson {
 #[derive(Debug, Clone, Serialize)]
 pub struct CounterexampleJson {
     pub function: String,
-    pub inputs: BTreeMap<String, String>,
+    pub values: BTreeMap<String, String>,
     pub violation: String,
     pub vow_id: u32,
     pub source: Option<SpanJson>,
@@ -462,7 +462,7 @@ impl CounterexampleJson {
     fn from_structured(ce: &StructuredCounterexample) -> Self {
         Self {
             function: ce.function.clone(),
-            inputs: ce.inputs.iter().cloned().collect(),
+            values: ce.values.iter().cloned().collect(),
             violation: ce.violation.clone(),
             vow_id: ce.vow_id,
             source: ce.source.as_ref().map(|s| SpanJson {
@@ -605,11 +605,11 @@ fn build_c_to_source_name_map(
     map
 }
 
-fn map_counterexample_inputs(
-    inputs: &[(String, String)],
+fn map_counterexample_values(
+    values: &[(String, String)],
     name_map: &std::collections::HashMap<String, String>,
 ) -> Vec<(String, String)> {
-    inputs
+    values
         .iter()
         .map(|(c_name, value)| {
             let source_name = name_map
@@ -652,7 +652,7 @@ fn build_structured_counterexample(
             length: span.len,
         });
     let name_map = build_c_to_source_name_map(func);
-    let mapped_inputs = map_counterexample_inputs(&ce.inputs, &name_map);
+    let mapped_values = map_counterexample_values(&ce.values, &name_map);
     let sites_raw = if blame == "caller" {
         call_site_index.get(&func.name).cloned().unwrap_or_default()
     } else {
@@ -674,7 +674,7 @@ fn build_structured_counterexample(
             let mut args = Vec::new();
             for (binding_name, _inst_id) in &entry.bindings {
                 if let Some(param_idx) = func.param_names.iter().position(|n| n == binding_name) {
-                    let value = mapped_inputs
+                    let value = mapped_values
                         .iter()
                         .find(|(n, _)| n == binding_name)
                         .map(|(_, v)| v.clone())
@@ -753,7 +753,7 @@ fn build_structured_counterexample(
 
     StructuredCounterexample {
         function: func.name.clone(),
-        inputs: mapped_inputs,
+        values: mapped_values,
         violation,
         vow_id: vid,
         source,
@@ -2263,7 +2263,7 @@ pub fn main() -> i32 [io] {
             diagnostics: vec![],
             counterexamples: vec![StructuredCounterexample {
                 function: "divide".to_string(),
-                inputs: vec![("p1".to_string(), "0".to_string())],
+                values: vec![("p1".to_string(), "0".to_string())],
                 violation: "y != 0".to_string(),
                 vow_id: 0,
                 source: None,
@@ -2705,7 +2705,7 @@ fn main() -> i32 {
             diagnostics: vec![],
             counterexamples: vec![StructuredCounterexample {
                 function: "divide".to_string(),
-                inputs: vec![
+                values: vec![
                     ("p0".to_string(), "42".to_string()),
                     ("p1".to_string(), "0".to_string()),
                 ],
@@ -2784,7 +2784,7 @@ fn main() -> i32 {
     fn counterexample_json_one_entry() {
         let ce = CounterexampleJson::from_structured(&StructuredCounterexample {
             function: "f".to_string(),
-            inputs: vec![("x".to_string(), "0".to_string())],
+            values: vec![("x".to_string(), "0".to_string())],
             violation: "x > 0".to_string(),
             vow_id: 1,
             source: None,
@@ -2796,7 +2796,7 @@ fn main() -> i32 {
         });
         let json = serde_json::to_string(&ce).unwrap();
         assert!(json.contains("\"function\":\"f\""), "function: {json}");
-        assert!(json.contains("\"x\":\"0\""), "inputs: {json}");
+        assert!(json.contains("\"x\":\"0\""), "values: {json}");
         assert!(
             json.contains("\"violation\":\"x > 0\""),
             "violation: {json}"
@@ -2809,7 +2809,7 @@ fn main() -> i32 {
     fn counterexample_json_with_source() {
         let ce = CounterexampleJson::from_structured(&StructuredCounterexample {
             function: "f".to_string(),
-            inputs: vec![],
+            values: vec![],
             violation: "result".to_string(),
             vow_id: 0,
             source: Some(CeSource {
@@ -2902,7 +2902,7 @@ fn main() -> i32 {
             diagnostics: vec![],
             counterexamples: vec![StructuredCounterexample {
                 function: "divide".to_string(),
-                inputs: vec![("y".to_string(), "0".to_string())],
+                values: vec![("y".to_string(), "0".to_string())],
                 violation: "y != 0".to_string(),
                 vow_id: 0,
                 source: Some(CeSource {
@@ -2937,7 +2937,7 @@ fn main() -> i32 {
         assert_eq!(call_sites.len(), 1);
         assert_eq!(call_sites[0]["caller_function"], "main");
         assert_eq!(ces[0]["function"], "divide");
-        assert_eq!(ces[0]["inputs"]["y"], "0");
+        assert_eq!(ces[0]["values"]["y"], "0");
         assert_eq!(ces[0]["violation"], "y != 0");
         assert_eq!(ces[0]["vow_id"], 0);
         assert_eq!(ces[0]["source"]["file"], "divide.vow");
@@ -3078,18 +3078,18 @@ fn main() -> i32 {
     }
 
     #[test]
-    fn map_counterexample_inputs_applies_mapping() {
+    fn map_counterexample_values_applies_mapping() {
         let mut name_map = std::collections::HashMap::new();
         name_map.insert("p0".to_string(), "x".to_string());
         name_map.insert("p1".to_string(), "y".to_string());
         name_map.insert("v0".to_string(), "x".to_string());
         name_map.insert("v1".to_string(), "y".to_string());
 
-        let inputs = vec![
+        let values = vec![
             ("v1".to_string(), "0".to_string()),
             ("v3".to_string(), "0".to_string()),
         ];
-        let mapped = map_counterexample_inputs(&inputs, &name_map);
+        let mapped = map_counterexample_values(&values, &name_map);
         assert_eq!(mapped[0], ("y".to_string(), "0".to_string()));
         assert_eq!(mapped[1], ("_esbmc_v3".to_string(), "0".to_string()));
     }
@@ -3141,17 +3141,17 @@ fn main() -> i32 {
             BuildStatus::VerifyFailed { function, .. } => {
                 assert_eq!(function, "bad_div");
                 let ce = &result.counterexamples[0];
-                for (name, _) in &ce.inputs {
+                for (name, _) in &ce.values {
                     assert!(
                         name == "x" || name == "y" || name.starts_with("_esbmc_"),
                         "expected source name or _esbmc_ prefix, got: {name}"
                     );
                 }
-                let has_source_name = ce.inputs.iter().any(|(n, _)| n == "x" || n == "y");
+                let has_source_name = ce.values.iter().any(|(n, _)| n == "x" || n == "y");
                 assert!(
                     has_source_name,
                     "at least one input should use a source name, got: {:?}",
-                    ce.inputs,
+                    ce.values,
                 );
             }
             BuildStatus::Unverified => {
@@ -3233,14 +3233,14 @@ fn main() -> i32 {
 
                 let ce = &broken_result.counterexamples[0];
 
-                // AC4a: inputs with source-level variable names
-                let has_source_name = ce.inputs.iter().any(|(name, _)| name == "a" || name == "b");
+                // AC4a: values with source-level variable names
+                let has_source_name = ce.values.iter().any(|(name, _)| name == "a" || name == "b");
                 assert!(
                     has_source_name,
-                    "counterexample inputs should use source names (a, b), got: {:?}",
-                    ce.inputs,
+                    "counterexample values should use source names (a, b), got: {:?}",
+                    ce.values,
                 );
-                for (name, _) in &ce.inputs {
+                for (name, _) in &ce.values {
                     assert!(
                         name == "a" || name == "b" || name.starts_with("_esbmc_"),
                         "unexpected variable name: {name}"
@@ -3711,7 +3711,7 @@ fn main() -> i32 {
         let ce = vow_verify::Counterexample {
             description: "y != 0".to_string(),
             vow_id: Some(0),
-            inputs: vec![
+            values: vec![
                 ("p0".to_string(), "10".to_string()),
                 ("p1".to_string(), "0".to_string()),
             ],
@@ -3774,7 +3774,7 @@ fn main() -> i32 {
         let ce = vow_verify::Counterexample {
             description: "result == x + x".to_string(),
             vow_id: Some(0),
-            inputs: vec![("p0".to_string(), "5".to_string())],
+            values: vec![("p0".to_string(), "5".to_string())],
             block_visits: vec![0],
             raw_output: String::new(),
         };
@@ -3803,7 +3803,7 @@ fn main() -> i32 {
     fn counterexample_json_serialization_blame_and_call_sites() {
         let sce = StructuredCounterexample {
             function: "safe_div".to_string(),
-            inputs: vec![
+            values: vec![
                 ("x".to_string(), "10".to_string()),
                 ("y".to_string(), "0".to_string()),
             ],
@@ -3834,7 +3834,7 @@ fn main() -> i32 {
         // Callee blame — call_sites should be omitted
         let sce_callee = StructuredCounterexample {
             function: "buggy".to_string(),
-            inputs: vec![("x".to_string(), "5".to_string())],
+            values: vec![("x".to_string(), "5".to_string())],
             violation: "result == x + x".to_string(),
             vow_id: 0,
             source: None,
@@ -4029,7 +4029,7 @@ fn main() -> i32 {
         let ce = vow_verify::Counterexample {
             description: "test".to_string(),
             vow_id: Some(0),
-            inputs: vec![
+            values: vec![
                 ("p0".to_string(), "10".to_string()),
                 ("p1".to_string(), "0".to_string()),
             ],
@@ -4127,7 +4127,7 @@ fn main() -> i32 {
         let ce = vow_verify::Counterexample {
             description: "test".to_string(),
             vow_id: Some(0),
-            inputs: vec![("p0".to_string(), "0".to_string())],
+            values: vec![("p0".to_string(), "0".to_string())],
             block_visits: vec![0, 2],
             raw_output: String::new(),
         };
@@ -4150,7 +4150,7 @@ fn main() -> i32 {
     fn new_json_fields_skip_when_empty() {
         let sce = StructuredCounterexample {
             function: "f".to_string(),
-            inputs: vec![],
+            values: vec![],
             violation: "test".to_string(),
             vow_id: 0,
             source: None,

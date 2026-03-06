@@ -16,7 +16,7 @@ use crate::c_emitter::{ConstantValue, detect_constant_functions, emit_c_module};
 pub struct Counterexample {
     pub description: String,
     pub vow_id: Option<u32>,
-    pub inputs: Vec<(String, String)>,
+    pub values: Vec<(String, String)>,
     pub block_visits: Vec<u32>,
     pub raw_output: String,
 }
@@ -88,7 +88,7 @@ pub fn parse_esbmc_output(output: &str) -> Counterexample {
     let vow_id = extract_vow_id(output);
     let all_assignments = extract_variable_assignments(output);
 
-    let mut inputs = Vec::new();
+    let mut values = Vec::new();
     let mut block_visits = Vec::new();
 
     for (name, value) in all_assignments {
@@ -99,7 +99,7 @@ pub fn parse_esbmc_output(output: &str) -> Counterexample {
                 block_visits.push(blk_id);
             }
         } else {
-            inputs.push((name, value));
+            values.push((name, value));
         }
     }
 
@@ -114,7 +114,7 @@ pub fn parse_esbmc_output(output: &str) -> Counterexample {
     Counterexample {
         description,
         vow_id,
-        inputs,
+        values,
         block_visits,
         raw_output: output.to_string(),
     }
@@ -469,9 +469,9 @@ VERIFICATION FAILED";
 
         let ce = parse_esbmc_output(output);
         assert_eq!(ce.vow_id, Some(0));
-        assert_eq!(ce.inputs.len(), 2);
-        assert_eq!(ce.inputs[0], ("v1".to_string(), "0".to_string()));
-        assert_eq!(ce.inputs[1], ("v3".to_string(), "0".to_string()));
+        assert_eq!(ce.values.len(), 2);
+        assert_eq!(ce.values[0], ("v1".to_string(), "0".to_string()));
+        assert_eq!(ce.values[1], ("v3".to_string(), "0".to_string()));
         assert!(ce.description.contains("Counterexample"));
     }
 
@@ -496,8 +496,8 @@ VERIFICATION FAILED";
 
         let ce = parse_esbmc_output(output);
         assert_eq!(ce.vow_id, Some(2));
-        assert_eq!(ce.inputs.len(), 1);
-        assert_eq!(ce.inputs[0], ("v0".to_string(), "42".to_string()));
+        assert_eq!(ce.values.len(), 1);
+        assert_eq!(ce.values[0], ("v0".to_string(), "42".to_string()));
     }
 
     #[test]
@@ -505,7 +505,7 @@ VERIFICATION FAILED";
         let output = "VERIFICATION FAILED\nsome other error";
         let ce = parse_esbmc_output(output);
         assert_eq!(ce.vow_id, None);
-        assert!(ce.inputs.is_empty());
+        assert!(ce.values.is_empty());
     }
 
     #[test]
@@ -568,8 +568,8 @@ VERIFICATION FAILED";
 
         let ce = parse_esbmc_output(output);
         assert_eq!(ce.block_visits, vec![0, 1], "blocks 0 and 1 visited");
-        assert_eq!(ce.inputs.len(), 1, "only v0 in inputs, __blk_* filtered");
-        assert_eq!(ce.inputs[0], ("v0".to_string(), "42".to_string()));
+        assert_eq!(ce.values.len(), 1, "only v0 in values, __blk_* filtered");
+        assert_eq!(ce.values[0], ("v0".to_string(), "42".to_string()));
     }
 
     #[test]
@@ -589,7 +589,7 @@ VERIFICATION FAILED";
 
         let ce = parse_esbmc_output(output);
         assert!(ce.block_visits.is_empty());
-        assert_eq!(ce.inputs.len(), 1);
+        assert_eq!(ce.values.len(), 1);
     }
 
     // --- Vec verification integration tests ---

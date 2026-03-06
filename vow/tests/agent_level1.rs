@@ -131,8 +131,8 @@ fn verify_failure_with_counterexample() {
     assert!(!ces.is_empty(), "expected non-empty counterexamples");
     let first = &ces[0];
     assert!(
-        first.get("inputs").is_some(),
-        "expected inputs in counterexample"
+        first.get("values").is_some(),
+        "expected values in counterexample"
     );
 }
 
