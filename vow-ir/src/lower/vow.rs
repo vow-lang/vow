@@ -1,5 +1,6 @@
 use vow_diag::Blame;
 use vow_syntax::ast::{Expr, ExprKind, Param, VowBlock, VowClause};
+use vow_syntax::span::Span;
 
 use crate::types::{InstData, InstId, Opcode, Ty};
 
@@ -101,16 +102,106 @@ fn collect_vars_in_expr(ctx: &LowerCtx, expr: &Expr, out: &mut Vec<(String, Inst
                 collect_vars_in_expr(ctx, e, out);
             }
         }
+        ExprKind::FieldAccess { base, field } => match &base.kind {
+            ExprKind::Ident(name) => {
+                let dotted = format!("{}.{}", name, field);
+                if let Some(id) = ctx.lookup(name)
+                    && !out.iter().any(|(n, _)| n == &dotted)
+                {
+                    out.push((dotted, id));
+                }
+            }
+            ExprKind::Result => {
+                let dotted = format!("result.{}", field);
+                if let Some(id) = ctx.lookup("result")
+                    && !out.iter().any(|(n, _)| n == &dotted)
+                {
+                    out.push((dotted, id));
+                }
+            }
+            _ => {
+                collect_vars_in_expr(ctx, base, out);
+            }
+        },
         ExprKind::Lit(_) | ExprKind::Break { .. } | ExprKind::Return { .. } => {}
         _ => {}
     }
+}
+
+fn expand_ptr_bindings(
+    ctx: &mut LowerCtx,
+    bindings: Vec<(String, InstId)>,
+    span: Span,
+) -> Vec<(String, InstId)> {
+    let mut result = Vec::new();
+    for (name, inst_id) in bindings {
+        let ty = ctx.inst_ty(inst_id);
+        if !matches!(ty, Ty::Ptr | Ty::LinearPtr) {
+            result.push((name, inst_id));
+            continue;
+        }
+        let struct_name = match ctx.inst_struct_type.get(&inst_id) {
+            Some(s) => s.clone(),
+            None => continue,
+        };
+        if matches!(struct_name.as_str(), "String" | "Vec" | "HashMap") {
+            continue;
+        }
+        let field_names = match ctx.struct_field_map.get(&struct_name) {
+            Some(names) => names.clone(),
+            None => continue,
+        };
+        let field_type_names = ctx
+            .struct_field_type_names
+            .get(&struct_name)
+            .cloned()
+            .unwrap_or_default();
+
+        if let Some(dot_pos) = name.rfind('.') {
+            let field = &name[dot_pos + 1..];
+            if let Some(idx) = field_names.iter().position(|n| n == field) {
+                let is_primitive = field_type_names
+                    .get(idx)
+                    .is_some_and(|t| matches!(t.as_str(), "i32" | "i64" | "f32" | "f64" | "bool"));
+                if is_primitive {
+                    let field_id = ctx.emit(
+                        Opcode::FieldGet,
+                        Ty::I64,
+                        vec![inst_id],
+                        InstData::FieldIndex(idx as u32),
+                        span,
+                    );
+                    result.push((name, field_id));
+                }
+            }
+        } else {
+            for (idx, fname) in field_names.iter().enumerate() {
+                let is_primitive = field_type_names
+                    .get(idx)
+                    .is_some_and(|t| matches!(t.as_str(), "i32" | "i64" | "f32" | "f64" | "bool"));
+                if is_primitive {
+                    let dotted = format!("{}.{}", name, fname);
+                    let field_id = ctx.emit(
+                        Opcode::FieldGet,
+                        Ty::I64,
+                        vec![inst_id],
+                        InstData::FieldIndex(idx as u32),
+                        span,
+                    );
+                    result.push((dotted, field_id));
+                }
+            }
+        }
+    }
+    result
 }
 
 pub fn lower_requires(ctx: &mut LowerCtx, vow_block: &VowBlock) {
     for clause in &vow_block.clauses {
         if let VowClause::Requires { span, .. } = clause {
             let desc = clause_description(clause);
-            let bindings = collect_free_vars(ctx, clause_expr(clause));
+            let raw_bindings = collect_free_vars(ctx, clause_expr(clause));
+            let bindings = expand_ptr_bindings(ctx, raw_bindings, *span);
             let vow_id = ctx.alloc_vow(desc, Blame::Caller, bindings, span.start);
             let pred_id = lower_predicate(ctx, clause, None);
             ctx.emit(
@@ -136,7 +227,8 @@ pub fn lower_param_refinements(ctx: &mut LowerCtx, params: &[Param]) {
                 vow_syntax::printer::print_expr(refinement),
                 param.name,
             );
-            let bindings = collect_free_vars(ctx, refinement);
+            let raw_bindings = collect_free_vars(ctx, refinement);
+            let bindings = expand_ptr_bindings(ctx, raw_bindings, param.span);
             let vow_id = ctx.alloc_vow(desc, Blame::Caller, bindings, param.span.start);
             let pred_id = lower_predicate(ctx, &clause, None);
             ctx.emit(
@@ -156,7 +248,8 @@ pub fn lower_ensures(ctx: &mut LowerCtx, vow_block: &VowBlock, result_id: InstId
     for clause in &vow_block.clauses {
         if let VowClause::Ensures { span, .. } = clause {
             let desc = clause_description(clause);
-            let bindings = collect_free_vars(ctx, clause_expr(clause));
+            let raw_bindings = collect_free_vars(ctx, clause_expr(clause));
+            let bindings = expand_ptr_bindings(ctx, raw_bindings, *span);
             let vow_id = ctx.alloc_vow(desc, Blame::Callee, bindings, span.start);
             let pred_id = lower_predicate(ctx, clause, Some(result_id));
             ctx.emit(
@@ -175,7 +268,8 @@ pub fn lower_invariant(ctx: &mut LowerCtx, vow_block: &VowBlock) {
     for clause in &vow_block.clauses {
         if let VowClause::Invariant { span, .. } = clause {
             let desc = clause_description(clause);
-            let bindings = collect_free_vars(ctx, clause_expr(clause));
+            let raw_bindings = collect_free_vars(ctx, clause_expr(clause));
+            let bindings = expand_ptr_bindings(ctx, raw_bindings, *span);
             let vow_id = ctx.alloc_vow(desc, Blame::Callee, bindings, span.start);
             let pred_id = lower_predicate(ctx, clause, None);
             ctx.emit(
@@ -569,5 +663,100 @@ mod tests {
         );
         assert_eq!(func.vows.len(), 3);
         assert!(func.vows.iter().all(|v| v.blame == Blame::Caller));
+    }
+
+    #[test]
+    fn requires_struct_field_produces_dotted_binding() {
+        use vow_syntax::ast::BinOp;
+
+        let clause = VowClause::Requires {
+            expr: Expr {
+                kind: ExprKind::BinaryOp {
+                    op: BinOp::Gt,
+                    lhs: Box::new(Expr {
+                        kind: ExprKind::FieldAccess {
+                            base: Box::new(Expr {
+                                kind: ExprKind::Ident("s".to_string()),
+                                span: sp(),
+                            }),
+                            field: "size".to_string(),
+                        },
+                        span: sp(),
+                    }),
+                    rhs: Box::new(Expr {
+                        kind: ExprKind::Lit(Lit::Int(0)),
+                        span: sp(),
+                    }),
+                },
+                span: sp(),
+            },
+            span: sp(),
+        };
+        let vow_block = VowBlock {
+            clauses: vec![clause],
+            span: sp(),
+        };
+        let fn_def = FnDef {
+            vis: Visibility::Public,
+            name: "stack_peek".to_string(),
+            params: vec![Param {
+                name: "s".to_string(),
+                ty: Type::Named {
+                    name: "Stack".to_string(),
+                    span: sp(),
+                },
+                refinement: None,
+                span: sp(),
+            }],
+            return_ty: Type::Named {
+                name: "i64".to_string(),
+                span: sp(),
+            },
+            effects: vec![],
+            vow: Some(vow_block),
+            body: Block {
+                stmts: vec![],
+                trailing_expr: Some(Box::new(Expr {
+                    kind: ExprKind::Lit(Lit::Int(0)),
+                    span: sp(),
+                })),
+                span: sp(),
+            },
+            span: sp(),
+            is_declaration: false,
+        };
+        let mut struct_field_map = std::collections::HashMap::new();
+        struct_field_map.insert(
+            "Stack".to_string(),
+            vec!["data".to_string(), "size".to_string()],
+        );
+        let mut struct_field_type_names = std::collections::HashMap::new();
+        struct_field_type_names.insert(
+            "Stack".to_string(),
+            vec!["Vec".to_string(), "i64".to_string()],
+        );
+        let (func, _) = lower_function(
+            &fn_def,
+            "",
+            &std::collections::HashMap::new(),
+            struct_field_map,
+            std::collections::HashMap::new(),
+            struct_field_type_names,
+            &std::collections::HashSet::new(),
+        );
+
+        assert_eq!(func.vows.len(), 1);
+        let vow = &func.vows[0];
+        assert_eq!(vow.blame, Blame::Caller);
+        assert_eq!(vow.bindings.len(), 1, "expected one dotted binding");
+        assert_eq!(vow.bindings[0].0, "s.size");
+
+        let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
+        let field_get = all_insts
+            .iter()
+            .find(|i| i.id == vow.bindings[0].1)
+            .expect("binding InstId should exist");
+        assert_eq!(field_get.opcode, Opcode::FieldGet);
+        assert_eq!(field_get.data, InstData::FieldIndex(1));
     }
 }

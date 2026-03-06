@@ -70,7 +70,7 @@ pub struct LowerCtx {
     // source file path for vow entries
     file: String,
     // struct name → field type names (from AST declarations) for FieldGet auto-tagging
-    struct_field_type_names: HashMap<String, Vec<String>>,
+    pub(super) struct_field_type_names: HashMap<String, Vec<String>>,
     // expr addresses whose resolved type is String (from checker)
     string_exprs: StringExprSet,
 }
