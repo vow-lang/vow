@@ -45,7 +45,21 @@ fn collect_vec_vars(func: &Function) -> HashSet<u32> {
         }
     }
 
-    // Pass 2: propagate through Upsilon→Phi until fixed point
+    // Pass 2: reverse-propagate — if a value is used as first arg of __vow_vec_*, it's a vec
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.opcode == Opcode::Call
+                && let InstData::CallExtern(ref name) = inst.data
+                && name.starts_with("__vow_vec_")
+                && name != "__vow_vec_new"
+                && !inst.args.is_empty()
+            {
+                vec_vars.insert(inst.args[0].0);
+            }
+        }
+    }
+
+    // Pass 3: propagate through Upsilon→Phi until fixed point
     loop {
         let mut changed = false;
         for block in &func.blocks {
@@ -86,6 +100,20 @@ fn collect_string_vars(func: &Function) -> HashSet<u32> {
         }
     }
 
+    // Reverse-propagate: first arg of __vow_string_* calls is a string
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.opcode == Opcode::Call
+                && let InstData::CallExtern(ref name) = inst.data
+                && name.starts_with("__vow_string_")
+                && name != "__vow_string_from_cstr"
+                && !inst.args.is_empty()
+            {
+                string_vars.insert(inst.args[0].0);
+            }
+        }
+    }
+
     loop {
         let mut changed = false;
         for block in &func.blocks {
@@ -122,6 +150,20 @@ fn collect_hashmap_vars(func: &Function) -> HashSet<u32> {
                 && name == "__vow_map_new"
             {
                 hashmap_vars.insert(inst.id.0);
+            }
+        }
+    }
+
+    // Reverse-propagate: first arg of __vow_map_* calls is a hashmap
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.opcode == Opcode::Call
+                && let InstData::CallExtern(ref name) = inst.data
+                && name.starts_with("__vow_map_")
+                && name != "__vow_map_new"
+                && !inst.args.is_empty()
+            {
+                hashmap_vars.insert(inst.args[0].0);
             }
         }
     }
@@ -390,7 +432,7 @@ fn emit_inst(
                     || string_vars.contains(&val_id.0)
                     || hashmap_vars.contains(&val_id.0)
                 {
-                    out.push_str("  return (void*)0; /* modelled type return */\n");
+                    out.push_str("  return 0; /* modelled type return */\n");
                 } else {
                     out.push_str(&format!("  return v{};\n", val_id.0));
                 }
@@ -613,9 +655,28 @@ fn emit_inst(
         | Opcode::RegionFree
         | Opcode::LinearConsume
         | Opcode::LinearBorrow
-        | Opcode::FieldGet
         | Opcode::FieldSet => {
             emit_unmodelled(inst, out);
+        }
+        Opcode::FieldGet => {
+            if vec_vars.contains(&id) {
+                out.push_str(&format!(
+                    "  /* FieldGet -> vec */ __vow_vec_t v{};\n  v{}.len = 0;\n",
+                    id, id
+                ));
+            } else if string_vars.contains(&id) {
+                out.push_str(&format!(
+                    "  /* FieldGet -> string */ __vow_string_t v{};\n  v{}.len = 0;\n",
+                    id, id
+                ));
+            } else if hashmap_vars.contains(&id) {
+                out.push_str(&format!(
+                    "  /* FieldGet -> hashmap */ __vow_hashmap_t v{};\n  v{}.len = 0;\n",
+                    id, id
+                ));
+            } else {
+                emit_unmodelled(inst, out);
+            }
         }
 
         Opcode::RemF32 | Opcode::RemF64 => {
@@ -632,9 +693,13 @@ fn emit_unmodelled(inst: &Inst, out: &mut String) {
     let id = inst.id.0;
     out.push_str(&format!("  /* opcode {:?} not modelled */\n", inst.opcode));
     if inst.ty != Ty::Unit {
+        let c_ty = match inst.ty {
+            Ty::Ptr | Ty::LinearPtr => "int64_t",
+            other => ir_ty_to_c(other),
+        };
         out.push_str(&format!(
             "  {} v{} = __VERIFIER_nondet_{}();\n",
-            ir_ty_to_c(inst.ty),
+            c_ty,
             id,
             c_nondet_suffix(inst.ty)
         ));
@@ -648,7 +713,8 @@ fn c_nondet_suffix(ty: Ty) -> &'static str {
         Ty::F32 => "float",
         Ty::F64 => "double",
         Ty::Bool => "bool",
-        _ => "int",
+        Ty::Ptr | Ty::LinearPtr => "long",
+        Ty::Unit => "int",
     }
 }
 
@@ -662,20 +728,26 @@ pub fn emit_c_function(func: &Function) -> String {
     let string_vars = collect_string_vars(func);
     let hashmap_vars = collect_hashmap_vars(func);
 
-    // Return type
-    let ret_c = if func.return_ty == Ty::Unit {
-        "void"
-    } else {
-        ir_ty_to_c(func.return_ty)
+    // Return type (use int64_t for Ptr since structs are opaque in verification)
+    let ret_c = match func.return_ty {
+        Ty::Unit => "void",
+        Ty::Ptr | Ty::LinearPtr => "int64_t",
+        other => ir_ty_to_c(other),
     };
 
-    // Parameters (skip Unit params)
+    // Parameters (skip Unit params; use int64_t for Ptr)
     let params: Vec<String> = func
         .params
         .iter()
         .enumerate()
         .filter(|&(_, &ty)| ty != Ty::Unit)
-        .map(|(i, &ty)| format!("{} p{}", ir_ty_to_c(ty), i))
+        .map(|(i, &ty)| {
+            let c_ty = match ty {
+                Ty::Ptr | Ty::LinearPtr => "int64_t",
+                other => ir_ty_to_c(other),
+            };
+            format!("{} p{}", c_ty, i)
+        })
         .collect();
     let param_str = if params.is_empty() {
         "void".to_string()
@@ -702,15 +774,29 @@ pub fn emit_c_function(func: &Function) -> String {
             if inst.opcode == Opcode::GetArg
                 && let InstData::ArgIndex(idx) = inst.data
             {
+                let id = inst.id.0;
                 if let Some(&(_, cl)) = arg_var_map.iter().find(|(ir, _)| *ir == idx) {
-                    out.push_str(&format!(
-                        "  {} v{} = p{};\n",
-                        ir_ty_to_c(inst.ty),
-                        inst.id.0,
-                        cl
-                    ));
+                    if vec_vars.contains(&id) {
+                        out.push_str(&format!("  __vow_vec_t v{};\n  v{}.len = 0;\n", id, id));
+                    } else if string_vars.contains(&id) {
+                        out.push_str(&format!(
+                            "  __vow_string_t v{};\n  v{}.len = 0;\n",
+                            id, id
+                        ));
+                    } else if hashmap_vars.contains(&id) {
+                        out.push_str(&format!(
+                            "  __vow_hashmap_t v{};\n  v{}.len = 0;\n",
+                            id, id
+                        ));
+                    } else {
+                        let c_ty = match inst.ty {
+                            Ty::Ptr | Ty::LinearPtr => "int64_t",
+                            other => ir_ty_to_c(other),
+                        };
+                        out.push_str(&format!("  {} v{} = p{};\n", c_ty, id, cl));
+                    }
                 } else {
-                    out.push_str(&format!("  int32_t v{} = 0; /* unit arg */\n", inst.id.0));
+                    out.push_str(&format!("  int32_t v{} = 0; /* unit arg */\n", id));
                 }
             }
         }
@@ -903,7 +989,9 @@ mod tests {
         assert_eq!(c_nondet_suffix(Ty::F32), "float");
         assert_eq!(c_nondet_suffix(Ty::F64), "double");
         assert_eq!(c_nondet_suffix(Ty::Bool), "bool");
-        assert_eq!(c_nondet_suffix(Ty::Ptr), "int");
+        assert_eq!(c_nondet_suffix(Ty::Ptr), "long");
+        assert_eq!(c_nondet_suffix(Ty::LinearPtr), "long");
+        assert_eq!(c_nondet_suffix(Ty::Unit), "int");
     }
 
     fn make_func(name: &str, params: Vec<Ty>, ret: Ty, insts: Vec<Inst>) -> Function {
@@ -1413,7 +1501,7 @@ mod tests {
         assert!(c.contains("__vow_vec_t v2;"), "vec struct decl: {c}");
         assert!(c.contains("v2.len = 0;"), "vec len init: {c}");
         assert!(
-            c.contains("(void*)0; /* modelled type return */"),
+            c.contains("return 0; /* modelled type return */"),
             "vec return: {c}"
         );
     }
@@ -1719,7 +1807,7 @@ mod tests {
             "len bounded: {c}"
         );
         assert!(
-            c.contains("(void*)0; /* modelled type return */"),
+            c.contains("return 0; /* modelled type return */"),
             "string return: {c}"
         );
     }
@@ -2081,7 +2169,7 @@ mod tests {
         assert!(c.contains("__vow_hashmap_t v0;"), "hashmap decl: {c}");
         assert!(c.contains("v0.len = 0;"), "hashmap len init: {c}");
         assert!(
-            c.contains("(void*)0; /* modelled type return */"),
+            c.contains("return 0; /* modelled type return */"),
             "hashmap return: {c}"
         );
     }
