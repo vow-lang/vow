@@ -380,6 +380,10 @@ or from community adoption.
   to verify sequentially
 - **Recursive type ESBMC bounds** (from design sketch §15) — trigger: agent
   hits `--unwind` ceiling on compiler AST types
+- **Direct goto-program emission** — trigger: C model limitations accumulate
+  (Ptr type mismatches, struct field tracking, modeled-type propagation).
+  Emit ESBMC goto programs directly from Vow IR instead of going through C,
+  eliminating the C type system as an intermediate representation
 
 ### Triggered by ecosystem demand
 
