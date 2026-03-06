@@ -15,6 +15,7 @@ pub struct Counterexample {
     pub description: String,
     pub vow_id: Option<u32>,
     pub inputs: Vec<(String, String)>,
+    pub block_visits: Vec<u32>,
     pub raw_output: String,
 }
 
@@ -83,7 +84,25 @@ fn emit_harness(func: &Function) -> String {
 
 pub fn parse_esbmc_output(output: &str) -> Counterexample {
     let vow_id = extract_vow_id(output);
-    let inputs = extract_variable_assignments(output);
+    let all_assignments = extract_variable_assignments(output);
+
+    let mut inputs = Vec::new();
+    let mut block_visits = Vec::new();
+
+    for (name, value) in all_assignments {
+        if let Some(rest) = name.strip_prefix("__blk_") {
+            if let Ok(blk_id) = rest.parse::<u32>()
+                && value.trim() == "1"
+            {
+                block_visits.push(blk_id);
+            }
+        } else {
+            inputs.push((name, value));
+        }
+    }
+
+    block_visits.sort();
+
     let description = output
         .lines()
         .find(|l| l.contains("Counterexample") || l.contains("violation") || l.contains("FAILED"))
@@ -94,6 +113,7 @@ pub fn parse_esbmc_output(output: &str) -> Counterexample {
         description,
         vow_id,
         inputs,
+        block_visits,
         raw_output: output.to_string(),
     }
 }
@@ -500,6 +520,61 @@ VERIFICATION FAILED";
     #[test]
     fn parse_assignment_line_empty() {
         assert_eq!(parse_assignment_line(""), None);
+    }
+
+    #[test]
+    fn parse_block_visits_from_counterexample() {
+        let output = "\
+[Counterexample]
+
+State 1 file /tmp/test.c line 5 column 3 function f thread 0
+----------------------------------------------------
+  __blk_0 = 1
+
+State 2 file /tmp/test.c line 6 column 3 function f thread 0
+----------------------------------------------------
+  __blk_1 = 1
+
+State 3 file /tmp/test.c line 7 column 3 function f thread 0
+----------------------------------------------------
+  __blk_2 = 0
+
+State 4 file /tmp/test.c line 8 column 3 function f thread 0
+----------------------------------------------------
+  v0 = 42
+
+Violated property:
+  file /tmp/test.c line 10 column 3 function f
+  vow:0
+  v0
+
+
+VERIFICATION FAILED";
+
+        let ce = parse_esbmc_output(output);
+        assert_eq!(ce.block_visits, vec![0, 1], "blocks 0 and 1 visited");
+        assert_eq!(ce.inputs.len(), 1, "only v0 in inputs, __blk_* filtered");
+        assert_eq!(ce.inputs[0], ("v0".to_string(), "42".to_string()));
+    }
+
+    #[test]
+    fn parse_no_block_visits() {
+        let output = "\
+[Counterexample]
+
+State 1 file /tmp/test.c line 5 column 3 function f thread 0
+----------------------------------------------------
+  v0 = 7
+
+Violated property:
+  vow:0
+  v0
+
+VERIFICATION FAILED";
+
+        let ce = parse_esbmc_output(output);
+        assert!(ce.block_visits.is_empty());
+        assert_eq!(ce.inputs.len(), 1);
     }
 
     // --- Vec verification integration tests ---

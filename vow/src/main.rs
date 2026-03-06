@@ -280,6 +280,28 @@ pub struct CeSource {
 }
 
 #[derive(Debug, Clone)]
+pub struct CeViolatingArg {
+    pub param: String,
+    pub value: String,
+    pub arg_offset: u32,
+    pub arg_length: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct CePathStep {
+    pub block_id: u32,
+    pub offset: u32,
+    pub length: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct CeBranchDecision {
+    pub condition_offset: u32,
+    pub condition_length: u32,
+    pub taken: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct StructuredCounterexample {
     pub function: String,
     pub inputs: Vec<(String, String)>,
@@ -288,6 +310,9 @@ pub struct StructuredCounterexample {
     pub source: Option<CeSource>,
     pub blame: String,
     pub call_sites: Vec<CeCallSite>,
+    pub violating_args: Vec<CeViolatingArg>,
+    pub execution_path: Vec<CePathStep>,
+    pub branch_decisions: Vec<CeBranchDecision>,
 }
 
 #[derive(Debug, Clone)]
@@ -354,6 +379,28 @@ pub struct CeCallSiteJson {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct CeViolatingArgJson {
+    pub param: String,
+    pub value: String,
+    pub arg_offset: u32,
+    pub arg_length: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CePathStepJson {
+    pub block_id: u32,
+    pub offset: u32,
+    pub length: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CeBranchDecisionJson {
+    pub condition_offset: u32,
+    pub condition_length: u32,
+    pub taken: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct CounterexampleJson {
     pub function: String,
     pub inputs: BTreeMap<String, String>,
@@ -363,6 +410,12 @@ pub struct CounterexampleJson {
     pub blame: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub call_sites: Vec<CeCallSiteJson>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub violating_args: Vec<CeViolatingArgJson>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub execution_path: Vec<CePathStepJson>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub branch_decisions: Vec<CeBranchDecisionJson>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -423,6 +476,34 @@ impl CounterexampleJson {
                     file: cs.file.clone(),
                     offset: cs.offset,
                     length: cs.length,
+                })
+                .collect(),
+            violating_args: ce
+                .violating_args
+                .iter()
+                .map(|va| CeViolatingArgJson {
+                    param: va.param.clone(),
+                    value: va.value.clone(),
+                    arg_offset: va.arg_offset,
+                    arg_length: va.arg_length,
+                })
+                .collect(),
+            execution_path: ce
+                .execution_path
+                .iter()
+                .map(|ps| CePathStepJson {
+                    block_id: ps.block_id,
+                    offset: ps.offset,
+                    length: ps.length,
+                })
+                .collect(),
+            branch_decisions: ce
+                .branch_decisions
+                .iter()
+                .map(|bd| CeBranchDecisionJson {
+                    condition_offset: bd.condition_offset,
+                    condition_length: bd.condition_length,
+                    taken: bd.taken.clone(),
                 })
                 .collect(),
         }
@@ -543,6 +624,7 @@ fn build_structured_counterexample(
     file: &str,
     call_site_index: &std::collections::HashMap<String, Vec<CallSiteInfo>>,
 ) -> StructuredCounterexample {
+    use vow_ir::InstData;
     let vid = ce.vow_id.unwrap_or(0);
     let vow_entry = ce
         .vow_id
@@ -568,22 +650,104 @@ fn build_structured_counterexample(
         });
     let name_map = build_c_to_source_name_map(func);
     let mapped_inputs = map_counterexample_inputs(&ce.inputs, &name_map);
-    let call_sites = if blame == "caller" {
-        call_site_index
-            .get(&func.name)
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|cs| CeCallSite {
-                caller_function: cs.caller_function,
-                file: cs.file,
-                offset: cs.offset,
-                length: cs.length,
-            })
-            .collect()
+    let sites_raw = if blame == "caller" {
+        call_site_index.get(&func.name).cloned().unwrap_or_default()
     } else {
         vec![]
     };
+    let call_sites: Vec<CeCallSite> = sites_raw
+        .iter()
+        .map(|cs| CeCallSite {
+            caller_function: cs.caller_function.clone(),
+            file: cs.file.clone(),
+            offset: cs.offset,
+            length: cs.length,
+        })
+        .collect();
+
+    // Violating args: for caller-blame, map bindings to param indices and arg spans
+    let violating_args = if blame == "caller" {
+        if let Some(entry) = vow_entry {
+            let mut args = Vec::new();
+            for (binding_name, _inst_id) in &entry.bindings {
+                if let Some(param_idx) = func.param_names.iter().position(|n| n == binding_name) {
+                    let value = mapped_inputs
+                        .iter()
+                        .find(|(n, _)| n == binding_name)
+                        .map(|(_, v)| v.clone())
+                        .unwrap_or_default();
+                    for cs in &sites_raw {
+                        if let Some(&(off, len)) = cs.arg_spans.get(param_idx) {
+                            args.push(CeViolatingArg {
+                                param: binding_name.clone(),
+                                value: value.clone(),
+                                arg_offset: off,
+                                arg_length: len,
+                            });
+                        }
+                    }
+                }
+            }
+            args
+        } else {
+            vec![]
+        }
+    } else {
+        vec![]
+    };
+
+    // Execution path from block visits
+    let visited: std::collections::HashSet<u32> = ce.block_visits.iter().copied().collect();
+    let mut execution_path: Vec<CePathStep> = Vec::new();
+    for block in &func.blocks {
+        if visited.contains(&block.id.0) {
+            let span = block
+                .insts
+                .iter()
+                .find(|i| i.origin.start != 0 || i.origin.len != 0)
+                .map(|i| i.origin);
+            if let Some(s) = span {
+                execution_path.push(CePathStep {
+                    block_id: block.id.0,
+                    offset: s.start,
+                    length: s.len,
+                });
+            } else {
+                execution_path.push(CePathStep {
+                    block_id: block.id.0,
+                    offset: 0,
+                    length: 0,
+                });
+            }
+        }
+    }
+
+    // Branch decisions
+    let mut branch_decisions: Vec<CeBranchDecision> = Vec::new();
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.opcode == vow_ir::Opcode::Branch
+                && let InstData::BranchTargets {
+                    then_block,
+                    else_block,
+                } = &inst.data
+            {
+                let then_visited = visited.contains(&then_block.0);
+                let else_visited = visited.contains(&else_block.0);
+                let taken = match (then_visited, else_visited) {
+                    (true, false) => "then",
+                    (false, true) => "else",
+                    _ => continue,
+                };
+                branch_decisions.push(CeBranchDecision {
+                    condition_offset: inst.origin.start,
+                    condition_length: inst.origin.len,
+                    taken: taken.to_string(),
+                });
+            }
+        }
+    }
+
     StructuredCounterexample {
         function: func.name.clone(),
         inputs: mapped_inputs,
@@ -592,6 +756,9 @@ fn build_structured_counterexample(
         source,
         blame,
         call_sites,
+        violating_args,
+        execution_path,
+        branch_decisions,
     }
 }
 
@@ -622,6 +789,7 @@ struct CallSiteInfo {
     file: String,
     offset: u32,
     length: u32,
+    arg_spans: Vec<(u32, u32)>,
 }
 
 fn build_call_site_index(
@@ -639,12 +807,29 @@ fn build_call_site_index(
         .collect();
 
     for func in &module.functions {
+        let inst_span: std::collections::HashMap<u32, vow_syntax::span::Span> = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .map(|i| (i.id.0, i.origin))
+            .collect();
+
         for block in &func.blocks {
             for inst in &block.insts {
                 if inst.opcode == Opcode::Call
                     && let InstData::CallTarget(fid) = &inst.data
                     && let Some(&callee_name) = func_by_id.get(&fid.0)
                 {
+                    let arg_spans: Vec<(u32, u32)> = inst
+                        .args
+                        .iter()
+                        .map(|a| {
+                            inst_span
+                                .get(&a.0)
+                                .map(|s| (s.start, s.len))
+                                .unwrap_or((0, 0))
+                        })
+                        .collect();
                     index
                         .entry(callee_name.to_string())
                         .or_default()
@@ -653,6 +838,7 @@ fn build_call_site_index(
                             file: file.to_string(),
                             offset: inst.origin.start,
                             length: inst.origin.len,
+                            arg_spans,
                         });
                 }
             }
@@ -2079,6 +2265,9 @@ pub fn main() -> i32 [io] {
                 source: None,
                 blame: "caller".to_string(),
                 call_sites: vec![],
+                violating_args: vec![],
+                execution_path: vec![],
+                branch_decisions: vec![],
             }],
             verify_status: None,
             verify_message: None,
@@ -2524,6 +2713,9 @@ fn main() -> i32 {
                 }),
                 blame: "caller".to_string(),
                 call_sites: vec![],
+                violating_args: vec![],
+                execution_path: vec![],
+                branch_decisions: vec![],
             }],
             verify_status: None,
             verify_message: None,
@@ -2593,6 +2785,9 @@ fn main() -> i32 {
             source: None,
             blame: "caller".to_string(),
             call_sites: vec![],
+            violating_args: vec![],
+            execution_path: vec![],
+            branch_decisions: vec![],
         });
         let json = serde_json::to_string(&ce).unwrap();
         assert!(json.contains("\"function\":\"f\""), "function: {json}");
@@ -2619,6 +2814,9 @@ fn main() -> i32 {
             }),
             blame: "callee".to_string(),
             call_sites: vec![],
+            violating_args: vec![],
+            execution_path: vec![],
+            branch_decisions: vec![],
         });
         let json = serde_json::to_string(&ce).unwrap();
         assert!(json.contains("\"file\":\"test.vow\""), "file: {json}");
@@ -2713,6 +2911,9 @@ fn main() -> i32 {
                     offset: 120,
                     length: 15,
                 }],
+                violating_args: vec![],
+                execution_path: vec![],
+                branch_decisions: vec![],
             }],
             verify_status: None,
             verify_message: None,
@@ -3508,6 +3709,7 @@ fn main() -> i32 {
                 ("p0".to_string(), "10".to_string()),
                 ("p1".to_string(), "0".to_string()),
             ],
+            block_visits: vec![0],
             raw_output: String::new(),
         };
 
@@ -3519,6 +3721,7 @@ fn main() -> i32 {
                 file: "test.vow".to_string(),
                 offset: 120,
                 length: 18,
+                arg_spans: vec![],
             }],
         );
 
@@ -3566,6 +3769,7 @@ fn main() -> i32 {
             description: "result == x + x".to_string(),
             vow_id: Some(0),
             inputs: vec![("p0".to_string(), "5".to_string())],
+            block_visits: vec![0],
             raw_output: String::new(),
         };
 
@@ -3577,6 +3781,7 @@ fn main() -> i32 {
                 file: "test.vow".to_string(),
                 offset: 100,
                 length: 10,
+                arg_spans: vec![],
             }],
         );
 
@@ -3610,6 +3815,9 @@ fn main() -> i32 {
                 offset: 120,
                 length: 18,
             }],
+            violating_args: vec![],
+            execution_path: vec![],
+            branch_decisions: vec![],
         };
         let json_ce = CounterexampleJson::from_structured(&sce);
         let serialized = serde_json::to_string(&json_ce).unwrap();
@@ -3626,6 +3834,9 @@ fn main() -> i32 {
             source: None,
             blame: "callee".to_string(),
             call_sites: vec![],
+            violating_args: vec![],
+            execution_path: vec![],
+            branch_decisions: vec![],
         };
         let json_callee = CounterexampleJson::from_structured(&sce_callee);
         let serialized_callee = serde_json::to_string(&json_callee).unwrap();
@@ -3663,5 +3874,299 @@ fn main() -> i32 {
 
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert!(parsed.get("status").is_some());
+    }
+
+    #[test]
+    fn call_site_index_captures_arg_spans() {
+        use vow_ir::*;
+        use vow_syntax::span::Span;
+        let callee = Function {
+            id: FuncId(0),
+            name: "callee".to_string(),
+            params: vec![Ty::I64, Ty::I64],
+            param_names: vec!["a".to_string(), "b".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    Inst {
+                        id: InstId(0),
+                        opcode: Opcode::GetArg,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ArgIndex(0),
+                        origin: Span::new(10, 1),
+                    },
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::Return,
+                        ty: Ty::Unit,
+                        args: vec![InstId(0)],
+                        data: InstData::None,
+                        origin: Span::new(12, 1),
+                    },
+                ],
+            }],
+        };
+        let caller = Function {
+            id: FuncId(1),
+            name: "caller".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    Inst {
+                        id: InstId(10),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(5),
+                        origin: Span::new(100, 1),
+                    },
+                    Inst {
+                        id: InstId(11),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(0),
+                        origin: Span::new(103, 1),
+                    },
+                    Inst {
+                        id: InstId(12),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(10), InstId(11)],
+                        data: InstData::CallTarget(FuncId(0)),
+                        origin: Span::new(95, 12),
+                    },
+                    Inst {
+                        id: InstId(13),
+                        opcode: Opcode::Return,
+                        ty: Ty::Unit,
+                        args: vec![InstId(12)],
+                        data: InstData::None,
+                        origin: Span::new(110, 1),
+                    },
+                ],
+            }],
+        };
+        let module = Module {
+            name: "test".to_string(),
+            functions: vec![callee, caller],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+        };
+        let index = build_call_site_index(&module, "test.vow");
+        let sites = index.get("callee").expect("callee should have call sites");
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].arg_spans.len(), 2);
+        assert_eq!(sites[0].arg_spans[0], (100, 1));
+        assert_eq!(sites[0].arg_spans[1], (103, 1));
+    }
+
+    #[test]
+    fn violating_args_populated_for_caller_blame() {
+        use vow_ir::*;
+        use vow_syntax::span::Span;
+        let func = Function {
+            id: FuncId(0),
+            name: "divide".to_string(),
+            params: vec![Ty::I64, Ty::I64],
+            param_names: vec!["x".to_string(), "y".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "y != 0".to_string(),
+                blame: vow_diag::Blame::Caller,
+                bindings: vec![("y".to_string(), InstId(1))],
+                file: "test.vow".to_string(),
+                offset: 20,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    Inst {
+                        id: InstId(0),
+                        opcode: Opcode::GetArg,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ArgIndex(0),
+                        origin: Span::new(10, 1),
+                    },
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::GetArg,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ArgIndex(1),
+                        origin: Span::new(15, 1),
+                    },
+                    Inst {
+                        id: InstId(2),
+                        opcode: Opcode::Return,
+                        ty: Ty::Unit,
+                        args: vec![InstId(0)],
+                        data: InstData::None,
+                        origin: Span::new(20, 1),
+                    },
+                ],
+            }],
+        };
+        let ce = vow_verify::Counterexample {
+            description: "test".to_string(),
+            vow_id: Some(0),
+            inputs: vec![
+                ("p0".to_string(), "10".to_string()),
+                ("p1".to_string(), "0".to_string()),
+            ],
+            block_visits: vec![0],
+            raw_output: String::new(),
+        };
+        let mut call_site_index = std::collections::HashMap::new();
+        call_site_index.insert(
+            "divide".to_string(),
+            vec![CallSiteInfo {
+                caller_function: "main".to_string(),
+                file: "test.vow".to_string(),
+                offset: 50,
+                length: 15,
+                arg_spans: vec![(55, 2), (59, 1)],
+            }],
+        );
+        let sce = build_structured_counterexample(&func, &ce, "test.vow", &call_site_index);
+        assert_eq!(sce.blame, "caller");
+        assert_eq!(sce.violating_args.len(), 1);
+        assert_eq!(sce.violating_args[0].param, "y");
+        assert_eq!(sce.violating_args[0].value, "0");
+        assert_eq!(sce.violating_args[0].arg_offset, 59);
+        assert_eq!(sce.violating_args[0].arg_length, 1);
+    }
+
+    #[test]
+    fn execution_path_and_branch_decisions_from_block_visits() {
+        use vow_ir::*;
+        use vow_syntax::span::Span;
+        let func = Function {
+            id: FuncId(0),
+            name: "branchy".to_string(),
+            params: vec![Ty::Bool],
+            param_names: vec!["cond".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "result >= 0".to_string(),
+                blame: vow_diag::Blame::Callee,
+                bindings: vec![],
+                file: "test.vow".to_string(),
+                offset: 0,
+            }],
+            blocks: vec![
+                BasicBlock {
+                    id: BlockId(0),
+                    insts: vec![
+                        Inst {
+                            id: InstId(0),
+                            opcode: Opcode::GetArg,
+                            ty: Ty::Bool,
+                            args: vec![],
+                            data: InstData::ArgIndex(0),
+                            origin: Span::new(10, 4),
+                        },
+                        Inst {
+                            id: InstId(1),
+                            opcode: Opcode::Branch,
+                            ty: Ty::Unit,
+                            args: vec![InstId(0)],
+                            data: InstData::BranchTargets {
+                                then_block: BlockId(1),
+                                else_block: BlockId(2),
+                            },
+                            origin: Span::new(20, 8),
+                        },
+                    ],
+                },
+                BasicBlock {
+                    id: BlockId(1),
+                    insts: vec![Inst {
+                        id: InstId(2),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(1),
+                        origin: Span::new(30, 1),
+                    }],
+                },
+                BasicBlock {
+                    id: BlockId(2),
+                    insts: vec![Inst {
+                        id: InstId(3),
+                        opcode: Opcode::ConstI64,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ConstI64(-1),
+                        origin: Span::new(40, 2),
+                    }],
+                },
+            ],
+        };
+        let ce = vow_verify::Counterexample {
+            description: "test".to_string(),
+            vow_id: Some(0),
+            inputs: vec![("p0".to_string(), "0".to_string())],
+            block_visits: vec![0, 2],
+            raw_output: String::new(),
+        };
+        let call_site_index = std::collections::HashMap::new();
+        let sce = build_structured_counterexample(&func, &ce, "test.vow", &call_site_index);
+
+        assert_eq!(sce.execution_path.len(), 2);
+        assert_eq!(sce.execution_path[0].block_id, 0);
+        assert_eq!(sce.execution_path[0].offset, 10);
+        assert_eq!(sce.execution_path[1].block_id, 2);
+        assert_eq!(sce.execution_path[1].offset, 40);
+
+        assert_eq!(sce.branch_decisions.len(), 1);
+        assert_eq!(sce.branch_decisions[0].taken, "else");
+        assert_eq!(sce.branch_decisions[0].condition_offset, 20);
+        assert_eq!(sce.branch_decisions[0].condition_length, 8);
+    }
+
+    #[test]
+    fn new_json_fields_skip_when_empty() {
+        let sce = StructuredCounterexample {
+            function: "f".to_string(),
+            inputs: vec![],
+            violation: "test".to_string(),
+            vow_id: 0,
+            source: None,
+            blame: "callee".to_string(),
+            call_sites: vec![],
+            violating_args: vec![],
+            execution_path: vec![],
+            branch_decisions: vec![],
+        };
+        let json_obj = CounterexampleJson::from_structured(&sce);
+        let json = serde_json::to_string(&json_obj).unwrap();
+        assert!(
+            !json.contains("violating_args"),
+            "empty field should be skipped"
+        );
+        assert!(
+            !json.contains("execution_path"),
+            "empty field should be skipped"
+        );
+        assert!(
+            !json.contains("branch_decisions"),
+            "empty field should be skipped"
+        );
     }
 }

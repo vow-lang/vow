@@ -814,12 +814,18 @@ pub fn emit_c_function(func: &Function) -> String {
         }
     }
 
+    // Block-visit tracking variables
+    for block in &func.blocks {
+        out.push_str(&format!("  int __blk_{} = 0;\n", block.id.0));
+    }
+
     // Emit blocks
     let first_block_id = func.blocks.first().map(|b| b.id);
     for block in &func.blocks {
         if Some(block.id) != first_block_id {
             out.push_str(&format!("block{}:;\n", block.id.0));
         }
+        out.push_str(&format!("  __blk_{} = 1;\n", block.id.0));
         for inst in &block.insts {
             if inst.opcode != Opcode::GetArg {
                 emit_inst(inst, &mut out, &vec_vars, &string_vars, &hashmap_vars);
@@ -2405,5 +2411,59 @@ mod tests {
         );
         assert!(c.contains("int64_t keys["), "keys array in typedef: {c}");
         assert!(c.contains("int64_t vals["), "vals array in typedef: {c}");
+    }
+
+    #[test]
+    fn emit_block_visit_instrumentation() {
+        use vow_ir::InstId;
+        let func = Function {
+            id: FuncId(0),
+            name: "branchy".to_string(),
+            params: vec![Ty::Bool],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![
+                BasicBlock {
+                    id: BlockId(0),
+                    insts: vec![
+                        inst(0, Opcode::GetArg, Ty::Bool, vec![], InstData::ArgIndex(0)),
+                        Inst {
+                            id: InstId(1),
+                            opcode: Opcode::Branch,
+                            ty: Ty::Unit,
+                            args: vec![InstId(0)],
+                            data: InstData::BranchTargets {
+                                then_block: BlockId(1),
+                                else_block: BlockId(2),
+                            },
+                            origin: sp(),
+                        },
+                    ],
+                },
+                BasicBlock {
+                    id: BlockId(1),
+                    insts: vec![
+                        inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                        inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                    ],
+                },
+                BasicBlock {
+                    id: BlockId(2),
+                    insts: vec![
+                        inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                        inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
+                    ],
+                },
+            ],
+        };
+        let c = emit_c_function(&func);
+        assert!(c.contains("int __blk_0 = 0;"), "blk_0 decl: {c}");
+        assert!(c.contains("int __blk_1 = 0;"), "blk_1 decl: {c}");
+        assert!(c.contains("int __blk_2 = 0;"), "blk_2 decl: {c}");
+        assert!(c.contains("__blk_0 = 1;"), "blk_0 set: {c}");
+        assert!(c.contains("__blk_1 = 1;"), "blk_1 set: {c}");
+        assert!(c.contains("__blk_2 = 1;"), "blk_2 set: {c}");
     }
 }
