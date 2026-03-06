@@ -73,8 +73,7 @@ impl<'e> Checker<'e> {
                     );
                 }
                 Item::Enum(e) => {
-                    self.env
-                        .define_enum(&e.name, EnumInfo { variants: vec![] });
+                    self.env.define_enum(&e.name, EnumInfo { variants: vec![] });
                 }
                 _ => {}
             }

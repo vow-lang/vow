@@ -779,15 +779,9 @@ pub fn emit_c_function(func: &Function) -> String {
                     if vec_vars.contains(&id) {
                         out.push_str(&format!("  __vow_vec_t v{};\n  v{}.len = 0;\n", id, id));
                     } else if string_vars.contains(&id) {
-                        out.push_str(&format!(
-                            "  __vow_string_t v{};\n  v{}.len = 0;\n",
-                            id, id
-                        ));
+                        out.push_str(&format!("  __vow_string_t v{};\n  v{}.len = 0;\n", id, id));
                     } else if hashmap_vars.contains(&id) {
-                        out.push_str(&format!(
-                            "  __vow_hashmap_t v{};\n  v{}.len = 0;\n",
-                            id, id
-                        ));
+                        out.push_str(&format!("  __vow_hashmap_t v{};\n  v{}.len = 0;\n", id, id));
                     } else {
                         let c_ty = match inst.ty {
                             Ty::Ptr | Ty::LinearPtr => "int64_t",

@@ -286,6 +286,16 @@ pub struct StructuredCounterexample {
     pub violation: String,
     pub vow_id: u32,
     pub source: Option<CeSource>,
+    pub blame: String,
+    pub call_sites: Vec<CeCallSite>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CeCallSite {
+    pub caller_function: String,
+    pub file: String,
+    pub offset: u32,
+    pub length: u32,
 }
 
 enum VerifyOutcome {
@@ -336,12 +346,23 @@ pub struct DiagnosticJson {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct CeCallSiteJson {
+    pub caller_function: String,
+    pub file: String,
+    pub offset: u32,
+    pub length: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct CounterexampleJson {
     pub function: String,
     pub inputs: BTreeMap<String, String>,
     pub violation: String,
     pub vow_id: u32,
     pub source: Option<SpanJson>,
+    pub blame: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub call_sites: Vec<CeCallSiteJson>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -393,6 +414,17 @@ impl CounterexampleJson {
                 offset: s.offset,
                 length: s.length,
             }),
+            blame: ce.blame.clone(),
+            call_sites: ce
+                .call_sites
+                .iter()
+                .map(|cs| CeCallSiteJson {
+                    caller_function: cs.caller_function.clone(),
+                    file: cs.file.clone(),
+                    offset: cs.offset,
+                    length: cs.length,
+                })
+                .collect(),
         }
     }
 }
@@ -509,13 +541,23 @@ fn build_structured_counterexample(
     func: &vow_ir::Function,
     ce: &Counterexample,
     file: &str,
+    call_site_index: &std::collections::HashMap<String, Vec<CallSiteInfo>>,
 ) -> StructuredCounterexample {
     let vid = ce.vow_id.unwrap_or(0);
-    let violation = ce
+    let vow_entry = ce
         .vow_id
-        .and_then(|id| func.vows.iter().find(|v| v.id.0 == id))
+        .and_then(|id| func.vows.iter().find(|v| v.id.0 == id));
+    let violation = vow_entry
         .map(|v| v.description.clone())
         .unwrap_or_else(|| ce.description.clone());
+    let blame = vow_entry
+        .map(|v| match v.blame {
+            vow_diag::Blame::Caller => "caller",
+            vow_diag::Blame::Callee => "callee",
+            vow_diag::Blame::None => "none",
+        })
+        .unwrap_or("none")
+        .to_string();
     let source = ce
         .vow_id
         .and_then(|id| find_vow_span(func, id))
@@ -526,12 +568,30 @@ fn build_structured_counterexample(
         });
     let name_map = build_c_to_source_name_map(func);
     let mapped_inputs = map_counterexample_inputs(&ce.inputs, &name_map);
+    let call_sites = if blame == "caller" {
+        call_site_index
+            .get(&func.name)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|cs| CeCallSite {
+                caller_function: cs.caller_function,
+                file: cs.file,
+                offset: cs.offset,
+                length: cs.length,
+            })
+            .collect()
+    } else {
+        vec![]
+    };
     StructuredCounterexample {
         function: func.name.clone(),
         inputs: mapped_inputs,
         violation,
         vow_id: vid,
         source,
+        blame,
+        call_sites,
     }
 }
 
@@ -550,6 +610,56 @@ fn find_vow_span(func: &vow_ir::Function, vow_id: u32) -> Option<vow_syntax::spa
         }
     }
     None
+}
+
+// ---------------------------------------------------------------------------
+// Call-site index
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+struct CallSiteInfo {
+    caller_function: String,
+    file: String,
+    offset: u32,
+    length: u32,
+}
+
+fn build_call_site_index(
+    module: &vow_ir::Module,
+    file: &str,
+) -> std::collections::HashMap<String, Vec<CallSiteInfo>> {
+    use vow_ir::{InstData, Opcode};
+    let mut index: std::collections::HashMap<String, Vec<CallSiteInfo>> =
+        std::collections::HashMap::new();
+
+    let func_by_id: std::collections::HashMap<u32, &str> = module
+        .functions
+        .iter()
+        .map(|f| (f.id.0, f.name.as_str()))
+        .collect();
+
+    for func in &module.functions {
+        for block in &func.blocks {
+            for inst in &block.insts {
+                if inst.opcode == Opcode::Call
+                    && let InstData::CallTarget(fid) = &inst.data
+                    && let Some(&callee_name) = func_by_id.get(&fid.0)
+                {
+                    index
+                        .entry(callee_name.to_string())
+                        .or_default()
+                        .push(CallSiteInfo {
+                            caller_function: func.name.clone(),
+                            file: file.to_string(),
+                            offset: inst.origin.start,
+                            length: inst.origin.len,
+                        });
+                }
+            }
+        }
+    }
+
+    index
 }
 
 // ---------------------------------------------------------------------------
@@ -662,14 +772,18 @@ fn compile_frontend(source: &Path) -> Result<FrontendResult, Box<BuildOutput>> {
 // Verification (synchronous)
 // ---------------------------------------------------------------------------
 
-fn run_verification_sync(ir_module: &vow_ir::Module, file: &str) -> VerifyOutcome {
+fn run_verification_sync(
+    ir_module: &vow_ir::Module,
+    file: &str,
+    call_site_index: &std::collections::HashMap<String, Vec<CallSiteInfo>>,
+) -> VerifyOutcome {
     for func in &ir_module.functions {
         if func.vows.is_empty() {
             continue;
         }
         match verify_function(func) {
             VerificationResult::Failed(ce) => {
-                let sce = build_structured_counterexample(func, &ce, file);
+                let sce = build_structured_counterexample(func, &ce, file, call_site_index);
                 return VerifyOutcome::Failed {
                     function: func.name.clone(),
                     description: ce.description.clone(),
@@ -696,25 +810,77 @@ fn run_verification_sync(ir_module: &vow_ir::Module, file: &str) -> VerifyOutcom
     VerifyOutcome::Proven
 }
 
+fn blame_to_error_code(blame: &str) -> vow_diag::ErrorCode {
+    match blame {
+        "caller" => vow_diag::ErrorCode::VowRequiresViolated,
+        "callee" => vow_diag::ErrorCode::VowEnsuresViolated,
+        _ => vow_diag::ErrorCode::VowRequiresViolated,
+    }
+}
+
+fn blame_to_diag_blame(blame: &str) -> vow_diag::Blame {
+    match blame {
+        "caller" => vow_diag::Blame::Caller,
+        "callee" => vow_diag::Blame::Callee,
+        _ => vow_diag::Blame::None,
+    }
+}
+
 fn verify_outcome_to_output(
     outcome: VerifyOutcome,
-    diagnostics: Vec<Diagnostic>,
+    mut diagnostics: Vec<Diagnostic>,
     executable: Option<PathBuf>,
 ) -> BuildOutput {
     let (status, counterexamples, verify_status, verify_message) = match outcome {
         VerifyOutcome::Failed {
             function,
             description,
-            counterexamples,
-        } => (
-            BuildStatus::VerifyFailed {
-                function,
-                description,
-            },
-            counterexamples,
-            None,
-            None,
-        ),
+            ref counterexamples,
+        } => {
+            for sce in counterexamples {
+                let primary = match &sce.source {
+                    Some(src) => vow_diag::SourceLocation {
+                        file: src.file.clone(),
+                        byte_offset: src.offset,
+                        byte_len: src.length,
+                    },
+                    None => vow_diag::SourceLocation {
+                        file: String::new(),
+                        byte_offset: 0,
+                        byte_len: 0,
+                    },
+                };
+                let secondary: Vec<vow_diag::SourceLocation> = sce
+                    .call_sites
+                    .iter()
+                    .map(|cs| vow_diag::SourceLocation {
+                        file: cs.file.clone(),
+                        byte_offset: cs.offset,
+                        byte_len: cs.length,
+                    })
+                    .collect();
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Error,
+                    code: blame_to_error_code(&sce.blame),
+                    message: format!(
+                        "contract violation in `{}`: {}",
+                        sce.function, sce.violation
+                    ),
+                    primary,
+                    secondary,
+                    blame: blame_to_diag_blame(&sce.blame),
+                });
+            }
+            (
+                BuildStatus::VerifyFailed {
+                    function,
+                    description,
+                },
+                counterexamples.clone(),
+                None,
+                None,
+            )
+        }
         VerifyOutcome::Timeout { function } => (
             BuildStatus::VerifyFailed {
                 function,
@@ -759,7 +925,8 @@ pub fn run_verify_only(source: &Path) -> BuildOutput {
     };
 
     let file = source.to_string_lossy().to_string();
-    let outcome = run_verification_sync(&frontend.ir_module, &file);
+    let call_site_index = build_call_site_index(&frontend.ir_module, &file);
+    let outcome = run_verification_sync(&frontend.ir_module, &file, &call_site_index);
     verify_outcome_to_output(outcome, frontend.diagnostics, None)
 }
 
@@ -830,11 +997,12 @@ fn run_pipeline_inner(
     // Spawn verification thread
     let module_for_verify = Arc::clone(&ir_module);
     let file_for_verify = source.to_string_lossy().to_string();
+    let call_site_index = build_call_site_index(&ir_module, &file_for_verify);
     let verify_handle = thread::spawn(move || -> VerifyOutcome {
         if no_verify {
             return VerifyOutcome::Skipped;
         }
-        run_verification_sync(&module_for_verify, &file_for_verify)
+        run_verification_sync(&module_for_verify, &file_for_verify, &call_site_index)
     });
 
     let output_path = output
@@ -1909,6 +2077,8 @@ pub fn main() -> i32 [io] {
                 violation: "y != 0".to_string(),
                 vow_id: 0,
                 source: None,
+                blame: "caller".to_string(),
+                call_sites: vec![],
             }],
             verify_status: None,
             verify_message: None,
@@ -2352,6 +2522,8 @@ fn main() -> i32 {
                     offset: 50,
                     length: 6,
                 }),
+                blame: "caller".to_string(),
+                call_sites: vec![],
             }],
             verify_status: None,
             verify_message: None,
@@ -2419,6 +2591,8 @@ fn main() -> i32 {
             violation: "x > 0".to_string(),
             vow_id: 1,
             source: None,
+            blame: "caller".to_string(),
+            call_sites: vec![],
         });
         let json = serde_json::to_string(&ce).unwrap();
         assert!(json.contains("\"function\":\"f\""), "function: {json}");
@@ -2443,6 +2617,8 @@ fn main() -> i32 {
                 offset: 10,
                 length: 5,
             }),
+            blame: "callee".to_string(),
+            call_sites: vec![],
         });
         let json = serde_json::to_string(&ce).unwrap();
         assert!(json.contains("\"file\":\"test.vow\""), "file: {json}");
@@ -2530,6 +2706,13 @@ fn main() -> i32 {
                     offset: 50,
                     length: 10,
                 }),
+                blame: "caller".to_string(),
+                call_sites: vec![CeCallSite {
+                    caller_function: "main".to_string(),
+                    file: "divide.vow".to_string(),
+                    offset: 120,
+                    length: 15,
+                }],
             }],
             verify_status: None,
             verify_message: None,
@@ -2542,6 +2725,10 @@ fn main() -> i32 {
         assert_eq!(parsed["counterexample"], "y=0 violates requires");
         let ces = parsed["counterexamples"].as_array().unwrap();
         assert_eq!(ces.len(), 1);
+        assert_eq!(ces[0]["blame"], "caller");
+        let call_sites = ces[0]["call_sites"].as_array().unwrap();
+        assert_eq!(call_sites.len(), 1);
+        assert_eq!(call_sites[0]["caller_function"], "main");
         assert_eq!(ces[0]["function"], "divide");
         assert_eq!(ces[0]["inputs"]["y"], "0");
         assert_eq!(ces[0]["violation"], "y != 0");
@@ -2812,11 +2999,23 @@ fn main() -> i32 {
             BuildStatus::VerifyFailed { function, .. } => {
                 assert_eq!(function, "safe_sub");
 
-                // AC2: diagnostics array present (empty since no compile errors)
+                // AC2: diagnostics array present; only verification diagnostics, no compile errors
+                let compile_errors: Vec<_> = broken_result
+                    .diagnostics
+                    .iter()
+                    .filter(|d| {
+                        !matches!(
+                            d.code,
+                            vow_diag::ErrorCode::VowRequiresViolated
+                                | vow_diag::ErrorCode::VowEnsuresViolated
+                                | vow_diag::ErrorCode::VowInvariantViolated
+                        )
+                    })
+                    .collect();
                 assert!(
-                    broken_result.diagnostics.is_empty(),
-                    "diagnostics should be empty (no compile errors), got: {:?}",
-                    broken_result.diagnostics,
+                    compile_errors.is_empty(),
+                    "diagnostics should have no compile errors, got: {:?}",
+                    compile_errors,
                 );
 
                 // AC3: counterexamples array with at least one entry
@@ -3117,5 +3316,352 @@ fn main() -> i32 {
             }
             other => panic!("unexpected status: {other:?}"),
         }
+    }
+
+    #[test]
+    fn build_call_site_index_finds_internal_calls() {
+        use vow_ir::*;
+        use vow_syntax::span::Span;
+
+        let module = Module {
+            name: "test".to_string(),
+            functions: vec![
+                Function {
+                    id: FuncId(0),
+                    name: "callee".to_string(),
+                    params: vec![Ty::I64],
+                    param_names: vec!["x".to_string()],
+                    return_ty: Ty::I64,
+                    effects: vec![],
+                    vows: vec![],
+                    blocks: vec![BasicBlock {
+                        id: BlockId(0),
+                        insts: vec![
+                            Inst {
+                                id: InstId(0),
+                                opcode: Opcode::GetArg,
+                                ty: Ty::I64,
+                                args: vec![],
+                                data: InstData::ArgIndex(0),
+                                origin: Span::new(0, 0),
+                            },
+                            Inst {
+                                id: InstId(1),
+                                opcode: Opcode::Return,
+                                ty: Ty::Unit,
+                                args: vec![InstId(0)],
+                                data: InstData::None,
+                                origin: Span::new(0, 0),
+                            },
+                        ],
+                    }],
+                },
+                Function {
+                    id: FuncId(1),
+                    name: "caller_a".to_string(),
+                    params: vec![],
+                    param_names: vec![],
+                    return_ty: Ty::I64,
+                    effects: vec![],
+                    vows: vec![],
+                    blocks: vec![BasicBlock {
+                        id: BlockId(0),
+                        insts: vec![
+                            Inst {
+                                id: InstId(0),
+                                opcode: Opcode::ConstI64,
+                                ty: Ty::I64,
+                                args: vec![],
+                                data: InstData::ConstI64(5),
+                                origin: Span::new(0, 0),
+                            },
+                            Inst {
+                                id: InstId(1),
+                                opcode: Opcode::Call,
+                                ty: Ty::I64,
+                                args: vec![InstId(0)],
+                                data: InstData::CallTarget(FuncId(0)),
+                                origin: Span::new(100, 10),
+                            },
+                            Inst {
+                                id: InstId(2),
+                                opcode: Opcode::Return,
+                                ty: Ty::Unit,
+                                args: vec![InstId(1)],
+                                data: InstData::None,
+                                origin: Span::new(0, 0),
+                            },
+                        ],
+                    }],
+                },
+                Function {
+                    id: FuncId(2),
+                    name: "caller_b".to_string(),
+                    params: vec![],
+                    param_names: vec![],
+                    return_ty: Ty::I64,
+                    effects: vec![],
+                    vows: vec![],
+                    blocks: vec![BasicBlock {
+                        id: BlockId(0),
+                        insts: vec![
+                            Inst {
+                                id: InstId(0),
+                                opcode: Opcode::ConstI64,
+                                ty: Ty::I64,
+                                args: vec![],
+                                data: InstData::ConstI64(10),
+                                origin: Span::new(0, 0),
+                            },
+                            Inst {
+                                id: InstId(1),
+                                opcode: Opcode::Call,
+                                ty: Ty::I64,
+                                args: vec![InstId(0)],
+                                data: InstData::CallTarget(FuncId(0)),
+                                origin: Span::new(200, 15),
+                            },
+                            Inst {
+                                id: InstId(2),
+                                opcode: Opcode::Return,
+                                ty: Ty::Unit,
+                                args: vec![InstId(1)],
+                                data: InstData::None,
+                                origin: Span::new(0, 0),
+                            },
+                        ],
+                    }],
+                },
+            ],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+        };
+
+        let index = build_call_site_index(&module, "test.vow");
+        let callee_sites = index.get("callee").expect("callee should have call sites");
+        assert_eq!(callee_sites.len(), 2);
+        assert_eq!(callee_sites[0].caller_function, "caller_a");
+        assert_eq!(callee_sites[0].offset, 100);
+        assert_eq!(callee_sites[0].length, 10);
+        assert_eq!(callee_sites[1].caller_function, "caller_b");
+        assert_eq!(callee_sites[1].offset, 200);
+        assert_eq!(callee_sites[1].length, 15);
+        assert!(index.get("caller_a").is_none());
+    }
+
+    #[test]
+    fn structured_counterexample_includes_blame_caller() {
+        use vow_ir::*;
+        use vow_syntax::span::Span;
+
+        let func = Function {
+            id: FuncId(0),
+            name: "safe_div".to_string(),
+            params: vec![Ty::I64, Ty::I64],
+            param_names: vec!["x".to_string(), "y".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "y != 0".to_string(),
+                blame: vow_diag::Blame::Caller,
+                bindings: vec![],
+                file: "test.vow".to_string(),
+                offset: 42,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    Inst {
+                        id: InstId(0),
+                        opcode: Opcode::GetArg,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ArgIndex(0),
+                        origin: Span::new(0, 0),
+                    },
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::GetArg,
+                        ty: Ty::I64,
+                        args: vec![],
+                        data: InstData::ArgIndex(1),
+                        origin: Span::new(0, 0),
+                    },
+                    Inst {
+                        id: InstId(2),
+                        opcode: Opcode::VowRequires,
+                        ty: Ty::Unit,
+                        args: vec![InstId(1)],
+                        data: InstData::VowId(VowId(0)),
+                        origin: Span::new(42, 6),
+                    },
+                ],
+            }],
+        };
+
+        let ce = vow_verify::Counterexample {
+            description: "y != 0".to_string(),
+            vow_id: Some(0),
+            inputs: vec![
+                ("p0".to_string(), "10".to_string()),
+                ("p1".to_string(), "0".to_string()),
+            ],
+            raw_output: String::new(),
+        };
+
+        let mut call_sites = std::collections::HashMap::new();
+        call_sites.insert(
+            "safe_div".to_string(),
+            vec![CallSiteInfo {
+                caller_function: "main".to_string(),
+                file: "test.vow".to_string(),
+                offset: 120,
+                length: 18,
+            }],
+        );
+
+        let sce = build_structured_counterexample(&func, &ce, "test.vow", &call_sites);
+        assert_eq!(sce.blame, "caller");
+        assert_eq!(sce.call_sites.len(), 1);
+        assert_eq!(sce.call_sites[0].caller_function, "main");
+        assert_eq!(sce.call_sites[0].offset, 120);
+    }
+
+    #[test]
+    fn structured_counterexample_callee_blame_no_call_sites() {
+        use vow_ir::*;
+        use vow_syntax::span::Span;
+
+        let func = Function {
+            id: FuncId(0),
+            name: "buggy".to_string(),
+            params: vec![Ty::I64],
+            param_names: vec!["x".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "result == x + x".to_string(),
+                blame: vow_diag::Blame::Callee,
+                bindings: vec![],
+                file: "test.vow".to_string(),
+                offset: 30,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![Inst {
+                    id: InstId(0),
+                    opcode: Opcode::VowEnsures,
+                    ty: Ty::Unit,
+                    args: vec![],
+                    data: InstData::VowId(VowId(0)),
+                    origin: Span::new(30, 20),
+                }],
+            }],
+        };
+
+        let ce = vow_verify::Counterexample {
+            description: "result == x + x".to_string(),
+            vow_id: Some(0),
+            inputs: vec![("p0".to_string(), "5".to_string())],
+            raw_output: String::new(),
+        };
+
+        let mut call_sites = std::collections::HashMap::new();
+        call_sites.insert(
+            "buggy".to_string(),
+            vec![CallSiteInfo {
+                caller_function: "main".to_string(),
+                file: "test.vow".to_string(),
+                offset: 100,
+                length: 10,
+            }],
+        );
+
+        let sce = build_structured_counterexample(&func, &ce, "test.vow", &call_sites);
+        assert_eq!(sce.blame, "callee");
+        assert!(
+            sce.call_sites.is_empty(),
+            "callee blame should have no call_sites"
+        );
+    }
+
+    #[test]
+    fn counterexample_json_serialization_blame_and_call_sites() {
+        let sce = StructuredCounterexample {
+            function: "safe_div".to_string(),
+            inputs: vec![
+                ("x".to_string(), "10".to_string()),
+                ("y".to_string(), "0".to_string()),
+            ],
+            violation: "y != 0".to_string(),
+            vow_id: 0,
+            source: Some(CeSource {
+                file: "test.vow".to_string(),
+                offset: 42,
+                length: 6,
+            }),
+            blame: "caller".to_string(),
+            call_sites: vec![CeCallSite {
+                caller_function: "main".to_string(),
+                file: "test.vow".to_string(),
+                offset: 120,
+                length: 18,
+            }],
+        };
+        let json_ce = CounterexampleJson::from_structured(&sce);
+        let serialized = serde_json::to_string(&json_ce).unwrap();
+        assert!(serialized.contains("\"blame\":\"caller\""));
+        assert!(serialized.contains("\"call_sites\""));
+        assert!(serialized.contains("\"caller_function\":\"main\""));
+
+        // Callee blame — call_sites should be omitted
+        let sce_callee = StructuredCounterexample {
+            function: "buggy".to_string(),
+            inputs: vec![("x".to_string(), "5".to_string())],
+            violation: "result == x + x".to_string(),
+            vow_id: 0,
+            source: None,
+            blame: "callee".to_string(),
+            call_sites: vec![],
+        };
+        let json_callee = CounterexampleJson::from_structured(&sce_callee);
+        let serialized_callee = serde_json::to_string(&json_callee).unwrap();
+        assert!(serialized_callee.contains("\"blame\":\"callee\""));
+        assert!(!serialized_callee.contains("call_sites"));
+    }
+
+    #[test]
+    fn verify_caller_blame_example() {
+        let source = PathBuf::from("examples/caller_blame.vow");
+        if !source.exists() {
+            eprintln!("SKIP: examples/caller_blame.vow not found");
+            return;
+        }
+        let result = run_verify_only(&source);
+        let build_result = result.to_build_result();
+        let json = serde_json::to_string(&build_result).unwrap();
+
+        // The file should verify successfully (safe_div has requires: y != 0
+        // and all call sites pass valid args). Check JSON is well-formed.
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(parsed.get("status").is_some());
+    }
+
+    #[test]
+    fn verify_callee_blame_example() {
+        let source = PathBuf::from("examples/callee_blame.vow");
+        if !source.exists() {
+            eprintln!("SKIP: examples/callee_blame.vow not found");
+            return;
+        }
+        let result = run_verify_only(&source);
+        let build_result = result.to_build_result();
+        let json = serde_json::to_string(&build_result).unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(parsed.get("status").is_some());
     }
 }
