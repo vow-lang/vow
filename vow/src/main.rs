@@ -13,7 +13,7 @@ use vow_codegen::cranelift_backend::CraneliftBackend;
 use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{CollectingEmitter, Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
-use vow_verify::{Counterexample, VerificationResult, verify_function};
+use vow_verify::{Counterexample, VerificationResult, verify_function_with_module};
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -970,7 +970,7 @@ fn run_verification_sync(
         if func.vows.is_empty() {
             continue;
         }
-        match verify_function(func) {
+        match verify_function_with_module(func, ir_module) {
             VerificationResult::Failed(ce) => {
                 let sce = build_structured_counterexample(func, &ce, file, call_site_index);
                 return VerifyOutcome::Failed {

@@ -1,6 +1,51 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use vow_ir::{Function, Inst, InstData, Opcode, Ty};
+use vow_ir::{FuncId, Function, Inst, InstData, Module, Opcode, Ty};
+
+// ---------------------------------------------------------------------------
+// Constant-function detection (for cross-function verification inlining)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub enum ConstantValue {
+    I32(i32),
+    I64(i64),
+    Bool(bool),
+}
+
+pub fn detect_constant_functions(module: &Module) -> HashMap<FuncId, ConstantValue> {
+    let mut result = HashMap::new();
+    for func in &module.functions {
+        if func.blocks.len() != 1 {
+            continue;
+        }
+        let block = &func.blocks[0];
+        let non_arg: Vec<_> = block
+            .insts
+            .iter()
+            .filter(|i| i.opcode != Opcode::GetArg)
+            .collect();
+        if non_arg.len() != 2 {
+            continue;
+        }
+        let const_inst = non_arg[0];
+        let ret_inst = non_arg[1];
+        if ret_inst.opcode != Opcode::Return {
+            continue;
+        }
+        if ret_inst.args.first().copied() != Some(const_inst.id) {
+            continue;
+        }
+        let val = match (&const_inst.opcode, &const_inst.data) {
+            (Opcode::ConstI32, InstData::ConstI32(v)) => ConstantValue::I32(*v),
+            (Opcode::ConstI64, InstData::ConstI64(v)) => ConstantValue::I64(*v),
+            (Opcode::ConstBool, InstData::ConstBool(v)) => ConstantValue::Bool(*v),
+            _ => continue,
+        };
+        result.insert(func.id, val);
+    }
+    result
+}
 
 // ---------------------------------------------------------------------------
 // Vec model capacity for bounded model checking
@@ -215,6 +260,7 @@ fn emit_inst(
     vec_vars: &HashSet<u32>,
     string_vars: &HashSet<u32>,
     hashmap_vars: &HashSet<u32>,
+    const_fns: &HashMap<FuncId, ConstantValue>,
 ) {
     let id = inst.id.0;
     match inst.opcode {
@@ -663,6 +709,24 @@ fn emit_inst(
             }
         }
 
+        // Constant-function inlining: replace CallTarget with the known constant
+        Opcode::Call if matches!(&inst.data, InstData::CallTarget(fid) if const_fns.contains_key(fid)) => {
+            if let InstData::CallTarget(fid) = &inst.data {
+                let val = &const_fns[fid];
+                match val {
+                    ConstantValue::I32(v) => {
+                        out.push_str(&format!("  int32_t v{} = {};\n", id, v));
+                    }
+                    ConstantValue::I64(v) => {
+                        out.push_str(&format!("  int64_t v{} = {}LL;\n", id, v));
+                    }
+                    ConstantValue::Bool(v) => {
+                        out.push_str(&format!("  _Bool v{} = {};\n", id, *v as i32));
+                    }
+                }
+            }
+        }
+
         // Other calls, memory, region/linear/field ops — not yet supported for verification
         Opcode::Call
         | Opcode::Load
@@ -738,7 +802,7 @@ fn c_nondet_suffix(ty: Ty) -> &'static str {
 // Function emission
 // ---------------------------------------------------------------------------
 
-pub fn emit_c_function(func: &Function) -> String {
+pub fn emit_c_function(func: &Function, const_fns: &HashMap<FuncId, ConstantValue>) -> String {
     let mut out = String::new();
     let vec_vars = collect_vec_vars(func);
     let string_vars = collect_string_vars(func);
@@ -844,7 +908,14 @@ pub fn emit_c_function(func: &Function) -> String {
         out.push_str(&format!("  __blk_{} = 1;\n", block.id.0));
         for inst in &block.insts {
             if inst.opcode != Opcode::GetArg {
-                emit_inst(inst, &mut out, &vec_vars, &string_vars, &hashmap_vars);
+                emit_inst(
+                    inst,
+                    &mut out,
+                    &vec_vars,
+                    &string_vars,
+                    &hashmap_vars,
+                    const_fns,
+                );
             }
         }
     }
@@ -853,7 +924,7 @@ pub fn emit_c_function(func: &Function) -> String {
     out
 }
 
-pub fn emit_c_module(funcs: &[&Function]) -> String {
+pub fn emit_c_module(funcs: &[&Function], const_fns: &HashMap<FuncId, ConstantValue>) -> String {
     let mut out = String::new();
     out.push_str("#include <stdint.h>\n");
     out.push_str("#include <stdbool.h>\n");
@@ -878,7 +949,7 @@ pub fn emit_c_module(funcs: &[&Function]) -> String {
     ));
 
     for func in funcs {
-        out.push_str(&emit_c_function(func));
+        out.push_str(&emit_c_function(func, const_fns));
         out.push('\n');
     }
     out
@@ -932,7 +1003,7 @@ mod tests {
                 ],
             }],
         };
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("int64_t add("), "signature: {c}");
         assert!(c.contains("v2 = v0 + v1"), "add: {c}");
         assert!(c.contains("return v2"), "return: {c}");
@@ -981,7 +1052,7 @@ mod tests {
                 ],
             }],
         };
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("__ESBMC_assume(v3)"), "requires: {c}");
         assert!(!c.contains("__ESBMC_assert"), "no assert for requires: {c}");
     }
@@ -1067,7 +1138,7 @@ mod tests {
                 inst(7, Opcode::Return, Ty::Unit, vec![], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("int32_t v0 = 7"), "ConstI32: {c}");
         assert!(c.contains("float v1 = 1.5f"), "ConstF32: {c}");
         assert!(c.contains("double v2 = 2"), "ConstF64: {c}");
@@ -1152,7 +1223,7 @@ mod tests {
                 inst(11, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("v0 - v1"), "sub: {c}");
         assert!(c.contains("v0 * v1"), "mul: {c}");
         assert!(c.contains("v0 / v1"), "div: {c}");
@@ -1181,7 +1252,7 @@ mod tests {
                 inst(12, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("v0 + v1"), "fadd: {c}");
         assert!(c.contains("v0 - v1"), "fsub: {c}");
         assert!(c.contains("v0 * v1"), "fmul: {c}");
@@ -1214,7 +1285,7 @@ mod tests {
                 inst(14, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("v0 == v1"), "eq: {c}");
         assert!(c.contains("v0 != v1"), "ne: {c}");
         assert!(c.contains("v0 < v1"), "lt: {c}");
@@ -1238,7 +1309,7 @@ mod tests {
                 inst(5, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("!v0"), "not: {c}");
         assert!(c.contains("v0 && v1"), "and: {c}");
         assert!(c.contains("v0 || v1"), "or: {c}");
@@ -1292,7 +1363,7 @@ mod tests {
                 },
             ],
         };
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(
             c.contains("if (v0) goto block1; else goto block2;"),
             "branch: {c}"
@@ -1329,7 +1400,7 @@ mod tests {
                 inst(3, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("int64_t v0;"), "phi declaration: {c}");
         assert!(c.contains("v0 = v1;"), "upsilon assignment: {c}");
     }
@@ -1361,7 +1432,7 @@ mod tests {
                 inst(2, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("not modelled"), "not modelled comment: {c}");
         assert!(c.contains("__VERIFIER_nondet_long"), "nondet for I64: {c}");
     }
@@ -1392,7 +1463,7 @@ mod tests {
                 inst(2, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(
             c.contains("__ESBMC_assert(v0, \"vow:2\")"),
             "invariant assert: {c}"
@@ -1407,7 +1478,7 @@ mod tests {
             Ty::Unit,
             vec![inst(0, Opcode::Return, Ty::Unit, vec![], InstData::None)],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("return 0;"), "void return: {c}");
     }
 
@@ -1428,7 +1499,7 @@ mod tests {
                 inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
         );
-        let out = emit_c_module(&[&f1, &f2]);
+        let out = emit_c_module(&[&f1, &f2], &HashMap::new());
         assert!(out.contains("#include <stdint.h>"), "includes: {out}");
         assert!(out.contains("__ESBMC_assume"), "esbmc assume: {out}");
         assert!(out.contains("void f1(void)"), "f1 signature: {out}");
@@ -1474,7 +1545,7 @@ mod tests {
                 ],
             }],
         };
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("__ESBMC_assert(v0"), "ensures: {c}");
     }
 
@@ -1486,7 +1557,7 @@ mod tests {
             Ty::Unit,
             vec![inst(0, Opcode::Return, Ty::Unit, vec![], InstData::None)],
         );
-        let out = emit_c_module(&[&f]);
+        let out = emit_c_module(&[&f], &HashMap::new());
         assert!(out.contains("__vow_vec_t"), "vec typedef: {out}");
         assert!(out.contains("int64_t len"), "vec len field: {out}");
         assert!(out.contains("int64_t data["), "vec data field: {out}");
@@ -1513,7 +1584,7 @@ mod tests {
                 inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("__vow_vec_t v2;"), "vec struct decl: {c}");
         assert!(c.contains("v2.len = 0;"), "vec len init: {c}");
         assert!(
@@ -1552,7 +1623,7 @@ mod tests {
                 inst(5, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(
             c.contains("__ESBMC_assert(v2.len < 128, \"vec capacity\")"),
             "push capacity: {c}"
@@ -1590,7 +1661,7 @@ mod tests {
                 inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("int64_t v3 = v2.len;"), "vec len: {c}");
     }
 
@@ -1624,7 +1695,7 @@ mod tests {
                 inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(
             c.contains("__ESBMC_assert(v3 >= 0 && v3 < v2.len"),
             "bounds check: {c}"
@@ -1661,7 +1732,7 @@ mod tests {
                 inst(4, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("v2.len--;"), "pop decrement: {c}");
     }
 
@@ -1696,7 +1767,7 @@ mod tests {
                 inst(6, Opcode::Return, Ty::Unit, vec![], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(
             c.contains("__ESBMC_assert(v3 >= 0 && v3 < v2.len"),
             "bounds check: {c}"
@@ -1748,7 +1819,7 @@ mod tests {
                 ],
             }],
         };
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("__vow_vec_t v0;"), "phi uses vec type: {c}");
     }
 
@@ -1771,7 +1842,7 @@ mod tests {
                 inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("not modelled"), "non-vec call still nondet: {c}");
         assert!(
             c.contains("__VERIFIER_nondet_long"),
@@ -1787,7 +1858,7 @@ mod tests {
             Ty::Unit,
             vec![inst(0, Opcode::Return, Ty::Unit, vec![], InstData::None)],
         );
-        let out = emit_c_module(&[&f]);
+        let out = emit_c_module(&[&f], &HashMap::new());
         assert!(out.contains("__vow_string_t"), "string typedef: {out}");
         assert!(out.contains("int8_t data["), "string data field: {out}");
     }
@@ -1812,7 +1883,7 @@ mod tests {
                 inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("__vow_string_t v1;"), "string struct decl: {c}");
         assert!(
             c.contains("v1.len = __VERIFIER_nondet_long()"),
@@ -1856,7 +1927,7 @@ mod tests {
                 inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("int64_t v2 = v1.len;"), "string len: {c}");
     }
 
@@ -1889,7 +1960,7 @@ mod tests {
                 inst(4, Opcode::Return, Ty::Unit, vec![1], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(
             c.contains("__ESBMC_assert(v1.len < 256, \"string capacity\")"),
             "push_byte capacity: {c}"
@@ -1938,7 +2009,7 @@ mod tests {
                 inst(5, Opcode::Return, Ty::Unit, vec![1], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("v1.len += v3.len;"), "push_str: {c}");
     }
 
@@ -1971,7 +2042,7 @@ mod tests {
                 inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(
             c.contains("__ESBMC_assert(v2 >= 0 && v2 < v1.len"),
             "bounds check: {c}"
@@ -2023,7 +2094,7 @@ mod tests {
                 inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(
             c.contains("_Bool v4 = (v1.len == v3.len)"),
             "string eq length check: {c}"
@@ -2071,7 +2142,7 @@ mod tests {
                 inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("_Bool v4 = 0;"), "contains init: {c}");
         assert!(
             c.contains("v1.data[__i + __j] != v3.data[__j]"),
@@ -2122,7 +2193,7 @@ mod tests {
                 ],
             }],
         };
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(
             c.contains("__vow_string_t v0;"),
             "phi uses string type: {c}"
@@ -2157,7 +2228,7 @@ mod tests {
                 inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(
             c.contains("string print not modelled"),
             "print not modelled: {c}"
@@ -2185,7 +2256,7 @@ mod tests {
                 inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("__vow_hashmap_t v0;"), "hashmap decl: {c}");
         assert!(c.contains("v0.len = 0;"), "hashmap len init: {c}");
         assert!(
@@ -2221,7 +2292,7 @@ mod tests {
                 inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("int64_t v1 = v0.len;"), "hashmap len: {c}");
     }
 
@@ -2254,7 +2325,7 @@ mod tests {
                 inst(4, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("v0.keys[__i] == v1"), "key search: {c}");
         assert!(c.contains("v0.vals[__i] = v2"), "update existing: {c}");
         assert!(
@@ -2294,7 +2365,7 @@ mod tests {
                 inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("int64_t v2 = 0;"), "get default: {c}");
         assert!(c.contains("v0.keys[__i] == v1"), "get key search: {c}");
         assert!(c.contains("v2 = v0.vals[__i]"), "get reads value: {c}");
@@ -2328,7 +2399,7 @@ mod tests {
                 inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("_Bool v2 = 0;"), "contains default: {c}");
         assert!(c.contains("v0.keys[__i] == v1"), "contains key search: {c}");
         assert!(c.contains("v2 = 1"), "contains sets true: {c}");
@@ -2362,7 +2433,7 @@ mod tests {
                 inst(3, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
         );
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("v0.keys[__i] == v1"), "remove key search: {c}");
         assert!(c.contains("v0.len--"), "remove decrements len: {c}");
     }
@@ -2409,7 +2480,7 @@ mod tests {
                 ],
             }],
         };
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(
             c.contains("__vow_hashmap_t v0;"),
             "phi uses hashmap type: {c}"
@@ -2424,7 +2495,7 @@ mod tests {
             Ty::Unit,
             vec![inst(0, Opcode::Return, Ty::Unit, vec![], InstData::None)],
         );
-        let c = emit_c_module(&[&func]);
+        let c = emit_c_module(&[&func], &HashMap::new());
         assert!(
             c.contains("__vow_hashmap_t"),
             "hashmap typedef in header: {c}"
@@ -2478,12 +2549,183 @@ mod tests {
                 },
             ],
         };
-        let c = emit_c_function(&func);
+        let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("int __blk_0 = 0;"), "blk_0 decl: {c}");
         assert!(c.contains("int __blk_1 = 0;"), "blk_1 decl: {c}");
         assert!(c.contains("int __blk_2 = 0;"), "blk_2 decl: {c}");
         assert!(c.contains("__blk_0 = 1;"), "blk_0 set: {c}");
         assert!(c.contains("__blk_1 = 1;"), "blk_1 set: {c}");
         assert!(c.contains("__blk_2 = 1;"), "blk_2 set: {c}");
+    }
+
+    // --- Constant-function detection tests ---
+
+    fn make_constant_func(fid: u32, name: &str, val: i64) -> Function {
+        Function {
+            id: FuncId(fid),
+            name: name.to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(
+                        0,
+                        Opcode::ConstI64,
+                        Ty::I64,
+                        vec![],
+                        InstData::ConstI64(val),
+                    ),
+                    inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            }],
+        }
+    }
+
+    #[test]
+    fn detect_constant_functions_finds_simple() {
+        use vow_ir::Module;
+        let module = Module {
+            name: "test".to_string(),
+            functions: vec![make_constant_func(0, "forty_two", 42)],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+        };
+        let result = detect_constant_functions(&module);
+        assert_eq!(result.len(), 1);
+        assert!(result.contains_key(&FuncId(0)));
+        assert!(matches!(result[&FuncId(0)], ConstantValue::I64(42)));
+    }
+
+    #[test]
+    fn detect_constant_functions_skips_multi_block() {
+        use vow_ir::Module;
+        let func = Function {
+            id: FuncId(0),
+            name: "multi".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![
+                BasicBlock {
+                    id: BlockId(0),
+                    insts: vec![inst(
+                        0,
+                        Opcode::ConstI64,
+                        Ty::I64,
+                        vec![],
+                        InstData::ConstI64(1),
+                    )],
+                },
+                BasicBlock {
+                    id: BlockId(1),
+                    insts: vec![inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None)],
+                },
+            ],
+        };
+        let module = Module {
+            name: "test".to_string(),
+            functions: vec![func],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+        };
+        assert!(detect_constant_functions(&module).is_empty());
+    }
+
+    #[test]
+    fn detect_constant_functions_skips_non_trivial() {
+        use vow_ir::Module;
+        let func = Function {
+            id: FuncId(0),
+            name: "adder".to_string(),
+            params: vec![Ty::I64, Ty::I64],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
+                    inst(
+                        2,
+                        Opcode::WrappingAddI64,
+                        Ty::I64,
+                        vec![0, 1],
+                        InstData::None,
+                    ),
+                    inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                ],
+            }],
+        };
+        let module = Module {
+            name: "test".to_string(),
+            functions: vec![func],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+        };
+        assert!(detect_constant_functions(&module).is_empty());
+    }
+
+    #[test]
+    fn emit_inlines_constant_call_target() {
+        let mut const_fns = HashMap::new();
+        const_fns.insert(FuncId(1), ConstantValue::I64(42));
+
+        let call_inst = Inst {
+            id: InstId(5),
+            opcode: Opcode::Call,
+            ty: Ty::I64,
+            args: vec![],
+            data: InstData::CallTarget(FuncId(1)),
+            origin: sp(),
+        };
+        let mut out = String::new();
+        emit_inst(
+            &call_inst,
+            &mut out,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &const_fns,
+        );
+        assert!(
+            out.contains("int64_t v5 = 42LL;"),
+            "inlined constant: {out}"
+        );
+    }
+
+    #[test]
+    fn emit_falls_back_for_unknown_call_target() {
+        let call_inst = Inst {
+            id: InstId(5),
+            opcode: Opcode::Call,
+            ty: Ty::I64,
+            args: vec![],
+            data: InstData::CallTarget(FuncId(99)),
+            origin: sp(),
+        };
+        let mut out = String::new();
+        emit_inst(
+            &call_inst,
+            &mut out,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        assert!(
+            out.contains("__VERIFIER_nondet_long()"),
+            "nondet fallback: {out}"
+        );
     }
 }
