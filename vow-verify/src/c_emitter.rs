@@ -67,10 +67,15 @@ fn collect_vec_vars(func: &Function) -> HashSet<u32> {
                 if inst.opcode == Opcode::Upsilon
                     && let InstData::PhiTarget(phi_id) = inst.data
                     && !inst.args.is_empty()
-                    && vec_vars.contains(&inst.args[0].0)
-                    && vec_vars.insert(phi_id.0)
                 {
-                    changed = true;
+                    // Forward: Upsilon value → Phi target
+                    if vec_vars.contains(&inst.args[0].0) && vec_vars.insert(phi_id.0) {
+                        changed = true;
+                    }
+                    // Reverse: Phi target → Upsilon value
+                    if vec_vars.contains(&phi_id.0) && vec_vars.insert(inst.args[0].0) {
+                        changed = true;
+                    }
                 }
             }
         }
@@ -121,10 +126,15 @@ fn collect_string_vars(func: &Function) -> HashSet<u32> {
                 if inst.opcode == Opcode::Upsilon
                     && let InstData::PhiTarget(phi_id) = inst.data
                     && !inst.args.is_empty()
-                    && string_vars.contains(&inst.args[0].0)
-                    && string_vars.insert(phi_id.0)
                 {
-                    changed = true;
+                    // Forward: Upsilon value → Phi target
+                    if string_vars.contains(&inst.args[0].0) && string_vars.insert(phi_id.0) {
+                        changed = true;
+                    }
+                    // Reverse: Phi target → Upsilon value
+                    if string_vars.contains(&phi_id.0) && string_vars.insert(inst.args[0].0) {
+                        changed = true;
+                    }
                 }
             }
         }
@@ -175,10 +185,15 @@ fn collect_hashmap_vars(func: &Function) -> HashSet<u32> {
                 if inst.opcode == Opcode::Upsilon
                     && let InstData::PhiTarget(phi_id) = inst.data
                     && !inst.args.is_empty()
-                    && hashmap_vars.contains(&inst.args[0].0)
-                    && hashmap_vars.insert(phi_id.0)
                 {
-                    changed = true;
+                    // Forward: Upsilon value → Phi target
+                    if hashmap_vars.contains(&inst.args[0].0) && hashmap_vars.insert(phi_id.0) {
+                        changed = true;
+                    }
+                    // Reverse: Phi target → Upsilon value
+                    if hashmap_vars.contains(&phi_id.0) && hashmap_vars.insert(inst.args[0].0) {
+                        changed = true;
+                    }
                 }
             }
         }
