@@ -136,6 +136,10 @@ fn emit_non_exhaustive(
     file: &str,
     emitter: &mut dyn DiagnosticEmitter,
 ) {
+    let hints = vec![
+        format!("add arms for: {missing}"),
+        "or add a wildcard '_' arm to match remaining patterns".to_string(),
+    ];
     emitter.emit(&Diagnostic {
         severity: Severity::Error,
         code: ErrorCode::NonExhaustiveMatch,
@@ -147,6 +151,7 @@ fn emit_non_exhaustive(
         },
         secondary: vec![],
         blame: Blame::None,
+        hints,
     });
 }
 
@@ -306,5 +311,29 @@ mod tests {
         assert_eq!(emitter.0.len(), 1);
         assert_eq!(emitter.0[0].code, ErrorCode::NonExhaustiveMatch);
         assert!(emitter.0[0].message.contains("Blue"));
+    }
+
+    #[test]
+    fn non_exhaustive_match_includes_add_arms_hint() {
+        let mut emitter = TestEmitter(vec![]);
+        let env = TypeEnv::new();
+        let arms = vec![make_arm(PatKind::Lit(Lit::Bool(true)))];
+        check_exhaustive(
+            &Ty::Bool,
+            &arms,
+            &env,
+            dummy_span(),
+            "test.vow",
+            &mut emitter,
+        );
+        assert_eq!(emitter.0.len(), 1);
+        assert!(
+            emitter.0[0].hints.iter().any(|h| h.contains("add arms")),
+            "expected hint about adding arms"
+        );
+        assert!(
+            emitter.0[0].hints.iter().any(|h| h.contains("wildcard")),
+            "expected hint about wildcard"
+        );
     }
 }

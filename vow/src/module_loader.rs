@@ -68,6 +68,7 @@ fn load_deps(
                     },
                     secondary: vec![],
                     blame: Blame::None,
+                    hints: vec![],
                 });
             }
         }

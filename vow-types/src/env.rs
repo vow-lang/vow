@@ -278,6 +278,22 @@ impl TypeEnv {
         self.type_aliases.insert(name.into(), ty);
     }
 
+    pub fn all_var_names(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        for scope in &self.scopes {
+            for key in scope.keys() {
+                if !names.contains(key) {
+                    names.push(key.clone());
+                }
+            }
+        }
+        names
+    }
+
+    pub fn all_fn_names(&self) -> Vec<String> {
+        self.fn_sigs.keys().cloned().collect()
+    }
+
     pub fn resolve(&self, ast_ty: &AstType) -> Result<Ty, String> {
         match ast_ty {
             AstType::Named { name, .. } => {

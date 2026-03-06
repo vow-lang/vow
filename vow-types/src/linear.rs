@@ -53,6 +53,9 @@ pub fn check_linear_usage(
                 format!("linear value `{name}` is never consumed"),
                 *def_span,
                 Blame::Callee,
+                vec![format!(
+                    "consume `{name}` by passing it to a function or using drop()"
+                )],
             );
         }
     }
@@ -253,6 +256,9 @@ fn consume_var(
                 format!("linear value `{name}` already consumed"),
                 span,
                 Blame::None,
+                vec![format!(
+                    "`{name}` was already consumed; clone it or restructure to use it only once"
+                )],
             );
         }
         Some(ConsumeState::Available(_)) => {
@@ -265,6 +271,7 @@ fn consume_var(
                     ),
                     span,
                     Blame::None,
+                    vec![format!("move the consumption of `{name}` outside the loop")],
                 );
             }
             tracker
@@ -311,6 +318,7 @@ fn check_if_branches(
                         ),
                         *span,
                         Blame::None,
+                        vec![format!("consume `{name}` in both branches or neither")],
                     );
                 }
                 (Some(ConsumeState::Available(_)), Some(ConsumeState::Consumed(span))) => {
@@ -322,6 +330,7 @@ fn check_if_branches(
                         ),
                         *span,
                         Blame::None,
+                        vec![format!("consume `{name}` in both branches or neither")],
                     );
                 }
                 _ => {}
@@ -342,6 +351,7 @@ fn check_if_branches(
                     ),
                     then_branch.span,
                     Blame::None,
+                    vec![format!("add an `else` branch that also consumes `{name}`")],
                 );
                 tracker
                     .vars
@@ -405,6 +415,7 @@ fn check_match_arms(
                 format!("linear value `{name}` is consumed in one branch but not the other"),
                 consumed_span,
                 Blame::None,
+                vec![format!("consume `{name}` in all match arms or none")],
             );
         }
     }
@@ -416,6 +427,7 @@ fn emit_violation(
     message: String,
     span: Span,
     blame: Blame,
+    hints: Vec<String>,
 ) {
     emitter.emit(&Diagnostic {
         severity: Severity::Error,
@@ -428,6 +440,7 @@ fn emit_violation(
         },
         secondary: vec![],
         blame,
+        hints,
     });
 }
 

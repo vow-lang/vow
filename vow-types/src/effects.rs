@@ -149,6 +149,11 @@ pub fn check_fn_effects(
                         callee_name,
                         effect_name(effect),
                     );
+                    let hint = format!(
+                        "add '{}' to `{}`'s effect list",
+                        effect_name(effect),
+                        fn_def.name,
+                    );
                     emitter.emit(&Diagnostic {
                         severity: Severity::Error,
                         code: ErrorCode::EffectViolation,
@@ -160,6 +165,7 @@ pub fn check_fn_effects(
                         },
                         secondary: vec![],
                         blame: Blame::None,
+                        hints: vec![hint],
                     });
                 }
             }
@@ -205,6 +211,10 @@ pub fn check_vow_purity(
                     },
                     secondary: vec![],
                     blame: Blame::Callee,
+                    hints: vec![
+                        "vow predicates must be pure — move effectful code outside the vow block"
+                            .to_string(),
+                    ],
                 });
             }
         }
@@ -574,5 +584,37 @@ mod tests {
         let mut emitter = TestEmitter(vec![]);
         check_vow_purity(&vow, &env, "test.vow", &mut emitter);
         assert!(emitter.0.is_empty());
+    }
+
+    #[test]
+    fn effect_violation_includes_add_effect_hint() {
+        let env = env_with_read_file();
+        let caller = make_fn("caller", vec![], simple_body("read_file"));
+        let mut emitter = TestEmitter(vec![]);
+        check_fn_effects(&caller, &env, "test.vow", &mut emitter);
+        assert_eq!(emitter.0.len(), 1);
+        assert!(
+            emitter.0[0].hints.iter().any(|h| h.contains("Read")),
+            "expected hint mentioning the missing effect"
+        );
+    }
+
+    #[test]
+    fn vow_purity_violation_includes_hint() {
+        let env = env_with_read_file();
+        let vow = VowBlock {
+            clauses: vec![VowClause::Requires {
+                expr: call_expr("read_file"),
+                span: dummy_span(),
+            }],
+            span: dummy_span(),
+        };
+        let mut emitter = TestEmitter(vec![]);
+        check_vow_purity(&vow, &env, "test.vow", &mut emitter);
+        assert_eq!(emitter.0.len(), 1);
+        assert!(
+            emitter.0[0].hints.iter().any(|h| h.contains("pure")),
+            "expected hint about purity"
+        );
     }
 }

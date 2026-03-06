@@ -12,6 +12,35 @@ use crate::types::Ty;
 /// Set of expression addresses (`*const Expr as usize`) whose resolved type is `Ty::Str`.
 pub type StringExprSet = HashSet<usize>;
 
+fn edit_distance(a: &str, b: &str) -> usize {
+    let n = b.len();
+    let mut prev = (0..=n).collect::<Vec<_>>();
+    let mut curr = vec![0; n + 1];
+    for (i, ca) in a.bytes().enumerate() {
+        curr[0] = i + 1;
+        for (j, cb) in b.bytes().enumerate() {
+            let cost = if ca == cb { 0 } else { 1 };
+            curr[j + 1] = (prev[j] + cost).min(prev[j + 1] + 1).min(curr[j] + 1);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[n]
+}
+
+fn suggest_similar(name: &str, candidates: &[String], max_distance: usize) -> Option<String> {
+    let mut best: Option<(usize, &str)> = None;
+    for c in candidates {
+        if c == name {
+            continue;
+        }
+        let d = edit_distance(name, c);
+        if d <= max_distance && (best.is_none() || d < best.unwrap().0) {
+            best = Some((d, c.as_str()));
+        }
+    }
+    best.map(|(_, s)| s.to_string())
+}
+
 pub struct Checker<'e> {
     pub(crate) env: TypeEnv,
     pub(crate) current_return_ty: Ty,
@@ -56,6 +85,30 @@ impl<'e> Checker<'e> {
             },
             secondary: vec![],
             blame: Blame::None,
+            hints: vec![],
+        });
+    }
+
+    fn emit_error_with_hints(
+        &mut self,
+        code: ErrorCode,
+        msg: impl Into<String>,
+        span: Span,
+        hints: Vec<String>,
+    ) {
+        self.error_count += 1;
+        self.emitter.emit(&Diagnostic {
+            severity: Severity::Error,
+            code,
+            message: msg.into(),
+            primary: SourceLocation {
+                file: self.file.clone(),
+                byte_offset: span.start,
+                byte_len: span.len,
+            },
+            secondary: vec![],
+            blame: Blame::None,
+            hints,
         });
     }
 
@@ -263,12 +316,15 @@ impl<'e> Checker<'e> {
             || body_ty == Ty::Never
             || (body_ty == Ty::I32 && expected.is_integer());
         if !coercible {
-            self.emit_error(
+            self.emit_error_with_hints(
                 ErrorCode::TypeMismatch,
                 format!(
                     "function body has type `{body_ty}` but declared return type is `{expected}`"
                 ),
                 fn_def.body.span,
+                vec![format!(
+                    "function declares return type `{expected}`, but body evaluates to `{body_ty}`"
+                )],
             );
         }
 
@@ -308,12 +364,15 @@ impl<'e> Checker<'e> {
                                 || ann_ty == init_ty
                                 || (init_ty == Ty::I32 && ann_ty.is_integer());
                             if !coercible {
-                                self.emit_error(
+                                self.emit_error_with_hints(
                                     ErrorCode::TypeMismatch,
                                     format!(
                                         "let binding annotated as `{ann_ty}` but initializer has type `{init_ty}`"
                                     ),
                                     ann.span(),
+                                    vec![format!(
+                                        "annotation is `{ann_ty}`, but initializer has type `{init_ty}`"
+                                    )],
                                 );
                             }
                             ann_ty
@@ -372,10 +431,16 @@ impl<'e> Checker<'e> {
             ExprKind::Ident(name) => match self.env.lookup(name) {
                 Some(ty) => ty.clone(),
                 None => {
-                    self.emit_error(
+                    let mut hints = Vec::new();
+                    let candidates = self.env.all_var_names();
+                    if let Some(suggestion) = suggest_similar(name, &candidates, 3) {
+                        hints.push(format!("did you mean `{suggestion}`?"));
+                    }
+                    self.emit_error_with_hints(
                         ErrorCode::TypeMismatch,
                         format!("undefined variable `{name}`"),
                         expr.span,
+                        hints,
                     );
                     Ty::Unit
                 }
@@ -474,10 +539,16 @@ impl<'e> Checker<'e> {
                 let (param_tys, return_ty) = match self.env.lookup_fn(name) {
                     Some(sig) => (sig.params.clone(), sig.return_ty.clone()),
                     None => {
-                        self.emit_error(
+                        let mut hints = Vec::new();
+                        let candidates = self.env.all_fn_names();
+                        if let Some(suggestion) = suggest_similar(name, &candidates, 3) {
+                            hints.push(format!("did you mean `{suggestion}`?"));
+                        }
+                        self.emit_error_with_hints(
                             ErrorCode::TypeMismatch,
                             format!("undefined function `{name}`"),
                             callee.span,
+                            hints,
                         );
                         for arg in args {
                             self.check_expr(arg);
@@ -501,12 +572,13 @@ impl<'e> Checker<'e> {
                     let coercible =
                         arg_ty == Ty::I32 && expected_ty.is_integer() && *expected_ty != Ty::I32;
                     if arg_ty != *expected_ty && arg_ty != Ty::Never && !coercible {
-                        self.emit_error(
+                        self.emit_error_with_hints(
                             ErrorCode::TypeMismatch,
                             format!(
                                 "argument has type `{arg_ty}` but function expects `{expected_ty}`"
                             ),
                             arg.span,
+                            vec![format!("parameter expects `{expected_ty}`, got `{arg_ty}`")],
                         );
                     }
                 }
@@ -663,10 +735,11 @@ impl<'e> Checker<'e> {
             } => {
                 let cond_ty = self.check_expr(condition);
                 if cond_ty != Ty::Bool && cond_ty != Ty::Never {
-                    self.emit_error(
+                    self.emit_error_with_hints(
                         ErrorCode::TypeMismatch,
                         format!("if condition must be `bool`, found `{cond_ty}`"),
                         condition.span,
+                        vec!["if condition must be `bool`".to_string()],
                     );
                 }
                 let then_ty = self.check_block(then_branch);
@@ -679,12 +752,15 @@ impl<'e> Checker<'e> {
                             || (then_ty == Ty::I32 && else_ty.is_integer())
                             || (else_ty == Ty::I32 && then_ty.is_integer());
                         if !compatible {
-                            self.emit_error(
+                            self.emit_error_with_hints(
                                 ErrorCode::TypeMismatch,
                                 format!(
                                     "if branches have different types: `{then_ty}` vs `{else_ty}`"
                                 ),
                                 expr.span,
+                                vec![format!(
+                                    "then branch has type `{then_ty}`, but else branch has type `{else_ty}`"
+                                )],
                             );
                         }
                         if then_ty == Ty::Never {
@@ -724,12 +800,13 @@ impl<'e> Checker<'e> {
                     || val_ty == Ty::Never
                     || (val_ty == Ty::I32 && expected.is_integer());
                 if !coercible {
-                    self.emit_error(
+                    self.emit_error_with_hints(
                         ErrorCode::TypeMismatch,
                         format!(
                             "return type `{val_ty}` does not match declared return type `{expected}`"
                         ),
                         expr.span,
+                        vec![format!("function return type is `{expected}`")],
                     );
                 }
                 Ty::Never
@@ -963,18 +1040,20 @@ impl<'e> Checker<'e> {
             (lhs, rhs)
         };
         if !lhs.is_numeric() {
-            self.emit_error(
+            self.emit_error_with_hints(
                 ErrorCode::TypeMismatch,
                 format!("arithmetic operator requires a numeric type, found `{lhs}`"),
                 op_span,
+                vec!["arithmetic operators require numeric operands".to_string()],
             );
             return Ty::Unit;
         }
         if lhs != rhs {
-            self.emit_error(
+            self.emit_error_with_hints(
                 ErrorCode::TypeMismatch,
                 format!("arithmetic operands have different types: `{lhs}` and `{rhs}`"),
                 op_span,
+                vec!["operator requires matching types".to_string()],
             );
             return Ty::Unit;
         }
@@ -2174,5 +2253,103 @@ mod tests {
         checker.check_stmt(&stmt);
         assert_eq!(checker.env.lookup("x"), Some(&Ty::I64));
         assert!(!checker.has_errors());
+    }
+
+    // --- edit_distance tests ---
+
+    #[test]
+    fn edit_distance_identical() {
+        assert_eq!(edit_distance("hello", "hello"), 0);
+    }
+
+    #[test]
+    fn edit_distance_single_char() {
+        assert_eq!(edit_distance("cat", "bat"), 1);
+    }
+
+    #[test]
+    fn edit_distance_completely_different() {
+        assert_eq!(edit_distance("abc", "xyz"), 3);
+    }
+
+    #[test]
+    fn edit_distance_empty_strings() {
+        assert_eq!(edit_distance("", ""), 0);
+        assert_eq!(edit_distance("abc", ""), 3);
+        assert_eq!(edit_distance("", "abc"), 3);
+    }
+
+    // --- suggest_similar tests ---
+
+    #[test]
+    fn suggest_similar_finds_close_match() {
+        let candidates = vec!["counter".to_string(), "display".to_string()];
+        assert_eq!(
+            suggest_similar("coutner", &candidates, 3),
+            Some("counter".to_string())
+        );
+    }
+
+    #[test]
+    fn suggest_similar_returns_none_if_too_far() {
+        let candidates = vec!["counter".to_string()];
+        assert_eq!(suggest_similar("xyz", &candidates, 2), None);
+    }
+
+    #[test]
+    fn suggest_similar_skips_exact_match() {
+        let candidates = vec!["foo".to_string()];
+        assert_eq!(suggest_similar("foo", &candidates, 3), None);
+    }
+
+    // --- all_var_names / all_fn_names tests ---
+
+    #[test]
+    fn all_var_names_returns_defined_vars() {
+        let mut env = TypeEnv::new();
+        env.define("x", Ty::I64);
+        env.define("y", Ty::Bool);
+        let names = env.all_var_names();
+        assert!(names.contains(&"x".to_string()));
+        assert!(names.contains(&"y".to_string()));
+    }
+
+    #[test]
+    fn all_fn_names_returns_defined_fns() {
+        let env = TypeEnv::new();
+        let names = env.all_fn_names();
+        assert!(names.contains(&"print_str".to_string()));
+        assert!(names.contains(&"print_i64".to_string()));
+    }
+
+    // --- hint integration tests ---
+
+    #[test]
+    fn undefined_variable_includes_did_you_mean_hint() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        checker.env.define("counter", Ty::I64);
+        let expr = make_expr(ExprKind::Ident("coutner".to_string()));
+        checker.check_expr(&expr);
+        assert_eq!(emitter.0.len(), 1);
+        assert!(emitter.0[0].hints.iter().any(|h| h.contains("counter")));
+    }
+
+    #[test]
+    fn undefined_function_includes_did_you_mean_hint() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = Checker::new("test.vow", &mut emitter);
+        let callee = make_expr(ExprKind::Ident("prnt_str".to_string()));
+        let expr = make_expr(ExprKind::Call {
+            callee: Box::new(callee),
+            args: vec![],
+        });
+        checker.check_expr(&expr);
+        assert!(!emitter.0.is_empty());
+        let has_hint = emitter
+            .0
+            .iter()
+            .any(|d| d.hints.iter().any(|h| h.contains("print_str")));
+        assert!(has_hint, "expected 'did you mean' hint for print_str");
     }
 }

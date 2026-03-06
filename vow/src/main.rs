@@ -368,6 +368,8 @@ pub struct DiagnosticJson {
     pub message: String,
     pub severity: String,
     pub span: SpanJson,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hints: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -451,6 +453,7 @@ impl DiagnosticJson {
                 offset: d.primary.byte_offset,
                 length: d.primary.byte_len,
             },
+            hints: d.hints.clone(),
         }
     }
 }
@@ -1055,6 +1058,7 @@ fn verify_outcome_to_output(
                     primary,
                     secondary,
                     blame: blame_to_diag_blame(&sce.blame),
+                    hints: vec![],
                 });
             }
             (
@@ -2305,6 +2309,7 @@ pub fn main() -> i32 [io] {
             },
             secondary: vec![],
             blame: vow_diag::Blame::None,
+            hints: vec![],
         };
         let out = BuildOutput {
             status: BuildStatus::CompileFailed {
@@ -2859,6 +2864,7 @@ fn main() -> i32 {
             },
             secondary: vec![],
             blame: vow_diag::Blame::None,
+            hints: vec![],
         };
         let out = BuildOutput {
             status: BuildStatus::CompileFailed {

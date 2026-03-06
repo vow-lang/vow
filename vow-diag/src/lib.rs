@@ -29,6 +29,8 @@ pub struct Diagnostic {
     pub primary: SourceLocation,
     pub secondary: Vec<SourceLocation>,
     pub blame: Blame,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hints: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,6 +143,9 @@ impl DiagnosticEmitter for HumanEmitter {
         if diagnostic.blame != Blame::None {
             writeln!(self.output, "  blame: {:?}", diagnostic.blame).ok();
         }
+        for hint in &diagnostic.hints {
+            writeln!(self.output, "  hint: {hint}").ok();
+        }
     }
 
     fn finish(&mut self) {}
@@ -174,6 +179,7 @@ mod tests {
             },
             secondary: vec![],
             blame: Blame::Caller,
+            hints: vec![],
         }
     }
 
@@ -201,5 +207,45 @@ mod tests {
         let output = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
         assert!(output.contains("error"));
         assert!(output.contains("precondition violated"));
+    }
+
+    #[test]
+    fn json_emitter_skips_empty_hints() {
+        let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let mut emitter = JsonEmitter::new(Box::new(SharedBuf(Arc::clone(&buf))));
+        emitter.emit(&make_diagnostic());
+        emitter.finish();
+        let output = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        assert!(
+            !output.contains("hints"),
+            "empty hints should be omitted from JSON"
+        );
+    }
+
+    #[test]
+    fn json_emitter_includes_nonempty_hints() {
+        let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let mut emitter = JsonEmitter::new(Box::new(SharedBuf(Arc::clone(&buf))));
+        let mut diag = make_diagnostic();
+        diag.hints = vec!["did you mean `counter`?".to_string()];
+        emitter.emit(&diag);
+        emitter.finish();
+        let output = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+        let arr = parsed.as_array().unwrap();
+        let hints = arr[0]["hints"].as_array().unwrap();
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0], "did you mean `counter`?");
+    }
+
+    #[test]
+    fn human_emitter_prints_hints() {
+        let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let mut emitter = HumanEmitter::new(Box::new(SharedBuf(Arc::clone(&buf))));
+        let mut diag = make_diagnostic();
+        diag.hints = vec!["check the value of y".to_string()];
+        emitter.emit(&diag);
+        let output = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        assert!(output.contains("hint: check the value of y"));
     }
 }

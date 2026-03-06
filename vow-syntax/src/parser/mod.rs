@@ -169,6 +169,7 @@ impl Parser {
             },
             secondary: vec![],
             blame: Blame::None,
+            hints: vec![],
         });
     }
 
@@ -653,6 +654,7 @@ pub fn parse_item_source(source: &str, file: &str) -> (Option<Item>, Vec<Diagnos
                 },
                 secondary: vec![],
                 blame: vow_diag::Blame::None,
+                hints: vec![],
             };
             return (None, vec![diag]);
         }
@@ -677,6 +679,7 @@ pub fn parse_module(source: &str, file: &str) -> (Module, Vec<Diagnostic>) {
                 },
                 secondary: vec![],
                 blame: Blame::None,
+                hints: vec![],
             };
             let module = Module {
                 name: "<error>".to_string(),
