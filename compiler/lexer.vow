@@ -78,7 +78,9 @@ fn keyword_tag(s: String) -> i64 {
     else { tok_ident() }
 }
 
-fn keyword_bool_val(s: String) -> i64 {
+fn keyword_bool_val(s: String) -> i64 vow {
+    ensures: result == 0 || result == 1
+} {
     if s.eq(String::from("true")) { 1 }
     else { 0 }
 }
