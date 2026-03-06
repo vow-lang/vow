@@ -536,7 +536,8 @@ fn emit_inst(
                         let idx = inst.args[1].0;
                         out.push_str(&format!(
                             "  __ESBMC_assert(v{idx} >= 0 && v{idx} < v{s}.len, \"string bounds\");\n\
-                             \x20 int64_t v{id} = (int64_t)v{s}.data[v{idx}];\n"
+                             \x20 int64_t v{id} = (int64_t)(unsigned char)v{s}.data[v{idx}];\n\
+                             \x20 __ESBMC_assume(v{id} >= 0 && v{id} <= 255);\n"
                         ));
                     }
                     "__vow_string_eq" => {
@@ -1961,8 +1962,12 @@ mod tests {
             "bounds check: {c}"
         );
         assert!(
-            c.contains("int64_t v3 = (int64_t)v1.data[v2]"),
+            c.contains("int64_t v3 = (int64_t)(unsigned char)v1.data[v2]"),
             "byte_at access: {c}"
+        );
+        assert!(
+            c.contains("__ESBMC_assume(v3 >= 0 && v3 <= 255)"),
+            "byte_at range postcondition: {c}"
         );
     }
 
