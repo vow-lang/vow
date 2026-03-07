@@ -1582,6 +1582,7 @@ mod tests {
                     id: BlockId(0),
                     insts: vec![inst(0, Opcode::Return, Ty::Unit, vec![], InstData::None)],
                 }],
+                local_names: std::collections::HashMap::new(),
             }],
         );
         let result =
@@ -1611,6 +1612,7 @@ mod tests {
                         inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
                     ],
                 }],
+                local_names: std::collections::HashMap::new(),
             }],
         );
         let result =
@@ -1647,6 +1649,7 @@ mod tests {
                         inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
                     ],
                 }],
+                local_names: std::collections::HashMap::new(),
             }],
         );
         let result =
@@ -1746,6 +1749,7 @@ mod tests {
                         ],
                     },
                 ],
+                local_names: std::collections::HashMap::new(),
             }],
         );
         let _ = VowId(0); // suppress unused import
@@ -1786,6 +1790,7 @@ mod tests {
             effects: vec![],
             vows: vec![],
             blocks: vec![],
+            local_names: std::collections::HashMap::new(),
         };
         let sig = build_signature(&ir_func, CallConv::SystemV);
         assert_eq!(sig.params.len(), 2);
@@ -1818,6 +1823,7 @@ mod tests {
                 id: BlockId(0),
                 insts,
             }],
+            local_names: std::collections::HashMap::new(),
         }
     }
 
@@ -2030,6 +2036,7 @@ mod tests {
                         inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
                     ],
                 }],
+                local_names: std::collections::HashMap::new(),
             }],
         );
         let result =
@@ -2092,6 +2099,7 @@ mod tests {
                         inst(7, Opcode::Return, Ty::Unit, vec![6], InstData::None),
                     ],
                 }],
+                local_names: std::collections::HashMap::new(),
             }],
         );
         let result =
@@ -2125,6 +2133,7 @@ mod tests {
                         inst(8, Opcode::Return, Ty::Unit, vec![7], InstData::None),
                     ],
                 }],
+                local_names: std::collections::HashMap::new(),
             }],
         );
         let result =
@@ -2156,6 +2165,7 @@ mod tests {
                         inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
                     ],
                 }],
+                local_names: std::collections::HashMap::new(),
             }],
         );
         let result =
@@ -2187,6 +2197,7 @@ mod tests {
                         inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
                     ],
                 }],
+                local_names: std::collections::HashMap::new(),
             }],
         );
         let result =
@@ -2242,6 +2253,7 @@ mod tests {
                         inst(8, Opcode::Return, Ty::Unit, vec![7], InstData::None),
                     ],
                 }],
+                local_names: std::collections::HashMap::new(),
             }],
         );
         let result =
@@ -2275,6 +2287,7 @@ mod tests {
                         inst(8, Opcode::Return, Ty::Unit, vec![7], InstData::None),
                     ],
                 }],
+                local_names: std::collections::HashMap::new(),
             }],
         );
         let result =
@@ -2305,6 +2318,7 @@ mod tests {
                         inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
                     ],
                 }],
+                local_names: std::collections::HashMap::new(),
             }],
         );
         let result =
@@ -2335,6 +2349,7 @@ mod tests {
                         inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
                     ],
                 }],
+                local_names: std::collections::HashMap::new(),
             }],
         );
         let result =
@@ -2405,6 +2420,7 @@ mod tests {
                         inst(2, Opcode::Return, Ty::Unit, vec![], InstData::None),
                     ],
                 }],
+                local_names: std::collections::HashMap::new(),
             }],
         );
         let result =
@@ -2451,6 +2467,7 @@ mod tests {
                         inst(2, Opcode::Return, Ty::Unit, vec![], InstData::None),
                     ],
                 }],
+                local_names: std::collections::HashMap::new(),
             }],
         );
         let result =
@@ -2497,6 +2514,7 @@ mod tests {
                         inst(2, Opcode::Return, Ty::Unit, vec![], InstData::None),
                     ],
                 }],
+                local_names: std::collections::HashMap::new(),
             }],
         );
         let result =
@@ -2545,6 +2563,7 @@ mod tests {
                         inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
                     ],
                 }],
+                local_names: std::collections::HashMap::new(),
             }],
         );
         let result =
@@ -3147,6 +3166,7 @@ mod tests {
                             inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
                         ],
                     }],
+                    local_names: std::collections::HashMap::new(),
                 },
                 Function {
                     id: FuncId(1),
@@ -3170,6 +3190,7 @@ mod tests {
                             inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
                         ],
                     }],
+                    local_names: std::collections::HashMap::new(),
                 },
             ],
         );
@@ -3253,6 +3274,7 @@ mod tests {
                         inst(7, Opcode::Return, Ty::Unit, vec![6], InstData::None),
                     ],
                 }],
+                local_names: std::collections::HashMap::new(),
             }],
         );
         let result =
@@ -3286,6 +3308,7 @@ mod tests {
                         inst(8, Opcode::Return, Ty::Unit, vec![7], InstData::None),
                     ],
                 }],
+                local_names: std::collections::HashMap::new(),
             }],
         );
         let result =

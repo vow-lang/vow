@@ -268,6 +268,7 @@ mod tests {
             effects,
             vows: vec![],
             blocks,
+            local_names: std::collections::HashMap::new(),
         }
     }
 

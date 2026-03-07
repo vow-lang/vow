@@ -1002,6 +1002,7 @@ mod tests {
                     inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         };
         let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("int64_t add("), "signature: {c}");
@@ -1051,6 +1052,7 @@ mod tests {
                     inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         };
         let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("__ESBMC_assume(v3)"), "requires: {c}");
@@ -1094,6 +1096,7 @@ mod tests {
                 id: BlockId(0),
                 insts,
             }],
+            local_names: std::collections::HashMap::new(),
         }
     }
 
@@ -1362,6 +1365,7 @@ mod tests {
                     )],
                 },
             ],
+            local_names: std::collections::HashMap::new(),
         };
         let c = emit_c_function(&func, &HashMap::new());
         assert!(
@@ -1544,6 +1548,7 @@ mod tests {
                     inst(2, Opcode::Return, Ty::Unit, vec![0], InstData::None),
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         };
         let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("__ESBMC_assert(v0"), "ensures: {c}");
@@ -1818,6 +1823,7 @@ mod tests {
                     inst(5, Opcode::Return, Ty::Unit, vec![0], InstData::None),
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         };
         let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("__vow_vec_t v0;"), "phi uses vec type: {c}");
@@ -2192,6 +2198,7 @@ mod tests {
                     inst(4, Opcode::Return, Ty::Unit, vec![0], InstData::None),
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         };
         let c = emit_c_function(&func, &HashMap::new());
         assert!(
@@ -2479,6 +2486,7 @@ mod tests {
                     inst(3, Opcode::Return, Ty::Unit, vec![0], InstData::None),
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         };
         let c = emit_c_function(&func, &HashMap::new());
         assert!(
@@ -2548,6 +2556,7 @@ mod tests {
                     ],
                 },
             ],
+            local_names: std::collections::HashMap::new(),
         };
         let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("int __blk_0 = 0;"), "blk_0 decl: {c}");
@@ -2582,6 +2591,7 @@ mod tests {
                     inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         }
     }
 
@@ -2628,6 +2638,7 @@ mod tests {
                     insts: vec![inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None)],
                 },
             ],
+            local_names: std::collections::HashMap::new(),
         };
         let module = Module {
             name: "test".to_string(),
@@ -2665,6 +2676,7 @@ mod tests {
                     inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         };
         let module = Module {
             name: "test".to_string(),

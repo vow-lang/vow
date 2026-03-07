@@ -103,6 +103,7 @@ impl LowerCtx {
             effects,
             vows: vec![],
             blocks: vec![entry],
+            local_names: HashMap::new(),
         };
         let mut enum_variant_map = enum_variant_map;
         enum_variant_map
@@ -1476,6 +1477,7 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
                         _ => {}
                     }
                 }
+                ctx.func.local_names.insert(val.0, name.clone());
                 ctx.define(name.clone(), val);
             }
         }

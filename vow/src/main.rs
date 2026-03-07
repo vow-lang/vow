@@ -370,6 +370,10 @@ pub struct DiagnosticJson {
     pub span: SpanJson,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hints: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub secondary: Vec<SpanJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blame: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -440,6 +444,20 @@ pub struct BuildResult {
 
 impl DiagnosticJson {
     fn from_diagnostic(d: &Diagnostic) -> Self {
+        let blame = match d.blame {
+            vow_diag::Blame::Caller => Some("caller".to_string()),
+            vow_diag::Blame::Callee => Some("callee".to_string()),
+            vow_diag::Blame::None => None,
+        };
+        let secondary = d
+            .secondary
+            .iter()
+            .map(|s| SpanJson {
+                file: s.file.clone(),
+                offset: s.byte_offset,
+                length: s.byte_len,
+            })
+            .collect();
         Self {
             error_code: format!("{:?}", d.code),
             message: d.message.clone(),
@@ -454,6 +472,8 @@ impl DiagnosticJson {
                 length: d.primary.byte_len,
             },
             hints: d.hints.clone(),
+            secondary,
+            blame,
         }
     }
 }
@@ -600,6 +620,11 @@ fn build_c_to_source_name_map(
                 map.insert(format!("v{}", inst.id.0), name.clone());
             }
         }
+    }
+
+    for (&inst_id, name) in &func.local_names {
+        map.entry(format!("v{inst_id}"))
+            .or_insert_with(|| name.clone());
     }
 
     map
@@ -1048,6 +1073,28 @@ fn verify_outcome_to_output(
                         byte_len: cs.length,
                     })
                     .collect();
+                let mut hints = Vec::new();
+                match sce.blame.as_str() {
+                    "caller" => {
+                        hints.push(format!(
+                            "the call site violated function `{}`'s precondition",
+                            sce.function
+                        ));
+                        for va in &sce.violating_args {
+                            hints.push(format!(
+                                "argument `{}` = {} violates the contract",
+                                va.param, va.value
+                            ));
+                        }
+                    }
+                    "callee" => {
+                        hints.push(format!(
+                            "function `{}` failed to establish its postcondition",
+                            sce.function
+                        ));
+                    }
+                    _ => {}
+                }
                 diagnostics.push(Diagnostic {
                     severity: Severity::Error,
                     code: blame_to_error_code(&sce.blame),
@@ -1058,7 +1105,7 @@ fn verify_outcome_to_output(
                     primary,
                     secondary,
                     blame: blame_to_diag_blame(&sce.blame),
-                    hints: vec![],
+                    hints,
                 });
             }
             (
@@ -3026,6 +3073,7 @@ fn main() -> i32 {
                     },
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         };
         let map = build_c_to_source_name_map(&func);
         assert_eq!(map.get("p0"), Some(&"x".to_string()));
@@ -3067,6 +3115,7 @@ fn main() -> i32 {
                     },
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         };
         let map = build_c_to_source_name_map(&func);
         // p0 maps to "a" (first non-Unit), p1 maps to "b"
@@ -3109,6 +3158,7 @@ fn main() -> i32 {
                 id: BlockId(0),
                 insts: vec![],
             }],
+            local_names: std::collections::HashMap::new(),
         };
         let map = build_c_to_source_name_map(&func);
         assert!(map.is_empty());
@@ -3562,6 +3612,7 @@ fn main() -> i32 {
                             },
                         ],
                     }],
+                    local_names: std::collections::HashMap::new(),
                 },
                 Function {
                     id: FuncId(1),
@@ -3600,6 +3651,7 @@ fn main() -> i32 {
                             },
                         ],
                     }],
+                    local_names: std::collections::HashMap::new(),
                 },
                 Function {
                     id: FuncId(2),
@@ -3638,6 +3690,7 @@ fn main() -> i32 {
                             },
                         ],
                     }],
+                    local_names: std::collections::HashMap::new(),
                 },
             ],
             strings: vec![],
@@ -3706,6 +3759,7 @@ fn main() -> i32 {
                     },
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         };
 
         let ce = vow_verify::Counterexample {
@@ -3769,6 +3823,7 @@ fn main() -> i32 {
                     origin: Span::new(30, 20),
                 }],
             }],
+            local_names: std::collections::HashMap::new(),
         };
 
         let ce = vow_verify::Counterexample {
@@ -3915,6 +3970,7 @@ fn main() -> i32 {
                     },
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         };
         let caller = Function {
             id: FuncId(1),
@@ -3961,6 +4017,7 @@ fn main() -> i32 {
                     },
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         };
         let module = Module {
             name: "test".to_string(),
@@ -4025,6 +4082,7 @@ fn main() -> i32 {
                     },
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         };
         let ce = vow_verify::Counterexample {
             description: "test".to_string(),
@@ -4123,6 +4181,7 @@ fn main() -> i32 {
                     }],
                 },
             ],
+            local_names: std::collections::HashMap::new(),
         };
         let ce = vow_verify::Counterexample {
             description: "test".to_string(),

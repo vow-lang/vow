@@ -294,6 +294,10 @@ impl TypeEnv {
         self.fn_sigs.keys().cloned().collect()
     }
 
+    pub fn all_struct_names(&self) -> Vec<String> {
+        self.struct_defs.keys().cloned().collect()
+    }
+
     pub fn resolve(&self, ast_ty: &AstType) -> Result<Ty, String> {
         match ast_ty {
             AstType::Named { name, .. } => {

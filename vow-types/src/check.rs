@@ -330,9 +330,8 @@ impl<'e> Checker<'e> {
 
         self.env.pop_scope();
 
-        // TODO: After Wave 2 merges, add:
-        // crate::effects::check_fn_effects(fn_def, &self.env, &self.file, self.emitter);
-        // crate::linear::check_linear_usage(fn_def, &self.env, &self.file, self.emitter);
+        crate::effects::check_fn_effects(fn_def, &self.env, &self.file, self.emitter);
+        crate::linear::check_linear_usage(fn_def, &self.env, &self.file, self.emitter);
 
         self.current_fn_effects = outer_effects;
         self.current_return_ty = outer_return_ty;
@@ -468,29 +467,34 @@ impl<'e> Checker<'e> {
                             && rhs_ty != Ty::Never
                             && !coercible
                         {
-                            self.emit_error(
+                            self.emit_error_with_hints(
                                 ErrorCode::TypeMismatch,
                                 format!(
                                     "comparison operands have different types: `{lhs_ty}` and `{rhs_ty}`"
                                 ),
                                 expr.span,
+                                vec![format!(
+                                    "convert one operand so both sides have the same type"
+                                )],
                             );
                         }
                         Ty::Bool
                     }
                     BinOp::And | BinOp::Or => {
                         if lhs_ty != Ty::Bool && lhs_ty != Ty::Never {
-                            self.emit_error(
+                            self.emit_error_with_hints(
                                 ErrorCode::TypeMismatch,
                                 format!("logical operator requires `bool`, found `{lhs_ty}`"),
                                 lhs.span,
+                                vec!["use `!= 0` to convert an integer to bool".to_string()],
                             );
                         }
                         if rhs_ty != Ty::Bool && rhs_ty != Ty::Never {
-                            self.emit_error(
+                            self.emit_error_with_hints(
                                 ErrorCode::TypeMismatch,
                                 format!("logical operator requires `bool`, found `{rhs_ty}`"),
                                 rhs.span,
+                                vec!["use `!= 0` to convert an integer to bool".to_string()],
                             );
                         }
                         Ty::Bool
@@ -557,7 +561,12 @@ impl<'e> Checker<'e> {
                     }
                 };
                 if args.len() != param_tys.len() {
-                    self.emit_error(
+                    let sig_str = param_tys
+                        .iter()
+                        .map(|t| format!("`{t}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    self.emit_error_with_hints(
                         ErrorCode::TypeMismatch,
                         format!(
                             "function `{name}` expects {} arguments but got {}",
@@ -565,6 +574,7 @@ impl<'e> Checker<'e> {
                             args.len()
                         ),
                         expr.span,
+                        vec![format!("expected signature: ({sig_str})")],
                     );
                 }
                 for (arg, expected_ty) in args.iter().zip(param_tys.iter()) {
@@ -665,10 +675,19 @@ impl<'e> Checker<'e> {
                     Some(info) => match info.fields.iter().find(|(n, _)| n == field) {
                         Some((_, ty)) => ty.clone(),
                         None => {
-                            self.emit_error(
+                            let field_names: Vec<String> =
+                                info.fields.iter().map(|(n, _)| n.clone()).collect();
+                            let mut hints = Vec::new();
+                            if let Some(s) = suggest_similar(field, &field_names, 3) {
+                                hints.push(format!("did you mean `{s}`?"));
+                            } else if !field_names.is_empty() {
+                                hints.push(format!("available fields: {}", field_names.join(", ")));
+                            }
+                            self.emit_error_with_hints(
                                 ErrorCode::TypeMismatch,
                                 format!("struct `{struct_name}` has no field `{field}`"),
                                 expr.span,
+                                hints,
                             );
                             Ty::Unit
                         }
@@ -689,10 +708,14 @@ impl<'e> Checker<'e> {
                 match &base_ty {
                     Ty::Applied(_, args) => args.first().cloned().unwrap_or(Ty::Unit),
                     _ => {
-                        self.emit_error(
+                        self.emit_error_with_hints(
                             ErrorCode::TypeMismatch,
                             format!("index operation on non-indexable type `{base_ty}`"),
                             expr.span,
+                            vec![
+                                "indexing is supported on Vec<T>, HashMap<K,V>, and String"
+                                    .to_string(),
+                            ],
                         );
                         Ty::Unit
                     }
@@ -827,12 +850,16 @@ impl<'e> Checker<'e> {
                     }
                     Ty::Never => Ty::Never,
                     _ => {
-                        self.emit_error(
+                        self.emit_error_with_hints(
                             ErrorCode::TypeMismatch,
                             format!(
                                 "the `?` operator requires `Option<T>` or `Result<T,E>`, found `{inner_ty}`"
                             ),
                             inner.span,
+                            vec![
+                                "`?` unwraps Option or Result, propagating None/Err to the caller"
+                                    .to_string(),
+                            ],
                         );
                         Ty::Unit
                     }
@@ -865,10 +892,16 @@ impl<'e> Checker<'e> {
                 let info = self.env.lookup_struct(name).cloned();
                 match info {
                     None => {
-                        self.emit_error(
+                        let candidates = self.env.all_struct_names();
+                        let mut hints = Vec::new();
+                        if let Some(s) = suggest_similar(name, &candidates, 3) {
+                            hints.push(format!("did you mean `{s}`?"));
+                        }
+                        self.emit_error_with_hints(
                             ErrorCode::TypeMismatch,
                             format!("unknown struct `{name}`"),
                             expr.span,
+                            hints,
                         );
                         for (_, e) in fields {
                             self.check_expr(e);

@@ -1,102 +1,102 @@
 module Ir
 
-fn IOP_CONST_I32() -> i64 { 0 }
-fn IOP_CONST_I64() -> i64 { 1 }
-fn IOP_CONST_F32() -> i64 { 2 }
-fn IOP_CONST_F64() -> i64 { 3 }
-fn IOP_CONST_BOOL() -> i64 { 4 }
-fn IOP_CONST_STR() -> i64 { 5 }
-fn IOP_CONST_UNIT() -> i64 { 6 }
+fn IOP_CONST_I32() -> i64 vow { ensures: result >= 0 } { 0 }
+fn IOP_CONST_I64() -> i64 vow { ensures: result >= 0 } { 1 }
+fn IOP_CONST_F32() -> i64 vow { ensures: result >= 0 } { 2 }
+fn IOP_CONST_F64() -> i64 vow { ensures: result >= 0 } { 3 }
+fn IOP_CONST_BOOL() -> i64 vow { ensures: result >= 0 } { 4 }
+fn IOP_CONST_STR() -> i64 vow { ensures: result >= 0 } { 5 }
+fn IOP_CONST_UNIT() -> i64 vow { ensures: result >= 0 } { 6 }
 
-fn IOP_GET_ARG() -> i64 { 7 }
+fn IOP_GET_ARG() -> i64 vow { ensures: result >= 0 } { 7 }
 
-fn IOP_WADD_I32() -> i64 { 8 }
-fn IOP_WSUB_I32() -> i64 { 9 }
-fn IOP_WMUL_I32() -> i64 { 10 }
-fn IOP_WDIV_I32() -> i64 { 11 }
-fn IOP_WREM_I32() -> i64 { 12 }
-fn IOP_CADD_I32() -> i64 { 13 }
-fn IOP_CSUB_I32() -> i64 { 14 }
-fn IOP_CMUL_I32() -> i64 { 15 }
-fn IOP_CDIV_I32() -> i64 { 16 }
-fn IOP_CREM_I32() -> i64 { 17 }
-fn IOP_EQ_I32() -> i64 { 18 }
-fn IOP_NE_I32() -> i64 { 19 }
-fn IOP_LT_I32() -> i64 { 20 }
-fn IOP_LE_I32() -> i64 { 21 }
-fn IOP_GT_I32() -> i64 { 22 }
-fn IOP_GE_I32() -> i64 { 23 }
+fn IOP_WADD_I32() -> i64 vow { ensures: result >= 0 } { 8 }
+fn IOP_WSUB_I32() -> i64 vow { ensures: result >= 0 } { 9 }
+fn IOP_WMUL_I32() -> i64 vow { ensures: result >= 0 } { 10 }
+fn IOP_WDIV_I32() -> i64 vow { ensures: result >= 0 } { 11 }
+fn IOP_WREM_I32() -> i64 vow { ensures: result >= 0 } { 12 }
+fn IOP_CADD_I32() -> i64 vow { ensures: result >= 0 } { 13 }
+fn IOP_CSUB_I32() -> i64 vow { ensures: result >= 0 } { 14 }
+fn IOP_CMUL_I32() -> i64 vow { ensures: result >= 0 } { 15 }
+fn IOP_CDIV_I32() -> i64 vow { ensures: result >= 0 } { 16 }
+fn IOP_CREM_I32() -> i64 vow { ensures: result >= 0 } { 17 }
+fn IOP_EQ_I32() -> i64 vow { ensures: result >= 0 } { 18 }
+fn IOP_NE_I32() -> i64 vow { ensures: result >= 0 } { 19 }
+fn IOP_LT_I32() -> i64 vow { ensures: result >= 0 } { 20 }
+fn IOP_LE_I32() -> i64 vow { ensures: result >= 0 } { 21 }
+fn IOP_GT_I32() -> i64 vow { ensures: result >= 0 } { 22 }
+fn IOP_GE_I32() -> i64 vow { ensures: result >= 0 } { 23 }
 
-fn IOP_WADD_I64() -> i64 { 24 }
-fn IOP_WSUB_I64() -> i64 { 25 }
-fn IOP_WMUL_I64() -> i64 { 26 }
-fn IOP_WDIV_I64() -> i64 { 27 }
-fn IOP_WREM_I64() -> i64 { 28 }
-fn IOP_CADD_I64() -> i64 { 29 }
-fn IOP_CSUB_I64() -> i64 { 30 }
-fn IOP_CMUL_I64() -> i64 { 31 }
-fn IOP_CDIV_I64() -> i64 { 32 }
-fn IOP_CREM_I64() -> i64 { 33 }
-fn IOP_EQ_I64() -> i64 { 34 }
-fn IOP_NE_I64() -> i64 { 35 }
-fn IOP_LT_I64() -> i64 { 36 }
-fn IOP_LE_I64() -> i64 { 37 }
-fn IOP_GT_I64() -> i64 { 38 }
-fn IOP_GE_I64() -> i64 { 39 }
+fn IOP_WADD_I64() -> i64 vow { ensures: result >= 0 } { 24 }
+fn IOP_WSUB_I64() -> i64 vow { ensures: result >= 0 } { 25 }
+fn IOP_WMUL_I64() -> i64 vow { ensures: result >= 0 } { 26 }
+fn IOP_WDIV_I64() -> i64 vow { ensures: result >= 0 } { 27 }
+fn IOP_WREM_I64() -> i64 vow { ensures: result >= 0 } { 28 }
+fn IOP_CADD_I64() -> i64 vow { ensures: result >= 0 } { 29 }
+fn IOP_CSUB_I64() -> i64 vow { ensures: result >= 0 } { 30 }
+fn IOP_CMUL_I64() -> i64 vow { ensures: result >= 0 } { 31 }
+fn IOP_CDIV_I64() -> i64 vow { ensures: result >= 0 } { 32 }
+fn IOP_CREM_I64() -> i64 vow { ensures: result >= 0 } { 33 }
+fn IOP_EQ_I64() -> i64 vow { ensures: result >= 0 } { 34 }
+fn IOP_NE_I64() -> i64 vow { ensures: result >= 0 } { 35 }
+fn IOP_LT_I64() -> i64 vow { ensures: result >= 0 } { 36 }
+fn IOP_LE_I64() -> i64 vow { ensures: result >= 0 } { 37 }
+fn IOP_GT_I64() -> i64 vow { ensures: result >= 0 } { 38 }
+fn IOP_GE_I64() -> i64 vow { ensures: result >= 0 } { 39 }
 
-fn IOP_ADD_F32() -> i64 { 40 }
-fn IOP_SUB_F32() -> i64 { 41 }
-fn IOP_MUL_F32() -> i64 { 42 }
-fn IOP_DIV_F32() -> i64 { 43 }
-fn IOP_REM_F32() -> i64 { 44 }
-fn IOP_EQ_F32() -> i64 { 45 }
-fn IOP_NE_F32() -> i64 { 46 }
-fn IOP_LT_F32() -> i64 { 47 }
-fn IOP_LE_F32() -> i64 { 48 }
-fn IOP_GT_F32() -> i64 { 49 }
-fn IOP_GE_F32() -> i64 { 50 }
+fn IOP_ADD_F32() -> i64 vow { ensures: result >= 0 } { 40 }
+fn IOP_SUB_F32() -> i64 vow { ensures: result >= 0 } { 41 }
+fn IOP_MUL_F32() -> i64 vow { ensures: result >= 0 } { 42 }
+fn IOP_DIV_F32() -> i64 vow { ensures: result >= 0 } { 43 }
+fn IOP_REM_F32() -> i64 vow { ensures: result >= 0 } { 44 }
+fn IOP_EQ_F32() -> i64 vow { ensures: result >= 0 } { 45 }
+fn IOP_NE_F32() -> i64 vow { ensures: result >= 0 } { 46 }
+fn IOP_LT_F32() -> i64 vow { ensures: result >= 0 } { 47 }
+fn IOP_LE_F32() -> i64 vow { ensures: result >= 0 } { 48 }
+fn IOP_GT_F32() -> i64 vow { ensures: result >= 0 } { 49 }
+fn IOP_GE_F32() -> i64 vow { ensures: result >= 0 } { 50 }
 
-fn IOP_ADD_F64() -> i64 { 51 }
-fn IOP_SUB_F64() -> i64 { 52 }
-fn IOP_MUL_F64() -> i64 { 53 }
-fn IOP_DIV_F64() -> i64 { 54 }
-fn IOP_REM_F64() -> i64 { 55 }
-fn IOP_EQ_F64() -> i64 { 56 }
-fn IOP_NE_F64() -> i64 { 57 }
-fn IOP_LT_F64() -> i64 { 58 }
-fn IOP_LE_F64() -> i64 { 59 }
-fn IOP_GT_F64() -> i64 { 60 }
-fn IOP_GE_F64() -> i64 { 61 }
+fn IOP_ADD_F64() -> i64 vow { ensures: result >= 0 } { 51 }
+fn IOP_SUB_F64() -> i64 vow { ensures: result >= 0 } { 52 }
+fn IOP_MUL_F64() -> i64 vow { ensures: result >= 0 } { 53 }
+fn IOP_DIV_F64() -> i64 vow { ensures: result >= 0 } { 54 }
+fn IOP_REM_F64() -> i64 vow { ensures: result >= 0 } { 55 }
+fn IOP_EQ_F64() -> i64 vow { ensures: result >= 0 } { 56 }
+fn IOP_NE_F64() -> i64 vow { ensures: result >= 0 } { 57 }
+fn IOP_LT_F64() -> i64 vow { ensures: result >= 0 } { 58 }
+fn IOP_LE_F64() -> i64 vow { ensures: result >= 0 } { 59 }
+fn IOP_GT_F64() -> i64 vow { ensures: result >= 0 } { 60 }
+fn IOP_GE_F64() -> i64 vow { ensures: result >= 0 } { 61 }
 
-fn IOP_NOT() -> i64 { 62 }
-fn IOP_AND() -> i64 { 63 }
-fn IOP_OR() -> i64 { 64 }
+fn IOP_NOT() -> i64 vow { ensures: result >= 0 } { 62 }
+fn IOP_AND() -> i64 vow { ensures: result >= 0 } { 63 }
+fn IOP_OR() -> i64 vow { ensures: result >= 0 } { 64 }
 
-fn IOP_LOAD() -> i64 { 65 }
-fn IOP_STORE() -> i64 { 66 }
+fn IOP_LOAD() -> i64 vow { ensures: result >= 0 } { 65 }
+fn IOP_STORE() -> i64 vow { ensures: result >= 0 } { 66 }
 
-fn IOP_BRANCH() -> i64 { 67 }
-fn IOP_JUMP() -> i64 { 68 }
-fn IOP_RETURN() -> i64 { 69 }
-fn IOP_UNREACHABLE() -> i64 { 70 }
+fn IOP_BRANCH() -> i64 vow { ensures: result >= 0 } { 67 }
+fn IOP_JUMP() -> i64 vow { ensures: result >= 0 } { 68 }
+fn IOP_RETURN() -> i64 vow { ensures: result >= 0 } { 69 }
+fn IOP_UNREACHABLE() -> i64 vow { ensures: result >= 0 } { 70 }
 
-fn IOP_PHI() -> i64 { 71 }
-fn IOP_UPSILON() -> i64 { 72 }
+fn IOP_PHI() -> i64 vow { ensures: result >= 0 } { 71 }
+fn IOP_UPSILON() -> i64 vow { ensures: result >= 0 } { 72 }
 
-fn IOP_VOW_REQ() -> i64 { 73 }
-fn IOP_VOW_ENS() -> i64 { 74 }
-fn IOP_VOW_INV() -> i64 { 75 }
+fn IOP_VOW_REQ() -> i64 vow { ensures: result >= 0 } { 73 }
+fn IOP_VOW_ENS() -> i64 vow { ensures: result >= 0 } { 74 }
+fn IOP_VOW_INV() -> i64 vow { ensures: result >= 0 } { 75 }
 
-fn IOP_CALL() -> i64 { 76 }
+fn IOP_CALL() -> i64 vow { ensures: result >= 0 } { 76 }
 
-fn IOP_REGION_ALLOC() -> i64 { 77 }
-fn IOP_REGION_FREE() -> i64 { 78 }
+fn IOP_REGION_ALLOC() -> i64 vow { ensures: result >= 0 } { 77 }
+fn IOP_REGION_FREE() -> i64 vow { ensures: result >= 0 } { 78 }
 
-fn IOP_LINEAR_CONSUME() -> i64 { 79 }
-fn IOP_LINEAR_BORROW() -> i64 { 80 }
+fn IOP_LINEAR_CONSUME() -> i64 vow { ensures: result >= 0 } { 79 }
+fn IOP_LINEAR_BORROW() -> i64 vow { ensures: result >= 0 } { 80 }
 
-fn IOP_FIELD_GET() -> i64 { 81 }
-fn IOP_FIELD_SET() -> i64 { 82 }
+fn IOP_FIELD_GET() -> i64 vow { ensures: result >= 0 } { 81 }
+fn IOP_FIELD_SET() -> i64 vow { ensures: result >= 0 } { 82 }
 
 fn iop_is_terminal(op: i64) -> bool vow {
     requires: op >= 0
@@ -104,35 +104,35 @@ fn iop_is_terminal(op: i64) -> bool vow {
     op == IOP_BRANCH() || op == IOP_JUMP() || op == IOP_RETURN() || op == IOP_UNREACHABLE()
 }
 
-fn ITY_I32() -> i64 { 0 }
-fn ITY_I64() -> i64 { 1 }
-fn ITY_F32() -> i64 { 2 }
-fn ITY_F64() -> i64 { 3 }
-fn ITY_BOOL() -> i64 { 4 }
-fn ITY_UNIT() -> i64 { 5 }
-fn ITY_PTR() -> i64 { 6 }
-fn ITY_LPTR() -> i64 { 7 }
+fn ITY_I32() -> i64 vow { ensures: result >= 0 } { 0 }
+fn ITY_I64() -> i64 vow { ensures: result >= 0 } { 1 }
+fn ITY_F32() -> i64 vow { ensures: result >= 0 } { 2 }
+fn ITY_F64() -> i64 vow { ensures: result >= 0 } { 3 }
+fn ITY_BOOL() -> i64 vow { ensures: result >= 0 } { 4 }
+fn ITY_UNIT() -> i64 vow { ensures: result >= 0 } { 5 }
+fn ITY_PTR() -> i64 vow { ensures: result >= 0 } { 6 }
+fn ITY_LPTR() -> i64 vow { ensures: result >= 0 } { 7 }
 
-fn IDATA_NONE() -> i64 { 0 }
-fn IDATA_CONST_I32() -> i64 { 1 }
-fn IDATA_CONST_I64() -> i64 { 2 }
-fn IDATA_CONST_F32() -> i64 { 3 }
-fn IDATA_CONST_F64() -> i64 { 4 }
-fn IDATA_CONST_BOOL() -> i64 { 5 }
-fn IDATA_ARG_INDEX() -> i64 { 6 }
-fn IDATA_PHI_TARGET() -> i64 { 7 }
-fn IDATA_CONST_STR() -> i64 { 8 }
-fn IDATA_CALL_TARGET() -> i64 { 9 }
-fn IDATA_CALL_EXTERN() -> i64 { 10 }
-fn IDATA_BRANCH_TARGETS() -> i64 { 11 }
-fn IDATA_JUMP_TARGET() -> i64 { 12 }
-fn IDATA_REGION_ID() -> i64 { 13 }
-fn IDATA_VOW_ID() -> i64 { 14 }
-fn IDATA_ALLOC_SIZE() -> i64 { 15 }
-fn IDATA_FIELD() -> i64 { 16 }
+fn IDATA_NONE() -> i64 vow { ensures: result >= 0 } { 0 }
+fn IDATA_CONST_I32() -> i64 vow { ensures: result >= 0 } { 1 }
+fn IDATA_CONST_I64() -> i64 vow { ensures: result >= 0 } { 2 }
+fn IDATA_CONST_F32() -> i64 vow { ensures: result >= 0 } { 3 }
+fn IDATA_CONST_F64() -> i64 vow { ensures: result >= 0 } { 4 }
+fn IDATA_CONST_BOOL() -> i64 vow { ensures: result >= 0 } { 5 }
+fn IDATA_ARG_INDEX() -> i64 vow { ensures: result >= 0 } { 6 }
+fn IDATA_PHI_TARGET() -> i64 vow { ensures: result >= 0 } { 7 }
+fn IDATA_CONST_STR() -> i64 vow { ensures: result >= 0 } { 8 }
+fn IDATA_CALL_TARGET() -> i64 vow { ensures: result >= 0 } { 9 }
+fn IDATA_CALL_EXTERN() -> i64 vow { ensures: result >= 0 } { 10 }
+fn IDATA_BRANCH_TARGETS() -> i64 vow { ensures: result >= 0 } { 11 }
+fn IDATA_JUMP_TARGET() -> i64 vow { ensures: result >= 0 } { 12 }
+fn IDATA_REGION_ID() -> i64 vow { ensures: result >= 0 } { 13 }
+fn IDATA_VOW_ID() -> i64 vow { ensures: result >= 0 } { 14 }
+fn IDATA_ALLOC_SIZE() -> i64 vow { ensures: result >= 0 } { 15 }
+fn IDATA_FIELD() -> i64 vow { ensures: result >= 0 } { 16 }
 
-fn BLAME_CALLER() -> i64 { 0 }
-fn BLAME_CALLEE() -> i64 { 1 }
+fn BLAME_CALLER() -> i64 vow { ensures: result >= 0 } { 0 }
+fn BLAME_CALLEE() -> i64 vow { ensures: result >= 0 } { 1 }
 
 struct IrInst {
     id: i64,

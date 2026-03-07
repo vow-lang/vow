@@ -71,6 +71,7 @@ fn make_main_returns_42() -> Module {
                     inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         }],
     }
 }
@@ -162,6 +163,7 @@ fn vow_violation_exits_with_code_1_and_blames_caller() {
                 inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
             ],
         }],
+        local_names: std::collections::HashMap::new(),
     };
 
     // main: call divide(10, 0), return 0
@@ -196,6 +198,7 @@ fn vow_violation_exits_with_code_1_and_blames_caller() {
                 inst(14, Opcode::Return, Ty::Unit, vec![13], InstData::None),
             ],
         }],
+        local_names: std::collections::HashMap::new(),
     };
 
     let module = Module {
@@ -276,6 +279,7 @@ fn vow_violation_reports_variable_values() {
                 inst(4, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
         }],
+        local_names: std::collections::HashMap::new(),
     };
 
     let main_fn = Function {
@@ -308,6 +312,7 @@ fn vow_violation_reports_variable_values() {
                 inst(13, Opcode::Return, Ty::Unit, vec![12], InstData::None),
             ],
         }],
+        local_names: std::collections::HashMap::new(),
     };
 
     let module = Module {

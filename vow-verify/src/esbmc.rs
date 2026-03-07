@@ -307,6 +307,7 @@ mod tests {
                     inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         }
     }
 
@@ -349,6 +350,7 @@ mod tests {
                     inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         }
     }
 
@@ -418,6 +420,7 @@ mod tests {
                     inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         };
         match verify_function(&func) {
             VerificationResult::Proven | VerificationResult::ToolNotFound => {}
@@ -666,6 +669,7 @@ VERIFICATION FAILED";
                     inst(9, Opcode::Return, Ty::Unit, vec![2], InstData::None),
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         }
     }
 
@@ -723,6 +727,7 @@ VERIFICATION FAILED";
                     inst(7, Opcode::Return, Ty::Unit, vec![2], InstData::None),
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         }
     }
 
@@ -825,6 +830,7 @@ VERIFICATION FAILED";
                     inst(8, Opcode::Return, Ty::Unit, vec![1], InstData::None),
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         }
     }
 
@@ -881,6 +887,7 @@ VERIFICATION FAILED";
                     inst(6, Opcode::Return, Ty::Unit, vec![1], InstData::None),
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         }
     }
 
@@ -995,6 +1002,7 @@ VERIFICATION FAILED";
                     inst(9, Opcode::Return, Ty::Unit, vec![5], InstData::None),
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         }
     }
 
@@ -1067,6 +1075,7 @@ VERIFICATION FAILED";
                     inst(8, Opcode::Return, Ty::Unit, vec![4], InstData::None),
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         }
     }
 
@@ -1126,6 +1135,7 @@ VERIFICATION FAILED";
                     inst(5, Opcode::Return, Ty::Unit, vec![1], InstData::None),
                 ],
             }],
+            local_names: std::collections::HashMap::new(),
         }
     }
 

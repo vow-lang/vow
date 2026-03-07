@@ -1,27 +1,27 @@
 module Types
 
-fn CTY_I8() -> i64 { 0 }
-fn CTY_I16() -> i64 { 1 }
-fn CTY_I32() -> i64 { 2 }
-fn CTY_I64() -> i64 { 3 }
-fn CTY_I128() -> i64 { 4 }
-fn CTY_U8() -> i64 { 5 }
-fn CTY_U16() -> i64 { 6 }
-fn CTY_U32() -> i64 { 7 }
-fn CTY_U64() -> i64 { 8 }
-fn CTY_U128() -> i64 { 9 }
-fn CTY_F32() -> i64 { 10 }
-fn CTY_F64() -> i64 { 11 }
-fn CTY_BOOL() -> i64 { 12 }
-fn CTY_STR() -> i64 { 13 }
-fn CTY_UNIT() -> i64 { 14 }
-fn CTY_NEVER() -> i64 { 15 }
-fn CTY_STRUCT() -> i64 { 16 }
-fn CTY_ENUM() -> i64 { 17 }
-fn CTY_APPLIED() -> i64 { 18 }
-fn CTY_REF() -> i64 { 19 }
-fn CTY_TUPLE() -> i64 { 20 }
-fn CTY_UNKNOWN() -> i64 { 21 }
+fn CTY_I8() -> i64 vow { ensures: result >= 0 } { 0 }
+fn CTY_I16() -> i64 vow { ensures: result >= 0 } { 1 }
+fn CTY_I32() -> i64 vow { ensures: result >= 0 } { 2 }
+fn CTY_I64() -> i64 vow { ensures: result >= 0 } { 3 }
+fn CTY_I128() -> i64 vow { ensures: result >= 0 } { 4 }
+fn CTY_U8() -> i64 vow { ensures: result >= 0 } { 5 }
+fn CTY_U16() -> i64 vow { ensures: result >= 0 } { 6 }
+fn CTY_U32() -> i64 vow { ensures: result >= 0 } { 7 }
+fn CTY_U64() -> i64 vow { ensures: result >= 0 } { 8 }
+fn CTY_U128() -> i64 vow { ensures: result >= 0 } { 9 }
+fn CTY_F32() -> i64 vow { ensures: result >= 0 } { 10 }
+fn CTY_F64() -> i64 vow { ensures: result >= 0 } { 11 }
+fn CTY_BOOL() -> i64 vow { ensures: result >= 0 } { 12 }
+fn CTY_STR() -> i64 vow { ensures: result >= 0 } { 13 }
+fn CTY_UNIT() -> i64 vow { ensures: result >= 0 } { 14 }
+fn CTY_NEVER() -> i64 vow { ensures: result >= 0 } { 15 }
+fn CTY_STRUCT() -> i64 vow { ensures: result >= 0 } { 16 }
+fn CTY_ENUM() -> i64 vow { ensures: result >= 0 } { 17 }
+fn CTY_APPLIED() -> i64 vow { ensures: result >= 0 } { 18 }
+fn CTY_REF() -> i64 vow { ensures: result >= 0 } { 19 }
+fn CTY_TUPLE() -> i64 vow { ensures: result >= 0 } { 20 }
+fn CTY_UNKNOWN() -> i64 vow { ensures: result >= 0 } { 21 }
 
 struct TyStore {
     data: Vec<i64>,

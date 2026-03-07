@@ -202,6 +202,7 @@ pub struct Function {
     pub effects: Vec<Effect>,
     pub vows: Vec<VowEntry>,
     pub blocks: Vec<BasicBlock>,
+    pub local_names: std::collections::HashMap<u32, String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -346,6 +347,7 @@ mod tests {
             effects: vec![],
             vows: vec![],
             blocks: vec![block],
+            local_names: std::collections::HashMap::new(),
         };
         let module = Module {
             name: "test_module".to_string(),
@@ -390,6 +392,7 @@ mod tests {
             effects: vec![],
             vows: vec![],
             blocks: vec![block],
+            local_names: std::collections::HashMap::new(),
         };
         assert_eq!(func.blocks[0].insts[0].data, InstData::ConstI32(10));
         assert_eq!(func.blocks[0].insts[1].args, vec![InstId(0)]);
