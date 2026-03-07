@@ -365,16 +365,22 @@ uv run --project bench bench/run.py report                 # comparison report
 
 Results compared against paper baselines (Dafny 82%, Verus 44%, Lean 27%).
 
-### 15.3 Compare against vericoding paper results
+### 15.3 Compare against vericoding paper results ✔
 
 The reference numbers from arxiv.org/abs/2509.22908:
 - Dafny: 82% verification rate
 - Verus/Rust: 44%
 - Lean: 27%
 
-Vow's hypothesis: blame-tracking contracts + structured counterexamples +
-the CEGIS-ready pipeline yield higher verification rates than unguided
-approaches. Test this hypothesis.
+First run (2026-03-07, commit 23e3138):
+- **Vow + claude-sonnet-4-6: 100%** (36/36 non-Stretch, all on first CEGIS iteration)
+- Mean verification time: ~5s per benchmark (M01 binary_search slowest at 40.7s)
+- 2/4 Stretch benchmarks also verified (H04, H09); 2 hit ESBMC limits (H07, H10)
+- Full report: `reports/2026-03-07-sonnet-4-6.md`
+
+Vow's hypothesis confirmed: blame-tracking contracts + structured
+counterexamples + the CEGIS-ready pipeline yield higher verification rates
+than unguided approaches.
 
 ### 15.4 Publish results
 
