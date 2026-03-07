@@ -382,10 +382,11 @@ Vow's hypothesis confirmed: blame-tracking contracts + structured
 counterexamples + the CEGIS-ready pipeline yield higher verification rates
 than unguided approaches.
 
-### 15.4 Publish results
+### 15.4 Publish results — POSTPONED
 
 Write up findings. Position Vow as the reference language for vericoding.
 The narrative: "Vow is the language where AI agents prove their code correct."
+Postponed to focus on self-hosted compiler parity (Phases 16–20).
 
 ---
 
@@ -463,43 +464,40 @@ depends on 16. Phase 19 depends on 16 and 17. Phase 20 depends on all.
 
 ---
 
-## Phase 16: Self-Hosted Vow Contracts
+## Phase 16: Self-Hosted Vow Contracts — COMPLETE
 
 **Goal:** The self-hosted compiler can lower vow blocks (requires, ensures,
 invariant) to IR and generate runtime violation checks in debug mode.
 
-### 16.1 Vow block lowering in self-hosted IR lowerer
+The vow lowering infrastructure was already built during Phases 9–12:
+`lower.vow` has `lower_requires_clauses`, `lower_ensures_clauses`,
+`lower_invariant_clauses`, free variable collection, blame metadata, and
+parameter refinement handling. The `vow-clif-shim` already emits runtime
+checks when `mode != 0`. The only missing piece was `main.vow` hardcoding
+`mode = 0` (release).
 
-Port `lower/vow.rs` logic to `lower.vow`:
-- Parse `requires`, `ensures`, `invariant` blocks from AST vow entries
-- Lower predicate expressions to IR instructions
-- Emit `Assert` instructions for verification conditions
-- Emit `VowEntry` metadata (vow_id, blame, description, bindings)
+### 16.1 Add `--mode debug` flag to self-hosted compiler ✔
 
-Reference: Rust `vow-ir/src/lower/vow.rs` (~762 lines).
+Added `--mode` flag parsing in `main.vow`. Maps `"debug"` → mode 1,
+default → mode 0. Passes mode to `clif_emit_module`. Updated
+`get_source_path` to skip `--mode` argument values.
 
-### 16.2 Debug-mode codegen for runtime vow checks
+### 16.2 Verified: divide.vow produces VowViolation in debug mode ✔
 
-In `clif.vow`, when compiling in debug mode:
-- Emit runtime checks for `requires` (at function entry) and `ensures`
-  (before each return)
-- Call `__vow_violation(vow_id, blame, description, values...)` on failure
-- Omit all checks in release mode (zero overhead)
+```
+$ /tmp/vowc --mode debug -o /tmp/divide examples/divide.vow
+$ /tmp/divide
+{"error":"VowViolation","vow_id":0,"blame":"Caller","description":"requires y != 0","file":"","offset":0,"values":{"y":0}}
+```
 
-Reference: Rust `vow-codegen/src/cranelift_backend.rs` vow check emission.
+### 16.3 Verified: IR output matches Rust compiler ✔
 
-### 16.3 Blame metadata propagation
+IR output for divide.vow is byte-identical between Rust and self-hosted
+compilers (including VowRequires instructions and vow entries).
 
-Ensure blame (Caller for requires, Callee for ensures) flows through the
-self-hosted pipeline:
-- VowEntry in IR carries blame tag
-- Codegen passes blame to `__vow_violation`
-- Runtime produces correct `VowViolation` JSON
+### 16.4 Verified: bootstrap triple test passes ✔
 
-### 16.4 Verification: self-hosted compiler compiles divide.vow with contracts
-
-Test: `./compiler/main --mode debug -o /tmp/divide compiler/divide.vow`
-produces a binary that emits `VowViolation` JSON when called with `y = 0`.
+Binary fixed point confirmed after the change (B = C, sha256 identical).
 
 ---
 

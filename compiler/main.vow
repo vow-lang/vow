@@ -44,7 +44,7 @@ fn get_source_path(argv: Vec<String>) -> String {
         if first_byte != 45 {
             if i > 0 {
                 let prev: String = argv[i - 1];
-                if prev == String::from("-o") {
+                if prev == String::from("-o") || prev == String::from("--mode") {
                     i = i - 1;
                 } else {
                     return a;
@@ -193,9 +193,17 @@ fn main() -> i32 [io] {
     if n_errors == 0 {
         if has_output {
             let out: String = get_flag_arg(argv, String::from("-o"));
+            let mode_str: String = get_flag_arg(argv, String::from("--mode"));
+            let mode: i64 = {
+                if mode_str == String::from("debug") {
+                    1
+                } else {
+                    0
+                }
+            };
             let str_eids: Vec<i64> = e.expr_str_eids;
             let ir_mod: IrModule = lower_module_vow(merged, str_eids);
-            let result: i64 = clif_emit_module(ir_mod, out, 0);
+            let result: i64 = clif_emit_module(ir_mod, out, mode);
             if result != 0 {
                 eprintln_str(String::from("compilation failed"));
                 return 1;
