@@ -160,3 +160,41 @@ The `examples/` directory contains runnable `.vow` programs:
 - `hello.vow` — basic IO
 - `bisect.vow` — loop invariant
 - `countdown.vow` — while loop
+
+## Vericoding Benchmark Suite
+
+`benchmarks/` contains 40 verification benchmarks (15 Easy, 15 Medium, 10 Hard; 4 Hard are Stretch).
+Each benchmark has: `spec.md`, `skeleton.vow`, `reference.vow`, `meta.toml`.
+`benchmarks/manifest.toml` lists all benchmarks. 36 non-Stretch references pass `vow verify`.
+
+### Benchmark Runner (`bench/`)
+
+A Python CLI tool (managed by `uv`) that runs frontier LLMs against the benchmark suite.
+
+```bash
+# From repo root (requires uv):
+uv run --project bench bench/run.py validate-references                             # verify all reference.vow files
+uv run --project bench bench/run.py run --model claude-sonnet-4-20250514 --benchmark E01  # single benchmark
+uv run --project bench bench/run.py run --model claude-sonnet-4-20250514                  # full suite
+uv run --project bench bench/run.py run --model claude-sonnet-4-20250514 --resume         # resume partial run
+uv run --project bench bench/run.py report --run-id <id>                            # generate comparison report
+uv run --project bench bench/run.py report                                          # report on most recent run
+
+# Or from bench/:
+cd bench && uv run python run.py run --model claude-sonnet-4-20250514
+```
+
+**Architecture:** Direct API calls (Anthropic/OpenAI SDKs), not agent tool use. Each benchmark is a single conversation: system prompt (skill docs ~35KB) + spec + skeleton → LLM returns Vow code → `vow verify` → CEGIS loop if needed. Temperature 0.0 for reproducibility.
+
+**Files:**
+- `bench/run.py` — CLI entry point (`run`, `report`, `validate-references`)
+- `bench/runner.py` — core CEGIS loop per benchmark
+- `bench/llm.py` — LLM provider abstraction (Anthropic, OpenAI)
+- `bench/verifier.py` — `vow verify` subprocess wrapper
+- `bench/manifest.py` — manifest + meta.toml loader
+- `bench/prompts.py` — system prompt (skill docs) + user prompt templates
+- `bench/report.py` — results → markdown comparison report
+- `bench/config.toml` — model configurations
+- `bench/results/` — gitignored output directory
+
+**Environment variables:** `ANTHROPIC_API_KEY` for Claude models, `OPENAI_API_KEY` for OpenAI models.

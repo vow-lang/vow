@@ -287,36 +287,53 @@ Previously completed.
 
 ---
 
-## Phase 15 (revised): Vericoding Benchmark (~2 weeks)
+## Phase 15 (revised): Vericoding Benchmark — IN PROGRESS
 
 **Goal:** Vow is positioned as a reference language for specification-driven
 AI coding. Level 4 capability.
 
-### 15.1 Define the benchmark suite
+### 15.1 Define the benchmark suite ✔
 
-Design N formal specifications (target: 30–50) across difficulty levels:
+40 benchmarks across three difficulty levels in `benchmarks/`:
 
-- **Easy (10–15):** Pure arithmetic, simple data structures, sorting,
-  searching. Single-function, base-type contracts.
-- **Medium (10–15):** Multi-function algorithms, collection-type contracts,
-  cross-function invariants. Binary search trees, graph algorithms, parsers.
-- **Hard (5–10):** Multi-module programs, stateful algorithms, compiler
-  phases. Contracts involving multiple interacting invariants.
+- **Easy (15):** Pure arithmetic, branching, simple loops. Single-function,
+  base-type contracts (`ensures`, `requires`).
+- **Medium (15):** Multi-function algorithms, Vec/HashMap contracts, loop
+  invariants, cross-function reasoning.
+- **Hard (10):** Multi-function with structs, state machines, matrix ops.
+  4 are Stretch (expected to exceed current ESBMC capabilities).
 
-Each spec includes: natural language description, formal contracts in Vow
-syntax, reference implementation (for differential testing), expected ESBMC
-unwind bounds.
+Each benchmark has: `spec.md` (natural language), `skeleton.vow` (contracts
+pre-written, bodies empty), `reference.vow` (verified solution), `meta.toml`
+(max_cegis_iterations, tags, difficulty). `benchmarks/manifest.toml` lists all.
+36/36 non-Stretch references verified by ESBMC.
 
-### 15.2 Run agents against the suite
+Key design decisions:
+- Verified functions use only i64 params/returns (structs unmodelled in C emitter)
+- Struct benchmarks restructured to use i64 helper functions
+- C emitter Upsilon ordering bug found and fixed (post-terminal + batching)
 
-Test with multiple frontier models (Claude, GPT, Gemini — whatever is
-available). Measure:
+### 15.2 Run agents against the suite ✔
 
-- **Verification rate:** % of specs where the agent produces verified code
-- **CEGIS iterations:** how many counterexample-fix cycles per spec
-- **Time to verified binary:** wall-clock including all iterations
-- **Failure modes:** categorize why the agent failed (wrong algorithm, wrong
-  contract, ESBMC timeout, type error, etc.)
+`bench/` contains a Python CLI tool (managed by `uv`) that runs frontier LLMs
+against the benchmark suite via direct API calls (Anthropic/OpenAI SDKs).
+
+Architecture:
+- System prompt: all 6 skill docs concatenated (~35KB / ~9K tokens)
+- Per benchmark: single conversation with CEGIS loop
+- Code extraction handles markdown fences + raw `module` detection
+- Temperature 0.0 for reproducibility
+- Incremental save + resume support
+- Failure mode classification (syntax_error, type_error, wrong_algorithm,
+  effect_violation, esbmc_timeout, empty_response)
+
+```bash
+uv run --project bench bench/run.py validate-references   # verify all references
+uv run --project bench bench/run.py run --model <id>       # full suite
+uv run --project bench bench/run.py report                 # comparison report
+```
+
+Results compared against paper baselines (Dafny 82%, Verus 44%, Lean 27%).
 
 ### 15.3 Compare against vericoding paper results
 

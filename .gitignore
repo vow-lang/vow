@@ -8,3 +8,5 @@ compiler/*.vow.c
 /.claire/
 /codecov
 /lcov.info
+bench/results/
+__pycache__/

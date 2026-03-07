@@ -1,0 +1,20 @@
+# Model configurations for the benchmark runner.
+# API keys are read from environment variables:
+#   ANTHROPIC_API_KEY for Claude models
+#   OPENAI_API_KEY for OpenAI models
+
+[[models]]
+id = "claude-sonnet-4-20250514"
+provider = "anthropic"
+
+[[models]]
+id = "claude-opus-4-20250514"
+provider = "anthropic"
+
+[[models]]
+id = "gpt-4o-2024-11-20"
+provider = "openai"
+
+[[models]]
+id = "o3-2025-04-16"
+provider = "openai"
