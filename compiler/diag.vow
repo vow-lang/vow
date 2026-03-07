@@ -1,0 +1,137 @@
+module Diag
+
+fn SEV_ERROR() -> i64 vow { ensures: result >= 0 } { 0 }
+fn SEV_WARNING() -> i64 vow { ensures: result >= 0 } { 1 }
+fn SEV_NOTE() -> i64 vow { ensures: result >= 0 } { 2 }
+
+fn DIAG_BLAME_CALLER() -> i64 vow { ensures: result >= 0 } { 0 }
+fn DIAG_BLAME_CALLEE() -> i64 vow { ensures: result >= 0 } { 1 }
+fn DIAG_BLAME_NONE() -> i64 vow { ensures: result >= 0 } { 2 }
+
+fn EC_UNTERMINATED_STRING() -> i64 vow { ensures: result >= 0 } { 0 }
+fn EC_INVALID_CHARACTER() -> i64 vow { ensures: result >= 0 } { 1 }
+fn EC_UNEXPECTED_TOKEN() -> i64 vow { ensures: result >= 0 } { 2 }
+fn EC_MISSING_DELIMITER() -> i64 vow { ensures: result >= 0 } { 3 }
+fn EC_TYPE_MISMATCH() -> i64 vow { ensures: result >= 0 } { 4 }
+fn EC_EFFECT_VIOLATION() -> i64 vow { ensures: result >= 0 } { 5 }
+fn EC_LINEAR_TYPE_VIOLATION() -> i64 vow { ensures: result >= 0 } { 6 }
+fn EC_NON_EXHAUSTIVE_MATCH() -> i64 vow { ensures: result >= 0 } { 7 }
+fn EC_VOW_REQUIRES_VIOLATED() -> i64 vow { ensures: result >= 0 } { 8 }
+fn EC_VOW_ENSURES_VIOLATED() -> i64 vow { ensures: result >= 0 } { 9 }
+fn EC_VOW_INVARIANT_VIOLATED() -> i64 vow { ensures: result >= 0 } { 10 }
+
+struct Diagnostic {
+    severity: i64,
+    code: i64,
+    message: String,
+    file: String,
+    span_start: i64,
+    span_len: i64,
+    blame: i64,
+    hints: Vec<String>,
+}
+
+struct DiagCtx {
+    diags: Vec<Diagnostic>,
+    error_count: i64,
+}
+
+fn diag_new(severity: i64, code: i64, message: String, file: String, span_start: i64, span_len: i64, blame: i64) -> Diagnostic {
+    Diagnostic {
+        severity: severity,
+        code: code,
+        message: message,
+        file: file,
+        span_start: span_start,
+        span_len: span_len,
+        blame: blame,
+        hints: Vec::new(),
+    }
+}
+
+fn diag_error(code: i64, message: String, file: String, span_start: i64, span_len: i64) -> Diagnostic {
+    diag_new(SEV_ERROR(), code, message, file, span_start, span_len, DIAG_BLAME_NONE())
+}
+
+fn diag_add_hint(d: Diagnostic, hint: String) {
+    let h: Vec<String> = d.hints;
+    h.push(hint);
+}
+
+fn diag_ctx_new() -> DiagCtx {
+    DiagCtx {
+        diags: Vec::new(),
+        error_count: 0,
+    }
+}
+
+fn diag_ctx_emit(ctx: DiagCtx, d: Diagnostic) {
+    let ds: Vec<Diagnostic> = ctx.diags;
+    ds.push(d);
+    if d.severity == SEV_ERROR() {
+        ctx.error_count = ctx.error_count + 1;
+    }
+}
+
+fn diag_ctx_has_errors(ctx: DiagCtx) -> bool {
+    ctx.error_count > 0
+}
+
+fn sev_name(s: i64) -> String {
+    if s == SEV_ERROR() {
+        String::from("Error")
+    } else {
+        if s == SEV_WARNING() {
+            String::from("Warning")
+        } else {
+            String::from("Note")
+        }
+    }
+}
+
+fn diag_blame_name(b: i64) -> String {
+    if b == DIAG_BLAME_CALLER() {
+        String::from("Caller")
+    } else {
+        if b == DIAG_BLAME_CALLEE() {
+            String::from("Callee")
+        } else {
+            String::from("None")
+        }
+    }
+}
+
+fn ec_name(code: i64) -> String {
+    if code == EC_UNTERMINATED_STRING() {
+        String::from("UnterminatedString")
+    } else {
+    if code == EC_INVALID_CHARACTER() {
+        String::from("InvalidCharacter")
+    } else {
+    if code == EC_UNEXPECTED_TOKEN() {
+        String::from("UnexpectedToken")
+    } else {
+    if code == EC_MISSING_DELIMITER() {
+        String::from("MissingDelimiter")
+    } else {
+    if code == EC_TYPE_MISMATCH() {
+        String::from("TypeMismatch")
+    } else {
+    if code == EC_EFFECT_VIOLATION() {
+        String::from("EffectViolation")
+    } else {
+    if code == EC_LINEAR_TYPE_VIOLATION() {
+        String::from("LinearTypeViolation")
+    } else {
+    if code == EC_NON_EXHAUSTIVE_MATCH() {
+        String::from("NonExhaustiveMatch")
+    } else {
+    if code == EC_VOW_REQUIRES_VIOLATED() {
+        String::from("VowRequiresViolated")
+    } else {
+    if code == EC_VOW_ENSURES_VIOLATED() {
+        String::from("VowEnsuresViolated")
+    } else {
+        String::from("VowInvariantViolated")
+    }}}}}}}}}}
+}

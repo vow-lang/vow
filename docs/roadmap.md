@@ -501,20 +501,27 @@ Binary fixed point confirmed after the change (B = C, sha256 identical).
 
 ---
 
-## Phase 17: Self-Hosted Diagnostics
+## Phase 17: Self-Hosted Diagnostics — IN PROGRESS
 
 **Goal:** The self-hosted compiler emits structured, actionable diagnostics
 in both JSON and human-readable format.
 
-### 17.1 Structured error types in Vow
+### 17.1 Structured error types in Vow ✔
 
-Define diagnostic structs in a new `compiler/diag.vow` module:
-- Error codes (enum or integer constants matching Rust `ErrorCode`)
-- Severity levels (Error, Warning, Note)
-- Span-carrying diagnostic messages
-- Hint/suggestion attachments
-
-Reference: Rust `vow-diag/src/lib.rs` (~251 lines).
+New `compiler/diag.vow` module with structured diagnostic types matching
+Rust `vow-diag`:
+- `Diagnostic` struct: severity, code, message, file, span_start, span_len,
+  blame, hints (flat span fields avoid chained-field-access gotcha)
+- `DiagCtx` struct: diagnostic accumulator with error_count
+- Severity constants (`SEV_ERROR/WARNING/NOTE`)
+- Blame constants (`DIAG_BLAME_CALLER/CALLEE/NONE` — prefixed to avoid
+  collision with `ir.vow`'s `BLAME_CALLER/BLAME_CALLEE`)
+- 11 error code constants (`EC_*`) matching Rust `ErrorCode` variant order
+- Constructor helpers: `diag_new`, `diag_error`, `diag_add_hint`,
+  `diag_ctx_new`, `diag_ctx_emit`, `diag_ctx_has_errors`
+- Name-to-string helpers: `sev_name`, `diag_blame_name`, `ec_name`
+- All constant functions have `vow { ensures: result >= 0 }` contracts
+- Bootstrap triple test passes (binary fixed point confirmed)
 
 ### 17.2 JSON + human-readable dual emitter
 

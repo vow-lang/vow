@@ -11,6 +11,7 @@ use ir
 use ir_printer
 use lower
 use clif
+use diag
 
 fn has_flag(argv: Vec<String>, flag: String) -> bool {
     let mut i: i64 = 0;
