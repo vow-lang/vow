@@ -1,19 +1,22 @@
-# Vow Roadmap — Revised (03.03.2026)
+# Vow Roadmap — Revised (07.03.2026)
 
 This plan supersedes the original Phase 12–15 roadmap. It was produced by
 reviewing the design sketch (v3), ideas-improvement.md, the original roadmap,
 and the competitive landscape — then realigning every phase with Vow's core
 vision: **agents are the primary programmers, the toolchain is their interface.**
 
+The March 2026 revision adds Phases 16–20: a concrete path to making the
+self-hosted compiler the primary driver, replacing the Rust compiler for
+day-to-day use.
+
 ---
 
 ## Where Vow Stands Today
 
-Self-hosting is achieved. The bootstrap triple test passes (6276 lines across
-13 modules). Phase 10 (CEGIS loop closure) and Phase 11 (module loading + build
-system) are complete.
+Self-hosting is achieved. The bootstrap triple test passes (6335 lines across
+13 modules). Phases 10–15.2 are complete.
 
-**Current maturity: 6.5/10 for agent autonomy.**
+**Current maturity: 7.5/10 for agent autonomy.**
 
 Strengths:
 - JSON build output with status codes (Verified, Unverified, CompileFailed, VerifyFailed)
@@ -31,12 +34,34 @@ Strengths:
 - `--debug-trace=calls|full` structured execution traces (Phase 12.3)
 - Incremental compilation caching (Phase 12.4)
 - Level 1 agent capability integration tests (Phase 12.5)
+- Cross-module type resolution, declaration files, type-level string eq (Phase 13)
+- 271 contracts on self-hosted compiler verified by ESBMC (Phase 14)
+- Blame-tracking pipeline, counterexample-guided suggestions (Phase 14)
+- 40-benchmark vericoding suite with runner CLI (Phase 15)
 
-Critical gaps:
-- Self-hosted compiler uses zero vow blocks (credibility gap)
-- No cross-module type resolution in self-hosted checker (ideas #2, #4, #8)
-- String equality still depends on IR tagging rather than type-level dispatch (ideas #7)
-- Counterexample → fix suggestion pipeline lacks full blame chain
+### Self-hosted compiler capability gap
+
+The self-hosted compiler (`compiler/*.vow`, ~6335 lines, 13 modules) can lex,
+parse, type-check, lower to IR, and emit native binaries via Cranelift FFI
+shims. The bootstrap triple test proves binary fixed-point reproducibility.
+
+However, it cannot yet replace the Rust compiler as the primary driver:
+
+```
+                    Rust compiler          Self-hosted compiler
+                    -------------          --------------------
+Lex/Parse/Check     Yes                    Yes
+IR Lowering         Yes                    Yes
+Native Codegen      Yes (Cranelift)        Yes (Cranelift via FFI)
+Module Loading      Yes                    Yes
+Vow Contracts       Yes (lower + codegen)  No (no vow block lowering)
+Verification        Yes (ESBMC pipeline)   No (no C emitter, no ESBMC)
+Debug Mode          Yes (runtime checks)   No (no blame/violation codegen)
+Diagnostics         Yes (JSON + human)     No (minimal error output)
+CLI UX              Yes (subcommands)      No (bare -o flag only)
+```
+
+Phases 16–20 close these gaps.
 
 ---
 
@@ -109,6 +134,11 @@ existing code, not just greenfield.
 Agent implements a non-trivial algorithm from a natural-language specification,
 writes contracts, verifies — the full vericoding workflow. This is the benchmark
 comparison against Dafny/Verus/Lean numbers.
+
+**Level 5 — Self-hosted pipeline.**
+Agent uses the self-hosted compiler (not the Rust compiler) to compile, verify,
+and debug a program. The self-hosted compiler is the primary driver for new
+Vow development.
 
 Each phase ends with running the relevant capability level and fixing whatever
 breaks the agent's workflow.
@@ -353,7 +383,289 @@ The narrative: "Vow is the language where AI agents prove their code correct."
 
 ---
 
-## Phase 16: Advanced Language Features (As Needed)
+## Path to Self-Hosted Primary Driver
+
+The following phases close the gap between the self-hosted compiler and the
+Rust compiler. After Phase 20, the self-hosted binary becomes the primary
+driver for all Vow development.
+
+```
+ Phase 15.2 (complete)
+  |
+  v
++-------------------------------------------------------+
+| Phase 16: Self-Hosted Vow Contracts                   |
+|  16.1  Vow block lowering (requires/ensures/invariant)|
+|  16.2  Debug-mode codegen (__vow_violation calls)     |
+|  16.3  Blame metadata propagation                     |
+|  Self-hosted compiler can compile + enforce contracts  |
++---------------------------+---------------------------+
+                            |
+                            v
++-------------------------------------------------------+
+| Phase 17: Self-Hosted Diagnostics                     |
+|  17.1  Structured error types in Vow                  |
+|  17.2  JSON + human-readable dual emitter             |
+|  17.3  Source spans in error messages                  |
+|  Self-hosted compiler has production-quality errors    |
++---------------------------+---------------------------+
+                            |
+                            v
++-------------------------------------------------------+
+| Phase 18: Self-Hosted Verification Pipeline           |
+|  18.1  C emitter in Vow (IR -> ESBMC-compatible C)   |
+|  18.2  ESBMC invocation + result parsing              |
+|  18.3  Counterexample -> source mapping (Origin)      |
+|  18.4  CEGIS loop integration                         |
+|  Self-hosted compiler can verify contracts via ESBMC   |
++---------------------------+---------------------------+
+                            |
+                            v
++-------------------------------------------------------+
+| Phase 19: CLI & Driver Parity                         |
+|  19.1  Subcommands (build, verify, test)              |
+|  19.2  --mode debug / --no-verify flags               |
+|  19.3  --help (JSON + human)                          |
+|  19.4  Parallel codegen + verify pipeline             |
+|  Feature parity with Rust `vow` CLI                   |
++---------------------------+---------------------------+
+                            |
+                            v
++-------------------------------------------------------+
+| Phase 20: Switchover                                  |
+|  20.1  Self-hosted passes full test suite             |
+|  20.2  Benchmark suite runs under self-hosted         |
+|  20.3  Bootstrap from Rust -> self-hosted release     |
+|  20.4  Rust compiler becomes "stage 0" bootstrap only |
+|                                                       |
+|  * SELF-HOSTED IS THE PRIMARY DRIVER *                |
++-------------------------------------------------------+
+```
+
+### Critical path analysis
+
+Phase 16 (Contracts) is the most important next step — contracts are the
+defining feature of the language. The Rust lowerer's `lower/vow.rs` (762 lines)
+is the direct reference implementation.
+
+Phase 18 (Verification) is the hardest phase. The C emitter + ESBMC
+integration is ~3,500 lines in Rust and involves subprocess management, output
+parsing, and counterexample mapping.
+
+Phases 16 and 17 are independent and can be done in parallel. Phase 18
+depends on 16. Phase 19 depends on 16 and 17. Phase 20 depends on all.
+
+---
+
+## Phase 16: Self-Hosted Vow Contracts
+
+**Goal:** The self-hosted compiler can lower vow blocks (requires, ensures,
+invariant) to IR and generate runtime violation checks in debug mode.
+
+### 16.1 Vow block lowering in self-hosted IR lowerer
+
+Port `lower/vow.rs` logic to `lower.vow`:
+- Parse `requires`, `ensures`, `invariant` blocks from AST vow entries
+- Lower predicate expressions to IR instructions
+- Emit `Assert` instructions for verification conditions
+- Emit `VowEntry` metadata (vow_id, blame, description, bindings)
+
+Reference: Rust `vow-ir/src/lower/vow.rs` (~762 lines).
+
+### 16.2 Debug-mode codegen for runtime vow checks
+
+In `clif.vow`, when compiling in debug mode:
+- Emit runtime checks for `requires` (at function entry) and `ensures`
+  (before each return)
+- Call `__vow_violation(vow_id, blame, description, values...)` on failure
+- Omit all checks in release mode (zero overhead)
+
+Reference: Rust `vow-codegen/src/cranelift_backend.rs` vow check emission.
+
+### 16.3 Blame metadata propagation
+
+Ensure blame (Caller for requires, Callee for ensures) flows through the
+self-hosted pipeline:
+- VowEntry in IR carries blame tag
+- Codegen passes blame to `__vow_violation`
+- Runtime produces correct `VowViolation` JSON
+
+### 16.4 Verification: self-hosted compiler compiles divide.vow with contracts
+
+Test: `./compiler/main --mode debug -o /tmp/divide compiler/divide.vow`
+produces a binary that emits `VowViolation` JSON when called with `y = 0`.
+
+---
+
+## Phase 17: Self-Hosted Diagnostics
+
+**Goal:** The self-hosted compiler emits structured, actionable diagnostics
+in both JSON and human-readable format.
+
+### 17.1 Structured error types in Vow
+
+Define diagnostic structs in a new `compiler/diag.vow` module:
+- Error codes (enum or integer constants matching Rust `ErrorCode`)
+- Severity levels (Error, Warning, Note)
+- Span-carrying diagnostic messages
+- Hint/suggestion attachments
+
+Reference: Rust `vow-diag/src/lib.rs` (~251 lines).
+
+### 17.2 JSON + human-readable dual emitter
+
+Implement dual output (the Vow design invariant):
+- JSON to stdout (parseable by agents)
+- Human-readable to stderr (readable by developers)
+- Both always on, not a flag
+
+### 17.3 Source spans in error messages
+
+Wire spans from AST/IR through to diagnostic output:
+- File name + line + column from `Span`
+- Underline the relevant source range in human output
+- Include span as `{file, line, column, length}` in JSON output
+
+### 17.4 Verification: error output matches Rust compiler format
+
+Test: introduce a type error in a `.vow` file, compile with both Rust and
+self-hosted compilers, verify JSON output has the same schema.
+
+---
+
+## Phase 18: Self-Hosted Verification Pipeline
+
+**Goal:** The self-hosted compiler can invoke ESBMC, interpret results, and
+map counterexamples back to source. This is the hardest phase.
+
+### 18.1 C emitter in Vow
+
+Port the IR-to-C translation to Vow:
+- Emit ESBMC-compatible C from Vow IR
+- Model Vec/String/HashMap operations as C functions
+- Handle Upsilon/Phi nodes correctly (batched temporaries)
+- Emit `__ESBMC_assert` for verification conditions
+
+Reference: Rust verification pipeline (~3,500 lines total). The C emitter
+is the largest single component.
+
+### 18.2 ESBMC invocation + result parsing
+
+Implement subprocess management in Vow:
+- Invoke `esbmc` with correct flags (`--incremental-bmc`, `--unwind`, etc.)
+- Parse ESBMC stdout for VERIFICATION SUCCESSFUL / VERIFICATION FAILED
+- Parse counterexample JSON from ESBMC output
+- Handle timeouts and crashes gracefully
+
+Requires: `process_run` or equivalent FFI for subprocess execution with
+stdout/stderr capture. May need a new runtime function
+`__vow_process_run(cmd, args) -> (exit_code, stdout, stderr)`.
+
+### 18.3 Counterexample-to-source mapping
+
+Port the `Origin` metadata and name mapping:
+- `local_names` in IR Function for source variable names
+- `build_c_to_source_name_map` equivalent in Vow
+- Map ESBMC counterexample variables back to Vow source names
+- Emit counterexample JSON with source-level variable names
+
+### 18.4 CEGIS loop integration
+
+Wire the verification pipeline into the compiler driver:
+- Compile → emit C → invoke ESBMC → parse result → report
+- Structured JSON output for verification results
+- Counterexample JSON with blame and source names
+
+### 18.5 Verification: self-hosted verifies its own contracts
+
+Test: `./compiler/main verify compiler/token.vow` successfully verifies all
+89 contracts on tok_* functions, matching the Rust compiler's results.
+
+---
+
+## Phase 19: CLI & Driver Parity
+
+**Goal:** The self-hosted compiler has feature parity with the Rust `vow` CLI.
+An agent (or human) can use the self-hosted binary as a drop-in replacement.
+
+### 19.1 Subcommands
+
+Implement `build`, `verify`, `test` subcommands:
+- `./vowc build foo.vow` — compile + verify (default)
+- `./vowc verify foo.vow` — verify only (no codegen)
+- `./vowc test` — run tests (placeholder)
+
+Reference: Rust `vow/src/main.rs` argument parsing (~4,200 lines).
+
+### 19.2 Flags
+
+- `--no-verify` — skip ESBMC verification
+- `--mode debug` — emit runtime vow checks
+- `--unwind N` — ESBMC unwind bound
+- `--debug-trace=calls|full` — structured execution traces
+- `-o <path>` — output binary path (already exists)
+
+### 19.3 Structured --help
+
+- `--help` — JSON capability description (for agents)
+- `--help --human` — human-readable description
+- Same schema as Rust compiler's `--help` output
+
+### 19.4 Parallel codegen + verify pipeline
+
+The Rust compiler runs codegen and verification in parallel (compile while
+verifying). Port this to the self-hosted compiler for equivalent performance.
+
+### 19.5 Verification: CLI compatibility test
+
+Test: run the full example suite (`examples/*.vow`) through both Rust and
+self-hosted compilers with identical flags. All outputs must match.
+
+---
+
+## Phase 20: Switchover
+
+**Goal:** The self-hosted compiler becomes the primary driver. The Rust
+compiler is retained only as the stage 0 bootstrap.
+
+### 20.1 Full test suite under self-hosted compiler
+
+Run all pipeline tests, example programs, and integration tests using the
+self-hosted compiler. Fix any discrepancies.
+
+### 20.2 Benchmark suite under self-hosted compiler
+
+Run the vericoding benchmark suite (`bench/`) using the self-hosted compiler
+as the verification backend. Results must match the Rust compiler's results.
+
+### 20.3 Bootstrap release process
+
+Define the release workflow:
+```
+Stage 0 (one-time):  cargo build --release        -> ./target/release/vow
+Stage 1:             ./target/release/vow build compiler/main.vow -> ./vowc
+Stage 2:             ./vowc build compiler/main.vow -> ./vowc2
+Verify:              sha256sum ./vowc ./vowc2      (must match)
+```
+
+The Rust compiler stays in the repo. `cargo build` is the bootstrap entry
+point. Day-to-day development uses `./vowc`.
+
+### 20.4 Documentation and skill updates
+
+Update the Toolchain Skill document to reference the self-hosted binary as the
+primary compiler. Update CLAUDE.md build instructions. The Rust compiler
+section becomes "Bootstrap" documentation.
+
+### 20.5 Level 5 Agent Capability Test
+
+Run the test: an agent uses the self-hosted compiler exclusively to write,
+compile, verify, and debug a multi-module program with contracts. The Rust
+compiler is not invoked at any point after the initial bootstrap.
+
+---
+
+## Phase 21: Advanced Language Features (As Needed)
 
 These features are not on a timeline. Each is triggered when a concrete need
 surfaces — either from the vericoding benchmark, from agent capability tests,
@@ -401,7 +713,7 @@ These ideas from the original roadmap and ideas-improvement.md are tracked
 but not scheduled:
 
 - **Constrained decoding for Vow grammar** (from original Phase 13) — the
-  grammar is well-suited for grammar-constrained LLM sampling (à la MoonBit's
+  grammar is well-suited for grammar-constrained LLM sampling (a la MoonBit's
   semantics-based sampler). Worth exploring after the skill-based approach is
   validated. If agents achieve high verification rates with the skill alone,
   constrained decoding is an optimization. If they don't, constrained decoding
@@ -422,11 +734,18 @@ but not scheduled:
 | 13: "Vow Pilot" agent | 13: Cross-module maturity | Make the toolchain agent-friendly; any LLM becomes the pilot. |
 | 14: Vericoding showcase | 14: Contract retrofit + CEGIS validation | Can't benchmark what agents can't use. Validate the pipeline first. |
 | 15: Advanced features | 15: Vericoding benchmark | Moved up after pipeline validation. Now has prerequisites met. |
-| — | 16: Features as needed | Demand-driven, not speculative. |
+| 16: Features as needed | 16–20: Self-hosted primary driver | Concrete path to self-hosted switchover. The compiler eating its own dogfood is the ultimate credibility proof. |
+| — | 21: Features as needed | Demand-driven, not speculative. Renumbered from 16. |
 
 The through-line: **the toolchain is the product, not the agent.** If the
 toolchain emits the right structured data and the skill teaches the workflow,
 the agent is a commodity. Invest in the interface, not the consumer.
+
+The self-hosting switchover (Phases 16–20) adds a second through-line:
+**the compiler must use its own features.** A language whose own compiler
+doesn't use contracts has a credibility gap. A self-hosted compiler that
+verifies its own contracts is the strongest possible proof that the system
+works.
 
 ---
 
@@ -446,4 +765,3 @@ the agent is a commodity. Invest in the interface, not the consumer.
 *This document captures the revised roadmap as of March 2026. Each phase
 ends with a concrete agent capability test. If the test passes, move on.
 If it fails, fix the toolchain.*
-
