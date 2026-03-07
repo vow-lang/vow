@@ -1,0 +1,16 @@
+module Midpoint
+
+fn midpoint(a: i64, b: i64) -> i64 vow {
+  requires: a >= 0,
+  requires: b >= a,
+  ensures: result >= a,
+  ensures: result <= b
+} {
+  a + (b - a) / 2
+}
+
+fn main() -> i32 [io] {
+  print_i64(midpoint(0, 10));
+  print_i64(midpoint(3, 7));
+  0
+}

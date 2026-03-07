@@ -1,0 +1,9 @@
+[benchmark]
+id = "M01"
+name = "binary_search"
+difficulty = "medium"
+tags = ["loop", "invariant", "requires", "bisection"]
+unwind = 10
+modules = 1
+expected_status = "Verified"
+max_cegis_iterations = 3

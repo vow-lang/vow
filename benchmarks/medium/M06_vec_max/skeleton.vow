@@ -1,0 +1,18 @@
+module VecMax
+
+fn vec_max(v: Vec<i64>) -> i64 vow {
+  requires: v.len() > 0,
+  requires: v.len() <= 8,
+  ensures: result >= 0
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(3);
+  v.push(7);
+  v.push(2);
+  print_i64(vec_max(v));
+  0
+}

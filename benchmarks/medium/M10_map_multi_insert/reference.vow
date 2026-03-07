@@ -1,0 +1,24 @@
+module MapMultiInsert
+
+fn map_fill(n: i64) -> HashMap<i64, i64> vow {
+  requires: n >= 0,
+  requires: n <= 4,
+  ensures: result.len() == n
+} {
+  let m: HashMap<i64, i64> = HashMap::new();
+  let mut i: i64 = 0;
+  while i < n vow {
+    invariant: i >= 0,
+    invariant: i <= n
+  } {
+    m.insert(i, i * 10);
+    i = i + 1;
+  }
+  m
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<i64, i64> = map_fill(3);
+  print_i64(m.len());
+  0
+}

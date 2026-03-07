@@ -1,0 +1,9 @@
+[benchmark]
+id = "M09"
+name = "map_update"
+difficulty = "medium"
+tags = ["hashmap", "ensures"]
+unwind = 10
+modules = 1
+expected_status = "Verified"
+max_cegis_iterations = 3

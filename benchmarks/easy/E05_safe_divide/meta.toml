@@ -1,0 +1,9 @@
+[benchmark]
+id = "E05"
+name = "safe_divide"
+difficulty = "easy"
+tags = ["arithmetic", "requires"]
+unwind = 10
+modules = 1
+expected_status = "Verified"
+max_cegis_iterations = 2

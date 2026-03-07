@@ -1,0 +1,9 @@
+[benchmark]
+id = "E15"
+name = "checked_multiply"
+difficulty = "easy"
+tags = ["arithmetic", "requires", "ensures"]
+unwind = 10
+modules = 1
+expected_status = "Verified"
+max_cegis_iterations = 2

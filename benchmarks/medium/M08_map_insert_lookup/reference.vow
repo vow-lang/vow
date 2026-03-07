@@ -1,0 +1,16 @@
+module MapInsertLookup
+
+fn store_entry(k: i64, v: i64) -> HashMap<i64, i64> vow {
+  ensures: result.contains_key(k),
+  ensures: result.len() == 1
+} {
+  let m: HashMap<i64, i64> = HashMap::new();
+  m.insert(k, v);
+  m
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<i64, i64> = store_entry(42, 100);
+  print_i64(m.len());
+  0
+}

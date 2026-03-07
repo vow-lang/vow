@@ -1,0 +1,9 @@
+[benchmark]
+id = "H02"
+name = "geometry_area"
+difficulty = "hard"
+tags = ["struct", "multi-function", "requires", "ensures", "overflow"]
+unwind = 10
+modules = 1
+expected_status = "Verified"
+max_cegis_iterations = 3

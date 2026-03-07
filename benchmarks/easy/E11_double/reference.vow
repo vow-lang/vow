@@ -1,0 +1,19 @@
+module Double
+
+fn twice(x: i64) -> i64 vow {
+  ensures: result == x + x
+} {
+  x + x
+}
+
+fn negate(x: i64) -> i64 vow {
+  ensures: result + x == 0
+} {
+  0 - x
+}
+
+fn main() -> i32 [io] {
+  print_i64(twice(5));
+  print_i64(negate(twice(3)));
+  0
+}

@@ -1,0 +1,17 @@
+module Gcd
+
+fn gcd(a: i64, b: i64) -> i64 vow {
+  requires: a > 0,
+  requires: b > 0,
+  requires: a <= 8,
+  requires: b <= 8,
+  ensures: result > 0
+} {
+  1
+}
+
+fn main() -> i32 [io] {
+  print_i64(gcd(6, 4));
+  print_i64(gcd(7, 3));
+  0
+}

@@ -1,0 +1,9 @@
+[benchmark]
+id = "M02"
+name = "vec_fill"
+difficulty = "medium"
+tags = ["vec", "loop", "invariant", "requires", "ensures"]
+unwind = 10
+modules = 1
+expected_status = "Verified"
+max_cegis_iterations = 3

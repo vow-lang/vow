@@ -1,0 +1,9 @@
+[benchmark]
+id = "E07"
+name = "bounded_add"
+difficulty = "easy"
+tags = ["arithmetic", "where", "requires", "ensures"]
+unwind = 10
+modules = 1
+expected_status = "Verified"
+max_cegis_iterations = 2

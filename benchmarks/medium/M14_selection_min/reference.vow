@@ -1,0 +1,34 @@
+module SelectionMin
+
+fn find_min_idx(v: Vec<i64>) -> i64 vow {
+  requires: v.len() > 0,
+  requires: v.len() <= 8,
+  ensures: result >= 0,
+  ensures: result < v.len()
+} {
+  let mut min_idx: i64 = 0;
+  let mut i: i64 = 1;
+  while i < v.len() vow {
+    invariant: min_idx >= 0,
+    invariant: min_idx < v.len(),
+    invariant: i >= 1,
+    invariant: i <= v.len()
+  } {
+    if v[i] < v[min_idx] {
+      min_idx = i;
+    } else {
+      0;
+    }
+    i = i + 1;
+  }
+  min_idx
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(5);
+  v.push(2);
+  v.push(8);
+  print_i64(find_min_idx(v));
+  0
+}

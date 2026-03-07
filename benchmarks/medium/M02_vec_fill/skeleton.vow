@@ -1,0 +1,16 @@
+module VecFill
+
+fn fill_vec(n: i64) -> Vec<i64> vow {
+  requires: n >= 0,
+  requires: n <= 8,
+  ensures: result.len() == n
+} {
+  let v: Vec<i64> = Vec::new();
+  v
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = fill_vec(5);
+  print_i64(v.len());
+  0
+}

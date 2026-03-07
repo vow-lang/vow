@@ -1,0 +1,9 @@
+[benchmark]
+id = "M11"
+name = "bounded_counter"
+difficulty = "medium"
+tags = ["struct", "requires", "ensures"]
+unwind = 10
+modules = 1
+expected_status = "Verified"
+max_cegis_iterations = 3

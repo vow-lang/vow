@@ -1,0 +1,9 @@
+[benchmark]
+id = "H06"
+name = "matrix_ops"
+difficulty = "hard"
+tags = ["struct", "multi-function", "requires", "ensures", "arithmetic"]
+unwind = 10
+modules = 1
+expected_status = "Verified"
+max_cegis_iterations = 3

@@ -1,0 +1,46 @@
+module Tokenizer
+
+fn count_tokens(v: Vec<i64>) -> i64 vow {
+  requires: v.len() >= 0,
+  requires: v.len() <= 8,
+  ensures: result >= 0,
+  ensures: result <= v.len()
+} {
+  let mut count: i64 = 0;
+  let mut in_token: i64 = 0;
+  let mut i: i64 = 0;
+  while i < v.len() vow {
+    invariant: count >= 0,
+    invariant: count <= i,
+    invariant: i >= 0,
+    invariant: i <= v.len(),
+    invariant: in_token >= 0,
+    invariant: in_token <= 1
+  } {
+    if v[i] != 0 {
+      if in_token == 0 {
+        count = count + 1;
+        in_token = 1;
+      } else {
+        0;
+      }
+    } else {
+      in_token = 0;
+    }
+    i = i + 1;
+  }
+  count
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v.push(2);
+  v.push(0);
+  v.push(3);
+  v.push(0);
+  v.push(4);
+  v.push(5);
+  print_i64(count_tokens(v));
+  0
+}

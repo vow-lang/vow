@@ -1,0 +1,17 @@
+module SafeModulo
+
+fn safe_mod(x: i64 where x >= 0, m: i64) -> i64 vow {
+  requires: x <= 1000,
+  requires: m > 0,
+  requires: m <= 100,
+  ensures: result >= 0,
+  ensures: result < m
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  print_i64(safe_mod(17, 5));
+  print_i64(safe_mod(10, 3));
+  0
+}

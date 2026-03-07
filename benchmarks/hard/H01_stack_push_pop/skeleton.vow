@@ -1,0 +1,45 @@
+module StackPushPop
+
+struct Stack {
+  data: Vec<i64>,
+  size: i64,
+}
+
+fn stack_new() -> Stack {
+  let v: Vec<i64> = Vec::new();
+  Stack { data: v, size: 0 }
+}
+
+fn stack_push(s: Stack, val: i64) -> Stack {
+  Stack { data: s.data, size: 0 }
+}
+
+fn stack_size_bounded(size: i64) -> i64 vow {
+  requires: size >= 0,
+  ensures: result >= 0
+} {
+  0
+}
+
+fn stack_is_empty(size: i64) -> i64 vow {
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  0
+}
+
+fn stack_peek_safe(v: Vec<i64>, size: i64) -> i64 vow {
+  requires: size > 0,
+  requires: size <= v.len()
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  let s0: Stack = stack_new();
+  let s1: Stack = stack_push(s0, 10);
+  let s2: Stack = stack_push(s1, 20);
+  print_i64(stack_size_bounded(2));
+  print_i64(stack_is_empty(0));
+  0
+}

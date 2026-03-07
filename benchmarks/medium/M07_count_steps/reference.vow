@@ -1,0 +1,22 @@
+module CountSteps
+
+fn count_steps(n: i64) -> i64 vow {
+  requires: n >= 0,
+  requires: n <= 8,
+  ensures: result == n
+} {
+  let mut i: i64 = 0;
+  while i < n vow {
+    invariant: i >= 0,
+    invariant: i <= n
+  } {
+    i = i + 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  print_i64(count_steps(5));
+  print_i64(count_steps(0));
+  0
+}

@@ -1,0 +1,9 @@
+[benchmark]
+id = "H05"
+name = "state_machine"
+difficulty = "hard"
+tags = ["enum", "match", "ensures", "state"]
+unwind = 10
+modules = 1
+expected_status = "Verified"
+max_cegis_iterations = 3

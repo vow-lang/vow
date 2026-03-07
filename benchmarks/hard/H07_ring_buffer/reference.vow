@@ -1,0 +1,52 @@
+module RingBuffer
+
+struct RingBuf {
+  data: Vec<i64>,
+  write_pos: i64,
+  count: i64,
+  capacity: i64,
+}
+
+fn ring_new(capacity: i64) -> RingBuf vow {
+  requires: capacity > 0,
+  requires: capacity <= 4,
+  ensures: result.count == 0,
+  ensures: result.capacity == capacity
+} {
+  let v: Vec<i64> = Vec::new();
+  let mut i: i64 = 0;
+  while i < capacity vow {
+    invariant: i >= 0,
+    invariant: i <= capacity
+  } {
+    v.push(0);
+    i = i + 1;
+  }
+  RingBuf { data: v, write_pos: 0, count: 0, capacity: capacity }
+}
+
+fn ring_write(rb: RingBuf, val: i64) -> RingBuf vow {
+  requires: rb.count < rb.capacity,
+  requires: rb.write_pos >= 0,
+  requires: rb.write_pos < rb.capacity,
+  ensures: result.count == rb.count + 1
+} {
+  let mut d: Vec<i64> = rb.data;
+  d[rb.write_pos] = val;
+  let next_pos: i64 = (rb.write_pos + 1) % rb.capacity;
+  RingBuf { data: d, write_pos: next_pos, count: rb.count + 1, capacity: rb.capacity }
+}
+
+fn ring_count(rb: RingBuf) -> i64 vow {
+  ensures: result >= 0
+} {
+  rb.count
+}
+
+fn main() -> i32 [io] {
+  let r0: RingBuf = ring_new(3);
+  let r1: RingBuf = ring_write(r0, 10);
+  let r2: RingBuf = ring_write(r1, 20);
+  print_i64(ring_count(r2));
+  0
+}

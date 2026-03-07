@@ -1,0 +1,9 @@
+[benchmark]
+id = "H09"
+name = "tokenizer"
+difficulty = "hard"
+tags = ["vec", "loop", "invariant", "requires", "ensures"]
+unwind = 10
+modules = 1
+expected_status = "Stretch"
+max_cegis_iterations = 5

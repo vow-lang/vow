@@ -1,0 +1,23 @@
+module Sign
+
+fn sign(x: i64) -> i64 vow {
+  ensures: result >= 0 - 1,
+  ensures: result <= 1
+} {
+  if x < 0 {
+    0 - 1
+  } else {
+    if x > 0 {
+      1
+    } else {
+      0
+    }
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(sign(42));
+  print_i64(sign(0));
+  print_i64(sign(0 - 7));
+  0
+}

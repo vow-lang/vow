@@ -1,0 +1,285 @@
+[suite]
+name = "vericoding"
+version = "1.0.0"
+total = 40
+stretch_count = 4
+
+[[benchmarks]]
+id = "E01"
+name = "absolute_value"
+difficulty = "easy"
+path = "easy/E01_absolute_value"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "E02"
+name = "max_of_two"
+difficulty = "easy"
+path = "easy/E02_max_of_two"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "E03"
+name = "min_of_two"
+difficulty = "easy"
+path = "easy/E03_min_of_two"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "E04"
+name = "clamp"
+difficulty = "easy"
+path = "easy/E04_clamp"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "E05"
+name = "safe_divide"
+difficulty = "easy"
+path = "easy/E05_safe_divide"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "E06"
+name = "safe_subtract"
+difficulty = "easy"
+path = "easy/E06_safe_subtract"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "E07"
+name = "bounded_add"
+difficulty = "easy"
+path = "easy/E07_bounded_add"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "E08"
+name = "sign"
+difficulty = "easy"
+path = "easy/E08_sign"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "E09"
+name = "is_even"
+difficulty = "easy"
+path = "easy/E09_is_even"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "E10"
+name = "safe_modulo"
+difficulty = "easy"
+path = "easy/E10_safe_modulo"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "E11"
+name = "double"
+difficulty = "easy"
+path = "easy/E11_double"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "E12"
+name = "power_of_two"
+difficulty = "easy"
+path = "easy/E12_power_of_two"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "E13"
+name = "fibonacci_bounded"
+difficulty = "easy"
+path = "easy/E13_fibonacci_bounded"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "E14"
+name = "midpoint"
+difficulty = "easy"
+path = "easy/E14_midpoint"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "E15"
+name = "checked_multiply"
+difficulty = "easy"
+path = "easy/E15_checked_multiply"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "M01"
+name = "binary_search"
+difficulty = "medium"
+path = "medium/M01_binary_search"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "M02"
+name = "vec_fill"
+difficulty = "medium"
+path = "medium/M02_vec_fill"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "M03"
+name = "vec_sum"
+difficulty = "medium"
+path = "medium/M03_vec_sum"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "M04"
+name = "vec_find"
+difficulty = "medium"
+path = "medium/M04_vec_find"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "M05"
+name = "vec_count"
+difficulty = "medium"
+path = "medium/M05_vec_count"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "M06"
+name = "vec_max"
+difficulty = "medium"
+path = "medium/M06_vec_max"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "M07"
+name = "count_steps"
+difficulty = "medium"
+path = "medium/M07_count_steps"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "M08"
+name = "map_insert_lookup"
+difficulty = "medium"
+path = "medium/M08_map_insert_lookup"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "M09"
+name = "map_update"
+difficulty = "medium"
+path = "medium/M09_map_update"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "M10"
+name = "map_multi_insert"
+difficulty = "medium"
+path = "medium/M10_map_multi_insert"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "M11"
+name = "bounded_counter"
+difficulty = "medium"
+path = "medium/M11_bounded_counter"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "M12"
+name = "swap_pair"
+difficulty = "medium"
+path = "medium/M12_swap_pair"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "M13"
+name = "gcd"
+difficulty = "medium"
+path = "medium/M13_gcd"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "M14"
+name = "selection_min"
+difficulty = "medium"
+path = "medium/M14_selection_min"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "M15"
+name = "collatz_bounded"
+difficulty = "medium"
+path = "medium/M15_collatz_bounded"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "H01"
+name = "stack_push_pop"
+difficulty = "hard"
+path = "hard/H01_stack_push_pop"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "H02"
+name = "geometry_area"
+difficulty = "hard"
+path = "hard/H02_geometry_area"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "H03"
+name = "bounded_queue"
+difficulty = "hard"
+path = "hard/H03_bounded_queue"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "H04"
+name = "sorted_insert"
+difficulty = "hard"
+path = "hard/H04_sorted_insert"
+expected_status = "Stretch"
+
+[[benchmarks]]
+id = "H05"
+name = "state_machine"
+difficulty = "hard"
+path = "hard/H05_state_machine"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "H06"
+name = "matrix_ops"
+difficulty = "hard"
+path = "hard/H06_matrix_ops"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "H07"
+name = "ring_buffer"
+difficulty = "hard"
+path = "hard/H07_ring_buffer"
+expected_status = "Stretch"
+
+[[benchmarks]]
+id = "H08"
+name = "interval_overlap"
+difficulty = "hard"
+path = "hard/H08_interval_overlap"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "H09"
+name = "tokenizer"
+difficulty = "hard"
+path = "hard/H09_tokenizer"
+expected_status = "Stretch"
+
+[[benchmarks]]
+id = "H10"
+name = "expression_eval"
+difficulty = "hard"
+path = "hard/H10_expression_eval"
+expected_status = "Stretch"

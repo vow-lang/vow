@@ -1,0 +1,25 @@
+module CollatzBounded
+
+fn collatz_steps(n: i64) -> i64 vow {
+  requires: n >= 1,
+  requires: n <= 4,
+  ensures: result >= 0
+} {
+  let mut val: i64 = n;
+  let mut steps: i64 = 0;
+  while val != 1 {
+    if val % 2 == 0 {
+      val = val / 2;
+    } else {
+      val = 3 * val + 1;
+    }
+    steps = steps + 1;
+  }
+  steps
+}
+
+fn main() -> i32 [io] {
+  print_i64(collatz_steps(1));
+  print_i64(collatz_steps(4));
+  0
+}

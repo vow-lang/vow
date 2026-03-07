@@ -906,17 +906,45 @@ pub fn emit_c_function(func: &Function, const_fns: &HashMap<FuncId, ConstantValu
             out.push_str(&format!("block{}:;\n", block.id.0));
         }
         out.push_str(&format!("  __blk_{} = 1;\n", block.id.0));
+        // Partition block instructions into: regular, upsilons, terminal.
+        // In Pizlo-style IR, Upsilons can appear after the terminal and
+        // multiple Upsilons can conflict (one writes a Phi that another
+        // reads).  Fix both by: (1) moving post-terminal Upsilons before
+        // the terminal, and (2) reading all Upsilon sources into temps
+        // before writing any targets.
+        let mut regular: Vec<&Inst> = Vec::new();
+        let mut upsilons: Vec<(u32, u32)> = Vec::new(); // (phi_id, source_val)
+        let mut terminal: Option<&Inst> = None;
         for inst in &block.insts {
-            if inst.opcode != Opcode::GetArg {
-                emit_inst(
-                    inst,
-                    &mut out,
-                    &vec_vars,
-                    &string_vars,
-                    &hashmap_vars,
-                    const_fns,
-                );
+            if inst.opcode == Opcode::GetArg {
+                continue;
             }
+            if inst.opcode == Opcode::Upsilon {
+                if let InstData::PhiTarget(phi_id) = inst.data {
+                    upsilons.push((phi_id.0, inst.args[0].0));
+                }
+                continue;
+            }
+            if inst.opcode.is_terminal() {
+                terminal = Some(inst);
+                continue;
+            }
+            regular.push(inst);
+        }
+        for inst in &regular {
+            emit_inst(inst, &mut out, &vec_vars, &string_vars, &hashmap_vars, const_fns);
+        }
+        // Emit Upsilons: read all sources first, then write all targets.
+        if !upsilons.is_empty() {
+            for &(_, src) in &upsilons {
+                out.push_str(&format!("  int64_t __ups_{src} = v{src};\n"));
+            }
+            for &(phi, src) in &upsilons {
+                out.push_str(&format!("  v{phi} = __ups_{src};\n"));
+            }
+        }
+        if let Some(term) = terminal {
+            emit_inst(term, &mut out, &vec_vars, &string_vars, &hashmap_vars, const_fns);
         }
     }
 
@@ -1406,7 +1434,7 @@ mod tests {
         );
         let c = emit_c_function(&func, &HashMap::new());
         assert!(c.contains("int64_t v0;"), "phi declaration: {c}");
-        assert!(c.contains("v0 = v1;"), "upsilon assignment: {c}");
+        assert!(c.contains("v0 = __ups_1;"), "upsilon assignment: {c}");
     }
 
     #[test]

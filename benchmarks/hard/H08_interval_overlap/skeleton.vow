@@ -1,0 +1,57 @@
+module IntervalOverlap
+
+struct Interval {
+  lo: i64,
+  hi: i64,
+}
+
+fn interval_new(lo: i64, hi: i64) -> Interval vow {
+  requires: lo <= hi
+} {
+  Interval { lo: 0, hi: 0 }
+}
+
+fn interval_contains(lo: i64, hi: i64, x: i64) -> i64 vow {
+  requires: lo >= 0,
+  requires: hi >= 0,
+  requires: lo <= hi,
+  requires: hi <= 1000,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  0
+}
+
+fn interval_width(lo: i64, hi: i64) -> i64 vow {
+  requires: lo >= 0,
+  requires: hi >= 0,
+  requires: lo <= hi,
+  requires: hi <= 1000,
+  ensures: result >= 0
+} {
+  0
+}
+
+fn intervals_overlap(a_lo: i64, a_hi: i64, b_lo: i64, b_hi: i64) -> i64 vow {
+  requires: a_lo >= 0,
+  requires: a_hi >= 0,
+  requires: a_lo <= a_hi,
+  requires: a_hi <= 1000,
+  requires: b_lo >= 0,
+  requires: b_hi >= 0,
+  requires: b_lo <= b_hi,
+  requires: b_hi <= 1000,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  let a: Interval = interval_new(1, 5);
+  let b: Interval = interval_new(3, 8);
+  print_i64(intervals_overlap(1, 5, 3, 8));
+  print_i64(interval_contains(1, 5, 3));
+  print_i64(interval_width(1, 5));
+  0
+}

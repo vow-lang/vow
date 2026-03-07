@@ -1,0 +1,30 @@
+module FibonacciBounded
+
+fn fib(n: i64) -> i64 vow {
+  requires: n >= 0,
+  requires: n <= 8,
+  ensures: result >= 0
+} {
+  let mut a: i64 = 0;
+  let mut b: i64 = 1;
+  let mut i: i64 = 0;
+  while i < n vow {
+    invariant: a >= 0,
+    invariant: b >= 1,
+    invariant: i >= 0,
+    invariant: i <= n
+  } {
+    let tmp: i64 = a + b;
+    a = b;
+    b = tmp;
+    i = i + 1;
+  }
+  a
+}
+
+fn main() -> i32 [io] {
+  print_i64(fib(0));
+  print_i64(fib(5));
+  print_i64(fib(8));
+  0
+}

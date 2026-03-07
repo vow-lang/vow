@@ -1,0 +1,54 @@
+module MatrixOps
+
+fn mat_trace(a: i64, d: i64) -> i64 vow {
+  requires: a >= 0,
+  requires: d >= 0,
+  requires: a <= 1000,
+  requires: d <= 1000,
+  ensures: result >= 0
+} {
+  0
+}
+
+fn mat_add_element(x: i64, y: i64) -> i64 vow {
+  requires: x >= 0,
+  requires: y >= 0,
+  requires: x <= 1000,
+  requires: y <= 1000,
+  ensures: result >= 0,
+  ensures: result <= 2000
+} {
+  0
+}
+
+fn mat_scale(x: i64, k: i64) -> i64 vow {
+  requires: x >= 0,
+  requires: k >= 0,
+  requires: x <= 100,
+  requires: k <= 100,
+  ensures: result >= 0
+} {
+  0
+}
+
+fn mat_determinant_2x2(a: i64, b: i64, c: i64, d: i64) -> i64 vow {
+  requires: a >= 0,
+  requires: b >= 0,
+  requires: c >= 0,
+  requires: d >= 0,
+  requires: a <= 100,
+  requires: b <= 100,
+  requires: c <= 100,
+  requires: d <= 100,
+  ensures: result >= 0 - 10000
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  print_i64(mat_trace(1, 4));
+  print_i64(mat_add_element(3, 5));
+  print_i64(mat_scale(3, 4));
+  print_i64(mat_determinant_2x2(1, 2, 3, 4));
+  0
+}

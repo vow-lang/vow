@@ -1,0 +1,9 @@
+[benchmark]
+id = "E09"
+name = "is_even"
+difficulty = "easy"
+tags = ["arithmetic", "modulo", "ensures"]
+unwind = 10
+modules = 1
+expected_status = "Verified"
+max_cegis_iterations = 2

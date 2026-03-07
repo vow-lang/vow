@@ -1,0 +1,24 @@
+module Clamp
+
+fn clamp(x: i64, lo: i64, hi: i64) -> i64 vow {
+  requires: lo <= hi,
+  ensures: result >= lo,
+  ensures: result <= hi
+} {
+  if x < lo {
+    lo
+  } else {
+    if x > hi {
+      hi
+    } else {
+      x
+    }
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(clamp(5, 0, 10));
+  print_i64(clamp(-3, 0, 10));
+  print_i64(clamp(15, 0, 10));
+  0
+}

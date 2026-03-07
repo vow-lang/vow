@@ -1,0 +1,34 @@
+module VecCount
+
+fn vec_count_pos(v: Vec<i64>) -> i64 vow {
+  requires: v.len() >= 0,
+  requires: v.len() <= 8,
+  ensures: result >= 0,
+  ensures: result <= v.len()
+} {
+  let mut count: i64 = 0;
+  let mut i: i64 = 0;
+  while i < v.len() vow {
+    invariant: count >= 0,
+    invariant: count <= i,
+    invariant: i >= 0,
+    invariant: i <= v.len()
+  } {
+    if v[i] > 0 {
+      count = count + 1;
+    } else {
+      0;
+    }
+    i = i + 1;
+  }
+  count
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v.push(0 - 2);
+  v.push(3);
+  print_i64(vec_count_pos(v));
+  0
+}

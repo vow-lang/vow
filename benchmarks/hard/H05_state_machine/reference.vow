@@ -1,0 +1,37 @@
+module StateMachine
+
+fn state_new() -> i64 vow {
+  ensures: result == 0
+} {
+  0
+}
+
+fn state_advance(state: i64) -> i64 vow {
+  requires: state >= 0,
+  requires: state <= 2,
+  ensures: result >= 0,
+  ensures: result <= 3
+} {
+  state + 1
+}
+
+fn state_is_terminal(state: i64) -> i64 vow {
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  if state == 3 {
+    1
+  } else {
+    0
+  }
+}
+
+fn main() -> i32 [io] {
+  let s0: i64 = state_new();
+  let s1: i64 = state_advance(s0);
+  let s2: i64 = state_advance(s1);
+  let s3: i64 = state_advance(s2);
+  print_i64(s3);
+  print_i64(state_is_terminal(s3));
+  0
+}

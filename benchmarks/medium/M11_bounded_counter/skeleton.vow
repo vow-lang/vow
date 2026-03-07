@@ -1,0 +1,28 @@
+module BoundedCounter
+
+fn counter_inc(count: i64, max: i64) -> i64 vow {
+  requires: count >= 0,
+  requires: count < max,
+  requires: max <= 100,
+  ensures: result == count + 1,
+  ensures: result <= max
+} {
+  0
+}
+
+fn counter_is_zero(count: i64) -> i64 vow {
+  requires: count >= 0,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  let c0: i64 = 0;
+  let c1: i64 = counter_inc(c0, 3);
+  let c2: i64 = counter_inc(c1, 3);
+  print_i64(c2);
+  print_i64(counter_is_zero(c0));
+  0
+}

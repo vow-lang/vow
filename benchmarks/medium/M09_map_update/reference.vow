@@ -1,0 +1,17 @@
+module MapUpdate
+
+fn map_update(k: i64, v1: i64, v2: i64) -> HashMap<i64, i64> vow {
+  ensures: result.contains_key(k),
+  ensures: result.len() == 1
+} {
+  let m: HashMap<i64, i64> = HashMap::new();
+  m.insert(k, v1);
+  m.insert(k, v2);
+  m
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<i64, i64> = map_update(1, 10, 20);
+  print_i64(m.len());
+  0
+}

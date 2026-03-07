@@ -1,0 +1,57 @@
+module BoundedQueue
+
+struct Queue {
+  data: Vec<i64>,
+  size: i64,
+  capacity: i64,
+}
+
+fn queue_new(capacity: i64) -> Queue {
+  let v: Vec<i64> = Vec::new();
+  Queue { data: v, size: 0, capacity: capacity }
+}
+
+fn queue_enqueue(q: Queue, val: i64) -> Queue {
+  let mut d: Vec<i64> = q.data;
+  d.push(val);
+  Queue { data: d, size: q.size + 1, capacity: q.capacity }
+}
+
+fn queue_size_bounded(size: i64) -> i64 vow {
+  requires: size >= 0,
+  ensures: result >= 0
+} {
+  size
+}
+
+fn queue_is_full(size: i64, capacity: i64) -> i64 vow {
+  requires: size >= 0,
+  requires: capacity > 0,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  if size == capacity {
+    1
+  } else {
+    0
+  }
+}
+
+fn queue_can_enqueue(size: i64, capacity: i64) -> i64 vow {
+  requires: size >= 0,
+  requires: capacity > 0,
+  requires: size < capacity,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  1
+}
+
+fn main() -> i32 [io] {
+  let q0: Queue = queue_new(3);
+  let q1: Queue = queue_enqueue(q0, 10);
+  let q2: Queue = queue_enqueue(q1, 20);
+  print_i64(queue_size_bounded(2));
+  print_i64(queue_is_full(2, 3));
+  0
+}

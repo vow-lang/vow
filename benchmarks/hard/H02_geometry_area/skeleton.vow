@@ -1,0 +1,51 @@
+module GeometryArea
+
+struct Point {
+  x: i64,
+  y: i64,
+}
+
+fn point_new(x: i64, y: i64) -> Point {
+  Point { x: x, y: y }
+}
+
+fn circle_area(r: i64) -> i64 vow {
+  requires: r >= 0,
+  requires: r <= 1000000,
+  ensures: result >= 0
+} {
+  0
+}
+
+fn rect_area(w: i64, h: i64) -> i64 vow {
+  requires: w >= 0,
+  requires: h >= 0,
+  requires: w <= 1000000,
+  requires: h <= 1000000,
+  ensures: result >= 0
+} {
+  0
+}
+
+fn rect_perimeter(w: i64, h: i64) -> i64 vow {
+  requires: w >= 0,
+  requires: h >= 0,
+  requires: w <= 1000000,
+  requires: h <= 1000000,
+  ensures: result >= 0
+} {
+  0
+}
+
+fn point_distance_sq(a: Point, b: Point) -> i64 {
+  let dx: i64 = a.x - b.x;
+  let dy: i64 = a.y - b.y;
+  dx * dx + dy * dy
+}
+
+fn main() -> i32 [io] {
+  print_i64(circle_area(5));
+  print_i64(rect_area(3, 4));
+  print_i64(rect_perimeter(3, 4));
+  0
+}

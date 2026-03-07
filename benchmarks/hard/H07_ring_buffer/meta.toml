@@ -1,0 +1,9 @@
+[benchmark]
+id = "H07"
+name = "ring_buffer"
+difficulty = "hard"
+tags = ["struct", "vec", "modular", "requires", "ensures"]
+unwind = 10
+modules = 1
+expected_status = "Stretch"
+max_cegis_iterations = 5

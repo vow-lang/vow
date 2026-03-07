@@ -1,0 +1,9 @@
+[benchmark]
+id = "E11"
+name = "double"
+difficulty = "easy"
+tags = ["arithmetic", "ensures"]
+unwind = 10
+modules = 1
+expected_status = "Verified"
+max_cegis_iterations = 2

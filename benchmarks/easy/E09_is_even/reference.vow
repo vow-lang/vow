@@ -1,0 +1,18 @@
+module IsEven
+
+fn is_even(x: i64 where x >= 0) -> i64 vow {
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  if x % 2 == 0 {
+    1
+  } else {
+    0
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(is_even(4));
+  print_i64(is_even(7));
+  0
+}

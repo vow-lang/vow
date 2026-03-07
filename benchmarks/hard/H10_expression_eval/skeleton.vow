@@ -1,0 +1,18 @@
+module ExpressionEval
+
+fn eval_rpn(ops: Vec<i64>) -> i64 vow {
+  requires: ops.len() >= 1,
+  requires: ops.len() <= 6,
+  ensures: result >= 0
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  let ops: Vec<i64> = Vec::new();
+  ops.push(3);
+  ops.push(4);
+  ops.push(100);
+  print_i64(eval_rpn(ops));
+  0
+}

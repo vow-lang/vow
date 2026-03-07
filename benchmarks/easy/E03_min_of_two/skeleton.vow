@@ -1,0 +1,14 @@
+module MinOfTwo
+
+fn min_of(a: i64, b: i64) -> i64 vow {
+  ensures: result <= a,
+  ensures: result <= b
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  print_i64(min_of(3, 7));
+  print_i64(min_of(-1, -5));
+  0
+}

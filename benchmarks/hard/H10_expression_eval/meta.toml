@@ -1,0 +1,9 @@
+[benchmark]
+id = "H10"
+name = "expression_eval"
+difficulty = "hard"
+tags = ["vec", "loop", "invariant", "requires", "ensures", "stack"]
+unwind = 10
+modules = 1
+expected_status = "Stretch"
+max_cegis_iterations = 5

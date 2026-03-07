@@ -1,0 +1,9 @@
+[benchmark]
+id = "M15"
+name = "collatz_bounded"
+difficulty = "medium"
+tags = ["loop", "invariant", "requires", "ensures", "branching"]
+unwind = 10
+modules = 1
+expected_status = "Verified"
+max_cegis_iterations = 3

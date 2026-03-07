@@ -1,0 +1,17 @@
+module AbsoluteValue
+
+fn abs(x: i64) -> i64 vow {
+  ensures: result >= 0
+} {
+  if x < 0 {
+    0 - x
+  } else {
+    x
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(abs(-5));
+  print_i64(abs(3));
+  0
+}

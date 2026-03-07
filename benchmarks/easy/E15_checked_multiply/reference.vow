@@ -1,0 +1,17 @@
+module CheckedMultiply
+
+fn checked_mul(a: i64, b: i64) -> i64 vow {
+  requires: a >= 0,
+  requires: a <= 1000,
+  requires: b >= 0,
+  requires: b <= 1000,
+  ensures: result == a * b
+} {
+  a * b
+}
+
+fn main() -> i32 [io] {
+  print_i64(checked_mul(3, 7));
+  print_i64(checked_mul(100, 100));
+  0
+}

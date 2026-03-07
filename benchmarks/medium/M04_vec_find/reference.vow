@@ -1,0 +1,34 @@
+module VecFind
+
+fn vec_find(v: Vec<i64>, target: i64) -> i64 vow {
+  requires: v.len() >= 0,
+  requires: v.len() <= 8,
+  ensures: result >= 0 - 1,
+  ensures: result < v.len()
+} {
+  let mut found: i64 = 0 - 1;
+  let mut i: i64 = 0;
+  while i < v.len() vow {
+    invariant: i >= 0,
+    invariant: i <= v.len(),
+    invariant: found >= 0 - 1,
+    invariant: found < v.len()
+  } {
+    if v[i] == target {
+      found = i;
+    } else {
+      0;
+    }
+    i = i + 1;
+  }
+  found
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(10);
+  v.push(20);
+  v.push(30);
+  print_i64(vec_find(v, 20));
+  0
+}
