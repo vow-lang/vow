@@ -51,6 +51,8 @@ pub enum ErrorCode {
     VowRequiresViolated,
     VowEnsuresViolated,
     VowInvariantViolated,
+    // IO errors
+    IoError,
 }
 
 pub trait DiagnosticEmitter {
