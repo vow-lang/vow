@@ -14,5 +14,7 @@ cranelift-native = "0.129"
 
 [dev-dependencies]
 vow-syntax = { path = "../vow-syntax" }
+vow-types = { path = "../vow-types" }
 vow-diag = { path = "../vow-diag" }
+proptest = "1"
 tempfile = "3"
