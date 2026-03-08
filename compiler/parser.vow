@@ -2,21 +2,22 @@ module Parser
 
 use token
 use ast
+use diag
 
 struct Parser {
     tokens: Vec<Token>,
     pos: i64,
     arena: AstArena,
-    errors: Vec<String>,
+    dctx: DiagCtx,
     in_ensures: i64,
 }
 
-fn parser_new(tokens: Vec<Token>, arena: AstArena) -> Parser {
+fn parser_new(tokens: Vec<Token>, arena: AstArena, dctx: DiagCtx) -> Parser {
     Parser {
         tokens: tokens,
         pos: 0,
         arena: arena,
-        errors: Vec::new(),
+        dctx: dctx,
         in_ensures: 0,
     }
 }
@@ -77,16 +78,19 @@ fn span_pack(start: i64, len: i64) -> i64 vow {
 }
 
 fn push_error(p: Parser, msg: String) {
-    p.errors.push(msg);
+    let d: Diagnostic = diag_error(EC_UNEXPECTED_TOKEN(), msg, String::from(""), 0, 0);
+    let dctx: DiagCtx = p.dctx;
+    diag_ctx_emit(dctx, d);
 }
 
-fn parse_module(tokens: Vec<Token>) -> Module [io] {
+fn parse_module(tokens: Vec<Token>) -> Module {
     let arena: AstArena = arena_new();
-    parse_module_into(tokens, arena)
+    let dctx: DiagCtx = diag_ctx_new();
+    parse_module_into(tokens, arena, dctx)
 }
 
-fn parse_module_into(tokens: Vec<Token>, arena: AstArena) -> Module [io] {
-    let p: Parser = parser_new(tokens, arena);
+fn parse_module_into(tokens: Vec<Token>, arena: AstArena, dctx: DiagCtx) -> Module {
+    let p: Parser = parser_new(tokens, arena, dctx);
 
     if at(p, tok_kw_module()) {
         let _kw: Token = advance(p);
@@ -109,13 +113,6 @@ fn parse_module_into(tokens: Vec<Token>, arena: AstArena) -> Module [io] {
         if item != -1 {
             items.push(item);
         }
-    }
-
-    let mut ei: i64 = 0;
-    let ne: i64 = p.errors.len();
-    while ei < ne {
-        eprintln_str(p.errors[ei]);
-        ei = ei + 1;
     }
 
     Module {

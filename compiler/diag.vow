@@ -135,3 +135,172 @@ fn ec_name(code: i64) -> String {
         String::from("VowInvariantViolated")
     }}}}}}}}}}
 }
+
+fn sev_name_lower(s: i64) -> String {
+    if s == SEV_ERROR() {
+        String::from("error")
+    } else {
+        if s == SEV_WARNING() {
+            String::from("warning")
+        } else {
+            String::from("note")
+        }
+    }
+}
+
+fn diag_json_escape_str(s: String) -> String {
+    let r: String = String::from("");
+    let n: i64 = s.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let b: i64 = s.byte_at(i);
+        if b == 92 {
+            r.push_byte(92);
+            r.push_byte(92);
+        } else if b == 34 {
+            r.push_byte(92);
+            r.push_byte(34);
+        } else if b == 10 {
+            r.push_byte(92);
+            r.push_byte(110);
+        } else if b == 9 {
+            r.push_byte(92);
+            r.push_byte(116);
+        } else {
+            r.push_byte(b);
+        }
+        i = i + 1;
+    }
+    r
+}
+
+fn diag_i64_to_str(v: i64) -> String {
+    if v == 0 { return String::from("0"); }
+    let neg: bool = v < 0;
+    let mut n: i64 = v;
+    if neg { n = 0 - n; }
+    let digits: Vec<i64> = Vec::new();
+    while n > 0 {
+        digits.push(n - (n / 10) * 10);
+        n = n / 10;
+    }
+    let result: String = String::from("");
+    if neg { result.push_byte(45); }
+    let nd: i64 = digits.len();
+    let mut i: i64 = nd;
+    while i > 0 {
+        i = i - 1;
+        result.push_byte(48 + digits[i]);
+    }
+    result
+}
+
+fn diag_to_json(d: Diagnostic) -> String {
+    let r: String = String::from("{\"error_code\":\"");
+    r.push_str(ec_name(d.code));
+    r.push_str(String::from("\",\"message\":\""));
+    r.push_str(diag_json_escape_str(d.message));
+    r.push_str(String::from("\",\"severity\":\""));
+    r.push_str(sev_name_lower(d.severity));
+    r.push_str(String::from("\",\"span\":{\"file\":\""));
+    r.push_str(diag_json_escape_str(d.file));
+    r.push_str(String::from("\",\"offset\":"));
+    r.push_str(diag_i64_to_str(d.span_start));
+    r.push_str(String::from(",\"length\":"));
+    r.push_str(diag_i64_to_str(d.span_len));
+    r.push_str(String::from("}"));
+    if d.blame != DIAG_BLAME_NONE() {
+        r.push_str(String::from(",\"blame\":\""));
+        r.push_str(diag_blame_name(d.blame));
+        r.push_str(String::from("\""));
+    }
+    let hints: Vec<String> = d.hints;
+    if hints.len() > 0 {
+        r.push_str(String::from(",\"hints\":["));
+        let mut hi: i64 = 0;
+        while hi < hints.len() {
+            if hi > 0 {
+                r.push_str(String::from(","));
+            }
+            r.push_str(String::from("\""));
+            r.push_str(diag_json_escape_str(hints[hi]));
+            r.push_str(String::from("\""));
+            hi = hi + 1;
+        }
+        r.push_str(String::from("]"));
+    }
+    r.push_str(String::from("}"));
+    r
+}
+
+fn diag_ctx_to_json(ctx: DiagCtx) -> String {
+    let r: String = String::from("[");
+    let ds: Vec<Diagnostic> = ctx.diags;
+    let n: i64 = ds.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if i > 0 {
+            r.push_str(String::from(","));
+        }
+        r.push_str(diag_to_json(ds[i]));
+        i = i + 1;
+    }
+    r.push_str(String::from("]"));
+    r
+}
+
+fn diag_to_human(d: Diagnostic) -> String {
+    let r: String = String::from("");
+    r.push_str(sev_name_lower(d.severity));
+    r.push_str(String::from("["));
+    r.push_str(ec_name(d.code));
+    r.push_str(String::from("]: "));
+    r.push_str(d.message);
+    if d.file.len() > 0 {
+        r.push_str(String::from(" ("));
+        r.push_str(d.file);
+        r.push_str(String::from(":"));
+        r.push_str(diag_i64_to_str(d.span_start));
+        r.push_str(String::from(")"));
+    }
+    if d.blame != DIAG_BLAME_NONE() {
+        r.push_str(String::from("\n  blame: "));
+        r.push_str(diag_blame_name(d.blame));
+    }
+    let hints: Vec<String> = d.hints;
+    let mut hi: i64 = 0;
+    while hi < hints.len() {
+        r.push_str(String::from("\n  hint: "));
+        r.push_str(hints[hi]);
+        hi = hi + 1;
+    }
+    r
+}
+
+fn diag_ctx_print_all(ctx: DiagCtx) [io] {
+    let ds: Vec<Diagnostic> = ctx.diags;
+    let n: i64 = ds.len();
+    let mut i: i64 = 0;
+    while i < n {
+        eprintln_str(diag_to_human(ds[i]));
+        i = i + 1;
+    }
+}
+
+fn diag_emit_build_json(status: String, exec_path: String, dctx: DiagCtx) [io] {
+    let r: String = String::from("{\"status\":\"");
+    r.push_str(status);
+    r.push_str(String::from("\",\"executable\":"));
+    if exec_path.len() > 0 {
+        r.push_str(String::from("\""));
+        r.push_str(diag_json_escape_str(exec_path));
+        r.push_str(String::from("\""));
+    } else {
+        r.push_str(String::from("null"));
+    }
+    r.push_str(String::from(",\"diagnostics\":"));
+    r.push_str(diag_ctx_to_json(dctx));
+    r.push_str(String::from(",\"counterexamples\":[]}"));
+    print_str(r);
+    print_str(String::from("\n"));
+}
