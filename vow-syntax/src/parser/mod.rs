@@ -42,8 +42,6 @@ fn keyword_as_str(kind: &TokenKind) -> Option<&'static str> {
         TokenKind::KwFor => Some("for"),
         TokenKind::KwIn => Some("in"),
         TokenKind::KwAs => Some("as"),
-        TokenKind::KwAssert => Some("assert"),
-        TokenKind::KwAssume => Some("assume"),
         TokenKind::KwRead => Some("read"),
         TokenKind::KwWrite => Some("write"),
         TokenKind::KwIO => Some("io"),
@@ -487,18 +485,6 @@ impl Parser {
                 } else {
                     break;
                 }
-            } else if self.at(&TokenKind::KwAssert) {
-                if let Some(stmt) = self.parse_assert_stmt() {
-                    stmts.push(stmt);
-                } else {
-                    break;
-                }
-            } else if self.at(&TokenKind::KwAssume) {
-                if let Some(stmt) = self.parse_assume_stmt() {
-                    stmts.push(stmt);
-                } else {
-                    break;
-                }
             } else {
                 let expr_start = self.current_span();
                 if let Some(expr) = self.parse_expr() {
@@ -542,34 +528,6 @@ impl Parser {
         Some(Block {
             stmts,
             trailing_expr,
-            span: start.merge(end),
-        })
-    }
-
-    fn parse_assert_stmt(&mut self) -> Option<Stmt> {
-        let start = self.current_span();
-        self.expect(TokenKind::KwAssert)?;
-        let expr = self.parse_expr()?;
-        let end = expr.span;
-        if self.at(&TokenKind::Semicolon) {
-            self.advance();
-        }
-        Some(Stmt::Assert {
-            expr,
-            span: start.merge(end),
-        })
-    }
-
-    fn parse_assume_stmt(&mut self) -> Option<Stmt> {
-        let start = self.current_span();
-        self.expect(TokenKind::KwAssume)?;
-        let expr = self.parse_expr()?;
-        let end = expr.span;
-        if self.at(&TokenKind::Semicolon) {
-            self.advance();
-        }
-        Some(Stmt::Assume {
-            expr,
             span: start.merge(end),
         })
     }
@@ -847,8 +805,6 @@ mod tests {
             (TokenKind::KwFor, "for"),
             (TokenKind::KwIn, "in"),
             (TokenKind::KwAs, "as"),
-            (TokenKind::KwAssert, "assert"),
-            (TokenKind::KwAssume, "assume"),
             (TokenKind::KwRead, "read"),
             (TokenKind::KwWrite, "write"),
             (TokenKind::KwIO, "io"),

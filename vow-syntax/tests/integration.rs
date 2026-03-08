@@ -189,14 +189,6 @@ fn strip_stmt(stmt: Stmt) -> Stmt {
             has_semicolon,
             span: z(),
         },
-        Stmt::Assert { expr, .. } => Stmt::Assert {
-            expr: strip_expr(expr),
-            span: z(),
-        },
-        Stmt::Assume { expr, .. } => Stmt::Assume {
-            expr: strip_expr(expr),
-            span: z(),
-        },
     }
 }
 

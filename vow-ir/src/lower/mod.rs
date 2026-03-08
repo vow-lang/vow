@@ -1484,26 +1484,6 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
         Stmt::Expr { expr, .. } => {
             lower_expr(ctx, expr);
         }
-        Stmt::Assert { expr, span } => {
-            let pred_id = lower_expr(ctx, expr);
-            ctx.emit(
-                Opcode::Assert,
-                Ty::Unit,
-                vec![pred_id],
-                InstData::None,
-                *span,
-            );
-        }
-        Stmt::Assume { expr, span } => {
-            let pred_id = lower_expr(ctx, expr);
-            ctx.emit(
-                Opcode::Assume,
-                Ty::Unit,
-                vec![pred_id],
-                InstData::None,
-                *span,
-            );
-        }
     }
 }
 

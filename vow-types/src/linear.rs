@@ -106,9 +106,6 @@ fn check_stmt(
         Stmt::Expr { expr, .. } => {
             check_expr(expr, tracker, env, file, emitter, true);
         }
-        Stmt::Assert { expr, .. } | Stmt::Assume { expr, .. } => {
-            check_expr(expr, tracker, env, file, emitter, true);
-        }
     }
 }
 

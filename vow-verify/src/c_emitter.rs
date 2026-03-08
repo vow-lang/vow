@@ -465,19 +465,6 @@ fn emit_inst(
             ));
         }
 
-        // Inline assert / assume
-        Opcode::Assert => {
-            let pred = inst.args[0].0;
-            out.push_str(&format!(
-                "  __ESBMC_assert(v{}, \"assert:{}\");\n",
-                pred, inst.id.0
-            ));
-        }
-        Opcode::Assume => {
-            let pred = inst.args[0].0;
-            out.push_str(&format!("  __ESBMC_assume(v{});\n", pred));
-        }
-
         // Control flow
         Opcode::Branch => {
             let cond = inst.args[0].0;

@@ -44,8 +44,6 @@ pub enum TokenKind {
     KwFor,
     KwIn,
     KwAs,
-    KwAssert,
-    KwAssume,
 
     // Effect keywords
     KwRead,
@@ -168,8 +166,6 @@ impl TokenKind {
             "for" => Some(TokenKind::KwFor),
             "in" => Some(TokenKind::KwIn),
             "as" => Some(TokenKind::KwAs),
-            "assert" => Some(TokenKind::KwAssert),
-            "assume" => Some(TokenKind::KwAssume),
             "read" => Some(TokenKind::KwRead),
             "write" => Some(TokenKind::KwWrite),
             "io" => Some(TokenKind::KwIO),
@@ -202,8 +198,6 @@ mod tests {
             TokenKind::from_keyword("invariant"),
             Some(TokenKind::KwInvariant)
         );
-        assert_eq!(TokenKind::from_keyword("assert"), Some(TokenKind::KwAssert));
-        assert_eq!(TokenKind::from_keyword("assume"), Some(TokenKind::KwAssume));
         assert_eq!(TokenKind::from_keyword("not_a_keyword"), None);
     }
 }

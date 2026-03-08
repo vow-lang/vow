@@ -253,12 +253,6 @@ fn print_stmt(stmt: &Stmt, level: usize) -> String {
                 format!("{}{}\n", ind, print_expr(expr))
             }
         }
-        Stmt::Assert { expr, .. } => {
-            format!("{}assert {};\n", ind, print_expr(expr))
-        }
-        Stmt::Assume { expr, .. } => {
-            format!("{}assume {};\n", ind, print_expr(expr))
-        }
     }
 }
 
