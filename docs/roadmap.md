@@ -57,7 +57,7 @@ Module Loading      Yes                    Yes
 Vow Contracts       Yes (lower + codegen)  No (no vow block lowering)
 Verification        Yes (ESBMC pipeline)   No (no C emitter, no ESBMC)
 Debug Mode          Yes (runtime checks)   No (no blame/violation codegen)
-Diagnostics         Yes (JSON + human)     No (minimal error output)
+Diagnostics         Yes (JSON + human)     Yes (JSON + human, file:line:col)
 CLI UX              Yes (subcommands)      No (bare -o flag only)
 ```
 
@@ -523,19 +523,25 @@ Rust `vow-diag`:
 - All constant functions have `vow { ensures: result >= 0 }` contracts
 - Bootstrap triple test passes (binary fixed point confirmed)
 
-### 17.2 JSON + human-readable dual emitter
+### 17.2 JSON + human-readable dual emitter ✔
 
-Implement dual output (the Vow design invariant):
-- JSON to stdout (parseable by agents)
-- Human-readable to stderr (readable by developers)
-- Both always on, not a flag
+Parser and checker emit `Diagnostic` objects into a shared `DiagCtx` instead
+of ad-hoc `eprintln_str` calls. Human-readable output to stderr via
+`diag_ctx_print_all`, JSON build result to stdout via `diag_emit_build_json`.
+Both always on. Bootstrap triple test passes (binary fixed point confirmed).
 
-### 17.3 Source spans in error messages
+### 17.3 Source spans in error messages ✔
 
-Wire spans from AST/IR through to diagnostic output:
-- File name + line + column from `Span`
-- Underline the relevant source range in human output
-- Include span as `{file, line, column, length}` in JSON output
+Wired file names and byte-offset spans through the full pipeline:
+- `DiagCtx` stores source file → source text mappings for line:col computation
+- `Parser` and `CheckEnv` carry current file name; diagnostics include file path
+- `push_error` captures token span; `env_emit_error` accepts packed AST span
+- Span unpack helpers + line:col computation at emit time
+- Human output: `error[TypeMismatch]: in fn foo: body type mismatch (file:42:5)`
+- JSON output: `"span":{"file":"...","offset":N,"length":N,"line":N,"column":N}`
+- Statement spans (let bindings) and function spans populated; expression spans
+  are 0 (future work) — location omitted gracefully when span unavailable
+- Bootstrap triple test passes (binary fixed point confirmed)
 
 ### 17.4 Verification: error output matches Rust compiler format
 

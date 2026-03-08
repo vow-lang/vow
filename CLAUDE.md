@@ -99,10 +99,12 @@ All diagnostic output flows through **`vow-diag`**, which every other crate uses
 ### Building and running
 
 ```bash
-./target/release/vow --no-verify compiler/main.vow   # compile → ./compiler/main
-./compiler/main compiler/lexer.vow                    # type-check, print IR
-./compiler/main -o /tmp/lexer compiler/lexer.vow      # compile to native binary
+./target/release/vow --no-verify compiler/main.vow -o /tmp/vow_main  # compile self-hosted compiler
+ulimit -v 2000000; /tmp/vow_main compiler/lexer.vow                  # type-check, print IR
+ulimit -v 2000000; /tmp/vow_main -o /tmp/lexer compiler/lexer.vow    # compile to native binary
 ```
+
+**CRITICAL:** Always use `ulimit -v 2000000` when running self-hosted compiler binaries (or any binary produced by them). Without it, the process can consume all system memory and freeze the machine. This applies to `./compiler/main`, `/tmp/vow_main`, and any binary compiled from `.vow` files.
 
 The self-hosted compiler supports DFS module loading via `use` declarations.
 

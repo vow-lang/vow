@@ -10,15 +10,17 @@ struct Parser {
     arena: AstArena,
     dctx: DiagCtx,
     in_ensures: i64,
+    file: String,
 }
 
-fn parser_new(tokens: Vec<Token>, arena: AstArena, dctx: DiagCtx) -> Parser {
+fn parser_new(tokens: Vec<Token>, arena: AstArena, dctx: DiagCtx, file: String) -> Parser {
     Parser {
         tokens: tokens,
         pos: 0,
         arena: arena,
         dctx: dctx,
         in_ensures: 0,
+        file: file,
     }
 }
 
@@ -78,7 +80,8 @@ fn span_pack(start: i64, len: i64) -> i64 vow {
 }
 
 fn push_error(p: Parser, msg: String) {
-    let d: Diagnostic = diag_error(EC_UNEXPECTED_TOKEN(), msg, String::from(""), 0, 0);
+    let t: Token = peek(p);
+    let d: Diagnostic = diag_error(EC_UNEXPECTED_TOKEN(), msg, p.file, t.span_start, t.span_len);
     let dctx: DiagCtx = p.dctx;
     diag_ctx_emit(dctx, d);
 }
@@ -86,11 +89,11 @@ fn push_error(p: Parser, msg: String) {
 fn parse_module(tokens: Vec<Token>) -> Module {
     let arena: AstArena = arena_new();
     let dctx: DiagCtx = diag_ctx_new();
-    parse_module_into(tokens, arena, dctx)
+    parse_module_into(tokens, arena, dctx, String::from(""))
 }
 
-fn parse_module_into(tokens: Vec<Token>, arena: AstArena, dctx: DiagCtx) -> Module {
-    let p: Parser = parser_new(tokens, arena, dctx);
+fn parse_module_into(tokens: Vec<Token>, arena: AstArena, dctx: DiagCtx, file: String) -> Module {
+    let p: Parser = parser_new(tokens, arena, dctx, file);
 
     if at(p, tok_kw_module()) {
         let _kw: Token = advance(p);
@@ -447,6 +450,10 @@ fn parse_stmt(p: Parser) -> i64 {
 }
 
 fn parse_let_stmt(p: Parser) -> i64 {
+    let span_start: i64 = {
+        let t: Token = peek(p);
+        t.span_start
+    };
     let _kw: bool = expect(p, tok_kw_let());
     let is_mut: i64 = if at(p, tok_kw_mut()) {
         let _m: Token = advance(p);
@@ -466,7 +473,8 @@ fn parse_let_stmt(p: Parser) -> i64 {
         let _sc: Token = advance(p);
     }
     let pat_pid: i64 = arena_add_pat(p.arena, PAT_IDENT(), name_sid, is_mut, 0);
-    arena_add_stmt(p.arena, STMT_LET(), pat_pid, annot_tid, init_eid, 0)
+    let span: i64 = span_pack(span_start, 0);
+    arena_add_stmt(p.arena, STMT_LET(), pat_pid, annot_tid, init_eid, span)
 }
 
 fn parse_expr(p: Parser) -> i64 {

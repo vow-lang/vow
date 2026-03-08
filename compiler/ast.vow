@@ -196,6 +196,15 @@ fn edef_variants_lid(a: AstArena, eid: i64) -> i64 { a.edef_data[eid * 3 + 1] }
 
 fn arena_str(a: AstArena, sid: i64) -> String { a.strs[sid] }
 
+fn expr_span(a: AstArena, eid: i64) -> i64 { a.expr_data[eid * 5 + 4] }
+fn stmt_span(a: AstArena, sid: i64) -> i64 { a.stmt_data[sid * 5 + 4] }
+fn blk_span(a: AstArena, bid: i64) -> i64 { a.blk_data[bid * 3 + 2] }
+fn fn_span(a: AstArena, fid: i64) -> i64 { a.fn_data[fid * 7 + 6] }
+fn type_span(a: AstArena, tid: i64) -> i64 { a.type_data[tid * 4 + 3] }
+fn pat_span(a: AstArena, pid: i64) -> i64 { a.pat_data[pid * 4 + 3] }
+fn sdef_span(a: AstArena, sid: i64) -> i64 { a.sdef_data[sid * 4 + 3] }
+fn edef_span(a: AstArena, eid: i64) -> i64 { a.edef_data[eid * 3 + 2] }
+
 fn arena_add_stmt(a: AstArena, tag: i64, av: i64, bv: i64, cv: i64, span: i64) -> i64 {
     let sid: i64 = a.stmt_data.len() / 5;
     a.stmt_data.push(tag);
