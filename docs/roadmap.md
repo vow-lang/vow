@@ -543,10 +543,15 @@ Wired file names and byte-offset spans through the full pipeline:
   are 0 (future work) — location omitted gracefully when span unavailable
 - Bootstrap triple test passes (binary fixed point confirmed)
 
-### 17.4 Verification: error output matches Rust compiler format
+### 17.4 Verification: error output matches Rust compiler format ✔
 
-Test: introduce a type error in a `.vow` file, compile with both Rust and
-self-hosted compilers, verify JSON output has the same schema.
+Compared diagnostic JSON schema between Rust and self-hosted compilers.
+Findings:
+- **Fixed:** blame field now lowercase (`"caller"`/`"callee"`) in JSON, matching Rust compiler.
+  Human-readable output keeps capitalized form (`Caller`/`Callee`).
+- **Superset OK:** self-hosted span includes `line`/`column` (Rust does not) — strictly more info.
+- **Acceptable gaps:** `secondary` spans and verification fields not yet in self-hosted (Phase 18).
+- Bootstrap triple test passes (binary fixed point).
 
 ---
 
