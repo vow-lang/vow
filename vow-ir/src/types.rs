@@ -105,6 +105,8 @@ pub enum Opcode {
     VowRequires,
     VowEnsures,
     VowInvariant,
+    Assert,
+    Assume,
 
     Call,
 

@@ -605,6 +605,23 @@ fn lower_inst(
         }
 
         // ------------------------------------------------------------------
+        // Inline assert / assume
+        // ------------------------------------------------------------------
+        Opcode::Assert => {
+            if ctx.mode == BuildMode::Debug
+                && let Some(&pred_id) = inst.args.first()
+                && let Some(&pred) = ctx.value_map.get(&pred_id)
+            {
+                emit_vow_check(builder, pred, 0, 1, &[], inst.origin.start, ctx)?;
+            }
+            // In Release mode: no-op
+        }
+        Opcode::Assume => {
+            // No-op at runtime in both Debug and Release.
+            // The verifier handles this as a constraint.
+        }
+
+        // ------------------------------------------------------------------
         // Function calls
         // ------------------------------------------------------------------
         Opcode::Call => {

@@ -389,6 +389,23 @@ impl<'e> Checker<'e> {
             Stmt::Expr { expr, .. } => {
                 self.check_expr(expr);
             }
+            Stmt::Assert { expr, .. } | Stmt::Assume { expr, .. } => {
+                let ty = self.check_expr(expr);
+                if ty != Ty::Bool && ty != Ty::Never {
+                    self.emit_error(
+                        ErrorCode::TypeMismatch,
+                        format!(
+                            "{} condition must be `bool`, found `{ty}`",
+                            if matches!(stmt, Stmt::Assert { .. }) {
+                                "assert"
+                            } else {
+                                "assume"
+                            }
+                        ),
+                        expr.span,
+                    );
+                }
+            }
         }
     }
 

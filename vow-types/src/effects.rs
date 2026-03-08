@@ -107,6 +107,9 @@ fn collect_calls_in_block<'a>(block: &'a Block, calls: &mut Vec<(&'a Expr, &'a s
         match stmt {
             Stmt::Let { init, .. } => collect_calls_in_expr(init, calls),
             Stmt::Expr { expr, .. } => collect_calls_in_expr(expr, calls),
+            Stmt::Assert { expr, .. } | Stmt::Assume { expr, .. } => {
+                collect_calls_in_expr(expr, calls)
+            }
         }
     }
     if let Some(e) = &block.trailing_expr {

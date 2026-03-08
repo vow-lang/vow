@@ -366,6 +366,14 @@ pub enum Stmt {
         has_semicolon: bool,
         span: Span,
     },
+    Assert {
+        expr: Expr,
+        span: Span,
+    },
+    Assume {
+        expr: Expr,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
