@@ -163,6 +163,7 @@ This separation is key: types are decidable and mechanical; refinements are expr
 - **Exceptions.** `Result<T, E>` everywhere with `?` propagation.
 - **Operator overloading.** Operators have fixed meaning per type.
 - **Macros.** Macros destroy local reasoning. Agents generate code directly.
+- **Assert/assume statements.** Duplicates vow blocks (`assert`) or punches holes in verification (`assume`). See §A.6.
 - **Async/await.** Concurrency modeled through the effect system, not language syntax (deferred).
 
 ## 5. Syntax Overview
@@ -677,6 +678,20 @@ That's the language. Nothing more is needed.
 **Rationale:** Two modes, two operators, zero ambiguity. `+` does what the hardware does — silent wrap. `+!` forces the caller to handle overflow via `Option`. The `!` reads as "watch out, this checks." Saturating arithmetic is domain-specific (audio, pixel math) and lives in the standard library. Division `/` traps on zero (hardware behavior); `/!` returns `Option<T>`.
 
 **What this replaces:** v2 listed three modes (wrapping, checked, saturating) without specifying operators. The operator syntax and the exclusion of saturating from the language are new.
+
+### A.6. No assert/assume statements (v4, 08.03.2026)
+
+**Decision:** Vow does not provide `assert` or `assume` as inline statement-level constructs. All verification properties are expressed through vow blocks (`requires`, `ensures`, `invariant`).
+
+**Rationale:** `assert` and `assume` were prototyped as inline statements flowing through the full pipeline (lexer → parser → type checker → IR → codegen → ESBMC). The prototype worked, but the constructs were rejected for three reasons:
+
+1. **`assert` duplicates vow blocks.** A mid-function assertion is a postcondition of the code above it and a precondition of the code below it. This is already expressible by decomposing the function into smaller functions with vow blocks, which is what an agent should do anyway. Adding `assert` creates two ways to express the same verification intent, violating "There's a single way to do it."
+
+2. **`assume` punches holes in verification.** `assume` tells ESBMC "trust me, this is true" — an unverified escape hatch. Every `assume` is a proof obligation the agent has given up on. An agent should instead strengthen the loop invariant, add a `requires` clause, or decompose the function. The one legitimate use — encoding facts about opaque extern functions — is already handled by vow blocks on `extern "C"` declarations (§12).
+
+3. **Neither construct carries blame.** Vow blocks have blame semantics: `requires` violations blame the Caller, `ensures`/`invariant` violations blame the Callee. `assert` and `assume` are blameless — they cannot tell the diagnostic system which side of a module boundary is at fault. This makes them less useful for the automated diagnosis system (§11) than properly structured vow blocks.
+
+**What this replaces:** An implemented prototype (assert/assume keywords, AST nodes, IR opcodes, codegen, ESBMC emission) was reverted in favor of this design decision.
 
 ---
 
