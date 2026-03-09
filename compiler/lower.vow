@@ -1481,6 +1481,8 @@ fn lower_stmt(ctx: LowerCtx, sid: i64) {
                     lctx_tag(ctx, val, type_name);
                 }
             }
+            ctx.func.local_names_ids.push(val);
+            ctx.func.local_names_strs.push(name);
             lctx_define(ctx, name, val);
         }
     } else if tag == STMT_EXPR() {
@@ -1831,6 +1833,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
         let arg_args: Vec<i64> = Vec::new();
         let arg_id: i64 = lctx_emit(ctx, IOP_GET_ARG(), pty, arg_args, IDATA_ARG_INDEX(), pi, 0, String::from(""));
         let pname: String = arena_str(a, pname_sid);
+        func.param_names.push(pname);
 
         if ptid != -1 {
             let ptag: i64 = type_tag(a, ptid);

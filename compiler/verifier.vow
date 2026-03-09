@@ -102,20 +102,17 @@ fn str_to_i64(s: String) -> i64 {
 
 fn split_lines(s: String, lines: Vec<String>) {
     let n: i64 = s.len();
-    let cur: String = String::from("");
+    let mut start: i64 = 0;
     let mut i: i64 = 0;
     while i < n {
-        let b: i64 = s.byte_at(i);
-        if b == 10 {
-            lines.push(cur);
-            cur = String::from("");
-        } else {
-            cur.push_byte(b);
+        if s.byte_at(i) == 10 {
+            lines.push(str_substring(s, start, i));
+            start = i + 1;
         }
         i = i + 1;
     }
-    if cur.len() > 0 {
-        lines.push(cur);
+    if start < n {
+        lines.push(str_substring(s, start, n));
     }
 }
 
@@ -330,6 +327,104 @@ fn parse_block_visits(output: String, visits: Vec<i64>) {
     }
 }
 
+fn map_lookup(keys: Vec<String>, vals: Vec<String>, key: String) -> String {
+    let n: i64 = keys.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if keys[i] == key {
+            return vals[i];
+        }
+        i = i + 1;
+    }
+    String::from("")
+}
+
+fn map_has_key(keys: Vec<String>, key: String) -> bool {
+    let n: i64 = keys.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if keys[i] == key {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn build_name_map(f: IrFunction, map_keys: Vec<String>, map_vals: Vec<String>) {
+    let params: Vec<i64> = f.params;
+    let param_names: Vec<String> = f.param_names;
+    let np: i64 = params.len();
+    let mut cl_idx: i64 = 0;
+    let mut ir_idx: i64 = 0;
+    while ir_idx < np {
+        let pty: i64 = params[ir_idx];
+        if pty != ITY_UNIT() {
+            if ir_idx < param_names.len() {
+                let pk: String = String::from("p");
+                pk.push_str(i64_to_str(cl_idx));
+                map_keys.push(pk);
+                map_vals.push(param_names[ir_idx]);
+            }
+            cl_idx = cl_idx + 1;
+        }
+        ir_idx = ir_idx + 1;
+    }
+    let blocks: Vec<IrBlock> = f.blocks;
+    let nb: i64 = blocks.len();
+    let mut bi: i64 = 0;
+    while bi < nb {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let ni: i64 = insts.len();
+        let mut ii: i64 = 0;
+        while ii < ni {
+            let inst: IrInst = insts[ii];
+            if inst.op == IOP_GET_ARG() && inst.dk == IDATA_ARG_INDEX() {
+                let arg_idx: i64 = inst.dv;
+                if arg_idx < param_names.len() {
+                    let vk: String = String::from("v");
+                    vk.push_str(i64_to_str(inst.id));
+                    map_keys.push(vk);
+                    map_vals.push(param_names[arg_idx]);
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    let ln_ids: Vec<i64> = f.local_names_ids;
+    let ln_strs: Vec<String> = f.local_names_strs;
+    let nln: i64 = ln_ids.len();
+    let mut li: i64 = 0;
+    while li < nln {
+        let lk: String = String::from("v");
+        lk.push_str(i64_to_str(ln_ids[li]));
+        if !map_has_key(map_keys, lk) {
+            map_keys.push(lk);
+            map_vals.push(ln_strs[li]);
+        }
+        li = li + 1;
+    }
+}
+
+fn map_ce_values(c_names: Vec<String>, c_values: Vec<String>, map_keys: Vec<String>, map_vals: Vec<String>, out_names: Vec<String>, out_values: Vec<String>) {
+    let n: i64 = c_names.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let src: String = map_lookup(map_keys, map_vals, c_names[i]);
+        if src.len() > 0 {
+            out_names.push(src);
+        } else {
+            let fallback: String = String::from("_esbmc_");
+            fallback.push_str(c_names[i]);
+            out_names.push(fallback);
+        }
+        out_values.push(c_values[i]);
+        i = i + 1;
+    }
+}
+
 fn verify_function_full(f: IrFunction, m: IrModule) -> VerifyResult [io] {
     let vows: Vec<IrVowEntry> = f.vows;
     if vows.len() == 0 {
@@ -371,8 +466,14 @@ fn verify_function_full(f: IrFunction, m: IrModule) -> VerifyResult [io] {
     let var_values: Vec<String> = Vec::new();
     let block_visits: Vec<i64> = Vec::new();
     if status == VERIFY_FAILED() {
-        parse_assignments(combined, var_names, var_values);
+        let raw_names: Vec<String> = Vec::new();
+        let raw_values: Vec<String> = Vec::new();
+        parse_assignments(combined, raw_names, raw_values);
         parse_block_visits(combined, block_visits);
+        let map_keys: Vec<String> = Vec::new();
+        let map_vals: Vec<String> = Vec::new();
+        build_name_map(f, map_keys, map_vals);
+        map_ce_values(raw_names, raw_values, map_keys, map_vals, var_names, var_values);
     }
     VerifyResult {
         status: status,

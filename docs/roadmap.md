@@ -422,7 +422,7 @@ driver for all Vow development.
 | Phase 18: Self-Hosted Verification Pipeline           |
 |  18.1  C emitter in Vow (IR -> ESBMC-compatible C)   |
 |  18.2  ESBMC invocation + result parsing              |
-|  18.3  Counterexample -> source mapping (Origin)      |
+|  18.3  Counterexample -> source mapping (Origin) DONE |
 |  18.4  CEGIS loop integration                         |
 |  Self-hosted compiler can verify contracts via ESBMC   |
 +---------------------------+---------------------------+
@@ -589,13 +589,17 @@ type checkers/lowerers. `compiler/verifier.vow` (~300 lines) implements ESBMC
 orchestration + output parsing. `--verify` flag in self-hosted compiler driver.
 Bootstrap triple test passes (binary fixed point).
 
-### 18.3 Counterexample-to-source mapping
+### 18.3 Counterexample-to-source mapping ✅
 
 Port the `Origin` metadata and name mapping:
 - `local_names` in IR Function for source variable names
 - `build_c_to_source_name_map` equivalent in Vow
 - Map ESBMC counterexample variables back to Vow source names
 - Emit counterexample JSON with source-level variable names
+
+**Done.** Added `param_names`, `local_names_ids`, `local_names_strs` to `IrFunction`.
+Populated during lowering. `build_name_map` + `map_ce_values` in verifier.vow map
+C names (`v0`, `p0`) back to source names (`x`, `y`). Unmapped names get `_esbmc_` prefix.
 
 ### 18.4 CEGIS loop integration
 
