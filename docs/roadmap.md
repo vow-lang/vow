@@ -58,7 +58,7 @@ Vow Contracts       Yes (lower + codegen)  No (no vow block lowering)
 Verification        Yes (ESBMC pipeline)   No (no C emitter, no ESBMC)
 Debug Mode          Yes (runtime checks)   No (no blame/violation codegen)
 Diagnostics         Yes (JSON + human)     Yes (JSON + human, file:line:col)
-CLI UX              Yes (subcommands)      No (bare -o flag only)
+CLI UX              Yes (subcommands)      Yes (subcommands, flags, --help)
 ```
 
 Phases 16–20 close these gaps.
@@ -648,11 +648,13 @@ Reference: Rust `vow/src/main.rs` argument parsing (~4,200 lines).
 - `--debug-trace=calls|full` — structured execution traces
 - `-o <path>` — output binary path (already exists)
 
-### 19.3 Structured --help
+### 19.3 Structured --help ✔
 
 - `--help` — JSON capability description (for agents)
 - `--help --human` — human-readable description
-- Same schema as Rust compiler's `--help` output
+- Same schema as Rust compiler's `--help` output (minus `decl` command)
+- Checked before subcommand dispatch; works with `vowc --help`, `vowc build --help`, etc.
+- Bootstrap triple test passes (binary fixed point)
 
 ### 19.4 Parallel codegen + verify pipeline
 
