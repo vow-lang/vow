@@ -204,14 +204,14 @@ fn esbmc_path() -> String {
     String::from("/home/pmatos/installs/esbmc-20260226/bin/esbmc")
 }
 
-fn run_esbmc(c_source: String) -> i64 [io] {
+fn run_esbmc(c_source: String, unwind: String) -> i64 [io] {
     fs_write(String::from("/tmp/__vow_verify.c"), c_source);
     let esbmc_args: Vec<String> = Vec::new();
     esbmc_args.push(String::from("/tmp/__vow_verify.c"));
     esbmc_args.push(String::from("--no-bounds-check"));
     esbmc_args.push(String::from("--no-pointer-check"));
     esbmc_args.push(String::from("--unwind"));
-    esbmc_args.push(String::from("10"));
+    esbmc_args.push(unwind);
     esbmc_args.push(String::from("--64"));
     let exit_code: i64 = process_run(esbmc_path(), esbmc_args);
     exit_code
@@ -425,7 +425,7 @@ fn map_ce_values(c_names: Vec<String>, c_values: Vec<String>, map_keys: Vec<Stri
     }
 }
 
-fn verify_function_full(f: IrFunction, m: IrModule) -> VerifyResult [io] {
+fn verify_function_full(f: IrFunction, m: IrModule, unwind: String) -> VerifyResult [io] {
     let vows: Vec<IrVowEntry> = f.vows;
     if vows.len() == 0 {
         return VerifyResult {
@@ -438,7 +438,7 @@ fn verify_function_full(f: IrFunction, m: IrModule) -> VerifyResult [io] {
         };
     }
     let c_source: String = emit_c_for_verify(f, m);
-    let exit_code: i64 = run_esbmc(c_source);
+    let exit_code: i64 = run_esbmc(c_source, unwind);
     if exit_code == -1 {
         return VerifyResult {
             status: VERIFY_NOT_FOUND(),

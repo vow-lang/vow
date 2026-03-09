@@ -156,7 +156,7 @@ impl TypeEnv {
         env.define_fn(
             "__vow_clif_create",
             FnSig {
-                params: vec![Ty::I64],
+                params: vec![Ty::I64, Ty::I64],
                 return_ty: Ty::I64,
                 effects: [Effect::IO].into_iter().collect(),
             },

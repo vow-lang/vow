@@ -1303,6 +1303,7 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         // Cranelift shim FFI (used by self-hosted compiler)
         "__vow_clif_create" => {
             sig.params.push(AbiParam::new(types::I64)); // mode
+            sig.params.push(AbiParam::new(types::I64)); // trace_mode
             sig.returns.push(AbiParam::new(types::I64)); // ctx handle
         }
         "__vow_clif_add_string" => {
