@@ -533,8 +533,136 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
     0
 }
 
+fn skill_json() -> String {
+    let r: String = String::from("{\n");
+    r.push_str(String::from("  \"tool\": \"vow\",\n"));
+    r.push_str(String::from("  \"description\": \"Vow compiler: compiles Vow source to native executables with contract verification\",\n"));
+    r.push_str(String::from("  \"usage\": \"vow <command> [OPTIONS] <source.vow>\",\n"));
+    r.push_str(String::from("  \"commands\": {\n"));
+    r.push_str(String::from("    \"build\": \"Compile source to native executable (verifies by default; use --no-verify to skip)\",\n"));
+    r.push_str(String::from("    \"verify\": \"Verify contracts without producing an executable\",\n"));
+    r.push_str(String::from("    \"test\": \"Run tests (not yet implemented)\"\n"));
+    r.push_str(String::from("  },\n"));
+    r.push_str(String::from("  \"legacy_usage\": \"vow [OPTIONS] <source.vow> (equivalent to vow build)\",\n"));
+    r.push_str(String::from("  \"build_options\": {\n"));
+    r.push_str(String::from("    \"-o, --output <path>\": \"Output executable path (default: source without .vow extension)\",\n"));
+    r.push_str(String::from("    \"--mode <debug|release>\": \"Build mode; debug inserts runtime vow checks (default: release)\",\n"));
+    r.push_str(String::from("    \"--no-verify\": \"Skip ESBMC static verification\",\n"));
+    r.push_str(String::from("    \"--dump-ir\": \"Dump IR text to stdout and exit (skip codegen/verify)\",\n"));
+    r.push_str(String::from("    \"--debug-trace <off|calls|full>\": \"Emit JSON trace lines to stderr at runtime (default: off)\"\n"));
+    r.push_str(String::from("  },\n"));
+    r.push_str(String::from("  \"global_options\": {\n"));
+    r.push_str(String::from("    \"--help\": \"Print this JSON capability description\",\n"));
+    r.push_str(String::from("    \"--help --human\": \"Print human-readable capability description\"\n"));
+    r.push_str(String::from("  },\n"));
+    r.push_str(String::from("  \"output_json\": {\n"));
+    r.push_str(String::from("    \"status\": \"Verified | Unverified | CompileFailed | VerifyFailed\",\n"));
+    r.push_str(String::from("    \"executable\": \"path to compiled binary, or null\",\n"));
+    r.push_str(String::from("    \"diagnostics\": \"[array of {error_code, message, severity, span: {file, offset, length}}]\",\n"));
+    r.push_str(String::from("    \"message\": \"error detail (CompileFailed)\",\n"));
+    r.push_str(String::from("    \"function\": \"function name (VerifyFailed)\",\n"));
+    r.push_str(String::from("    \"counterexample\": \"ESBMC counterexample description (VerifyFailed)\"\n"));
+    r.push_str(String::from("  },\n"));
+    r.push_str(String::from("  \"exit_codes\": {\n"));
+    r.push_str(String::from("    \"0\": \"success (Verified or Unverified)\",\n"));
+    r.push_str(String::from("    \"1\": \"failure (CompileFailed or VerifyFailed)\"\n"));
+    r.push_str(String::from("  },\n"));
+    r.push_str(String::from("  \"language\": {\n"));
+    r.push_str(String::from("    \"module\": \"module <Name>\",\n"));
+    r.push_str(String::from("    \"function\": \"fn <name>(<params>) -> <RetTy> [<effects>] { <body> }\",\n"));
+    r.push_str(String::from("    \"vow_function\": \"fn <name>(<params>) -> <RetTy> vow { requires: <expr>; ensures: <expr> } { <body> }\",\n"));
+    r.push_str(String::from("    \"while_with_invariant\": \"while <cond> vow { invariant: <expr> } { <body> }\",\n"));
+    r.push_str(String::from("    \"types\": [\"i32\", \"i64\", \"f32\", \"f64\", \"bool\", \"()\"],\n"));
+    r.push_str(String::from("    \"effects\": [\"io\", \"read\", \"write\", \"panic\", \"unsafe\"],\n"));
+    r.push_str(String::from("    \"builtins\": {\n"));
+    r.push_str(String::from("      \"print_str\": \"fn(s: str) -> () [io]\",\n"));
+    r.push_str(String::from("      \"print_i64\": \"fn(v: i64) -> () [io]\"\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"operators\": {\n"));
+    r.push_str(String::from("      \"arithmetic\": [\"+\", \"-\", \"*\", \"/\", \"%\"],\n"));
+    r.push_str(String::from("      \"checked_arithmetic\": [\"+!\", \"-!\", \"*!\", \"/!\", \"%!\"],\n"));
+    r.push_str(String::from("      \"comparison\": [\"==\", \"!=\", \"<\", \"<=\", \">\", \">=\"],\n"));
+    r.push_str(String::from("      \"logical\": [\"&&\", \"||\", \"!\"]\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"vow_clauses\": {\n"));
+    r.push_str(String::from("      \"requires\": \"precondition -- blame=Caller on violation\",\n"));
+    r.push_str(String::from("      \"ensures\": \"postcondition -- blame=Callee on violation; use `result` for return value\",\n"));
+    r.push_str(String::from("      \"invariant\": \"loop invariant -- checked at top of each iteration\"\n"));
+    r.push_str(String::from("    }\n"));
+    r.push_str(String::from("  }\n"));
+    r.push_str(String::from("}\n"));
+    r
+}
+
+fn skill_human() -> String {
+    let r: String = String::from("vow -- Vow compiler\n\n");
+    r.push_str(String::from("USAGE\n"));
+    r.push_str(String::from("  vow build [OPTIONS] <source.vow>    Compile to native executable\n"));
+    r.push_str(String::from("  vow verify <source.vow>             Verify contracts only (no executable)\n"));
+    r.push_str(String::from("  vow test [<source.vow>]             Run tests (not yet implemented)\n"));
+    r.push_str(String::from("  vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("BUILD OPTIONS\n"));
+    r.push_str(String::from("  -o, --output <path>   Output executable path\n"));
+    r.push_str(String::from("  --mode <debug|release>  Build mode (default: release)\n"));
+    r.push_str(String::from("                          debug: inserts runtime vow violation checks\n"));
+    r.push_str(String::from("                          release: omits vow checks for performance\n"));
+    r.push_str(String::from("  --no-verify           Skip ESBMC static verification\n"));
+    r.push_str(String::from("  --dump-ir             Dump IR text to stdout and exit\n"));
+    r.push_str(String::from("  --debug-trace <off|calls|full>  Emit JSON trace to stderr (default: off)\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("GLOBAL OPTIONS\n"));
+    r.push_str(String::from("  --help                Print JSON capability description (agent-friendly)\n"));
+    r.push_str(String::from("  --help --human        Print this text\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("OUTPUT (JSON on stdout)\n"));
+    r.push_str(String::from("  status      : Verified | Unverified | CompileFailed | VerifyFailed\n"));
+    r.push_str(String::from("  executable  : path to compiled binary, or null\n"));
+    r.push_str(String::from("  diagnostics : array of {error_code, message, severity, span: {file, offset, length}}\n"));
+    r.push_str(String::from("  message     : error detail (CompileFailed)\n"));
+    r.push_str(String::from("  function    : function name (VerifyFailed)\n"));
+    r.push_str(String::from("  counterexample: ESBMC counterexample (VerifyFailed)\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("EXIT CODES\n"));
+    r.push_str(String::from("  0  success (Verified or Unverified)\n"));
+    r.push_str(String::from("  1  failure (CompileFailed or VerifyFailed)\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("LANGUAGE SUMMARY\n"));
+    r.push_str(String::from("  module Hello\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("  fn add(x: i64, y: i64) -> i64 {\n"));
+    r.push_str(String::from("    x + y\n"));
+    r.push_str(String::from("  }\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("  fn divide(x: i64, y: i64) -> i64 vow {\n"));
+    r.push_str(String::from("    requires: y != 0\n"));
+    r.push_str(String::from("    ensures:  result * y == x\n"));
+    r.push_str(String::from("  } {\n"));
+    r.push_str(String::from("    x / y\n"));
+    r.push_str(String::from("  }\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("  fn main() -> i32 [io] {\n"));
+    r.push_str(String::from("    print_i64(divide(10, 2));\n"));
+    r.push_str(String::from("    0\n"));
+    r.push_str(String::from("  }\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("TYPES     : i32  i64  f32  f64  bool  ()\n"));
+    r.push_str(String::from("EFFECTS   : io  read  write  panic  unsafe\n"));
+    r.push_str(String::from("BUILTINS  : print_str(str) [io]   print_i64(i64) [io]\n"));
+    r.push_str(String::from("OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !\n"));
+    r
+}
+
 fn main() -> i32 [io] {
     let argv: Vec<String> = args();
+    if has_flag(argv, String::from("--help")) {
+        if has_flag(argv, String::from("--human")) {
+            print_str(skill_human());
+        } else {
+            print_str(skill_json());
+        }
+        return 0;
+    }
     if argv.len() == 0 {
         eprintln_str("usage: vowc <command> [options] <file.vow>");
         return 1;
