@@ -555,7 +555,7 @@ Findings:
 
 ---
 
-## Phase 18: Self-Hosted Verification Pipeline
+## Phase 18: Self-Hosted Verification Pipeline — COMPLETE
 
 **Goal:** The self-hosted compiler can invoke ESBMC, interpret results, and
 map counterexamples back to source. This is the hardest phase.
@@ -614,10 +614,15 @@ to stdout (`{"status":"Verified"|"VerifyFailed"|"CompileFailed",...}`) with diag
 and counterexamples arrays. Summary line redirected to stderr when `--verify` is active.
 Bootstrap triple test passes (binary fixed point).
 
-### 18.5 Verification: self-hosted verifies its own contracts
+### 18.5 Verification: self-hosted verifies its own contracts ✅
 
 Test: `./compiler/main verify compiler/token.vow` successfully verifies all
 89 contracts on tok_* functions, matching the Rust compiler's results.
+
+**Done.** Both compilers produce identical JSON output:
+- Self-hosted: `ulimit -v 2000000; /tmp/vow_main --verify compiler/token.vow` → exit 0, 89 tok_* functions PROVEN
+- Rust: `./target/release/vow verify compiler/token.vow` → exit 0, Verified
+- Both emit: `{"status":"Verified","executable":null,"diagnostics":[],"counterexamples":[]}`
 
 ---
 
