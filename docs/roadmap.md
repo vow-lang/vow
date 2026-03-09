@@ -560,16 +560,19 @@ Findings:
 **Goal:** The self-hosted compiler can invoke ESBMC, interpret results, and
 map counterexamples back to source. This is the hardest phase.
 
-### 18.1 C emitter in Vow
+### 18.1 C emitter in Vow ✅
 
 Port the IR-to-C translation to Vow:
 - Emit ESBMC-compatible C from Vow IR
 - Model Vec/String/HashMap operations as C functions
 - Handle Upsilon/Phi nodes correctly (batched temporaries)
 - Emit `__ESBMC_assert` for verification conditions
+- `--emit-c` flag in self-hosted compiler driver
 
-Reference: Rust verification pipeline (~3,500 lines total). The C emitter
-is the largest single component.
+**Done.** `compiler/c_emitter.vow` (~950 lines) ports the full Rust C emitter.
+`emit_c_module` is the entry point. Constant-function detection and inlining,
+Vec/String/HashMap variable analysis with fixed-point propagation, Upsilon
+batching with temporaries — all ported. Bootstrap triple test passes.
 
 ### 18.2 ESBMC invocation + result parsing
 

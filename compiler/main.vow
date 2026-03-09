@@ -11,6 +11,7 @@ use ir
 use ir_printer
 use lower
 use clif
+use c_emitter
 use diag
 
 fn has_flag(argv: Vec<String>, flag: String) -> bool {
@@ -195,8 +196,14 @@ fn main() -> i32 [io] {
     print_str(" items, ");
     print_i64(n_errors);
     print_str(" errors\n");
+    let emit_c: bool = has_flag(argv, String::from("--emit-c"));
     if n_errors == 0 {
-        if has_output {
+        if emit_c {
+            let str_eids: Vec<i64> = e.expr_str_eids;
+            let ir_mod: IrModule = lower_module_vow(merged, str_eids);
+            let c_code: String = emit_c_module(ir_mod);
+            print_str(c_code);
+        } else if has_output {
             let out: String = get_flag_arg(argv, String::from("-o"));
             let mode_str: String = get_flag_arg(argv, String::from("--mode"));
             let mode: i64 = {
