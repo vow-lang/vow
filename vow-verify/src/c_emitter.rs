@@ -72,94 +72,22 @@ fn ir_ty_to_c(ty: Ty) -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
-// Vec variable analysis
+// Typed variable analysis (Vec, String, HashMap)
 // ---------------------------------------------------------------------------
 
-fn collect_vec_vars(func: &Function) -> HashSet<u32> {
-    let mut vec_vars = HashSet::new();
+fn collect_typed_vars(func: &Function, creator: &str, prefix: &str) -> HashSet<u32> {
+    let mut vars = HashSet::new();
 
-    // Pass 1: collect all __vow_vec_new results
     for block in &func.blocks {
         for inst in &block.insts {
             if inst.opcode == Opcode::Call
                 && let InstData::CallExtern(ref name) = inst.data
-                && name == "__vow_vec_new"
             {
-                vec_vars.insert(inst.id.0);
-            }
-        }
-    }
-
-    // Pass 2: reverse-propagate — if a value is used as first arg of __vow_vec_*, it's a vec
-    for block in &func.blocks {
-        for inst in &block.insts {
-            if inst.opcode == Opcode::Call
-                && let InstData::CallExtern(ref name) = inst.data
-                && name.starts_with("__vow_vec_")
-                && name != "__vow_vec_new"
-                && !inst.args.is_empty()
-            {
-                vec_vars.insert(inst.args[0].0);
-            }
-        }
-    }
-
-    // Pass 3: propagate through Upsilon→Phi until fixed point
-    loop {
-        let mut changed = false;
-        for block in &func.blocks {
-            for inst in &block.insts {
-                if inst.opcode == Opcode::Upsilon
-                    && let InstData::PhiTarget(phi_id) = inst.data
-                    && !inst.args.is_empty()
-                {
-                    // Forward: Upsilon value → Phi target
-                    if vec_vars.contains(&inst.args[0].0) && vec_vars.insert(phi_id.0) {
-                        changed = true;
-                    }
-                    // Reverse: Phi target → Upsilon value
-                    if vec_vars.contains(&phi_id.0) && vec_vars.insert(inst.args[0].0) {
-                        changed = true;
-                    }
+                if name == creator {
+                    vars.insert(inst.id.0);
+                } else if name.starts_with(prefix) && !inst.args.is_empty() {
+                    vars.insert(inst.args[0].0);
                 }
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-
-    vec_vars
-}
-
-// ---------------------------------------------------------------------------
-// String variable analysis
-// ---------------------------------------------------------------------------
-
-fn collect_string_vars(func: &Function) -> HashSet<u32> {
-    let mut string_vars = HashSet::new();
-
-    for block in &func.blocks {
-        for inst in &block.insts {
-            if inst.opcode == Opcode::Call
-                && let InstData::CallExtern(ref name) = inst.data
-                && name == "__vow_string_from_cstr"
-            {
-                string_vars.insert(inst.id.0);
-            }
-        }
-    }
-
-    // Reverse-propagate: first arg of __vow_string_* calls is a string
-    for block in &func.blocks {
-        for inst in &block.insts {
-            if inst.opcode == Opcode::Call
-                && let InstData::CallExtern(ref name) = inst.data
-                && name.starts_with("__vow_string_")
-                && name != "__vow_string_from_cstr"
-                && !inst.args.is_empty()
-            {
-                string_vars.insert(inst.args[0].0);
             }
         }
     }
@@ -172,71 +100,10 @@ fn collect_string_vars(func: &Function) -> HashSet<u32> {
                     && let InstData::PhiTarget(phi_id) = inst.data
                     && !inst.args.is_empty()
                 {
-                    // Forward: Upsilon value → Phi target
-                    if string_vars.contains(&inst.args[0].0) && string_vars.insert(phi_id.0) {
+                    if vars.contains(&inst.args[0].0) && vars.insert(phi_id.0) {
                         changed = true;
                     }
-                    // Reverse: Phi target → Upsilon value
-                    if string_vars.contains(&phi_id.0) && string_vars.insert(inst.args[0].0) {
-                        changed = true;
-                    }
-                }
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-
-    string_vars
-}
-
-// ---------------------------------------------------------------------------
-// HashMap variable analysis
-// ---------------------------------------------------------------------------
-
-fn collect_hashmap_vars(func: &Function) -> HashSet<u32> {
-    let mut hashmap_vars = HashSet::new();
-
-    for block in &func.blocks {
-        for inst in &block.insts {
-            if inst.opcode == Opcode::Call
-                && let InstData::CallExtern(ref name) = inst.data
-                && name == "__vow_map_new"
-            {
-                hashmap_vars.insert(inst.id.0);
-            }
-        }
-    }
-
-    // Reverse-propagate: first arg of __vow_map_* calls is a hashmap
-    for block in &func.blocks {
-        for inst in &block.insts {
-            if inst.opcode == Opcode::Call
-                && let InstData::CallExtern(ref name) = inst.data
-                && name.starts_with("__vow_map_")
-                && name != "__vow_map_new"
-                && !inst.args.is_empty()
-            {
-                hashmap_vars.insert(inst.args[0].0);
-            }
-        }
-    }
-
-    loop {
-        let mut changed = false;
-        for block in &func.blocks {
-            for inst in &block.insts {
-                if inst.opcode == Opcode::Upsilon
-                    && let InstData::PhiTarget(phi_id) = inst.data
-                    && !inst.args.is_empty()
-                {
-                    // Forward: Upsilon value → Phi target
-                    if hashmap_vars.contains(&inst.args[0].0) && hashmap_vars.insert(phi_id.0) {
-                        changed = true;
-                    }
-                    // Reverse: Phi target → Upsilon value
-                    if hashmap_vars.contains(&phi_id.0) && hashmap_vars.insert(inst.args[0].0) {
+                    if vars.contains(&phi_id.0) && vars.insert(inst.args[0].0) {
                         changed = true;
                     }
                 }
@@ -247,7 +114,7 @@ fn collect_hashmap_vars(func: &Function) -> HashSet<u32> {
         }
     }
 
-    hashmap_vars
+    vars
 }
 
 // ---------------------------------------------------------------------------
@@ -804,9 +671,9 @@ fn c_nondet_suffix(ty: Ty) -> &'static str {
 
 pub fn emit_c_function(func: &Function, const_fns: &HashMap<FuncId, ConstantValue>) -> String {
     let mut out = String::new();
-    let vec_vars = collect_vec_vars(func);
-    let string_vars = collect_string_vars(func);
-    let hashmap_vars = collect_hashmap_vars(func);
+    let vec_vars = collect_typed_vars(func, "__vow_vec_new", "__vow_vec_");
+    let string_vars = collect_typed_vars(func, "__vow_string_from_cstr", "__vow_string_");
+    let hashmap_vars = collect_typed_vars(func, "__vow_map_new", "__vow_map_");
 
     // Return type (use int64_t for Ptr since structs are opaque in verification)
     let ret_c = match func.return_ty {

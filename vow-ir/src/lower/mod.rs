@@ -63,6 +63,7 @@ pub struct LowerCtx {
     scope: Vec<HashMap<String, InstId>>,
     pub(super) vow_block: Option<VowBlock>,
     pub(super) string_pool: Vec<String>,
+    string_pool_index: HashMap<String, u32>,
     func_index: HashMap<String, (FuncId, Ty)>,
     // struct name → field names in declaration order
     pub(super) struct_field_map: HashMap<String, Vec<String>>,
@@ -70,6 +71,7 @@ pub struct LowerCtx {
     pub(super) enum_variant_map: HashMap<String, Vec<String>>,
     // InstId of a struct/enum allocation → type name
     pub(super) inst_struct_type: HashMap<InstId, String>,
+    inst_ty_cache: HashMap<InstId, Ty>,
     // source file path for vow entries
     file: String,
     // struct name → field type names (from AST declarations) for FieldGet auto-tagging
@@ -122,10 +124,12 @@ impl LowerCtx {
             scope: vec![HashMap::new()],
             vow_block: None,
             string_pool: Vec::new(),
+            string_pool_index: HashMap::new(),
             func_index,
             struct_field_map,
             enum_variant_map,
             inst_struct_type: HashMap::new(),
+            inst_ty_cache: HashMap::new(),
             file,
             struct_field_type_names,
             string_exprs,
@@ -133,10 +137,11 @@ impl LowerCtx {
     }
 
     pub(super) fn intern_str(&mut self, s: &str) -> u32 {
-        if let Some(idx) = self.string_pool.iter().position(|x| x == s) {
-            return idx as u32;
+        if let Some(&idx) = self.string_pool_index.get(s) {
+            return idx;
         }
         let idx = self.string_pool.len() as u32;
+        self.string_pool_index.insert(s.to_string(), idx);
         self.string_pool.push(s.to_string());
         idx
     }
@@ -167,16 +172,8 @@ impl LowerCtx {
         self.define(name.to_string(), id);
     }
 
-    /// Look up the type of an already-emitted instruction.
     pub(super) fn inst_ty(&self, id: InstId) -> Ty {
-        for block in &self.func.blocks {
-            for inst in &block.insts {
-                if inst.id == id {
-                    return inst.ty;
-                }
-            }
-        }
-        Ty::Unit
+        self.inst_ty_cache.get(&id).copied().unwrap_or(Ty::Unit)
     }
 
     pub(super) fn lookup(&self, name: &str) -> Option<InstId> {
@@ -245,6 +242,7 @@ impl LowerCtx {
             data,
             origin,
         };
+        self.inst_ty_cache.insert(id, ty);
         let block_idx = self.current_block.0 as usize;
         self.func.blocks[block_idx].insts.push(inst);
         id

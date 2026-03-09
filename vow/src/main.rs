@@ -13,7 +13,10 @@ use vow_codegen::cranelift_backend::CraneliftBackend;
 use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{CollectingEmitter, Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
-use vow_verify::{Counterexample, VerificationResult, verify_function_with_module};
+use vow_verify::{
+    Counterexample, VerificationResult, detect_constant_functions,
+    verify_function_with_const_fns,
+};
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -991,11 +994,12 @@ fn run_verification_sync(
     file: &str,
     call_site_index: &std::collections::HashMap<String, Vec<CallSiteInfo>>,
 ) -> VerifyOutcome {
+    let const_fns = detect_constant_functions(ir_module);
     for func in &ir_module.functions {
         if func.vows.is_empty() {
             continue;
         }
-        match verify_function_with_module(func, ir_module) {
+        match verify_function_with_const_fns(func, &const_fns) {
             VerificationResult::Failed(ce) => {
                 let sce = build_structured_counterexample(func, &ce, file, call_site_index);
                 return VerifyOutcome::Failed {

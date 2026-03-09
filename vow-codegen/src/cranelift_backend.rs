@@ -11,7 +11,7 @@ use cranelift_module::{
     DataDescription, DataId, FuncId as CraneliftFuncId, Linkage, Module as CraneliftModule,
 };
 use cranelift_object::{ObjectBuilder, ObjectModule};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use vow_ir::{
     BlockId, FuncId as IrFuncId, Function as IrFunction, Inst, InstData, InstId,
@@ -1394,14 +1394,12 @@ impl Backend for CraneliftBackend {
         }
 
         // Scan all functions for CallExtern symbols and declare them as imports
-        let mut extern_syms: Vec<String> = Vec::new();
+        let mut extern_syms = HashSet::new();
         for func in &module.functions {
             for block in &func.blocks {
                 for inst in &block.insts {
-                    if let InstData::CallExtern(sym) = &inst.data
-                        && !extern_syms.contains(sym)
-                    {
-                        extern_syms.push(sym.clone());
+                    if let InstData::CallExtern(sym) = &inst.data {
+                        extern_syms.insert(sym.clone());
                     }
                 }
             }

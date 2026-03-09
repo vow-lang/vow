@@ -191,6 +191,13 @@ pub fn verify_function_with_module(func: &Function, module: &Module) -> Verifica
     verify_function_inner(func, &const_fns)
 }
 
+pub fn verify_function_with_const_fns(
+    func: &Function,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+) -> VerificationResult {
+    verify_function_inner(func, const_fns)
+}
+
 fn verify_function_inner(
     func: &Function,
     const_fns: &HashMap<FuncId, ConstantValue>,

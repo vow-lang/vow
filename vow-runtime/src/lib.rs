@@ -212,6 +212,33 @@ pub extern "C" fn __vow_vec_new_val() -> *mut u8 {
     __vow_vec_new(8, 8)
 }
 
+unsafe fn __vow_vec_reserve(vec: *mut u8, additional: usize, elem_size: usize, elem_align: usize) {
+    let v = unsafe { &mut *(vec as *mut VowVec) };
+    let required = v.len + additional;
+    if required <= v.cap {
+        return;
+    }
+    let mut new_cap = if v.cap == 0 { VEC_INITIAL_CAP } else { v.cap };
+    while new_cap < required {
+        new_cap *= 2;
+    }
+    let old_size = v.cap * elem_size;
+    let new_size = new_cap * elem_size;
+    let new_ptr = if old_size == 0 {
+        let layout = unsafe { std::alloc::Layout::from_size_align_unchecked(new_size, elem_align) };
+        unsafe { std::alloc::alloc_zeroed(layout) }
+    } else {
+        let old_layout =
+            unsafe { std::alloc::Layout::from_size_align_unchecked(old_size, elem_align) };
+        unsafe { std::alloc::realloc(v.ptr, old_layout, new_size) }
+    };
+    if new_ptr.is_null() {
+        std::process::abort();
+    }
+    v.ptr = new_ptr;
+    v.cap = new_cap;
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_push(
     vec: *mut u8,
@@ -219,30 +246,8 @@ pub unsafe extern "C" fn __vow_vec_push(
     elem_size: usize,
     elem_align: usize,
 ) {
+    unsafe { __vow_vec_reserve(vec, 1, elem_size, elem_align) };
     let v = unsafe { &mut *(vec as *mut VowVec) };
-    if v.len == v.cap {
-        let old_size = v.cap * elem_size;
-        let new_cap = if v.cap == 0 {
-            VEC_INITIAL_CAP
-        } else {
-            v.cap * 2
-        };
-        let new_size = new_cap * elem_size;
-        let old_layout =
-            unsafe { std::alloc::Layout::from_size_align_unchecked(old_size, elem_align) };
-        let new_ptr = if old_size == 0 {
-            let new_layout =
-                unsafe { std::alloc::Layout::from_size_align_unchecked(new_size, elem_align) };
-            unsafe { std::alloc::alloc_zeroed(new_layout) }
-        } else {
-            unsafe { std::alloc::realloc(v.ptr, old_layout, new_size) }
-        };
-        if new_ptr.is_null() {
-            std::process::abort();
-        }
-        v.ptr = new_ptr;
-        v.cap = new_cap;
-    }
     let dest = unsafe { v.ptr.add(v.len * elem_size) };
     unsafe { std::ptr::copy_nonoverlapping(elem, dest, elem_size) };
     v.len += 1;
@@ -311,10 +316,10 @@ pub unsafe extern "C" fn __vow_vec_get_ptr(
 pub unsafe extern "C" fn __vow_string_new(ptr: *const i8, len: usize) -> *mut u8 {
     let vec_ptr = __vow_vec_new(1, 1);
     if len > 0 && !ptr.is_null() {
-        let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, len) };
-        for &b in bytes {
-            unsafe { __vow_vec_push(vec_ptr, &b as *const u8, 1, 1) };
-        }
+        unsafe { __vow_vec_reserve(vec_ptr, len, 1, 1) };
+        let v = unsafe { &mut *(vec_ptr as *mut VowVec) };
+        unsafe { std::ptr::copy_nonoverlapping(ptr as *const u8, v.ptr, len) };
+        v.len = len;
     }
     vec_ptr
 }
@@ -373,10 +378,13 @@ pub unsafe extern "C" fn __vow_string_contains(haystack: *const u8, needle: *con
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_push_str(dest: *mut u8, src: *const u8) {
     let vs = unsafe { &*(src as *const VowVec) };
-    let bytes = unsafe { std::slice::from_raw_parts(vs.ptr, vs.len) };
-    for &b in bytes {
-        unsafe { __vow_vec_push(dest, &b as *const u8, 1, 1) };
+    if vs.len == 0 {
+        return;
     }
+    unsafe { __vow_vec_reserve(dest, vs.len, 1, 1) };
+    let vd = unsafe { &mut *(dest as *mut VowVec) };
+    unsafe { std::ptr::copy_nonoverlapping(vs.ptr, vd.ptr.add(vd.len), vs.len) };
+    vd.len += vs.len;
 }
 
 #[unsafe(no_mangle)]
