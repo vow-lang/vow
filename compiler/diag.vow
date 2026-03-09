@@ -365,6 +365,71 @@ fn diag_ctx_print_all(ctx: DiagCtx) [io] {
     }
 }
 
+struct VerifyCE {
+    function: String,
+    var_names: Vec<String>,
+    var_values: Vec<String>,
+    violation: String,
+    vow_id: i64,
+    source: String,
+    blame: i64,
+}
+
+fn diag_ce_to_json(ce: VerifyCE) -> String {
+    let r: String = String::from("{\"function\":\"");
+    r.push_str(diag_json_escape_str(ce.function));
+    r.push_str(String::from("\",\"values\":{"));
+    let names: Vec<String> = ce.var_names;
+    let vals: Vec<String> = ce.var_values;
+    let nv: i64 = names.len();
+    let mut i: i64 = 0;
+    while i < nv {
+        if i > 0 {
+            r.push_str(String::from(","));
+        }
+        r.push_str(String::from("\""));
+        r.push_str(diag_json_escape_str(names[i]));
+        r.push_str(String::from("\":\""));
+        r.push_str(diag_json_escape_str(vals[i]));
+        r.push_str(String::from("\""));
+        i = i + 1;
+    }
+    r.push_str(String::from("},\"violation\":\""));
+    r.push_str(diag_json_escape_str(ce.violation));
+    r.push_str(String::from("\",\"vow_id\":"));
+    r.push_str(diag_i64_to_str(ce.vow_id));
+    r.push_str(String::from(",\"source\":\""));
+    r.push_str(diag_json_escape_str(ce.source));
+    r.push_str(String::from("\",\"blame\":\""));
+    if ce.blame != DIAG_BLAME_NONE() {
+        r.push_str(diag_blame_name_json(ce.blame));
+    } else {
+        r.push_str(String::from("none"));
+    }
+    r.push_str(String::from("\"}"));
+    r
+}
+
+fn diag_emit_verify_json(status: String, dctx: DiagCtx, ces: Vec<VerifyCE>) [io] {
+    let r: String = String::from("{\"status\":\"");
+    r.push_str(status);
+    r.push_str(String::from("\",\"executable\":null,\"diagnostics\":"));
+    r.push_str(diag_ctx_to_json(dctx));
+    r.push_str(String::from(",\"counterexamples\":["));
+    let nc: i64 = ces.len();
+    let mut i: i64 = 0;
+    while i < nc {
+        if i > 0 {
+            r.push_str(String::from(","));
+        }
+        r.push_str(diag_ce_to_json(ces[i]));
+        i = i + 1;
+    }
+    r.push_str(String::from("]}"));
+    print_str(r);
+    print_str(String::from("\n"));
+}
+
 fn diag_emit_build_json(status: String, exec_path: String, dctx: DiagCtx) [io] {
     let r: String = String::from("{\"status\":\"");
     r.push_str(status);

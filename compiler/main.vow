@@ -193,19 +193,28 @@ fn main() -> i32 [io] {
     check_module(e, merged);
     let n_errors: i64 = e.error_count;
     diag_ctx_print_all(dctx);
-    print_i64(n_items);
-    print_str(" items, ");
-    print_i64(n_errors);
-    print_str(" errors\n");
     let emit_c: bool = has_flag(argv, String::from("--emit-c"));
     let do_verify: bool = has_flag(argv, String::from("--verify"));
+    if do_verify {
+        eprintln_str(str4(i64_to_str(n_items), String::from(" items, "), i64_to_str(n_errors), String::from(" errors")));
+    } else {
+        print_i64(n_items);
+        print_str(" items, ");
+        print_i64(n_errors);
+        print_str(" errors\n");
+    }
+    if n_errors > 0 && do_verify {
+        diag_emit_verify_json(String::from("CompileFailed"), dctx, Vec::new());
+        return 1;
+    }
     if n_errors == 0 {
         if do_verify {
             let str_eids: Vec<i64> = e.expr_str_eids;
             let ir_mod: IrModule = lower_module_vow(merged, str_eids);
             let fns: Vec<IrFunction> = ir_mod.functions;
             let mut fi: i64 = 0;
-            let mut all_proven: bool = true;
+            let mut all_proven: i64 = 1;
+            let ces: Vec<VerifyCE> = Vec::new();
             while fi < fns.len() {
                 let f: IrFunction = fns[fi];
                 let vows: Vec<IrVowEntry> = f.vows;
@@ -216,7 +225,7 @@ fn main() -> i32 [io] {
                     if st == VERIFY_PROVEN() {
                         eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN")));
                     } else if st == VERIFY_FAILED() {
-                        all_proven = false;
+                        all_proven = 0;
                         eprintln_str(str3(String::from("  "), f.name, String::from(": FAILED")));
                         let vnames: Vec<String> = vr.var_names;
                         let vvals: Vec<String> = vr.var_values;
@@ -225,15 +234,51 @@ fn main() -> i32 [io] {
                             eprintln_str(str4(String::from("    "), vnames[vi], String::from(" = "), vvals[vi]));
                             vi = vi + 1;
                         }
+                        let vow_id: i64 = vr.vow_id;
+                        let ce_violation: String = String::from("");
+                        let ce_blame: i64 = DIAG_BLAME_NONE();
+                        let vow_entries: Vec<IrVowEntry> = f.vows;
+                        let mut vi2: i64 = 0;
+                        while vi2 < vow_entries.len() {
+                            let ve: IrVowEntry = vow_entries[vi2];
+                            if ve.id == vow_id {
+                                ce_violation = ve.description;
+                                ce_blame = ve.blame;
+                            }
+                            vi2 = vi2 + 1;
+                        }
+                        let ce: VerifyCE = VerifyCE {
+                            function: f.name,
+                            var_names: vr.var_names,
+                            var_values: vr.var_values,
+                            violation: ce_violation,
+                            vow_id: vow_id,
+                            source: path,
+                            blame: ce_blame,
+                        };
+                        ces.push(ce);
                     } else if st == VERIFY_TIMEOUT() {
+                        all_proven = 0;
                         eprintln_str(str3(String::from("  "), f.name, String::from(": TIMEOUT")));
                     } else if st == VERIFY_NOT_FOUND() {
                         eprintln_str(String::from("  esbmc not found"));
                     } else {
+                        all_proven = 0;
                         eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR")));
                     }
                 }
                 fi = fi + 1;
+            }
+            let status_str: String = {
+                if all_proven == 1 {
+                    String::from("Verified")
+                } else {
+                    String::from("VerifyFailed")
+                }
+            };
+            diag_emit_verify_json(status_str, dctx, ces);
+            if all_proven == 0 {
+                return 1;
             }
         } else if emit_c {
             let str_eids: Vec<i64> = e.expr_str_eids;

@@ -601,12 +601,18 @@ Port the `Origin` metadata and name mapping:
 Populated during lowering. `build_name_map` + `map_ce_values` in verifier.vow map
 C names (`v0`, `p0`) back to source names (`x`, `y`). Unmapped names get `_esbmc_` prefix.
 
-### 18.4 CEGIS loop integration
+### 18.4 Structured JSON verification output ✅
 
 Wire the verification pipeline into the compiler driver:
 - Compile → emit C → invoke ESBMC → parse result → report
 - Structured JSON output for verification results
 - Counterexample JSON with blame and source names
+
+**Done.** `VerifyCE` struct + `diag_ce_to_json` + `diag_emit_verify_json` added to
+`compiler/diag.vow`. `main.vow` restructured: `--verify` path emits structured JSON
+to stdout (`{"status":"Verified"|"VerifyFailed"|"CompileFailed",...}`) with diagnostics
+and counterexamples arrays. Summary line redirected to stderr when `--verify` is active.
+Bootstrap triple test passes (binary fixed point).
 
 ### 18.5 Verification: self-hosted verifies its own contracts
 
