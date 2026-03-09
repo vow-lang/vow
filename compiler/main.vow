@@ -12,6 +12,7 @@ use ir_printer
 use lower
 use clif
 use c_emitter
+use verifier
 use diag
 
 fn has_flag(argv: Vec<String>, flag: String) -> bool {
@@ -197,8 +198,44 @@ fn main() -> i32 [io] {
     print_i64(n_errors);
     print_str(" errors\n");
     let emit_c: bool = has_flag(argv, String::from("--emit-c"));
+    let do_verify: bool = has_flag(argv, String::from("--verify"));
     if n_errors == 0 {
-        if emit_c {
+        if do_verify {
+            let str_eids: Vec<i64> = e.expr_str_eids;
+            let ir_mod: IrModule = lower_module_vow(merged, str_eids);
+            let fns: Vec<IrFunction> = ir_mod.functions;
+            let mut fi: i64 = 0;
+            let mut all_proven: bool = true;
+            while fi < fns.len() {
+                let f: IrFunction = fns[fi];
+                let vows: Vec<IrVowEntry> = f.vows;
+                if vows.len() > 0 {
+                    eprintln_str(str3(String::from("Verifying "), f.name, String::from("...")));
+                    let vr: VerifyResult = verify_function_full(f, ir_mod);
+                    let st: i64 = vr.status;
+                    if st == VERIFY_PROVEN() {
+                        eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN")));
+                    } else if st == VERIFY_FAILED() {
+                        all_proven = false;
+                        eprintln_str(str3(String::from("  "), f.name, String::from(": FAILED")));
+                        let vnames: Vec<String> = vr.var_names;
+                        let vvals: Vec<String> = vr.var_values;
+                        let mut vi: i64 = 0;
+                        while vi < vnames.len() {
+                            eprintln_str(str4(String::from("    "), vnames[vi], String::from(" = "), vvals[vi]));
+                            vi = vi + 1;
+                        }
+                    } else if st == VERIFY_TIMEOUT() {
+                        eprintln_str(str3(String::from("  "), f.name, String::from(": TIMEOUT")));
+                    } else if st == VERIFY_NOT_FOUND() {
+                        eprintln_str(String::from("  esbmc not found"));
+                    } else {
+                        eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR")));
+                    }
+                }
+                fi = fi + 1;
+            }
+        } else if emit_c {
             let str_eids: Vec<i64> = e.expr_str_eids;
             let ir_mod: IrModule = lower_module_vow(merged, str_eids);
             let c_code: String = emit_c_module(ir_mod);

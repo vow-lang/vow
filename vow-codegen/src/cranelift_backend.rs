@@ -1265,6 +1265,14 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_process_exit" => {
             sig.params.push(AbiParam::new(types::I64)); // exit code
         }
+        "__vow_process_run" => {
+            sig.params.push(AbiParam::new(types::I64)); // cmd *VowVec<u8>
+            sig.params.push(AbiParam::new(types::I64)); // args *VowVec<i64>
+            sig.returns.push(AbiParam::new(types::I64)); // exit code
+        }
+        "__vow_process_get_stdout" | "__vow_process_get_stderr" => {
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
         // HashMap runtime
         "__vow_map_new" => {
             sig.returns.push(AbiParam::new(types::I64)); // *VowMap

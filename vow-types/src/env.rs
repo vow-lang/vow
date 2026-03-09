@@ -124,6 +124,34 @@ impl TypeEnv {
             },
         );
 
+        env.define_fn(
+            "process_run",
+            FnSig {
+                params: vec![
+                    Ty::Str,
+                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::Str]),
+                ],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "process_get_stdout",
+            FnSig {
+                params: vec![],
+                return_ty: Ty::Str,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "process_get_stderr",
+            FnSig {
+                params: vec![],
+                return_ty: Ty::Str,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+
         // Cranelift shim FFI functions (used by the self-hosted compiler's clif.vow)
         env.define_fn(
             "__vow_clif_create",

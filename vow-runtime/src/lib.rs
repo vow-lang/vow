@@ -1,7 +1,13 @@
 #![allow(clippy::missing_safety_doc)]
 
-use std::ffi::{CStr, c_char};
+use std::cell::RefCell;
+use std::ffi::{c_char, CStr};
 use std::io::Write as _;
+
+thread_local! {
+    static LAST_STDOUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    static LAST_STDERR: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
 
 const TAG_I32: u8 = 0;
 const TAG_I64: u8 = 1;
@@ -337,7 +343,11 @@ pub unsafe extern "C" fn __vow_string_eq(a: *const u8, b: *const u8) -> i64 {
     }
     let sa = unsafe { std::slice::from_raw_parts(va.ptr, va.len) };
     let sb = unsafe { std::slice::from_raw_parts(vb.ptr, vb.len) };
-    if sa == sb { 1 } else { 0 }
+    if sa == sb {
+        1
+    } else {
+        0
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -462,6 +472,53 @@ pub extern "C" fn __vow_args() -> *mut u8 {
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_process_exit(code: i64) {
     std::process::exit(code as i32);
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_process_run(cmd_ptr: i64, args_ptr: i64) -> i64 {
+    let cmd_vec = unsafe { &*(cmd_ptr as *const VowVec) };
+    let cmd_bytes = unsafe { std::slice::from_raw_parts(cmd_vec.ptr, cmd_vec.len) };
+    let cmd_str = match std::str::from_utf8(cmd_bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+
+    let args_vec = unsafe { &*(args_ptr as *const VowVec) };
+    let arg_ptrs = unsafe { std::slice::from_raw_parts(args_vec.ptr as *const i64, args_vec.len) };
+    let mut args = Vec::new();
+    for &arg_ptr in arg_ptrs {
+        let av = unsafe { &*(arg_ptr as *const VowVec) };
+        let ab = unsafe { std::slice::from_raw_parts(av.ptr, av.len) };
+        match std::str::from_utf8(ab) {
+            Ok(s) => args.push(s.to_string()),
+            Err(_) => return -1,
+        }
+    }
+
+    match std::process::Command::new(cmd_str).args(&args).output() {
+        Ok(output) => {
+            LAST_STDOUT.with(|cell| *cell.borrow_mut() = output.stdout);
+            LAST_STDERR.with(|cell| *cell.borrow_mut() = output.stderr);
+            output.status.code().unwrap_or(-1) as i64
+        }
+        Err(_) => -1,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_process_get_stdout() -> *mut u8 {
+    LAST_STDOUT.with(|cell| {
+        let bytes = cell.borrow();
+        unsafe { __vow_string_new(bytes.as_ptr() as *const i8, bytes.len()) }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_process_get_stderr() -> *mut u8 {
+    LAST_STDERR.with(|cell| {
+        let bytes = cell.borrow();
+        unsafe { __vow_string_new(bytes.as_ptr() as *const i8, bytes.len()) }
+    })
 }
 
 // ---------------------------------------------------------------------------

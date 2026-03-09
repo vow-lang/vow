@@ -574,17 +574,20 @@ Port the IR-to-C translation to Vow:
 Vec/String/HashMap variable analysis with fixed-point propagation, Upsilon
 batching with temporaries — all ported. Bootstrap triple test passes.
 
-### 18.2 ESBMC invocation + result parsing
+### 18.2 ESBMC invocation + result parsing ✅
 
 Implement subprocess management in Vow:
-- Invoke `esbmc` with correct flags (`--incremental-bmc`, `--unwind`, etc.)
+- Invoke `esbmc` with correct flags (`--no-bounds-check`, `--no-pointer-check`, `--unwind 10`, `--64`)
 - Parse ESBMC stdout for VERIFICATION SUCCESSFUL / VERIFICATION FAILED
-- Parse counterexample JSON from ESBMC output
-- Handle timeouts and crashes gracefully
+- Parse counterexample assignments and block visits
+- Handle timeouts and tool-not-found gracefully
 
-Requires: `process_run` or equivalent FFI for subprocess execution with
-stdout/stderr capture. May need a new runtime function
-`__vow_process_run(cmd, args) -> (exit_code, stdout, stderr)`.
+**Done.** Three new runtime FFI functions: `__vow_process_run` (subprocess with
+stdout/stderr capture via thread-local storage), `__vow_process_get_stdout`,
+`__vow_process_get_stderr`. Registered as builtins in both Rust and self-hosted
+type checkers/lowerers. `compiler/verifier.vow` (~300 lines) implements ESBMC
+orchestration + output parsing. `--verify` flag in self-hosted compiler driver.
+Bootstrap triple test passes (binary fixed point).
 
 ### 18.3 Counterexample-to-source mapping
 

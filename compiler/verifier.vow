@@ -1,0 +1,385 @@
+module Verifier
+
+use ir
+use ir_printer
+use c_emitter
+
+fn VERIFY_PROVEN() -> i64 vow { ensures: result >= 0 } { 0 }
+fn VERIFY_FAILED() -> i64 vow { ensures: result >= 0 } { 1 }
+fn VERIFY_TIMEOUT() -> i64 vow { ensures: result >= 0 } { 2 }
+fn VERIFY_ERROR() -> i64 vow { ensures: result >= 0 } { 3 }
+fn VERIFY_NOT_FOUND() -> i64 vow { ensures: result >= 0 } { 4 }
+
+struct VerifyResult {
+    status: i64,
+    vow_id: i64,
+    var_names: Vec<String>,
+    var_values: Vec<String>,
+    block_visits: Vec<i64>,
+    raw_output: String,
+}
+
+fn str_contains_byte(s: String, b: i64) -> bool {
+    let n: i64 = s.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if s.byte_at(i) == b {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn str_find_str(haystack: String, needle: String) -> i64 {
+    let hlen: i64 = haystack.len();
+    let nlen: i64 = needle.len();
+    if nlen == 0 { return 0; }
+    if nlen > hlen { return -1; }
+    let mut i: i64 = 0;
+    while i <= hlen - nlen {
+        let mut j: i64 = 0;
+        let matched: bool = true;
+        while j < nlen {
+            if haystack.byte_at(i + j) != needle.byte_at(j) {
+                matched = false;
+                j = nlen;
+            }
+            j = j + 1;
+        }
+        if matched { return i; }
+        i = i + 1;
+    }
+    -1
+}
+
+fn str_substring(s: String, start: i64, end: i64) -> String {
+    let r: String = String::from("");
+    let mut i: i64 = start;
+    while i < end && i < s.len() {
+        r.push_byte(s.byte_at(i));
+        i = i + 1;
+    }
+    r
+}
+
+fn is_ws(b: i64) -> bool {
+    b == 32 || b == 9 || b == 10 || b == 13
+}
+
+fn str_trim(s: String) -> String {
+    let n: i64 = s.len();
+    let mut start: i64 = 0;
+    while start < n && is_ws(s.byte_at(start)) {
+        start = start + 1;
+    }
+    if start >= n { return String::from(""); }
+    let mut end: i64 = n;
+    while end > start && is_ws(s.byte_at(end - 1)) {
+        end = end - 1;
+    }
+    str_substring(s, start, end)
+}
+
+fn str_to_i64(s: String) -> i64 {
+    let n: i64 = s.len();
+    if n == 0 { return -1; }
+    let mut result: i64 = 0;
+    let mut i: i64 = 0;
+    let negative: bool = s.byte_at(0) == 45;
+    if negative { i = 1; }
+    while i < n {
+        let b: i64 = s.byte_at(i);
+        if b >= 48 && b <= 57 {
+            result = result * 10 + (b - 48);
+        } else {
+            return -1;
+        }
+        i = i + 1;
+    }
+    if negative { 0 - result } else { result }
+}
+
+fn split_lines(s: String, lines: Vec<String>) {
+    let n: i64 = s.len();
+    let cur: String = String::from("");
+    let mut i: i64 = 0;
+    while i < n {
+        let b: i64 = s.byte_at(i);
+        if b == 10 {
+            lines.push(cur);
+            cur = String::from("");
+        } else {
+            cur.push_byte(b);
+        }
+        i = i + 1;
+    }
+    if cur.len() > 0 {
+        lines.push(cur);
+    }
+}
+
+fn str_find_byte(s: String, b: i64) -> i64 {
+    let n: i64 = s.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if s.byte_at(i) == b {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn esbmc_nondet_call(ty: i64) -> String {
+    if ty == ITY_I32() { return String::from("__VERIFIER_nondet_int()"); }
+    if ty == ITY_I64() { return String::from("__VERIFIER_nondet_long()"); }
+    if ty == ITY_F32() { return String::from("__VERIFIER_nondet_float()"); }
+    if ty == ITY_F64() { return String::from("__VERIFIER_nondet_double()"); }
+    if ty == ITY_BOOL() { return String::from("__VERIFIER_nondet_bool()"); }
+    String::from("0")
+}
+
+fn emit_harness(f: IrFunction) -> String {
+    let out: String = String::from("int main(void) { ");
+    out.push_str(f.name);
+    out.push_byte(40);
+    let params: Vec<i64> = f.params;
+    let np: i64 = params.len();
+    let mut count: i64 = 0;
+    let mut pi: i64 = 0;
+    while pi < np {
+        let pty: i64 = params[pi];
+        if pty != ITY_UNIT() {
+            if count > 0 {
+                out.push_str(String::from(", "));
+            }
+            out.push_str(esbmc_nondet_call(pty));
+            count = count + 1;
+        }
+        pi = pi + 1;
+    }
+    out.push_str(String::from("); return 0; }\n"));
+    out
+}
+
+fn emit_c_preamble() -> String {
+    let out: String = String::from("");
+    out.push_str(String::from("#include <stdint.h>\n"));
+    out.push_str(String::from("#include <stdbool.h>\n"));
+    out.push_str(String::from("extern void __ESBMC_assume(_Bool);\n"));
+    out.push_str(String::from("extern void __ESBMC_assert(_Bool, const char*);\n"));
+    out.push_str(String::from("extern int __VERIFIER_nondet_int(void);\n"));
+    out.push_str(String::from("extern long __VERIFIER_nondet_long(void);\n"));
+    out.push_str(String::from("extern float __VERIFIER_nondet_float(void);\n"));
+    out.push_str(String::from("extern double __VERIFIER_nondet_double(void);\n"));
+    out.push_str(String::from("extern _Bool __VERIFIER_nondet_bool(void);\n\n"));
+    out.push_str(str3(
+        String::from("typedef struct { int64_t len; int64_t data["),
+        i64_to_str(VOW_VEC_MAX()),
+        String::from("]; } __vow_vec_t;\n")
+    ));
+    out.push_str(str3(
+        String::from("typedef struct { int64_t len; int8_t data["),
+        i64_to_str(VOW_STRING_MAX()),
+        String::from("]; } __vow_string_t;\n")
+    ));
+    out.push_str(str5(
+        String::from("typedef struct { int64_t len; int64_t keys["),
+        i64_to_str(VOW_HASHMAP_MAX()),
+        String::from("]; int64_t vals["),
+        i64_to_str(VOW_HASHMAP_MAX()),
+        String::from("]; } __vow_hashmap_t;\n\n")
+    ));
+    out
+}
+
+fn emit_c_for_verify(f: IrFunction, m: IrModule) -> String {
+    let out: String = emit_c_preamble();
+    let const_fn_indices: Vec<i64> = detect_const_fns(m);
+    emit_c_function(out, f, const_fn_indices, m);
+    out.push_byte(10);
+    out.push_str(emit_harness(f));
+    out
+}
+
+fn esbmc_path() -> String {
+    String::from("/home/pmatos/installs/esbmc-20260226/bin/esbmc")
+}
+
+fn run_esbmc(c_source: String) -> i64 [io] {
+    fs_write(String::from("/tmp/__vow_verify.c"), c_source);
+    let esbmc_args: Vec<String> = Vec::new();
+    esbmc_args.push(String::from("/tmp/__vow_verify.c"));
+    esbmc_args.push(String::from("--no-bounds-check"));
+    esbmc_args.push(String::from("--no-pointer-check"));
+    esbmc_args.push(String::from("--unwind"));
+    esbmc_args.push(String::from("10"));
+    esbmc_args.push(String::from("--64"));
+    let exit_code: i64 = process_run(esbmc_path(), esbmc_args);
+    exit_code
+}
+
+fn parse_verify_status(combined: String) -> i64 {
+    if str_find_str(combined, String::from("VERIFICATION SUCCESSFUL")) >= 0 {
+        return VERIFY_PROVEN();
+    }
+    if str_find_str(combined, String::from("VERIFICATION FAILED")) >= 0 {
+        return VERIFY_FAILED();
+    }
+    if str_find_str(combined, String::from("timeout")) >= 0 {
+        return VERIFY_TIMEOUT();
+    }
+    if str_find_str(combined, String::from("Timeout")) >= 0 {
+        return VERIFY_TIMEOUT();
+    }
+    VERIFY_ERROR()
+}
+
+fn parse_vow_id(output: String) -> i64 {
+    let lines: Vec<String> = Vec::new();
+    split_lines(output, lines);
+    let n: i64 = lines.len();
+    let mut in_violated: bool = false;
+    let mut i: i64 = 0;
+    while i < n {
+        let line: String = str_trim(lines[i]);
+        if line == String::from("Violated property:") {
+            in_violated = true;
+        } else if in_violated {
+            if str_starts_with(line, String::from("vow:")) {
+                let rest: String = str_substring(line, 4, line.len());
+                return str_to_i64(rest);
+            }
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn parse_assignments(output: String, names: Vec<String>, values: Vec<String>) {
+    let lines: Vec<String> = Vec::new();
+    split_lines(output, lines);
+    let n: i64 = lines.len();
+    let mut in_ce: bool = false;
+    let mut i: i64 = 0;
+    while i < n {
+        let line: String = str_trim(lines[i]);
+        if line == String::from("[Counterexample]") {
+            in_ce = true;
+        } else if line == String::from("Violated property:") {
+            in_ce = false;
+        } else if in_ce {
+            let eq_pos: i64 = str_find_byte(line, 61);
+            if eq_pos > 0 {
+                let name: String = str_trim(str_substring(line, 0, eq_pos));
+                if name.len() > 0 {
+                    let first_byte: i64 = name.byte_at(0);
+                    let is_ident: bool = (first_byte >= 65 && first_byte <= 90) || (first_byte >= 97 && first_byte <= 122) || first_byte == 95;
+                    if is_ident {
+                        if !str_starts_with(name, String::from("__blk_")) {
+                            let val_raw: String = str_trim(str_substring(line, eq_pos + 1, line.len()));
+                            let paren_pos: i64 = str_find_str(val_raw, String::from(" ("));
+                            let val: String = {
+                                if paren_pos >= 0 {
+                                    str_substring(val_raw, 0, paren_pos)
+                                } else {
+                                    val_raw
+                                }
+                            };
+                            names.push(name);
+                            values.push(val);
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+}
+
+fn parse_block_visits(output: String, visits: Vec<i64>) {
+    let lines: Vec<String> = Vec::new();
+    split_lines(output, lines);
+    let n: i64 = lines.len();
+    let mut in_ce: bool = false;
+    let mut i: i64 = 0;
+    while i < n {
+        let line: String = str_trim(lines[i]);
+        if line == String::from("[Counterexample]") {
+            in_ce = true;
+        } else if line == String::from("Violated property:") {
+            in_ce = false;
+        } else if in_ce {
+            let eq_pos: i64 = str_find_byte(line, 61);
+            if eq_pos > 0 {
+                let name: String = str_trim(str_substring(line, 0, eq_pos));
+                if str_starts_with(name, String::from("__blk_")) {
+                    let val: String = str_trim(str_substring(line, eq_pos + 1, line.len()));
+                    if val == String::from("1") {
+                        let blk_str: String = str_substring(name, 6, name.len());
+                        let blk_id: i64 = str_to_i64(blk_str);
+                        if blk_id >= 0 {
+                            visits.push(blk_id);
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+}
+
+fn verify_function_full(f: IrFunction, m: IrModule) -> VerifyResult [io] {
+    let vows: Vec<IrVowEntry> = f.vows;
+    if vows.len() == 0 {
+        return VerifyResult {
+            status: VERIFY_PROVEN(),
+            vow_id: -1,
+            var_names: Vec::new(),
+            var_values: Vec::new(),
+            block_visits: Vec::new(),
+            raw_output: String::from(""),
+        };
+    }
+    let c_source: String = emit_c_for_verify(f, m);
+    let exit_code: i64 = run_esbmc(c_source);
+    if exit_code == -1 {
+        return VerifyResult {
+            status: VERIFY_NOT_FOUND(),
+            vow_id: -1,
+            var_names: Vec::new(),
+            var_values: Vec::new(),
+            block_visits: Vec::new(),
+            raw_output: String::from("esbmc not found"),
+        };
+    }
+    let stdout: String = process_get_stdout();
+    let stderr: String = process_get_stderr();
+    let combined: String = String::from("");
+    combined.push_str(stdout);
+    combined.push_str(stderr);
+    let status: i64 = parse_verify_status(combined);
+    let vow_id: i64 = {
+        if status == VERIFY_FAILED() {
+            parse_vow_id(combined)
+        } else {
+            -1
+        }
+    };
+    let var_names: Vec<String> = Vec::new();
+    let var_values: Vec<String> = Vec::new();
+    let block_visits: Vec<i64> = Vec::new();
+    if status == VERIFY_FAILED() {
+        parse_assignments(combined, var_names, var_values);
+        parse_block_visits(combined, block_visits);
+    }
+    VerifyResult {
+        status: status,
+        vow_id: vow_id,
+        var_names: var_names,
+        var_values: var_values,
+        block_visits: block_visits,
+        raw_output: combined,
+    }
+}
