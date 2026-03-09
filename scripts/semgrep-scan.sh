@@ -19,9 +19,8 @@ if ! command -v semgrep &>/dev/null; then
 fi
 
 SEMGREP_ARGS=(
-    --config auto
+    --config p/default
     --error
-    --metrics off
 )
 
 if [[ "$CI_MODE" == true ]]; then
