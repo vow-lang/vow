@@ -14,8 +14,7 @@ use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{CollectingEmitter, Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
-    Counterexample, VerificationResult, detect_constant_functions,
-    verify_function_with_const_fns,
+    Counterexample, VerificationResult, detect_constant_functions, verify_function_with_const_fns,
 };
 
 // ---------------------------------------------------------------------------

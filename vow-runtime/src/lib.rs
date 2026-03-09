@@ -1,7 +1,7 @@
 #![allow(clippy::missing_safety_doc)]
 
 use std::cell::RefCell;
-use std::ffi::{c_char, CStr};
+use std::ffi::{CStr, c_char};
 use std::io::Write as _;
 
 thread_local! {
@@ -348,11 +348,7 @@ pub unsafe extern "C" fn __vow_string_eq(a: *const u8, b: *const u8) -> i64 {
     }
     let sa = unsafe { std::slice::from_raw_parts(va.ptr, va.len) };
     let sb = unsafe { std::slice::from_raw_parts(vb.ptr, vb.len) };
-    if sa == sb {
-        1
-    } else {
-        0
-    }
+    if sa == sb { 1 } else { 0 }
 }
 
 #[unsafe(no_mangle)]
