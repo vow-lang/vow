@@ -447,3 +447,31 @@ fn diag_emit_build_json(status: String, exec_path: String, dctx: DiagCtx) [io] {
     print_str(r);
     print_str(String::from("\n"));
 }
+
+fn diag_emit_build_verify_json(status: String, exec_path: String, dctx: DiagCtx, ces: Vec<VerifyCE>) [io] {
+    let r: String = String::from("{\"status\":\"");
+    r.push_str(status);
+    r.push_str(String::from("\",\"executable\":"));
+    if exec_path.len() > 0 {
+        r.push_str(String::from("\""));
+        r.push_str(diag_json_escape_str(exec_path));
+        r.push_str(String::from("\""));
+    } else {
+        r.push_str(String::from("null"));
+    }
+    r.push_str(String::from(",\"diagnostics\":"));
+    r.push_str(diag_ctx_to_json(dctx));
+    r.push_str(String::from(",\"counterexamples\":["));
+    let nc: i64 = ces.len();
+    let mut i: i64 = 0;
+    while i < nc {
+        if i > 0 {
+            r.push_str(String::from(","));
+        }
+        r.push_str(diag_ce_to_json(ces[i]));
+        i = i + 1;
+    }
+    r.push_str(String::from("]}"));
+    print_str(r);
+    print_str(String::from("\n"));
+}
