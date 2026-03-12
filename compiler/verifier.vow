@@ -204,10 +204,10 @@ fn esbmc_path() -> String {
     String::from("/home/pmatos/installs/esbmc-20260226/bin/esbmc")
 }
 
-fn run_esbmc(c_source: String, unwind: String) -> i64 [io] {
-    fs_write(String::from("/tmp/__vow_verify.c"), c_source);
+fn run_esbmc(c_source: String, unwind: String, tmp_path: String) -> i64 [io] {
+    fs_write(tmp_path, c_source);
     let esbmc_args: Vec<String> = Vec::new();
-    esbmc_args.push(String::from("/tmp/__vow_verify.c"));
+    esbmc_args.push(tmp_path);
     esbmc_args.push(String::from("--no-bounds-check"));
     esbmc_args.push(String::from("--no-pointer-check"));
     esbmc_args.push(String::from("--unwind"));
@@ -215,6 +215,19 @@ fn run_esbmc(c_source: String, unwind: String) -> i64 [io] {
     esbmc_args.push(String::from("--64"));
     let exit_code: i64 = process_run(esbmc_path(), esbmc_args);
     exit_code
+}
+
+fn start_esbmc(c_source: String, unwind: String, tmp_path: String) -> i64 [io] {
+    fs_write(tmp_path, c_source);
+    let esbmc_args: Vec<String> = Vec::new();
+    esbmc_args.push(tmp_path);
+    esbmc_args.push(String::from("--no-bounds-check"));
+    esbmc_args.push(String::from("--no-pointer-check"));
+    esbmc_args.push(String::from("--unwind"));
+    esbmc_args.push(unwind);
+    esbmc_args.push(String::from("--64"));
+    let handle: i64 = process_start(esbmc_path(), esbmc_args);
+    handle
 }
 
 fn parse_verify_status(combined: String) -> i64 {
@@ -438,7 +451,7 @@ fn verify_function_full(f: IrFunction, m: IrModule, unwind: String) -> VerifyRes
         };
     }
     let c_source: String = emit_c_for_verify(f, m);
-    let exit_code: i64 = run_esbmc(c_source, unwind);
+    let exit_code: i64 = run_esbmc(c_source, unwind, String::from("/tmp/__vow_verify.c"));
     if exit_code == -1 {
         return VerifyResult {
             status: VERIFY_NOT_FOUND(),
@@ -451,6 +464,67 @@ fn verify_function_full(f: IrFunction, m: IrModule, unwind: String) -> VerifyRes
     }
     let stdout: String = process_get_stdout();
     let stderr: String = process_get_stderr();
+    let combined: String = String::from("");
+    combined.push_str(stdout);
+    combined.push_str(stderr);
+    let status: i64 = parse_verify_status(combined);
+    let vow_id: i64 = {
+        if status == VERIFY_FAILED() {
+            parse_vow_id(combined)
+        } else {
+            -1
+        }
+    };
+    let var_names: Vec<String> = Vec::new();
+    let var_values: Vec<String> = Vec::new();
+    let block_visits: Vec<i64> = Vec::new();
+    if status == VERIFY_FAILED() {
+        let raw_names: Vec<String> = Vec::new();
+        let raw_values: Vec<String> = Vec::new();
+        parse_assignments(combined, raw_names, raw_values);
+        parse_block_visits(combined, block_visits);
+        let map_keys: Vec<String> = Vec::new();
+        let map_vals: Vec<String> = Vec::new();
+        build_name_map(f, map_keys, map_vals);
+        map_ce_values(raw_names, raw_values, map_keys, map_vals, var_names, var_values);
+    }
+    VerifyResult {
+        status: status,
+        vow_id: vow_id,
+        var_names: var_names,
+        var_values: var_values,
+        block_visits: block_visits,
+        raw_output: combined,
+    }
+}
+
+fn verify_start(f: IrFunction, m: IrModule, unwind: String, idx: i64) -> i64 [io] {
+    let vows: Vec<IrVowEntry> = f.vows;
+    if vows.len() == 0 {
+        return -1;
+    }
+    let c_source: String = emit_c_for_verify(f, m);
+    let tmp_path: String = String::from("/tmp/__vow_verify_");
+    tmp_path.push_str(i64_to_str(idx));
+    tmp_path.push_str(String::from(".c"));
+    let handle: i64 = start_esbmc(c_source, unwind, tmp_path);
+    handle
+}
+
+fn verify_collect(handle: i64, f: IrFunction) -> VerifyResult [io] {
+    let exit_code: i64 = process_wait(handle);
+    if exit_code == -1 {
+        return VerifyResult {
+            status: VERIFY_NOT_FOUND(),
+            vow_id: -1,
+            var_names: Vec::new(),
+            var_values: Vec::new(),
+            block_visits: Vec::new(),
+            raw_output: String::from("esbmc not found"),
+        };
+    }
+    let stdout: String = process_stdout_for(handle);
+    let stderr: String = process_stderr_for(handle);
     let combined: String = String::from("");
     combined.push_str(stdout);
     combined.push_str(stderr);

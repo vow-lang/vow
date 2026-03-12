@@ -389,24 +389,98 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         else { 0 }
     };
     let ir_mod: IrModule = lower_module_vow(merged, str_eids);
-    let result: i64 = clif_emit_module(ir_mod, out, mode, trace);
-    if result != 0 {
-        eprintln_str(String::from("compilation failed"));
-        diag_emit_build_verify_json(String::from("CompileFailed"), String::from(""), dctx, Vec::new());
-        return 1;
-    }
-    if has_flag(argv, String::from("--no-verify")) {
-        diag_emit_build_verify_json(String::from("Unverified"), out, dctx, Vec::new());
-        return 0;
-    }
+    let do_verify: bool = !has_flag(argv, String::from("--no-verify"));
     let unwind_str: String = get_flag_arg(argv, String::from("--unwind"));
     let unwind: String = {
         if unwind_str.len() > 0 { unwind_str }
         else { String::from("10") }
     };
     let fns: Vec<IrFunction> = ir_mod.functions;
+    let handles: Vec<i64> = Vec::new();
+    let vow_fn_indices: Vec<i64> = Vec::new();
+    if do_verify {
+        let mut fi: i64 = 0;
+        while fi < fns.len() {
+            let f: IrFunction = fns[fi];
+            let vows: Vec<IrVowEntry> = f.vows;
+            if vows.len() > 0 {
+                eprintln_str(str3(String::from("Starting verification of "), f.name, String::from("...")));
+                let h: i64 = verify_start(f, ir_mod, unwind, fi);
+                handles.push(h);
+                vow_fn_indices.push(fi);
+            }
+            fi = fi + 1;
+        }
+    }
+    let result: i64 = clif_emit_module(ir_mod, out, mode, trace);
+    if result != 0 {
+        eprintln_str(String::from("compilation failed"));
+        diag_emit_build_verify_json(String::from("CompileFailed"), String::from(""), dctx, Vec::new());
+        return 1;
+    }
+    if !do_verify {
+        diag_emit_build_verify_json(String::from("Unverified"), out, dctx, Vec::new());
+        return 0;
+    }
     let ces: Vec<VerifyCE> = Vec::new();
-    let all_proven: i64 = run_verify_loop(fns, ir_mod, path, ces, unwind);
+    let mut all_proven: i64 = 1;
+    let mut hi: i64 = 0;
+    while hi < handles.len() {
+        let fi2: i64 = vow_fn_indices[hi];
+        let f: IrFunction = fns[fi2];
+        let h: i64 = handles[hi];
+        if h < 0 {
+            hi = hi + 1;
+        } else {
+            let vr: VerifyResult = verify_collect(h, f);
+            let st: i64 = vr.status;
+            if st == VERIFY_PROVEN() {
+                eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN")));
+            } else if st == VERIFY_FAILED() {
+                all_proven = 0;
+                eprintln_str(str3(String::from("  "), f.name, String::from(": FAILED")));
+                let vnames: Vec<String> = vr.var_names;
+                let vvals: Vec<String> = vr.var_values;
+                let mut vi: i64 = 0;
+                while vi < vnames.len() {
+                    eprintln_str(str4(String::from("    "), vnames[vi], String::from(" = "), vvals[vi]));
+                    vi = vi + 1;
+                }
+                let vow_id: i64 = vr.vow_id;
+                let ce_violation: String = String::from("");
+                let ce_blame: i64 = DIAG_BLAME_NONE();
+                let vow_entries: Vec<IrVowEntry> = f.vows;
+                let mut vi2: i64 = 0;
+                while vi2 < vow_entries.len() {
+                    let ve: IrVowEntry = vow_entries[vi2];
+                    if ve.id == vow_id {
+                        ce_violation = ve.description;
+                        ce_blame = ve.blame;
+                    }
+                    vi2 = vi2 + 1;
+                }
+                let ce: VerifyCE = VerifyCE {
+                    function: f.name,
+                    var_names: vr.var_names,
+                    var_values: vr.var_values,
+                    violation: ce_violation,
+                    vow_id: vow_id,
+                    source: path,
+                    blame: ce_blame,
+                };
+                ces.push(ce);
+            } else if st == VERIFY_TIMEOUT() {
+                all_proven = 0;
+                eprintln_str(str3(String::from("  "), f.name, String::from(": TIMEOUT")));
+            } else if st == VERIFY_NOT_FOUND() {
+                eprintln_str(String::from("  esbmc not found"));
+            } else {
+                all_proven = 0;
+                eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR")));
+            }
+            hi = hi + 1;
+        }
+    }
     let status_str: String = {
         if all_proven == 1 {
             String::from("Verified")

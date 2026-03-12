@@ -1,12 +1,29 @@
 #![allow(clippy::missing_safety_doc)]
 
 use std::cell::RefCell;
-use std::ffi::{CStr, c_char};
+use std::collections::HashMap;
+use std::ffi::{c_char, CStr};
 use std::io::Write as _;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Mutex;
 
 thread_local! {
     static LAST_STDOUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     static LAST_STDERR: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
+enum ProcessState {
+    Running(std::process::Child),
+    Completed { stdout: Vec<u8>, stderr: Vec<u8> },
+}
+
+static PROCESS_MAP: Mutex<Option<HashMap<i64, ProcessState>>> = Mutex::new(None);
+static NEXT_PROCESS_HANDLE: AtomicI64 = AtomicI64::new(1);
+
+fn process_map_init(
+    map: &mut Option<HashMap<i64, ProcessState>>,
+) -> &mut HashMap<i64, ProcessState> {
+    map.get_or_insert_with(HashMap::new)
 }
 
 const TAG_I32: u8 = 0;
@@ -348,7 +365,11 @@ pub unsafe extern "C" fn __vow_string_eq(a: *const u8, b: *const u8) -> i64 {
     }
     let sa = unsafe { std::slice::from_raw_parts(va.ptr, va.len) };
     let sb = unsafe { std::slice::from_raw_parts(vb.ptr, vb.len) };
-    if sa == sb { 1 } else { 0 }
+    if sa == sb {
+        1
+    } else {
+        0
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -523,6 +544,103 @@ pub extern "C" fn __vow_process_get_stderr() -> *mut u8 {
         let bytes = cell.borrow();
         unsafe { __vow_string_new(bytes.as_ptr() as *const i8, bytes.len()) }
     })
+}
+
+// ---------------------------------------------------------------------------
+// Non-blocking subprocess management
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_process_start(cmd_ptr: i64, args_ptr: i64) -> i64 {
+    let cmd_vec = unsafe { &*(cmd_ptr as *const VowVec) };
+    let cmd_bytes = unsafe { std::slice::from_raw_parts(cmd_vec.ptr, cmd_vec.len) };
+    let cmd_str = match std::str::from_utf8(cmd_bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+
+    let args_vec = unsafe { &*(args_ptr as *const VowVec) };
+    let arg_ptrs = unsafe { std::slice::from_raw_parts(args_vec.ptr as *const i64, args_vec.len) };
+    let mut args = Vec::new();
+    for &arg_ptr in arg_ptrs {
+        let av = unsafe { &*(arg_ptr as *const VowVec) };
+        let ab = unsafe { std::slice::from_raw_parts(av.ptr, av.len) };
+        match std::str::from_utf8(ab) {
+            Ok(s) => args.push(s.to_string()),
+            Err(_) => return -1,
+        }
+    }
+
+    use std::process::{Command, Stdio};
+    match Command::new(cmd_str)
+        .args(&args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => {
+            let handle = NEXT_PROCESS_HANDLE.fetch_add(1, Ordering::Relaxed);
+            let mut guard = PROCESS_MAP.lock().unwrap();
+            let map = process_map_init(&mut guard);
+            map.insert(handle, ProcessState::Running(child));
+            handle
+        }
+        Err(_) => -1,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_process_wait(handle: i64) -> i64 {
+    let mut guard = PROCESS_MAP.lock().unwrap();
+    let map = process_map_init(&mut guard);
+    let state = match map.remove(&handle) {
+        Some(s) => s,
+        None => return -1,
+    };
+    match state {
+        ProcessState::Running(child) => match child.wait_with_output() {
+            Ok(output) => {
+                let exit_code = output.status.code().unwrap_or(-1) as i64;
+                map.insert(
+                    handle,
+                    ProcessState::Completed {
+                        stdout: output.stdout,
+                        stderr: output.stderr,
+                    },
+                );
+                exit_code
+            }
+            Err(_) => -1,
+        },
+        ProcessState::Completed { stdout, stderr } => {
+            map.insert(handle, ProcessState::Completed { stdout, stderr });
+            0
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_process_stdout_for(handle: i64) -> *mut u8 {
+    let guard = PROCESS_MAP.lock().unwrap();
+    if let Some(Some(ProcessState::Completed { stdout, .. })) =
+        guard.as_ref().map(|m| m.get(&handle))
+    {
+        unsafe { __vow_string_new(stdout.as_ptr() as *const i8, stdout.len()) }
+    } else {
+        unsafe { __vow_string_new(std::ptr::null(), 0) }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_process_stderr_for(handle: i64) -> *mut u8 {
+    let guard = PROCESS_MAP.lock().unwrap();
+    if let Some(Some(ProcessState::Completed { stderr, .. })) =
+        guard.as_ref().map(|m| m.get(&handle))
+    {
+        unsafe { __vow_string_new(stderr.as_ptr() as *const i8, stderr.len()) }
+    } else {
+        unsafe { __vow_string_new(std::ptr::null(), 0) }
+    }
 }
 
 // ---------------------------------------------------------------------------
