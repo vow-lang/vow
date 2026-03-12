@@ -626,12 +626,12 @@ Test: `./compiler/main verify compiler/token.vow` successfully verifies all
 
 ---
 
-## Phase 19: CLI & Driver Parity
+## Phase 19: CLI & Driver Parity — IN PROGRESS
 
 **Goal:** The self-hosted compiler has feature parity with the Rust `vow` CLI.
 An agent (or human) can use the self-hosted binary as a drop-in replacement.
 
-### 19.1 Subcommands
+### 19.1 Subcommands ✔
 
 Implement `build`, `verify`, `test` subcommands:
 - `./vowc build foo.vow` — compile + verify (default)
@@ -640,7 +640,7 @@ Implement `build`, `verify`, `test` subcommands:
 
 Reference: Rust `vow/src/main.rs` argument parsing (~4,200 lines).
 
-### 19.2 Flags
+### 19.2 Flags ✔
 
 - `--no-verify` — skip ESBMC verification
 - `--mode debug` — emit runtime vow checks
@@ -656,10 +656,22 @@ Reference: Rust `vow/src/main.rs` argument parsing (~4,200 lines).
 - Checked before subcommand dispatch; works with `vowc --help`, `vowc build --help`, etc.
 - Bootstrap triple test passes (binary fixed point)
 
-### 19.4 Parallel codegen + verify pipeline
+### 19.4 Parallel codegen + verify pipeline ✔
 
-The Rust compiler runs codegen and verification in parallel (compile while
-verifying). Port this to the self-hosted compiler for equivalent performance.
+Added non-blocking subprocess FFI (`process_start`, `process_wait`,
+`process_stdout_for`, `process_stderr_for`) to `vow-runtime`, wired through
+all compiler layers (type checker, IR lowerer, both Cranelift backends).
+
+Self-hosted `run_build` restructured: starts all ESBMC processes before
+codegen, runs Cranelift codegen while ESBMC runs in the background, then
+collects results. Actually *better* than the Rust approach — all ESBMC
+instances run in parallel with each other and with codegen (Rust verifies
+functions sequentially on a single thread).
+
+`verify_start` launches ESBMC asynchronously with unique temp files
+(`/tmp/__vow_verify_<idx>.c`); `verify_collect` waits and parses results.
+`run_verify` (verify-only subcommand) keeps sequential `run_verify_loop`.
+Bootstrap triple test passes (binary fixed point).
 
 ### 19.5 Verification: CLI compatibility test
 
