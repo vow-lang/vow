@@ -244,7 +244,7 @@ fn run_frontend(argv: Vec<String>, sub: bool) -> FrontendResult [io] {
     let n_items: i64 = all_items.len();
     let e: CheckEnv = env_new(dctx, path);
     check_module(e, merged);
-    let n_errors: i64 = e.error_count;
+    let n_errors: i64 = dctx.error_count;
     let str_eids: Vec<i64> = e.expr_str_eids;
     FrontendResult {
         path: path,
@@ -529,7 +529,7 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
     let n_items: i64 = all_items.len();
     let e: CheckEnv = env_new(dctx, path);
     check_module(e, merged);
-    let n_errors: i64 = e.error_count;
+    let n_errors: i64 = dctx.error_count;
     diag_ctx_print_all(dctx);
     let emit_c: bool = has_flag(argv, String::from("--emit-c"));
     let do_verify: bool = has_flag(argv, String::from("--verify"));

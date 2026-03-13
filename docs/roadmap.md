@@ -687,10 +687,18 @@ fields (function, vow_id, blame). Result: 40/40 tests pass.
 **Goal:** The self-hosted compiler becomes the primary driver. The Rust
 compiler is retained only as the stage 0 bootstrap.
 
-### 20.1 Full test suite under self-hosted compiler
+### 20.1 Full test suite under self-hosted compiler ✅
 
 Run all pipeline tests, example programs, and integration tests using the
 self-hosted compiler. Fix any discrepancies.
+
+**Done.** `scripts/full_test.sh` — 82 passed, 0 failed, 1 skipped (divide.vow
+release runtime UB). Nine test sections: build --no-verify (23), verify (17),
+runtime execution (22), debug mode (4), multi-module (6), error handling (3),
+help output (2), bootstrap triple (1), build+verify default (4). Bugs fixed:
+String.contains() missing from self-hosted lowerer, parse error diagnostics
+not emitted, missing-module errors not propagated, dctx.error_count not used
+for frontend error detection.
 
 ### 20.2 Benchmark suite under self-hosted compiler
 

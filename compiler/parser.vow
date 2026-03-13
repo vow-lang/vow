@@ -153,6 +153,7 @@ fn parse_item(p: Parser) -> i64 {
         let eid: i64 = parse_enum_def(p);
         item_pack(ITEM_ENUM(), eid)
     } else {
+        push_error(p, String::from("expected item (fn, struct, or enum)"));
         skip_unknown_item(p);
         -1
     }

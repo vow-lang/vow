@@ -1166,6 +1166,22 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 call_args.push(arg_id);
                 return lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_push_byte"));
             }
+            if method_name == String::from("contains") {
+                let nargs: i64 = list_len(a, args_lid);
+                let arg_id: i64 = {
+                    if nargs > 0 {
+                        let ae: i64 = list_get(a, args_lid, 0);
+                        lower_expr(ctx, ae)
+                    } else {
+                        let u_args: Vec<i64> = Vec::new();
+                        lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
+                    }
+                };
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(recv_id);
+                call_args.push(arg_id);
+                return lctx_emit(ctx, IOP_CALL(), ITY_BOOL(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_contains"));
+            }
         }
 
         if recv_tag_str == String::from("HashMap") {
