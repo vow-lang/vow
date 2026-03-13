@@ -673,10 +673,12 @@ functions sequentially on a single thread).
 `run_verify` (verify-only subcommand) keeps sequential `run_verify_loop`.
 Bootstrap triple test passes (binary fixed point).
 
-### 19.5 Verification: CLI compatibility test
+### 19.5 Verification: CLI compatibility test ✔
 
-Test: run the full example suite (`examples/*.vow`) through both Rust and
-self-hosted compilers with identical flags. All outputs must match.
+`scripts/cli_compat_test.sh` runs all 23 examples through both Rust and
+self-hosted compilers with `build --no-verify` and `verify` modes.
+Compares JSON output: status, exit code, diagnostics count, counterexample
+fields (function, vow_id, blame). Result: 40/40 tests pass.
 
 ---
 
