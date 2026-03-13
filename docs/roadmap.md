@@ -626,7 +626,7 @@ Test: `./compiler/main verify compiler/token.vow` successfully verifies all
 
 ---
 
-## Phase 19: CLI & Driver Parity — IN PROGRESS
+## Phase 19: CLI & Driver Parity — COMPLETE
 
 **Goal:** The self-hosted compiler has feature parity with the Rust `vow` CLI.
 An agent (or human) can use the self-hosted binary as a drop-in replacement.
