@@ -1,0 +1,51 @@
+module Stats
+use safemath
+
+fn min_of(a: i64, b: i64) -> i64 vow {
+  ensures: result <= a,
+  ensures: result <= b
+} {
+  if a <= b {
+    a
+  } else {
+    b
+  }
+}
+
+fn max_of(a: i64, b: i64) -> i64 vow {
+  ensures: result >= a,
+  ensures: result >= b
+} {
+  if a >= b {
+    a
+  } else {
+    b
+  }
+}
+
+fn bounded_sum(v: Vec<i64>) -> i64 vow {
+  requires: v.len() >= 0,
+  requires: v.len() <= 8
+} {
+  let mut i: i64 = 0;
+  let mut total: i64 = 0;
+  let n: i64 = v.len();
+  while i < n vow {
+    invariant: i >= 0,
+    invariant: i <= n
+  } {
+    total = total + v[i];
+    i = i + 1;
+  }
+  total
+}
+
+fn mean_of(a: i64, b: i64) -> i64 vow {
+  requires: a >= 0,
+  requires: b >= 0,
+  requires: a <= 4611686018427387903,
+  requires: b <= 4611686018427387903,
+  ensures: result >= 0
+} {
+  (a + b) / 2
+}

@@ -744,11 +744,18 @@ shows bootstrap + day-to-day workflow. benchmarks/README.md uses `./vowc` with
 `ulimit`. Skill index.md notes `./vowc` as primary binary. Roadmap capability
 gap table updated to reflect full parity.
 
-### 20.5 Level 5 Agent Capability Test
+### 20.5 Level 5 Agent Capability Test ✅
 
 Run the test: an agent uses the self-hosted compiler exclusively to write,
 compile, verify, and debug a multi-module program with contracts. The Rust
 compiler is not invoked at any point after the initial bootstrap.
+
+**Done.** Agent wrote `examples/safemath/` (3 modules, 10 functions, ~25 contract
+clauses) using only `./vowc`. CEGIS loop exercised: 2 iterations on `safemath.vow`
+(i64 overflow + MIN edge case), 3 iterations on `stats.vow` (missing preconditions
++ modular verification subtlety). All 9 contracts verified. Binary runs correctly.
+Debug mode demo captured VowViolation with blame=Caller. Zero Rust compiler
+invocations. Full trace: `docs/level5-test-trace.md`.
 
 ---
 
