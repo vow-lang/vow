@@ -43,6 +43,21 @@ Debug mode is required to see runtime `VowViolation` output. Release omits all v
 `vow build` verifies by default; use `--no-verify` to skip ESBMC verification.
 `vow verify` runs only the frontend + verification pipeline (no codegen, no executable output).
 
+## Bootstrap Release Workflow
+
+```bash
+scripts/bootstrap.sh --no-verify          # full bootstrap, skip ESBMC
+scripts/bootstrap.sh --no-verify --skip-cargo  # skip cargo build too
+scripts/bootstrap.sh                      # full bootstrap with verification
+```
+
+This produces `./vowc` — the self-hosted compiler for day-to-day development:
+```bash
+ulimit -v 2000000; ./vowc build --no-verify examples/hello.vow -o /tmp/hello
+```
+
+**CRITICAL:** Always use `ulimit -v 2000000` when running `./vowc` or any binary it produces.
+
 ## Architecture
 
 Vow is a Rust workspace where each crate maps to one compiler pipeline stage. The planned pipeline is:

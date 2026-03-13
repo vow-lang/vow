@@ -711,7 +711,7 @@ Memory limit (`ulimit -v 2000000` equivalent) applied via `resource.setrlimit`.
 `--compare` flag on `validate-references` runs both compilers side-by-side.
 All 36 non-Stretch references verify identically under both compilers.
 
-### 20.3 Bootstrap release process
+### 20.3 Bootstrap release process ✅
 
 Define the release workflow:
 ```
@@ -723,6 +723,12 @@ Verify:              sha256sum ./vowc ./vowc2      (must match)
 
 The Rust compiler stays in the repo. `cargo build` is the bootstrap entry
 point. Day-to-day development uses `./vowc`.
+
+**Done.** `scripts/bootstrap.sh` implements the 4-stage bootstrap with module
+loading (no `concat_vow.sh`). Stages: cargo build → Rust compiles self-hosted
+→ self-hosted rebuilds itself → second rebuild → SHA-256 fixed-point check.
+Flags: `--no-verify` (skip ESBMC), `--skip-cargo` (skip Stage 0). Produces
+`./vowc` as the primary self-hosted compiler for development.
 
 ### 20.4 Documentation and skill updates
 
