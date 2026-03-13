@@ -45,7 +45,8 @@ The self-hosted compiler (`compiler/*.vow`, ~6335 lines, 13 modules) can lex,
 parse, type-check, lower to IR, and emit native binaries via Cranelift FFI
 shims. The bootstrap triple test proves binary fixed-point reproducibility.
 
-However, it cannot yet replace the Rust compiler as the primary driver:
+The self-hosted compiler now has full feature parity with the Rust compiler
+and is the primary driver for all Vow development (Phases 16–20 complete):
 
 ```
                     Rust compiler          Self-hosted compiler
@@ -54,14 +55,15 @@ Lex/Parse/Check     Yes                    Yes
 IR Lowering         Yes                    Yes
 Native Codegen      Yes (Cranelift)        Yes (Cranelift via FFI)
 Module Loading      Yes                    Yes
-Vow Contracts       Yes (lower + codegen)  No (no vow block lowering)
-Verification        Yes (ESBMC pipeline)   No (no C emitter, no ESBMC)
-Debug Mode          Yes (runtime checks)   No (no blame/violation codegen)
-Diagnostics         Yes (JSON + human)     Yes (JSON + human, file:line:col)
-CLI UX              Yes (subcommands)      Yes (subcommands, flags, --help)
+Vow Contracts       Yes (lower + codegen)  Yes (Phase 16)
+Verification        Yes (ESBMC pipeline)   Yes (Phase 18)
+Debug Mode          Yes (runtime checks)   Yes (Phase 16)
+Diagnostics         Yes (JSON + human)     Yes (Phase 17, with line:col)
+CLI UX              Yes (subcommands)      Yes (Phase 19, 40/40 compat)
+Parallel Pipeline   Yes (sequential)       Yes (Phase 19.4, truly parallel)
 ```
 
-Phases 16–20 close these gaps.
+`./vowc` is the primary compiler. The Rust compiler is retained as stage 0 bootstrap only.
 
 ---
 
@@ -317,7 +319,7 @@ Previously completed.
 
 ---
 
-## Phase 15 (revised): Vericoding Benchmark — IN PROGRESS
+## Phase 15 (revised): Vericoding Benchmark — COMPLETE
 
 **Goal:** Vow is positioned as a reference language for specification-driven
 AI coding. Level 4 capability.
@@ -501,7 +503,7 @@ Binary fixed point confirmed after the change (B = C, sha256 identical).
 
 ---
 
-## Phase 17: Self-Hosted Diagnostics — IN PROGRESS
+## Phase 17: Self-Hosted Diagnostics — COMPLETE
 
 **Goal:** The self-hosted compiler emits structured, actionable diagnostics
 in both JSON and human-readable format.
@@ -730,11 +732,17 @@ loading (no `concat_vow.sh`). Stages: cargo build → Rust compiles self-hosted
 Flags: `--no-verify` (skip ESBMC), `--skip-cargo` (skip Stage 0). Produces
 `./vowc` as the primary self-hosted compiler for development.
 
-### 20.4 Documentation and skill updates
+### 20.4 Documentation and skill updates ✅
 
 Update the Toolchain Skill document to reference the self-hosted binary as the
 primary compiler. Update CLAUDE.md build instructions. The Rust compiler
 section becomes "Bootstrap" documentation.
+
+**Done.** CLAUDE.md restructured: `./vowc` is the primary compiler in all examples,
+Rust compiler demoted to "Bootstrap (Stage 0)" section. README.md quick start
+shows bootstrap + day-to-day workflow. benchmarks/README.md uses `./vowc` with
+`ulimit`. Skill index.md notes `./vowc` as primary binary. Roadmap capability
+gap table updated to reflect full parity.
 
 ### 20.5 Level 5 Agent Capability Test
 
