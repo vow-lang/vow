@@ -88,6 +88,7 @@ def run_benchmark(
     system_prompt: str,
     vow_binary: Path,
     verify_timeout: int = 120,
+    memory_limit: int | None = None,
 ) -> BenchmarkResult:
     start = time.time()
     max_iters = bench.max_cegis_iterations
@@ -132,7 +133,7 @@ def run_benchmark(
         final_code = code
 
         # Verify
-        vr = run_verify(vow_binary, code, timeout=verify_timeout)
+        vr = run_verify(vow_binary, code, timeout=verify_timeout, memory_limit=memory_limit)
         verify_outputs.append(vr.raw_json)
 
         if vr.status == "Verified":
@@ -158,7 +159,7 @@ def run_benchmark(
 
     # Exhausted iterations
     elapsed = time.time() - start
-    last_vr = run_verify(vow_binary, final_code, timeout=verify_timeout) if final_code else None
+    last_vr = run_verify(vow_binary, final_code, timeout=verify_timeout, memory_limit=memory_limit) if final_code else None
     failure_mode = classify_failure(last_vr) if last_vr else "empty_response"
     status_map = {
         "CompileFailed": "compile_failed",

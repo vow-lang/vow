@@ -39,9 +39,11 @@ def generate_report(results_dir: Path, run_id: str) -> str:
         total = summary.get("verified", 0)
         total_applicable = summary.get("total_applicable", 36)
         rate = summary.get("verification_rate", 0)
+        compiler = data.get("compiler", "rust")
+        compiler_label = f", {compiler}" if compiler != "rust" else ""
 
         lines.append(
-            f"| Vow ({_short_name(model_name)}) "
+            f"| Vow ({_short_name(model_name)}{compiler_label}) "
             f"| {easy.get('verified', 0)}/{easy.get('total', 15)} "
             f"| {medium.get('verified', 0)}/{medium.get('total', 15)} "
             f"| {hard.get('verified', 0)}/{hard.get('total', 6)} "

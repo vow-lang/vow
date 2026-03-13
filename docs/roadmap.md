@@ -700,10 +700,16 @@ String.contains() missing from self-hosted lowerer, parse error diagnostics
 not emitted, missing-module errors not propagated, dctx.error_count not used
 for frontend error detection.
 
-### 20.2 Benchmark suite under self-hosted compiler
+### 20.2 Benchmark suite under self-hosted compiler ✅
 
 Run the vericoding benchmark suite (`bench/`) using the self-hosted compiler
 as the verification backend. Results must match the Rust compiler's results.
+
+**Done.** Added `--compiler` flag to `bench/run.py` (`rust` | `self-hosted`).
+Self-hosted compiler auto-built to `target/release/vow_self` on first use.
+Memory limit (`ulimit -v 2000000` equivalent) applied via `resource.setrlimit`.
+`--compare` flag on `validate-references` runs both compilers side-by-side.
+All 36 non-Stretch references verify identically under both compilers.
 
 ### 20.3 Bootstrap release process
 
