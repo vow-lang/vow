@@ -337,17 +337,21 @@ consistent error tracking across the pipeline.
 
 **Priority: DEMAND-DRIVEN — each is triggered when a concrete need surfaces.**
 
-### 26.1 Arena deallocation (region-based memory)
+### 26.1 String comparison deallocation ✅ (partial)
 
-**Trigger: agent writes long-running programs that exhaust memory.**
+Typed free functions (`__vow_string_free`, `__vow_vec_free_val`,
+`__vow_map_free`) implemented in `vow-runtime`. Both lowerers emit inline
+`__vow_string_free` calls immediately after string equality/contains
+comparisons when one operand is a string literal. This eliminates the
+dominant leak pattern (keyword matching in loops — ~180K allocations per
+compiler invocation). Stress test: 100K iterations × 4 comparisons uses
+constant 2.7 MB RSS.
 
-`__vow_arena_free` is currently a no-op. All allocations leak. This is fine
-for compiler invocations and benchmarks (short-lived processes) but blocks
-any real-world server, daemon, or event-loop application.
-
-Options:
-- Implement scope-based arena deallocation (free on function return)
-- Add explicit `region` syntax for named arenas (design sketch §7)
+**Remaining work (future):**
+- Scope-exit deallocation for `let`-bound strings (requires escape analysis)
+- Vec/Map/Struct deallocation
+- Arena header-based `__vow_arena_free` for struct allocations
+- `drop()` language builtin for manual control
 
 ### 26.2 Recursive type ESBMC bounds
 

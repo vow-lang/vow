@@ -187,6 +187,7 @@ fn lctx_restore(ctx: LowerCtx, snap: ScopeSnap) {
     }
 }
 
+
 fn lctx_tag(ctx: LowerCtx, inst_id: i64, name: String) {
     ctx.tag_inst_ids.push(inst_id);
     ctx.tag_names.push(name);
@@ -578,6 +579,18 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             call_args.push(lhs_id);
             call_args.push(rhs_id);
             let eq_id: i64 = lctx_emit(ctx, IOP_CALL(), ITY_BOOL(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_eq"));
+            let lhs_tag: i64 = expr_tag(a, lhs_eid);
+            if lhs_tag == EXPR_LIT_STR() {
+                let free_args: Vec<i64> = Vec::new();
+                free_args.push(lhs_id);
+                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_free"));
+            }
+            let rhs_tag: i64 = expr_tag(a, rhs_eid);
+            if rhs_tag == EXPR_LIT_STR() {
+                let free_args: Vec<i64> = Vec::new();
+                free_args.push(rhs_id);
+                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_free"));
+            }
             if op == BINOP_NE() {
                 let not_args: Vec<i64> = Vec::new();
                 not_args.push(eq_id);
@@ -1180,7 +1193,17 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let call_args: Vec<i64> = Vec::new();
                 call_args.push(recv_id);
                 call_args.push(arg_id);
-                return lctx_emit(ctx, IOP_CALL(), ITY_BOOL(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_contains"));
+                let contains_result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_BOOL(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_contains"));
+                if nargs > 0 {
+                    let ae: i64 = list_get(a, args_lid, 0);
+                    let ae_tag: i64 = expr_tag(a, ae);
+                    if ae_tag == EXPR_LIT_STR() {
+                        let free_args: Vec<i64> = Vec::new();
+                        free_args.push(arg_id);
+                        lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_free"));
+                    }
+                }
+                return contains_result;
             }
         }
 

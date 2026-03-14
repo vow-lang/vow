@@ -158,6 +158,16 @@ impl LowerCtx {
         self.scope.pop();
     }
 
+    pub(super) fn emit_string_free(&mut self, id: InstId, span: Span) {
+        self.emit(
+            Opcode::Call,
+            Ty::Unit,
+            vec![id],
+            InstData::CallExtern("__vow_string_free".to_string()),
+            span,
+        );
+    }
+
     pub(super) fn define(&mut self, name: String, id: InstId) {
         if let Some(top) = self.scope.last_mut() {
             top.insert(name, id);
@@ -442,6 +452,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     InstData::CallExtern("__vow_string_eq".to_string()),
                     span,
                 );
+                if matches!(&lhs.kind, ExprKind::Lit(Lit::String(_))) {
+                    ctx.emit_string_free(lhs_id, span);
+                }
+                if matches!(&rhs.kind, ExprKind::Lit(Lit::String(_))) {
+                    ctx.emit_string_free(rhs_id, span);
+                }
                 if *op == BinOp::Ne {
                     ctx.emit(Opcode::Not, Ty::Bool, vec![eq_result], InstData::None, span)
                 } else {
@@ -1195,16 +1211,21 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     )
                 }
                 (Some("String"), "contains") => {
-                    let arg_id = args.first().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
+                    let arg_expr = args.first();
+                    let arg_id = arg_expr.map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
                         ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
                     });
-                    ctx.emit(
+                    let result = ctx.emit(
                         Opcode::Call,
                         Ty::Bool,
                         vec![recv_id, arg_id],
                         InstData::CallExtern("__vow_string_contains".to_string()),
                         span,
-                    )
+                    );
+                    if arg_expr.is_some_and(|e| matches!(&e.kind, ExprKind::Lit(Lit::String(_)))) {
+                        ctx.emit_string_free(arg_id, span);
+                    }
+                    result
                 }
                 (Some("String"), "byte_at") => {
                     let idx_id = args.first().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {

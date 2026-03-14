@@ -1704,6 +1704,15 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_string_free" => {
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        "__vow_vec_free_val" => {
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        "__vow_map_free" => {
+            sig.params.push(AbiParam::new(types::I64));
+        }
         "__vow_map_new" => {
             sig.returns.push(AbiParam::new(types::I64));
         }

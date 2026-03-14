@@ -2,10 +2,10 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::ffi::{c_char, CStr};
+use std::ffi::{CStr, c_char};
 use std::io::Write as _;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 thread_local! {
     static LAST_STDOUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
@@ -186,7 +186,9 @@ pub extern "C" fn __vow_arena_alloc(size: usize, align: usize) -> *mut u8 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_arena_free(_ptr: *mut u8) {
-    // MVP: no-op (memory leak); proper arena deallocation is future work
+    // No-op: struct deallocation deferred to future work.
+    // Typed free functions (__vow_string_free, __vow_vec_free_val, __vow_map_free) handle
+    // collection types directly without needing arena headers.
 }
 
 #[repr(C)]
@@ -365,11 +367,7 @@ pub unsafe extern "C" fn __vow_string_eq(a: *const u8, b: *const u8) -> i64 {
     }
     let sa = unsafe { std::slice::from_raw_parts(va.ptr, va.len) };
     let sb = unsafe { std::slice::from_raw_parts(vb.ptr, vb.len) };
-    if sa == sb {
-        1
-    } else {
-        0
-    }
+    if sa == sb { 1 } else { 0 }
 }
 
 #[unsafe(no_mangle)]
@@ -755,4 +753,51 @@ pub unsafe extern "C" fn __vow_map_remove(map: *mut u8, key: i64) {
 pub unsafe extern "C" fn __vow_map_len(map: *const u8) -> usize {
     let m = unsafe { &*(map as *const VowMap) };
     m.len
+}
+
+// ---------------------------------------------------------------------------
+// Typed deallocation
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_free(s: *mut u8) {
+    if s.is_null() {
+        return;
+    }
+    let v = unsafe { &*(s as *const VowVec) };
+    if v.cap > 0 && !v.ptr.is_null() {
+        let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(v.cap, 1) };
+        unsafe { std::alloc::dealloc(v.ptr, buf_layout) };
+    }
+    let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
+    unsafe { std::alloc::dealloc(s, header_layout) };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_free_val(v: *mut u8) {
+    if v.is_null() {
+        return;
+    }
+    let vec = unsafe { &*(v as *const VowVec) };
+    if vec.cap > 0 && !vec.ptr.is_null() {
+        let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(vec.cap * 8, 8) };
+        unsafe { std::alloc::dealloc(vec.ptr, buf_layout) };
+    }
+    let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
+    unsafe { std::alloc::dealloc(v, header_layout) };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_map_free(m: *mut u8) {
+    if m.is_null() {
+        return;
+    }
+    let map = unsafe { &*(m as *const VowMap) };
+    if map.cap > 0 && !map.ptr.is_null() {
+        let buf_layout =
+            unsafe { std::alloc::Layout::from_size_align_unchecked(map.cap * MAP_ENTRY_BYTES, 8) };
+        unsafe { std::alloc::dealloc(map.ptr, buf_layout) };
+    }
+    let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
+    unsafe { std::alloc::dealloc(m, header_layout) };
 }

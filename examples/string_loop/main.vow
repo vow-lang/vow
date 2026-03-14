@@ -1,0 +1,21 @@
+module StringLoop
+
+fn classify(s: String) -> i64 {
+  if s == "alpha" { return 1; }
+  if s == "beta" { return 2; }
+  if s == "gamma" { return 3; }
+  if s == "delta" { return 4; }
+  0
+}
+
+fn main() -> i32 [io] {
+  let target: String = String::from("gamma");
+  let mut i: i64 = 0;
+  let mut total: i64 = 0;
+  while i < 100000 {
+    total = total + classify(target);
+    i = i + 1;
+  }
+  print_i64(total);
+  0
+}
