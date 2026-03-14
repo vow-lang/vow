@@ -11,6 +11,8 @@ Vow is a language for agents, not humans. New language features should only be a
 
 Syntactic convenience for humans (string interpolation, pattern matching sugar, etc.) is not sufficient justification. Every feature added expands the compiler, C emitter, and verification surface area.
 
+**Crisp rule:** add surface sugar only when it desugars to today's core semantics with near-zero verifier impact; reject anything that introduces a new type-system axis. This preserves Vow's identity.
+
 ## Bootstrap Commands (Rust Stage 0)
 
 These Rust workspace commands build the stage 0 bootstrap compiler only. For day-to-day development, use `./vowc` (see below).

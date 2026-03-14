@@ -194,24 +194,7 @@ correctly in all callers.
 Scope: lexer (`break` keyword) + parser + IR lowering (jump to loop exit
 block) + verification (break as loop termination).
 
-### 22.3 String interpolation — GitHub #9
-
-Format literal syntax for string construction:
-
-```
-print_str(f"error at line {line}: expected {token_name}, got {actual}\n")
-```
-
-Impact: eliminates the single most common verbosity pattern in Vow code. The
-self-hosted compiler has 15+ instances of decomposed `print_str`/`print_i64`
-call chains. Agents generating diagnostic code cannot accidentally omit
-separators or newlines.
-
-Scope: lexer (f-string tokens) + parser (interpolation expressions) + IR
-lowering (desugar to `string_concat` + `i64_to_string` calls) + runtime
-helpers.
-
-### 22.4 Iterator protocol / for-each loop — GitHub #10
+### 22.3 Iterator protocol / for-each loop — GitHub #10
 
 `for`-each loop over `Vec<T>`:
 
@@ -230,32 +213,6 @@ loop with bounds check) + verification (loop invariant synthesis for for-loops).
 Note: the design sketch (§4.3) says "no `for` loops" because iterators require
 traits. This `for`-each is a syntactic desugar to `while` with index — no
 traits, no closures, no iterators. The IR is identical to the manual pattern.
-
-### 22.5 User-defined generic types (monomorphisation) — GitHub #14
-
-Monomorphisation-based user generics:
-
-```
-struct Stack<T> {
-    data: Vec<T>,
-}
-
-fn stack_push<T>(s: Stack<T>, v: T) -> Stack<T> { ... }
-```
-
-Impact: eliminates copy-paste programming for type-specific duplicates. The
-self-hosted compiler has many cases where identical logic is duplicated for
-different `i64`-typed semantic domains.
-
-Scope: parser (type parameter syntax) + type checker (monomorphisation pass) +
-IR lowering (instantiate per concrete type). This is the most complex language
-feature on the roadmap. The existing built-in generic types (`Vec<T>`,
-`Option<T>`, etc.) prove the mechanism is feasible.
-
-Note: the design sketch (§4.1) explicitly rejects user-defined generics. This
-is a design revision — the self-hosting experience showed that the duplication
-cost is higher than anticipated, especially for agents maintaining large
-codebases.
 
 ---
 
