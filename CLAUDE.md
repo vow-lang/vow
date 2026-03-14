@@ -2,6 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Language Design Principles
+
+Vow is a language for agents, not humans. New language features should only be added if they meet **all three** criteria:
+1. **Does not make verification harder** — the ESBMC pipeline and C model must not become more complex or fragile.
+2. **Eliminates a class of agent bugs** — the feature must make it harder for agents to generate incorrect code, not just shorter code.
+3. **Makes agentic coding easier** — the feature must help agents produce correct, verified programs more reliably (not merely reduce verbosity).
+
+Syntactic convenience for humans (string interpolation, pattern matching sugar, etc.) is not sufficient justification. Every feature added expands the compiler, C emitter, and verification surface area.
+
 ## Bootstrap Commands (Rust Stage 0)
 
 These Rust workspace commands build the stage 0 bootstrap compiler only. For day-to-day development, use `./vowc` (see below).
