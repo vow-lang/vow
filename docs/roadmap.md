@@ -84,17 +84,57 @@ Meanwhile, DafnyPro reached 86% at POPL 2026 and is publishing actively.
 
 ### 21.1 Publish benchmark results
 
-Write up the vericoding benchmark findings. Position Vow as the reference
-language for specification-driven AI coding. The narrative: "Vow is the
-language where AI agents prove their code correct."
+**Status: BLOCKED — comparison methodology invalid, spec expressiveness gap
+identified.**
 
-Content:
-- 100% (36/36) verification rate vs Dafny 82%, Verus 44%, Lean 27%
-- All on first CEGIS iteration (no repair needed)
-- Blame-tracking contracts as the key differentiator
-- Reproducible: benchmark suite + runner in `bench/`
+The original 36/36 (100%) result is on Vow's own benchmark suite. The
+Vericoding paper (arxiv.org/abs/2509.22908) uses 12,504 specifications across
+Dafny (3,029), Verus (2,334), and Lean (7,141) — the same problems translated
+across languages. Their headline numbers (Dafny 82%, Verus 44%, Lean 27%) are
+the **union across 9 models** with up to 5 repair iterations each, not a single
+model's result. The best single model achieves 67.5% on Dafny (Opus 4.1).
 
-Target: blog post + arxiv preprint.
+Comparing Vow's 36/36 on custom benchmarks against those numbers is not valid.
+
+**Pilot: 10 HumanEval problems translated to Vow (March 2026).**
+Translated 10 problems from the Vericoding HumanEval-Dafny set to Vow
+(`benchmarks/humaneval/HE*`). Result: 10/10 verified with claude-sonnet-4-6,
+mean 1.3 CEGIS iterations. However:
+
+- Only 2/10 have **exact** Dafny-equivalent contracts (HE041, HE060). The
+  rest have weaker contracts because Vow ensures clauses cannot call
+  user-defined functions or express quantifiers.
+- Weaker contracts make verification easier — a trivial implementation can
+  satisfy weak specs. This inflates Vow's pass rate relative to Dafny.
+- Nested loops with Vec access fail ESBMC verification (had to drop 2SUM
+  and 3SUM problems).
+- `let mut` declarations inside loop bodies cause ESBMC errors — variables
+  must be declared outside all enclosing loops.
+
+**Key blocker: spec function calls in ensures clauses.** The C emitter
+currently replaces non-constant function calls with `__VERIFIER_nondet()`,
+making them meaningless. If the emitter instead emitted the actual function
+body into the C model, ensures clauses could reference pure spec functions
+(e.g., `ensures: result == is_prime_spec(n)`). ESBMC would then verify by
+bounded model checking — no quantifiers needed, no new syntax, just a
+verification pipeline fix. This would make Vow contracts as strong as Dafny's
+for bounded inputs.
+
+**Path to publishable comparison:**
+1. Fix C emitter to emit spec function bodies (not nondet) for pure functions
+   referenced in ensures clauses.
+2. Re-translate the 10 HumanEval pilots with full-strength contracts.
+3. Scale to the full 162 HumanEval-Dafny set from the Vericoding benchmark.
+4. Run the same protocol (up to 5 CEGIS iterations) and compare against
+   their published per-model results.
+
+**Resources:**
+- Vericoding benchmark: github.com/Beneficial-AI-Foundation/vericoding-benchmark
+- Vericoding scripts: github.com/Beneficial-AI-Foundation/vericoding
+- Pilot results: `bench/results/humaneval-pilot/`
+- Pilot benchmarks: `benchmarks/humaneval/HE*`
+
+Target: blog post + arxiv preprint (after spec function fix).
 
 ### 21.2 Expand example coverage
 

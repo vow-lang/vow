@@ -1,7 +1,7 @@
 [suite]
 name = "vericoding"
-version = "1.0.0"
-total = 40
+version = "1.1.0"
+total = 50
 stretch_count = 4
 
 [[benchmarks]]
@@ -283,3 +283,75 @@ name = "expression_eval"
 difficulty = "hard"
 path = "hard/H10_expression_eval"
 expected_status = "Stretch"
+
+# HumanEval benchmarks (from Vericoding paper, arxiv.org/abs/2509.22908)
+
+[[benchmarks]]
+id = "HE003"
+name = "below_zero"
+difficulty = "medium"
+path = "humaneval/HE003_below_zero"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE005"
+name = "insert_delimiter"
+difficulty = "medium"
+path = "humaneval/HE005_insert_delimiter"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE009"
+name = "rolling_max"
+difficulty = "medium"
+path = "humaneval/HE009_rolling_max"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE013"
+name = "gcd"
+difficulty = "medium"
+path = "humaneval/HE013_gcd"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE025"
+name = "factorize"
+difficulty = "hard"
+path = "humaneval/HE025_factorize"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE031"
+name = "is_prime"
+difficulty = "medium"
+path = "humaneval/HE031_is_prime"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE041"
+name = "car_race_collision"
+difficulty = "easy"
+path = "humaneval/HE041_car_race_collision"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE042"
+name = "incr_list"
+difficulty = "medium"
+path = "humaneval/HE042_incr_list"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE049"
+name = "modp"
+difficulty = "medium"
+path = "humaneval/HE049_modp"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE060"
+name = "sum_to_n"
+difficulty = "easy"
+path = "humaneval/HE060_sum_to_n"
+expected_status = "Verified"

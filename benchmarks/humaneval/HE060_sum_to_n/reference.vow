@@ -1,0 +1,14 @@
+module SumToN
+
+fn sum_to_n(n: i64) -> i64 vow {
+  requires: n >= 1,
+  requires: n <= 100,
+  ensures: result == n * (n + 1) / 2
+} {
+  n * (n + 1) / 2
+}
+
+fn main() -> i32 [io] {
+  print_i64(sum_to_n(10));
+  0
+}

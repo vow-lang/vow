@@ -1,0 +1,25 @@
+module RollingMax
+
+fn rolling_max(nums: Vec<i64>) -> Vec<i64> vow {
+  requires: nums.len() >= 0,
+  requires: nums.len() <= 8,
+  ensures: result.len() == nums.len()
+} {
+  Vec::new()
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v.push(3);
+  v.push(2);
+  v.push(5);
+  v.push(1);
+  let r: Vec<i64> = rolling_max(v);
+  let mut i: i64 = 0;
+  while i < r.len() {
+    print_i64(r[i]);
+    i = i + 1;
+  }
+  0
+}

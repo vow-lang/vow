@@ -1,0 +1,9 @@
+[benchmark]
+id = "HE060"
+name = "sum_to_n"
+difficulty = "easy"
+tags = ["arithmetic", "ensures", "humaneval"]
+unwind = 10
+modules = 1
+expected_status = "Verified"
+max_cegis_iterations = 2
