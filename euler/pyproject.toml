@@ -1,0 +1,13 @@
+[project]
+name = "euler"
+version = "0.1.0"
+description = "Project Euler demo: AI agent solves and verifies problems in Vow"
+requires-python = ">=3.13"
+dependencies = [
+    "anthropic>=0.52.0",
+    "openai>=1.82.0",
+    "tomli>=2.0.0;python_version<'3.11'",
+]
+
+[project.scripts]
+euler = "run:main"

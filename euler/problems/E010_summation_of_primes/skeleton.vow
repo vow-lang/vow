@@ -1,0 +1,20 @@
+module SummationOfPrimes
+
+fn is_prime(n: i64) -> bool vow {
+  requires: n >= 2
+} {
+  false
+}
+
+fn sum_primes(limit: i64) -> i64 vow {
+  requires: limit >= 2,
+  ensures: result >= 2
+} {
+  2
+}
+
+fn main() -> i32 [io] {
+  let answer: i64 = sum_primes(2000000);
+  print_i64(answer);
+  0
+}

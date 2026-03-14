@@ -1,0 +1,14 @@
+module MultiplesOf3Or5
+
+fn sum_multiples(limit: i64) -> i64 vow {
+  requires: limit >= 0,
+  ensures: result >= 0
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  let answer: i64 = sum_multiples(1000);
+  print_i64(answer);
+  0
+}

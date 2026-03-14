@@ -1,0 +1,14 @@
+module EvenFibonacci
+
+fn even_fib_sum(limit: i64) -> i64 vow {
+  requires: limit >= 2,
+  ensures: result >= 2
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  let answer: i64 = even_fib_sum(4000000);
+  print_i64(answer);
+  0
+}
