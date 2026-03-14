@@ -1,0 +1,7 @@
+Implement a module called SafeMath with the following functions:
+
+1. `safe_divide(x: i64, y: i64) -> i64` — integer division that cannot divide by zero.
+2. `safe_abs(x: i64) -> i64` — absolute value that handles the i64 minimum correctly (should require input > i64 min).
+3. `clamp(val: i64, lo: i64, hi: i64) -> i64` — clamp a value to the range [lo, hi]. Requires lo <= hi. Ensures result is in [lo, hi].
+
+The module should have appropriate contracts (requires, ensures) so that all functions verify with ESBMC.

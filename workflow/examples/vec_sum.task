@@ -1,0 +1,11 @@
+Implement a module called VecOps with a function:
+
+`bounded_sum(v: Vec<i64>, n: i64) -> i64`
+
+Sum the first `n` elements of vector `v`. Requirements:
+- n must be non-negative and not exceed v.len()
+- n must be at most 8 (to stay within ESBMC's unwind bound of 10)
+- Each element must be in [-100, 100] (use requires clauses)
+- The result must be in [-800, 800] (since at most 8 elements of at most 100 each)
+
+Use a while loop with proper loop invariants.
