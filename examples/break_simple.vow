@@ -1,0 +1,19 @@
+module BreakSimple
+
+fn find_first_over(threshold: i64) -> i64 [io] {
+    let mut i: i64 = 0;
+    while i < 100 {
+        if i > threshold {
+            break;
+        }
+        i = i + 1;
+    }
+    i
+}
+
+fn main() -> i64 [io] {
+    let result: i64 = find_first_over(42);
+    print_i64(result);
+    print_str("\n");
+    0
+}

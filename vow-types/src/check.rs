@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use vow_diag::{Blame, Diagnostic, DiagnosticEmitter, ErrorCode, Severity, SourceLocation};
 use vow_syntax::ast::{
@@ -49,6 +49,8 @@ pub struct Checker<'e> {
     pub(crate) file: String,
     pub(crate) emitter: &'e mut dyn DiagnosticEmitter,
     string_exprs: StringExprSet,
+    in_loop: u32,
+    pub const_values: HashMap<String, i64>,
 }
 
 impl<'e> Checker<'e> {
@@ -61,6 +63,8 @@ impl<'e> Checker<'e> {
             file: file.into(),
             emitter,
             string_exprs: HashSet::new(),
+            in_loop: 0,
+            const_values: HashMap::new(),
         }
     }
 
@@ -216,6 +220,59 @@ impl<'e> Checker<'e> {
                     Err(msg) => self.emit_error(ErrorCode::TypeMismatch, msg, a.ty.span()),
                 },
                 _ => {}
+            }
+        }
+
+        // Pass 1b2: Register constants
+        for item in &module.items {
+            if let Item::Const(c) = item {
+                let ty = match self.env.resolve(&c.ty) {
+                    Ok(ty) => ty,
+                    Err(msg) => {
+                        self.emit_error(ErrorCode::TypeMismatch, msg, c.ty.span());
+                        continue;
+                    }
+                };
+                match &c.value.kind {
+                    ExprKind::Lit(Lit::Int(v)) => {
+                        if ty != Ty::I64 && ty != Ty::I32 {
+                            self.emit_error(
+                                ErrorCode::TypeMismatch,
+                                format!("const `{}` has type `{}`, expected integer type", c.name, ty),
+                                c.span,
+                            );
+                        }
+                        self.const_values.insert(c.name.clone(), *v as i64);
+                    }
+                    ExprKind::Lit(Lit::Bool(b)) => {
+                        if ty != Ty::Bool {
+                            self.emit_error(
+                                ErrorCode::TypeMismatch,
+                                format!("const `{}` has type `{}`, expected bool", c.name, ty),
+                                c.span,
+                            );
+                        }
+                        self.const_values.insert(c.name.clone(), *b as i64);
+                    }
+                    ExprKind::UnaryOp { op: UnOp::Neg, operand } => {
+                        if let ExprKind::Lit(Lit::Int(v)) = &operand.kind {
+                            self.const_values.insert(c.name.clone(), -(*v as i64));
+                        } else {
+                            self.emit_error(
+                                ErrorCode::TypeMismatch,
+                                format!("const `{}` value must be a literal", c.name),
+                                c.value.span,
+                            );
+                        }
+                    }
+                    _ => {
+                        self.emit_error(
+                            ErrorCode::TypeMismatch,
+                            format!("const `{}` value must be a literal", c.name),
+                            c.value.span,
+                        );
+                    }
+                }
             }
         }
 
@@ -427,21 +484,26 @@ impl<'e> Checker<'e> {
                 Lit::Bool(_) => Ty::Bool,
                 Lit::String(_) => Ty::Str,
             },
-            ExprKind::Ident(name) => match self.env.lookup(name) {
-                Some(ty) => ty.clone(),
-                None => {
-                    let mut hints = Vec::new();
-                    let candidates = self.env.all_var_names();
-                    if let Some(suggestion) = suggest_similar(name, &candidates, 3) {
-                        hints.push(format!("did you mean `{suggestion}`?"));
+            ExprKind::Ident(name) => {
+                if self.const_values.contains_key(name.as_str()) {
+                    return Ty::I64;
+                }
+                match self.env.lookup(name) {
+                    Some(ty) => ty.clone(),
+                    None => {
+                        let mut hints = Vec::new();
+                        let candidates = self.env.all_var_names();
+                        if let Some(suggestion) = suggest_similar(name, &candidates, 3) {
+                            hints.push(format!("did you mean `{suggestion}`?"));
+                        }
+                        self.emit_error_with_hints(
+                            ErrorCode::TypeMismatch,
+                            format!("undefined variable `{name}`"),
+                            expr.span,
+                            hints,
+                        );
+                        Ty::Unit
                     }
-                    self.emit_error_with_hints(
-                        ErrorCode::TypeMismatch,
-                        format!("undefined variable `{name}`"),
-                        expr.span,
-                        hints,
-                    );
-                    Ty::Unit
                 }
             },
             ExprKind::BinaryOp { op, lhs, rhs } => {
@@ -805,14 +867,30 @@ impl<'e> Checker<'e> {
                 condition, body, ..
             } => {
                 self.check_expr(condition);
+                self.in_loop += 1;
                 self.check_block(body);
+                self.in_loop -= 1;
                 Ty::Unit
             }
             ExprKind::Loop { body, .. } => {
+                self.in_loop += 1;
                 self.check_block(body);
+                self.in_loop -= 1;
                 Ty::Unit
             }
-            ExprKind::Break { .. } => Ty::Never,
+            ExprKind::Break { value } => {
+                if self.in_loop == 0 {
+                    self.emit_error(
+                        ErrorCode::TypeMismatch,
+                        "`break` outside of a loop",
+                        expr.span,
+                    );
+                }
+                if let Some(v) = value {
+                    self.check_expr(v);
+                }
+                Ty::Never
+            }
             ExprKind::Return { value } => {
                 let val_ty = match value {
                     Some(v) => self.check_expr(v),

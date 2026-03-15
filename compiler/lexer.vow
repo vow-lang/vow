@@ -72,6 +72,7 @@ fn keyword_tag(s: String) -> i64 {
     else if s.eq(String::from("io")) { tok_kw_io() }
     else if s.eq(String::from("panic")) { tok_kw_panic() }
     else if s.eq(String::from("unsafe")) { tok_kw_unsafe() }
+    else if s.eq(String::from("const")) { tok_kw_const() }
     else if s.eq(String::from("true")) { tok_lit_bool() }
     else if s.eq(String::from("false")) { tok_lit_bool() }
     else if s.eq(String::from("_")) { tok_underscore() }

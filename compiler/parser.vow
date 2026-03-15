@@ -138,6 +138,17 @@ fn parse_path(p: Parser) -> i64 {
     arena_add_list(p.arena, items)
 }
 
+fn parse_const_def(p: Parser) -> i64 {
+    let _kw: bool = expect(p, tok_kw_const());
+    let name_sid: i64 = expect_ident(p);
+    let _colon: bool = expect(p, tok_colon());
+    let type_tid: i64 = parse_type(p);
+    let _eq: bool = expect(p, tok_eq());
+    let value_eid: i64 = parse_expr(p);
+    let _semi: bool = expect(p, tok_semicolon());
+    arena_add_cdef(p.arena, name_sid, type_tid, value_eid)
+}
+
 fn parse_item(p: Parser) -> i64 {
     if at(p, tok_kw_fn()) {
         let fid: i64 = parse_fn_def(p);
@@ -152,8 +163,11 @@ fn parse_item(p: Parser) -> i64 {
     } else if at(p, tok_kw_enum()) {
         let eid: i64 = parse_enum_def(p);
         item_pack(ITEM_ENUM(), eid)
+    } else if at(p, tok_kw_const()) {
+        let cid: i64 = parse_const_def(p);
+        item_pack(ITEM_CONST(), cid)
     } else {
-        push_error(p, String::from("expected item (fn, struct, or enum)"));
+        push_error(p, String::from("expected item (fn, struct, enum, or const)"));
         skip_unknown_item(p);
         -1
     }

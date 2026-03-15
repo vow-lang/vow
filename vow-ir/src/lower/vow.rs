@@ -354,6 +354,7 @@ mod tests {
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             &std::collections::HashSet::new(),
+            &std::collections::HashMap::new(),
         );
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
@@ -396,6 +397,7 @@ mod tests {
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             &std::collections::HashSet::new(),
+            &std::collections::HashMap::new(),
         );
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
@@ -435,6 +437,7 @@ mod tests {
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             &std::collections::HashSet::new(),
+            &std::collections::HashMap::new(),
         );
 
         assert_eq!(func.vows.len(), 1);
@@ -468,6 +471,7 @@ mod tests {
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             &std::collections::HashSet::new(),
+            &std::collections::HashMap::new(),
         );
 
         assert_eq!(func.vows.len(), 1);
@@ -545,6 +549,7 @@ mod tests {
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             &std::collections::HashSet::new(),
+            &std::collections::HashMap::new(),
         );
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
@@ -648,6 +653,7 @@ mod tests {
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             &std::collections::HashSet::new(),
+            &std::collections::HashMap::new(),
         );
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
@@ -743,6 +749,7 @@ mod tests {
             std::collections::HashMap::new(),
             struct_field_type_names,
             &std::collections::HashSet::new(),
+            &std::collections::HashMap::new(),
         );
 
         assert_eq!(func.vows.len(), 1);

@@ -1,6 +1,6 @@
 use crate::ast::{
-    BinOp, Block, Effect, EnumDef, EnumVariant, Expr, ExprKind, ExternBlock, ExternFn, FnDef,
-    ImplBlock, Item, Lit, MatchArm, Module, Param, Pat, PatKind, Stmt, StructDef, TraitDef,
+    BinOp, Block, ConstDef, Effect, EnumDef, EnumVariant, Expr, ExprKind, ExternBlock, ExternFn,
+    FnDef, ImplBlock, Item, Lit, MatchArm, Module, Param, Pat, PatKind, Stmt, StructDef, TraitDef,
     TraitMethod, Type, TypeAlias, UnOp, VariantKind, Visibility, VowBlock, VowClause,
 };
 
@@ -51,6 +51,7 @@ fn print_decl_item(item: &Item, level: usize) -> String {
         Item::Impl(i) => print_impl_decl(i, level),
         Item::TypeAlias(a) => print_type_alias(a, level),
         Item::Extern(e) => print_extern(e, level),
+        Item::Const(c) => print_const(c, level),
     }
 }
 
@@ -99,6 +100,7 @@ fn print_item(item: &Item, level: usize) -> String {
         Item::Impl(i) => print_impl(i, level),
         Item::TypeAlias(a) => print_type_alias(a, level),
         Item::Extern(e) => print_extern(e, level),
+        Item::Const(c) => print_const(c, level),
     }
 }
 
@@ -350,6 +352,19 @@ fn print_type_alias(a: &TypeAlias, level: usize) -> String {
     let ind = indent(level);
     let vis = print_visibility(&a.vis);
     format!("{}{}type {} = {};\n", ind, vis, a.name, print_type(&a.ty))
+}
+
+fn print_const(c: &ConstDef, level: usize) -> String {
+    let ind = indent(level);
+    let vis = print_visibility(&c.vis);
+    format!(
+        "{}{}const {}: {} = {};\n",
+        ind,
+        vis,
+        c.name,
+        print_type(&c.ty),
+        print_expr(&c.value)
+    )
 }
 
 fn print_extern(e: &ExternBlock, level: usize) -> String {

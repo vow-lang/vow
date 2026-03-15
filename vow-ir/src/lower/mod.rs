@@ -82,6 +82,10 @@ pub struct LowerCtx {
     pub(super) struct_field_type_names: HashMap<String, Vec<String>>,
     // expr addresses whose resolved type is String (from checker)
     string_exprs: StringExprSet,
+    // const name → compile-time integer value
+    const_map: HashMap<String, i64>,
+    // loop exit block stack for break
+    loop_exit_blocks: Vec<BlockId>,
 }
 
 impl LowerCtx {
@@ -137,6 +141,8 @@ impl LowerCtx {
             file,
             struct_field_type_names,
             string_exprs,
+            const_map: HashMap::new(),
+            loop_exit_blocks: Vec::new(),
         }
     }
 
@@ -432,9 +438,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 vow_str
             }
         },
-        ExprKind::Ident(name) => ctx
-            .lookup(name)
-            .unwrap_or_else(|| panic!("undefined variable: {name}")),
+        ExprKind::Ident(name) => {
+            if let Some(&val) = ctx.const_map.get(name.as_str()) {
+                return ctx.emit(Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(val), span);
+            }
+            ctx.lookup(name)
+                .unwrap_or_else(|| panic!("undefined variable: {name}"))
+        }
         ExprKind::BinaryOp { op, lhs, rhs } => {
             let lhs_id = lower_expr(ctx, lhs);
             let rhs_id = lower_expr(ctx, rhs);
@@ -830,27 +840,31 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             // Body: lower body (push/pop scope handles lets inside body).
             ctx.switch_to_block(body_block);
+            ctx.loop_exit_blocks.push(exit_block);
             lower_block(ctx, body);
+            ctx.loop_exit_blocks.pop();
 
             // Emit back-edge Upsilons with the current scope values.
-            for (name, phi_id) in &phi_ids {
-                if let Some(cur_val) = ctx.lookup(name) {
-                    ctx.emit(
-                        Opcode::Upsilon,
-                        ctx.inst_ty(cur_val),
-                        vec![cur_val],
-                        InstData::PhiTarget(*phi_id),
-                        span,
-                    );
+            if !ctx.is_terminated() {
+                for (name, phi_id) in &phi_ids {
+                    if let Some(cur_val) = ctx.lookup(name) {
+                        ctx.emit(
+                            Opcode::Upsilon,
+                            ctx.inst_ty(cur_val),
+                            vec![cur_val],
+                            InstData::PhiTarget(*phi_id),
+                            span,
+                        );
+                    }
                 }
+                ctx.emit(
+                    Opcode::Jump,
+                    Ty::Unit,
+                    vec![],
+                    InstData::JumpTarget(header_block),
+                    span,
+                );
             }
-            ctx.emit(
-                Opcode::Jump,
-                Ty::Unit,
-                vec![],
-                InstData::JumpTarget(header_block),
-                span,
-            );
 
             // Restore scope to Phi values so the exit block sees the loop-exit values.
             for (name, phi_id) in &phi_ids {
@@ -860,6 +874,109 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             // Exit block.
             ctx.switch_to_block(exit_block);
             ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+        }
+        ExprKind::Loop {
+            body,
+            vow: loop_vow,
+        } => {
+            let mutated = collect_assigned_vars(body);
+            let loop_vars: Vec<(String, InstId)> = mutated
+                .into_iter()
+                .filter_map(|name| ctx.lookup(&name).map(|id| (name, id)))
+                .collect();
+
+            let pre_header_block = ctx.current_block;
+            let header_block = ctx.new_block();
+            let exit_block = ctx.new_block();
+
+            let mut upsilon_ids: Vec<(String, InstId)> = vec![];
+            for (name, pre_val) in &loop_vars {
+                let ty = ctx.inst_ty(*pre_val);
+                let up_id = ctx.emit(
+                    Opcode::Upsilon,
+                    ty,
+                    vec![*pre_val],
+                    InstData::PhiTarget(InstId(u32::MAX)),
+                    span,
+                );
+                upsilon_ids.push((name.clone(), up_id));
+            }
+            ctx.emit(
+                Opcode::Jump,
+                Ty::Unit,
+                vec![],
+                InstData::JumpTarget(header_block),
+                span,
+            );
+
+            ctx.switch_to_block(header_block);
+            let mut phi_ids: Vec<(String, InstId)> = vec![];
+            for (name, pre_val) in &loop_vars {
+                let ty = ctx.inst_ty(*pre_val);
+                let phi_id = ctx.emit(Opcode::Phi, ty, vec![], InstData::None, span);
+                phi_ids.push((name.clone(), phi_id));
+            }
+            for (name, up_id) in &upsilon_ids {
+                let phi_id = phi_ids.iter().find(|(n, _)| n == name).unwrap().1;
+                backpatch_upsilon(ctx, pre_header_block, *up_id, phi_id);
+            }
+            for (name, phi_id) in &phi_ids {
+                ctx.assign(name, *phi_id);
+            }
+
+            if let Some(lv) = loop_vow {
+                vow::lower_invariant(ctx, lv);
+            }
+
+            ctx.loop_exit_blocks.push(exit_block);
+            lower_block(ctx, body);
+            ctx.loop_exit_blocks.pop();
+
+            // Back-edge Upsilons
+            if !ctx.is_terminated() {
+                for (name, phi_id) in &phi_ids {
+                    if let Some(cur_val) = ctx.lookup(name) {
+                        ctx.emit(
+                            Opcode::Upsilon,
+                            ctx.inst_ty(cur_val),
+                            vec![cur_val],
+                            InstData::PhiTarget(*phi_id),
+                            span,
+                        );
+                    }
+                }
+                ctx.emit(
+                    Opcode::Jump,
+                    Ty::Unit,
+                    vec![],
+                    InstData::JumpTarget(header_block),
+                    span,
+                );
+            }
+
+            for (name, phi_id) in &phi_ids {
+                ctx.assign(name, *phi_id);
+            }
+
+            ctx.switch_to_block(exit_block);
+            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+        }
+        ExprKind::Break { value } => {
+            let exit_block = ctx
+                .loop_exit_blocks
+                .last()
+                .copied()
+                .expect("break outside of loop");
+            if let Some(val_expr) = value {
+                lower_expr(ctx, val_expr);
+            }
+            ctx.emit(
+                Opcode::Jump,
+                Ty::Unit,
+                vec![],
+                InstData::JumpTarget(exit_block),
+                span,
+            )
         }
         ExprKind::FieldAccess { base, field } => {
             let ptr_id = lower_expr(ctx, base);
@@ -1544,6 +1661,7 @@ fn lower_block_inner(ctx: &mut LowerCtx, block: &Block) -> InstId {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn lower_function(
     fn_def: &FnDef,
     file: &str,
@@ -1552,6 +1670,7 @@ pub fn lower_function(
     enum_variant_map: HashMap<String, Vec<String>>,
     struct_field_type_names: HashMap<String, Vec<String>>,
     string_exprs: &StringExprSet,
+    const_map: &HashMap<String, i64>,
 ) -> (Function, Vec<String>) {
     let params: Vec<Ty> = fn_def.params.iter().map(|p| lower_ty(&p.ty)).collect();
     let param_names: Vec<String> = fn_def.params.iter().map(|p| p.name.clone()).collect();
@@ -1571,6 +1690,8 @@ pub fn lower_function(
         struct_field_type_names,
         string_exprs.clone(),
     );
+
+    ctx.const_map = const_map.clone();
 
     if let Some(vow) = &fn_def.vow {
         ctx.vow_block = Some(vow.clone());
@@ -1661,6 +1782,29 @@ pub fn lower_module(module: &AstModule, file: &str, string_exprs: &StringExprSet
             (fn_def.name.clone(), (FuncId(idx as u32), ret_ty))
         })
         .collect();
+
+    // Collect const declarations
+    let mut const_map: HashMap<String, i64> = HashMap::new();
+    for item in &module.items {
+        if let Item::Const(c) = item {
+            let val = match &c.value.kind {
+                ExprKind::Lit(Lit::Int(v)) => *v as i64,
+                ExprKind::Lit(Lit::Bool(b)) => *b as i64,
+                ExprKind::UnaryOp {
+                    op: UnOp::Neg,
+                    operand,
+                } => {
+                    if let ExprKind::Lit(Lit::Int(v)) = &operand.kind {
+                        -(*v as i64)
+                    } else {
+                        0
+                    }
+                }
+                _ => 0,
+            };
+            const_map.insert(c.name.clone(), val);
+        }
+    }
 
     // Build struct layout info
     let mut struct_field_map: HashMap<String, Vec<String>> = HashMap::new();
@@ -1759,6 +1903,7 @@ pub fn lower_module(module: &AstModule, file: &str, string_exprs: &StringExprSet
                 enum_variant_map.clone(),
                 struct_field_type_names.clone(),
                 string_exprs,
+                &const_map,
             );
             func.id = FuncId(idx as u32);
             let base = all_strings.len() as u32;
@@ -1883,6 +2028,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             &HashSet::new(),
+            &HashMap::new(),
         );
 
         assert_eq!(func.name, "const_fn");
@@ -1926,6 +2072,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             &HashSet::new(),
+            &HashMap::new(),
         );
 
         let entry = &func.blocks[0];
@@ -1972,6 +2119,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             &HashSet::new(),
+            &HashMap::new(),
         );
 
         let entry = &func.blocks[0];
@@ -2013,6 +2161,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             &HashSet::new(),
+            &HashMap::new(),
         );
 
         assert!(
@@ -2055,6 +2204,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             &HashSet::new(),
+            &HashMap::new(),
         );
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
@@ -2107,6 +2257,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             &HashSet::new(),
+            &HashMap::new(),
         );
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
@@ -2208,6 +2359,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             &HashSet::new(),
+            &HashMap::new(),
         );
 
         let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();

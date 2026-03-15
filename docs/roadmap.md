@@ -1,4 +1,4 @@
-# Vow Roadmap — Revised (14.03.2026)
+# Vow Roadmap — Revised (15.03.2026)
 
 This revision replaces the March 7 roadmap. Phases 10–20 are complete. The
 self-hosted compiler (`./vowc`) is the primary driver. This document focuses
@@ -19,7 +19,7 @@ Achieved:
 - Structured JSON diagnostics with line:col source spans
 - `build`, `verify` subcommands; `--mode debug`, `--no-verify`, `--unwind N` flags
 - Vericoding benchmark: **100% (36/36)** with claude-sonnet-4-6 vs Dafny 82%, Verus 44%, Lean 27%
-- 82/82 tests passing, 40/40 CLI compatibility tests
+- 89/89 tests passing, 40/40 CLI compatibility tests
 - Toolchain Skill document, structured `--help`, `--debug-trace`, incremental compilation
 - Bootstrap: `scripts/bootstrap.sh` produces `./vowc` from Rust stage 0
 
@@ -157,42 +157,20 @@ Each example should be a complete, runnable program that compiles and verifies.
 **Priority: HIGH — these directly improve agent productivity and reduce
 error rates. Ordered by implementation difficulty (easiest first).**
 
-### 22.1 Named constants (`const` declarations) — GitHub #15
+### 22.1 Named constants (`const` declarations) — GitHub #15 ✅
 
-Top-level `const` declarations that fold at compile time:
+Top-level `const` declarations that fold at compile time. Both Rust and
+self-hosted compilers support `const NAME: TYPE = LITERAL;`. The checker
+validates literal values; the lowerer folds to `ConstI64`. Zero verifier
+impact — verification of contracts using consts works unchanged.
 
-```
-const TWO_32: i64 = 4294967296
-const HASHMAP_ENTRY_STRIDE: i64 = 16
-```
+### 22.2 Break and break-with-value — GitHub #13 ✅
 
-Impact: eliminates magic numbers throughout the self-hosted compiler (e.g.,
-`4294967296` in `item_pack`, `16` for HashMap stride, `24` for HashMap header).
-Agents cannot accidentally use the wrong literal. Zero runtime cost.
-
-Scope: lexer + parser + type checker + IR lowering (constant folding). No
-verification changes needed.
-
-### 22.2 Break and break-with-value — GitHub #13
-
-`break` exits the current loop. `break <expr>` exits with a value (loop
-becomes an expression):
-
-```
-let found: i64 = loop {
-    if list_get(data, lid, i) == target { break i }
-    i = i + 1
-    if i >= n { break -1 }
-}
-```
-
-Impact: eliminates the sentinel-flag antipattern from search and validation
-code. The self-hosted compiler has many instances of `let found: i64 = -1`
-followed by a while loop. Agents frequently fail to handle the `-1` sentinel
-correctly in all callers.
-
-Scope: lexer (`break` keyword) + parser + IR lowering (jump to loop exit
-block) + verification (break as loop termination).
+`break` exits the current loop via `Jump` to the loop exit block. Both Rust
+and self-hosted compilers support `break` inside `while` loops. The Rust
+compiler also supports `break` inside `loop` expressions and `ExprKind::Loop`
+IR lowering. The type checker validates break-outside-loop errors. Back-edge
+emission is guarded by `is_terminated()` to handle break in loop bodies.
 
 ### 22.3 Iterator protocol / for-each loop — GitHub #10
 
@@ -448,6 +426,6 @@ until a concrete verification need exceeds ESBMC's capabilities.
 
 ---
 
-*This document captures the forward-looking roadmap as of March 2026. Phases
-21–25 are prioritised by impact. Phase 26 is demand-driven. Phase 27 is
-demand-triggered. If a phase isn't earning its keep, cut it.*
+*This document captures the forward-looking roadmap as of 15 March 2026.
+Phases 21–25 are prioritised by impact. Phase 26 is demand-driven. Phase 27
+is demand-triggered. If a phase isn't earning its keep, cut it.*

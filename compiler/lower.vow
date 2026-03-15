@@ -23,6 +23,9 @@ struct LowerCtx {
     arena: AstArena,
     cur_vow_lid: i64,
     str_eids: Vec<i64>,
+    const_names: Vec<String>,
+    const_values: Vec<i64>,
+    loop_exit_blocks: Vec<i64>,
 }
 
 struct ScopeSnap {
@@ -55,6 +58,9 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         arena: arena,
         cur_vow_lid: -1,
         str_eids: str_eids,
+        const_names: Vec::new(),
+        const_values: Vec::new(),
+        loop_exit_blocks: Vec::new(),
     }
 }
 
@@ -549,6 +555,17 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
     if tag == EXPR_IDENT() {
         let name_sid: i64 = expr_a(a, eid);
         let name: String = arena_str(a, name_sid);
+        let ncnst: i64 = ctx.const_names.len();
+        let mut ci: i64 = 0;
+        while ci < ncnst {
+            let cn: String = ctx.const_names[ci];
+            if cn.eq(name) {
+                let cv: i64 = ctx.const_values[ci];
+                let args: Vec<i64> = Vec::new();
+                return lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), args, IDATA_CONST_I64(), cv, 0, String::from(""));
+            }
+            ci = ci + 1;
+        }
         let val: i64 = lctx_lookup(ctx, name);
         if val != -1 {
             return val;
@@ -876,17 +893,21 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
 
         lctx_switch_to_block(ctx, body_block);
+        ctx.loop_exit_blocks.push(exit_block);
         lower_block(ctx, body_bid);
+        ctx.loop_exit_blocks.pop();
 
-        let mut ai3: i64 = 0;
-        while ai3 < nassigned {
-            let vname: String = assigned[ai3];
-            let new_val: i64 = lctx_lookup(ctx, vname);
-            let val_ty: i64 = ITY_I64();
-            let up_args: Vec<i64> = Vec::new();
-            up_args.push(new_val);
-            lctx_emit(ctx, IOP_UPSILON(), val_ty, up_args, IDATA_PHI_TARGET(), phi_ids[ai3], 0, String::from(""));
-            ai3 = ai3 + 1;
+        if !lctx_is_terminated(ctx) {
+            let mut ai3: i64 = 0;
+            while ai3 < nassigned {
+                let vname: String = assigned[ai3];
+                let new_val: i64 = lctx_lookup(ctx, vname);
+                let val_ty: i64 = ITY_I64();
+                let up_args: Vec<i64> = Vec::new();
+                up_args.push(new_val);
+                lctx_emit(ctx, IOP_UPSILON(), val_ty, up_args, IDATA_PHI_TARGET(), phi_ids[ai3], 0, String::from(""));
+                ai3 = ai3 + 1;
+            }
         }
 
         if !lctx_is_terminated(ctx) {
@@ -1494,6 +1515,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
     }
 
     if tag == EXPR_BREAK() {
+        let nle: i64 = ctx.loop_exit_blocks.len();
+        if nle > 0 {
+            let exit_block: i64 = ctx.loop_exit_blocks[nle - 1];
+            let jmp_args: Vec<i64> = Vec::new();
+            return lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), exit_block, 0, String::from(""));
+        }
         let u_args: Vec<i64> = Vec::new();
         return lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""));
     }
@@ -2058,6 +2085,41 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>) -> IrModule {
     res_variants.push(String::from("Err"));
     enum_variant_lists.push(res_variants);
 
+    let cnames: Vec<String> = Vec::new();
+    let cvals: Vec<i64> = Vec::new();
+    let mut ci: i64 = 0;
+    while ci < n_items {
+        let item: i64 = m.items[ci];
+        let ik: i64 = item_kind(item);
+        let iid: i64 = item_id(item);
+        if ik == ITEM_CONST() {
+            let cn_sid: i64 = cdef_name_sid(a, iid);
+            let cn: String = arena_str(a, cn_sid);
+            let cv_eid: i64 = cdef_value_eid(a, iid);
+            let cv_tag: i64 = expr_tag(a, cv_eid);
+            let cv: i64 = {
+                if cv_tag == EXPR_LIT_INT() {
+                    expr_a(a, cv_eid)
+                } else if cv_tag == EXPR_LIT_BOOL() {
+                    expr_a(a, cv_eid)
+                } else if cv_tag == EXPR_UNOP() {
+                    let inner_eid: i64 = expr_b(a, cv_eid);
+                    let inner_tag: i64 = expr_tag(a, inner_eid);
+                    if inner_tag == EXPR_LIT_INT() {
+                        0 - expr_a(a, inner_eid)
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                }
+            };
+            cnames.push(cn);
+            cvals.push(cv);
+        }
+        ci = ci + 1;
+    }
+
     let ctx: LowerCtx = lctx_new(String::from(""), ITY_UNIT(), 0, a, str_eids);
     ctx.func_names = func_names;
     ctx.func_ret_tys = func_ret_tys;
@@ -2066,6 +2128,8 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>) -> IrModule {
     ctx.struct_field_type_names = struct_field_type_names;
     ctx.enum_names = enum_names;
     ctx.enum_variant_lists = enum_variant_lists;
+    ctx.const_names = cnames;
+    ctx.const_values = cvals;
 
     let all_strings: Vec<String> = Vec::new();
     let mut func_idx: i64 = 0;
