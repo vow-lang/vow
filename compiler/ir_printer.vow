@@ -146,6 +146,8 @@ fn opcode_name(op: i64) -> String {
     if op == IOP_NOT() { return String::from("Not"); }
     if op == IOP_AND() { return String::from("And"); }
     if op == IOP_OR() { return String::from("Or"); }
+    if op == IOP_XOR_I32() { return String::from("XorI32"); }
+    if op == IOP_XOR_I64() { return String::from("XorI64"); }
     if op == IOP_LOAD() { return String::from("Load"); }
     if op == IOP_STORE() { return String::from("Store"); }
     if op == IOP_BRANCH() { return String::from("Branch"); }

@@ -1,0 +1,49 @@
+module DecodeCyclic
+
+fn decode_cyclic(s: Vec<i64>) -> Vec<i64> vow {
+  requires: s.len() >= 0,
+  requires: s.len() <= 8,
+  ensures: result.len() >= 0
+} {
+  let out: Vec<i64> = Vec::new();
+  let n: i64 = s.len();
+  let full: i64 = n - n % 3;
+  let mut i: i64 = 0;
+  while i < n vow {
+    invariant: i >= 0,
+    invariant: i <= n
+  } {
+    if i < full {
+      let m: i64 = i % 3;
+      if m == 0 {
+        out.push(s[i + 2]);
+      } else {
+        if m == 1 {
+          out.push(s[i - 1]);
+        } else {
+          out.push(s[i - 1]);
+        }
+      }
+    } else {
+      out.push(s[i]);
+    }
+    i = i + 1;
+  }
+  out
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(10);
+  v.push(20);
+  v.push(30);
+  v.push(40);
+  v.push(50);
+  let r: Vec<i64> = decode_cyclic(v);
+  let mut i: i64 = 0;
+  while i < r.len() {
+    print_i64(r[i]);
+    i = i + 1;
+  }
+  0
+}

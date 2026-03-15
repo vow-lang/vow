@@ -1,0 +1,31 @@
+module Eat
+
+fn eat(number: i64, need: i64, remaining: i64) -> Vec<i64> vow {
+  requires: number >= 0,
+  requires: number <= 100,
+  requires: need >= 0,
+  requires: need <= 100,
+  requires: remaining >= 0,
+  requires: remaining <= 100,
+  ensures: result.len() == 2
+} {
+  let out: Vec<i64> = Vec::new();
+  if need <= remaining {
+    out.push(number + need);
+    out.push(remaining - need);
+  } else {
+    out.push(number + remaining);
+    out.push(0);
+  }
+  out
+}
+
+fn main() -> i32 [io] {
+  let r1: Vec<i64> = eat(5, 6, 10);
+  print_i64(r1[0]);
+  print_i64(r1[1]);
+  let r2: Vec<i64> = eat(4, 8, 3);
+  print_i64(r2[0]);
+  print_i64(r2[1]);
+  0
+}

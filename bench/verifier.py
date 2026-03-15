@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import resource
 import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+SELF_HOSTED_MEM_LIMIT = 2_000_000 * 1024  # ulimit -v 2000000 in bytes
 
 
 @dataclass
@@ -18,12 +21,18 @@ class VerifyResult:
     timed_out: bool
 
 
-def run_verify(vow_binary: Path, vow_source: str, timeout: int = 120) -> VerifyResult:
+def run_verify(
+    vow_binary: Path, vow_source: str, timeout: int = 120, memory_limit: int | None = None
+) -> VerifyResult:
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".vow", delete=False, dir="/tmp"
     ) as f:
         f.write(vow_source)
         tmp_path = f.name
+
+    def _set_mem_limit() -> None:
+        if memory_limit is not None:
+            resource.setrlimit(resource.RLIMIT_AS, (memory_limit, memory_limit))
 
     try:
         result = subprocess.run(
@@ -31,6 +40,7 @@ def run_verify(vow_binary: Path, vow_source: str, timeout: int = 120) -> VerifyR
             capture_output=True,
             text=True,
             timeout=timeout,
+            preexec_fn=_set_mem_limit if memory_limit else None,
         )
         raw = result.stdout.strip()
         try:

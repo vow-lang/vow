@@ -1,0 +1,15 @@
+module Compare
+
+fn compare(game: Vec<i64>, guess: Vec<i64>) -> Vec<i64> vow {
+  requires: game.len() >= 0,
+  requires: game.len() <= 8,
+  requires: guess.len() >= 0,
+  requires: guess.len() <= 8,
+  ensures: result.len() >= 0
+} {
+  Vec::new()
+}
+
+fn main() -> i32 [io] {
+  0
+}

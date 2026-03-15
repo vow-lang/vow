@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 import time
 from dataclasses import asdict
@@ -18,7 +19,7 @@ from manifest import load_applicable, load_manifest
 from prompts import build_system_prompt
 from report import generate_report
 from runner import BenchmarkResult, run_benchmark
-from verifier import run_verify
+from verifier import SELF_HOSTED_MEM_LIMIT, run_verify
 
 
 def find_root() -> Path:
@@ -35,9 +36,36 @@ def find_vow_binary(root: Path) -> Path:
     return binary
 
 
+def find_self_hosted_binary(root: Path) -> Path:
+    vowc = root / "vowc"
+    if vowc.exists():
+        return vowc
+    binary = root / "target" / "release" / "vow_self"
+    if not binary.exists():
+        rust_binary = find_vow_binary(root)
+        compiler_src = root / "compiler" / "main.vow"
+        print(f"Building self-hosted compiler → {binary} ...", file=sys.stderr)
+        result = subprocess.run(
+            [str(rust_binary), "--no-verify", str(compiler_src), "-o", str(binary)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            print(f"Error building self-hosted compiler:\n{result.stderr}", file=sys.stderr)
+            sys.exit(1)
+        print("Self-hosted compiler built.", file=sys.stderr)
+    return binary
+
+
+def resolve_compiler(root: Path, compiler_name: str) -> tuple[Path, int | None]:
+    if compiler_name == "self-hosted":
+        return find_self_hosted_binary(root), SELF_HOSTED_MEM_LIMIT
+    return find_vow_binary(root), None
+
+
 def cmd_run(args: argparse.Namespace) -> None:
     root = find_root()
-    vow_binary = find_vow_binary(root)
+    vow_binary, memory_limit = resolve_compiler(root, args.compiler)
     system_prompt = build_system_prompt(root)
     results_dir = Path(__file__).resolve().parent / "results"
 
@@ -59,6 +87,15 @@ def cmd_run(args: argparse.Namespace) -> None:
     all_benchmarks = load_manifest(root)
     applicable = [b for b in all_benchmarks if b.expected_status != "Stretch"]
     stretch = [b for b in all_benchmarks if b.expected_status == "Stretch"]
+
+    # Filter by suite
+    suite = getattr(args, "suite", "all")
+    if suite == "vow":
+        applicable = [b for b in applicable if not b.id.startswith("HE")]
+        stretch = [b for b in stretch if not b.id.startswith("HE")]
+    elif suite == "humaneval":
+        applicable = [b for b in applicable if b.id.startswith("HE")]
+        stretch = [b for b in stretch if b.id.startswith("HE")]
 
     # Filter to single benchmark if requested
     if args.benchmark:
@@ -92,7 +129,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                 continue
 
             print(f"  [{i}/{len(applicable)}] {bench.id} {bench.name} ...", end=" ", flush=True)
-            result = run_benchmark(bench, model_config, system_prompt, vow_binary)
+            result = run_benchmark(bench, model_config, system_prompt, vow_binary, memory_limit=memory_limit)
             results.append(result)
             status_str = result.status.upper()
             if result.status == "verified":
@@ -100,7 +137,7 @@ def cmd_run(args: argparse.Namespace) -> None:
             print(f"{status_str} [{result.wall_clock_seconds:.1f}s]")
 
             # Save incrementally
-            _save_results(output_file, model_id, run_id, results, stretch_results)
+            _save_results(output_file, model_id, run_id, results, stretch_results, args.compiler)
 
         # Run stretch benchmarks (informational)
         if not args.benchmark:
@@ -109,11 +146,11 @@ def cmd_run(args: argparse.Namespace) -> None:
                 if args.resume and bid in {r["benchmark_id"] for r in stretch_results}:
                     continue
                 print(f"  [stretch] {bid} {bench.name} ...", end=" ", flush=True)
-                result = run_benchmark(bench, model_config, system_prompt, vow_binary)
+                result = run_benchmark(bench, model_config, system_prompt, vow_binary, memory_limit=memory_limit)
                 stretch_results.append(asdict(result))
                 print(f"{result.status.upper()} [{result.wall_clock_seconds:.1f}s]")
 
-        _save_results(output_file, model_id, run_id, results, stretch_results)
+        _save_results(output_file, model_id, run_id, results, stretch_results, args.compiler)
         print(f"\nResults saved to {output_file}")
 
 
@@ -136,15 +173,22 @@ def cmd_report(args: argparse.Namespace) -> None:
         print(report)
 
 
-def cmd_validate_references(_args: argparse.Namespace) -> None:
+def cmd_validate_references(args: argparse.Namespace) -> None:
     root = find_root()
-    vow_binary = find_vow_binary(root)
     benchmarks = load_applicable(root)
+
+    if args.compare:
+        _validate_compare(root, benchmarks)
+        return
+
+    vow_binary, memory_limit = resolve_compiler(root, args.compiler)
+    compiler_label = args.compiler
 
     passed = 0
     failed = 0
+    print(f"Compiler: {compiler_label}")
     for bench in benchmarks:
-        vr = run_verify(vow_binary, bench.reference_vow)
+        vr = run_verify(vow_binary, bench.reference_vow, memory_limit=memory_limit)
         status = "OK" if vr.status == "Verified" else f"FAIL ({vr.status})"
         print(f"  {bench.id} {bench.name}: {status}")
         if vr.status == "Verified":
@@ -152,8 +196,36 @@ def cmd_validate_references(_args: argparse.Namespace) -> None:
         else:
             failed += 1
 
-    print(f"\n{passed}/{passed + failed} references verified")
+    print(f"\n{passed}/{passed + failed} references verified ({compiler_label})")
     if failed:
+        sys.exit(1)
+
+
+def _validate_compare(root: Path, benchmarks: list) -> None:
+    rust_binary, _ = resolve_compiler(root, "rust")
+    self_binary, self_mem = resolve_compiler(root, "self-hosted")
+
+    print(f"{'ID':<5} {'Name':<35} {'Rust':<12} {'Self-Hosted':<12} {'Match'}")
+    print("-" * 75)
+
+    mismatches = 0
+    for bench in benchmarks:
+        rust_vr = run_verify(rust_binary, bench.reference_vow)
+        self_vr = run_verify(self_binary, bench.reference_vow, memory_limit=self_mem)
+        rust_ok = rust_vr.status == "Verified"
+        self_ok = self_vr.status == "Verified"
+        match = rust_ok == self_ok
+        if not match:
+            mismatches += 1
+        rust_str = "OK" if rust_ok else f"FAIL ({rust_vr.status})"
+        self_str = "OK" if self_ok else f"FAIL ({self_vr.status})"
+        match_str = "YES" if match else "NO"
+        print(f"  {bench.id:<5} {bench.name:<35} {rust_str:<12} {self_str:<12} {match_str}")
+
+    total = len(benchmarks)
+    matched = total - mismatches
+    print(f"\n{matched}/{total} references match across both compilers")
+    if mismatches:
         sys.exit(1)
 
 
@@ -169,12 +241,14 @@ def _save_results(
     run_id: str,
     results: list[BenchmarkResult],
     stretch_results: list[dict],
+    compiler: str = "rust",
 ) -> None:
     result_dicts = [asdict(r) for r in results]
     summary = _compute_summary(result_dicts)
     data = {
         "run_id": run_id,
         "model": model_id,
+        "compiler": compiler,
         "results": result_dicts,
         "stretch_results": stretch_results,
         "summary": summary,
@@ -198,11 +272,34 @@ def _compute_summary(results: list[dict]) -> dict:
     verified_iters = [r["iterations"] for r in results if r["status"] == "verified"]
     mean_iters = sum(verified_iters) / len(verified_iters) if verified_iters else 0
 
+    by_fidelity: dict[str, dict] = {}
+    for r in results:
+        fid = r.get("contract_fidelity", "n/a")
+        if fid not in by_fidelity:
+            by_fidelity[fid] = {"total": 0, "verified": 0}
+        by_fidelity[fid]["total"] += 1
+        if r["status"] == "verified":
+            by_fidelity[fid]["verified"] += 1
+
+    he_results = [r for r in results if r["benchmark_id"].startswith("HE")]
+    he_total = len(he_results)
+    he_verified = sum(1 for r in he_results if r["status"] == "verified")
+    he_exact = [r for r in he_results if r.get("contract_fidelity") == "exact"]
+    he_exact_total = len(he_exact)
+    he_exact_verified = sum(1 for r in he_exact if r["status"] == "verified")
+
     return {
         "total_applicable": total,
         "verified": verified,
         "verification_rate": verified / total if total else 0,
         "by_difficulty": by_diff,
+        "by_fidelity": by_fidelity,
+        "humaneval_total": he_total,
+        "humaneval_verified": he_verified,
+        "humaneval_rate": he_verified / he_total if he_total else 0,
+        "humaneval_exact_total": he_exact_total,
+        "humaneval_exact_verified": he_exact_verified,
+        "humaneval_exact_rate": he_exact_verified / he_exact_total if he_exact_total else 0,
         "mean_cegis_iterations": round(mean_iters, 2),
     }
 
@@ -212,6 +309,7 @@ def _dict_to_result(d: dict) -> BenchmarkResult:
         benchmark_id=d["benchmark_id"],
         benchmark_name=d["benchmark_name"],
         difficulty=d["difficulty"],
+        contract_fidelity=d.get("contract_fidelity", "n/a"),
         status=d["status"],
         iterations=d["iterations"],
         wall_clock_seconds=d["wall_clock_seconds"],
@@ -234,6 +332,10 @@ def main() -> None:
     run_parser.add_argument("--benchmark", help="Run single benchmark by ID (e.g. E01)")
     run_parser.add_argument("--resume", action="store_true", help="Skip already-completed benchmarks")
     run_parser.add_argument("--run-id", help="Run ID (default: timestamp)")
+    run_parser.add_argument("--compiler", choices=["rust", "self-hosted"], default="rust",
+                            help="Which compiler to use for verification (default: rust)")
+    run_parser.add_argument("--suite", choices=["vow", "humaneval", "all"], default="all",
+                            help="Benchmark suite to run: vow (E/M/H), humaneval (HE*), all (default)")
     run_parser.set_defaults(func=cmd_run)
 
     # report
@@ -244,6 +346,10 @@ def main() -> None:
 
     # validate-references
     val_parser = subparsers.add_parser("validate-references", help="Verify all reference.vow files")
+    val_parser.add_argument("--compiler", choices=["rust", "self-hosted"], default="rust",
+                            help="Which compiler to use for verification (default: rust)")
+    val_parser.add_argument("--compare", action="store_true",
+                            help="Run both compilers and compare results side-by-side")
     val_parser.set_defaults(func=cmd_validate_references)
 
     args = parser.parse_args()

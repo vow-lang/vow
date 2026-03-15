@@ -1,0 +1,57 @@
+module WillItFly
+
+fn will_it_fly(q: Vec<i64>, w: i64) -> i64 vow {
+  requires: q.len() >= 0,
+  requires: q.len() <= 8,
+  requires: w >= 0,
+  requires: w <= 100,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  let mut is_palindrome: i64 = 1;
+  let mut i: i64 = 0;
+  while i < q.len() / 2 vow {
+    invariant: i >= 0,
+    invariant: i <= q.len(),
+    invariant: is_palindrome >= 0,
+    invariant: is_palindrome <= 1
+  } {
+    if q[i] != q[q.len() - 1 - i] {
+      is_palindrome = 0;
+    } else {
+      0;
+    }
+    i = i + 1;
+  }
+  let mut total: i64 = 0;
+  let mut j: i64 = 0;
+  while j < q.len() vow {
+    invariant: j >= 0,
+    invariant: j <= q.len()
+  } {
+    total = total + q[j];
+    j = j + 1;
+  }
+  if is_palindrome == 1 {
+    if total <= w {
+      1
+    } else {
+      0
+    }
+  } else {
+    0
+  }
+}
+
+fn main() -> i32 [io] {
+  let v1: Vec<i64> = Vec::new();
+  v1.push(3);
+  v1.push(2);
+  v1.push(3);
+  print_i64(will_it_fly(v1, 9));
+  let v2: Vec<i64> = Vec::new();
+  v2.push(1);
+  v2.push(2);
+  print_i64(will_it_fly(v2, 5));
+  0
+}

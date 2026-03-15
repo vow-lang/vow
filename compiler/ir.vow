@@ -98,6 +98,9 @@ fn IOP_LINEAR_BORROW() -> i64 vow { ensures: result >= 0 } { 80 }
 fn IOP_FIELD_GET() -> i64 vow { ensures: result >= 0 } { 81 }
 fn IOP_FIELD_SET() -> i64 vow { ensures: result >= 0 } { 82 }
 
+fn IOP_XOR_I32() -> i64 vow { ensures: result >= 0 } { 83 }
+fn IOP_XOR_I64() -> i64 vow { ensures: result >= 0 } { 84 }
+
 fn iop_is_terminal(op: i64) -> bool vow {
     requires: op >= 0
 } {

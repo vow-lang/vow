@@ -1,0 +1,32 @@
+module ChooseNum
+
+fn choose_num(x: i64, y: i64) -> i64 vow {
+  requires: x >= 0,
+  requires: x <= 100,
+  requires: y >= 0,
+  requires: y <= 100,
+  ensures: result >= -1,
+  ensures: result <= 100
+} {
+  if x > y {
+    -1
+  } else {
+    if y % 2 == 0 {
+      y
+    } else {
+      if y - 1 >= x {
+        y - 1
+      } else {
+        -1
+      }
+    }
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(choose_num(12, 15));
+  print_i64(choose_num(13, 12));
+  print_i64(choose_num(1, 1));
+  print_i64(choose_num(2, 2));
+  0
+}

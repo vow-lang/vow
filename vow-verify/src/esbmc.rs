@@ -6,7 +6,10 @@ use std::collections::HashMap;
 
 use vow_ir::{FuncId, Function, Module, Ty};
 
-use crate::c_emitter::{ConstantValue, detect_constant_functions, emit_c_module};
+use crate::c_emitter::{
+    ConstantValue, collect_modelable_callees, detect_constant_functions, emit_c_module,
+    emit_c_module_with_callees,
+};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -188,7 +191,7 @@ pub fn verify_function(func: &Function) -> VerificationResult {
 
 pub fn verify_function_with_module(func: &Function, module: &Module) -> VerificationResult {
     let const_fns = detect_constant_functions(module);
-    verify_function_inner(func, &const_fns)
+    verify_function_with_module_and_const_fns(func, module, &const_fns)
 }
 
 pub fn verify_function_with_const_fns(
@@ -196,6 +199,38 @@ pub fn verify_function_with_const_fns(
     const_fns: &HashMap<FuncId, ConstantValue>,
 ) -> VerificationResult {
     verify_function_inner(func, const_fns)
+}
+
+pub fn emit_verify_c_source(
+    func: &Function,
+    module: &Module,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+) -> String {
+    let mut modelable_cache = HashMap::new();
+    let callee_ids = collect_modelable_callees(func, module, const_fns, &mut modelable_cache);
+
+    let mut c_src = if callee_ids.is_empty() {
+        emit_c_module(&[func], const_fns)
+    } else {
+        let modelable_fns: std::collections::HashSet<FuncId> = callee_ids.iter().copied().collect();
+        emit_c_module_with_callees(func, module, const_fns, &callee_ids, &modelable_fns)
+    };
+    c_src.push_str(&emit_harness(func));
+    c_src
+}
+
+pub fn verify_function_with_module_and_const_fns(
+    func: &Function,
+    module: &Module,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+) -> VerificationResult {
+    let esbmc = match find_esbmc() {
+        Some(p) => p,
+        None => return VerificationResult::ToolNotFound,
+    };
+
+    let c_src = emit_verify_c_source(func, module, const_fns);
+    run_esbmc(&esbmc, &c_src)
 }
 
 fn verify_function_inner(
@@ -210,6 +245,10 @@ fn verify_function_inner(
     let mut c_src = emit_c_module(&[func], const_fns);
     c_src.push_str(&emit_harness(func));
 
+    run_esbmc(&esbmc, &c_src)
+}
+
+pub fn run_esbmc(esbmc: &std::path::Path, c_src: &str) -> VerificationResult {
     let mut tmp = match tempfile::Builder::new().suffix(".c").tempfile() {
         Ok(f) => f,
         Err(e) => return VerificationResult::ToolError(e.to_string()),
@@ -221,7 +260,7 @@ fn verify_function_inner(
         return VerificationResult::ToolError(e.to_string());
     }
 
-    let output = match Command::new(&esbmc)
+    let output = match Command::new(esbmc)
         .arg(tmp.path())
         .arg("--no-bounds-check")
         .arg("--no-pointer-check")

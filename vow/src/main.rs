@@ -14,8 +14,11 @@ use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{CollectingEmitter, Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
-    Counterexample, VerificationResult, detect_constant_functions, verify_function_with_const_fns,
+    Counterexample, VerificationResult, detect_constant_functions, emit_verify_c_source,
+    find_esbmc, run_esbmc, verify_function_with_module_and_const_fns,
 };
+
+use cache::{CachedVerifyResult, VerifyCache};
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -106,6 +109,8 @@ struct VerifyArgs {
     help: bool,
     #[arg(long)]
     human: bool,
+    #[arg(long)]
+    no_cache: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -141,7 +146,7 @@ fn skill_json() -> String {
   "usage": "vow <command> [OPTIONS] <source.vow>",
   "commands": {
     "build": "Compile source to native executable (verifies by default; use --no-verify to skip)",
-    "verify": "Verify contracts without producing an executable",
+    "verify": "Verify contracts without producing an executable (use --no-cache to skip cache)",
     "test": "Run tests (not yet implemented)",
     "decl": "Emit declaration file (.vow.d) with type signatures only"
   },
@@ -151,7 +156,11 @@ fn skill_json() -> String {
     "--mode <debug|release>": "Build mode; debug inserts runtime vow checks (default: release)",
     "--no-verify": "Skip ESBMC static verification",
     "--dump-ir": "Dump IR text to stdout and exit (skip codegen/verify)",
-    "--debug-trace <off|calls|full>": "Emit JSON trace lines to stderr at runtime (default: off)"
+    "--debug-trace <off|calls|full>": "Emit JSON trace lines to stderr at runtime (default: off)",
+    "--no-cache": "Disable compile and verify caching"
+  },
+  "verify_options": {
+    "--no-cache": "Disable verification result caching"
   },
   "global_options": {
     "--help": "Print this JSON capability description",
@@ -201,7 +210,7 @@ fn skill_human() -> String {
 
 USAGE
   vow build [OPTIONS] <source.vow>    Compile to native executable
-  vow verify <source.vow>             Verify contracts only (no executable)
+  vow verify [OPTIONS] <source.vow>    Verify contracts only (no executable)
   vow test [<source.vow>]             Run tests (not yet implemented)
   vow decl [OPTIONS] <source.vow>    Emit declaration file (.vow.d)
   vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)
@@ -214,6 +223,10 @@ BUILD OPTIONS
   --no-verify           Skip ESBMC static verification
   --dump-ir             Dump IR text to stdout and exit
   --debug-trace <off|calls|full>  Emit JSON trace to stderr (default: off)
+  --no-cache            Disable compile and verify caching
+
+VERIFY OPTIONS
+  --no-cache            Disable verification result caching
 
 GLOBAL OPTIONS
   --help                Print JSON capability description (agent-friendly)
@@ -992,13 +1005,56 @@ fn run_verification_sync(
     ir_module: &vow_ir::Module,
     file: &str,
     call_site_index: &std::collections::HashMap<String, Vec<CallSiteInfo>>,
+    verify_cache: Option<&VerifyCache>,
 ) -> VerifyOutcome {
     let const_fns = detect_constant_functions(ir_module);
     for func in &ir_module.functions {
         if func.vows.is_empty() {
             continue;
         }
-        match verify_function_with_const_fns(func, &const_fns) {
+
+        let result = if let Some(vc) = verify_cache {
+            let c_src = emit_verify_c_source(func, ir_module, &const_fns);
+            let key = VerifyCache::cache_key(&c_src, 10);
+
+            if let Some(cached) = vc.lookup(&key) {
+                match cached {
+                    CachedVerifyResult::Proven => VerificationResult::Proven,
+                    CachedVerifyResult::Failed { .. } => {
+                        VerificationResult::Failed(cached.to_counterexample().unwrap())
+                    }
+                }
+            } else {
+                let esbmc = match find_esbmc() {
+                    Some(p) => p,
+                    None => return VerifyOutcome::ToolNotFound,
+                };
+                let res = run_esbmc(&esbmc, &c_src);
+                match &res {
+                    VerificationResult::Proven => {
+                        vc.store(&key, &CachedVerifyResult::Proven);
+                    }
+                    VerificationResult::Failed(ce) => {
+                        vc.store(
+                            &key,
+                            &CachedVerifyResult::Failed {
+                                vow_id: ce.vow_id,
+                                description: ce.description.clone(),
+                                values: ce.values.clone(),
+                                block_visits: ce.block_visits.clone(),
+                                raw_output: ce.raw_output.clone(),
+                            },
+                        );
+                    }
+                    _ => {}
+                }
+                res
+            }
+        } else {
+            verify_function_with_module_and_const_fns(func, ir_module, &const_fns)
+        };
+
+        match result {
             VerificationResult::Failed(ce) => {
                 let sce = build_structured_counterexample(func, &ce, file, call_site_index);
                 return VerifyOutcome::Failed {
@@ -1159,14 +1215,24 @@ fn verify_outcome_to_output(
 // ---------------------------------------------------------------------------
 
 pub fn run_verify_only(source: &Path) -> BuildOutput {
+    run_verify_only_inner(source, false)
+}
+
+fn run_verify_only_inner(source: &Path, no_cache: bool) -> BuildOutput {
     let frontend = match compile_frontend(source) {
         Ok(f) => f,
         Err(output) => return *output,
     };
 
+    let verify_cache = if no_cache { None } else { VerifyCache::new() };
     let file = source.to_string_lossy().to_string();
     let call_site_index = build_call_site_index(&frontend.ir_module, &file);
-    let outcome = run_verification_sync(&frontend.ir_module, &file, &call_site_index);
+    let outcome = run_verification_sync(
+        &frontend.ir_module,
+        &file,
+        &call_site_index,
+        verify_cache.as_ref(),
+    );
     verify_outcome_to_output(outcome, frontend.diagnostics, None)
 }
 
@@ -1238,11 +1304,21 @@ fn run_pipeline_inner(
     let module_for_verify = Arc::clone(&ir_module);
     let file_for_verify = source.to_string_lossy().to_string();
     let call_site_index = build_call_site_index(&ir_module, &file_for_verify);
+    let verify_cache = if no_cache || no_verify {
+        None
+    } else {
+        VerifyCache::new()
+    };
     let verify_handle = thread::spawn(move || -> VerifyOutcome {
         if no_verify {
             return VerifyOutcome::Skipped;
         }
-        run_verification_sync(&module_for_verify, &file_for_verify, &call_site_index)
+        run_verification_sync(
+            &module_for_verify,
+            &file_for_verify,
+            &call_site_index,
+            verify_cache.as_ref(),
+        )
     });
 
     let output_path = output
@@ -1404,8 +1480,8 @@ fn run_decl_command(source: &Path, output: Option<&Path>) {
     eprintln!("wrote {}", out_path.display());
 }
 
-fn run_verify_command(source: &Path) {
-    let result = run_verify_only(source);
+fn run_verify_command(source: &Path, no_cache: bool) {
+    let result = run_verify_only_inner(source, no_cache);
     result.emit_json();
     if matches!(
         &result.status,
@@ -1470,7 +1546,7 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            run_verify_command(&source);
+            run_verify_command(&source, v.no_cache);
         }
         Some(Command::Test(t)) => {
             if t.help {

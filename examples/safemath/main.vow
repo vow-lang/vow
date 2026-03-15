@@ -1,0 +1,23 @@
+module Main
+use safemath
+use stats
+
+fn main() -> i32 [io] {
+    print_i64(safe_add(10, 20));
+    print_i64(safe_sub(20, 12));
+    print_i64(safe_div(42, 3));
+    print_i64(abs_val(-42));
+    print_i64(clamp(50, 0, 100));
+
+    print_i64(min_of(3, 7));
+    print_i64(max_of(3, 7));
+
+    let v: Vec<i64> = Vec::new();
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    print_i64(bounded_sum(v));
+
+    print_i64(mean_of(10, 20));
+    0
+}

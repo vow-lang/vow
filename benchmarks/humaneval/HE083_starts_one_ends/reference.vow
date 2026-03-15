@@ -1,0 +1,38 @@
+module StartsOneEnds
+
+fn pow10(k: i64) -> i64 vow {
+  requires: k >= 0,
+  requires: k <= 8,
+  ensures: result >= 1
+} {
+  let mut r: i64 = 1;
+  let mut i: i64 = 0;
+  while i < k vow {
+    invariant: i >= 0,
+    invariant: i <= k,
+    invariant: r >= 1
+  } {
+    r = r * 10;
+    i = i + 1;
+  }
+  r
+}
+
+fn starts_one_ends(n: i64) -> i64 vow {
+  requires: n >= 1,
+  requires: n <= 8,
+  ensures: result >= 1
+} {
+  if n == 1 {
+    1
+  } else {
+    18 * pow10(n - 2)
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(starts_one_ends(1));
+  print_i64(starts_one_ends(2));
+  print_i64(starts_one_ends(3));
+  0
+}

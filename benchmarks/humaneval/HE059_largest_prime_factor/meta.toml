@@ -1,0 +1,10 @@
+[benchmark]
+id = "HE059"
+name = "largest_prime_factor"
+difficulty = "medium"
+tags = ["humaneval"]
+unwind = 10
+modules = 1
+expected_status = "Verified"
+max_cegis_iterations = 5
+contract_fidelity = "partial"

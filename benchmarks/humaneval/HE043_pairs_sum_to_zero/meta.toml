@@ -1,0 +1,10 @@
+[benchmark]
+id = "HE043"
+name = "pairs_sum_to_zero"
+difficulty = "medium"
+tags = ["humaneval"]
+unwind = 10
+modules = 1
+expected_status = "Verified"
+max_cegis_iterations = 5
+contract_fidelity = "exact"

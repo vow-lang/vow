@@ -118,9 +118,228 @@ fn collect_typed_vars(func: &Function, creator: &str, prefix: &str) -> HashSet<u
 }
 
 // ---------------------------------------------------------------------------
+// Modelable function detection (for cross-function spec verification)
+// ---------------------------------------------------------------------------
+
+fn is_known_builtin(name: &str) -> bool {
+    matches!(
+        name,
+        "__vow_vec_new"
+            | "__vow_vec_push_val"
+            | "__vow_vec_get_val"
+            | "__vow_vec_len"
+            | "__vow_vec_pop"
+            | "__vow_vec_set_val"
+            | "__vow_string_from_cstr"
+            | "__vow_string_len"
+            | "__vow_string_push_str"
+            | "__vow_string_push_byte"
+            | "__vow_string_byte_at"
+            | "__vow_string_eq"
+            | "__vow_string_contains"
+            | "__vow_string_print"
+            | "__vow_map_new"
+            | "__vow_map_len"
+            | "__vow_map_insert"
+            | "__vow_map_get"
+            | "__vow_map_contains"
+            | "__vow_map_remove"
+    )
+}
+
+/// Check whether a function can be precisely modeled in the C emitter.
+/// Modelable functions are pure (no effects) and use only opcodes that the
+/// C emitter handles without resorting to `__VERIFIER_nondet`.
+pub fn is_modelable(
+    func: &Function,
+    module: &Module,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+    cache: &mut HashMap<FuncId, bool>,
+) -> bool {
+    if let Some(&cached) = cache.get(&func.id) {
+        return cached;
+    }
+    cache.insert(func.id, false); // prevent infinite recursion
+
+    if !func.effects.is_empty() {
+        return false;
+    }
+
+    let vec_vars = collect_typed_vars(func, "__vow_vec_new", "__vow_vec_");
+    let string_vars = collect_typed_vars(func, "__vow_string_from_cstr", "__vow_string_");
+    let hashmap_vars = collect_typed_vars(func, "__vow_map_new", "__vow_map_");
+
+    for block in &func.blocks {
+        for inst in &block.insts {
+            let ok = match inst.opcode {
+                Opcode::ConstI32
+                | Opcode::ConstI64
+                | Opcode::ConstF32
+                | Opcode::ConstF64
+                | Opcode::ConstBool
+                | Opcode::ConstUnit
+                | Opcode::ConstStr
+                | Opcode::GetArg
+                | Opcode::WrappingAddI32
+                | Opcode::WrappingAddI64
+                | Opcode::CheckedAddI32
+                | Opcode::CheckedAddI64
+                | Opcode::WrappingSubI32
+                | Opcode::WrappingSubI64
+                | Opcode::CheckedSubI32
+                | Opcode::CheckedSubI64
+                | Opcode::WrappingMulI32
+                | Opcode::WrappingMulI64
+                | Opcode::CheckedMulI32
+                | Opcode::CheckedMulI64
+                | Opcode::WrappingDivI32
+                | Opcode::WrappingDivI64
+                | Opcode::CheckedDivI32
+                | Opcode::CheckedDivI64
+                | Opcode::WrappingRemI32
+                | Opcode::WrappingRemI64
+                | Opcode::CheckedRemI32
+                | Opcode::CheckedRemI64
+                | Opcode::AddF32
+                | Opcode::AddF64
+                | Opcode::SubF32
+                | Opcode::SubF64
+                | Opcode::MulF32
+                | Opcode::MulF64
+                | Opcode::DivF32
+                | Opcode::DivF64
+                | Opcode::EqI32
+                | Opcode::EqI64
+                | Opcode::EqF32
+                | Opcode::EqF64
+                | Opcode::NeI32
+                | Opcode::NeI64
+                | Opcode::NeF32
+                | Opcode::NeF64
+                | Opcode::LtI32
+                | Opcode::LtI64
+                | Opcode::LtF32
+                | Opcode::LtF64
+                | Opcode::LeI32
+                | Opcode::LeI64
+                | Opcode::LeF32
+                | Opcode::LeF64
+                | Opcode::GtI32
+                | Opcode::GtI64
+                | Opcode::GtF32
+                | Opcode::GtF64
+                | Opcode::GeI32
+                | Opcode::GeI64
+                | Opcode::GeF32
+                | Opcode::GeF64
+                | Opcode::Not
+                | Opcode::And
+                | Opcode::Or
+                | Opcode::XorI32
+                | Opcode::XorI64
+                | Opcode::VowRequires
+                | Opcode::VowEnsures
+                | Opcode::VowInvariant
+                | Opcode::Branch
+                | Opcode::Jump
+                | Opcode::Return
+                | Opcode::Unreachable
+                | Opcode::Phi
+                | Opcode::Upsilon => true,
+
+                Opcode::Call => match &inst.data {
+                    InstData::CallExtern(name) => is_known_builtin(name),
+                    InstData::CallTarget(fid) => {
+                        const_fns.contains_key(fid)
+                            || module.functions.iter().find(|f| f.id == *fid).is_some_and(
+                                |callee| is_modelable(callee, module, const_fns, cache),
+                            )
+                    }
+                    _ => false,
+                },
+
+                Opcode::FieldGet => {
+                    let iid = inst.id.0;
+                    vec_vars.contains(&iid)
+                        || string_vars.contains(&iid)
+                        || hashmap_vars.contains(&iid)
+                }
+
+                Opcode::RemF32
+                | Opcode::RemF64
+                | Opcode::Load
+                | Opcode::Store
+                | Opcode::RegionAlloc
+                | Opcode::RegionFree
+                | Opcode::LinearConsume
+                | Opcode::LinearBorrow
+                | Opcode::FieldSet => false,
+            };
+            if !ok {
+                return false;
+            }
+        }
+    }
+
+    cache.insert(func.id, true);
+    true
+}
+
+/// Collect all modelable callees reachable from `func`, excluding constant
+/// functions (which are inlined). Returns FuncIds in topological order
+/// (callees before callers).
+pub fn collect_modelable_callees(
+    func: &Function,
+    module: &Module,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+    modelable_cache: &mut HashMap<FuncId, bool>,
+) -> Vec<FuncId> {
+    let mut visited = HashSet::new();
+    let mut order = Vec::new();
+    collect_callees_dfs(
+        func,
+        module,
+        const_fns,
+        modelable_cache,
+        &mut visited,
+        &mut order,
+    );
+    order
+}
+
+fn collect_callees_dfs(
+    func: &Function,
+    module: &Module,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+    modelable_cache: &mut HashMap<FuncId, bool>,
+    visited: &mut HashSet<FuncId>,
+    order: &mut Vec<FuncId>,
+) {
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.opcode == Opcode::Call
+                && let InstData::CallTarget(fid) = &inst.data
+            {
+                if const_fns.contains_key(fid) || visited.contains(fid) {
+                    continue;
+                }
+                if let Some(callee) = module.functions.iter().find(|f| f.id == *fid)
+                    && is_modelable(callee, module, const_fns, modelable_cache)
+                {
+                    visited.insert(*fid);
+                    collect_callees_dfs(callee, module, const_fns, modelable_cache, visited, order);
+                    order.push(*fid);
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Expression / statement emission
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn emit_inst(
     inst: &Inst,
     out: &mut String,
@@ -128,39 +347,41 @@ fn emit_inst(
     string_vars: &HashSet<u32>,
     hashmap_vars: &HashSet<u32>,
     const_fns: &HashMap<FuncId, ConstantValue>,
+    modelable_fns: &HashSet<FuncId>,
+    module: &Module,
 ) {
     let id = inst.id.0;
     match inst.opcode {
         // Constants
         Opcode::ConstI32 => {
             if let InstData::ConstI32(v) = inst.data {
-                out.push_str(&format!("  {} v{} = {};\n", ir_ty_to_c(inst.ty), id, v));
+                out.push_str(&format!("  v{} = {};\n", id, v));
             }
         }
         Opcode::ConstI64 => {
             if let InstData::ConstI64(v) = inst.data {
-                out.push_str(&format!("  {} v{} = {}LL;\n", ir_ty_to_c(inst.ty), id, v));
+                out.push_str(&format!("  v{} = {}LL;\n", id, v));
             }
         }
         Opcode::ConstF32 => {
             if let InstData::ConstF32(v) = inst.data {
-                out.push_str(&format!("  float v{} = {}f;\n", id, v));
+                out.push_str(&format!("  v{} = {}f;\n", id, v));
             }
         }
         Opcode::ConstF64 => {
             if let InstData::ConstF64(v) = inst.data {
-                out.push_str(&format!("  double v{} = {};\n", id, v));
+                out.push_str(&format!("  v{} = {};\n", id, v));
             }
         }
         Opcode::ConstBool => {
             let b = matches!(inst.data, InstData::ConstBool(true));
-            out.push_str(&format!("  _Bool v{} = {};\n", id, b as i32));
+            out.push_str(&format!("  v{} = {};\n", id, b as i32));
         }
         Opcode::ConstUnit => {
-            out.push_str(&format!("  int32_t v{} = 0;\n", id));
+            out.push_str(&format!("  v{} = 0;\n", id));
         }
         Opcode::ConstStr => {
-            out.push_str(&format!("  void* v{} = 0; /* string not modelled */\n", id));
+            out.push_str(&format!("  v{} = 0; /* string not modelled */\n", id));
         }
 
         // Arguments — emitted as parameter names at function top
@@ -172,147 +393,97 @@ fn emit_inst(
         | Opcode::CheckedAddI32
         | Opcode::CheckedAddI64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
-            out.push_str(&format!(
-                "  {} v{} = v{} + v{};\n",
-                ir_ty_to_c(inst.ty),
-                id,
-                a,
-                b
-            ));
+            out.push_str(&format!("  v{} = v{} + v{};\n", id, a, b));
         }
         Opcode::WrappingSubI32
         | Opcode::WrappingSubI64
         | Opcode::CheckedSubI32
         | Opcode::CheckedSubI64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
-            out.push_str(&format!(
-                "  {} v{} = v{} - v{};\n",
-                ir_ty_to_c(inst.ty),
-                id,
-                a,
-                b
-            ));
+            out.push_str(&format!("  v{} = v{} - v{};\n", id, a, b));
         }
         Opcode::WrappingMulI32
         | Opcode::WrappingMulI64
         | Opcode::CheckedMulI32
         | Opcode::CheckedMulI64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
-            out.push_str(&format!(
-                "  {} v{} = v{} * v{};\n",
-                ir_ty_to_c(inst.ty),
-                id,
-                a,
-                b
-            ));
+            out.push_str(&format!("  v{} = v{} * v{};\n", id, a, b));
         }
         Opcode::WrappingDivI32
         | Opcode::WrappingDivI64
         | Opcode::CheckedDivI32
         | Opcode::CheckedDivI64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
-            out.push_str(&format!(
-                "  {} v{} = v{} / v{};\n",
-                ir_ty_to_c(inst.ty),
-                id,
-                a,
-                b
-            ));
+            out.push_str(&format!("  v{} = v{} / v{};\n", id, a, b));
         }
         Opcode::WrappingRemI32
         | Opcode::WrappingRemI64
         | Opcode::CheckedRemI32
         | Opcode::CheckedRemI64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
-            out.push_str(&format!(
-                "  {} v{} = v{} % v{};\n",
-                ir_ty_to_c(inst.ty),
-                id,
-                a,
-                b
-            ));
+            out.push_str(&format!("  v{} = v{} % v{};\n", id, a, b));
         }
 
         // Float arithmetic
         Opcode::AddF32 | Opcode::AddF64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
-            out.push_str(&format!(
-                "  {} v{} = v{} + v{};\n",
-                ir_ty_to_c(inst.ty),
-                id,
-                a,
-                b
-            ));
+            out.push_str(&format!("  v{} = v{} + v{};\n", id, a, b));
         }
         Opcode::SubF32 | Opcode::SubF64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
-            out.push_str(&format!(
-                "  {} v{} = v{} - v{};\n",
-                ir_ty_to_c(inst.ty),
-                id,
-                a,
-                b
-            ));
+            out.push_str(&format!("  v{} = v{} - v{};\n", id, a, b));
         }
         Opcode::MulF32 | Opcode::MulF64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
-            out.push_str(&format!(
-                "  {} v{} = v{} * v{};\n",
-                ir_ty_to_c(inst.ty),
-                id,
-                a,
-                b
-            ));
+            out.push_str(&format!("  v{} = v{} * v{};\n", id, a, b));
         }
         Opcode::DivF32 | Opcode::DivF64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
-            out.push_str(&format!(
-                "  {} v{} = v{} / v{};\n",
-                ir_ty_to_c(inst.ty),
-                id,
-                a,
-                b
-            ));
+            out.push_str(&format!("  v{} = v{} / v{};\n", id, a, b));
         }
 
         // Integer comparisons
         Opcode::EqI32 | Opcode::EqI64 | Opcode::EqF32 | Opcode::EqF64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
-            out.push_str(&format!("  _Bool v{} = (v{} == v{});\n", id, a, b));
+            out.push_str(&format!("  v{} = (v{} == v{});\n", id, a, b));
         }
         Opcode::NeI32 | Opcode::NeI64 | Opcode::NeF32 | Opcode::NeF64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
-            out.push_str(&format!("  _Bool v{} = (v{} != v{});\n", id, a, b));
+            out.push_str(&format!("  v{} = (v{} != v{});\n", id, a, b));
         }
         Opcode::LtI32 | Opcode::LtI64 | Opcode::LtF32 | Opcode::LtF64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
-            out.push_str(&format!("  _Bool v{} = (v{} < v{});\n", id, a, b));
+            out.push_str(&format!("  v{} = (v{} < v{});\n", id, a, b));
         }
         Opcode::LeI32 | Opcode::LeI64 | Opcode::LeF32 | Opcode::LeF64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
-            out.push_str(&format!("  _Bool v{} = (v{} <= v{});\n", id, a, b));
+            out.push_str(&format!("  v{} = (v{} <= v{});\n", id, a, b));
         }
         Opcode::GtI32 | Opcode::GtI64 | Opcode::GtF32 | Opcode::GtF64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
-            out.push_str(&format!("  _Bool v{} = (v{} > v{});\n", id, a, b));
+            out.push_str(&format!("  v{} = (v{} > v{});\n", id, a, b));
         }
         Opcode::GeI32 | Opcode::GeI64 | Opcode::GeF32 | Opcode::GeF64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
-            out.push_str(&format!("  _Bool v{} = (v{} >= v{});\n", id, a, b));
+            out.push_str(&format!("  v{} = (v{} >= v{});\n", id, a, b));
         }
 
         // Boolean ops
         Opcode::Not => {
             let a = inst.args[0].0;
-            out.push_str(&format!("  _Bool v{} = !v{};\n", id, a));
+            out.push_str(&format!("  v{} = !v{};\n", id, a));
         }
         Opcode::And => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
-            out.push_str(&format!("  _Bool v{} = (v{} && v{});\n", id, a, b));
+            out.push_str(&format!("  v{} = (v{} && v{});\n", id, a, b));
         }
         Opcode::Or => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
-            out.push_str(&format!("  _Bool v{} = (v{} || v{});\n", id, a, b));
+            out.push_str(&format!("  v{} = (v{} || v{});\n", id, a, b));
+        }
+        Opcode::XorI32 | Opcode::XorI64 => {
+            let (a, b) = (inst.args[0].0, inst.args[1].0);
+            out.push_str(&format!("  v{} = (v{} ^ v{});\n", id, a, b));
         }
 
         // Vow checks → ESBMC intrinsics
@@ -386,7 +557,7 @@ fn emit_inst(
             if let InstData::CallExtern(ref name) = inst.data {
                 match name.as_str() {
                     "__vow_vec_new" => {
-                        out.push_str(&format!("  __vow_vec_t v{};\n  v{}.len = 0;\n", id, id));
+                        out.push_str(&format!("  v{}.len = 0;\n", id));
                     }
                     "__vow_vec_push_val" => {
                         let vec = inst.args[0].0;
@@ -402,12 +573,12 @@ fn emit_inst(
                         let idx = inst.args[1].0;
                         out.push_str(&format!(
                             "  __ESBMC_assert(v{idx} >= 0 && v{idx} < v{vec}.len, \"vec bounds\");\n\
-                             \x20 int64_t v{id} = v{vec}.data[v{idx}];\n"
+                             \x20 v{id} = v{vec}.data[v{idx}];\n"
                         ));
                     }
                     "__vow_vec_len" => {
                         let vec = inst.args[0].0;
-                        out.push_str(&format!("  int64_t v{id} = v{vec}.len;\n"));
+                        out.push_str(&format!("  v{id} = v{vec}.len;\n"));
                     }
                     "__vow_vec_pop" => {
                         let vec = inst.args[0].0;
@@ -435,15 +606,14 @@ fn emit_inst(
                 match name.as_str() {
                     "__vow_string_from_cstr" => {
                         out.push_str(&format!(
-                            "  __vow_string_t v{id};\n\
-                             \x20 v{id}.len = __VERIFIER_nondet_long();\n\
+                            "  v{id}.len = __VERIFIER_nondet_long();\n\
                              \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < {});\n",
                             VOW_STRING_MAX
                         ));
                     }
                     "__vow_string_len" => {
                         let s = inst.args[0].0;
-                        out.push_str(&format!("  int64_t v{id} = v{s}.len;\n"));
+                        out.push_str(&format!("  v{id} = v{s}.len;\n"));
                     }
                     "__vow_string_push_str" => {
                         let dest = inst.args[0].0;
@@ -464,7 +634,7 @@ fn emit_inst(
                         let idx = inst.args[1].0;
                         out.push_str(&format!(
                             "  __ESBMC_assert(v{idx} >= 0 && v{idx} < v{s}.len, \"string bounds\");\n\
-                             \x20 int64_t v{id} = (int64_t)(unsigned char)v{s}.data[v{idx}];\n\
+                             \x20 v{id} = (int64_t)(unsigned char)v{s}.data[v{idx}];\n\
                              \x20 __ESBMC_assume(v{id} >= 0 && v{id} <= 255);\n"
                         ));
                     }
@@ -472,7 +642,7 @@ fn emit_inst(
                         let a = inst.args[0].0;
                         let b = inst.args[1].0;
                         out.push_str(&format!(
-                            "  _Bool v{id} = (v{a}.len == v{b}.len);\n\
+                            "  v{id} = (v{a}.len == v{b}.len);\n\
                              \x20 if (v{id}) {{\n\
                              \x20   for (int64_t __i = 0; __i < v{a}.len; __i++) {{\n\
                              \x20     if (v{a}.data[__i] != v{b}.data[__i]) {{ v{id} = 0; break; }}\n\
@@ -484,7 +654,7 @@ fn emit_inst(
                         let h = inst.args[0].0;
                         let n = inst.args[1].0;
                         out.push_str(&format!(
-                            "  _Bool v{id} = 0;\n\
+                            "  v{id} = 0;\n\
                              \x20 if (v{n}.len == 0) {{ v{id} = 1; }}\n\
                              \x20 else if (v{n}.len <= v{h}.len) {{\n\
                              \x20   for (int64_t __i = 0; __i <= v{h}.len - v{n}.len; __i++) {{\n\
@@ -512,11 +682,11 @@ fn emit_inst(
             if let InstData::CallExtern(ref name) = inst.data {
                 match name.as_str() {
                     "__vow_map_new" => {
-                        out.push_str(&format!("  __vow_hashmap_t v{id};\n  v{id}.len = 0;\n"));
+                        out.push_str(&format!("  v{id}.len = 0;\n"));
                     }
                     "__vow_map_len" => {
                         let m = inst.args[0].0;
-                        out.push_str(&format!("  int64_t v{id} = v{m}.len;\n"));
+                        out.push_str(&format!("  v{id} = v{m}.len;\n"));
                     }
                     "__vow_map_insert" => {
                         let m = inst.args[0].0;
@@ -539,7 +709,7 @@ fn emit_inst(
                         let m = inst.args[0].0;
                         let k = inst.args[1].0;
                         out.push_str(&format!(
-                            "  int64_t v{id} = 0;\n\
+                            "  v{id} = 0;\n\
                              \x20 for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
                              \x20   if (v{m}.keys[__i] == v{k}) {{ v{id} = v{m}.vals[__i]; break; }}\n\
                              \x20 }}\n"
@@ -549,7 +719,7 @@ fn emit_inst(
                         let m = inst.args[0].0;
                         let k = inst.args[1].0;
                         out.push_str(&format!(
-                            "  _Bool v{id} = 0;\n\
+                            "  v{id} = 0;\n\
                              \x20 for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
                              \x20   if (v{m}.keys[__i] == v{k}) {{ v{id} = 1; break; }}\n\
                              \x20 }}\n"
@@ -582,14 +752,38 @@ fn emit_inst(
                 let val = &const_fns[fid];
                 match val {
                     ConstantValue::I32(v) => {
-                        out.push_str(&format!("  int32_t v{} = {};\n", id, v));
+                        out.push_str(&format!("  v{} = {};\n", id, v));
                     }
                     ConstantValue::I64(v) => {
-                        out.push_str(&format!("  int64_t v{} = {}LL;\n", id, v));
+                        out.push_str(&format!("  v{} = {}LL;\n", id, v));
                     }
                     ConstantValue::Bool(v) => {
-                        out.push_str(&format!("  _Bool v{} = {};\n", id, *v as i32));
+                        out.push_str(&format!("  v{} = {};\n", id, *v as i32));
                     }
+                }
+            }
+        }
+
+        // Modelable function calls: emit actual C function call
+        Opcode::Call if matches!(&inst.data, InstData::CallTarget(fid) if modelable_fns.contains(fid)) => {
+            if let InstData::CallTarget(fid) = &inst.data
+                && let Some(callee) = module.functions.iter().find(|f| f.id == *fid)
+            {
+                let mut args_str = Vec::new();
+                for (i, arg) in inst.args.iter().enumerate() {
+                    if i < callee.params.len() && callee.params[i] != Ty::Unit {
+                        args_str.push(format!("v{}", arg.0));
+                    }
+                }
+                if inst.ty != Ty::Unit {
+                    out.push_str(&format!(
+                        "  v{} = {}({});\n",
+                        id,
+                        callee.name,
+                        args_str.join(", ")
+                    ));
+                } else {
+                    out.push_str(&format!("  {}({});\n", callee.name, args_str.join(", ")));
                 }
             }
         }
@@ -607,31 +801,18 @@ fn emit_inst(
         }
         Opcode::FieldGet => {
             if vec_vars.contains(&id) {
-                out.push_str(&format!(
-                    "  /* FieldGet -> vec */ __vow_vec_t v{};\n  v{}.len = 0;\n",
-                    id, id
-                ));
+                out.push_str(&format!("  /* FieldGet -> vec */ v{}.len = 0;\n", id));
             } else if string_vars.contains(&id) {
-                out.push_str(&format!(
-                    "  /* FieldGet -> string */ __vow_string_t v{};\n  v{}.len = 0;\n",
-                    id, id
-                ));
+                out.push_str(&format!("  /* FieldGet -> string */ v{}.len = 0;\n", id));
             } else if hashmap_vars.contains(&id) {
-                out.push_str(&format!(
-                    "  /* FieldGet -> hashmap */ __vow_hashmap_t v{};\n  v{}.len = 0;\n",
-                    id, id
-                ));
+                out.push_str(&format!("  /* FieldGet -> hashmap */ v{}.len = 0;\n", id));
             } else {
                 emit_unmodelled(inst, out);
             }
         }
 
         Opcode::RemF32 | Opcode::RemF64 => {
-            out.push_str(&format!(
-                "  /* float rem not modelled */ {} v{} = 0;\n",
-                ir_ty_to_c(inst.ty),
-                id
-            ));
+            out.push_str(&format!("  /* float rem not modelled */ v{} = 0;\n", id));
         }
     }
 }
@@ -640,13 +821,8 @@ fn emit_unmodelled(inst: &Inst, out: &mut String) {
     let id = inst.id.0;
     out.push_str(&format!("  /* opcode {:?} not modelled */\n", inst.opcode));
     if inst.ty != Ty::Unit {
-        let c_ty = match inst.ty {
-            Ty::Ptr | Ty::LinearPtr => "int64_t",
-            other => ir_ty_to_c(other),
-        };
         out.push_str(&format!(
-            "  {} v{} = __VERIFIER_nondet_{}();\n",
-            c_ty,
+            "  v{} = __VERIFIER_nondet_{}();\n",
             id,
             c_nondet_suffix(inst.ty)
         ));
@@ -670,6 +846,26 @@ fn c_nondet_suffix(ty: Ty) -> &'static str {
 // ---------------------------------------------------------------------------
 
 pub fn emit_c_function(func: &Function, const_fns: &HashMap<FuncId, ConstantValue>) -> String {
+    emit_c_function_full(
+        func,
+        const_fns,
+        &HashSet::new(),
+        &Module {
+            name: String::new(),
+            functions: vec![],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+        },
+    )
+}
+
+pub fn emit_c_function_full(
+    func: &Function,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+    modelable_fns: &HashSet<FuncId>,
+    module: &Module,
+) -> String {
     let mut out = String::new();
     let vec_vars = collect_typed_vars(func, "__vow_vec_new", "__vow_vec_");
     let string_vars = collect_typed_vars(func, "__vow_string_from_cstr", "__vow_string_");
@@ -743,21 +939,59 @@ pub fn emit_c_function(func: &Function, const_fns: &HashMap<FuncId, ConstantValu
         }
     }
 
-    // Pre-declare Phi variables (Upsilon writes may precede the Phi block)
+    // Pre-declare ALL instruction variables at function scope.
+    // This prevents C99 goto/scope errors when declarations appear inside
+    // goto-labeled blocks (e.g. `let mut` inside loop bodies).
     for block in &func.blocks {
         for inst in &block.insts {
-            if inst.opcode == Opcode::Phi {
-                let id = inst.id.0;
-                if vec_vars.contains(&id) {
-                    out.push_str(&format!("  __vow_vec_t v{};\n", id));
-                } else if string_vars.contains(&id) {
-                    out.push_str(&format!("  __vow_string_t v{};\n", id));
-                } else if hashmap_vars.contains(&id) {
-                    out.push_str(&format!("  __vow_hashmap_t v{};\n", id));
-                } else {
-                    out.push_str(&format!("  {} v{};\n", ir_ty_to_c(inst.ty), id));
+            if inst.opcode == Opcode::GetArg
+                || inst.opcode == Opcode::Upsilon
+                || inst.opcode.is_terminal()
+                || inst.opcode == Opcode::VowRequires
+                || inst.opcode == Opcode::VowEnsures
+                || inst.opcode == Opcode::VowInvariant
+            {
+                continue;
+            }
+            if inst.ty == Ty::Unit && inst.opcode != Opcode::ConstUnit && inst.opcode != Opcode::Phi
+            {
+                continue;
+            }
+            let id = inst.id.0;
+            if vec_vars.contains(&id) {
+                out.push_str(&format!("  __vow_vec_t v{};\n", id));
+            } else if string_vars.contains(&id) {
+                out.push_str(&format!("  __vow_string_t v{};\n", id));
+            } else if hashmap_vars.contains(&id) {
+                out.push_str(&format!("  __vow_hashmap_t v{};\n", id));
+            } else {
+                let c_ty = match inst.ty {
+                    Ty::Unit => "int32_t",
+                    Ty::Ptr | Ty::LinearPtr => "int64_t",
+                    other => ir_ty_to_c(other),
+                };
+                out.push_str(&format!("  {} v{};\n", c_ty, id));
+            }
+        }
+    }
+
+    // Pre-declare Upsilon temporaries at function scope
+    {
+        let mut ups_sources: Vec<u32> = Vec::new();
+        for block in &func.blocks {
+            for inst in &block.insts {
+                if inst.opcode == Opcode::Upsilon
+                    && let InstData::PhiTarget(_) = inst.data
+                    && !inst.args.is_empty()
+                    && !ups_sources.contains(&inst.args[0].0)
+                {
+                    ups_sources.push(inst.args[0].0);
                 }
             }
+        }
+        ups_sources.sort();
+        for src in ups_sources {
+            out.push_str(&format!("  int64_t __ups_{};\n", src));
         }
     }
 
@@ -806,12 +1040,14 @@ pub fn emit_c_function(func: &Function, const_fns: &HashMap<FuncId, ConstantValu
                 &string_vars,
                 &hashmap_vars,
                 const_fns,
+                modelable_fns,
+                module,
             );
         }
         // Emit Upsilons: read all sources first, then write all targets.
         if !upsilons.is_empty() {
             for &(_, src) in &upsilons {
-                out.push_str(&format!("  int64_t __ups_{src} = v{src};\n"));
+                out.push_str(&format!("  __ups_{src} = v{src};\n"));
             }
             for &(phi, src) in &upsilons {
                 out.push_str(&format!("  v{phi} = __ups_{src};\n"));
@@ -825,6 +1061,8 @@ pub fn emit_c_function(func: &Function, const_fns: &HashMap<FuncId, ConstantValu
                 &string_vars,
                 &hashmap_vars,
                 const_fns,
+                modelable_fns,
+                module,
             );
         }
     }
@@ -833,8 +1071,7 @@ pub fn emit_c_function(func: &Function, const_fns: &HashMap<FuncId, ConstantValu
     out
 }
 
-pub fn emit_c_module(funcs: &[&Function], const_fns: &HashMap<FuncId, ConstantValue>) -> String {
-    let mut out = String::new();
+fn emit_c_preamble(out: &mut String) {
     out.push_str("#include <stdint.h>\n");
     out.push_str("#include <stdbool.h>\n");
     out.push_str("extern void __ESBMC_assume(_Bool);\n");
@@ -856,7 +1093,38 @@ pub fn emit_c_module(funcs: &[&Function], const_fns: &HashMap<FuncId, ConstantVa
         "typedef struct {{ int64_t len; int64_t keys[{}]; int64_t vals[{}]; }} __vow_hashmap_t;\n\n",
         VOW_HASHMAP_MAX, VOW_HASHMAP_MAX
     ));
+}
 
+fn emit_forward_declaration(func: &Function, out: &mut String) {
+    let ret_c = match func.return_ty {
+        Ty::Unit => "void",
+        Ty::Ptr | Ty::LinearPtr => "int64_t",
+        other => ir_ty_to_c(other),
+    };
+    let params: Vec<String> = func
+        .params
+        .iter()
+        .enumerate()
+        .filter(|&(_, &ty)| ty != Ty::Unit)
+        .map(|(i, &ty)| {
+            let c_ty = match ty {
+                Ty::Ptr | Ty::LinearPtr => "int64_t",
+                other => ir_ty_to_c(other),
+            };
+            format!("{} p{}", c_ty, i)
+        })
+        .collect();
+    let param_str = if params.is_empty() {
+        "void".to_string()
+    } else {
+        params.join(", ")
+    };
+    out.push_str(&format!("{} {}({});\n", ret_c, func.name, param_str));
+}
+
+pub fn emit_c_module(funcs: &[&Function], const_fns: &HashMap<FuncId, ConstantValue>) -> String {
+    let mut out = String::new();
+    emit_c_preamble(&mut out);
     for func in funcs {
         out.push_str(&emit_c_function(func, const_fns));
         out.push('\n');
@@ -864,11 +1132,57 @@ pub fn emit_c_module(funcs: &[&Function], const_fns: &HashMap<FuncId, ConstantVa
     out
 }
 
+/// Emit C code for a target function and its modelable callees.
+/// Callee functions are emitted in topological order (callees first).
+pub fn emit_c_module_with_callees(
+    target: &Function,
+    module: &Module,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+    callee_ids: &[FuncId],
+    modelable_fns: &HashSet<FuncId>,
+) -> String {
+    let mut out = String::new();
+    emit_c_preamble(&mut out);
+
+    // Forward declarations for all callees
+    for fid in callee_ids {
+        if let Some(callee) = module.functions.iter().find(|f| f.id == *fid) {
+            emit_forward_declaration(callee, &mut out);
+        }
+    }
+    if !callee_ids.is_empty() {
+        out.push('\n');
+    }
+
+    // Callee function bodies in topological order
+    for fid in callee_ids {
+        if let Some(callee) = module.functions.iter().find(|f| f.id == *fid) {
+            out.push_str(&emit_c_function_full(
+                callee,
+                const_fns,
+                modelable_fns,
+                module,
+            ));
+            out.push('\n');
+        }
+    }
+
+    // Target function
+    out.push_str(&emit_c_function_full(
+        target,
+        const_fns,
+        modelable_fns,
+        module,
+    ));
+    out.push('\n');
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use vow_diag::Blame;
-    use vow_ir::{BasicBlock, BlockId, FuncId, InstId, VowEntry, VowId};
+    use vow_ir::{BasicBlock, BlockId, FuncId, InstId, Module, VowEntry, VowId};
     use vow_syntax::span::Span;
 
     fn sp() -> Span {
@@ -1051,13 +1365,20 @@ mod tests {
             ],
         );
         let c = emit_c_function(&func, &HashMap::new());
-        assert!(c.contains("int32_t v0 = 7"), "ConstI32: {c}");
-        assert!(c.contains("float v1 = 1.5f"), "ConstF32: {c}");
-        assert!(c.contains("double v2 = 2"), "ConstF64: {c}");
-        assert!(c.contains("_Bool v3 = 1"), "ConstBool true: {c}");
-        assert!(c.contains("_Bool v4 = 0"), "ConstBool false: {c}");
-        assert!(c.contains("int32_t v5 = 0"), "ConstUnit: {c}");
-        assert!(c.contains("void* v6 = 0"), "ConstStr: {c}");
+        assert!(c.contains("int32_t v0;"), "ConstI32 decl: {c}");
+        assert!(c.contains("v0 = 7;"), "ConstI32 assign: {c}");
+        assert!(c.contains("float v1;"), "ConstF32 decl: {c}");
+        assert!(c.contains("v1 = 1.5f;"), "ConstF32 assign: {c}");
+        assert!(c.contains("double v2;"), "ConstF64 decl: {c}");
+        assert!(c.contains("v2 = 2;"), "ConstF64 assign: {c}");
+        assert!(c.contains("_Bool v3;"), "ConstBool true decl: {c}");
+        assert!(c.contains("v3 = 1;"), "ConstBool true assign: {c}");
+        assert!(c.contains("_Bool v4;"), "ConstBool false decl: {c}");
+        assert!(c.contains("v4 = 0;"), "ConstBool false assign: {c}");
+        assert!(c.contains("int32_t v5;"), "ConstUnit decl: {c}");
+        assert!(c.contains("v5 = 0;"), "ConstUnit assign: {c}");
+        assert!(c.contains("int64_t v6;"), "ConstStr decl: {c}");
+        assert!(c.contains("v6 = 0;"), "ConstStr assign: {c}");
     }
 
     #[test]
@@ -1576,7 +1897,7 @@ mod tests {
             ],
         );
         let c = emit_c_function(&func, &HashMap::new());
-        assert!(c.contains("int64_t v3 = v2.len;"), "vec len: {c}");
+        assert!(c.contains("v3 = v2.len;"), "vec len: {c}");
     }
 
     #[test]
@@ -1614,7 +1935,7 @@ mod tests {
             c.contains("__ESBMC_assert(v3 >= 0 && v3 < v2.len"),
             "bounds check: {c}"
         );
-        assert!(c.contains("int64_t v4 = v2.data[v3]"), "get access: {c}");
+        assert!(c.contains("v4 = v2.data[v3]"), "get access: {c}");
     }
 
     #[test]
@@ -1843,7 +2164,7 @@ mod tests {
             ],
         );
         let c = emit_c_function(&func, &HashMap::new());
-        assert!(c.contains("int64_t v2 = v1.len;"), "string len: {c}");
+        assert!(c.contains("v2 = v1.len;"), "string len: {c}");
     }
 
     #[test]
@@ -1963,7 +2284,7 @@ mod tests {
             "bounds check: {c}"
         );
         assert!(
-            c.contains("int64_t v3 = (int64_t)(unsigned char)v1.data[v2]"),
+            c.contains("v3 = (int64_t)(unsigned char)v1.data[v2]"),
             "byte_at access: {c}"
         );
         assert!(
@@ -2011,7 +2332,7 @@ mod tests {
         );
         let c = emit_c_function(&func, &HashMap::new());
         assert!(
-            c.contains("_Bool v4 = (v1.len == v3.len)"),
+            c.contains("v4 = (v1.len == v3.len)"),
             "string eq length check: {c}"
         );
         assert!(
@@ -2058,7 +2379,7 @@ mod tests {
             ],
         );
         let c = emit_c_function(&func, &HashMap::new());
-        assert!(c.contains("_Bool v4 = 0;"), "contains init: {c}");
+        assert!(c.contains("v4 = 0;"), "contains init: {c}");
         assert!(
             c.contains("v1.data[__i + __j] != v3.data[__j]"),
             "contains byte comparison: {c}"
@@ -2209,7 +2530,7 @@ mod tests {
             ],
         );
         let c = emit_c_function(&func, &HashMap::new());
-        assert!(c.contains("int64_t v1 = v0.len;"), "hashmap len: {c}");
+        assert!(c.contains("v1 = v0.len;"), "hashmap len: {c}");
     }
 
     #[test]
@@ -2282,7 +2603,7 @@ mod tests {
             ],
         );
         let c = emit_c_function(&func, &HashMap::new());
-        assert!(c.contains("int64_t v2 = 0;"), "get default: {c}");
+        assert!(c.contains("v2 = 0;"), "get default: {c}");
         assert!(c.contains("v0.keys[__i] == v1"), "get key search: {c}");
         assert!(c.contains("v2 = v0.vals[__i]"), "get reads value: {c}");
     }
@@ -2316,7 +2637,7 @@ mod tests {
             ],
         );
         let c = emit_c_function(&func, &HashMap::new());
-        assert!(c.contains("_Bool v2 = 0;"), "contains default: {c}");
+        assert!(c.contains("v2 = 0;"), "contains default: {c}");
         assert!(c.contains("v0.keys[__i] == v1"), "contains key search: {c}");
         assert!(c.contains("v2 = 1"), "contains sets true: {c}");
     }
@@ -2610,6 +2931,13 @@ mod tests {
             data: InstData::CallTarget(FuncId(1)),
             origin: sp(),
         };
+        let empty_module = Module {
+            name: String::new(),
+            functions: vec![],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+        };
         let mut out = String::new();
         emit_inst(
             &call_inst,
@@ -2618,15 +2946,21 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &const_fns,
+            &HashSet::new(),
+            &empty_module,
         );
-        assert!(
-            out.contains("int64_t v5 = 42LL;"),
-            "inlined constant: {out}"
-        );
+        assert!(out.contains("v5 = 42LL;"), "inlined constant: {out}");
     }
 
     #[test]
     fn emit_falls_back_for_unknown_call_target() {
+        let empty_module = Module {
+            name: String::new(),
+            functions: vec![],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+        };
         let call_inst = Inst {
             id: InstId(5),
             opcode: Opcode::Call,
@@ -2643,6 +2977,8 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashMap::new(),
+            &HashSet::new(),
+            &empty_module,
         );
         assert!(
             out.contains("__VERIFIER_nondet_long()"),

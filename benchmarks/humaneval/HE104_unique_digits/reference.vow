@@ -1,0 +1,86 @@
+module UniqueDigits
+
+fn has_even_digit(val: i64) -> i64 vow {
+  requires: val >= 0,
+  requires: val <= 100000,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  if val == 0 {
+    1
+  } else {
+    let mut n: i64 = val;
+    let mut found: i64 = 0;
+    while n > 0 vow {
+      invariant: n >= 0,
+      invariant: found >= 0,
+      invariant: found <= 1
+    } {
+      let digit: i64 = n % 10;
+      if digit % 2 == 0 {
+        found = 1;
+      } else {
+        0;
+      }
+      n = n / 10;
+    }
+    found
+  }
+}
+
+fn unique_digits(x: Vec<i64>) -> Vec<i64> vow {
+  requires: x.len() >= 0,
+  requires: x.len() <= 8,
+  ensures: result.len() >= 0
+} {
+  let filtered: Vec<i64> = Vec::new();
+  let mut i: i64 = 0;
+  while i < x.len() vow {
+    invariant: i >= 0,
+    invariant: i <= x.len()
+  } {
+    if has_even_digit(x[i]) == 0 {
+      filtered.push(x[i]);
+    } else {
+      0;
+    }
+    i = i + 1;
+  }
+  let mut si: i64 = 0;
+  while si < filtered.len() vow {
+    invariant: si >= 0,
+    invariant: si <= filtered.len()
+  } {
+    let mut sj: i64 = si + 1;
+    while sj < filtered.len() vow {
+      invariant: sj >= 0,
+      invariant: sj <= filtered.len()
+    } {
+      if filtered[si] > filtered[sj] {
+        let tmp: i64 = filtered[si];
+        filtered[si] = filtered[sj];
+        filtered[sj] = tmp;
+      } else {
+        0;
+      }
+      sj = sj + 1;
+    }
+    si = si + 1;
+  }
+  filtered
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(15);
+  v.push(33);
+  v.push(1422);
+  v.push(1);
+  let r: Vec<i64> = unique_digits(v);
+  let mut i: i64 = 0;
+  while i < r.len() {
+    print_i64(r[i]);
+    i = i + 1;
+  }
+  0
+}

@@ -1,0 +1,66 @@
+module GenerateIntegers
+
+fn generate_integers(a: i64, b: i64) -> Vec<i64> vow {
+  requires: a >= 0,
+  requires: a <= 100,
+  requires: b >= 0,
+  requires: b <= 100,
+  ensures: result.len() >= 0
+} {
+  let mut lo: i64 = a;
+  let mut hi: i64 = b;
+  if a > b {
+    lo = b;
+    hi = a;
+  } else {
+    0;
+  }
+  let out: Vec<i64> = Vec::new();
+  if lo <= 2 {
+    if 2 <= hi {
+      out.push(2);
+    } else {
+      0;
+    }
+  } else {
+    0;
+  }
+  if lo <= 4 {
+    if 4 <= hi {
+      out.push(4);
+    } else {
+      0;
+    }
+  } else {
+    0;
+  }
+  if lo <= 6 {
+    if 6 <= hi {
+      out.push(6);
+    } else {
+      0;
+    }
+  } else {
+    0;
+  }
+  if lo <= 8 {
+    if 8 <= hi {
+      out.push(8);
+    } else {
+      0;
+    }
+  } else {
+    0;
+  }
+  out
+}
+
+fn main() -> i32 [io] {
+  let r: Vec<i64> = generate_integers(2, 8);
+  let mut i: i64 = 0;
+  while i < r.len() {
+    print_i64(r[i]);
+    i = i + 1;
+  }
+  0
+}

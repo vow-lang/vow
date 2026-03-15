@@ -1,0 +1,16 @@
+module IsSimplePower
+
+fn is_simple_power(x: i64, n: i64) -> i64 vow {
+  requires: x >= 0,
+  requires: x <= 100,
+  requires: n >= 0,
+  requires: n <= 100,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  0
+}

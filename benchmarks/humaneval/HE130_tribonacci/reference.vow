@@ -1,0 +1,45 @@
+module Tribonacci
+
+fn tribonacci(n: i64) -> Vec<i64> vow {
+  requires: n >= 0,
+  requires: n <= 10,
+  ensures: result.len() >= 0
+} {
+  let out: Vec<i64> = Vec::new();
+  out.push(1);
+  if n >= 1 {
+    out.push(3);
+  } else {
+    0;
+  }
+  if n >= 2 {
+    let mut i: i64 = 2;
+    while i <= n vow {
+      invariant: i >= 2,
+      invariant: i <= n + 1
+    } {
+      if i % 2 == 0 {
+        out.push(1 + i / 2);
+      } else {
+        let prev1: i64 = out[i - 1];
+        let prev2: i64 = out[i - 2];
+        let next_even: i64 = 1 + (i + 1) / 2;
+        out.push(prev1 + prev2 + next_even);
+      }
+      i = i + 1;
+    }
+  } else {
+    0;
+  }
+  out
+}
+
+fn main() -> i32 [io] {
+  let r: Vec<i64> = tribonacci(4);
+  let mut i: i64 = 0;
+  while i < r.len() {
+    print_i64(r[i]);
+    i = i + 1;
+  }
+  0
+}

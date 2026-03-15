@@ -1,0 +1,54 @@
+module Safemath
+
+fn safe_add(a: i64, b: i64) -> i64 vow {
+  requires: a >= 0,
+  requires: b >= 0,
+  requires: a <= 4611686018427387903,
+  requires: b <= 4611686018427387903,
+  ensures: result >= a,
+  ensures: result >= b
+} {
+  a + b
+}
+
+fn safe_sub(a: i64, b: i64) -> i64 vow {
+  requires: a >= 0,
+  requires: b >= 0,
+  requires: a >= b,
+  ensures: result >= 0
+} {
+  a - b
+}
+
+fn safe_div(a: i64, b: i64) -> i64 vow {
+  requires: b != 0
+} {
+  a / b
+}
+
+fn abs_val(x: i64) -> i64 vow {
+  requires: x > -9223372036854775807 - 1,
+  ensures: result >= 0
+} {
+  if x < 0 {
+    0 - x
+  } else {
+    x
+  }
+}
+
+fn clamp(val: i64, lo: i64, hi: i64) -> i64 vow {
+  requires: lo <= hi,
+  ensures: result >= lo,
+  ensures: result <= hi
+} {
+  if val < lo {
+    lo
+  } else {
+    if val > hi {
+      hi
+    } else {
+      val
+    }
+  }
+}

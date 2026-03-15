@@ -100,6 +100,191 @@ impl TypeEnv {
             },
         );
         env.define_fn(
+            "fs_exists",
+            FnSig {
+                params: vec![Ty::Str],
+                return_ty: Ty::I64,
+                effects: [Effect::Read].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "fs_mkdir",
+            FnSig {
+                params: vec![Ty::Str],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "fs_listdir",
+            FnSig {
+                params: vec![Ty::Str],
+                return_ty: Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::Str]),
+                effects: [Effect::Read].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "fs_remove",
+            FnSig {
+                params: vec![Ty::Str],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "fs_remove_dir",
+            FnSig {
+                params: vec![Ty::Str],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "fs_is_dir",
+            FnSig {
+                params: vec![Ty::Str],
+                return_ty: Ty::I64,
+                effects: [Effect::Read].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "fs_rename",
+            FnSig {
+                params: vec![Ty::Str, Ty::Str],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "string_substr",
+            FnSig {
+                params: vec![Ty::Str, Ty::I64, Ty::I64],
+                return_ty: Ty::Str,
+                effects: BTreeSet::new(),
+            },
+        );
+        env.define_fn(
+            "string_split",
+            FnSig {
+                params: vec![Ty::Str, Ty::Str],
+                return_ty: Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::Str]),
+                effects: BTreeSet::new(),
+            },
+        );
+        env.define_fn(
+            "string_starts_with",
+            FnSig {
+                params: vec![Ty::Str, Ty::Str],
+                return_ty: Ty::I64,
+                effects: BTreeSet::new(),
+            },
+        );
+        env.define_fn(
+            "string_ends_with",
+            FnSig {
+                params: vec![Ty::Str, Ty::Str],
+                return_ty: Ty::I64,
+                effects: BTreeSet::new(),
+            },
+        );
+        env.define_fn(
+            "string_trim",
+            FnSig {
+                params: vec![Ty::Str],
+                return_ty: Ty::Str,
+                effects: BTreeSet::new(),
+            },
+        );
+        env.define_fn(
+            "string_to_upper",
+            FnSig {
+                params: vec![Ty::Str],
+                return_ty: Ty::Str,
+                effects: BTreeSet::new(),
+            },
+        );
+        env.define_fn(
+            "string_to_lower",
+            FnSig {
+                params: vec![Ty::Str],
+                return_ty: Ty::Str,
+                effects: BTreeSet::new(),
+            },
+        );
+        env.define_fn(
+            "string_replace",
+            FnSig {
+                params: vec![Ty::Str, Ty::Str, Ty::Str],
+                return_ty: Ty::Str,
+                effects: BTreeSet::new(),
+            },
+        );
+        env.define_fn(
+            "string_join",
+            FnSig {
+                params: vec![
+                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::Str]),
+                    Ty::Str,
+                ],
+                return_ty: Ty::Str,
+                effects: BTreeSet::new(),
+            },
+        );
+        env.define_fn(
+            "parse_i64",
+            FnSig {
+                params: vec![Ty::Str],
+                return_ty: Ty::I64,
+                effects: BTreeSet::new(),
+            },
+        );
+        env.define_fn(
+            "i64_to_string",
+            FnSig {
+                params: vec![Ty::I64],
+                return_ty: Ty::Str,
+                effects: BTreeSet::new(),
+            },
+        );
+        env.define_fn(
+            "vec_sort",
+            FnSig {
+                params: vec![Ty::Applied(
+                    Box::new(Ty::Struct("Vec".to_string())),
+                    vec![Ty::I64],
+                )],
+                return_ty: Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
+                effects: BTreeSet::new(),
+            },
+        );
+        env.define_fn(
+            "time_unix",
+            FnSig {
+                params: vec![],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "hex_encode",
+            FnSig {
+                params: vec![Ty::Applied(
+                    Box::new(Ty::Struct("Vec".to_string())),
+                    vec![Ty::U8],
+                )],
+                return_ty: Ty::Str,
+                effects: BTreeSet::new(),
+            },
+        );
+        env.define_fn(
+            "hex_decode",
+            FnSig {
+                params: vec![Ty::Str],
+                return_ty: Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::U8]),
+                effects: BTreeSet::new(),
+            },
+        );
+        env.define_fn(
             "eprintln_str",
             FnSig {
                 params: vec![Ty::Str],
