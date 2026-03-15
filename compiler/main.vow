@@ -11,6 +11,8 @@ use ir
 use ir_printer
 use lower
 use clif
+use c_emitter
+use verifier
 use diag
 
 fn has_flag(argv: Vec<String>, flag: String) -> bool {
@@ -45,7 +47,30 @@ fn get_source_path(argv: Vec<String>) -> String {
         if first_byte != 45 {
             if i > 0 {
                 let prev: String = argv[i - 1];
-                if prev == String::from("-o") || prev == String::from("--mode") {
+                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--unwind") || prev == String::from("--debug-trace") {
+                    i = i - 1;
+                } else {
+                    return a;
+                }
+            } else {
+                return a;
+            }
+        }
+        i = i - 1;
+    }
+    String::from("")
+}
+
+fn get_source_path_sub(argv: Vec<String>) -> String {
+    let argc: i64 = argv.len();
+    let mut i: i64 = argc - 1;
+    while i >= 1 {
+        let a: String = argv[i];
+        let first_byte: i64 = a.byte_at(0);
+        if first_byte != 45 {
+            if i > 1 {
+                let prev: String = argv[i - 1];
+                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--unwind") || prev == String::from("--debug-trace") {
                     i = i - 1;
                 } else {
                     return a;
@@ -132,8 +157,9 @@ fn load_deps(root_dir: String, m: Module, arena: AstArena, all_items: Vec<i64>, 
                 let d: Diagnostic = diag_error(EC_MISSING_DELIMITER(), str2(String::from("cannot read "), dep_path), dep_path, 0, 0);
                 diag_ctx_emit(dctx, d);
             } else {
+                diag_ctx_add_source(dctx, dep_path, src);
                 let tokens: Vec<Token> = lex(src);
-                let dep_m: Module = parse_module_into(tokens, arena, dctx);
+                let dep_m: Module = parse_module_into(tokens, arena, dctx, dep_path);
                 load_deps(root_dir, dep_m, arena, all_items, visited, dctx);
                 let dep_items: Vec<i64> = dep_m.items;
                 let n_dep: i64 = dep_items.len();
@@ -148,24 +174,55 @@ fn load_deps(root_dir: String, m: Module, arena: AstArena, all_items: Vec<i64>, 
     }
 }
 
-fn main() -> i32 [io] {
-    let argv: Vec<String> = args();
-    let argc: i64 = argv.len();
-    if argc == 0 {
-        eprintln_str("usage: main [-o <output>] <file.vow>");
-        return 1;
+fn CMD_NONE() -> i64 vow { ensures: result >= 0 } { 0 }
+fn CMD_BUILD() -> i64 vow { ensures: result >= 0 } { 1 }
+fn CMD_VERIFY() -> i64 vow { ensures: result >= 0 } { 2 }
+fn CMD_TEST() -> i64 vow { ensures: result >= 0 } { 3 }
+
+fn get_subcommand(argv: Vec<String>) -> i64 {
+    if argv.len() < 1 {
+        return CMD_NONE();
     }
-    let has_output: bool = has_flag(argv, String::from("-o"));
-    let path: String = get_source_path(argv);
+    let sub: String = argv[0];
+    if sub == String::from("build") {
+        return CMD_BUILD();
+    }
+    if sub == String::from("verify") {
+        return CMD_VERIFY();
+    }
+    if sub == String::from("test") {
+        return CMD_TEST();
+    }
+    CMD_NONE()
+}
+
+struct FrontendResult {
+    path: String,
+    dctx: DiagCtx,
+    merged: Module,
+    str_eids: Vec<i64>,
+    n_items: i64,
+    n_errors: i64,
+}
+
+fn run_frontend(argv: Vec<String>, sub: bool) -> FrontendResult [io] {
+    let path: String = {
+        if sub {
+            get_source_path_sub(argv)
+        } else {
+            get_source_path(argv)
+        }
+    };
     if path.len() == 0 {
-        eprintln_str("usage: main [-o <output>] <file.vow>");
-        return 1;
+        eprintln_str("usage: vowc <command> [options] <file.vow>");
+        process_exit(1);
     }
     let dctx: DiagCtx = diag_ctx_new();
     let src: String = fs_read(path);
+    diag_ctx_add_source(dctx, path, src);
     let tokens: Vec<Token> = lex(src);
     let arena: AstArena = arena_new();
-    let m: Module = parse_module_into(tokens, arena, dctx);
+    let m: Module = parse_module_into(tokens, arena, dctx, path);
     let root_dir: String = get_dir_path(path);
     let all_items: Vec<i64> = Vec::new();
     let visited: Vec<String> = Vec::new();
@@ -185,16 +242,349 @@ fn main() -> i32 [io] {
         arena: arena,
     };
     let n_items: i64 = all_items.len();
-    let e: CheckEnv = env_new(dctx);
+    let e: CheckEnv = env_new(dctx, path);
     check_module(e, merged);
-    let n_errors: i64 = e.error_count;
+    let n_errors: i64 = dctx.error_count;
+    let str_eids: Vec<i64> = e.expr_str_eids;
+    FrontendResult {
+        path: path,
+        dctx: dctx,
+        merged: merged,
+        str_eids: str_eids,
+        n_items: n_items,
+        n_errors: n_errors,
+    }
+}
+
+fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, unwind: String, use_cache: bool) -> i64 [io] {
+    let mut fi: i64 = 0;
+    let mut all_proven: i64 = 1;
+    while fi < fns.len() {
+        let f: IrFunction = fns[fi];
+        let vows: Vec<IrVowEntry> = f.vows;
+        if vows.len() > 0 {
+            eprintln_str(str3(String::from("Verifying "), f.name, String::from("...")));
+            let vr: VerifyResult = verify_function_full(f, ir_mod, unwind, use_cache);
+            let st: i64 = vr.status;
+            if st == VERIFY_PROVEN() {
+                eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN")));
+            } else if st == VERIFY_FAILED() {
+                all_proven = 0;
+                eprintln_str(str3(String::from("  "), f.name, String::from(": FAILED")));
+                let vnames: Vec<String> = vr.var_names;
+                let vvals: Vec<String> = vr.var_values;
+                let mut vi: i64 = 0;
+                while vi < vnames.len() {
+                    eprintln_str(str4(String::from("    "), vnames[vi], String::from(" = "), vvals[vi]));
+                    vi = vi + 1;
+                }
+                let vow_id: i64 = vr.vow_id;
+                let ce_violation: String = String::from("");
+                let ce_blame: i64 = DIAG_BLAME_NONE();
+                let vow_entries: Vec<IrVowEntry> = f.vows;
+                let mut vi2: i64 = 0;
+                while vi2 < vow_entries.len() {
+                    let ve: IrVowEntry = vow_entries[vi2];
+                    if ve.id == vow_id {
+                        ce_violation = ve.description;
+                        ce_blame = ve.blame;
+                    }
+                    vi2 = vi2 + 1;
+                }
+                let ce: VerifyCE = VerifyCE {
+                    function: f.name,
+                    var_names: vr.var_names,
+                    var_values: vr.var_values,
+                    violation: ce_violation,
+                    vow_id: vow_id,
+                    source: path,
+                    blame: ce_blame,
+                };
+                ces.push(ce);
+            } else if st == VERIFY_TIMEOUT() {
+                all_proven = 0;
+                eprintln_str(str3(String::from("  "), f.name, String::from(": TIMEOUT")));
+            } else if st == VERIFY_NOT_FOUND() {
+                eprintln_str(String::from("  esbmc not found"));
+            } else {
+                all_proven = 0;
+                eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR")));
+            }
+        }
+        fi = fi + 1;
+    }
+    all_proven
+}
+
+fn run_verify(argv: Vec<String>) -> i32 [io] {
+    let fr: FrontendResult = run_frontend(argv, true);
+    let path: String = fr.path;
+    let dctx: DiagCtx = fr.dctx;
+    let merged: Module = fr.merged;
+    let str_eids: Vec<i64> = fr.str_eids;
+    let n_items: i64 = fr.n_items;
+    let n_errors: i64 = fr.n_errors;
     diag_ctx_print_all(dctx);
-    print_i64(n_items);
-    print_str(" items, ");
-    print_i64(n_errors);
-    print_str(" errors\n");
+    eprintln_str(str4(i64_to_str(n_items), String::from(" items, "), i64_to_str(n_errors), String::from(" errors")));
+    if n_errors > 0 {
+        diag_emit_verify_json(String::from("CompileFailed"), dctx, Vec::new());
+        return 1;
+    }
+    let unwind_str: String = get_flag_arg(argv, String::from("--unwind"));
+    let unwind: String = {
+        if unwind_str.len() > 0 { unwind_str }
+        else { String::from("10") }
+    };
+    let use_cache: bool = !has_flag(argv, String::from("--no-cache"));
+    let ir_mod: IrModule = lower_module_vow(merged, str_eids);
+    let fns: Vec<IrFunction> = ir_mod.functions;
+    let ces: Vec<VerifyCE> = Vec::new();
+    let all_proven: i64 = run_verify_loop(fns, ir_mod, path, ces, unwind, use_cache);
+    let status_str: String = {
+        if all_proven == 1 {
+            String::from("Verified")
+        } else {
+            String::from("VerifyFailed")
+        }
+    };
+    diag_emit_verify_json(status_str, dctx, ces);
+    if all_proven == 0 {
+        return 1;
+    }
+    0
+}
+
+fn run_build(argv: Vec<String>) -> i32 [io] {
+    let fr: FrontendResult = run_frontend(argv, true);
+    let path: String = fr.path;
+    let dctx: DiagCtx = fr.dctx;
+    let merged: Module = fr.merged;
+    let str_eids: Vec<i64> = fr.str_eids;
+    let n_items: i64 = fr.n_items;
+    let n_errors: i64 = fr.n_errors;
+    diag_ctx_print_all(dctx);
+    eprintln_str(str4(i64_to_str(n_items), String::from(" items, "), i64_to_str(n_errors), String::from(" errors")));
+    if n_errors > 0 {
+        diag_emit_build_verify_json(String::from("CompileFailed"), String::from(""), dctx, Vec::new());
+        return 1;
+    }
+    let out: String = {
+        if has_flag(argv, String::from("-o")) {
+            get_flag_arg(argv, String::from("-o"))
+        } else {
+            strip_vow_ext(path)
+        }
+    };
+    let mode_str: String = get_flag_arg(argv, String::from("--mode"));
+    let mode: i64 = {
+        if mode_str == String::from("debug") {
+            1
+        } else {
+            0
+        }
+    };
+    let trace_str: String = get_flag_arg(argv, String::from("--debug-trace"));
+    let trace: i64 = {
+        if trace_str == String::from("calls") { 1 }
+        else if trace_str == String::from("full") { 2 }
+        else { 0 }
+    };
+    let ir_mod: IrModule = lower_module_vow(merged, str_eids);
+    let do_verify: bool = !has_flag(argv, String::from("--no-verify"));
+    let use_cache: bool = !has_flag(argv, String::from("--no-cache"));
+    let unwind_str: String = get_flag_arg(argv, String::from("--unwind"));
+    let unwind: String = {
+        if unwind_str.len() > 0 { unwind_str }
+        else { String::from("10") }
+    };
+    let fns: Vec<IrFunction> = ir_mod.functions;
+    let handles: Vec<i64> = Vec::new();
+    let vow_fn_indices: Vec<i64> = Vec::new();
+    if do_verify {
+        let mut fi: i64 = 0;
+        while fi < fns.len() {
+            let f: IrFunction = fns[fi];
+            let vows: Vec<IrVowEntry> = f.vows;
+            if vows.len() > 0 {
+                eprintln_str(str3(String::from("Starting verification of "), f.name, String::from("...")));
+                let h: i64 = verify_start(f, ir_mod, unwind, fi, use_cache);
+                handles.push(h);
+                vow_fn_indices.push(fi);
+            }
+            fi = fi + 1;
+        }
+    }
+    let result: i64 = clif_emit_module(ir_mod, out, mode, trace);
+    if result != 0 {
+        eprintln_str(String::from("compilation failed"));
+        diag_emit_build_verify_json(String::from("CompileFailed"), String::from(""), dctx, Vec::new());
+        return 1;
+    }
+    if !do_verify {
+        diag_emit_build_verify_json(String::from("Unverified"), out, dctx, Vec::new());
+        return 0;
+    }
+    let ces: Vec<VerifyCE> = Vec::new();
+    let mut all_proven: i64 = 1;
+    let mut hi: i64 = 0;
+    while hi < handles.len() {
+        let fi2: i64 = vow_fn_indices[hi];
+        let f: IrFunction = fns[fi2];
+        let h: i64 = handles[hi];
+        if h == -1 {
+            hi = hi + 1;
+        } else if h == -2 {
+            eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN (cached)")));
+            hi = hi + 1;
+        } else {
+            let vr: VerifyResult = verify_collect(h, f);
+            let st: i64 = vr.status;
+            if st == VERIFY_PROVEN() {
+                eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN")));
+                if use_cache {
+                    let c_src2: String = emit_c_for_verify(f, ir_mod);
+                    let ck2: String = verify_cache_key(c_src2, unwind);
+                    verify_cache_store(ck2, VERIFY_PROVEN());
+                }
+            } else if st == VERIFY_FAILED() {
+                all_proven = 0;
+                eprintln_str(str3(String::from("  "), f.name, String::from(": FAILED")));
+                let vnames: Vec<String> = vr.var_names;
+                let vvals: Vec<String> = vr.var_values;
+                let mut vi: i64 = 0;
+                while vi < vnames.len() {
+                    eprintln_str(str4(String::from("    "), vnames[vi], String::from(" = "), vvals[vi]));
+                    vi = vi + 1;
+                }
+                let vow_id: i64 = vr.vow_id;
+                let ce_violation: String = String::from("");
+                let ce_blame: i64 = DIAG_BLAME_NONE();
+                let vow_entries: Vec<IrVowEntry> = f.vows;
+                let mut vi2: i64 = 0;
+                while vi2 < vow_entries.len() {
+                    let ve: IrVowEntry = vow_entries[vi2];
+                    if ve.id == vow_id {
+                        ce_violation = ve.description;
+                        ce_blame = ve.blame;
+                    }
+                    vi2 = vi2 + 1;
+                }
+                let ce: VerifyCE = VerifyCE {
+                    function: f.name,
+                    var_names: vr.var_names,
+                    var_values: vr.var_values,
+                    violation: ce_violation,
+                    vow_id: vow_id,
+                    source: path,
+                    blame: ce_blame,
+                };
+                ces.push(ce);
+            } else if st == VERIFY_TIMEOUT() {
+                all_proven = 0;
+                eprintln_str(str3(String::from("  "), f.name, String::from(": TIMEOUT")));
+            } else if st == VERIFY_NOT_FOUND() {
+                eprintln_str(String::from("  esbmc not found"));
+            } else {
+                all_proven = 0;
+                eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR")));
+            }
+            hi = hi + 1;
+        }
+    }
+    let status_str: String = {
+        if all_proven == 1 {
+            String::from("Verified")
+        } else {
+            String::from("VerifyFailed")
+        }
+    };
+    diag_emit_build_verify_json(status_str, out, dctx, ces);
+    if all_proven == 0 {
+        return 1;
+    }
+    0
+}
+
+fn run_legacy(argv: Vec<String>) -> i32 [io] {
+    let has_output: bool = has_flag(argv, String::from("-o"));
+    let path: String = get_source_path(argv);
+    if path.len() == 0 {
+        eprintln_str("usage: main [-o <output>] <file.vow>");
+        return 1;
+    }
+    let dctx: DiagCtx = diag_ctx_new();
+    let src: String = fs_read(path);
+    diag_ctx_add_source(dctx, path, src);
+    let tokens: Vec<Token> = lex(src);
+    let arena: AstArena = arena_new();
+    let m: Module = parse_module_into(tokens, arena, dctx, path);
+    let root_dir: String = get_dir_path(path);
+    let all_items: Vec<i64> = Vec::new();
+    let visited: Vec<String> = Vec::new();
+    visited.push(path);
+    load_deps(root_dir, m, arena, all_items, visited, dctx);
+    let root_items: Vec<i64> = m.items;
+    let n_root: i64 = root_items.len();
+    let mut ri: i64 = 0;
+    while ri < n_root {
+        all_items.push(root_items[ri]);
+        ri = ri + 1;
+    }
+    let merged: Module = Module {
+        name_sid: 0,
+        uses: Vec::new(),
+        items: all_items,
+        arena: arena,
+    };
+    let n_items: i64 = all_items.len();
+    let e: CheckEnv = env_new(dctx, path);
+    check_module(e, merged);
+    let n_errors: i64 = dctx.error_count;
+    diag_ctx_print_all(dctx);
+    let emit_c: bool = has_flag(argv, String::from("--emit-c"));
+    let do_verify: bool = has_flag(argv, String::from("--verify"));
+    if do_verify {
+        eprintln_str(str4(i64_to_str(n_items), String::from(" items, "), i64_to_str(n_errors), String::from(" errors")));
+    } else {
+        print_i64(n_items);
+        print_str(" items, ");
+        print_i64(n_errors);
+        print_str(" errors\n");
+    }
+    if n_errors > 0 && do_verify {
+        diag_emit_verify_json(String::from("CompileFailed"), dctx, Vec::new());
+        return 1;
+    }
     if n_errors == 0 {
-        if has_output {
+        if do_verify {
+            let unwind_str: String = get_flag_arg(argv, String::from("--unwind"));
+            let unwind: String = {
+                if unwind_str.len() > 0 { unwind_str }
+                else { String::from("10") }
+            };
+            let str_eids: Vec<i64> = e.expr_str_eids;
+            let ir_mod: IrModule = lower_module_vow(merged, str_eids);
+            let fns: Vec<IrFunction> = ir_mod.functions;
+            let ces: Vec<VerifyCE> = Vec::new();
+            let use_cache_leg: bool = !has_flag(argv, String::from("--no-cache"));
+            let all_proven: i64 = run_verify_loop(fns, ir_mod, path, ces, unwind, use_cache_leg);
+            let status_str: String = {
+                if all_proven == 1 {
+                    String::from("Verified")
+                } else {
+                    String::from("VerifyFailed")
+                }
+            };
+            diag_emit_verify_json(status_str, dctx, ces);
+            if all_proven == 0 {
+                return 1;
+            }
+        } else if emit_c {
+            let str_eids: Vec<i64> = e.expr_str_eids;
+            let ir_mod: IrModule = lower_module_vow(merged, str_eids);
+            let c_code: String = emit_c_module(ir_mod);
+            print_str(c_code);
+        } else if has_output {
             let out: String = get_flag_arg(argv, String::from("-o"));
             let mode_str: String = get_flag_arg(argv, String::from("--mode"));
             let mode: i64 = {
@@ -204,9 +594,15 @@ fn main() -> i32 [io] {
                     0
                 }
             };
+            let trace_str: String = get_flag_arg(argv, String::from("--debug-trace"));
+            let trace: i64 = {
+                if trace_str == String::from("calls") { 1 }
+                else if trace_str == String::from("full") { 2 }
+                else { 0 }
+            };
             let str_eids: Vec<i64> = e.expr_str_eids;
             let ir_mod: IrModule = lower_module_vow(merged, str_eids);
-            let result: i64 = clif_emit_module(ir_mod, out, mode);
+            let result: i64 = clif_emit_module(ir_mod, out, mode, trace);
             if result != 0 {
                 eprintln_str(String::from("compilation failed"));
                 return 1;
@@ -220,4 +616,160 @@ fn main() -> i32 [io] {
         }
     }
     0
+}
+
+fn skill_json() -> String {
+    let r: String = String::from("{\n");
+    r.push_str(String::from("  \"tool\": \"vow\",\n"));
+    r.push_str(String::from("  \"description\": \"Vow compiler: compiles Vow source to native executables with contract verification\",\n"));
+    r.push_str(String::from("  \"usage\": \"vow <command> [OPTIONS] <source.vow>\",\n"));
+    r.push_str(String::from("  \"commands\": {\n"));
+    r.push_str(String::from("    \"build\": \"Compile source to native executable (verifies by default; use --no-verify to skip)\",\n"));
+    r.push_str(String::from("    \"verify\": \"Verify contracts without producing an executable (use --no-cache to skip cache)\",\n"));
+    r.push_str(String::from("    \"test\": \"Run tests (not yet implemented)\"\n"));
+    r.push_str(String::from("  },\n"));
+    r.push_str(String::from("  \"legacy_usage\": \"vow [OPTIONS] <source.vow> (equivalent to vow build)\",\n"));
+    r.push_str(String::from("  \"build_options\": {\n"));
+    r.push_str(String::from("    \"-o, --output <path>\": \"Output executable path (default: source without .vow extension)\",\n"));
+    r.push_str(String::from("    \"--mode <debug|release>\": \"Build mode; debug inserts runtime vow checks (default: release)\",\n"));
+    r.push_str(String::from("    \"--no-verify\": \"Skip ESBMC static verification\",\n"));
+    r.push_str(String::from("    \"--dump-ir\": \"Dump IR text to stdout and exit (skip codegen/verify)\",\n"));
+    r.push_str(String::from("    \"--debug-trace <off|calls|full>\": \"Emit JSON trace lines to stderr at runtime (default: off)\",\n"));
+    r.push_str(String::from("    \"--no-cache\": \"Disable compile and verify caching\"\n"));
+    r.push_str(String::from("  },\n"));
+    r.push_str(String::from("  \"verify_options\": {\n"));
+    r.push_str(String::from("    \"--no-cache\": \"Disable verification result caching\"\n"));
+    r.push_str(String::from("  },\n"));
+    r.push_str(String::from("  \"global_options\": {\n"));
+    r.push_str(String::from("    \"--help\": \"Print this JSON capability description\",\n"));
+    r.push_str(String::from("    \"--help --human\": \"Print human-readable capability description\"\n"));
+    r.push_str(String::from("  },\n"));
+    r.push_str(String::from("  \"output_json\": {\n"));
+    r.push_str(String::from("    \"status\": \"Verified | Unverified | CompileFailed | VerifyFailed\",\n"));
+    r.push_str(String::from("    \"executable\": \"path to compiled binary, or null\",\n"));
+    r.push_str(String::from("    \"diagnostics\": \"[array of {error_code, message, severity, span: {file, offset, length}}]\",\n"));
+    r.push_str(String::from("    \"message\": \"error detail (CompileFailed)\",\n"));
+    r.push_str(String::from("    \"function\": \"function name (VerifyFailed)\",\n"));
+    r.push_str(String::from("    \"counterexample\": \"ESBMC counterexample description (VerifyFailed)\"\n"));
+    r.push_str(String::from("  },\n"));
+    r.push_str(String::from("  \"exit_codes\": {\n"));
+    r.push_str(String::from("    \"0\": \"success (Verified or Unverified)\",\n"));
+    r.push_str(String::from("    \"1\": \"failure (CompileFailed or VerifyFailed)\"\n"));
+    r.push_str(String::from("  },\n"));
+    r.push_str(String::from("  \"language\": {\n"));
+    r.push_str(String::from("    \"module\": \"module <Name>\",\n"));
+    r.push_str(String::from("    \"function\": \"fn <name>(<params>) -> <RetTy> [<effects>] { <body> }\",\n"));
+    r.push_str(String::from("    \"vow_function\": \"fn <name>(<params>) -> <RetTy> vow { requires: <expr>; ensures: <expr> } { <body> }\",\n"));
+    r.push_str(String::from("    \"while_with_invariant\": \"while <cond> vow { invariant: <expr> } { <body> }\",\n"));
+    r.push_str(String::from("    \"types\": [\"i32\", \"i64\", \"f32\", \"f64\", \"bool\", \"()\"],\n"));
+    r.push_str(String::from("    \"effects\": [\"io\", \"read\", \"write\", \"panic\", \"unsafe\"],\n"));
+    r.push_str(String::from("    \"builtins\": {\n"));
+    r.push_str(String::from("      \"print_str\": \"fn(s: str) -> () [io]\",\n"));
+    r.push_str(String::from("      \"print_i64\": \"fn(v: i64) -> () [io]\"\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"operators\": {\n"));
+    r.push_str(String::from("      \"arithmetic\": [\"+\", \"-\", \"*\", \"/\", \"%\"],\n"));
+    r.push_str(String::from("      \"checked_arithmetic\": [\"+!\", \"-!\", \"*!\", \"/!\", \"%!\"],\n"));
+    r.push_str(String::from("      \"comparison\": [\"==\", \"!=\", \"<\", \"<=\", \">\", \">=\"],\n"));
+    r.push_str(String::from("      \"logical\": [\"&&\", \"||\", \"!\"]\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"vow_clauses\": {\n"));
+    r.push_str(String::from("      \"requires\": \"precondition -- blame=Caller on violation\",\n"));
+    r.push_str(String::from("      \"ensures\": \"postcondition -- blame=Callee on violation; use `result` for return value\",\n"));
+    r.push_str(String::from("      \"invariant\": \"loop invariant -- checked at top of each iteration\"\n"));
+    r.push_str(String::from("    }\n"));
+    r.push_str(String::from("  }\n"));
+    r.push_str(String::from("}\n"));
+    r
+}
+
+fn skill_human() -> String {
+    let r: String = String::from("vow -- Vow compiler\n\n");
+    r.push_str(String::from("USAGE\n"));
+    r.push_str(String::from("  vow build [OPTIONS] <source.vow>    Compile to native executable\n"));
+    r.push_str(String::from("  vow verify [OPTIONS] <source.vow>    Verify contracts only (no executable)\n"));
+    r.push_str(String::from("  vow test [<source.vow>]             Run tests (not yet implemented)\n"));
+    r.push_str(String::from("  vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("BUILD OPTIONS\n"));
+    r.push_str(String::from("  -o, --output <path>   Output executable path\n"));
+    r.push_str(String::from("  --mode <debug|release>  Build mode (default: release)\n"));
+    r.push_str(String::from("                          debug: inserts runtime vow violation checks\n"));
+    r.push_str(String::from("                          release: omits vow checks for performance\n"));
+    r.push_str(String::from("  --no-verify           Skip ESBMC static verification\n"));
+    r.push_str(String::from("  --dump-ir             Dump IR text to stdout and exit\n"));
+    r.push_str(String::from("  --debug-trace <off|calls|full>  Emit JSON trace to stderr (default: off)\n"));
+    r.push_str(String::from("  --no-cache            Disable compile and verify caching\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("VERIFY OPTIONS\n"));
+    r.push_str(String::from("  --no-cache            Disable verification result caching\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("GLOBAL OPTIONS\n"));
+    r.push_str(String::from("  --help                Print JSON capability description (agent-friendly)\n"));
+    r.push_str(String::from("  --help --human        Print this text\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("OUTPUT (JSON on stdout)\n"));
+    r.push_str(String::from("  status      : Verified | Unverified | CompileFailed | VerifyFailed\n"));
+    r.push_str(String::from("  executable  : path to compiled binary, or null\n"));
+    r.push_str(String::from("  diagnostics : array of {error_code, message, severity, span: {file, offset, length}}\n"));
+    r.push_str(String::from("  message     : error detail (CompileFailed)\n"));
+    r.push_str(String::from("  function    : function name (VerifyFailed)\n"));
+    r.push_str(String::from("  counterexample: ESBMC counterexample (VerifyFailed)\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("EXIT CODES\n"));
+    r.push_str(String::from("  0  success (Verified or Unverified)\n"));
+    r.push_str(String::from("  1  failure (CompileFailed or VerifyFailed)\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("LANGUAGE SUMMARY\n"));
+    r.push_str(String::from("  module Hello\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("  fn add(x: i64, y: i64) -> i64 {\n"));
+    r.push_str(String::from("    x + y\n"));
+    r.push_str(String::from("  }\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("  fn divide(x: i64, y: i64) -> i64 vow {\n"));
+    r.push_str(String::from("    requires: y != 0\n"));
+    r.push_str(String::from("    ensures:  result * y == x\n"));
+    r.push_str(String::from("  } {\n"));
+    r.push_str(String::from("    x / y\n"));
+    r.push_str(String::from("  }\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("  fn main() -> i32 [io] {\n"));
+    r.push_str(String::from("    print_i64(divide(10, 2));\n"));
+    r.push_str(String::from("    0\n"));
+    r.push_str(String::from("  }\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("TYPES     : i32  i64  f32  f64  bool  ()\n"));
+    r.push_str(String::from("EFFECTS   : io  read  write  panic  unsafe\n"));
+    r.push_str(String::from("BUILTINS  : print_str(str) [io]   print_i64(i64) [io]\n"));
+    r.push_str(String::from("OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !\n"));
+    r
+}
+
+fn main() -> i32 [io] {
+    let argv: Vec<String> = args();
+    if has_flag(argv, String::from("--help")) {
+        if has_flag(argv, String::from("--human")) {
+            print_str(skill_human());
+        } else {
+            print_str(skill_json());
+        }
+        return 0;
+    }
+    if argv.len() == 0 {
+        eprintln_str("usage: vowc <command> [options] <file.vow>");
+        return 1;
+    }
+    let cmd: i64 = get_subcommand(argv);
+    if cmd == CMD_TEST() {
+        eprintln_str("test: not yet implemented");
+        return 1;
+    }
+    if cmd == CMD_BUILD() {
+        return run_build(argv);
+    }
+    if cmd == CMD_VERIFY() {
+        return run_verify(argv);
+    }
+    run_legacy(argv)
 }

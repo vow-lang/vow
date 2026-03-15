@@ -1,0 +1,49 @@
+module IsMultiplyPrime
+
+fn is_multiply_prime(a: i64) -> i64 vow {
+  requires: a >= 0,
+  requires: a <= 100,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  if a < 8 {
+    0
+  } else {
+    let mut rem: i64 = a;
+    let mut count: i64 = 0;
+    let mut d: i64 = 2;
+    while d * d <= rem vow {
+      invariant: d >= 2,
+      invariant: rem >= 1,
+      invariant: count >= 0
+    } {
+      while rem % d == 0 vow {
+        invariant: d >= 2,
+        invariant: rem >= 1,
+        invariant: count >= 0
+      } {
+        count = count + 1;
+        rem = rem / d;
+      }
+      d = d + 1;
+    }
+    if rem > 1 {
+      count = count + 1;
+    } else {
+      0;
+    }
+    if count == 3 {
+      1
+    } else {
+      0
+    }
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(is_multiply_prime(30));
+  print_i64(is_multiply_prime(8));
+  print_i64(is_multiply_prime(10));
+  print_i64(is_multiply_prime(5));
+  0
+}

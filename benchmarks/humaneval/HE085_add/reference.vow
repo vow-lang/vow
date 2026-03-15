@@ -1,0 +1,36 @@
+module Add
+
+fn add(v: Vec<i64>) -> i64 vow {
+  requires: v.len() >= 0,
+  requires: v.len() <= 8,
+  ensures: result >= 0
+} {
+  let mut s: i64 = 0;
+  let mut i: i64 = 1;
+  while i < v.len() vow {
+    invariant: i >= 1,
+    invariant: s >= 0
+  } {
+    if i % 2 == 1 {
+      if v[i] % 2 == 0 {
+        s = s + v[i];
+      } else {
+        0;
+      }
+    } else {
+      0;
+    }
+    i = i + 1;
+  }
+  s
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(4);
+  v.push(2);
+  v.push(6);
+  v.push(7);
+  print_i64(add(v));
+  0
+}

@@ -169,6 +169,9 @@ const IOP_LINEAR_BORROW: i64 = 80;
 const IOP_FIELD_GET: i64 = 81;
 const IOP_FIELD_SET: i64 = 82;
 
+const IOP_XOR_I32: i64 = 83;
+const IOP_XOR_I64: i64 = 84;
+
 // InstData kind constants (match compiler/ir.vow IDATA_*)
 #[allow(dead_code)]
 const IDATA_NONE: i64 = 0;
@@ -197,6 +200,7 @@ const IDATA_FIELD: i64 = 16;
 #[allow(dead_code)]
 struct FuncDecl {
     cl_id: CraneliftFuncId,
+    name: String,
     param_tys: Vec<i64>,
     ret_ty: i64,
     is_main: bool,
@@ -209,7 +213,8 @@ struct ModuleContext {
     string_data_ids: Vec<DataId>,
     func_decls: Vec<FuncDecl>,
     extern_func_ids: HashMap<String, CraneliftFuncId>,
-    mode: i64, // 0=release, 1=debug
+    mode: i64,       // 0=release, 1=debug
+    trace_mode: i64, // 0=off, 1=calls, 2=full
 }
 
 // ---------------------------------------------------------------------------
@@ -217,7 +222,7 @@ struct ModuleContext {
 // ---------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub extern "C" fn __vow_clif_create(mode: i64) -> i64 {
+pub extern "C" fn __vow_clif_create(mode: i64, trace_mode: i64) -> i64 {
     let mut flag_builder = settings::builder();
     let _ = flag_builder.set("use_colocated_libcalls", "false");
     if mode == 0 {
@@ -258,6 +263,7 @@ pub extern "C" fn __vow_clif_create(mode: i64) -> i64 {
         func_decls: Vec::new(),
         extern_func_ids: HashMap::new(),
         mode,
+        trace_mode,
     });
 
     Box::into_raw(ctx) as i64
@@ -357,6 +363,7 @@ pub unsafe extern "C" fn __vow_clif_declare_function(
 
     ctx.func_decls.push(FuncDecl {
         cl_id,
+        name: name.to_string(),
         param_tys,
         ret_ty,
         is_main: is_main != 0,
@@ -487,6 +494,43 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
         None
     };
 
+    // Trace runtime functions
+    let trace_enter_id = if ctx.trace_mode != 0 {
+        let mut sig = ctx.obj_module.make_signature();
+        sig.params.push(AbiParam::new(types::I64));
+        Some(
+            ctx.obj_module
+                .declare_function("__vow_trace_enter", Linkage::Import, &sig)
+                .expect("declare trace_enter"),
+        )
+    } else {
+        None
+    };
+    let trace_exit_id = if ctx.trace_mode != 0 {
+        let mut sig = ctx.obj_module.make_signature();
+        sig.params.push(AbiParam::new(types::I64));
+        Some(
+            ctx.obj_module
+                .declare_function("__vow_trace_exit", Linkage::Import, &sig)
+                .expect("declare trace_exit"),
+        )
+    } else {
+        None
+    };
+    let trace_vow_id = if ctx.trace_mode >= 2 && ctx.mode != 0 {
+        let mut sig = ctx.obj_module.make_signature();
+        sig.params.push(AbiParam::new(types::I64));
+        sig.params.push(AbiParam::new(types::I64));
+        sig.params.push(AbiParam::new(types::I64));
+        Some(
+            ctx.obj_module
+                .declare_function("__vow_trace_vow", Linkage::Import, &sig)
+                .expect("declare trace_vow"),
+        )
+    } else {
+        None
+    };
+
     // Build function signature
     let call_conv = ctx.isa.default_call_conv();
     let mut sig = Signature::new(call_conv);
@@ -548,6 +592,31 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
     let vow_violation_ref =
         vow_violation_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
     let overflow_ref = overflow_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
+    let trace_enter_ref =
+        trace_enter_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
+    let trace_exit_ref =
+        trace_exit_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
+    let trace_vow_ref =
+        trace_vow_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
+
+    // Create function name data section for trace instrumentation
+    let fn_name_gv = if ctx.trace_mode != 0 {
+        let name = &ctx.func_decls[fi].name;
+        let mut name_bytes = name.as_bytes().to_vec();
+        name_bytes.push(0);
+        let mut desc = DataDescription::new();
+        desc.define(name_bytes.into_boxed_slice());
+        let data_id = ctx
+            .obj_module
+            .declare_anonymous_data(false, false)
+            .expect("fn name data");
+        ctx.obj_module
+            .define_data(data_id, &desc)
+            .expect("define fn name");
+        Some(ctx.obj_module.declare_data_in_func(data_id, builder.func))
+    } else {
+        None
+    };
 
     // Build inst_id → ty map for all instructions (for vow checks)
     let mut inst_ty_map: HashMap<i64, i64> = HashMap::new();
@@ -677,6 +746,11 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
         let zero = builder.ins().iconst(types::I64, 0);
         for &slot in slot_map.values() {
             builder.ins().stack_store(zero, slot, 0);
+        }
+        // Emit trace_enter at function entry
+        if let (Some(gv), Some(enter_ref)) = (fn_name_gv, trace_enter_ref) {
+            let name_ptr = builder.ins().global_value(types::I64, gv);
+            builder.ins().call(enter_ref, &[name_ptr]);
         }
     }
     // Emit blocks
@@ -964,6 +1038,11 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
                     set_val!(iid, val);
                 }
 
+                IOP_XOR_I32 | IOP_XOR_I64 => {
+                    let val = builder.ins().bxor(arg!(0), arg!(1));
+                    set_val!(iid, val);
+                }
+
                 // Memory
                 IOP_LOAD => {
                     let cl_ty = ity_to_cranelift(ity).unwrap_or(types::I64);
@@ -995,6 +1074,10 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
                     }
                 }
                 IOP_RETURN => {
+                    if let (Some(gv), Some(exit_ref)) = (fn_name_gv, trace_exit_ref) {
+                        let name_ptr = builder.ins().global_value(types::I64, gv);
+                        builder.ins().call(exit_ref, &[name_ptr]);
+                    }
                     if ret_ty == ITY_UNIT {
                         builder.ins().return_(&[]);
                     } else if alen > 0 {
@@ -1069,6 +1152,8 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
                                 &captures,
                                 vow_violation_ref,
                                 &vow_desc_gvs,
+                                trace_vow_ref,
+                                fn_name_gv,
                             );
                         }
                     }
@@ -1385,6 +1470,7 @@ fn tag_for_ir_ty(ty: i64) -> i64 {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_vow_check(
     builder: &mut FunctionBuilder,
     predicate: Value,
@@ -1393,6 +1479,8 @@ fn emit_vow_check(
     captures: &[(GlobalValue, Value, i64)],
     vow_violation_ref: Option<FuncRef>,
     vow_desc_gvs: &HashMap<i64, GlobalValue>,
+    trace_vow_ref: Option<FuncRef>,
+    fn_name_gv: Option<GlobalValue>,
 ) {
     let one = builder.ins().iconst(types::I8, 1);
     let inv = builder.ins().bxor(predicate, one);
@@ -1405,6 +1493,13 @@ fn emit_vow_check(
 
     builder.switch_to_block(violation_block);
     builder.seal_block(violation_block);
+    // Trace vow failure (full mode)
+    if let (Some(tv_ref), Some(gv)) = (trace_vow_ref, fn_name_gv) {
+        let name_ptr = builder.ins().global_value(types::I64, gv);
+        let vid = builder.ins().iconst(types::I64, vow_id);
+        let passed = builder.ins().iconst(types::I64, 0);
+        builder.ins().call(tv_ref, &[name_ptr, vid, passed]);
+    }
     if let Some(vr) = vow_violation_ref {
         let vow_id_val = builder.ins().iconst(types::I32, vow_id);
         let blame_val = builder.ins().iconst(types::I8, blame);
@@ -1473,6 +1568,13 @@ fn emit_vow_check(
 
     builder.switch_to_block(cont_block);
     builder.seal_block(cont_block);
+    // Trace vow pass (full mode)
+    if let (Some(tv_ref), Some(gv)) = (trace_vow_ref, fn_name_gv) {
+        let name_ptr = builder.ins().global_value(types::I64, gv);
+        let vid = builder.ins().iconst(types::I64, vow_id);
+        let passed = builder.ins().iconst(types::I64, 1);
+        builder.ins().call(tv_ref, &[name_ptr, vid, passed]);
+    }
 }
 
 fn coerce_return_value(builder: &mut FunctionBuilder<'_>, val: Value, ret_ty: i64) -> Value {
@@ -1580,6 +1682,85 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_fs_exists" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_fs_mkdir" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_fs_listdir" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_fs_remove" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_fs_remove_dir" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_fs_is_dir" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_fs_rename" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_substr" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_split" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_starts_with" | "__vow_string_ends_with" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_trim" | "__vow_string_to_upper" | "__vow_string_to_lower" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_replace" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_join" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_parse_i64" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_vec_sort" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_time_unix" => {
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_hex_encode" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_hex_decode" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_eprintln_str" => {
             sig.params.push(AbiParam::new(types::I64));
         }
@@ -1587,6 +1768,36 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_process_exit" => {
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        "__vow_process_run" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_process_get_stdout" | "__vow_process_get_stderr" => {
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_process_start" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_process_wait" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_process_stdout_for" | "__vow_process_stderr_for" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_free" => {
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        "__vow_vec_free_val" => {
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        "__vow_map_free" => {
             sig.params.push(AbiParam::new(types::I64));
         }
         "__vow_map_new" => {
@@ -1617,7 +1828,16 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         }
         "__vow_unwrap_panic" => {}
         // Cranelift shim FFI (for self-hosting: the binary calls back into the shim)
+        "__vow_trace_enter" | "__vow_trace_exit" => {
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        "__vow_trace_vow" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+        }
         "__vow_clif_create" => {
+            sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }

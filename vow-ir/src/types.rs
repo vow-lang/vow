@@ -91,6 +91,9 @@ pub enum Opcode {
     And,
     Or,
 
+    XorI32,
+    XorI64,
+
     Load,
     Store,
 

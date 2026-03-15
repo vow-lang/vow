@@ -1,0 +1,30 @@
+module Solve
+
+fn solve(n: i64) -> i64 vow {
+  requires: n >= 0,
+  requires: n <= 100,
+  ensures: result >= 0
+} {
+  if n == 0 {
+    0
+  } else {
+    let mut val: i64 = n;
+    let mut count: i64 = 0;
+    while val > 0 vow {
+      invariant: val >= 0,
+      invariant: count >= 0
+    } {
+      count = count + val % 2;
+      val = val / 2;
+    }
+    count
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(solve(0));
+  print_i64(solve(1));
+  print_i64(solve(7));
+  print_i64(solve(100));
+  0
+}

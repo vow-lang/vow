@@ -1,0 +1,30 @@
+module GCD
+
+fn gcd(a: i64, b: i64) -> i64 vow {
+  requires: a >= 1,
+  requires: b >= 1,
+  requires: a <= 50,
+  requires: b <= 50,
+  ensures: result >= 1,
+  ensures: a % result == 0,
+  ensures: b % result == 0
+} {
+  let mut x: i64 = a;
+  let mut y: i64 = b;
+  while y != 0 vow {
+    invariant: x >= 1,
+    invariant: y >= 0,
+    invariant: x <= 50,
+    invariant: y <= 50
+  } {
+    let tmp: i64 = y;
+    y = x % y;
+    x = tmp;
+  }
+  x
+}
+
+fn main() -> i32 [io] {
+  print_i64(gcd(12, 8));
+  0
+}

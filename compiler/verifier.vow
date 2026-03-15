@@ -1,0 +1,658 @@
+module Verifier
+
+use ir
+use ir_printer
+use c_emitter
+
+fn VERIFY_PROVEN() -> i64 vow { ensures: result >= 0 } { 0 }
+fn VERIFY_FAILED() -> i64 vow { ensures: result >= 0 } { 1 }
+fn VERIFY_TIMEOUT() -> i64 vow { ensures: result >= 0 } { 2 }
+fn VERIFY_ERROR() -> i64 vow { ensures: result >= 0 } { 3 }
+fn VERIFY_NOT_FOUND() -> i64 vow { ensures: result >= 0 } { 4 }
+
+struct VerifyResult {
+    status: i64,
+    vow_id: i64,
+    var_names: Vec<String>,
+    var_values: Vec<String>,
+    block_visits: Vec<i64>,
+    raw_output: String,
+}
+
+fn str_contains_byte(s: String, b: i64) -> bool {
+    let n: i64 = s.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if s.byte_at(i) == b {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn str_find_str(haystack: String, needle: String) -> i64 {
+    let hlen: i64 = haystack.len();
+    let nlen: i64 = needle.len();
+    if nlen == 0 { return 0; }
+    if nlen > hlen { return -1; }
+    let mut i: i64 = 0;
+    while i <= hlen - nlen {
+        let mut j: i64 = 0;
+        let matched: bool = true;
+        while j < nlen {
+            if haystack.byte_at(i + j) != needle.byte_at(j) {
+                matched = false;
+                j = nlen;
+            }
+            j = j + 1;
+        }
+        if matched { return i; }
+        i = i + 1;
+    }
+    -1
+}
+
+fn str_substring(s: String, start: i64, end: i64) -> String {
+    let r: String = String::from("");
+    let mut i: i64 = start;
+    while i < end && i < s.len() {
+        r.push_byte(s.byte_at(i));
+        i = i + 1;
+    }
+    r
+}
+
+fn is_ws(b: i64) -> bool {
+    b == 32 || b == 9 || b == 10 || b == 13
+}
+
+fn str_trim(s: String) -> String {
+    let n: i64 = s.len();
+    let mut start: i64 = 0;
+    while start < n && is_ws(s.byte_at(start)) {
+        start = start + 1;
+    }
+    if start >= n { return String::from(""); }
+    let mut end: i64 = n;
+    while end > start && is_ws(s.byte_at(end - 1)) {
+        end = end - 1;
+    }
+    str_substring(s, start, end)
+}
+
+fn str_to_i64(s: String) -> i64 {
+    let n: i64 = s.len();
+    if n == 0 { return -1; }
+    let mut result: i64 = 0;
+    let mut i: i64 = 0;
+    let negative: bool = s.byte_at(0) == 45;
+    if negative { i = 1; }
+    while i < n {
+        let b: i64 = s.byte_at(i);
+        if b >= 48 && b <= 57 {
+            result = result * 10 + (b - 48);
+        } else {
+            return -1;
+        }
+        i = i + 1;
+    }
+    if negative { 0 - result } else { result }
+}
+
+fn split_lines(s: String, lines: Vec<String>) {
+    let n: i64 = s.len();
+    let mut start: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n {
+        if s.byte_at(i) == 10 {
+            lines.push(str_substring(s, start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    if start < n {
+        lines.push(str_substring(s, start, n));
+    }
+}
+
+fn str_find_byte(s: String, b: i64) -> i64 {
+    let n: i64 = s.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if s.byte_at(i) == b {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn esbmc_nondet_call(ty: i64) -> String {
+    if ty == ITY_I32() { return String::from("__VERIFIER_nondet_int()"); }
+    if ty == ITY_I64() { return String::from("__VERIFIER_nondet_long()"); }
+    if ty == ITY_F32() { return String::from("__VERIFIER_nondet_float()"); }
+    if ty == ITY_F64() { return String::from("__VERIFIER_nondet_double()"); }
+    if ty == ITY_BOOL() { return String::from("__VERIFIER_nondet_bool()"); }
+    String::from("0")
+}
+
+fn emit_harness(f: IrFunction) -> String {
+    let out: String = String::from("int main(void) { ");
+    out.push_str(f.name);
+    out.push_byte(40);
+    let params: Vec<i64> = f.params;
+    let np: i64 = params.len();
+    let mut count: i64 = 0;
+    let mut pi: i64 = 0;
+    while pi < np {
+        let pty: i64 = params[pi];
+        if pty != ITY_UNIT() {
+            if count > 0 {
+                out.push_str(String::from(", "));
+            }
+            out.push_str(esbmc_nondet_call(pty));
+            count = count + 1;
+        }
+        pi = pi + 1;
+    }
+    out.push_str(String::from("); return 0; }\n"));
+    out
+}
+
+fn emit_c_preamble() -> String {
+    let out: String = String::from("");
+    out.push_str(String::from("#include <stdint.h>\n"));
+    out.push_str(String::from("#include <stdbool.h>\n"));
+    out.push_str(String::from("extern void __ESBMC_assume(_Bool);\n"));
+    out.push_str(String::from("extern void __ESBMC_assert(_Bool, const char*);\n"));
+    out.push_str(String::from("extern int __VERIFIER_nondet_int(void);\n"));
+    out.push_str(String::from("extern long __VERIFIER_nondet_long(void);\n"));
+    out.push_str(String::from("extern float __VERIFIER_nondet_float(void);\n"));
+    out.push_str(String::from("extern double __VERIFIER_nondet_double(void);\n"));
+    out.push_str(String::from("extern _Bool __VERIFIER_nondet_bool(void);\n\n"));
+    out.push_str(str3(
+        String::from("typedef struct { int64_t len; int64_t data["),
+        i64_to_str(VOW_VEC_MAX()),
+        String::from("]; } __vow_vec_t;\n")
+    ));
+    out.push_str(str3(
+        String::from("typedef struct { int64_t len; int8_t data["),
+        i64_to_str(VOW_STRING_MAX()),
+        String::from("]; } __vow_string_t;\n")
+    ));
+    out.push_str(str5(
+        String::from("typedef struct { int64_t len; int64_t keys["),
+        i64_to_str(VOW_HASHMAP_MAX()),
+        String::from("]; int64_t vals["),
+        i64_to_str(VOW_HASHMAP_MAX()),
+        String::from("]; } __vow_hashmap_t;\n\n")
+    ));
+    out
+}
+
+fn emit_c_for_verify(f: IrFunction, m: IrModule) -> String {
+    let const_fn_indices: Vec<i64> = detect_const_fns(m);
+    let callee_fis: Vec<i64> = collect_modelable_callees(f, m, const_fn_indices);
+
+    let out: String = {
+        if callee_fis.len() > 0 {
+            let modelable_fi_set: Vec<i64> = Vec::new();
+            let mut ci: i64 = 0;
+            while ci < callee_fis.len() {
+                modelable_fi_set.push(callee_fis[ci]);
+                ci = ci + 1;
+            }
+            emit_c_module_with_callees(m, f.id, callee_fis, modelable_fi_set)
+        } else {
+            let preamble: String = cemit_preamble();
+            let empty_modelable: Vec<i64> = Vec::new();
+            emit_c_function(preamble, f, const_fn_indices, empty_modelable, m);
+            preamble.push_byte(10);
+            preamble
+        }
+    };
+    out.push_str(emit_harness(f));
+    out
+}
+
+fn esbmc_path() -> String {
+    String::from("/home/pmatos/installs/esbmc-20260226/bin/esbmc")
+}
+
+fn run_esbmc(c_source: String, unwind: String, tmp_path: String) -> i64 [io] {
+    fs_write(tmp_path, c_source);
+    let esbmc_args: Vec<String> = Vec::new();
+    esbmc_args.push(tmp_path);
+    esbmc_args.push(String::from("--no-bounds-check"));
+    esbmc_args.push(String::from("--no-pointer-check"));
+    esbmc_args.push(String::from("--unwind"));
+    esbmc_args.push(unwind);
+    esbmc_args.push(String::from("--64"));
+    let exit_code: i64 = process_run(esbmc_path(), esbmc_args);
+    exit_code
+}
+
+fn start_esbmc(c_source: String, unwind: String, tmp_path: String) -> i64 [io] {
+    fs_write(tmp_path, c_source);
+    let esbmc_args: Vec<String> = Vec::new();
+    esbmc_args.push(tmp_path);
+    esbmc_args.push(String::from("--no-bounds-check"));
+    esbmc_args.push(String::from("--no-pointer-check"));
+    esbmc_args.push(String::from("--unwind"));
+    esbmc_args.push(unwind);
+    esbmc_args.push(String::from("--64"));
+    let handle: i64 = process_start(esbmc_path(), esbmc_args);
+    handle
+}
+
+fn parse_verify_status(combined: String) -> i64 {
+    if str_find_str(combined, String::from("VERIFICATION SUCCESSFUL")) >= 0 {
+        return VERIFY_PROVEN();
+    }
+    if str_find_str(combined, String::from("VERIFICATION FAILED")) >= 0 {
+        return VERIFY_FAILED();
+    }
+    if str_find_str(combined, String::from("timeout")) >= 0 {
+        return VERIFY_TIMEOUT();
+    }
+    if str_find_str(combined, String::from("Timeout")) >= 0 {
+        return VERIFY_TIMEOUT();
+    }
+    VERIFY_ERROR()
+}
+
+fn parse_vow_id(output: String) -> i64 {
+    let lines: Vec<String> = Vec::new();
+    split_lines(output, lines);
+    let n: i64 = lines.len();
+    let mut in_violated: bool = false;
+    let mut i: i64 = 0;
+    while i < n {
+        let line: String = str_trim(lines[i]);
+        if line == String::from("Violated property:") {
+            in_violated = true;
+        } else if in_violated {
+            if str_starts_with(line, String::from("vow:")) {
+                let rest: String = str_substring(line, 4, line.len());
+                return str_to_i64(rest);
+            }
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn parse_assignments(output: String, names: Vec<String>, values: Vec<String>) {
+    let lines: Vec<String> = Vec::new();
+    split_lines(output, lines);
+    let n: i64 = lines.len();
+    let mut in_ce: bool = false;
+    let mut i: i64 = 0;
+    while i < n {
+        let line: String = str_trim(lines[i]);
+        if line == String::from("[Counterexample]") {
+            in_ce = true;
+        } else if line == String::from("Violated property:") {
+            in_ce = false;
+        } else if in_ce {
+            let eq_pos: i64 = str_find_byte(line, 61);
+            if eq_pos > 0 {
+                let name: String = str_trim(str_substring(line, 0, eq_pos));
+                if name.len() > 0 {
+                    let first_byte: i64 = name.byte_at(0);
+                    let is_ident: bool = (first_byte >= 65 && first_byte <= 90) || (first_byte >= 97 && first_byte <= 122) || first_byte == 95;
+                    if is_ident {
+                        if !str_starts_with(name, String::from("__blk_")) {
+                            let val_raw: String = str_trim(str_substring(line, eq_pos + 1, line.len()));
+                            let paren_pos: i64 = str_find_str(val_raw, String::from(" ("));
+                            let val: String = {
+                                if paren_pos >= 0 {
+                                    str_substring(val_raw, 0, paren_pos)
+                                } else {
+                                    val_raw
+                                }
+                            };
+                            names.push(name);
+                            values.push(val);
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+}
+
+fn parse_block_visits(output: String, visits: Vec<i64>) {
+    let lines: Vec<String> = Vec::new();
+    split_lines(output, lines);
+    let n: i64 = lines.len();
+    let mut in_ce: bool = false;
+    let mut i: i64 = 0;
+    while i < n {
+        let line: String = str_trim(lines[i]);
+        if line == String::from("[Counterexample]") {
+            in_ce = true;
+        } else if line == String::from("Violated property:") {
+            in_ce = false;
+        } else if in_ce {
+            let eq_pos: i64 = str_find_byte(line, 61);
+            if eq_pos > 0 {
+                let name: String = str_trim(str_substring(line, 0, eq_pos));
+                if str_starts_with(name, String::from("__blk_")) {
+                    let val: String = str_trim(str_substring(line, eq_pos + 1, line.len()));
+                    if val == String::from("1") {
+                        let blk_str: String = str_substring(name, 6, name.len());
+                        let blk_id: i64 = str_to_i64(blk_str);
+                        if blk_id >= 0 {
+                            visits.push(blk_id);
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+}
+
+fn map_lookup(keys: Vec<String>, vals: Vec<String>, key: String) -> String {
+    let n: i64 = keys.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if keys[i] == key {
+            return vals[i];
+        }
+        i = i + 1;
+    }
+    String::from("")
+}
+
+fn map_has_key(keys: Vec<String>, key: String) -> bool {
+    let n: i64 = keys.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if keys[i] == key {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn build_name_map(f: IrFunction, map_keys: Vec<String>, map_vals: Vec<String>) {
+    let params: Vec<i64> = f.params;
+    let param_names: Vec<String> = f.param_names;
+    let np: i64 = params.len();
+    let mut cl_idx: i64 = 0;
+    let mut ir_idx: i64 = 0;
+    while ir_idx < np {
+        let pty: i64 = params[ir_idx];
+        if pty != ITY_UNIT() {
+            if ir_idx < param_names.len() {
+                let pk: String = String::from("p");
+                pk.push_str(i64_to_str(cl_idx));
+                map_keys.push(pk);
+                map_vals.push(param_names[ir_idx]);
+            }
+            cl_idx = cl_idx + 1;
+        }
+        ir_idx = ir_idx + 1;
+    }
+    let blocks: Vec<IrBlock> = f.blocks;
+    let nb: i64 = blocks.len();
+    let mut bi: i64 = 0;
+    while bi < nb {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let ni: i64 = insts.len();
+        let mut ii: i64 = 0;
+        while ii < ni {
+            let inst: IrInst = insts[ii];
+            if inst.op == IOP_GET_ARG() && inst.dk == IDATA_ARG_INDEX() {
+                let arg_idx: i64 = inst.dv;
+                if arg_idx < param_names.len() {
+                    let vk: String = String::from("v");
+                    vk.push_str(i64_to_str(inst.id));
+                    map_keys.push(vk);
+                    map_vals.push(param_names[arg_idx]);
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    let ln_ids: Vec<i64> = f.local_names_ids;
+    let ln_strs: Vec<String> = f.local_names_strs;
+    let nln: i64 = ln_ids.len();
+    let mut li: i64 = 0;
+    while li < nln {
+        let lk: String = String::from("v");
+        lk.push_str(i64_to_str(ln_ids[li]));
+        if !map_has_key(map_keys, lk) {
+            map_keys.push(lk);
+            map_vals.push(ln_strs[li]);
+        }
+        li = li + 1;
+    }
+}
+
+fn map_ce_values(c_names: Vec<String>, c_values: Vec<String>, map_keys: Vec<String>, map_vals: Vec<String>, out_names: Vec<String>, out_values: Vec<String>) {
+    let n: i64 = c_names.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let src: String = map_lookup(map_keys, map_vals, c_names[i]);
+        if src.len() > 0 {
+            out_names.push(src);
+        } else {
+            let fallback: String = String::from("_esbmc_");
+            fallback.push_str(c_names[i]);
+            out_names.push(fallback);
+        }
+        out_values.push(c_values[i]);
+        i = i + 1;
+    }
+}
+
+fn VERIFY_CACHE_DIR() -> String { String::from("/tmp/.vow_verify_cache/") }
+
+fn vow_hash_string(s: String) -> i64 {
+    let mut h: i64 = 5381;
+    let mut i: i64 = 0;
+    while i < s.len() {
+        h = h * 33 + s.byte_at(i);
+        i = i + 1;
+    }
+    h
+}
+
+fn verify_cache_key(c_source: String, unwind: String) -> String {
+    let h: i64 = vow_hash_string(c_source);
+    let h2: i64 = h * 33 + vow_hash_string(unwind);
+    let abs_h: i64 = { if h2 < 0 { 0 - h2 } else { h2 } };
+    i64_to_str(abs_h)
+}
+
+fn verify_cache_ensure_dir() -> i64 [io] {
+    fs_mkdir(VERIFY_CACHE_DIR())
+}
+
+fn verify_cache_lookup(key: String) -> i64 [io] {
+    let path: String = String::from("");
+    path.push_str(VERIFY_CACHE_DIR());
+    path.push_str(key);
+    path.push_str(String::from(".vr"));
+    let exists: i64 = fs_exists(path);
+    if exists == 0 { return -1; }
+    let content: String = fs_read(path);
+    if content.len() == 0 { return -1; }
+    if str_find_str(content, String::from("PROVEN")) >= 0 {
+        return VERIFY_PROVEN();
+    }
+    if str_find_str(content, String::from("FAILED")) >= 0 {
+        return VERIFY_FAILED();
+    }
+    -1
+}
+
+fn verify_cache_store(key: String, status: i64) [io] {
+    let path: String = String::from("");
+    path.push_str(VERIFY_CACHE_DIR());
+    path.push_str(key);
+    path.push_str(String::from(".vr"));
+    let content: String = {
+        if status == VERIFY_PROVEN() { String::from("PROVEN\n") }
+        else { String::from("FAILED\n") }
+    };
+    fs_write(path, content);
+}
+
+fn verify_function_full(f: IrFunction, m: IrModule, unwind: String, use_cache: bool) -> VerifyResult [io] {
+    let vows: Vec<IrVowEntry> = f.vows;
+    if vows.len() == 0 {
+        return VerifyResult {
+            status: VERIFY_PROVEN(),
+            vow_id: -1,
+            var_names: Vec::new(),
+            var_values: Vec::new(),
+            block_visits: Vec::new(),
+            raw_output: String::from(""),
+        };
+    }
+    let c_source: String = emit_c_for_verify(f, m);
+    if use_cache {
+        verify_cache_ensure_dir();
+        let cache_key: String = verify_cache_key(c_source, unwind);
+        let cached: i64 = verify_cache_lookup(cache_key);
+        if cached == VERIFY_PROVEN() {
+            return VerifyResult {
+                status: VERIFY_PROVEN(),
+                vow_id: -1,
+                var_names: Vec::new(),
+                var_values: Vec::new(),
+                block_visits: Vec::new(),
+                raw_output: String::from("(cached)"),
+            };
+        }
+    }
+    let exit_code: i64 = run_esbmc(c_source, unwind, String::from("/tmp/__vow_verify.c"));
+    if exit_code == -1 {
+        return VerifyResult {
+            status: VERIFY_NOT_FOUND(),
+            vow_id: -1,
+            var_names: Vec::new(),
+            var_values: Vec::new(),
+            block_visits: Vec::new(),
+            raw_output: String::from("esbmc not found"),
+        };
+    }
+    let stdout: String = process_get_stdout();
+    let stderr: String = process_get_stderr();
+    let combined: String = String::from("");
+    combined.push_str(stdout);
+    combined.push_str(stderr);
+    let status: i64 = parse_verify_status(combined);
+    if use_cache {
+        if status == VERIFY_PROVEN() || status == VERIFY_FAILED() {
+            let cache_key2: String = verify_cache_key(c_source, unwind);
+            verify_cache_store(cache_key2, status);
+        }
+    }
+    let vow_id: i64 = {
+        if status == VERIFY_FAILED() {
+            parse_vow_id(combined)
+        } else {
+            -1
+        }
+    };
+    let var_names: Vec<String> = Vec::new();
+    let var_values: Vec<String> = Vec::new();
+    let block_visits: Vec<i64> = Vec::new();
+    if status == VERIFY_FAILED() {
+        let raw_names: Vec<String> = Vec::new();
+        let raw_values: Vec<String> = Vec::new();
+        parse_assignments(combined, raw_names, raw_values);
+        parse_block_visits(combined, block_visits);
+        let map_keys: Vec<String> = Vec::new();
+        let map_vals: Vec<String> = Vec::new();
+        build_name_map(f, map_keys, map_vals);
+        map_ce_values(raw_names, raw_values, map_keys, map_vals, var_names, var_values);
+    }
+    VerifyResult {
+        status: status,
+        vow_id: vow_id,
+        var_names: var_names,
+        var_values: var_values,
+        block_visits: block_visits,
+        raw_output: combined,
+    }
+}
+
+fn verify_start(f: IrFunction, m: IrModule, unwind: String, idx: i64, use_cache: bool) -> i64 [io] {
+    let vows: Vec<IrVowEntry> = f.vows;
+    if vows.len() == 0 {
+        return -1;
+    }
+    let c_source: String = emit_c_for_verify(f, m);
+    if use_cache {
+        verify_cache_ensure_dir();
+        let cache_key: String = verify_cache_key(c_source, unwind);
+        let cached: i64 = verify_cache_lookup(cache_key);
+        if cached == VERIFY_PROVEN() {
+            return -2;
+        }
+    }
+    let tmp_path: String = String::from("/tmp/__vow_verify_");
+    tmp_path.push_str(i64_to_str(idx));
+    tmp_path.push_str(String::from(".c"));
+    let handle: i64 = start_esbmc(c_source, unwind, tmp_path);
+    handle
+}
+
+fn verify_collect(handle: i64, f: IrFunction) -> VerifyResult [io] {
+    let exit_code: i64 = process_wait(handle);
+    if exit_code == -1 {
+        return VerifyResult {
+            status: VERIFY_NOT_FOUND(),
+            vow_id: -1,
+            var_names: Vec::new(),
+            var_values: Vec::new(),
+            block_visits: Vec::new(),
+            raw_output: String::from("esbmc not found"),
+        };
+    }
+    let stdout: String = process_stdout_for(handle);
+    let stderr: String = process_stderr_for(handle);
+    let combined: String = String::from("");
+    combined.push_str(stdout);
+    combined.push_str(stderr);
+    let status: i64 = parse_verify_status(combined);
+    let vow_id: i64 = {
+        if status == VERIFY_FAILED() {
+            parse_vow_id(combined)
+        } else {
+            -1
+        }
+    };
+    let var_names: Vec<String> = Vec::new();
+    let var_values: Vec<String> = Vec::new();
+    let block_visits: Vec<i64> = Vec::new();
+    if status == VERIFY_FAILED() {
+        let raw_names: Vec<String> = Vec::new();
+        let raw_values: Vec<String> = Vec::new();
+        parse_assignments(combined, raw_names, raw_values);
+        parse_block_visits(combined, block_visits);
+        let map_keys: Vec<String> = Vec::new();
+        let map_vals: Vec<String> = Vec::new();
+        build_name_map(f, map_keys, map_vals);
+        map_ce_values(raw_names, raw_values, map_keys, map_vals, var_names, var_values);
+    }
+    VerifyResult {
+        status: status,
+        vow_id: vow_id,
+        var_names: var_names,
+        var_values: var_values,
+        block_visits: block_visits,
+        raw_output: combined,
+    }
+}

@@ -1,0 +1,15 @@
+module Multiply
+
+fn multiply(a: i64, b: i64) -> i64 vow {
+  requires: a >= 0,
+  requires: a <= 100,
+  requires: b >= 0,
+  requires: b <= 100,
+  ensures: result >= 0
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  0
+}

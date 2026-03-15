@@ -1,0 +1,10 @@
+[benchmark]
+id = "HE145"
+name = "order_by_points"
+difficulty = "medium"
+tags = ["humaneval"]
+unwind = 10
+modules = 1
+expected_status = "Verified"
+max_cegis_iterations = 5
+contract_fidelity = "partial"

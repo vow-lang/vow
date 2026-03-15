@@ -1,0 +1,13 @@
+module SpecialFilter
+
+fn special_filter(nums: Vec<i64>) -> i64 vow {
+  requires: nums.len() >= 0,
+  requires: nums.len() <= 8,
+  ensures: result >= 0
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  0
+}

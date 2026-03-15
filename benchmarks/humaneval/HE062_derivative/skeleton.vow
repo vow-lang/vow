@@ -1,0 +1,13 @@
+module Derivative
+
+fn derivative(xs: Vec<i64>) -> Vec<i64> vow {
+  requires: xs.len() >= 0,
+  requires: xs.len() <= 8,
+  ensures: result.len() >= 0
+} {
+  Vec::new()
+}
+
+fn main() -> i32 [io] {
+  0
+}

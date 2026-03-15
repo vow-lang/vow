@@ -23,6 +23,7 @@ pub enum Item {
     Impl(ImplBlock),
     TypeAlias(TypeAlias),
     Extern(ExternBlock),
+    Const(ConstDef),
 }
 
 impl Item {
@@ -35,8 +36,18 @@ impl Item {
             Item::Impl(i) => i.span,
             Item::TypeAlias(t) => t.span,
             Item::Extern(e) => e.span,
+            Item::Const(c) => c.span,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstDef {
+    pub vis: Visibility,
+    pub name: String,
+    pub ty: Type,
+    pub value: Expr,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -338,6 +349,7 @@ pub enum BinOp {
     Ge,
     And,
     Or,
+    BitXor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

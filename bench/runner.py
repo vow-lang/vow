@@ -18,6 +18,7 @@ class BenchmarkResult:
     benchmark_id: str
     benchmark_name: str
     difficulty: str
+    contract_fidelity: str
     status: str  # verified / verify_failed / compile_failed / timeout / max_iterations / empty_response
     iterations: int
     wall_clock_seconds: float
@@ -88,6 +89,7 @@ def run_benchmark(
     system_prompt: str,
     vow_binary: Path,
     verify_timeout: int = 120,
+    memory_limit: int | None = None,
 ) -> BenchmarkResult:
     start = time.time()
     max_iters = bench.max_cegis_iterations
@@ -119,6 +121,7 @@ def run_benchmark(
                 benchmark_id=bench.id,
                 benchmark_name=bench.name,
                 difficulty=bench.difficulty,
+                contract_fidelity=bench.contract_fidelity,
                 status="empty_response",
                 iterations=iteration,
                 wall_clock_seconds=elapsed,
@@ -132,7 +135,7 @@ def run_benchmark(
         final_code = code
 
         # Verify
-        vr = run_verify(vow_binary, code, timeout=verify_timeout)
+        vr = run_verify(vow_binary, code, timeout=verify_timeout, memory_limit=memory_limit)
         verify_outputs.append(vr.raw_json)
 
         if vr.status == "Verified":
@@ -141,6 +144,7 @@ def run_benchmark(
                 benchmark_id=bench.id,
                 benchmark_name=bench.name,
                 difficulty=bench.difficulty,
+                contract_fidelity=bench.contract_fidelity,
                 status="verified",
                 iterations=iteration,
                 wall_clock_seconds=elapsed,
@@ -158,7 +162,7 @@ def run_benchmark(
 
     # Exhausted iterations
     elapsed = time.time() - start
-    last_vr = run_verify(vow_binary, final_code, timeout=verify_timeout) if final_code else None
+    last_vr = run_verify(vow_binary, final_code, timeout=verify_timeout, memory_limit=memory_limit) if final_code else None
     failure_mode = classify_failure(last_vr) if last_vr else "empty_response"
     status_map = {
         "CompileFailed": "compile_failed",
@@ -173,6 +177,7 @@ def run_benchmark(
         benchmark_id=bench.id,
         benchmark_name=bench.name,
         difficulty=bench.difficulty,
+        contract_fidelity=bench.contract_fidelity,
         status=final_status,
         iterations=max_iters,
         wall_clock_seconds=elapsed,

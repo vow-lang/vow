@@ -1,0 +1,52 @@
+module Compare
+
+fn compare(game: Vec<i64>, guess: Vec<i64>) -> Vec<i64> vow {
+  requires: game.len() >= 0,
+  requires: game.len() <= 8,
+  requires: guess.len() >= 0,
+  requires: guess.len() <= 8,
+  ensures: result.len() >= 0
+} {
+  let out: Vec<i64> = Vec::new();
+  let mut i: i64 = 0;
+  let mut n: i64 = game.len();
+  if guess.len() < n {
+    n = guess.len();
+  } else {
+    0;
+  }
+  while i < n vow {
+    invariant: i >= 0,
+    invariant: i <= n
+  } {
+    let mut diff: i64 = game[i] - guess[i];
+    if diff < 0 {
+      diff = 0 - diff;
+    } else {
+      0;
+    }
+    out.push(diff);
+    i = i + 1;
+  }
+  out
+}
+
+fn main() -> i32 [io] {
+  let g: Vec<i64> = Vec::new();
+  g.push(1);
+  g.push(2);
+  g.push(3);
+  g.push(4);
+  let p: Vec<i64> = Vec::new();
+  p.push(1);
+  p.push(4);
+  p.push(2);
+  p.push(4);
+  let r: Vec<i64> = compare(g, p);
+  let mut i: i64 = 0;
+  while i < r.len() {
+    print_i64(r[i]);
+    i = i + 1;
+  }
+  0
+}

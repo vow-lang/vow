@@ -98,6 +98,9 @@ fn IOP_LINEAR_BORROW() -> i64 vow { ensures: result >= 0 } { 80 }
 fn IOP_FIELD_GET() -> i64 vow { ensures: result >= 0 } { 81 }
 fn IOP_FIELD_SET() -> i64 vow { ensures: result >= 0 } { 82 }
 
+fn IOP_XOR_I32() -> i64 vow { ensures: result >= 0 } { 83 }
+fn IOP_XOR_I64() -> i64 vow { ensures: result >= 0 } { 84 }
+
 fn iop_is_terminal(op: i64) -> bool vow {
     requires: op >= 0
 } {
@@ -164,10 +167,13 @@ struct IrFunction {
     id: i64,
     name: String,
     params: Vec<i64>,
+    param_names: Vec<String>,
     return_ty: i64,
     effects: i64,
     vows: Vec<IrVowEntry>,
     blocks: Vec<IrBlock>,
+    local_names_ids: Vec<i64>,
+    local_names_strs: Vec<String>,
 }
 
 struct IrFieldLayout {
@@ -227,10 +233,13 @@ fn ir_function_new(id: i64, name: String, return_ty: i64, effects: i64) -> IrFun
         id: id,
         name: name,
         params: Vec::new(),
+        param_names: Vec::new(),
         return_ty: return_ty,
         effects: effects,
         vows: Vec::new(),
         blocks: Vec::new(),
+        local_names_ids: Vec::new(),
+        local_names_strs: Vec::new(),
     }
 }
 

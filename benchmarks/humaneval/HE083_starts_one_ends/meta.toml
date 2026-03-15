@@ -1,0 +1,10 @@
+[benchmark]
+id = "HE083"
+name = "starts_one_ends"
+difficulty = "easy"
+tags = ["humaneval"]
+unwind = 10
+modules = 1
+expected_status = "Verified"
+max_cegis_iterations = 5
+contract_fidelity = "partial"

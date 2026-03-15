@@ -1,7 +1,7 @@
 use vow_syntax::{
     ast::{
-        Block, EnumDef, EnumVariant, Expr, ExprKind, ExternBlock, ExternFn, FieldDef, FnDef,
-        ImplBlock, Item, MatchArm, Module, Param, Pat, PatKind, Stmt, StructDef, TraitDef,
+        Block, ConstDef, EnumDef, EnumVariant, Expr, ExprKind, ExternBlock, ExternFn, FieldDef,
+        FnDef, ImplBlock, Item, MatchArm, Module, Param, Pat, PatKind, Stmt, StructDef, TraitDef,
         TraitMethod, Type, TypeAlias, UseDecl, VariantKind, VowBlock, VowClause,
     },
     parser::parse_module,
@@ -355,6 +355,13 @@ fn strip_item(item: Item) -> Item {
         Item::Impl(i) => Item::Impl(strip_impl_block(i)),
         Item::TypeAlias(t) => Item::TypeAlias(strip_type_alias(t)),
         Item::Extern(e) => Item::Extern(strip_extern_block(e)),
+        Item::Const(c) => Item::Const(ConstDef {
+            vis: c.vis,
+            name: c.name,
+            ty: strip_type(c.ty),
+            value: strip_expr(c.value),
+            span: z(),
+        }),
     }
 }
 

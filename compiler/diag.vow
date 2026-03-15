@@ -34,6 +34,8 @@ struct Diagnostic {
 struct DiagCtx {
     diags: Vec<Diagnostic>,
     error_count: i64,
+    source_files: Vec<String>,
+    source_texts: Vec<String>,
 }
 
 fn diag_new(severity: i64, code: i64, message: String, file: String, span_start: i64, span_len: i64, blame: i64) -> Diagnostic {
@@ -62,7 +64,57 @@ fn diag_ctx_new() -> DiagCtx {
     DiagCtx {
         diags: Vec::new(),
         error_count: 0,
+        source_files: Vec::new(),
+        source_texts: Vec::new(),
     }
+}
+
+fn diag_ctx_add_source(ctx: DiagCtx, file: String, source: String) {
+    let files: Vec<String> = ctx.source_files;
+    files.push(file);
+    let texts: Vec<String> = ctx.source_texts;
+    texts.push(source);
+}
+
+fn diag_ctx_lookup_source(ctx: DiagCtx, file: String) -> String {
+    let files: Vec<String> = ctx.source_files;
+    let texts: Vec<String> = ctx.source_texts;
+    let n: i64 = files.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if files[i] == file {
+            return texts[i];
+        }
+        i = i + 1;
+    }
+    String::from("")
+}
+
+fn span_unpack_start(packed: i64) -> i64 { packed / 65536 }
+fn span_unpack_len(packed: i64) -> i64 { packed - (packed / 65536) * 65536 }
+
+fn diag_compute_line(src: String, offset: i64) -> i64 {
+    let mut line: i64 = 1;
+    let mut i: i64 = 0;
+    while i < offset && i < src.len() {
+        if src.byte_at(i) == 10 {
+            line = line + 1;
+        }
+        i = i + 1;
+    }
+    line
+}
+
+fn diag_compute_col(src: String, offset: i64) -> i64 {
+    let mut last_nl: i64 = -1;
+    let mut i: i64 = 0;
+    while i < offset && i < src.len() {
+        if src.byte_at(i) == 10 {
+            last_nl = i;
+        }
+        i = i + 1;
+    }
+    offset - last_nl
 }
 
 fn diag_ctx_emit(ctx: DiagCtx, d: Diagnostic) {
@@ -98,6 +150,14 @@ fn diag_blame_name(b: i64) -> String {
         } else {
             String::from("None")
         }
+    }
+}
+
+fn diag_blame_name_json(b: i64) -> String {
+    if b == DIAG_BLAME_CALLER() {
+        String::from("caller")
+    } else {
+        String::from("callee")
     }
 }
 
@@ -195,7 +255,7 @@ fn diag_i64_to_str(v: i64) -> String {
     result
 }
 
-fn diag_to_json(d: Diagnostic) -> String {
+fn diag_to_json(d: Diagnostic, ctx: DiagCtx) -> String {
     let r: String = String::from("{\"error_code\":\"");
     r.push_str(ec_name(d.code));
     r.push_str(String::from("\",\"message\":\""));
@@ -208,10 +268,21 @@ fn diag_to_json(d: Diagnostic) -> String {
     r.push_str(diag_i64_to_str(d.span_start));
     r.push_str(String::from(",\"length\":"));
     r.push_str(diag_i64_to_str(d.span_len));
+    if d.file.len() > 0 && d.span_start > 0 {
+        let src: String = diag_ctx_lookup_source(ctx, d.file);
+        if src.len() > 0 {
+            let line: i64 = diag_compute_line(src, d.span_start);
+            let col: i64 = diag_compute_col(src, d.span_start);
+            r.push_str(String::from(",\"line\":"));
+            r.push_str(diag_i64_to_str(line));
+            r.push_str(String::from(",\"column\":"));
+            r.push_str(diag_i64_to_str(col));
+        }
+    }
     r.push_str(String::from("}"));
     if d.blame != DIAG_BLAME_NONE() {
         r.push_str(String::from(",\"blame\":\""));
-        r.push_str(diag_blame_name(d.blame));
+        r.push_str(diag_blame_name_json(d.blame));
         r.push_str(String::from("\""));
     }
     let hints: Vec<String> = d.hints;
@@ -242,26 +313,33 @@ fn diag_ctx_to_json(ctx: DiagCtx) -> String {
         if i > 0 {
             r.push_str(String::from(","));
         }
-        r.push_str(diag_to_json(ds[i]));
+        r.push_str(diag_to_json(ds[i], ctx));
         i = i + 1;
     }
     r.push_str(String::from("]"));
     r
 }
 
-fn diag_to_human(d: Diagnostic) -> String {
+fn diag_to_human(d: Diagnostic, ctx: DiagCtx) -> String {
     let r: String = String::from("");
     r.push_str(sev_name_lower(d.severity));
     r.push_str(String::from("["));
     r.push_str(ec_name(d.code));
     r.push_str(String::from("]: "));
     r.push_str(d.message);
-    if d.file.len() > 0 {
-        r.push_str(String::from(" ("));
-        r.push_str(d.file);
-        r.push_str(String::from(":"));
-        r.push_str(diag_i64_to_str(d.span_start));
-        r.push_str(String::from(")"));
+    if d.file.len() > 0 && d.span_start > 0 {
+        let src: String = diag_ctx_lookup_source(ctx, d.file);
+        if src.len() > 0 {
+            let line: i64 = diag_compute_line(src, d.span_start);
+            let col: i64 = diag_compute_col(src, d.span_start);
+            r.push_str(String::from(" ("));
+            r.push_str(d.file);
+            r.push_str(String::from(":"));
+            r.push_str(diag_i64_to_str(line));
+            r.push_str(String::from(":"));
+            r.push_str(diag_i64_to_str(col));
+            r.push_str(String::from(")"));
+        }
     }
     if d.blame != DIAG_BLAME_NONE() {
         r.push_str(String::from("\n  blame: "));
@@ -282,9 +360,74 @@ fn diag_ctx_print_all(ctx: DiagCtx) [io] {
     let n: i64 = ds.len();
     let mut i: i64 = 0;
     while i < n {
-        eprintln_str(diag_to_human(ds[i]));
+        eprintln_str(diag_to_human(ds[i], ctx));
         i = i + 1;
     }
+}
+
+struct VerifyCE {
+    function: String,
+    var_names: Vec<String>,
+    var_values: Vec<String>,
+    violation: String,
+    vow_id: i64,
+    source: String,
+    blame: i64,
+}
+
+fn diag_ce_to_json(ce: VerifyCE) -> String {
+    let r: String = String::from("{\"function\":\"");
+    r.push_str(diag_json_escape_str(ce.function));
+    r.push_str(String::from("\",\"values\":{"));
+    let names: Vec<String> = ce.var_names;
+    let vals: Vec<String> = ce.var_values;
+    let nv: i64 = names.len();
+    let mut i: i64 = 0;
+    while i < nv {
+        if i > 0 {
+            r.push_str(String::from(","));
+        }
+        r.push_str(String::from("\""));
+        r.push_str(diag_json_escape_str(names[i]));
+        r.push_str(String::from("\":\""));
+        r.push_str(diag_json_escape_str(vals[i]));
+        r.push_str(String::from("\""));
+        i = i + 1;
+    }
+    r.push_str(String::from("},\"violation\":\""));
+    r.push_str(diag_json_escape_str(ce.violation));
+    r.push_str(String::from("\",\"vow_id\":"));
+    r.push_str(diag_i64_to_str(ce.vow_id));
+    r.push_str(String::from(",\"source\":\""));
+    r.push_str(diag_json_escape_str(ce.source));
+    r.push_str(String::from("\",\"blame\":\""));
+    if ce.blame != DIAG_BLAME_NONE() {
+        r.push_str(diag_blame_name_json(ce.blame));
+    } else {
+        r.push_str(String::from("none"));
+    }
+    r.push_str(String::from("\"}"));
+    r
+}
+
+fn diag_emit_verify_json(status: String, dctx: DiagCtx, ces: Vec<VerifyCE>) [io] {
+    let r: String = String::from("{\"status\":\"");
+    r.push_str(status);
+    r.push_str(String::from("\",\"executable\":null,\"diagnostics\":"));
+    r.push_str(diag_ctx_to_json(dctx));
+    r.push_str(String::from(",\"counterexamples\":["));
+    let nc: i64 = ces.len();
+    let mut i: i64 = 0;
+    while i < nc {
+        if i > 0 {
+            r.push_str(String::from(","));
+        }
+        r.push_str(diag_ce_to_json(ces[i]));
+        i = i + 1;
+    }
+    r.push_str(String::from("]}"));
+    print_str(r);
+    print_str(String::from("\n"));
 }
 
 fn diag_emit_build_json(status: String, exec_path: String, dctx: DiagCtx) [io] {
@@ -301,6 +444,34 @@ fn diag_emit_build_json(status: String, exec_path: String, dctx: DiagCtx) [io] {
     r.push_str(String::from(",\"diagnostics\":"));
     r.push_str(diag_ctx_to_json(dctx));
     r.push_str(String::from(",\"counterexamples\":[]}"));
+    print_str(r);
+    print_str(String::from("\n"));
+}
+
+fn diag_emit_build_verify_json(status: String, exec_path: String, dctx: DiagCtx, ces: Vec<VerifyCE>) [io] {
+    let r: String = String::from("{\"status\":\"");
+    r.push_str(status);
+    r.push_str(String::from("\",\"executable\":"));
+    if exec_path.len() > 0 {
+        r.push_str(String::from("\""));
+        r.push_str(diag_json_escape_str(exec_path));
+        r.push_str(String::from("\""));
+    } else {
+        r.push_str(String::from("null"));
+    }
+    r.push_str(String::from(",\"diagnostics\":"));
+    r.push_str(diag_ctx_to_json(dctx));
+    r.push_str(String::from(",\"counterexamples\":["));
+    let nc: i64 = ces.len();
+    let mut i: i64 = 0;
+    while i < nc {
+        if i > 0 {
+            r.push_str(String::from(","));
+        }
+        r.push_str(diag_ce_to_json(ces[i]));
+        i = i + 1;
+    }
+    r.push_str(String::from("]}"));
     print_str(r);
     print_str(String::from("\n"));
 }

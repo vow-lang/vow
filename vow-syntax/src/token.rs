@@ -44,6 +44,7 @@ pub enum TokenKind {
     KwFor,
     KwIn,
     KwAs,
+    KwConst,
 
     // Effect keywords
     KwRead,
@@ -89,6 +90,9 @@ pub enum TokenKind {
     AmpAmp,   // &&
     PipePipe, // ||
     Bang,     // !
+
+    // Bitwise operators
+    Caret, // ^
 
     // Other operators
     Amp,       // &
@@ -166,6 +170,7 @@ impl TokenKind {
             "for" => Some(TokenKind::KwFor),
             "in" => Some(TokenKind::KwIn),
             "as" => Some(TokenKind::KwAs),
+            "const" => Some(TokenKind::KwConst),
             "read" => Some(TokenKind::KwRead),
             "write" => Some(TokenKind::KwWrite),
             "io" => Some(TokenKind::KwIO),

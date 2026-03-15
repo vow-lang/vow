@@ -134,8 +134,8 @@ fn str_eq_lit(s: String, lit: String) -> bool {
     s == lit
 }
 
-fn clif_emit_module(m: IrModule, output_path: String, mode: i64) -> i64 [io] {
-    let ctx: i64 = __vow_clif_create(mode);
+fn clif_emit_module(m: IrModule, output_path: String, mode: i64, trace: i64) -> i64 [io] {
+    let ctx: i64 = __vow_clif_create(mode, trace);
     if ctx == 0 {
         eprintln_str(String::from("clif: failed to create context"));
         return -1;

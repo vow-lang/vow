@@ -3,8 +3,8 @@ pub mod items;
 pub mod types;
 
 use crate::ast::{
-    Block, Effect, Expr, ExprKind, FnDef, Item, Module, Param, Pat, PatKind, Stmt, Type, UseDecl,
-    Visibility, VowBlock, VowClause,
+    Block, ConstDef, Effect, Expr, ExprKind, FnDef, Item, Module, Param, Pat, PatKind, Stmt, Type,
+    UseDecl, Visibility, VowBlock, VowClause,
 };
 use crate::lexer::Lexer;
 use crate::span::Span;
@@ -42,6 +42,7 @@ fn keyword_as_str(kind: &TokenKind) -> Option<&'static str> {
         TokenKind::KwFor => Some("for"),
         TokenKind::KwIn => Some("in"),
         TokenKind::KwAs => Some("as"),
+        TokenKind::KwConst => Some("const"),
         TokenKind::KwRead => Some("read"),
         TokenKind::KwWrite => Some("write"),
         TokenKind::KwIO => Some("io"),
@@ -247,6 +248,7 @@ impl Parser {
             TokenKind::KwTrait => Some(self.parse_trait(vis)),
             TokenKind::KwImpl => Some(self.parse_impl()),
             TokenKind::KwType => Some(self.parse_type_alias(vis)),
+            TokenKind::KwConst => Some(self.parse_const(vis)),
             TokenKind::KwExtern => Some(self.parse_extern()),
             TokenKind::KwLinear => {
                 let start = self.current_span();
@@ -338,6 +340,30 @@ impl Parser {
             body,
             span: start.merge(end),
             is_declaration: false,
+        })
+    }
+
+    fn parse_const(&mut self, vis: Visibility) -> Item {
+        let start = self.current_span();
+        self.advance(); // consume `const`
+        let (name, _) = self
+            .expect_ident()
+            .unwrap_or(("<error>".to_string(), start));
+        self.expect(TokenKind::Colon);
+        let ty = self.parse_type_required();
+        self.expect(TokenKind::Eq);
+        let value = self.parse_expr().unwrap_or(Expr {
+            kind: ExprKind::Lit(crate::ast::Lit::Int(0)),
+            span: start,
+        });
+        let end = self.current_span();
+        self.expect(TokenKind::Semicolon);
+        Item::Const(ConstDef {
+            vis,
+            name,
+            ty,
+            value,
+            span: start.merge(end),
         })
     }
 
@@ -805,6 +831,7 @@ mod tests {
             (TokenKind::KwFor, "for"),
             (TokenKind::KwIn, "in"),
             (TokenKind::KwAs, "as"),
+            (TokenKind::KwConst, "const"),
             (TokenKind::KwRead, "read"),
             (TokenKind::KwWrite, "write"),
             (TokenKind::KwIO, "io"),

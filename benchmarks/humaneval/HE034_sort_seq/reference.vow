@@ -1,0 +1,53 @@
+module SortSeq
+
+fn sort_seq(s: Vec<i64>) -> Vec<i64> vow {
+  requires: s.len() >= 0,
+  requires: s.len() <= 8,
+  ensures: result.len() >= 0
+} {
+  let out: Vec<i64> = Vec::new();
+  let mut i: i64 = 0;
+  while i < s.len() vow {
+    invariant: i >= 0,
+    invariant: i <= s.len()
+  } {
+    out.push(s[i]);
+    i = i + 1;
+  }
+  let mut a: i64 = 0;
+  while a < out.len() vow {
+    invariant: a >= 0,
+    invariant: a <= out.len()
+  } {
+    let mut b: i64 = a + 1;
+    while b < out.len() vow {
+      invariant: b >= a + 1,
+      invariant: b <= out.len()
+    } {
+      if out[a] > out[b] {
+        let tmp: i64 = out[a];
+        out[a] = out[b];
+        out[b] = tmp;
+      } else {
+        0;
+      }
+      b = b + 1;
+    }
+    a = a + 1;
+  }
+  out
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(3);
+  v.push(1);
+  v.push(2);
+  let r: Vec<i64> = sort_seq(v);
+  let mut i: i64 = 0;
+  while i < r.len() {
+    print_i64(r[i]);
+    i = i + 1;
+  }
+  0
+}

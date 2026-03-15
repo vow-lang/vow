@@ -1,778 +1,495 @@
-# Vow Roadmap — Revised (07.03.2026)
+# Vow Roadmap — Revised (15.03.2026)
 
-This plan supersedes the original Phase 12–15 roadmap. It was produced by
-reviewing the design sketch (v3), ideas-improvement.md, the original roadmap,
-and the competitive landscape — then realigning every phase with Vow's core
-vision: **agents are the primary programmers, the toolchain is their interface.**
-
-The March 2026 revision adds Phases 16–20: a concrete path to making the
-self-hosted compiler the primary driver, replacing the Rust compiler for
-day-to-day use.
+This revision replaces the March 7 roadmap. Phases 10–20 are complete. The
+self-hosted compiler (`./vowc`) is the primary driver. This document focuses
+exclusively on what comes next, ordered by priority and impact.
 
 ---
 
 ## Where Vow Stands Today
 
-Self-hosting is achieved. The bootstrap triple test passes (6335 lines across
-13 modules). Phases 10–15.2 are complete.
+**All foundational phases (10–20) are complete.** The self-hosted compiler is a
+verified fixed point with full feature parity to the Rust bootstrap compiler.
 
-**Current maturity: 7.5/10 for agent autonomy.**
+Achieved:
+- Self-hosted compiler: 13 modules, ~9000 lines of Vow, binary fixed point
+- 271 contracts on compiler modules verified by ESBMC
+- Full verification pipeline: compile → emit C → ESBMC → counterexample → blame
+- Parallel codegen + verification (all ESBMC instances concurrent with codegen)
+- Structured JSON diagnostics with line:col source spans
+- `build`, `verify` subcommands; `--mode debug`, `--no-verify`, `--no-cache`, `--unwind N` flags
+- Verification caching: content-hash-based ESBMC result cache (23s → 0.001s on repeat)
+- Vericoding benchmark: **100% (36/36)** on Vow's original suite; 67 HumanEval benchmarks translated
+- 89/89 tests passing, 40/40 CLI compatibility tests
+- Toolchain Skill document, structured `--help`, `--debug-trace`, incremental compilation
+- Bootstrap: `scripts/bootstrap.sh` produces `./vowc` from Rust stage 0
 
-Strengths:
-- JSON build output with status codes (Verified, Unverified, CompileFailed, VerifyFailed)
-- VowViolation JSON: vow_id, blame (Caller/Callee), description, variable values
-- Dual output (JSON + human-readable) always on
-- Self-hosting compiler is a verified fixed point
-- Structured ESBMC counterexamples as JSON (Phase 10.2)
-- Vec/String/HashMap ESBMC models (Phase 10.4)
-- `where` clause / refinement type syntax (Phase 10.5)
-- ~20 verified example programs (Phase 10.6)
-- DFS module loading in self-hosted compiler (Phase 11.1)
-- `vow build`, `vow verify`, `vow test` subcommands (Phase 11.2)
-- Vow Toolchain Skill document (Phase 12.1)
-- Structured `--help` JSON on all subcommands (Phase 12.2)
-- `--debug-trace=calls|full` structured execution traces (Phase 12.3)
-- Incremental compilation caching (Phase 12.4)
-- Level 1 agent capability integration tests (Phase 12.5)
-- Cross-module type resolution, declaration files, type-level string eq (Phase 13)
-- 271 contracts on self-hosted compiler verified by ESBMC (Phase 14)
-- Blame-tracking pipeline, counterexample-guided suggestions (Phase 14)
-- 40-benchmark vericoding suite with runner CLI (Phase 15)
+**Current maturity: 9/10 for agent autonomy on verified programs.**
 
-### Self-hosted compiler capability gap
+**Strongest current claim:** Vow is an unusually strong agent-first,
+bounded-verification language with an integrated compile/verify/CEGIS loop,
+blame tracking, structured counterexamples, and a self-hosted verified compiler.
+107 benchmarks (40 original + 67 HumanEval) are verified; 103/103 non-stretch
+references pass. Contract fidelity is machine-tracked (exact/partial/weak).
+Phase 21.4e–f (running the comparison protocol and generating reports) remain.
 
-The self-hosted compiler (`compiler/*.vow`, ~6335 lines, 13 modules) can lex,
-parse, type-check, lower to IR, and emit native binaries via Cranelift FFI
-shims. The bootstrap triple test proves binary fixed-point reproducibility.
-
-However, it cannot yet replace the Rust compiler as the primary driver:
-
-```
-                    Rust compiler          Self-hosted compiler
-                    -------------          --------------------
-Lex/Parse/Check     Yes                    Yes
-IR Lowering         Yes                    Yes
-Native Codegen      Yes (Cranelift)        Yes (Cranelift via FFI)
-Module Loading      Yes                    Yes
-Vow Contracts       Yes (lower + codegen)  No (no vow block lowering)
-Verification        Yes (ESBMC pipeline)   No (no C emitter, no ESBMC)
-Debug Mode          Yes (runtime checks)   No (no blame/violation codegen)
-Diagnostics         Yes (JSON + human)     No (minimal error output)
-CLI UX              Yes (subcommands)      No (bare -o flag only)
-```
-
-Phases 16–20 close these gaps.
+Known limitations:
+- Arena deallocation is a no-op (`__vow_arena_free` leaks; fine for short-lived programs)
+- Expression-level source spans are unpopulated (function/statement spans work)
+- 2/4 Stretch benchmarks hit ESBMC `--unwind` ceiling (H07, H10)
+- `divide.vow` release build has UB (no runtime checks; debug mode works)
+- Zero public visibility — benchmark results not yet published
+- Spec expressiveness gap: ensures clauses cannot express quantifiers (user-defined function calls now work)
 
 ---
 
-## Strategic Alignment
+## Competitive Landscape (March 2026)
 
-### What Changed from the Original Roadmap
+### Direct comparators (benchmark peers for Phase 21)
 
-The original Phase 12 (LSP + MCP) was designed for a world where agents
-program inside editors. They don't. An agent operates on whole files, invokes
-the CLI, reads structured output, and iterates. LSP answers "what's the type
-at cursor position 47:12?" — a question no agent asks. MCP is closer to useful
-but still frames the compiler as something to be *queried interactively* rather
-than *invoked and read*.
+| | **Vow** | **Dafny** | **Verus** | **Lean** |
+|---|---|---|---|---|
+| Primary goal | Agent correctness | General verification | Rust verification | Theorem proving |
+| Verification style | Bounded MC (ESBMC) | SMT (Z3) | SMT (Z3) | Interactive proofs |
+| Spec expressiveness | Bounded, no quantifiers* | Full first-order logic | Rust-embedded specs | Dependent types |
+| Automation burden | Lowest (CEGIS loop, no ghost code) | Moderate (ghost code, lemmas) | Moderate (proof hints, triggers) | Highest (tactic proofs) |
+| Agent ergonomics | Agent-first design | Not agent-targeted | Not agent-targeted | Not agent-targeted |
+| Counterexample quality | Structured JSON + blame | Textual counterexamples | Limited | N/A (proof-based) |
+| Self-hosted pipeline | Yes (verified fixed point) | No | No | Yes (partial) |
 
-**The replacement: a Vow Toolchain Skill.** This is already prescribed by the
-design sketch (§10, `--help` as skill) and directly addresses the zero training
-data problem (§15 Open Questions). The skill is a structured, machine-readable
-document that teaches an agent everything it needs to write, compile, verify,
-and debug Vow programs. An agent reads the skill, writes code, invokes the CLI,
-reads JSON, and iterates. No LSP. No editor. No MCP.
+*Spec expressiveness improved in Phase 21.1 — spec function calls in ensures now work.
 
-The original Phase 13 ("Vow Pilot") conflated two things: making the toolchain
-agent-friendly (infrastructure) and building a specific agent (application).
-If the toolchain is genuinely agent-friendly, *any* capable LLM with the skill
-document becomes "Vow Pilot." Building a bespoke agent locks into an
-architecture that will be obsolete in months.
+### Adjacent comparators (positioning context)
 
-### What Stays
+| | **MoonBit** | **Bosque** | **Dana** |
+|---|---|---|---|
+| Primary goal | AI-native tooling | Regularized reasoning | Agent orchestration |
+| Verification | None (constrained sampling) | Research-stage verifier | None |
+| Niche | IDE + constrained decoding | Canonical forms | Intent-driven agents |
 
-- The CEGIS loop is the core workflow: compile → verify → counterexample → fix → iterate
-- The vericoding benchmark is the right strategic positioning
-- The success metric is right: autonomous agent, non-trivial program, no human intervention
-- Blame tracking (requires blames caller, ensures blames callee) is a key differentiator
+The Dafny ecosystem is publishing prolifically (ATLAS, DafnyPro, BRIDGE — all
+at POPL 2026). Vow's 100% result is on its own suite; fair comparison requires
+the work in Phase 21.
 
-### Competitive Position
-
-| Project | Approach | Formal verification | Self-hosting |
-|---------|----------|-------------------|--------------|
-| **MoonBit** | Constrained token sampling (prevent bad generation) | No | No |
-| **Bosque** | Contracts, canonical form, determinism | Research only | No |
-| **Vericoding** (concept) | LLM from specs, verified by FM | Via Dafny/Verus/Lean | N/A |
-| **Vow** | Post-hoc verification via ESBMC + blame tracking | Yes, in compile pipeline | Yes |
-
-Vow's unique claim: the only systems language where formal verification is
-integrated into the compile pipeline, with blame-tracking contracts and a
-CEGIS-ready counterexample flow. The self-hosting compiler proves the language
-is expressive enough. What's missing is proving that *agents* can use it
-autonomously.
+Vow's unique differentiators that no competitor has:
+- Blame tracking (caller vs callee) in verification failures
+- Integrated verification pipeline (not a separate framework)
+- Self-hosted compiler that verifies its own contracts
+- Structured counterexample JSON with source-level variable names
 
 ---
 
 ## Agent Capability Test Protocol
 
-Every phase below is measured against concrete capability levels:
+Every phase is measured against concrete capability levels:
 
-**Level 1 — Single-module verified program.**
-Agent writes a single-module program with 3+ contracts. All contracts verify
-via ESBMC. Agent may need ≤2 CEGIS iterations to fix counterexamples.
+**Level 1 — Single-module verified program.** ✅ Passed (Phase 12.5)
+**Level 2 — Multi-module verified program.** ✅ Passed (Phase 13.5)
+**Level 3 — Contract retrofit.** ✅ Passed (Phase 14.5)
+**Level 4 — Vericoding: spec to verified binary.** ✅ Passed (Phase 15.3)
+**Level 5 — Self-hosted pipeline.** ✅ Passed (Phase 20.5)
 
-**Level 2 — Multi-module verified program.**
-Agent writes a multi-module program with cross-module contracts. Types resolve
-correctly across module boundaries. Agent fixes counterexamples in ≤3 iterations.
-
-**Level 3 — Contract retrofit.**
-Agent adds contracts to an existing unverified module (e.g., a self-hosted
-compiler module), achieves verification. Tests that the agent can reason about
-existing code, not just greenfield.
-
-**Level 4 — Vericoding: spec to verified binary.**
-Agent implements a non-trivial algorithm from a natural-language specification,
-writes contracts, verifies — the full vericoding workflow. This is the benchmark
-comparison against Dafny/Verus/Lean numbers.
-
-**Level 5 — Self-hosted pipeline.**
-Agent uses the self-hosted compiler (not the Rust compiler) to compile, verify,
-and debug a program. The self-hosted compiler is the primary driver for new
-Vow development.
-
-Each phase ends with running the relevant capability level and fixing whatever
-breaks the agent's workflow.
+**Level 6 — Real-world application.**
+Agent uses Vow to implement a non-trivial application (not a compiler or
+algorithm benchmark) from a specification. The application uses filesystem I/O,
+string manipulation, and data structures. Contracts verify correctness
+properties. This is the `ai-coding-lang-bench` target.
 
 ---
 
-## Phase 12 (revised): Toolchain Skill + Agent Interface — COMPLETE
+## Phase 21: Publishable Comparison
 
-**Goal:** An agent with no prior Vow training data can load the skill, write a
-verified program, and close a CEGIS loop. Level 1 capability.
+**Priority: CRITICAL — competitive window is closing.**
 
-### 12.1 Write the Vow Toolchain Skill ✔
+Phase 21 has two tracks that can publish independently:
 
-The single highest-leverage item. A structured document (machine-readable,
-loadable into an agent's context) covering:
+- **Critical path (~~21.1~~ → 21.4 → 21.7):** ~~fix the verification pipeline,~~ run
+  the Vericoding comparison with contract fidelity, publish the direct
+  comparison. This is the minimum viable publication. 21.1 is complete.
+- **Parallel track (~~21.3~~ → 21.6 → 21.8):** ~~build the standard library,~~ run
+  ai-coding-lang-bench, publish the dual-track update. 21.3 is complete.
 
-- **Grammar reference.** One canonical form per construct. Every syntactic
-  production with examples. The agent needs to know that `where` clauses
-  desugar to `requires`, that `+` wraps and `+!` checks, that there are no
-  comments, no closures, no traits, no generics.
-- **CLI reference.** Every subcommand (`vow build`, `vow verify`, `vow test`),
-  every flag (`--no-verify`, `--debug-trace`, `--unwind`), every JSON output
-  schema (build result, verification result, counterexample, VowViolation).
-- **Verification workflow.** How contracts map to ESBMC assertions. What
-  `--unwind` means and how to choose bounds. How to interpret counterexample
-  JSON. The blame model: requires → caller fault, ensures → callee fault.
-- **Contract authoring patterns.** Common `requires`/`ensures`/`invariant`
-  patterns for each supported type. Patterns for loop invariants. Patterns
-  for cross-module contracts.
-- **Effect system rules.** Which effects exist, propagation rules, what you
-  can call from where. Pure functions cannot call `[Read]` functions, etc.
-- **Error catalog.** Every error code, what it means, common fixes. Structured
-  so an agent can pattern-match on error codes and apply fixes programmatically.
-- **Worked examples.** 3–5 complete programs showing the full cycle: spec →
-  code → compile → verify → counterexample → fix → verified binary.
+Verification caching (21.2, complete) and example coverage (21.5) accelerate
+this work but are not on either critical path.
 
-This is NOT documentation for humans. It is a skill that an agent loads to
-learn the toolchain — analogous to how `--help` returns JSON, not prose.
+### 21.1 Verification pipeline prerequisites ✅
 
-### 12.2 Structured `--help` on all CLI subcommands ✔
+**Status: COMPLETE.**
 
-Ensure every subcommand returns machine-readable JSON via `--help` (or a
-`--help-json` flag). The skill document references these, but the agent
-should also be able to query capabilities at runtime.
+Three pipeline limitations fixed:
 
-### 12.3 `--debug-trace` flag for structured execution traces ✔
+**C variable hoisting.** The C emitter now hoists ALL variable declarations to
+function scope, preventing C99 goto/scope errors when declarations appear
+inside goto-labeled blocks. This fixes `let mut` inside loop bodies and
+nested loop patterns. Upsilon temporaries (`__ups_*`) are also pre-declared.
 
-From ideas-improvement.md #9. Currently debugging requires manual
-`eprintln_str` instrumentation. Implement a compile-time flag that instruments
-every function entry/exit with structured trace output (function name, argument
-values, return value). Two modes:
+**Spec function calls in ensures clauses.** Pure user-defined functions are now
+detected as "modelable" and emitted as real C functions in the verification
+output. `is_modelable()` checks purity and instruction coverage; callee
+functions are emitted in topological order with forward declarations. Ensures
+clauses can now reference spec functions (e.g., `ensures: is_even(result)`).
 
-- `--debug-trace=calls` — function entry/exit only
-- `--debug-trace=full` — calls + every vow check + every effect boundary
+**Nested Vec loops.** The variable hoisting fix resolved the core issue. An
+additional bug was found and fixed in the self-hosted IR lowerer: Upsilon
+instructions referencing sentinel instruction ID `-1` produced invalid C
+variable names (`__ups_-1`, `v-1`). Negative IDs are now filtered. 2SUM-style
+nested Vec loops verify successfully with both compilers.
 
-Output is JSON lines to stderr, parseable by the agent. Zero overhead when
-the flag is off (traces compiled out entirely in production builds).
+### 21.2 Verification caching ✅
 
-### 12.4 Incremental compilation caching ✔
+**Status: COMPLETE.**
 
-From ideas-improvement.md #10. This is the main development bottleneck:
-every change requires recompiling the entire project. Implement module-level
-caching: if a `.vow` file hasn't changed (content hash), skip recompilation.
-Cache the compiled module artifacts alongside the source.
+ESBMC results are cached by content hash of the emitted C verification
+source. If the C source (which captures all verification inputs — function
+IR, contracts, callees, constants) and unwind depth are unchanged, the
+cached result is returned without invoking ESBMC. Both `Proven` and `Failed`
+results (with full counterexample data) are cached in the Rust compiler;
+only `Proven` results are cached in the self-hosted compiler for simplicity.
 
-This directly affects CEGIS iteration speed. If each iteration takes 30
-seconds instead of 3, the agent's effectiveness drops by an order of magnitude.
+Implementation in both compilers:
+- **Rust compiler:** FNV-1a hash, cache at `~/.cache/vow/verify/{hash}.vr`,
+  line-oriented text format with counterexample serialization
+- **Self-hosted compiler:** polynomial hash, cache at
+  `/tmp/.vow_verify_cache/{hash}.vr`
+- `--no-cache` flag on both `build` and `verify` subcommands
+- Async verification path (parallel codegen + verify) returns sentinel for
+  cached hits, avoiding unnecessary ESBMC subprocess spawns
 
-### 12.5 Level 1 Agent Capability Test ✔
+Performance: 23s → 0.001s on repeated verification of bisect.vow.
+New runtime builtins `fs_exists` and `fs_mkdir` added as prerequisites.
 
-Run the test: give an agent (Claude or equivalent) the skill document and
-ask it to write a single-module program with 3+ contracts, compile it, verify
-it, and fix any counterexamples. Document what breaks. Fix the toolchain, not
-the agent.
+### 21.3 Standard library core subset ✅
 
----
+**Status: COMPLETE.**
 
-## Phase 13 (revised): Cross-Module Maturity — COMPLETE
+20 new runtime builtins and one new operator, each wired through all 7
+layers: `vow-runtime` implementation, Rust type checker, Rust IR lowerer,
+Cranelift backend, `vow-clif-shim`, self-hosted checker, self-hosted lowerer.
+Bootstrap triple test passes with binary fixed point. 89/89 tests pass.
 
-**Goal:** Agents can write multi-module programs with cross-module type
-resolution and contracts. Level 2 capability.
+**Filesystem builtins** (5 functions, `[IO]`/`[Read]` effects):
+- `fs_listdir`, `fs_remove`, `fs_remove_dir`, `fs_is_dir`, `fs_rename`
 
-### 13.1 Cross-module type resolution in self-hosted compiler ✔
+**String builtins** (11 pure functions):
+- `string_substr`, `string_split`, `string_starts_with`, `string_ends_with`
+- `string_trim`, `string_to_upper`, `string_to_lower`, `string_replace`
+- `string_join`, `parse_i64`, `i64_to_string`
 
-From ideas-improvement.md #2. The self-hosted `main.vow` must follow `use`
-declarations and load/merge dependent modules before type checking. Without
-this, types from other modules resolve as opaque, forcing leniency rules that
-mask real errors.
+**Bitwise XOR operator** (`^`):
+- New `Caret` token, `BitXor` BinOp, `XorI32`/`XorI64` IR opcodes
+- Precedence between `||` and `&&` in both parsers
+- C emitter and Cranelift backend emit `^` / `bxor`
 
-### 13.2 Declaration files (`.vow.d`) ✔
+**Utility builtins** (4 functions):
+- `hex_encode(Vec<u8>) -> String`, `hex_decode(String) -> Vec<u8>`
+- `vec_sort(Vec<i64>) -> Vec<i64>` — returns sorted copy
+- `time_unix() -> i64` — Unix timestamp (`[IO]` effect)
 
-From ideas-improvement.md #8. A lightweight format containing only type
-signatures, function signatures, effect annotations, and contracts — without
-implementations. The type checker loads these for cross-module checking without
-parsing full source. Benefits:
+### 21.4 Vericoding comparison with contract fidelity
 
-- Faster type checking (no need to parse implementation bodies)
-- Enables partial checking when not all source is available
-- Natural boundary for incremental compilation
-- Agents can generate stubs for modules they haven't written yet
+**Status: 21.4a–d COMPLETE. 21.4e–f remaining (run protocol, generate report).**
 
-### 13.3 Fix struct-vs-enum ambiguity for unknown named types ✔
+**21.4a Infrastructure (COMPLETE).** `contract_fidelity` field added to all
+meta.toml files, `BenchmarkInfo`, `BenchmarkResult`. `--suite` flag
+(`vow`/`humaneval`/`all`) added to `run.py`. Fidelity-stratified tables
+(HE-All, HE-Exact, HE-Partial, HE-Weak) in `report.py`. Summary includes
+`by_fidelity` and `humaneval_*` breakdowns.
 
-From ideas-improvement.md #4. When a named type is not declared locally,
-`resolve_ast_ty` cannot tell struct from enum. With full module loading
-(13.1) and declaration files (13.2), this should be fully resolved. Verify
-that the `CTY_UNKNOWN` (already implemented) correctly handles all remaining
-edge cases.
+**21.4b Pilot upgrades (COMPLETE).** 2 benchmarks upgraded from WEAK/PARTIAL
+to EXACT using Phase 21.1 spec functions:
+- HE031 is_prime: WEAK → EXACT (spec fn `is_prime_check` with trial division)
+- HE049 modp: PARTIAL → EXACT (spec fn `power_mod`, bounds tightened to p≤100)
+- HE025/HE003: stay partial/weak (Vec-parameter spec fns fail — C model's
+  `__vow_vec_get_val` returns nondet values, making two loops over the same
+  Vec unprovably equivalent). Result: **4/10 EXACT** (was 2/10).
 
-### 13.4 Type-level string equality ✔
+**21.4c Triage (COMPLETE).** 162 HumanEval-Dafny tasks from the Vericoding
+benchmark triaged by type compatibility: 73 translatable (int/bool/seq\<int\>
+only), 34 maybe (string/char), 45 skip (real, seq\<string\>, multi-return,
+etc.). Output: `benchmarks/humaneval/triage.toml`.
 
-From ideas-improvement.md #7. String equality should be dispatched based on
-the *type* of both operands (`Ty::String` → emit `__vow_string_eq`), not via
-runtime tagging of IR instructions. The current tagging approach is fragile
-and produces silent pointer comparison bugs when a String value comes from
-an untagged source (e.g., FieldGet).
+**21.4d Translation (COMPLETE).** 57 new HumanEval benchmarks created and
+verified. Total suite: **107 benchmarks** (40 original + 67 HumanEval), 103
+non-stretch. All 103/103 non-stretch references verified with `./vowc`.
+Scripts: `bench/triage_humaneval.py`, `bench/translate_dafny.py`.
 
-### 13.5 Level 2 Agent Capability Test ✔
+**21.4e Run the protocol.** Run LLMs against the HumanEval suite with up to
+5 CEGIS iterations. `--suite humaneval` flag enables HE-only runs.
 
-Run the test: agent writes a multi-module program (≥3 modules) with cross-
-module contracts. Types resolve correctly. Agent fixes counterexamples in ≤3
-CEGIS iterations. Document what breaks.
+**21.4f Generate report.** Fidelity-stratified comparison: Vow vs
+Dafny/Verus/Lean pass rates, broken down by exact/partial/weak.
 
----
+**Resources:**
+- Vericoding benchmark: github.com/Beneficial-AI-Foundation/vericoding-benchmark
+- Triage: `benchmarks/humaneval/triage.toml`
+- Benchmarks: `benchmarks/humaneval/HE*` (67 directories)
+- Runner: `bench/run.py --suite humaneval`
 
-## Phase 14 (revised): Contract Retrofit + CEGIS Validation — COMPLETE
+### 21.5 Expand example coverage (not on critical path)
 
-**Goal:** The self-hosted compiler has contracts. The full blame-tracking
-pipeline works end-to-end. Level 3 capability.
+Improves skill document quality and adoption, but does not block either
+comparison track. Can land at any point.
 
-### 14.1 Agent-driven contract retrofit on self-hosted compiler ✔
+The `examples/` directory has significant feature gaps. Add examples
+demonstrating:
 
-Contracts added to constant functions across four compiler modules:
-- `token.vow`: 89 `ensures: result >= 0` contracts on all tok_* functions
-- `ast.vow`: 78 `ensures: result >= 0` contracts on all tag constant functions
-  (EXPR_*, BINOP_*, TY_*, STMT_*, PAT_*, ITEM_*, EFF_*, CLAUSE_*)
-- `types.vow`: 22 `ensures: result >= 0` contracts on CTY_* functions
-- `ir.vow`: 82 `ensures: result >= 0` contracts on IOP_*, ITY_*, IDATA_*, BLAME_* functions
+- `match` expressions on enums (currently zero examples)
+- `Option<T>` and `Result<T,E>` workflows
+- `?` operator for error propagation
+- Checked arithmetic operators (`+!`, `-!`, `*!`)
+- Non-IO effects (`[Read]`, `[Write]`)
+- `f32`/`f64` floating-point types
 
-All 271 contracts verified by ESBMC. Self-hosted compiler still builds and
-runs correctly.
+Each example should be a complete, runnable program that compiles and verifies.
 
-### 14.2 Complete the blame-tracking pipeline ✔
+### 21.6 Real-world comparison track (ai-coding-lang-bench)
 
-- Added `secondary` (call site locations) and `blame` (caller/callee) fields
-  to `DiagnosticJson` in CLI output
-- Blame-aware hints in verification failure diagnostics: caller-blame hints
-  identify precondition violations with violating argument values; callee-blame
-  hints identify postcondition failures
-- Runtime blame chains available via `--debug-trace=calls --mode debug`
+**Status: UNBLOCKED — 21.3 is complete.**
 
-### 14.3 Counterexample-guided fix suggestions ✔
+Participate in `ai-coding-lang-bench`, which measures how efficiently Claude
+Code can implement a mini-git clone across programming languages. This provides
+a second comparison axis beyond Vericoding: real-world application development,
+not just algorithm verification.
 
-- Added `local_names: HashMap<u32, String>` to IR `Function` struct
-- IR lowering populates local_names for every let-binding
-- `build_c_to_source_name_map()` maps IR local variable names back to source
-  names in counterexample JSON (using `or_insert_with` to not overwrite
-  more-precise param mappings)
+**21.6a Benchmark harness integration.**
+Fork the benchmark repository. Add Vow as a target language with build
+scripts, skill docs, and test infrastructure.
 
-### 14.4 Error suggestion hints in diagnostics ✔
+**21.6b Pilot runs and iteration.**
+Run Claude Code against the mini-git specification using `./vowc`. Identify
+failure modes. Fix the toolchain, not the agent.
 
-- Enabled effect checking and linear type checking (previously commented out)
-- Added structured hints to 8 high-value error paths:
-  - Struct field not found: suggests similar field names or lists available fields
-  - Unknown struct in literal: suggests similarly-named structs
-  - Argument count mismatch: shows expected parameter types
-  - Type mismatch on comparison: suggests type conversion
-  - Logical operator on non-bool: suggests `!= 0` conversion
-  - Index on non-indexable type: lists supported indexable types
-  - `?` on wrong type: explains Option/Result requirement
-- Added `all_struct_names()` to `TypeEnv` for struct name suggestions
+**21.6c Full benchmark execution.**
+20-trial suite for statistical significance. Target: ≥38/40 pass rate with
+competitive execution time (<90s).
 
-### 14.5 Level 3 Agent Capability Test ✔
+**21.6d Verified variant.**
+Run the benchmark with `vow build` (verification enabled). Demonstrate that
+Vow can produce a verified mini-git implementation — something no other
+benchmark language can do.
 
-Previously completed.
+### 21.7 Publish direct comparison
 
----
+**Status: BLOCKED on 21.4e–f (infrastructure and benchmarks complete).**
 
-## Phase 15 (revised): Vericoding Benchmark — IN PROGRESS
+Publish the Vericoding comparison as soon as the direct track is complete:
 
-**Goal:** Vow is positioned as a reference language for specification-driven
-AI coding. Level 4 capability.
+1. **Vericoding results** — pass rates with contract fidelity breakdown (Exact
+   vs All), compared against Dafny/Verus/Lean per-model results from the
+   Vericoding paper.
+2. **Comparison matrix** — the table from the Competitive Landscape section,
+   with empirical data from the Vericoding track.
 
-### 15.1 Define the benchmark suite ✔
+This is the minimum viable publication. It does not require the standard
+library, ai-coding-lang-bench, or any other parallel work.
 
-40 benchmarks across three difficulty levels in `benchmarks/`:
+Target: blog post + arxiv preprint.
 
-- **Easy (15):** Pure arithmetic, branching, simple loops. Single-function,
-  base-type contracts (`ensures`, `requires`).
-- **Medium (15):** Multi-function algorithms, Vec/HashMap contracts, loop
-  invariants, cross-function reasoning.
-- **Hard (10):** Multi-function with structs, state machines, matrix ops.
-  4 are Stretch (expected to exceed current ESBMC capabilities).
+### 21.8 Publish dual-track comparison update
 
-Each benchmark has: `spec.md` (natural language), `skeleton.vow` (contracts
-pre-written, bodies empty), `reference.vow` (verified solution), `meta.toml`
-(max_cegis_iterations, tags, difficulty). `benchmarks/manifest.toml` lists all.
-36/36 non-Stretch references verified by ESBMC.
+**Status: BLOCKED on 21.6 (real-world track).**
 
-Key design decisions:
-- Verified functions use only i64 params/returns (structs unmodelled in C emitter)
-- Struct benchmarks restructured to use i64 helper functions
-- C emitter Upsilon ordering bug found and fixed (post-terminal + batching)
+Follow-up publication adding the real-world track:
 
-### 15.2 Run agents against the suite ✔
+1. **ai-coding-lang-bench results** — pass rate and execution time, with
+   verified variant as a differentiator.
+2. **Updated comparison matrix** — empirical data from both tracks.
 
-`bench/` contains a Python CLI tool (managed by `uv`) that runs frontier LLMs
-against the benchmark suite via direct API calls (Anthropic/OpenAI SDKs).
-
-Architecture:
-- System prompt: all 6 skill docs concatenated (~35KB / ~9K tokens)
-- Per benchmark: single conversation with CEGIS loop
-- Code extraction handles markdown fences + raw `module` detection
-- Temperature 0.0 for reproducibility
-- Incremental save + resume support
-- Failure mode classification (syntax_error, type_error, wrong_algorithm,
-  effect_violation, esbmc_timeout, empty_response)
-
-```bash
-uv run --project bench bench/run.py validate-references   # verify all references
-uv run --project bench bench/run.py run --model <id>       # full suite
-uv run --project bench bench/run.py report                 # comparison report
-```
-
-Results compared against paper baselines (Dafny 82%, Verus 44%, Lean 27%).
-
-### 15.3 Compare against vericoding paper results ✔
-
-The reference numbers from arxiv.org/abs/2509.22908:
-- Dafny: 82% verification rate
-- Verus/Rust: 44%
-- Lean: 27%
-
-First run (2026-03-07, commit 23e3138):
-- **Vow + claude-sonnet-4-6: 100%** (36/36 non-Stretch, all on first CEGIS iteration)
-- Mean verification time: ~5s per benchmark (M01 binary_search slowest at 40.7s)
-- 2/4 Stretch benchmarks also verified (H04, H09); 2 hit ESBMC limits (H07, H10)
-- Full report: `reports/2026-03-07-sonnet-4-6.md`
-
-Vow's hypothesis confirmed: blame-tracking contracts + structured
-counterexamples + the CEGIS-ready pipeline yield higher verification rates
-than unguided approaches.
-
-### 15.4 Publish results — POSTPONED
-
-Write up findings. Position Vow as the reference language for vericoding.
-The narrative: "Vow is the language where AI agents prove their code correct."
-Postponed to focus on self-hosted compiler parity (Phases 16–20).
+This can be a second blog post or an updated preprint. It strengthens the
+story but does not gate the initial publication.
 
 ---
 
-## Path to Self-Hosted Primary Driver
+## Phase 22: Language Ergonomics
 
-The following phases close the gap between the self-hosted compiler and the
-Rust compiler. After Phase 20, the self-hosted binary becomes the primary
-driver for all Vow development.
+**Priority: HIGH — these directly improve agent productivity and reduce
+error rates. Ordered by implementation difficulty (easiest first).**
+
+### 22.1 Named constants (`const` declarations) — GitHub #15 ✅
+
+Top-level `const` declarations that fold at compile time. Both Rust and
+self-hosted compilers support `const NAME: TYPE = LITERAL;`. The checker
+validates literal values; the lowerer folds to `ConstI64`. Zero verifier
+impact — verification of contracts using consts works unchanged.
+
+### 22.2 Break and break-with-value — GitHub #13 ✅
+
+`break` exits the current loop via `Jump` to the loop exit block. Both Rust
+and self-hosted compilers support `break` inside `while` loops. The Rust
+compiler also supports `break` inside `loop` expressions and `ExprKind::Loop`
+IR lowering. The type checker validates break-outside-loop errors. Back-edge
+emission is guarded by `is_terminated()` to handle break in loop bodies.
+
+### 22.3 Iterator protocol / for-each loop — GitHub #10
+
+`for`-each loop over `Vec<T>`:
 
 ```
- Phase 15.2 (complete)
-  |
-  v
-+-------------------------------------------------------+
-| Phase 16: Self-Hosted Vow Contracts                   |
-|  16.1  Vow block lowering (requires/ensures/invariant)|
-|  16.2  Debug-mode codegen (__vow_violation calls)     |
-|  16.3  Blame metadata propagation                     |
-|  Self-hosted compiler can compile + enforce contracts  |
-+---------------------------+---------------------------+
-                            |
-                            v
-+-------------------------------------------------------+
-| Phase 17: Self-Hosted Diagnostics                     |
-|  17.1  Structured error types in Vow                  |
-|  17.2  JSON + human-readable dual emitter             |
-|  17.3  Source spans in error messages                  |
-|  Self-hosted compiler has production-quality errors    |
-+---------------------------+---------------------------+
-                            |
-                            v
-+-------------------------------------------------------+
-| Phase 18: Self-Hosted Verification Pipeline           |
-|  18.1  C emitter in Vow (IR -> ESBMC-compatible C)   |
-|  18.2  ESBMC invocation + result parsing              |
-|  18.3  Counterexample -> source mapping (Origin)      |
-|  18.4  CEGIS loop integration                         |
-|  Self-hosted compiler can verify contracts via ESBMC   |
-+---------------------------+---------------------------+
-                            |
-                            v
-+-------------------------------------------------------+
-| Phase 19: CLI & Driver Parity                         |
-|  19.1  Subcommands (build, verify, test)              |
-|  19.2  --mode debug / --no-verify flags               |
-|  19.3  --help (JSON + human)                          |
-|  19.4  Parallel codegen + verify pipeline             |
-|  Feature parity with Rust `vow` CLI                   |
-+---------------------------+---------------------------+
-                            |
-                            v
-+-------------------------------------------------------+
-| Phase 20: Switchover                                  |
-|  20.1  Self-hosted passes full test suite             |
-|  20.2  Benchmark suite runs under self-hosted         |
-|  20.3  Bootstrap from Rust -> self-hosted release     |
-|  20.4  Rust compiler becomes "stage 0" bootstrap only |
-|                                                       |
-|  * SELF-HOSTED IS THE PRIMARY DRIVER *                |
-+-------------------------------------------------------+
+for item in vec { ... }
+for i, item in vec.enumerate() { ... }
 ```
 
-### Critical path analysis
+Impact: eliminates 50+ manual while-loop index patterns across the 9000-line
+self-hosted compiler. Removes an entire class of off-by-one errors and
+forgotten `i = i + 1` infinite loops that agents produce at elevated rates.
 
-Phase 16 (Contracts) is the most important next step — contracts are the
-defining feature of the language. The Rust lowerer's `lower/vow.rs` (762 lines)
-is the direct reference implementation.
+Scope: lexer (`for`/`in` keywords) + parser + IR lowering (desugar to while
+loop with bounds check) + verification (loop invariant synthesis for for-loops).
 
-Phase 18 (Verification) is the hardest phase. The C emitter + ESBMC
-integration is ~3,500 lines in Rust and involves subprocess management, output
-parsing, and counterexample mapping.
-
-Phases 16 and 17 are independent and can be done in parallel. Phase 18
-depends on 16. Phase 19 depends on 16 and 17. Phase 20 depends on all.
+Note: the design sketch (§4.3) says "no `for` loops" because iterators require
+traits. This `for`-each is a syntactic desugar to `while` with index — no
+traits, no closures, no iterators. The IR is identical to the manual pattern.
 
 ---
 
-## Phase 16: Self-Hosted Vow Contracts — COMPLETE
+## Phase 23: Toolchain Improvements
 
-**Goal:** The self-hosted compiler can lower vow blocks (requires, ensures,
-invariant) to IR and generate runtime violation checks in debug mode.
+**Priority: MEDIUM — these improve the development experience but don't
+block current workflows.**
 
-The vow lowering infrastructure was already built during Phases 9–12:
-`lower.vow` has `lower_requires_clauses`, `lower_ensures_clauses`,
-`lower_invariant_clauses`, free variable collection, blame metadata, and
-parameter refinement handling. The `vow-clif-shim` already emits runtime
-checks when `mode != 0`. The only missing piece was `main.vow` hardcoding
-`mode = 0` (release).
+### 23.1 Expression-level source spans
 
-### 16.1 Add `--mode debug` flag to self-hosted compiler ✔
+Populate expression spans in the self-hosted compiler's parser. Currently
+only function and statement spans are wired through. Expression spans would
+give more precise error locations (e.g., "type mismatch in `a + b`" instead
+of "type mismatch in fn foo").
 
-Added `--mode` flag parsing in `main.vow`. Maps `"debug"` → mode 1,
-default → mode 0. Passes mode to `clif_emit_module`. Updated
-`get_source_path` to skip `--mode` argument values.
+### 23.2 Property-based tests for compiler pipeline (PR #27)
 
-### 16.2 Verified: divide.vow produces VowViolation in debug mode ✔
+Add proptest-based roundtrip, determinism, and robustness tests across
+vow-syntax, vow-types, and vow-codegen. Catches edge cases that handwritten
+tests miss.
 
-```
-$ /tmp/vowc --mode debug -o /tmp/divide examples/divide.vow
-$ /tmp/divide
-{"error":"VowViolation","vow_id":0,"blame":"Caller","description":"requires y != 0","file":"","offset":0,"values":{"y":0}}
-```
+### 23.3 IO error diagnostic code (PR #26)
 
-### 16.3 Verified: IR output matches Rust compiler ✔
-
-IR output for divide.vow is byte-identical between Rust and self-hosted
-compilers (including VowRequires instructions and vow entries).
-
-### 16.4 Verified: bootstrap triple test passes ✔
-
-Binary fixed point confirmed after the change (B = C, sha256 identical).
+New `EC_IO_ERROR` error code. Consolidate error counting to `DiagCtx` for
+consistent error tracking across the pipeline.
 
 ---
 
-## Phase 17: Self-Hosted Diagnostics — IN PROGRESS
+## Phase 24: Advanced Language Features
 
-**Goal:** The self-hosted compiler emits structured, actionable diagnostics
-in both JSON and human-readable format.
+**Priority: DEMAND-DRIVEN — each is triggered when a concrete need surfaces.**
 
-### 17.1 Structured error types in Vow ✔
+### 24.1 String comparison deallocation ✅ (partial)
 
-New `compiler/diag.vow` module with structured diagnostic types matching
-Rust `vow-diag`:
-- `Diagnostic` struct: severity, code, message, file, span_start, span_len,
-  blame, hints (flat span fields avoid chained-field-access gotcha)
-- `DiagCtx` struct: diagnostic accumulator with error_count
-- Severity constants (`SEV_ERROR/WARNING/NOTE`)
-- Blame constants (`DIAG_BLAME_CALLER/CALLEE/NONE` — prefixed to avoid
-  collision with `ir.vow`'s `BLAME_CALLER/BLAME_CALLEE`)
-- 11 error code constants (`EC_*`) matching Rust `ErrorCode` variant order
-- Constructor helpers: `diag_new`, `diag_error`, `diag_add_hint`,
-  `diag_ctx_new`, `diag_ctx_emit`, `diag_ctx_has_errors`
-- Name-to-string helpers: `sev_name`, `diag_blame_name`, `ec_name`
-- All constant functions have `vow { ensures: result >= 0 }` contracts
-- Bootstrap triple test passes (binary fixed point confirmed)
+Typed free functions (`__vow_string_free`, `__vow_vec_free_val`,
+`__vow_map_free`) implemented in `vow-runtime`. Both lowerers emit inline
+`__vow_string_free` calls immediately after string equality/contains
+comparisons when one operand is a string literal. This eliminates the
+dominant leak pattern (keyword matching in loops — ~180K allocations per
+compiler invocation). Stress test: 100K iterations × 4 comparisons uses
+constant 2.7 MB RSS.
 
-### 17.2 JSON + human-readable dual emitter
+**Remaining work (future):**
+- Scope-exit deallocation for `let`-bound strings (requires escape analysis)
+- Vec/Map/Struct deallocation
+- Arena header-based `__vow_arena_free` for struct allocations
+- `drop()` language builtin for manual control
 
-Implement dual output (the Vow design invariant):
-- JSON to stdout (parseable by agents)
-- Human-readable to stderr (readable by developers)
-- Both always on, not a flag
+### 24.2 Recursive type ESBMC bounds
 
-### 17.3 Source spans in error messages
+**Trigger: proven — Stretch benchmarks H07 (ring_buffer) and H10
+(expression_eval) hit `--unwind` ceiling.**
 
-Wire spans from AST/IR through to diagnostic output:
-- File name + line + column from `Span`
-- Underline the relevant source range in human output
-- Include span as `{file, line, column, length}` in JSON output
+Options:
+- Automatic `--unwind` bound selection based on type recursion depth
+- User-specified per-function unwind annotations
+- Direct goto-program emission (bypass C intermediate representation)
 
-### 17.4 Verification: error output matches Rust compiler format
+### 24.3 Effect system completion
 
-Test: introduce a type error in a `.vow` file, compile with both Rust and
-self-hosted compilers, verify JSON output has the same schema.
+**Trigger: agent needs to reason about which functions can panic.**
 
----
+`[Panic]` effect exists in the grammar but no builtins are annotated with it.
+Division by zero, array out-of-bounds, and `.unwrap()` are all silent panic
+sources. Completing the effect system would let agents statically reason about
+failure modes.
 
-## Phase 18: Self-Hosted Verification Pipeline
+### 24.4 Linear type enforcement
 
-**Goal:** The self-hosted compiler can invoke ESBMC, interpret results, and
-map counterexamples back to source. This is the hardest phase.
+**Trigger: agent writes resource-managing code that leaks handles.**
 
-### 18.1 C emitter in Vow
+The `linear struct` syntax and checker infrastructure exist (`vow-types/src/
+linear.rs`, 192 lines) but have never been exercised in practice. No examples
+use `linear struct`. Activation requires resource types (file handles, network
+connections) to exist in the language.
 
-Port the IR-to-C translation to Vow:
-- Emit ESBMC-compatible C from Vow IR
-- Model Vec/String/HashMap operations as C functions
-- Handle Upsilon/Phi nodes correctly (batched temporaries)
-- Emit `__ESBMC_assert` for verification conditions
+### 24.5 Direct goto-program emission
 
-Reference: Rust verification pipeline (~3,500 lines total). The C emitter
-is the largest single component.
+**Trigger: C model limitations accumulate (Ptr type mismatches, struct field
+tracking, fixed-size collection models).**
 
-### 18.2 ESBMC invocation + result parsing
-
-Implement subprocess management in Vow:
-- Invoke `esbmc` with correct flags (`--incremental-bmc`, `--unwind`, etc.)
-- Parse ESBMC stdout for VERIFICATION SUCCESSFUL / VERIFICATION FAILED
-- Parse counterexample JSON from ESBMC output
-- Handle timeouts and crashes gracefully
-
-Requires: `process_run` or equivalent FFI for subprocess execution with
-stdout/stderr capture. May need a new runtime function
-`__vow_process_run(cmd, args) -> (exit_code, stdout, stderr)`.
-
-### 18.3 Counterexample-to-source mapping
-
-Port the `Origin` metadata and name mapping:
-- `local_names` in IR Function for source variable names
-- `build_c_to_source_name_map` equivalent in Vow
-- Map ESBMC counterexample variables back to Vow source names
-- Emit counterexample JSON with source-level variable names
-
-### 18.4 CEGIS loop integration
-
-Wire the verification pipeline into the compiler driver:
-- Compile → emit C → invoke ESBMC → parse result → report
-- Structured JSON output for verification results
-- Counterexample JSON with blame and source names
-
-### 18.5 Verification: self-hosted verifies its own contracts
-
-Test: `./compiler/main verify compiler/token.vow` successfully verifies all
-89 contracts on tok_* functions, matching the Rust compiler's results.
+Emit ESBMC goto programs directly from Vow IR instead of going through C.
+Eliminates the C type system as an intermediate representation. Currently
+Vec is modeled as `int64_t data[128]`, String as `int8_t data[256]`,
+HashMap as 64-entry arrays — these fixed sizes are artificial constraints.
 
 ---
 
-## Phase 19: CLI & Driver Parity
+## Phase 25: Ecosystem
 
-**Goal:** The self-hosted compiler has feature parity with the Rust `vow` CLI.
-An agent (or human) can use the self-hosted binary as a drop-in replacement.
+**Priority: DEMAND-TRIGGERED — implement only when external demand justifies.**
 
-### 19.1 Subcommands
+### LSP server
 
-Implement `build`, `verify`, `test` subcommands:
-- `./vowc build foo.vow` — compile + verify (default)
-- `./vowc verify foo.vow` — verify only (no codegen)
-- `./vowc test` — run tests (placeholder)
+Trigger: significant demand from human developers using Vow in editors.
+Agents use the CLI, not editors. Implement only if human adoption justifies.
 
-Reference: Rust `vow/src/main.rs` argument parsing (~4,200 lines).
+### MCP server
 
-### 19.2 Flags
+Trigger: specific AI tool integration requires MCP as the interface. The
+skill document + JSON CLI output covers the same ground for direct usage.
 
-- `--no-verify` — skip ESBMC verification
-- `--mode debug` — emit runtime vow checks
-- `--unwind N` — ESBMC unwind bound
-- `--debug-trace=calls|full` — structured execution traces
-- `-o <path>` — output binary path (already exists)
+### FFI contract enforcement
 
-### 19.3 Structured --help
+Trigger: agent writes `extern "C"` blocks without contracts, producing
+unverified code. The type checker should require vow blocks on all extern
+declarations.
 
-- `--help` — JSON capability description (for agents)
-- `--help --human` — human-readable description
-- Same schema as Rust compiler's `--help` output
+### Concurrency model
 
-### 19.4 Parallel codegen + verify pipeline
+Trigger: use case requiring concurrent Vow programs surfaces. The effect
+system provides the foundation (`[Concurrent]` effect), but the execution
+model is undefined.
 
-The Rust compiler runs codegen and verification in parallel (compile while
-verifying). Port this to the self-hosted compiler for equivalent performance.
+### Constrained decoding for Vow grammar
 
-### 19.5 Verification: CLI compatibility test
+The grammar is well-suited for grammar-constrained LLM sampling (a la
+MoonBit's semantics-based sampler). Worth exploring if the skill-based
+approach plateaus. Recent research (ICML 2025) shows 17x faster preprocessing
+for grammar-constrained decoding. If agents achieve high verification rates
+with the skill alone, constrained decoding is an optimization.
 
-Test: run the full example suite (`examples/*.vow`) through both Rust and
-self-hosted compilers with identical flags. All outputs must match.
+### Lean integration
 
----
-
-## Phase 20: Switchover
-
-**Goal:** The self-hosted compiler becomes the primary driver. The Rust
-compiler is retained only as the stage 0 bootstrap.
-
-### 20.1 Full test suite under self-hosted compiler
-
-Run all pipeline tests, example programs, and integration tests using the
-self-hosted compiler. Fix any discrepancies.
-
-### 20.2 Benchmark suite under self-hosted compiler
-
-Run the vericoding benchmark suite (`bench/`) using the self-hosted compiler
-as the verification backend. Results must match the Rust compiler's results.
-
-### 20.3 Bootstrap release process
-
-Define the release workflow:
-```
-Stage 0 (one-time):  cargo build --release        -> ./target/release/vow
-Stage 1:             ./target/release/vow build compiler/main.vow -> ./vowc
-Stage 2:             ./vowc build compiler/main.vow -> ./vowc2
-Verify:              sha256sum ./vowc ./vowc2      (must match)
-```
-
-The Rust compiler stays in the repo. `cargo build` is the bootstrap entry
-point. Day-to-day development uses `./vowc`.
-
-### 20.4 Documentation and skill updates
-
-Update the Toolchain Skill document to reference the self-hosted binary as the
-primary compiler. Update CLAUDE.md build instructions. The Rust compiler
-section becomes "Bootstrap" documentation.
-
-### 20.5 Level 5 Agent Capability Test
-
-Run the test: an agent uses the self-hosted compiler exclusively to write,
-compile, verify, and debug a multi-module program with contracts. The Rust
-compiler is not invoked at any point after the initial bootstrap.
-
----
-
-## Phase 21: Advanced Language Features (As Needed)
-
-These features are not on a timeline. Each is triggered when a concrete need
-surfaces — either from the vericoding benchmark, from agent capability tests,
-or from community adoption.
-
-### Triggered by agent capability test failures
-
-- **Linear type enforcement** (`linear struct` + checker tracking) — trigger:
-  agent writes resource-managing code that leaks handles
-- **Region-based memory** (explicit `region` syntax) — trigger: agent-written
-  programs hit arena-per-scope limitations (e.g., long-lived allocations)
-- **Effect system completion** (all builtins annotated, `[Panic]` tracking) —
-  trigger: agent needs to reason about which functions can panic
-
-### Triggered by toolchain bottlenecks
-
-- **Verification caching** — trigger: ESBMC re-verifies unchanged modules,
-  slowing the CEGIS loop
-- **Parallel verification** — trigger: multi-module programs take too long
-  to verify sequentially
-- **Recursive type ESBMC bounds** (from design sketch §15) — trigger: agent
-  hits `--unwind` ceiling on compiler AST types
-- **Direct goto-program emission** — trigger: C model limitations accumulate
-  (Ptr type mismatches, struct field tracking, modeled-type propagation).
-  Emit ESBMC goto programs directly from Vow IR instead of going through C,
-  eliminating the C type system as an intermediate representation
-
-### Triggered by ecosystem demand
-
-- **LSP server** — trigger: significant demand from developers using Vow in
-  editors (not agents in CLIs). Implement only if human adoption justifies it.
-- **MCP server** — trigger: specific AI tool (Claude Code, Cursor, etc.)
-  integration requires MCP as the interface. The skill document covers the
-  same ground for direct CLI usage.
-- **FFI contract enforcement in type checker** — trigger: agent writes
-  `extern "C"` blocks without contracts, produces unverified code
-- **Concurrency model** (`[Concurrent]` effect, execution model) — trigger:
-  use case requiring concurrent Vow programs surfaces
-
----
-
-## Deferred Ideas (Not Rejected, Not Scheduled)
-
-These ideas from the original roadmap and ideas-improvement.md are tracked
-but not scheduled:
-
-- **Constrained decoding for Vow grammar** (from original Phase 13) — the
-  grammar is well-suited for grammar-constrained LLM sampling (a la MoonBit's
-  semantics-based sampler). Worth exploring after the skill-based approach is
-  validated. If agents achieve high verification rates with the skill alone,
-  constrained decoding is an optimization. If they don't, constrained decoding
-  might help.
-- **`--watch` mode** (from ideas #10) — useful for human developers iterating.
-  Agents don't need watch mode; they invoke the compiler explicitly.
-- **Lean integration** (from design sketch §15) — may be revisited for proofs
-  beyond ESBMC's bounded model checking. Deferred until a concrete verification
-  need exceeds ESBMC's capabilities.
-
----
-
-## Summary: What Changed and Why
-
-| Original Phase | Revised | Rationale |
-|---|---|---|
-| 12: LSP + MCP | 12: Skill + `--debug-trace` + incremental compilation | Agents don't use editors. The skill is the interface. |
-| 13: "Vow Pilot" agent | 13: Cross-module maturity | Make the toolchain agent-friendly; any LLM becomes the pilot. |
-| 14: Vericoding showcase | 14: Contract retrofit + CEGIS validation | Can't benchmark what agents can't use. Validate the pipeline first. |
-| 15: Advanced features | 15: Vericoding benchmark | Moved up after pipeline validation. Now has prerequisites met. |
-| 16: Features as needed | 16–20: Self-hosted primary driver | Concrete path to self-hosted switchover. The compiler eating its own dogfood is the ultimate credibility proof. |
-| — | 21: Features as needed | Demand-driven, not speculative. Renumbered from 16. |
-
-The through-line: **the toolchain is the product, not the agent.** If the
-toolchain emits the right structured data and the skill teaches the workflow,
-the agent is a commodity. Invest in the interface, not the consumer.
-
-The self-hosting switchover (Phases 16–20) adds a second through-line:
-**the compiler must use its own features.** A language whose own compiler
-doesn't use contracts has a credibility gap. A self-hosted compiler that
-verifies its own contracts is the strongest possible proof that the system
-works.
+May be revisited for proofs beyond ESBMC's bounded model checking. Deferred
+until a concrete verification need exceeds ESBMC's capabilities.
 
 ---
 
 ## References
 
-- Vow Design Sketch v3 (26.02.2026) — `vow_design_sketch_v3.md`
+- Vow Design Sketch v3 (26.02.2026) — `docs/vow_design_sketch.md`
 - Ideas for Improvement — `ideas-improvement.md`
 - Vericoding Benchmark: arxiv.org/abs/2509.22908
 - CEGIS Repair (AAAI 2025): arxiv.org/html/2502.07786v1
 - MoonBit AI-Native Toolchain: moonbitlang.com/blog/moonbit-ai
-- Bosque Language: github.com/microsoft/BosqueLanguage
+- Bosque Language: github.com/BosqueLanguage/BosqueCore
 - Armin Ronacher, "A Language For Agents": lucumr.pocoo.org/2026/2/9/a-language-for-agents/
 - Martin Kleppmann, "AI will make formal verification mainstream": martin.kleppmann.com/2025/12/08/ai-formal-verification.html
+- DafnyPro (POPL 2026): popl26.sigplan.org
+- ATLAS (2025): arxiv.org/abs/2512.10173
+- BRIDGE (2025): arxiv.org/abs/2511.21104
+- ESBMC + Rust Foundation: rustfoundation.org/media/expanding-the-rust-formal-verification-ecosystem-welcoming-esbmc/
+- ai-coding-lang-bench: github.com/mame/ai-coding-lang-bench
 
 ---
 
-*This document captures the revised roadmap as of March 2026. Each phase
-ends with a concrete agent capability test. If the test passes, move on.
-If it fails, fix the toolchain.*
+*This document captures the forward-looking roadmap as of 15 March 2026.
+Phase 21 critical path: 21.1 → 21.4 → 21.7 (publish direct comparison).
+Parallel: 21.3 → 21.6 → 21.8 (publish dual-track update). 21.1–21.3 are
+complete; 21.4a–d are complete (107 benchmarks, 103/103 verified). Remaining:
+21.4e–f (run protocol, generate report) → 21.7 (publish). Phase 22 improves
+agent ergonomics. Phase 23 is toolchain polish. Phases 24–25 are
+demand-driven. If a phase isn't earning its keep, cut it.*

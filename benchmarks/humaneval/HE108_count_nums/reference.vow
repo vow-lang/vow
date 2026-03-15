@@ -1,0 +1,72 @@
+module CountNums
+
+fn digit_sum(n: i64) -> i64 vow {
+  requires: n >= 0 - 10000,
+  requires: n <= 10000,
+  ensures: result >= 0 - 10000,
+  ensures: result <= 10000
+} {
+  if n == 0 {
+    0
+  } else {
+    let mut abs_n: i64 = n;
+    let mut neg: i64 = 0;
+    if n < 0 {
+      abs_n = 0 - n;
+      neg = 1;
+    } else {
+      0;
+    }
+    let mut s: i64 = 0;
+    let mut rem: i64 = abs_n;
+    while rem > 0 vow {
+      invariant: rem >= 0
+    } {
+      s = s + rem % 10;
+      rem = rem / 10;
+    }
+    if neg == 1 {
+      let mut first_digit: i64 = abs_n;
+      while first_digit >= 10 vow {
+        invariant: first_digit >= 0
+      } {
+        first_digit = first_digit / 10;
+      }
+      s - first_digit - first_digit
+    } else {
+      s
+    }
+  }
+}
+
+fn count_nums(arr: Vec<i64>) -> i64 vow {
+  requires: arr.len() >= 0,
+  requires: arr.len() <= 8,
+  ensures: result >= 0
+} {
+  let mut cnt: i64 = 0;
+  let mut i: i64 = 0;
+  while i < arr.len() vow {
+    invariant: i >= 0,
+    invariant: i <= arr.len(),
+    invariant: cnt >= 0
+  } {
+    if digit_sum(arr[i]) > 0 {
+      cnt = cnt + 1;
+    } else {
+      0;
+    }
+    i = i + 1;
+  }
+  cnt
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v.push(0 - 1);
+  v.push(0 - 12);
+  v.push(11);
+  print_i64(count_nums(v));
+  0
+}

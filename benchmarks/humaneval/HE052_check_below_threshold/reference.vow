@@ -1,0 +1,38 @@
+module CheckBelowThreshold
+
+fn check_below_threshold(l: Vec<i64>, t: i64) -> i64 vow {
+  requires: l.len() >= 0,
+  requires: l.len() <= 8,
+  requires: t >= 0,
+  requires: t <= 100,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  let mut all_below: i64 = 1;
+  let mut i: i64 = 0;
+  while i < l.len() vow {
+    invariant: i >= 0,
+    invariant: i <= l.len(),
+    invariant: all_below >= 0,
+    invariant: all_below <= 1
+  } {
+    if l[i] >= t {
+      all_below = 0;
+    } else {
+      0;
+    }
+    i = i + 1;
+  }
+  all_below
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v.push(2);
+  v.push(3);
+  v.push(4);
+  print_i64(check_below_threshold(v, 5));
+  print_i64(check_below_threshold(v, 3));
+  0
+}

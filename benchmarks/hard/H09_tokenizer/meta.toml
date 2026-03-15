@@ -7,3 +7,4 @@ unwind = 10
 modules = 1
 expected_status = "Stretch"
 max_cegis_iterations = 5
+contract_fidelity = "n/a"

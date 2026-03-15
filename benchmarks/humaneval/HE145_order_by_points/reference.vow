@@ -1,0 +1,116 @@
+module OrderByPoints
+
+fn digit_sum(n: i64) -> i64 vow {
+  requires: n >= 0 - 10000,
+  requires: n <= 10000,
+  ensures: result >= 0 - 10000,
+  ensures: result <= 10000
+} {
+  if n == 0 {
+    0
+  } else {
+    let mut abs_n: i64 = n;
+    let mut is_neg: i64 = 0;
+    if n < 0 {
+      abs_n = 0 - n;
+      is_neg = 1;
+    } else {
+      0;
+    }
+    let mut s: i64 = 0;
+    let mut rem: i64 = abs_n;
+    while rem > 0 vow {
+      invariant: rem >= 0
+    } {
+      s = s + rem % 10;
+      rem = rem / 10;
+    }
+    if is_neg == 1 {
+      let mut first: i64 = abs_n;
+      while first >= 10 vow {
+        invariant: first >= 0
+      } {
+        first = first / 10;
+      }
+      s - first - first
+    } else {
+      s
+    }
+  }
+}
+
+fn order_by_points(s: Vec<i64>) -> Vec<i64> vow {
+  requires: s.len() >= 0,
+  requires: s.len() <= 8,
+  ensures: result.len() >= 0
+} {
+  let out: Vec<i64> = Vec::new();
+  let idx: Vec<i64> = Vec::new();
+  let mut i: i64 = 0;
+  while i < s.len() vow {
+    invariant: i >= 0,
+    invariant: i <= s.len()
+  } {
+    out.push(s[i]);
+    idx.push(i);
+    i = i + 1;
+  }
+  let mut a: i64 = 0;
+  while a < out.len() vow {
+    invariant: a >= 0,
+    invariant: a <= out.len()
+  } {
+    let mut min_pos: i64 = a;
+    let mut b: i64 = a + 1;
+    while b < out.len() vow {
+      invariant: b >= a + 1,
+      invariant: b <= out.len(),
+      invariant: min_pos >= 0,
+      invariant: min_pos < out.len()
+    } {
+      let ds_b: i64 = digit_sum(out[b]);
+      let ds_m: i64 = digit_sum(out[min_pos]);
+      if ds_b < ds_m {
+        min_pos = b;
+      } else {
+        if ds_b == ds_m {
+          if idx[b] < idx[min_pos] {
+            min_pos = b;
+          } else {
+            0;
+          }
+        } else {
+          0;
+        }
+      }
+      b = b + 1;
+    }
+    if min_pos != a {
+      let tmp_v: i64 = out[a];
+      out[a] = out[min_pos];
+      out[min_pos] = tmp_v;
+      let tmp_i: i64 = idx[a];
+      idx[a] = idx[min_pos];
+      idx[min_pos] = tmp_i;
+    } else {
+      0;
+    }
+    a = a + 1;
+  }
+  out
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(41);
+  v.push(32);
+  v.push(23);
+  v.push(14);
+  let r: Vec<i64> = order_by_points(v);
+  let mut i: i64 = 0;
+  while i < r.len() {
+    print_i64(r[i]);
+    i = i + 1;
+  }
+  0
+}

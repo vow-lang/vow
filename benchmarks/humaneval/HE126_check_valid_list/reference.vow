@@ -1,0 +1,80 @@
+module CheckValidList
+
+fn check_valid_list(lst: Vec<i64>) -> i64 vow {
+  requires: lst.len() >= 0,
+  requires: lst.len() <= 8,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  if lst.len() <= 1 {
+    1
+  } else {
+    let mut valid: i64 = 1;
+    let mut i: i64 = 0;
+    while i < lst.len() - 1 vow {
+      invariant: i >= 0,
+      invariant: i <= lst.len(),
+      invariant: valid >= 0,
+      invariant: valid <= 1
+    } {
+      if lst[i] > lst[i + 1] {
+        valid = 0;
+      } else {
+        0;
+      }
+      i = i + 1;
+    }
+    if valid == 1 {
+      let mut j: i64 = 0;
+      while j < lst.len() vow {
+        invariant: j >= 0,
+        invariant: j <= lst.len(),
+        invariant: valid >= 0,
+        invariant: valid <= 1
+      } {
+        let mut count: i64 = 0;
+        let mut k: i64 = 0;
+        while k < lst.len() vow {
+          invariant: k >= 0,
+          invariant: k <= lst.len(),
+          invariant: count >= 0
+        } {
+          if lst[k] == lst[j] {
+            count = count + 1;
+          } else {
+            0;
+          }
+          k = k + 1;
+        }
+        if count > 2 {
+          valid = 0;
+        } else {
+          0;
+        }
+        j = j + 1;
+      }
+      valid
+    } else {
+      0
+    }
+  }
+}
+
+fn main() -> i32 [io] {
+  let v1: Vec<i64> = Vec::new();
+  v1.push(1);
+  v1.push(2);
+  v1.push(3);
+  print_i64(check_valid_list(v1));
+  let v2: Vec<i64> = Vec::new();
+  v2.push(1);
+  v2.push(3);
+  v2.push(2);
+  print_i64(check_valid_list(v2));
+  let v3: Vec<i64> = Vec::new();
+  v3.push(1);
+  v3.push(1);
+  v3.push(1);
+  print_i64(check_valid_list(v3));
+  0
+}

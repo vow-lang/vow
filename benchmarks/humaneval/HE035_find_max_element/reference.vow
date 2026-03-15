@@ -1,0 +1,37 @@
+module FindMaxElement
+
+fn find_max_element(l: Vec<i64>) -> i64 vow {
+  requires: l.len() >= 0,
+  requires: l.len() <= 8,
+  ensures: result >= 0
+} {
+  if l.len() == 0 {
+    0
+  } else {
+    let mut max_val: i64 = l[0];
+    let mut i: i64 = 1;
+    while i < l.len() vow {
+      invariant: i >= 1,
+      invariant: i <= l.len()
+    } {
+      if l[i] > max_val {
+        max_val = l[i];
+      } else {
+        0;
+      }
+      i = i + 1;
+    }
+    max_val
+  }
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(3);
+  v.push(7);
+  v.push(2);
+  v.push(9);
+  v.push(1);
+  print_i64(find_max_element(v));
+  0
+}

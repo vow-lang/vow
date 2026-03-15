@@ -31,7 +31,7 @@ fn main() -> i32 [io] {
 }
 ```
 
-Build and run:
+Build and run (`./vowc` is the primary compiler binary, produced by `scripts/bootstrap.sh`):
 ```
 $ vow build hello.vow
 $ ./hello

@@ -1,0 +1,13 @@
+module UniqueDigits
+
+fn unique_digits(x: Vec<i64>) -> Vec<i64> vow {
+  requires: x.len() >= 0,
+  requires: x.len() <= 8,
+  ensures: result.len() >= 0
+} {
+  Vec::new()
+}
+
+fn main() -> i32 [io] {
+  0
+}

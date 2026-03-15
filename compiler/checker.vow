@@ -52,7 +52,7 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
         }
         let err_msg: String = String::from("unknown type: ");
         err_msg.push_str(name);
-        env_emit_error(e, err_msg);
+        env_emit_error(e, err_msg, type_span(a, ast_tid));
         return CTY_UNKNOWN();
     }
     if tag == TY_GENERIC() {
@@ -264,7 +264,7 @@ fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     let body_tid: i64 = check_block(e, m, body_bid);
 
     if !is_coercible(e.ts, body_tid, ret_tid) {
-        env_emit_error(e, String::from("function body type mismatch"));
+        env_emit_error(e, String::from("function body type mismatch"), fn_span(a, fid));
     }
 
     env_pop_scope(e);
@@ -295,7 +295,7 @@ fn check_block(e: CheckEnv, m: Module, bid: i64) -> i64 [io] {
             } else {
                 let at_tid: i64 = resolve_ast_ty(e, m, annot_ast_tid);
                 if !is_coercible(e.ts, init_tid, at_tid) {
-                    env_emit_error(e, String::from("let binding type mismatch"));
+                    env_emit_error(e, String::from("let binding type mismatch"), stmt_span(a, sid));
                 }
                 at_tid
             };
@@ -464,7 +464,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 return CTY_NEVER();
             }
             if e.fn_param_count[fidx] != n_args {
-                env_emit_error(e, String::from("wrong argument count"));
+                env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
             }
             return e.fn_ret_tids[fidx];
         }
@@ -637,12 +637,12 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let val_eid: i64 = expr_a(a, eid);
         if val_eid == -1 {
             if !is_coercible(e.ts, CTY_UNIT(), e.cur_ret_tid) {
-                env_emit_error(e, String::from("return type mismatch"));
+                env_emit_error(e, String::from("return type mismatch"), expr_span(a, eid));
             }
         } else {
             let val_tid: i64 = check_expr(e, m, val_eid);
             if !is_coercible(e.ts, val_tid, e.cur_ret_tid) {
-                env_emit_error(e, String::from("return type mismatch"));
+                env_emit_error(e, String::from("return type mismatch"), expr_span(a, eid));
             }
         }
         return CTY_NEVER();
@@ -920,7 +920,7 @@ fn check_effects_fn(e: CheckEnv, m: Module, fid: i64) [io] {
         if fidx != -1 {
             let needed_eff: i64 = e.fn_effects[fidx];
             if needed_eff != 0 && !effect_covered(declared_eff, needed_eff) {
-                env_emit_error(e, String::from("effectful call from pure function"));
+                env_emit_error(e, String::from("effectful call from pure function"), fn_span(a, fid));
             }
         }
         i = i + 1;
