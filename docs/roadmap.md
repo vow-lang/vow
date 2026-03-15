@@ -18,12 +18,20 @@ Achieved:
 - Parallel codegen + verification (all ESBMC instances concurrent with codegen)
 - Structured JSON diagnostics with line:col source spans
 - `build`, `verify` subcommands; `--mode debug`, `--no-verify`, `--unwind N` flags
-- Vericoding benchmark: **100% (36/36)** with claude-sonnet-4-6 vs Dafny 82%, Verus 44%, Lean 27%
+- Vericoding benchmark: **100% (36/36)** with claude-sonnet-4-6 on Vow's own suite
 - 89/89 tests passing, 40/40 CLI compatibility tests
 - Toolchain Skill document, structured `--help`, `--debug-trace`, incremental compilation
 - Bootstrap: `scripts/bootstrap.sh` produces `./vowc` from Rust stage 0
 
 **Current maturity: 9/10 for agent autonomy on verified programs.**
+
+**Strongest current claim:** Vow is an unusually strong agent-first,
+bounded-verification language with an integrated compile/verify/CEGIS loop,
+blame tracking, structured counterexamples, and a self-hosted verified compiler.
+What it does **not** yet have is a fair apples-to-apples comparison on spec
+strength against Dafny/Verus/Lean. The 36/36 result is on Vow's own benchmark
+suite; the Vericoding paper's numbers are on cross-language translated tasks
+with stronger specs.
 
 Known limitations:
 - Arena deallocation is a no-op (`__vow_arena_free` leaks; fine for short-lived programs)
@@ -31,23 +39,37 @@ Known limitations:
 - 2/4 Stretch benchmarks hit ESBMC `--unwind` ceiling (H07, H10)
 - `divide.vow` release build has UB (no runtime checks; debug mode works)
 - Zero public visibility — benchmark results not yet published
+- Spec expressiveness gap: ensures clauses cannot call user-defined functions or express quantifiers
 
 ---
 
 ## Competitive Landscape (March 2026)
 
-| Project | Approach | Verification | Status |
-|---------|----------|-------------|--------|
-| **MoonBit** | Constrained token sampling | No formal verification | Approaching 1.0; AI Pilot agent |
-| **Bosque** | Contracts, canonical form | Research-stage verifier | Solo maintainer, slow progress |
-| **Dafny + LLMs** | LLM-generated proofs | DafnyPro: 86% (POPL 2026) | Very active research ecosystem |
-| **Verus + LLMs** | AutoVerus, VeriStruct | OS verification (Asterinas) | Growing Rust verification niche |
-| **Dana** | Intent-driven, agent orchestration | None | AI Alliance backed, different niche |
-| **Vow** | ESBMC + blame tracking, CEGIS | **100% (36/36)** integrated | Self-hosted, zero visibility |
+### Direct comparators (benchmark peers for Phase 21)
+
+| | **Vow** | **Dafny** | **Verus** | **Lean** |
+|---|---|---|---|---|
+| Primary goal | Agent correctness | General verification | Rust verification | Theorem proving |
+| Verification style | Bounded MC (ESBMC) | SMT (Z3) | SMT (Z3) | Interactive proofs |
+| Spec expressiveness | Bounded, no quantifiers* | Full first-order logic | Rust-embedded specs | Dependent types |
+| Automation burden | Zero (CEGIS loop) | Medium (ghost code) | Medium (proof hints) | High (tactic proofs) |
+| Agent ergonomics | Designed for agents | Retrofitted | Retrofitted | Retrofitted |
+| Counterexample quality | Structured JSON + blame | Basic | Basic | N/A |
+| Self-hosted pipeline | Yes (verified fixed point) | No | No | Yes (partial) |
+
+*Spec expressiveness improves after Phase 21.1 (spec function calls in ensures).
+
+### Adjacent comparators (positioning context)
+
+| | **MoonBit** | **Bosque** | **Dana** |
+|---|---|---|---|
+| Primary goal | AI-native tooling | Regularized reasoning | Agent orchestration |
+| Verification | None (constrained sampling) | Research-stage verifier | None |
+| Niche | IDE + constrained decoding | Canonical forms | Intent-driven agents |
 
 The Dafny ecosystem is publishing prolifically (ATLAS, DafnyPro, BRIDGE — all
-at POPL 2026). Vow's 100% result is the best published number but nobody knows
-about it. The competitive window is open but narrowing.
+at POPL 2026). Vow's 100% result is on its own suite; fair comparison requires
+the work in Phase 21.
 
 Vow's unique differentiators that no competitor has:
 - Blame tracking (caller vs callee) in verification failures
@@ -75,54 +97,106 @@ properties. This is the `ai-coding-lang-bench` target.
 
 ---
 
-## Phase 21: Publish & Position
+## Phase 21: Publishable Comparison
 
 **Priority: CRITICAL — competitive window is closing.**
 
-The 100% vericoding result is Vow's strongest asset but has zero visibility.
-Meanwhile, DafnyPro reached 86% at POPL 2026 and is publishing actively.
+Phase 21 is not "publish and hope." It is: make the comparison fair on two
+tracks (Vericoding + real-world), then publish. This phase absorbs the standard
+library work (old Phase 23), the ai-coding-lang-bench work (old Phase 24), and
+verification caching (old Phase 25.1) as prerequisites.
 
-### 21.1 Publish benchmark results
+### 21.1 Verification pipeline prerequisites
 
-**Status: BLOCKED — comparison methodology invalid, spec expressiveness gap
-identified.**
+**Status: BLOCKED — these must land before retranslating benchmarks.**
 
-The original 36/36 (100%) result is on Vow's own benchmark suite. The
-Vericoding paper (arxiv.org/abs/2509.22908) uses 12,504 specifications across
-Dafny (3,029), Verus (2,334), and Lean (7,141) — the same problems translated
-across languages. Their headline numbers (Dafny 82%, Verus 44%, Lean 27%) are
-the **union across 9 models** with up to 5 repair iterations each, not a single
-model's result. The best single model achieves 67.5% on Dafny (Opus 4.1).
+Three pipeline limitations prevent fair comparison:
 
-Comparing Vow's 36/36 on custom benchmarks against those numbers is not valid.
+**Spec function calls in ensures clauses.** The C emitter currently replaces
+non-constant function calls with `__VERIFIER_nondet()`, making them
+meaningless. If the emitter instead emitted the actual function body into the
+C model, ensures clauses could reference pure spec functions (e.g.,
+`ensures: result == is_prime_spec(n)`). ESBMC would then verify by bounded
+model checking — no quantifiers needed, no new syntax, just a verification
+pipeline fix. This makes Vow contracts as strong as Dafny's for bounded
+inputs.
 
-**Pilot: 10 HumanEval problems translated to Vow (March 2026).**
-Translated 10 problems from the Vericoding HumanEval-Dafny set to Vow
-(`benchmarks/humaneval/HE*`). Result: 10/10 verified with claude-sonnet-4-6,
-mean 1.3 CEGIS iterations. However:
+**Nested Vec loops.** Nested loops with Vec access fail ESBMC verification
+(had to drop 2SUM and 3SUM from the pilot). Requires investigation of the
+C model generated for nested indexed access patterns.
 
-- Only 2/10 have **exact** Dafny-equivalent contracts (HE041, HE060). The
-  rest have weaker contracts because Vow ensures clauses cannot call
-  user-defined functions or express quantifiers.
-- Weaker contracts make verification easier — a trivial implementation can
-  satisfy weak specs. This inflates Vow's pass rate relative to Dafny.
-- Nested loops with Vec access fail ESBMC verification (had to drop 2SUM
-  and 3SUM problems).
-- `let mut` declarations inside loop bodies cause ESBMC errors — variables
-  must be declared outside all enclosing loops.
+**`let mut` inside loop bodies.** Variables declared inside loop bodies cause
+ESBMC errors — currently variables must be declared outside all enclosing
+loops. The C emitter needs to handle scoped declarations within loop bodies.
 
-**Key blocker: spec function calls in ensures clauses.** The C emitter
-currently replaces non-constant function calls with `__VERIFIER_nondet()`,
-making them meaningless. If the emitter instead emitted the actual function
-body into the C model, ensures clauses could reference pure spec functions
-(e.g., `ensures: result == is_prime_spec(n)`). ESBMC would then verify by
-bounded model checking — no quantifiers needed, no new syntax, just a
-verification pipeline fix. This would make Vow contracts as strong as Dafny's
-for bounded inputs.
+### 21.2 Verification caching
+
+Cache ESBMC results by function content hash. If a function hasn't changed,
+skip re-verification. This directly speeds up the CEGIS loop — currently
+every `vow build` re-verifies all functions even if only one changed.
+Essential for comparison runs at scale (162 tasks × multiple iterations).
+
+### 21.3 Standard library core subset
+
+**Prerequisite for the real-world comparison track (21.6).**
+
+These are new runtime builtins registered in the type checker and lowerer.
+Scope for each: `vow-runtime` C implementations + type checker registration +
+IR lowerer builtin dispatch.
+
+**Filesystem builtins** (7 new `[IO]` functions):
+- `fs_mkdir(path: String) -> i64`
+- `fs_exists(path: String) -> i64`
+- `fs_listdir(path: String) -> Vec<String>`
+- `fs_remove(path: String) -> i64`
+- `fs_remove_dir(path: String) -> i64`
+- `fs_is_dir(path: String) -> i64`
+- `fs_rename(old: String, new: String) -> i64`
+
+**String builtins** (11 new functions):
+- `string_substr(s: String, start: i64, len: i64) -> String`
+- `string_split(s: String, sep: String) -> Vec<String>`
+- `string_starts_with(s: String, prefix: String) -> i64`
+- `string_ends_with(s: String, suffix: String) -> i64`
+- `string_trim(s: String) -> String`
+- `string_to_upper(s: String) -> String`
+- `string_to_lower(s: String) -> String`
+- `string_replace(s: String, old: String, new: String) -> String`
+- `string_join(parts: Vec<String>, sep: String) -> String`
+- `parse_i64(s: String) -> i64`
+- `i64_to_string(n: i64) -> String`
+
+**Bitwise operations:**
+- `a ^ b` — bitwise XOR (new token kind + parser + IR opcode)
+- `hex_encode(data: Vec<u8>) -> String`
+- `hex_decode(s: String) -> Vec<u8>`
+
+**Vec sorting:**
+- `vec_sort(v: Vec<i64>) -> Vec<i64>` — returns sorted copy
+
+**Time:**
+- `time_unix() -> i64` — current Unix timestamp in seconds
+
+### 21.4 Vericoding comparison with contract fidelity
+
+**Status: BLOCKED on 21.1.**
+
+The 10-task HumanEval pilot showed 10/10 verified with claude-sonnet-4-6
+(mean 1.3 CEGIS iterations), but only 2/10 have Dafny-equivalent contracts.
+
+**Contract fidelity classification.** Every translated task must be tagged:
+
+- **Exact:** Vow contract matches the reference Dafny spec (same properties
+  verified).
+- **Partial:** same intent, weaker encoding (e.g., missing a quantified
+  property).
+- **Weak:** only bounds/shape/basic safety (trivial implementation could pass).
+
+Publish pass rates separately for **Exact only** and **All translated tasks**.
+This avoids inflated comparisons from tasks with weak contracts.
 
 **Path to publishable comparison:**
-1. Fix C emitter to emit spec function bodies (not nondet) for pure functions
-   referenced in ensures clauses.
+1. Land 21.1 (spec functions, Vec loops, let mut fixes).
 2. Re-translate the 10 HumanEval pilots with full-strength contracts.
 3. Scale to the full 162 HumanEval-Dafny set from the Vericoding benchmark.
 4. Run the same protocol (up to 5 CEGIS iterations) and compare against
@@ -134,9 +208,7 @@ for bounded inputs.
 - Pilot results: `bench/results/humaneval-pilot/`
 - Pilot benchmarks: `benchmarks/humaneval/HE*`
 
-Target: blog post + arxiv preprint (after spec function fix).
-
-### 21.2 Expand example coverage
+### 21.5 Expand example coverage
 
 The `examples/` directory has significant feature gaps that weaken the skill
 document. Add examples demonstrating:
@@ -149,6 +221,48 @@ document. Add examples demonstrating:
 - `f32`/`f64` floating-point types
 
 Each example should be a complete, runnable program that compiles and verifies.
+
+### 21.6 Real-world comparison track (ai-coding-lang-bench)
+
+**Status: BLOCKED on 21.3 (standard library).**
+
+Participate in `ai-coding-lang-bench`, which measures how efficiently Claude
+Code can implement a mini-git clone across programming languages. This provides
+a second comparison axis beyond Vericoding: real-world application development,
+not just algorithm verification.
+
+**21.6a Benchmark harness integration.**
+Fork the benchmark repository. Add Vow as a target language with build
+scripts, skill docs, and test infrastructure.
+
+**21.6b Pilot runs and iteration.**
+Run Claude Code against the mini-git specification using `./vowc`. Identify
+failure modes. Fix the toolchain, not the agent.
+
+**21.6c Full benchmark execution.**
+20-trial suite for statistical significance. Target: ≥38/40 pass rate with
+competitive execution time (<90s).
+
+**21.6d Verified variant.**
+Run the benchmark with `vow build` (verification enabled). Demonstrate that
+Vow can produce a verified mini-git implementation — something no other
+benchmark language can do.
+
+### 21.7 Comparison matrix & publication
+
+**Status: BLOCKED on 21.4 and 21.6.**
+
+Publish results from both tracks:
+
+1. **Vericoding track** — pass rates with contract fidelity breakdown (Exact
+   vs All), compared against Dafny/Verus/Lean per-model results from the
+   Vericoding paper.
+2. **Real-world track** — ai-coding-lang-bench pass rate and execution time,
+   with verified variant as a differentiator.
+3. **Comparison matrix** — the table from the Competitive Landscape section,
+   updated with empirical data from both tracks.
+
+Target: blog post + arxiv preprint.
 
 ---
 
@@ -194,125 +308,36 @@ traits, no closures, no iterators. The IR is identical to the manual pattern.
 
 ---
 
-## Phase 23: Standard Library Expansion
-
-**Priority: HIGH — prerequisite for the AI coding benchmark (Phase 24) and
-generally useful for any real-world Vow program.**
-
-These are new runtime builtins registered in the type checker and lowerer.
-
-### 23.1 Filesystem builtins
-
-7 new `[IO]` functions:
-- `fs_mkdir(path: String) -> i64`
-- `fs_exists(path: String) -> i64`
-- `fs_listdir(path: String) -> Vec<String>`
-- `fs_remove(path: String) -> i64`
-- `fs_remove_dir(path: String) -> i64`
-- `fs_is_dir(path: String) -> i64`
-- `fs_rename(old: String, new: String) -> i64`
-
-Scope: `vow-runtime` C implementations + type checker registration + IR
-lowerer builtin dispatch.
-
-### 23.2 String builtins
-
-11 new string functions:
-- `string_substr(s: String, start: i64, len: i64) -> String`
-- `string_split(s: String, sep: String) -> Vec<String>`
-- `string_starts_with(s: String, prefix: String) -> i64`
-- `string_ends_with(s: String, suffix: String) -> i64`
-- `string_trim(s: String) -> String`
-- `string_to_upper(s: String) -> String`
-- `string_to_lower(s: String) -> String`
-- `string_replace(s: String, old: String, new: String) -> String`
-- `string_join(parts: Vec<String>, sep: String) -> String`
-- `parse_i64(s: String) -> i64`
-- `i64_to_string(n: i64) -> String`
-
-### 23.3 Bitwise operations
-
-XOR operator (`^`) and hex conversion:
-- `a ^ b` — bitwise XOR (new token kind + parser + IR opcode)
-- `hex_encode(data: Vec<u8>) -> String`
-- `hex_decode(s: String) -> Vec<u8>`
-
-### 23.4 Vec sorting
-
-- `vec_sort(v: Vec<i64>) -> Vec<i64>` — returns sorted copy
-
-### 23.5 Time builtin
-
-- `time_unix() -> i64` — current Unix timestamp in seconds
-
----
-
-## Phase 24: AI Coding Language Benchmark
-
-**Priority: HIGH — external validation and visibility.**
-
-Participate in `ai-coding-lang-bench`, which measures how efficiently Claude
-Code can implement a mini-git clone across programming languages.
-
-### 24.1 Benchmark harness integration
-
-Fork the benchmark repository. Add Vow as a target language with build
-scripts, skill docs, and test infrastructure.
-
-### 24.2 Pilot runs and iteration
-
-Run Claude Code against the mini-git specification using `./vowc`. Identify
-failure modes. Fix the toolchain, not the agent.
-
-### 24.3 Full benchmark execution
-
-20-trial suite for statistical significance. Target: ≥38/40 pass rate with
-competitive execution time (<90s).
-
-### 24.4 Verified variant
-
-Run the benchmark with `vow build` (verification enabled). Demonstrate that
-Vow can produce a verified mini-git implementation — something no other
-benchmark language can do.
-
----
-
-## Phase 25: Toolchain Improvements
+## Phase 23: Toolchain Improvements
 
 **Priority: MEDIUM — these improve the development experience but don't
 block current workflows.**
 
-### 25.1 Verification caching
-
-Cache ESBMC results by function content hash. If a function hasn't changed,
-skip re-verification. This directly speeds up the CEGIS loop — currently
-every `vow build` re-verifies all functions even if only one changed.
-
-### 25.2 Expression-level source spans
+### 23.1 Expression-level source spans
 
 Populate expression spans in the self-hosted compiler's parser. Currently
 only function and statement spans are wired through. Expression spans would
 give more precise error locations (e.g., "type mismatch in `a + b`" instead
 of "type mismatch in fn foo").
 
-### 25.3 Property-based tests for compiler pipeline (PR #27)
+### 23.2 Property-based tests for compiler pipeline (PR #27)
 
 Add proptest-based roundtrip, determinism, and robustness tests across
 vow-syntax, vow-types, and vow-codegen. Catches edge cases that handwritten
 tests miss.
 
-### 25.4 IO error diagnostic code (PR #26)
+### 23.3 IO error diagnostic code (PR #26)
 
 New `EC_IO_ERROR` error code. Consolidate error counting to `DiagCtx` for
 consistent error tracking across the pipeline.
 
 ---
 
-## Phase 26: Advanced Language Features
+## Phase 24: Advanced Language Features
 
 **Priority: DEMAND-DRIVEN — each is triggered when a concrete need surfaces.**
 
-### 26.1 String comparison deallocation ✅ (partial)
+### 24.1 String comparison deallocation ✅ (partial)
 
 Typed free functions (`__vow_string_free`, `__vow_vec_free_val`,
 `__vow_map_free`) implemented in `vow-runtime`. Both lowerers emit inline
@@ -328,7 +353,7 @@ constant 2.7 MB RSS.
 - Arena header-based `__vow_arena_free` for struct allocations
 - `drop()` language builtin for manual control
 
-### 26.2 Recursive type ESBMC bounds
+### 24.2 Recursive type ESBMC bounds
 
 **Trigger: proven — Stretch benchmarks H07 (ring_buffer) and H10
 (expression_eval) hit `--unwind` ceiling.**
@@ -338,7 +363,7 @@ Options:
 - User-specified per-function unwind annotations
 - Direct goto-program emission (bypass C intermediate representation)
 
-### 26.3 Effect system completion
+### 24.3 Effect system completion
 
 **Trigger: agent needs to reason about which functions can panic.**
 
@@ -347,7 +372,7 @@ Division by zero, array out-of-bounds, and `.unwrap()` are all silent panic
 sources. Completing the effect system would let agents statically reason about
 failure modes.
 
-### 26.4 Linear type enforcement
+### 24.4 Linear type enforcement
 
 **Trigger: agent writes resource-managing code that leaks handles.**
 
@@ -356,7 +381,7 @@ linear.rs`, 192 lines) but have never been exercised in practice. No examples
 use `linear struct`. Activation requires resource types (file handles, network
 connections) to exist in the language.
 
-### 26.5 Direct goto-program emission
+### 24.5 Direct goto-program emission
 
 **Trigger: C model limitations accumulate (Ptr type mismatches, struct field
 tracking, fixed-size collection models).**
@@ -368,7 +393,7 @@ HashMap as 64-entry arrays — these fixed sizes are artificial constraints.
 
 ---
 
-## Phase 27: Ecosystem
+## Phase 25: Ecosystem
 
 **Priority: DEMAND-TRIGGERED — implement only when external demand justifies.**
 
@@ -423,9 +448,11 @@ until a concrete verification need exceeds ESBMC's capabilities.
 - ATLAS (2025): arxiv.org/abs/2512.10173
 - BRIDGE (2025): arxiv.org/abs/2511.21104
 - ESBMC + Rust Foundation: rustfoundation.org/media/expanding-the-rust-formal-verification-ecosystem-welcoming-esbmc/
+- ai-coding-lang-bench: github.com/mame/ai-coding-lang-bench
 
 ---
 
 *This document captures the forward-looking roadmap as of 15 March 2026.
-Phases 21–25 are prioritised by impact. Phase 26 is demand-driven. Phase 27
-is demand-triggered. If a phase isn't earning its keep, cut it.*
+Phase 21 is the critical path (dual-track comparison). Phase 22 improves
+agent ergonomics. Phase 23 is toolchain polish. Phases 24–25 are
+demand-driven. If a phase isn't earning its keep, cut it.*
