@@ -138,6 +138,17 @@ fn parse_path(p: Parser) -> i64 {
     arena_add_list(p.arena, items)
 }
 
+fn parse_const_def(p: Parser) -> i64 {
+    let _kw: bool = expect(p, tok_kw_const());
+    let name_sid: i64 = expect_ident(p);
+    let _colon: bool = expect(p, tok_colon());
+    let type_tid: i64 = parse_type(p);
+    let _eq: bool = expect(p, tok_eq());
+    let value_eid: i64 = parse_expr(p);
+    let _semi: bool = expect(p, tok_semicolon());
+    arena_add_cdef(p.arena, name_sid, type_tid, value_eid)
+}
+
 fn parse_item(p: Parser) -> i64 {
     if at(p, tok_kw_fn()) {
         let fid: i64 = parse_fn_def(p);
@@ -152,7 +163,11 @@ fn parse_item(p: Parser) -> i64 {
     } else if at(p, tok_kw_enum()) {
         let eid: i64 = parse_enum_def(p);
         item_pack(ITEM_ENUM(), eid)
+    } else if at(p, tok_kw_const()) {
+        let cid: i64 = parse_const_def(p);
+        item_pack(ITEM_CONST(), cid)
     } else {
+        push_error(p, String::from("expected item (fn, struct, enum, or const)"));
         skip_unknown_item(p);
         -1
     }
@@ -484,14 +499,16 @@ fn parse_expr(p: Parser) -> i64 {
 fn binop_prec(tag: i64) -> i64 {
     if tag == tok_pipe_pipe() {
         1
-    } else if tag == tok_amp_amp() {
+    } else if tag == tok_caret() {
         2
-    } else if tag == tok_eq_eq() || tag == tok_bang_eq() || tag == tok_lt() || tag == tok_lt_eq() || tag == tok_gt() || tag == tok_gt_eq() {
+    } else if tag == tok_amp_amp() {
         3
-    } else if tag == tok_plus() || tag == tok_minus() || tag == tok_plus_checked() || tag == tok_minus_checked() {
+    } else if tag == tok_eq_eq() || tag == tok_bang_eq() || tag == tok_lt() || tag == tok_lt_eq() || tag == tok_gt() || tag == tok_gt_eq() {
         4
-    } else if tag == tok_star() || tag == tok_slash() || tag == tok_percent() || tag == tok_star_checked() || tag == tok_slash_checked() || tag == tok_percent_checked() {
+    } else if tag == tok_plus() || tag == tok_minus() || tag == tok_plus_checked() || tag == tok_minus_checked() {
         5
+    } else if tag == tok_star() || tag == tok_slash() || tag == tok_percent() || tag == tok_star_checked() || tag == tok_slash_checked() || tag == tok_percent_checked() {
+        6
     } else {
         -1
     }
@@ -515,6 +532,7 @@ fn tok_to_binop(tag: i64) -> i64 {
     else if tag == tok_gt() { BINOP_GT() }
     else if tag == tok_gt_eq() { BINOP_GE() }
     else if tag == tok_amp_amp() { BINOP_AND() }
+    else if tag == tok_caret() { BINOP_XOR() }
     else { BINOP_OR() }
 }
 

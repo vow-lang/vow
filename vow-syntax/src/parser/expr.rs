@@ -7,22 +7,23 @@ use super::Parser;
 fn infix_binding_power(kind: &TokenKind) -> Option<(u8, u8)> {
     match kind {
         TokenKind::PipePipe => Some((1, 2)),
-        TokenKind::AmpAmp => Some((3, 4)),
+        TokenKind::Caret => Some((3, 4)),
+        TokenKind::AmpAmp => Some((5, 6)),
         TokenKind::EqEq
         | TokenKind::BangEq
         | TokenKind::Lt
         | TokenKind::LtEq
         | TokenKind::Gt
-        | TokenKind::GtEq => Some((5, 6)),
+        | TokenKind::GtEq => Some((7, 8)),
         TokenKind::Plus | TokenKind::Minus | TokenKind::PlusChecked | TokenKind::MinusChecked => {
-            Some((7, 8))
+            Some((9, 10))
         }
         TokenKind::Star
         | TokenKind::Slash
         | TokenKind::Percent
         | TokenKind::StarChecked
         | TokenKind::SlashChecked
-        | TokenKind::PercentChecked => Some((9, 10)),
+        | TokenKind::PercentChecked => Some((11, 12)),
         _ => None,
     }
 }
@@ -47,6 +48,7 @@ fn token_to_binop(kind: &TokenKind) -> Option<BinOp> {
         TokenKind::GtEq => Some(BinOp::Ge),
         TokenKind::AmpAmp => Some(BinOp::And),
         TokenKind::PipePipe => Some(BinOp::Or),
+        TokenKind::Caret => Some(BinOp::BitXor),
         _ => None,
     }
 }

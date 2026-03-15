@@ -1,0 +1,16 @@
+module WillItFly
+
+fn will_it_fly(q: Vec<i64>, w: i64) -> i64 vow {
+  requires: q.len() >= 0,
+  requires: q.len() <= 8,
+  requires: w >= 0,
+  requires: w <= 100,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  0
+}

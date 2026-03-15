@@ -1,0 +1,15 @@
+module CarRaceCollision
+
+fn car_race_collision(n: i64) -> i64 vow {
+  requires: n >= 0,
+  requires: n <= 1000,
+  ensures: result == n * n,
+  ensures: result >= 0
+} {
+  n * n
+}
+
+fn main() -> i32 [io] {
+  print_i64(car_race_collision(3));
+  0
+}

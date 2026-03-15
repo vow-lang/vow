@@ -85,6 +85,8 @@ fn opcode_name(opcode: &Opcode) -> &'static str {
         Opcode::Not => "Not",
         Opcode::And => "And",
         Opcode::Or => "Or",
+        Opcode::XorI32 => "XorI32",
+        Opcode::XorI64 => "XorI64",
         Opcode::Load => "Load",
         Opcode::Store => "Store",
         Opcode::Branch => "Branch",

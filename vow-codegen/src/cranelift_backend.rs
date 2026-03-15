@@ -463,6 +463,14 @@ fn lower_inst(
         }
 
         // ------------------------------------------------------------------
+        // Bitwise XOR
+        // ------------------------------------------------------------------
+        Opcode::XorI32 | Opcode::XorI64 => {
+            let val = builder.ins().bxor(arg!(0), arg!(1));
+            ctx.value_map.insert(inst.id, val);
+        }
+
+        // ------------------------------------------------------------------
         // Memory
         // ------------------------------------------------------------------
         Opcode::Load => {
@@ -1256,6 +1264,98 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // data *VowVec<u8>
             sig.returns.push(AbiParam::new(types::I64)); // 0=ok, -1=err
         }
+        "__vow_fs_exists" => {
+            sig.params.push(AbiParam::new(types::I64)); // path *VowVec<u8>
+            sig.returns.push(AbiParam::new(types::I64)); // 1=exists, 0=not
+        }
+        "__vow_fs_mkdir" => {
+            sig.params.push(AbiParam::new(types::I64)); // path *VowVec<u8>
+            sig.returns.push(AbiParam::new(types::I64)); // 0=ok, -1=err
+        }
+        "__vow_fs_listdir" => {
+            sig.params.push(AbiParam::new(types::I64)); // path *VowVec<u8>
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<String>
+        }
+        "__vow_fs_remove" => {
+            sig.params.push(AbiParam::new(types::I64)); // path *VowVec<u8>
+            sig.returns.push(AbiParam::new(types::I64)); // 0=ok, -1=err
+        }
+        "__vow_fs_remove_dir" => {
+            sig.params.push(AbiParam::new(types::I64)); // path *VowVec<u8>
+            sig.returns.push(AbiParam::new(types::I64)); // 0=ok, -1=err
+        }
+        "__vow_fs_is_dir" => {
+            sig.params.push(AbiParam::new(types::I64)); // path *VowVec<u8>
+            sig.returns.push(AbiParam::new(types::I64)); // 1=dir, 0=not
+        }
+        "__vow_fs_rename" => {
+            sig.params.push(AbiParam::new(types::I64)); // old path *VowVec<u8>
+            sig.params.push(AbiParam::new(types::I64)); // new path *VowVec<u8>
+            sig.returns.push(AbiParam::new(types::I64)); // 0=ok, -1=err
+        }
+        "__vow_string_substr" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.params.push(AbiParam::new(types::I64)); // start
+            sig.params.push(AbiParam::new(types::I64)); // len
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_string_split" => {
+            sig.params.push(AbiParam::new(types::I64)); // haystack ptr
+            sig.params.push(AbiParam::new(types::I64)); // separator ptr
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<String>
+        }
+        "__vow_string_starts_with" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.params.push(AbiParam::new(types::I64)); // prefix ptr
+            sig.returns.push(AbiParam::new(types::I64)); // 1/0
+        }
+        "__vow_string_ends_with" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.params.push(AbiParam::new(types::I64)); // suffix ptr
+            sig.returns.push(AbiParam::new(types::I64)); // 1/0
+        }
+        "__vow_string_trim" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_string_to_upper" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_string_to_lower" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_string_replace" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.params.push(AbiParam::new(types::I64)); // from ptr
+            sig.params.push(AbiParam::new(types::I64)); // to ptr
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_string_join" => {
+            sig.params.push(AbiParam::new(types::I64)); // vec ptr
+            sig.params.push(AbiParam::new(types::I64)); // separator ptr
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_parse_i64" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.returns.push(AbiParam::new(types::I64)); // parsed value
+        }
+        "__vow_vec_sort" => {
+            sig.params.push(AbiParam::new(types::I64)); // vec ptr
+            sig.returns.push(AbiParam::new(types::I64)); // new sorted vec ptr
+        }
+        "__vow_time_unix" => {
+            sig.returns.push(AbiParam::new(types::I64)); // unix timestamp
+        }
+        "__vow_hex_encode" => {
+            sig.params.push(AbiParam::new(types::I64)); // vec ptr
+            sig.returns.push(AbiParam::new(types::I64)); // string ptr
+        }
+        "__vow_hex_decode" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.returns.push(AbiParam::new(types::I64)); // vec ptr
+        }
         "__vow_eprintln_str" => {
             sig.params.push(AbiParam::new(types::I64)); // C-string ptr
         }
@@ -1272,6 +1372,29 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         }
         "__vow_process_get_stdout" | "__vow_process_get_stderr" => {
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_process_start" => {
+            sig.params.push(AbiParam::new(types::I64)); // cmd *VowVec<u8>
+            sig.params.push(AbiParam::new(types::I64)); // args *VowVec<i64>
+            sig.returns.push(AbiParam::new(types::I64)); // handle
+        }
+        "__vow_process_wait" => {
+            sig.params.push(AbiParam::new(types::I64)); // handle
+            sig.returns.push(AbiParam::new(types::I64)); // exit code
+        }
+        "__vow_process_stdout_for" | "__vow_process_stderr_for" => {
+            sig.params.push(AbiParam::new(types::I64)); // handle
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        // Typed deallocation
+        "__vow_string_free" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+        }
+        "__vow_vec_free_val" => {
+            sig.params.push(AbiParam::new(types::I64)); // vec ptr
+        }
+        "__vow_map_free" => {
+            sig.params.push(AbiParam::new(types::I64)); // map ptr
         }
         // HashMap runtime
         "__vow_map_new" => {

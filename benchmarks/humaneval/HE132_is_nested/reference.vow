@@ -1,0 +1,75 @@
+module IsNested
+
+fn is_nested(s: Vec<i64>) -> i64 vow {
+  requires: s.len() >= 0,
+  requires: s.len() <= 8,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  let n: i64 = s.len();
+  let mut found: i64 = 0;
+  let mut x: i64 = 0;
+  while x < n vow {
+    invariant: x >= 0,
+    invariant: x <= n,
+    invariant: found >= 0,
+    invariant: found <= 1
+  } {
+    if s[x] == 0 {
+      let mut y: i64 = x + 1;
+      while y < n vow {
+        invariant: y >= x + 1,
+        invariant: y <= n,
+        invariant: found >= 0,
+        invariant: found <= 1
+      } {
+        if s[y] == 0 {
+          let mut z: i64 = y + 1;
+          while z < n vow {
+            invariant: z >= y + 1,
+            invariant: z <= n,
+            invariant: found >= 0,
+            invariant: found <= 1
+          } {
+            if s[z] == 1 {
+              let mut w: i64 = z + 1;
+              while w < n vow {
+                invariant: w >= z + 1,
+                invariant: w <= n,
+                invariant: found >= 0,
+                invariant: found <= 1
+              } {
+                if s[w] == 1 {
+                  found = 1;
+                } else {
+                  0;
+                }
+                w = w + 1;
+              }
+            } else {
+              0;
+            }
+            z = z + 1;
+          }
+        } else {
+          0;
+        }
+        y = y + 1;
+      }
+    } else {
+      0;
+    }
+    x = x + 1;
+  }
+  found
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(0);
+  v.push(0);
+  v.push(1);
+  v.push(1);
+  print_i64(is_nested(v));
+  0
+}

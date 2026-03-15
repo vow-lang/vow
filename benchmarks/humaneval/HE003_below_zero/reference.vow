@@ -1,0 +1,37 @@
+module BelowZero
+
+fn below_zero(ops: Vec<i64>) -> i64 vow {
+  requires: ops.len() >= 0,
+  requires: ops.len() <= 8,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  let mut balance: i64 = 0;
+  let mut went_below: i64 = 0;
+  let mut i: i64 = 0;
+  while i < ops.len() vow {
+    invariant: i >= 0,
+    invariant: i <= ops.len(),
+    invariant: went_below >= 0,
+    invariant: went_below <= 1
+  } {
+    balance = balance + ops[i];
+    if balance < 0 {
+      went_below = 1;
+    } else {
+      0;
+    }
+    i = i + 1;
+  }
+  went_below
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v.push(2);
+  v.push(0 - 5);
+  v.push(1);
+  print_i64(below_zero(v));
+  0
+}

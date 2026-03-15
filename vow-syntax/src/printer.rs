@@ -1,6 +1,6 @@
 use crate::ast::{
-    BinOp, Block, Effect, EnumDef, EnumVariant, Expr, ExprKind, ExternBlock, ExternFn, FnDef,
-    ImplBlock, Item, Lit, MatchArm, Module, Param, Pat, PatKind, Stmt, StructDef, TraitDef,
+    BinOp, Block, ConstDef, Effect, EnumDef, EnumVariant, Expr, ExprKind, ExternBlock, ExternFn,
+    FnDef, ImplBlock, Item, Lit, MatchArm, Module, Param, Pat, PatKind, Stmt, StructDef, TraitDef,
     TraitMethod, Type, TypeAlias, UnOp, VariantKind, Visibility, VowBlock, VowClause,
 };
 
@@ -51,6 +51,7 @@ fn print_decl_item(item: &Item, level: usize) -> String {
         Item::Impl(i) => print_impl_decl(i, level),
         Item::TypeAlias(a) => print_type_alias(a, level),
         Item::Extern(e) => print_extern(e, level),
+        Item::Const(c) => print_const(c, level),
     }
 }
 
@@ -99,6 +100,7 @@ fn print_item(item: &Item, level: usize) -> String {
         Item::Impl(i) => print_impl(i, level),
         Item::TypeAlias(a) => print_type_alias(a, level),
         Item::Extern(e) => print_extern(e, level),
+        Item::Const(c) => print_const(c, level),
     }
 }
 
@@ -352,6 +354,19 @@ fn print_type_alias(a: &TypeAlias, level: usize) -> String {
     format!("{}{}type {} = {};\n", ind, vis, a.name, print_type(&a.ty))
 }
 
+fn print_const(c: &ConstDef, level: usize) -> String {
+    let ind = indent(level);
+    let vis = print_visibility(&c.vis);
+    format!(
+        "{}{}const {}: {} = {};\n",
+        ind,
+        vis,
+        c.name,
+        print_type(&c.ty),
+        print_expr(&c.value)
+    )
+}
+
 fn print_extern(e: &ExternBlock, level: usize) -> String {
     let ind = indent(level);
     let mut out = format!("{}extern \"C\" {{\n", ind);
@@ -420,15 +435,16 @@ pub fn print_type(ty: &Type) -> String {
 fn binop_precedence(op: BinOp) -> u8 {
     match op {
         BinOp::Or => 1,
-        BinOp::And => 2,
-        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => 3,
-        BinOp::Add | BinOp::Sub | BinOp::AddChecked | BinOp::SubChecked => 4,
+        BinOp::BitXor => 2,
+        BinOp::And => 3,
+        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => 4,
+        BinOp::Add | BinOp::Sub | BinOp::AddChecked | BinOp::SubChecked => 5,
         BinOp::Mul
         | BinOp::Div
         | BinOp::Rem
         | BinOp::MulChecked
         | BinOp::DivChecked
-        | BinOp::RemChecked => 5,
+        | BinOp::RemChecked => 6,
     }
 }
 
@@ -452,6 +468,7 @@ fn binop_str(op: BinOp) -> &'static str {
         BinOp::Ge => ">=",
         BinOp::And => "&&",
         BinOp::Or => "||",
+        BinOp::BitXor => "^",
     }
 }
 

@@ -1,0 +1,41 @@
+module Solution
+
+fn solution(lst: Vec<i64>) -> i64 vow {
+  requires: lst.len() >= 0,
+  requires: lst.len() <= 8,
+  ensures: result >= 0
+} {
+  let mut s: i64 = 0;
+  let mut i: i64 = 0;
+  while i < lst.len() vow {
+    invariant: i >= 0,
+    invariant: i <= lst.len(),
+    invariant: s >= 0
+  } {
+    if i % 2 == 0 {
+      if lst[i] % 2 != 0 {
+        if lst[i] > 0 {
+          s = s + lst[i];
+        } else {
+          0;
+        }
+      } else {
+        0;
+      }
+    } else {
+      0;
+    }
+    i = i + 1;
+  }
+  s
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(5);
+  v.push(8);
+  v.push(7);
+  v.push(1);
+  print_i64(solution(v));
+  0
+}

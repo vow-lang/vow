@@ -1,0 +1,1292 @@
+[triage]
+total_humaneval = 162
+already_translated = 10
+translatable = 73
+maybe = 34
+skip = 45
+
+[[tasks]]
+dafny_id = "DH0000"
+humaneval_num = 0
+source_id = "humaneval_000"
+status = "skip"
+reason = "uses real numbers; uses seq<real>"
+dafny_signature = "method has_close_elements(numbers: seq<real>, threshold: real) returns (result: bool)"
+
+[[tasks]]
+dafny_id = "DH0001"
+humaneval_num = 1
+source_id = "humaneval_001_separate-paren-groups"
+status = "skip"
+reason = "uses seq<string>"
+dafny_signature = "method separate_paren_groups(paren_string: string) returns (res : seq<string>)"
+
+[[tasks]]
+dafny_id = "DH0002"
+humaneval_num = 2
+source_id = "humaneval_002"
+status = "skip"
+reason = "uses real numbers"
+dafny_signature = "method truncate_number(number: real) returns (result: real)"
+
+[[tasks]]
+dafny_id = "DH0003"
+humaneval_num = 3
+source_id = "humaneval_003"
+status = "already_done"
+reason = "already translated as HE003"
+
+[[tasks]]
+dafny_id = "DH0004"
+humaneval_num = 4
+source_id = "humaneval_004"
+status = "skip"
+reason = "uses real numbers; uses seq<real>"
+dafny_signature = "method mean_absolute_deviation(numbers: seq<real>) returns (result: real)"
+
+[[tasks]]
+dafny_id = "DH0005"
+humaneval_num = 5
+source_id = "humaneval_005"
+status = "already_done"
+reason = "already translated as HE005"
+
+[[tasks]]
+dafny_id = "DH0006"
+humaneval_num = 6
+source_id = "humaneval_006"
+status = "skip"
+reason = "uses seq<string>"
+dafny_signature = "method parse_nested_parens(paren_string: string) returns (result: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0007"
+humaneval_num = 7
+source_id = "humaneval_007"
+status = "skip"
+reason = "uses seq<string>"
+dafny_signature = "method filter_by_substring(strings: seq<string>, substring: string) returns (result: seq<string>)"
+
+[[tasks]]
+dafny_id = "DH0008"
+humaneval_num = 8
+source_id = "humaneval_008"
+status = "skip"
+reason = "uses multiple return values"
+dafny_signature = "method sum_product(numbers: seq<int>) returns (sum: int, product: int)"
+
+[[tasks]]
+dafny_id = "DH0009"
+humaneval_num = 9
+source_id = "humaneval_009"
+status = "already_done"
+reason = "already translated as HE009"
+
+[[tasks]]
+dafny_id = "DH0010"
+humaneval_num = 10
+source_id = "humaneval_010_is_palindrome__make_palindrome"
+status = "maybe"
+reason = "uses string type"
+dafny_signature = "method make_palindrome(s: string) returns (result: string)"
+
+[[tasks]]
+dafny_id = "DH0011"
+humaneval_num = 11
+source_id = "humaneval_011"
+status = "maybe"
+reason = "uses string type"
+dafny_signature = "method string_xor(a: string, b: string) returns (result: string)"
+
+[[tasks]]
+dafny_id = "DH0012"
+humaneval_num = 12
+source_id = "humaneval_012"
+status = "skip"
+reason = "uses seq<string>"
+dafny_signature = "method longest(strings: seq<string>) returns (result: Option<string>)"
+
+[[tasks]]
+dafny_id = "DH0013"
+humaneval_num = 13
+source_id = "humaneval_013"
+status = "already_done"
+reason = "already translated as HE013"
+
+[[tasks]]
+dafny_id = "DH0014"
+humaneval_num = 14
+source_id = "humaneval_014"
+status = "skip"
+reason = "uses seq<string>"
+dafny_signature = "method all_prefixes(s: string) returns (result: seq<string>)"
+
+[[tasks]]
+dafny_id = "DH0015"
+humaneval_num = 16
+source_id = "humaneval_016"
+status = "maybe"
+reason = "uses string type; uses char type"
+dafny_signature = "method count_distinct_characters(s: string) returns (count: int)"
+
+[[tasks]]
+dafny_id = "DH0016"
+humaneval_num = 18
+source_id = "humaneval_018_how_many_times"
+status = "maybe"
+reason = "uses string type"
+dafny_signature = "method how_many_times(s: string, substr: string) returns (times: int)"
+
+[[tasks]]
+dafny_id = "DH0017"
+humaneval_num = 20
+source_id = "humaneval_020"
+status = "skip"
+reason = "uses real numbers; uses seq<real>; uses multiple return values"
+dafny_signature = "method find_closest_elements(numbers: seq<real>) returns (result: (real, real))"
+
+[[tasks]]
+dafny_id = "DH0018"
+humaneval_num = 21
+source_id = "humaneval_021_rescale_to_unit"
+status = "skip"
+reason = "uses real numbers; uses seq<real>"
+dafny_signature = "method rescale_to_unit(s: seq<real>) returns (r : seq<real>)"
+
+[[tasks]]
+dafny_id = "DH0019"
+humaneval_num = 22
+source_id = "humaneval_022"
+status = "skip"
+reason = "uses real numbers"
+dafny_signature = "method filter_integers(values: seq<Value>) returns (result: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0020"
+humaneval_num = 23
+source_id = "humaneval_023"
+status = "maybe"
+reason = "uses string type"
+dafny_signature = "method strlen(s: string) returns (result: int)"
+
+[[tasks]]
+dafny_id = "DH0021"
+humaneval_num = 24
+source_id = "humaneval_024_largest-divisor"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method largest_divisor(n: int) returns (d : int)"
+
+[[tasks]]
+dafny_id = "DH0022"
+humaneval_num = 25
+source_id = "humaneval_025"
+status = "already_done"
+reason = "already translated as HE025"
+
+[[tasks]]
+dafny_id = "DH0023"
+humaneval_num = 26
+source_id = "humaneval_026_remove_duplicates__count"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method count(a: seq<int>, x: int) returns (cnt: int)"
+
+[[tasks]]
+dafny_id = "DH0024"
+humaneval_num = 26
+source_id = "humaneval_026_remove_duplicates__remove_duplicates"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method remove_duplicates(a: seq<int>) returns (result: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0025"
+humaneval_num = 27
+source_id = "humaneval_027"
+status = "maybe"
+reason = "uses string type; uses char type"
+dafny_signature = "method flip_case(s: string) returns (result: string)"
+
+[[tasks]]
+dafny_id = "DH0026"
+humaneval_num = 28
+source_id = "humaneval_028"
+status = "skip"
+reason = "uses seq<string>"
+dafny_signature = "method concatenate(strings: seq<string>) returns (result: string)"
+
+[[tasks]]
+dafny_id = "DH0027"
+humaneval_num = 29
+source_id = "humaneval_029_filter_by_prefix"
+status = "skip"
+reason = "uses seq<string>"
+dafny_signature = "method filter_by_prefix(xs: seq<string>, p: string) returns (filtered: seq<string>)"
+
+[[tasks]]
+dafny_id = "DH0028"
+humaneval_num = 30
+source_id = "humaneval_030"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method get_positive(l: seq<int>) returns (result: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0029"
+humaneval_num = 31
+source_id = "humaneval_031"
+status = "already_done"
+reason = "already translated as HE031"
+
+[[tasks]]
+dafny_id = "DH0030"
+humaneval_num = 33
+source_id = "humaneval_033_sort_third__SortSeqPred"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method SortSeqPred(s: seq<int>, p: seq<bool>) returns (sorted: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0031"
+humaneval_num = 33
+source_id = "humaneval_033_sort_third__sort_third"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method sort_third(a: seq<int>) returns (sorted_even: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0032"
+humaneval_num = 34
+source_id = "humaneval_034_unique__SortSeq"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method SortSeq(s: seq<int>) returns (sorted: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0033"
+humaneval_num = 34
+source_id = "humaneval_034_unique__unique"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method unique(s: seq<int>) returns (result: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0034"
+humaneval_num = 34
+source_id = "humaneval_034_unique__uniqueSorted"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method uniqueSorted(s: seq<int>) returns (result: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0035"
+humaneval_num = 35
+source_id = "humaneval_035"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method FindMaxElement(l: seq<int>) returns (max_val: int)"
+
+[[tasks]]
+dafny_id = "DH0036"
+humaneval_num = 36
+source_id = "humaneval_036_fizz_buzz__count7"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method count7(x: nat) returns (count: nat)"
+
+[[tasks]]
+dafny_id = "DH0037"
+humaneval_num = 36
+source_id = "humaneval_036_fizz_buzz__fizz_buzz"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method fizz_buzz(n: nat) returns (result: nat)"
+
+[[tasks]]
+dafny_id = "DH0038"
+humaneval_num = 37
+source_id = "humaneval_037_sort_even__SortSeqPred"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method SortSeqPred(s: seq<int>, p: seq<bool>) returns (sorted: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0039"
+humaneval_num = 37
+source_id = "humaneval_037_sort_even__sorted_even"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method sorted_even(a: seq<int>) returns (sorted: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0040"
+humaneval_num = 38
+source_id = "humaneval_038_encode_cyclic__decode_cyclic"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method decode_cyclic(s: seq<int>) returns (res: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0041"
+humaneval_num = 38
+source_id = "humaneval_038_encode_cyclic__encode_cyclic"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method encode_cyclic(s: seq<int>) returns (res: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0042"
+humaneval_num = 40
+source_id = "humaneval_040"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method triples_sum_to_zero(l: seq<int>) returns (result: bool)"
+
+[[tasks]]
+dafny_id = "DH0043"
+humaneval_num = 41
+source_id = "humaneval_041"
+status = "already_done"
+reason = "already translated as HE041"
+
+[[tasks]]
+dafny_id = "DH0044"
+humaneval_num = 42
+source_id = "humaneval_042"
+status = "already_done"
+reason = "already translated as HE042"
+
+[[tasks]]
+dafny_id = "DH0045"
+humaneval_num = 43
+source_id = "humaneval_043"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method pairs_sum_to_zero(l: seq<int>) returns (result: bool)"
+
+[[tasks]]
+dafny_id = "DH0046"
+humaneval_num = 44
+source_id = "humaneval_044"
+status = "maybe"
+reason = "uses string type; uses char type"
+dafny_signature = "method change_base(x: int, base: int) returns (result: string)"
+
+[[tasks]]
+dafny_id = "DH0047"
+humaneval_num = 45
+source_id = "humaneval_045"
+status = "skip"
+reason = "uses real numbers"
+dafny_signature = "method CalculateTriangleArea(base: real, height: real) returns (area: real)"
+
+[[tasks]]
+dafny_id = "DH0048"
+humaneval_num = 46
+source_id = "humaneval_046"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method fib4(n: int) returns (result: int)"
+
+[[tasks]]
+dafny_id = "DH0049"
+humaneval_num = 47
+source_id = "humaneval_047"
+status = "skip"
+reason = "uses real numbers; uses seq<real>; uses multiset type"
+dafny_signature = "method median(l: seq<real>) returns (result: real)"
+
+[[tasks]]
+dafny_id = "DH0050"
+humaneval_num = 48
+source_id = "humaneval_048"
+status = "maybe"
+reason = "uses string type; uses char type"
+dafny_signature = "method is_palindrome(text: string) returns (result: bool)"
+
+[[tasks]]
+dafny_id = "DH0051"
+humaneval_num = 49
+source_id = "humaneval_049"
+status = "already_done"
+reason = "already translated as HE049"
+
+[[tasks]]
+dafny_id = "DH0052"
+humaneval_num = 50
+source_id = "humaneval_050_encode_shift__decode_shift"
+status = "maybe"
+reason = "uses string type; uses char type"
+dafny_signature = "method decode_shift(s: string) returns (t: string)"
+
+[[tasks]]
+dafny_id = "DH0053"
+humaneval_num = 50
+source_id = "humaneval_050_encode_shift__encode_shift"
+status = "maybe"
+reason = "uses string type; uses char type"
+dafny_signature = "method encode_shift(s: string) returns (t: string)"
+
+[[tasks]]
+dafny_id = "DH0054"
+humaneval_num = 51
+source_id = "humaneval_051"
+status = "maybe"
+reason = "uses string type; uses char type"
+dafny_signature = "method remove_vowels(text: string) returns (result: string)"
+
+[[tasks]]
+dafny_id = "DH0055"
+humaneval_num = 52
+source_id = "humaneval_052"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method CheckBelowThreshold(l: seq<int>, t: int) returns (result: bool)"
+
+[[tasks]]
+dafny_id = "DH0056"
+humaneval_num = 53
+source_id = "humaneval_053"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method add(x: int, y: int) returns (result: int)"
+
+[[tasks]]
+dafny_id = "DH0057"
+humaneval_num = 54
+source_id = "humaneval_054"
+status = "skip"
+reason = "uses set type"
+dafny_signature = "method same_chars(s0: string, s1: string) returns (result: bool)"
+
+[[tasks]]
+dafny_id = "DH0058"
+humaneval_num = 55
+source_id = "humaneval_055"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method fib(n: int) returns (result: int)"
+
+[[tasks]]
+dafny_id = "DH0059"
+humaneval_num = 56
+source_id = "humaneval_056"
+status = "maybe"
+reason = "uses string type; uses char type"
+dafny_signature = "method correct_bracketing(brackets: string) returns (result: bool)"
+
+[[tasks]]
+dafny_id = "DH0060"
+humaneval_num = 57
+source_id = "humaneval_057"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method IsMonotonic(l: seq<int>) returns (result: bool)"
+
+[[tasks]]
+dafny_id = "DH0061"
+humaneval_num = 58
+source_id = "humaneval_058_common"
+status = "skip"
+reason = "uses set type"
+dafny_signature = "method common(l1 : seq<int>, l2 : seq<int>) returns (c : set<int>)"
+
+[[tasks]]
+dafny_id = "DH0062"
+humaneval_num = 59
+source_id = "humaneval_059"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method largest_prime_factor(n: int) returns (result: int)"
+
+[[tasks]]
+dafny_id = "DH0063"
+humaneval_num = 60
+source_id = "humaneval_060"
+status = "already_done"
+reason = "already translated as HE060"
+
+[[tasks]]
+dafny_id = "DH0064"
+humaneval_num = 62
+source_id = "humaneval_062"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method derivative(xs: seq<int>) returns (result: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0065"
+humaneval_num = 63
+source_id = "humaneval_063"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method fibfib(n: int) returns (result: int)"
+
+[[tasks]]
+dafny_id = "DH0066"
+humaneval_num = 64
+source_id = "humaneval_064_vowels_count"
+status = "maybe"
+reason = "uses string type; uses char type"
+dafny_signature = "method vowel_count(s: string) returns (count: int)"
+
+[[tasks]]
+dafny_id = "DH0067"
+humaneval_num = 65
+source_id = "humaneval_065"
+status = "maybe"
+reason = "uses string type; uses char type"
+dafny_signature = "method circular_shift(x: int, shift: int) returns (result: string)"
+
+[[tasks]]
+dafny_id = "DH0068"
+humaneval_num = 66
+source_id = "humaneval_066"
+status = "maybe"
+reason = "uses string type; uses char type"
+dafny_signature = "method digitSum(s: string) returns (result: int)"
+
+[[tasks]]
+dafny_id = "DH0069"
+humaneval_num = 67
+source_id = "humaneval_067"
+status = "maybe"
+reason = "uses string type"
+dafny_signature = "method fruit_distribution(s: string, n: int) returns (mangoes: int)"
+
+[[tasks]]
+dafny_id = "DH0070"
+humaneval_num = 68
+source_id = "humaneval_068"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method pluck(arr: seq<int>) returns (result: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0071"
+humaneval_num = 69
+source_id = "humaneval_069"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method search(lst: seq<int>) returns (result: int)"
+
+[[tasks]]
+dafny_id = "DH0072"
+humaneval_num = 70
+source_id = "humaneval_070_strange_sort_list__strange_sort_list_helper"
+status = "skip"
+reason = "uses multiple return values"
+dafny_signature = "method strange_sort_list_helper(s: seq<int>) returns (sorted: seq<int>, strange: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0073"
+humaneval_num = 72
+source_id = "humaneval_072"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method will_it_fly(q: seq<int>, w: int) returns (result: bool)"
+
+[[tasks]]
+dafny_id = "DH0074"
+humaneval_num = 73
+source_id = "humaneval_073"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method smallest_change(arr: seq<int>) returns (changes: int)"
+
+[[tasks]]
+dafny_id = "DH0075"
+humaneval_num = 74
+source_id = "humaneval_074"
+status = "skip"
+reason = "uses seq<string>"
+dafny_signature = "method total_match(lst1: seq<string>, lst2: seq<string>) returns (result: seq<string>)"
+
+[[tasks]]
+dafny_id = "DH0076"
+humaneval_num = 75
+source_id = "humaneval_075"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method is_multiply_prime(a: int) returns (result: bool)"
+
+[[tasks]]
+dafny_id = "DH0077"
+humaneval_num = 76
+source_id = "humaneval_076_is_simple_power"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method is_simple_power(x: nat, n: int) returns (ans : bool)"
+
+[[tasks]]
+dafny_id = "DH0078"
+humaneval_num = 77
+source_id = "humaneval_077_iscube__cube_root"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method cube_root(N: nat) returns (r: nat)"
+
+[[tasks]]
+dafny_id = "DH0079"
+humaneval_num = 77
+source_id = "humaneval_077_iscube__is_cube"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method is_cube(n: nat) returns (r: bool)"
+
+[[tasks]]
+dafny_id = "DH0080"
+humaneval_num = 78
+source_id = "humaneval_078"
+status = "maybe"
+reason = "uses string type; uses char type"
+dafny_signature = "method hex_key(num: string) returns (count: int)"
+
+[[tasks]]
+dafny_id = "DH0081"
+humaneval_num = 79
+source_id = "humaneval_079_decimal_to_binary"
+status = "maybe"
+reason = "uses string type"
+dafny_signature = "method decimal_to_binary(n: nat) returns (s: string)"
+
+[[tasks]]
+dafny_id = "DH0082"
+humaneval_num = 80
+source_id = "humaneval_080"
+status = "maybe"
+reason = "uses string type"
+dafny_signature = "method is_happy(s: string) returns (result: bool)"
+
+[[tasks]]
+dafny_id = "DH0083"
+humaneval_num = 81
+source_id = "humaneval_081"
+status = "skip"
+reason = "uses real numbers; uses seq<real>; uses seq<string>"
+dafny_signature = "method numerical_letter_grade(grades: seq<real>) returns (letter_grades: seq<string>)"
+
+[[tasks]]
+dafny_id = "DH0084"
+humaneval_num = 82
+source_id = "humaneval_082"
+status = "maybe"
+reason = "uses string type"
+dafny_signature = "method prime_length(s: string) returns (result: bool)"
+
+[[tasks]]
+dafny_id = "DH0085"
+humaneval_num = 83
+source_id = "humaneval_083"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method starts_one_ends(n: int) returns (result: int)"
+
+[[tasks]]
+dafny_id = "DH0086"
+humaneval_num = 84
+source_id = "humaneval_084_solve"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method solve(n: nat) returns (r: nat)"
+
+[[tasks]]
+dafny_id = "DH0087"
+humaneval_num = 85
+source_id = "humaneval_085_add"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method add(v: seq<int>) returns (r : int)"
+
+[[tasks]]
+dafny_id = "DH0088"
+humaneval_num = 87
+source_id = "humaneval_087_get_row__SortSeq"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method SortSeq(s: SortSeqState) returns (sorted: SortSeqState)"
+
+[[tasks]]
+dafny_id = "DH0089"
+humaneval_num = 87
+source_id = "humaneval_087_get_row__get_row"
+status = "skip"
+reason = "uses nested sequences"
+dafny_signature = "method get_row(lst: seq<seq<int>>, x: int) returns (pos: SortSeqState)"
+
+[[tasks]]
+dafny_id = "DH0090"
+humaneval_num = 88
+source_id = "humaneval_088"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method sort_array(arr: seq<int>) returns (result: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0091"
+humaneval_num = 89
+source_id = "humaneval_089"
+status = "maybe"
+reason = "uses string type; uses char type"
+dafny_signature = "method encrypt(s: string) returns (result: string)"
+
+[[tasks]]
+dafny_id = "DH0092"
+humaneval_num = 90
+source_id = "humaneval_090_next_smallest"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method rolling_max(s: seq<int>) returns (res: Option<int>)"
+
+[[tasks]]
+dafny_id = "DH0094"
+humaneval_num = 92
+source_id = "humaneval_092"
+status = "skip"
+reason = "uses real numbers"
+dafny_signature = "method any_int(x: real, y: real, z: real) returns (result: bool)"
+
+[[tasks]]
+dafny_id = "DH0095"
+humaneval_num = 93
+source_id = "humaneval_093"
+status = "maybe"
+reason = "uses string type; uses char type"
+dafny_signature = "method encode(message: string) returns (result: string)"
+
+[[tasks]]
+dafny_id = "DH0096"
+humaneval_num = 94
+source_id = "humaneval_094"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method skjkasdkd(lst: seq<int>) returns (result: int)"
+
+[[tasks]]
+dafny_id = "DH0097"
+humaneval_num = 95
+source_id = "humaneval_095_check_dict_case"
+status = "skip"
+reason = "uses map type"
+dafny_signature = "method CheckDictCase(dict: DictCase) returns (result: bool)"
+
+[[tasks]]
+dafny_id = "DH0098"
+humaneval_num = 96
+source_id = "humaneval_096"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method count_up_to(n: int) returns (result: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0099"
+humaneval_num = 97
+source_id = "humaneval_097"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method multiply(a: int, b: int) returns (result: int)"
+
+[[tasks]]
+dafny_id = "DH0100"
+humaneval_num = 98
+source_id = "humaneval_098_count_upper"
+status = "maybe"
+reason = "uses string type; uses char type"
+dafny_signature = "method count_upper(s: string) returns (cnt: int)"
+
+[[tasks]]
+dafny_id = "DH0101"
+humaneval_num = 100
+source_id = "humaneval_100"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method make_a_pile(n: int) returns (pile: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0102"
+humaneval_num = 102
+source_id = "humaneval_102"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method ChooseNum(x: int, y: int) returns (result: int)"
+
+[[tasks]]
+dafny_id = "DH0103"
+humaneval_num = 103
+source_id = "humaneval_103"
+status = "maybe"
+reason = "uses string type"
+dafny_signature = "method rounded_avg(n: int, m: int) returns (result: string)"
+
+[[tasks]]
+dafny_id = "DH0104"
+humaneval_num = 104
+source_id = "humaneval_104_unique_digits"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method UniqueDigits(x: seq<int>) returns (result: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0105"
+humaneval_num = 105
+source_id = "humaneval_105_by_length__SortReverseAndName"
+status = "skip"
+reason = "uses seq<string>"
+dafny_signature = "method SortReverseAndName(arr: seq<int>) returns (result: seq<string>)"
+
+[[tasks]]
+dafny_id = "DH0106"
+humaneval_num = 105
+source_id = "humaneval_105_by_length__SortSeq"
+status = "maybe"
+reason = "uses string type"
+dafny_signature = "method SortSeq(s: seq<int>) returns (sorted: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0107"
+humaneval_num = 105
+source_id = "humaneval_105_by_length__reverse"
+status = "maybe"
+reason = "uses string type"
+dafny_signature = "method reverse(s: seq<int>) returns (rev: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0108"
+humaneval_num = 106
+source_id = "humaneval_106"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method f(n: nat) returns (result: seq<nat>)"
+
+[[tasks]]
+dafny_id = "DH0109"
+humaneval_num = 107
+source_id = "humaneval_107"
+status = "skip"
+reason = "uses multiple return values"
+dafny_signature = "method even_odd_palindrome(n: nat) returns (result: (nat, nat))"
+
+[[tasks]]
+dafny_id = "DH0110"
+humaneval_num = 108
+source_id = "humaneval_108"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method count_nums(arr: seq<int>) returns (count: int)"
+
+[[tasks]]
+dafny_id = "DH0111"
+humaneval_num = 109
+source_id = "humaneval_109"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method move_one_ball(arr: seq<int>) returns (result: bool)"
+
+[[tasks]]
+dafny_id = "DH0112"
+humaneval_num = 110
+source_id = "humaneval_110"
+status = "maybe"
+reason = "uses string type"
+dafny_signature = "method exchange(lst1: seq<int>, lst2: seq<int>) returns (result: string)"
+
+[[tasks]]
+dafny_id = "DH0113"
+humaneval_num = 111
+source_id = "humaneval_111_histogram"
+status = "skip"
+reason = "uses map type"
+dafny_signature = "method count(a: seq<int>) returns (biggest: BiggestMap)"
+
+[[tasks]]
+dafny_id = "DH0114"
+humaneval_num = 112
+source_id = "humaneval_112"
+status = "skip"
+reason = "uses multiple return values"
+dafny_signature = "method reverse_delete(s: seq<char>, c: seq<char>) returns (result: (seq<char>, bool))"
+
+[[tasks]]
+dafny_id = "DH0115"
+humaneval_num = 113
+source_id = "humaneval_113"
+status = "skip"
+reason = "uses seq<string>"
+dafny_signature = "method odd_count(lst: seq<string>) returns (result: seq<string>)"
+
+[[tasks]]
+dafny_id = "DH0116"
+humaneval_num = 114
+source_id = "humaneval_114_minSubArraySum"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method minSubArraySum(a: seq<int>) returns (s: int)"
+
+[[tasks]]
+dafny_id = "DH0117"
+humaneval_num = 115
+source_id = "humaneval_115"
+status = "skip"
+reason = "uses nested sequences"
+dafny_signature = "method max_fill(grid: seq<seq<int>>, capacity: int) returns (result: int)"
+
+[[tasks]]
+dafny_id = "DH0118"
+humaneval_num = 116
+source_id = "humaneval_116_sort_array"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method sort_array(s: seq<nat>) returns (sorted: seq<nat>)"
+
+[[tasks]]
+dafny_id = "DH0119"
+humaneval_num = 118
+source_id = "humaneval_118_get_closest_vowel"
+status = "maybe"
+reason = "uses string type; uses char type"
+dafny_signature = "method get_closest_vowel(word: string) returns (result: string)"
+
+[[tasks]]
+dafny_id = "DH0120"
+humaneval_num = 119
+source_id = "humaneval_119"
+status = "skip"
+reason = "uses seq<string>"
+dafny_signature = "method match_parens(lst: seq<string>) returns (result: string)"
+
+[[tasks]]
+dafny_id = "DH0121"
+humaneval_num = 120
+source_id = "humaneval_120_maximum__SortSeq"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method SortSeq(s: seq<int>) returns (sorted: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0122"
+humaneval_num = 120
+source_id = "humaneval_120_maximum__maximum"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method maximum(s: seq<int>, k: int) returns (result: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0123"
+humaneval_num = 121
+source_id = "humaneval_121"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method solution(lst: seq<int>) returns (result: int)"
+
+[[tasks]]
+dafny_id = "DH0124"
+humaneval_num = 122
+source_id = "humaneval_122"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method add_elements(arr: seq<int>, k: int) returns (result: int)"
+
+[[tasks]]
+dafny_id = "DH0125"
+humaneval_num = 123
+source_id = "humaneval_123_get_odd_collatz__get_odd_collatz"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method get_odd_collatz(n: nat) returns (sorted: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0126"
+humaneval_num = 123
+source_id = "humaneval_123_get_odd_collatz__get_odd_collatz_unsorted"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method get_odd_collatz_unsorted(n: nat) returns (odd_collatz: seq<nat>)"
+
+[[tasks]]
+dafny_id = "DH0127"
+humaneval_num = 123
+source_id = "humaneval_123_get_odd_collatz__next_odd_collatz_iter"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method next_odd_collatz_iter(n: nat) returns (next: nat)"
+
+[[tasks]]
+dafny_id = "DH0128"
+humaneval_num = 124
+source_id = "humaneval_124"
+status = "skip"
+reason = "uses seq<string>"
+dafny_signature = "method valid_date(date: string) returns (result: bool)"
+
+[[tasks]]
+dafny_id = "DH0129"
+humaneval_num = 125
+source_id = "humaneval_125"
+status = "skip"
+reason = "uses seq<string>"
+dafny_signature = "method split_words(txt: string) returns (result: SplitResult)"
+
+[[tasks]]
+dafny_id = "DH0130"
+humaneval_num = 126
+source_id = "humaneval_126"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method CheckValidList(lst: seq<int>) returns (result: bool)"
+
+[[tasks]]
+dafny_id = "DH0131"
+humaneval_num = 127
+source_id = "humaneval_127_intersection"
+status = "maybe"
+reason = "uses string type"
+dafny_signature = "method Intersection(start1: int, end1: int, start2: int, end2: int) returns (result: string)"
+
+[[tasks]]
+dafny_id = "DH0132"
+humaneval_num = 128
+source_id = "humaneval_128"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method prod_signs(arr: seq<int>) returns (result: Option<int>)"
+
+[[tasks]]
+dafny_id = "DH0133"
+humaneval_num = 130
+source_id = "humaneval_130_tri"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method Tribonacci(n: nat) returns (result: seq<nat>)"
+
+[[tasks]]
+dafny_id = "DH0134"
+humaneval_num = 132
+source_id = "humaneval_132_is_nested"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method is_nested(s: seq<int>) returns (res: bool)"
+
+[[tasks]]
+dafny_id = "DH0135"
+humaneval_num = 133
+source_id = "humaneval_133_sum_squares"
+status = "skip"
+reason = "uses real numbers; uses seq<real>"
+dafny_signature = "method sum_squares(lst: seq<real>) returns (r : int)"
+
+[[tasks]]
+dafny_id = "DH0136"
+humaneval_num = 134
+source_id = "humaneval_134"
+status = "maybe"
+reason = "uses string type; uses char type"
+dafny_signature = "method check_if_last_char_is_a_letter(txt: string) returns (result: bool)"
+
+[[tasks]]
+dafny_id = "DH0137"
+humaneval_num = 135
+source_id = "humaneval_135"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method can_arrange(arr: seq<int>) returns (result: int)"
+
+[[tasks]]
+dafny_id = "DH0138"
+humaneval_num = 136
+source_id = "humaneval_136_largest_smallest_integers"
+status = "skip"
+reason = "uses multiple return values"
+dafny_signature = "method largest_smallest_integers(arr: seq<int>) returns (a: Option<int>, b: Option<int>)"
+
+[[tasks]]
+dafny_id = "DH0139"
+humaneval_num = 137
+source_id = "humaneval_137"
+status = "skip"
+reason = "uses real numbers"
+dafny_signature = "method compare_one(a: Value, b: Value) returns (result: Option<Value>)"
+
+[[tasks]]
+dafny_id = "DH0140"
+humaneval_num = 138
+source_id = "humaneval_138"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method is_equal_to_sum_even(n: int) returns (result: bool)"
+
+[[tasks]]
+dafny_id = "DH0141"
+humaneval_num = 139
+source_id = "humaneval_139"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method special_factorial(n: int) returns (result: int)"
+
+[[tasks]]
+dafny_id = "DH0143"
+humaneval_num = 142
+source_id = "humaneval_142"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method sum_squares(lst: seq<int>) returns (result: int)"
+
+[[tasks]]
+dafny_id = "DH0144"
+humaneval_num = 144
+source_id = "humaneval_144"
+status = "maybe"
+reason = "uses string type; uses char type"
+dafny_signature = "method simplify(x: string, n: string) returns (result: bool)"
+
+[[tasks]]
+dafny_id = "DH0145"
+humaneval_num = 145
+source_id = "humaneval_145_order_by_points"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method order_by_points(s: seq<int>) returns (sorted: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0146"
+humaneval_num = 146
+source_id = "humaneval_146"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method SpecialFilter(nums: seq<int>) returns (count: int)"
+
+[[tasks]]
+dafny_id = "DH0147"
+humaneval_num = 147
+source_id = "humaneval_147"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method get_max_triples(n: int) returns (result: int)"
+
+[[tasks]]
+dafny_id = "DH0148"
+humaneval_num = 148
+source_id = "humaneval_148_bf"
+status = "skip"
+reason = "uses seq<string>"
+dafny_signature = "method bf(start: int, end: int) returns (planets: seq<string>)"
+
+[[tasks]]
+dafny_id = "DH0149"
+humaneval_num = 149
+source_id = "humaneval_149_sorted_list_sum__sort_lengths"
+status = "skip"
+reason = "uses seq<string>"
+dafny_signature = "method sort_lengths(list: seq<string>) returns (sorted: seq<string>)"
+
+[[tasks]]
+dafny_id = "DH0150"
+humaneval_num = 149
+source_id = "humaneval_149_sorted_list_sum__sort_strings"
+status = "skip"
+reason = "uses seq<string>"
+dafny_signature = "method sort_strings(list: seq<string>) returns (sorted: seq<string>)"
+
+[[tasks]]
+dafny_id = "DH0151"
+humaneval_num = 149
+source_id = "humaneval_149_sorted_list_sum__sorted_list_sum"
+status = "skip"
+reason = "uses seq<string>"
+dafny_signature = "method sorted_list_sum(list: seq<string>) returns (sorted: seq<string>)"
+
+[[tasks]]
+dafny_id = "DH0152"
+humaneval_num = 150
+source_id = "humaneval_150_x_or_y"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method x_or_y(n: nat, x: int, y: int) returns (result: int)"
+
+[[tasks]]
+dafny_id = "DH0153"
+humaneval_num = 151
+source_id = "humaneval_151"
+status = "skip"
+reason = "uses real numbers"
+dafny_signature = "method double_the_difference(lst: seq<Number>) returns (result: int)"
+
+[[tasks]]
+dafny_id = "DH0154"
+humaneval_num = 152
+source_id = "humaneval_152"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method compare(game: seq<int>, guess: seq<int>) returns (result: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0155"
+humaneval_num = 153
+source_id = "humaneval_153"
+status = "skip"
+reason = "uses seq<string>"
+dafny_signature = "method Strongest_Extension(class_name: string, extensions: seq<string>) returns (result: string)"
+
+[[tasks]]
+dafny_id = "DH0156"
+humaneval_num = 154
+source_id = "humaneval_154_cycpattern_check"
+status = "maybe"
+reason = "uses string type"
+dafny_signature = "method CycpatternCheck(word: string, pattern: string) returns (result: bool)"
+
+[[tasks]]
+dafny_id = "DH0157"
+humaneval_num = 155
+source_id = "humaneval_155"
+status = "skip"
+reason = "uses multiple return values"
+dafny_signature = "method even_odd_count(num: int) returns (even_count: int, odd_count: int)"
+
+[[tasks]]
+dafny_id = "DH0158"
+humaneval_num = 157
+source_id = "humaneval_157"
+status = "skip"
+reason = "uses real numbers"
+dafny_signature = "method right_angle_triangle(a: real, b: real, c: real) returns (result: bool)"
+
+[[tasks]]
+dafny_id = "DH0159"
+humaneval_num = 158
+source_id = "humaneval_158_find_max"
+status = "skip"
+reason = "uses seq<string>"
+dafny_signature = "method find_max(strings : seq<string>) returns (s : string)"
+
+[[tasks]]
+dafny_id = "DH0160"
+humaneval_num = 159
+source_id = "humaneval_159"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method eat(number: int, need: int, remaining: int) returns (result: seq<int>)"
+
+[[tasks]]
+dafny_id = "DH0161"
+humaneval_num = 161
+source_id = "humaneval_161"
+status = "maybe"
+reason = "uses string type; uses char type"
+dafny_signature = "method solve(s: string) returns (result: string)"
+
+[[tasks]]
+dafny_id = "DH0162"
+humaneval_num = 162
+source_id = "humaneval_162"
+status = "maybe"
+reason = "uses string type"
+dafny_signature = "method string_to_md5(text: string) returns (result: Option<string>)"
+
+[[tasks]]
+dafny_id = "DH0163"
+humaneval_num = 163
+source_id = "humaneval_163_generate_integers__generate_integers"
+status = "translatable"
+reason = "int/bool/seq<int> types only"
+dafny_signature = "method generate_integers(a : int, b : int) returns (result: seq<int>)"

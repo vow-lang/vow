@@ -1,0 +1,13 @@
+module FindMaxElement
+
+fn find_max_element(l: Vec<i64>) -> i64 vow {
+  requires: l.len() >= 0,
+  requires: l.len() <= 8,
+  ensures: result >= 0
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  0
+}

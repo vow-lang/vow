@@ -1,12 +1,29 @@
 #![allow(clippy::missing_safety_doc)]
 
 use std::cell::RefCell;
-use std::ffi::{CStr, c_char};
+use std::collections::HashMap;
+use std::ffi::{c_char, CStr};
 use std::io::Write as _;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Mutex;
 
 thread_local! {
     static LAST_STDOUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     static LAST_STDERR: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
+enum ProcessState {
+    Running(std::process::Child),
+    Completed { stdout: Vec<u8>, stderr: Vec<u8> },
+}
+
+static PROCESS_MAP: Mutex<Option<HashMap<i64, ProcessState>>> = Mutex::new(None);
+static NEXT_PROCESS_HANDLE: AtomicI64 = AtomicI64::new(1);
+
+fn process_map_init(
+    map: &mut Option<HashMap<i64, ProcessState>>,
+) -> &mut HashMap<i64, ProcessState> {
+    map.get_or_insert_with(HashMap::new)
 }
 
 const TAG_I32: u8 = 0;
@@ -169,7 +186,9 @@ pub extern "C" fn __vow_arena_alloc(size: usize, align: usize) -> *mut u8 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_arena_free(_ptr: *mut u8) {
-    // MVP: no-op (memory leak); proper arena deallocation is future work
+    // No-op: struct deallocation deferred to future work.
+    // Typed free functions (__vow_string_free, __vow_vec_free_val, __vow_map_free) handle
+    // collection types directly without needing arena headers.
 }
 
 #[repr(C)]
@@ -348,7 +367,11 @@ pub unsafe extern "C" fn __vow_string_eq(a: *const u8, b: *const u8) -> i64 {
     }
     let sa = unsafe { std::slice::from_raw_parts(va.ptr, va.len) };
     let sb = unsafe { std::slice::from_raw_parts(vb.ptr, vb.len) };
-    if sa == sb { 1 } else { 0 }
+    if sa == sb {
+        1
+    } else {
+        0
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -414,6 +437,257 @@ pub unsafe extern "C" fn __vow_string_push_byte(s: *mut u8, byte: i64) {
 }
 
 // ---------------------------------------------------------------------------
+// String utility builtins
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_substr(s: *const u8, start: i64, len: i64) -> *mut u8 {
+    if s.is_null() {
+        return __vow_vec_new(1, 1);
+    }
+    let v = unsafe { &*(s as *const VowVec) };
+    let slen = v.len as i64;
+    let clamped_start = start.clamp(0, slen) as usize;
+    let clamped_len = len.clamp(0, slen - clamped_start as i64) as usize;
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    unsafe { __vow_string_new(bytes[clamped_start..].as_ptr() as *const i8, clamped_len) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_split(haystack: *const u8, separator: *const u8) -> *mut u8 {
+    let result_vec = __vow_vec_new_val();
+    if haystack.is_null() || separator.is_null() {
+        return result_vec;
+    }
+    let vh = unsafe { &*(haystack as *const VowVec) };
+    let vs = unsafe { &*(separator as *const VowVec) };
+    let h = unsafe { std::slice::from_raw_parts(vh.ptr, vh.len) };
+    let s = unsafe { std::slice::from_raw_parts(vs.ptr, vs.len) };
+
+    if s.is_empty() {
+        let str_vec = unsafe { __vow_string_new(h.as_ptr() as *const i8, h.len()) } as i64;
+        unsafe { __vow_vec_push_val(result_vec, str_vec) };
+        return result_vec;
+    }
+
+    let mut start = 0;
+    while start <= h.len() {
+        if let Some(pos) = h[start..].windows(s.len()).position(|w| w == s) {
+            let piece = unsafe { __vow_string_new(h[start..].as_ptr() as *const i8, pos) } as i64;
+            unsafe { __vow_vec_push_val(result_vec, piece) };
+            start += pos + s.len();
+        } else {
+            let piece =
+                unsafe { __vow_string_new(h[start..].as_ptr() as *const i8, h.len() - start) }
+                    as i64;
+            unsafe { __vow_vec_push_val(result_vec, piece) };
+            break;
+        }
+    }
+    result_vec
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_starts_with(s: *const u8, prefix: *const u8) -> i64 {
+    if s.is_null() || prefix.is_null() {
+        return 0;
+    }
+    let vs = unsafe { &*(s as *const VowVec) };
+    let vp = unsafe { &*(prefix as *const VowVec) };
+    let ss = unsafe { std::slice::from_raw_parts(vs.ptr, vs.len) };
+    let sp = unsafe { std::slice::from_raw_parts(vp.ptr, vp.len) };
+    if ss.starts_with(sp) {
+        1
+    } else {
+        0
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_ends_with(s: *const u8, suffix: *const u8) -> i64 {
+    if s.is_null() || suffix.is_null() {
+        return 0;
+    }
+    let vs = unsafe { &*(s as *const VowVec) };
+    let vp = unsafe { &*(suffix as *const VowVec) };
+    let ss = unsafe { std::slice::from_raw_parts(vs.ptr, vs.len) };
+    let sp = unsafe { std::slice::from_raw_parts(vp.ptr, vp.len) };
+    if ss.ends_with(sp) {
+        1
+    } else {
+        0
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_trim(s: *const u8) -> *mut u8 {
+    if s.is_null() {
+        return __vow_vec_new(1, 1);
+    }
+    let v = unsafe { &*(s as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let trimmed = match std::str::from_utf8(bytes) {
+        Ok(s) => s.trim(),
+        Err(_) => return __vow_vec_new(1, 1),
+    };
+    unsafe { __vow_string_new(trimmed.as_ptr() as *const i8, trimmed.len()) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_to_upper(s: *const u8) -> *mut u8 {
+    if s.is_null() {
+        return __vow_vec_new(1, 1);
+    }
+    let v = unsafe { &*(s as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let upper = match std::str::from_utf8(bytes) {
+        Ok(s) => s.to_uppercase(),
+        Err(_) => return __vow_vec_new(1, 1),
+    };
+    unsafe { __vow_string_new(upper.as_ptr() as *const i8, upper.len()) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_to_lower(s: *const u8) -> *mut u8 {
+    if s.is_null() {
+        return __vow_vec_new(1, 1);
+    }
+    let v = unsafe { &*(s as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let lower = match std::str::from_utf8(bytes) {
+        Ok(s) => s.to_lowercase(),
+        Err(_) => return __vow_vec_new(1, 1),
+    };
+    unsafe { __vow_string_new(lower.as_ptr() as *const i8, lower.len()) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_replace(
+    s: *const u8,
+    from: *const u8,
+    to: *const u8,
+) -> *mut u8 {
+    if s.is_null() || from.is_null() || to.is_null() {
+        return __vow_vec_new(1, 1);
+    }
+    let vs = unsafe { &*(s as *const VowVec) };
+    let vf = unsafe { &*(from as *const VowVec) };
+    let vt = unsafe { &*(to as *const VowVec) };
+    let ss = unsafe { std::slice::from_raw_parts(vs.ptr, vs.len) };
+    let sf = unsafe { std::slice::from_raw_parts(vf.ptr, vf.len) };
+    let st = unsafe { std::slice::from_raw_parts(vt.ptr, vt.len) };
+    let (ss_str, sf_str, st_str) = match (
+        std::str::from_utf8(ss),
+        std::str::from_utf8(sf),
+        std::str::from_utf8(st),
+    ) {
+        (Ok(a), Ok(b), Ok(c)) => (a, b, c),
+        _ => return __vow_vec_new(1, 1),
+    };
+    let result = ss_str.replace(sf_str, st_str);
+    unsafe { __vow_string_new(result.as_ptr() as *const i8, result.len()) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_join(vec_ptr: *const u8, sep: *const u8) -> *mut u8 {
+    if vec_ptr.is_null() || sep.is_null() {
+        return __vow_vec_new(1, 1);
+    }
+    let v = unsafe { &*(vec_ptr as *const VowVec) };
+    let ptrs = unsafe { std::slice::from_raw_parts(v.ptr as *const i64, v.len) };
+
+    let result = __vow_vec_new(1, 1);
+    for (i, &str_ptr) in ptrs.iter().enumerate() {
+        if i > 0 {
+            unsafe { __vow_string_push_str(result, sep) };
+        }
+        unsafe { __vow_string_push_str(result, str_ptr as *const u8) };
+    }
+    result
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_parse_i64(s: *const u8) -> i64 {
+    if s.is_null() {
+        return 0;
+    }
+    let v = unsafe { &*(s as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s.trim().parse::<i64>().unwrap_or(0),
+        Err(_) => 0,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Utility builtins
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_sort(vec: *const u8) -> *mut u8 {
+    let result = __vow_vec_new_val();
+    if vec.is_null() {
+        return result;
+    }
+    let v = unsafe { &*(vec as *const VowVec) };
+    let src = unsafe { std::slice::from_raw_parts(v.ptr as *const i64, v.len) };
+    let mut sorted: Vec<i64> = src.to_vec();
+    sorted.sort_unstable();
+    for &val in &sorted {
+        unsafe { __vow_vec_push_val(result, val) };
+    }
+    result
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_time_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_hex_encode(vec: *const u8) -> *mut u8 {
+    if vec.is_null() {
+        return __vow_vec_new(1, 1);
+    }
+    let v = unsafe { &*(vec as *const VowVec) };
+    let vals = unsafe { std::slice::from_raw_parts(v.ptr as *const i64, v.len) };
+    let mut hex = String::new();
+    for &val in vals {
+        hex.push_str(&format!("{:02x}", (val & 0xff) as u8));
+    }
+    unsafe { __vow_string_new(hex.as_ptr() as *const i8, hex.len()) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_hex_decode(s: *const u8) -> *mut u8 {
+    let result = __vow_vec_new_val();
+    if s.is_null() {
+        return result;
+    }
+    let v = unsafe { &*(s as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let hex_str = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return result,
+    };
+    if hex_str.len() % 2 != 0 {
+        return result;
+    }
+    let mut i = 0;
+    while i < hex_str.len() {
+        match u8::from_str_radix(&hex_str[i..i + 2], 16) {
+            Ok(byte) => unsafe { __vow_vec_push_val(result, byte as i64) },
+            Err(_) => return __vow_vec_new_val(),
+        }
+        i += 2;
+    }
+    result
+}
+
+// ---------------------------------------------------------------------------
 // File I/O runtime
 // ---------------------------------------------------------------------------
 
@@ -448,6 +722,142 @@ pub unsafe extern "C" fn __vow_fs_write(path_ptr: *const u8, data_ptr: *const u8
     let vd = unsafe { &*(data_ptr as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(vd.ptr, vd.len) };
     match std::fs::write(path, bytes) {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_fs_exists(path_ptr: *const u8) -> i64 {
+    if path_ptr.is_null() {
+        return 0;
+    }
+    let v = unsafe { &*(path_ptr as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let path = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    if std::path::Path::new(path).exists() {
+        1
+    } else {
+        0
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_fs_mkdir(path_ptr: *const u8) -> i64 {
+    if path_ptr.is_null() {
+        return -1;
+    }
+    let v = unsafe { &*(path_ptr as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let path = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    match std::fs::create_dir_all(path) {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_fs_listdir(path_ptr: *const u8) -> *mut u8 {
+    let result_vec = __vow_vec_new_val();
+    if path_ptr.is_null() {
+        return result_vec;
+    }
+    let v = unsafe { &*(path_ptr as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let path = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return result_vec,
+    };
+    let entries = match std::fs::read_dir(path) {
+        Ok(e) => e,
+        Err(_) => return result_vec,
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        let str_vec =
+            unsafe { __vow_string_new(name_str.as_ptr() as *const i8, name_str.len()) } as i64;
+        unsafe { __vow_vec_push_val(result_vec, str_vec) };
+    }
+    result_vec
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_fs_remove(path_ptr: *const u8) -> i64 {
+    if path_ptr.is_null() {
+        return -1;
+    }
+    let v = unsafe { &*(path_ptr as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let path = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    match std::fs::remove_file(path) {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_fs_remove_dir(path_ptr: *const u8) -> i64 {
+    if path_ptr.is_null() {
+        return -1;
+    }
+    let v = unsafe { &*(path_ptr as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let path = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    match std::fs::remove_dir_all(path) {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_fs_is_dir(path_ptr: *const u8) -> i64 {
+    if path_ptr.is_null() {
+        return 0;
+    }
+    let v = unsafe { &*(path_ptr as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let path = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    if std::path::Path::new(path).is_dir() {
+        1
+    } else {
+        0
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_fs_rename(old_ptr: *const u8, new_ptr: *const u8) -> i64 {
+    if old_ptr.is_null() || new_ptr.is_null() {
+        return -1;
+    }
+    let vo = unsafe { &*(old_ptr as *const VowVec) };
+    let old_bytes = unsafe { std::slice::from_raw_parts(vo.ptr, vo.len) };
+    let old_path = match std::str::from_utf8(old_bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let vn = unsafe { &*(new_ptr as *const VowVec) };
+    let new_bytes = unsafe { std::slice::from_raw_parts(vn.ptr, vn.len) };
+    let new_path = match std::str::from_utf8(new_bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    match std::fs::rename(old_path, new_path) {
         Ok(_) => 0,
         Err(_) => -1,
     }
@@ -523,6 +933,103 @@ pub extern "C" fn __vow_process_get_stderr() -> *mut u8 {
         let bytes = cell.borrow();
         unsafe { __vow_string_new(bytes.as_ptr() as *const i8, bytes.len()) }
     })
+}
+
+// ---------------------------------------------------------------------------
+// Non-blocking subprocess management
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_process_start(cmd_ptr: i64, args_ptr: i64) -> i64 {
+    let cmd_vec = unsafe { &*(cmd_ptr as *const VowVec) };
+    let cmd_bytes = unsafe { std::slice::from_raw_parts(cmd_vec.ptr, cmd_vec.len) };
+    let cmd_str = match std::str::from_utf8(cmd_bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+
+    let args_vec = unsafe { &*(args_ptr as *const VowVec) };
+    let arg_ptrs = unsafe { std::slice::from_raw_parts(args_vec.ptr as *const i64, args_vec.len) };
+    let mut args = Vec::new();
+    for &arg_ptr in arg_ptrs {
+        let av = unsafe { &*(arg_ptr as *const VowVec) };
+        let ab = unsafe { std::slice::from_raw_parts(av.ptr, av.len) };
+        match std::str::from_utf8(ab) {
+            Ok(s) => args.push(s.to_string()),
+            Err(_) => return -1,
+        }
+    }
+
+    use std::process::{Command, Stdio};
+    match Command::new(cmd_str)
+        .args(&args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => {
+            let handle = NEXT_PROCESS_HANDLE.fetch_add(1, Ordering::Relaxed);
+            let mut guard = PROCESS_MAP.lock().unwrap();
+            let map = process_map_init(&mut guard);
+            map.insert(handle, ProcessState::Running(child));
+            handle
+        }
+        Err(_) => -1,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_process_wait(handle: i64) -> i64 {
+    let mut guard = PROCESS_MAP.lock().unwrap();
+    let map = process_map_init(&mut guard);
+    let state = match map.remove(&handle) {
+        Some(s) => s,
+        None => return -1,
+    };
+    match state {
+        ProcessState::Running(child) => match child.wait_with_output() {
+            Ok(output) => {
+                let exit_code = output.status.code().unwrap_or(-1) as i64;
+                map.insert(
+                    handle,
+                    ProcessState::Completed {
+                        stdout: output.stdout,
+                        stderr: output.stderr,
+                    },
+                );
+                exit_code
+            }
+            Err(_) => -1,
+        },
+        ProcessState::Completed { stdout, stderr } => {
+            map.insert(handle, ProcessState::Completed { stdout, stderr });
+            0
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_process_stdout_for(handle: i64) -> *mut u8 {
+    let guard = PROCESS_MAP.lock().unwrap();
+    if let Some(Some(ProcessState::Completed { stdout, .. })) =
+        guard.as_ref().map(|m| m.get(&handle))
+    {
+        unsafe { __vow_string_new(stdout.as_ptr() as *const i8, stdout.len()) }
+    } else {
+        unsafe { __vow_string_new(std::ptr::null(), 0) }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_process_stderr_for(handle: i64) -> *mut u8 {
+    let guard = PROCESS_MAP.lock().unwrap();
+    if let Some(Some(ProcessState::Completed { stderr, .. })) =
+        guard.as_ref().map(|m| m.get(&handle))
+    {
+        unsafe { __vow_string_new(stderr.as_ptr() as *const i8, stderr.len()) }
+    } else {
+        unsafe { __vow_string_new(std::ptr::null(), 0) }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -637,4 +1144,51 @@ pub unsafe extern "C" fn __vow_map_remove(map: *mut u8, key: i64) {
 pub unsafe extern "C" fn __vow_map_len(map: *const u8) -> usize {
     let m = unsafe { &*(map as *const VowMap) };
     m.len
+}
+
+// ---------------------------------------------------------------------------
+// Typed deallocation
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_free(s: *mut u8) {
+    if s.is_null() {
+        return;
+    }
+    let v = unsafe { &*(s as *const VowVec) };
+    if v.cap > 0 && !v.ptr.is_null() {
+        let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(v.cap, 1) };
+        unsafe { std::alloc::dealloc(v.ptr, buf_layout) };
+    }
+    let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
+    unsafe { std::alloc::dealloc(s, header_layout) };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_free_val(v: *mut u8) {
+    if v.is_null() {
+        return;
+    }
+    let vec = unsafe { &*(v as *const VowVec) };
+    if vec.cap > 0 && !vec.ptr.is_null() {
+        let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(vec.cap * 8, 8) };
+        unsafe { std::alloc::dealloc(vec.ptr, buf_layout) };
+    }
+    let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
+    unsafe { std::alloc::dealloc(v, header_layout) };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_map_free(m: *mut u8) {
+    if m.is_null() {
+        return;
+    }
+    let map = unsafe { &*(m as *const VowMap) };
+    if map.cap > 0 && !map.ptr.is_null() {
+        let buf_layout =
+            unsafe { std::alloc::Layout::from_size_align_unchecked(map.cap * MAP_ENTRY_BYTES, 8) };
+        unsafe { std::alloc::dealloc(map.ptr, buf_layout) };
+    }
+    let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
+    unsafe { std::alloc::dealloc(m, header_layout) };
 }

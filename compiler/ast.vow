@@ -46,6 +46,7 @@ fn BINOP_GT() -> i64 vow { ensures: result >= 0 } { 14 }
 fn BINOP_GE() -> i64 vow { ensures: result >= 0 } { 15 }
 fn BINOP_AND() -> i64 vow { ensures: result >= 0 } { 16 }
 fn BINOP_OR() -> i64 vow { ensures: result >= 0 } { 17 }
+fn BINOP_XOR() -> i64 vow { ensures: result >= 0 } { 18 }
 
 fn UNOP_NEG() -> i64 vow { ensures: result >= 0 } { 0 }
 fn UNOP_NOT() -> i64 vow { ensures: result >= 0 } { 1 }
@@ -72,6 +73,7 @@ fn PAT_OR() -> i64 vow { ensures: result >= 0 } { 6 }
 fn ITEM_FN() -> i64 vow { ensures: result >= 0 } { 0 }
 fn ITEM_STRUCT() -> i64 vow { ensures: result >= 0 } { 1 }
 fn ITEM_ENUM() -> i64 vow { ensures: result >= 0 } { 2 }
+fn ITEM_CONST() -> i64 vow { ensures: result >= 0 } { 3 }
 
 fn EFF_IO() -> i64 vow { ensures: result > 0 } { 1 }
 fn EFF_PANIC() -> i64 vow { ensures: result > 0 } { 2 }
@@ -93,6 +95,7 @@ struct AstArena {
     list_head: Vec<i64>,
     list_size: Vec<i64>,
     vow_data: Vec<i64>,
+    cdef_data: Vec<i64>,
 }
 
 fn arena_new() -> AstArena {
@@ -110,6 +113,7 @@ fn arena_new() -> AstArena {
         list_head: Vec::new(),
         list_size: Vec::new(),
         vow_data: Vec::new(),
+        cdef_data: Vec::new(),
     }
 }
 
@@ -194,6 +198,10 @@ fn sdef_fields_lid(a: AstArena, sid: i64) -> i64 { a.sdef_data[sid * 4 + 1] }
 fn edef_name_sid(a: AstArena, eid: i64) -> i64 { a.edef_data[eid * 3] }
 fn edef_variants_lid(a: AstArena, eid: i64) -> i64 { a.edef_data[eid * 3 + 1] }
 
+fn cdef_name_sid(a: AstArena, cid: i64) -> i64 { a.cdef_data[cid * 3] }
+fn cdef_type_tid(a: AstArena, cid: i64) -> i64 { a.cdef_data[cid * 3 + 1] }
+fn cdef_value_eid(a: AstArena, cid: i64) -> i64 { a.cdef_data[cid * 3 + 2] }
+
 fn arena_str(a: AstArena, sid: i64) -> String { a.strs[sid] }
 
 fn expr_span(a: AstArena, eid: i64) -> i64 { a.expr_data[eid * 5 + 4] }
@@ -272,9 +280,17 @@ fn arena_add_edef(a: AstArena, name_sid: i64, variants_lid: i64, span: i64) -> i
     eid
 }
 
+fn arena_add_cdef(a: AstArena, name_sid: i64, type_tid: i64, value_eid: i64) -> i64 {
+    let cid: i64 = a.cdef_data.len() / 3;
+    a.cdef_data.push(name_sid);
+    a.cdef_data.push(type_tid);
+    a.cdef_data.push(value_eid);
+    cid
+}
+
 fn item_pack(kind: i64, id: i64) -> i64 vow {
     requires: kind >= 0,
-    requires: kind <= 2,
+    requires: kind <= 3,
     requires: id >= 0
 } {
     kind * 4294967296 + id

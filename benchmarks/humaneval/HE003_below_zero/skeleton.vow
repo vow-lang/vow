@@ -1,0 +1,20 @@
+module BelowZero
+
+fn below_zero(ops: Vec<i64>) -> i64 vow {
+  requires: ops.len() >= 0,
+  requires: ops.len() <= 8,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v.push(2);
+  v.push(0 - 5);
+  v.push(1);
+  print_i64(below_zero(v));
+  0
+}

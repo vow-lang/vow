@@ -1,0 +1,13 @@
+module StartsOneEnds
+
+fn starts_one_ends(n: i64) -> i64 vow {
+  requires: n >= 1,
+  requires: n <= 8,
+  ensures: result >= 1
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  0
+}

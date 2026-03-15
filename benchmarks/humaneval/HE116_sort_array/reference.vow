@@ -1,0 +1,87 @@
+module SortArray
+
+fn popcount(n: i64) -> i64 vow {
+  requires: n >= 0,
+  requires: n <= 127,
+  ensures: result >= 0
+} {
+  let mut count: i64 = 0;
+  let mut val: i64 = n;
+  while val > 0 vow {
+    invariant: count >= 0,
+    invariant: val >= 0
+  } {
+    count = count + val % 2;
+    val = val / 2;
+  }
+  count
+}
+
+fn sort_array(s: Vec<i64>) -> Vec<i64> vow {
+  requires: s.len() >= 0,
+  requires: s.len() <= 8,
+  ensures: result.len() >= 0
+} {
+  let out: Vec<i64> = Vec::new();
+  let mut i: i64 = 0;
+  while i < s.len() vow {
+    invariant: i >= 0,
+    invariant: i <= s.len()
+  } {
+    out.push(s[i]);
+    i = i + 1;
+  }
+  let mut a: i64 = 0;
+  while a < out.len() vow {
+    invariant: a >= 0,
+    invariant: a <= out.len()
+  } {
+    let mut b: i64 = a + 1;
+    while b < out.len() vow {
+      invariant: b >= a + 1,
+      invariant: b <= out.len()
+    } {
+      let pa: i64 = popcount(out[a]);
+      let pb: i64 = popcount(out[b]);
+      let mut do_swap: i64 = 0;
+      if pa > pb {
+        do_swap = 1;
+      } else {
+        if pa == pb {
+          if out[a] > out[b] {
+            do_swap = 1;
+          } else {
+            0;
+          }
+        } else {
+          0;
+        }
+      }
+      if do_swap == 1 {
+        let tmp: i64 = out[a];
+        out[a] = out[b];
+        out[b] = tmp;
+      } else {
+        0;
+      }
+      b = b + 1;
+    }
+    a = a + 1;
+  }
+  out
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(3);
+  v.push(7);
+  v.push(1);
+  v.push(2);
+  let r: Vec<i64> = sort_array(v);
+  let mut i: i64 = 0;
+  while i < r.len() {
+    print_i64(r[i]);
+    i = i + 1;
+  }
+  0
+}

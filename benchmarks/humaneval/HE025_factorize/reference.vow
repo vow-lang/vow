@@ -1,0 +1,40 @@
+module Factorize
+
+fn factorize(n: i64) -> Vec<i64> vow {
+  requires: n >= 2,
+  requires: n <= 100,
+  ensures: result.len() >= 1
+} {
+  let factors: Vec<i64> = Vec::new();
+  let mut rem: i64 = n;
+  let mut d: i64 = 2;
+  while d * d <= rem vow {
+    invariant: d >= 2,
+    invariant: rem >= 1
+  } {
+    while rem % d == 0 vow {
+      invariant: d >= 2,
+      invariant: rem >= 1
+    } {
+      factors.push(d);
+      rem = rem / d;
+    }
+    d = d + 1;
+  }
+  if rem > 1 {
+    factors.push(rem);
+  } else {
+    0;
+  }
+  factors
+}
+
+fn main() -> i32 [io] {
+  let factors: Vec<i64> = factorize(12);
+  let mut i: i64 = 0;
+  while i < factors.len() {
+    print_i64(factors[i]);
+    i = i + 1;
+  }
+  0
+}

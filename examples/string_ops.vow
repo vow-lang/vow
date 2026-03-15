@@ -1,0 +1,54 @@
+fn main() [io] {
+    let s: String = String::from("Hello, World!");
+
+    let sub: String = string_substr(s, 0, 5);
+    print_str(sub);
+    print_str(String::from("\n"));
+
+    let parts: Vec<String> = string_split(s, String::from(", "));
+    let n: i64 = parts.len();
+    print_str(String::from("split parts: "));
+    print_i64(n);
+    print_str(String::from("\n"));
+
+    let sw: i64 = string_starts_with(s, String::from("Hello"));
+    print_str(String::from("starts_with Hello: "));
+    print_i64(sw);
+    print_str(String::from("\n"));
+
+    let ew: i64 = string_ends_with(s, String::from("World!"));
+    print_str(String::from("ends_with World!: "));
+    print_i64(ew);
+    print_str(String::from("\n"));
+
+    let padded: String = String::from("  trimmed  ");
+    let trimmed: String = string_trim(padded);
+    print_str(trimmed);
+    print_str(String::from("\n"));
+
+    let upper: String = string_to_upper(String::from("abc"));
+    print_str(upper);
+    print_str(String::from("\n"));
+
+    let lower: String = string_to_lower(String::from("XYZ"));
+    print_str(lower);
+    print_str(String::from("\n"));
+
+    let replaced: String = string_replace(s, String::from("World"), String::from("Vow"));
+    print_str(replaced);
+    print_str(String::from("\n"));
+
+    let joined: String = string_join(parts, String::from(" | "));
+    print_str(joined);
+    print_str(String::from("\n"));
+
+    let parsed: i64 = parse_i64(String::from("42"));
+    print_str(String::from("parsed: "));
+    print_i64(parsed);
+    print_str(String::from("\n"));
+
+    let str_val: String = i64_to_string(123);
+    print_str(String::from("to_string: "));
+    print_str(str_val);
+    print_str(String::from("\n"));
+}

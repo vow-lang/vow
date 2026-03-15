@@ -1,0 +1,51 @@
+module AddElements
+
+fn add_elements(arr: Vec<i64>, k: i64) -> i64 vow {
+  requires: arr.len() >= 0,
+  requires: arr.len() <= 8,
+  requires: k >= 0,
+  requires: k <= 100,
+  ensures: result >= 0
+} {
+  let mut s: i64 = 0;
+  let mut i: i64 = 0;
+  let mut limit: i64 = k;
+  if limit > arr.len() {
+    limit = arr.len();
+  } else {
+    0;
+  }
+  while i < limit vow {
+    invariant: i >= 0,
+    invariant: i <= limit,
+    invariant: s >= 0
+  } {
+    let mut abs_val: i64 = arr[i];
+    if abs_val < 0 {
+      abs_val = 0 - abs_val;
+    } else {
+      0;
+    }
+    if abs_val <= 99 {
+      s = s + arr[i];
+    } else {
+      0;
+    }
+    i = i + 1;
+  }
+  s
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(111);
+  v.push(21);
+  v.push(3);
+  v.push(4000);
+  v.push(5);
+  v.push(6);
+  v.push(7);
+  v.push(8);
+  print_i64(add_elements(v, 3));
+  0
+}

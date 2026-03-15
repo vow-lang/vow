@@ -1,0 +1,14 @@
+module IsMultiplyPrime
+
+fn is_multiply_prime(a: i64) -> i64 vow {
+  requires: a >= 0,
+  requires: a <= 100,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  0
+}

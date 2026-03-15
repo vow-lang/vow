@@ -1,0 +1,10 @@
+[benchmark]
+id = "HE114"
+name = "min_sub_array_sum"
+difficulty = "medium"
+tags = ["humaneval"]
+unwind = 10
+modules = 1
+expected_status = "Verified"
+max_cegis_iterations = 5
+contract_fidelity = "partial"

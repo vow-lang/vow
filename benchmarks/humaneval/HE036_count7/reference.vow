@@ -1,0 +1,34 @@
+module Count7
+
+fn count7(x: i64) -> i64 vow {
+  requires: x >= 0,
+  requires: x <= 100,
+  ensures: result >= 0
+} {
+  if x == 0 {
+    0
+  } else {
+    let mut n: i64 = x;
+    let mut count: i64 = 0;
+    while n > 0 vow {
+      invariant: n >= 0,
+      invariant: count >= 0
+    } {
+      if n % 10 == 7 {
+        count = count + 1;
+      } else {
+        0;
+      }
+      n = n / 10;
+    }
+    count
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(count7(7));
+  print_i64(count7(77));
+  print_i64(count7(17));
+  print_i64(count7(0));
+  0
+}

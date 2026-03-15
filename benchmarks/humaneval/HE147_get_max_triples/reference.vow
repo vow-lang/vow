@@ -1,0 +1,33 @@
+module GetMaxTriples
+
+fn get_max_triples(n: i64) -> i64 vow {
+  requires: n >= 0,
+  requires: n <= 8,
+  ensures: result >= 0
+} {
+  let mut c0: i64 = 0;
+  let mut c1: i64 = 0;
+  let mut i: i64 = 1;
+  while i <= n vow {
+    invariant: i >= 1,
+    invariant: i <= n + 1,
+    invariant: c0 >= 0,
+    invariant: c1 >= 0
+  } {
+    let a: i64 = i * i - i + 1;
+    if a % 3 == 0 {
+      c0 = c0 + 1;
+    } else {
+      c1 = c1 + 1;
+    }
+    i = i + 1;
+  }
+  let t0: i64 = if c0 >= 3 { c0 * (c0 - 1) * (c0 - 2) / 6 } else { 0 };
+  let t1: i64 = if c1 >= 3 { c1 * (c1 - 1) * (c1 - 2) / 6 } else { 0 };
+  t0 + t1
+}
+
+fn main() -> i32 [io] {
+  print_i64(get_max_triples(5));
+  0
+}

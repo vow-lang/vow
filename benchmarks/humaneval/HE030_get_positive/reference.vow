@@ -1,0 +1,37 @@
+module GetPositive
+
+fn get_positive(l: Vec<i64>) -> Vec<i64> vow {
+  requires: l.len() >= 0,
+  requires: l.len() <= 8,
+  ensures: result.len() >= 0
+} {
+  let out: Vec<i64> = Vec::new();
+  let mut i: i64 = 0;
+  while i < l.len() vow {
+    invariant: i >= 0,
+    invariant: i <= l.len()
+  } {
+    if l[i] > 0 {
+      out.push(l[i]);
+    } else {
+      0;
+    }
+    i = i + 1;
+  }
+  out
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(0 - 1);
+  v.push(2);
+  v.push(0 - 3);
+  v.push(4);
+  let r: Vec<i64> = get_positive(v);
+  let mut i: i64 = 0;
+  while i < r.len() {
+    print_i64(r[i]);
+    i = i + 1;
+  }
+  0
+}

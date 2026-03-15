@@ -2,7 +2,20 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Commands
+## Language Design Principles
+
+Vow is a language for agents, not humans. New language features should only be added if they meet **all three** criteria:
+1. **Does not make verification harder** — the ESBMC pipeline and C model must not become more complex or fragile.
+2. **Eliminates a class of agent bugs** — the feature must make it harder for agents to generate incorrect code, not just shorter code.
+3. **Makes agentic coding easier** — the feature must help agents produce correct, verified programs more reliably (not merely reduce verbosity).
+
+Syntactic convenience for humans (string interpolation, pattern matching sugar, etc.) is not sufficient justification. Every feature added expands the compiler, C emitter, and verification surface area.
+
+**Crisp rule:** add surface sugar only when it desugars to today's core semantics with near-zero verifier impact; reject anything that introduces a new type-system axis. This preserves Vow's identity.
+
+## Bootstrap Commands (Rust Stage 0)
+
+These Rust workspace commands build the stage 0 bootstrap compiler only. For day-to-day development, use `./vowc` (see below).
 
 ```bash
 cargo build --all          # build all crates
@@ -13,35 +26,38 @@ cargo clippy --all -- -D warnings      # lint (CI enforces zero warnings)
 cargo fmt --all            # format all code
 ```
 
-## vow CLI
+## Day-to-Day Usage (Self-Hosted Compiler)
 
-First build the release binary:
-```bash
-cargo build --all --release
-```
-Then use `./target/release/vow` (or `cargo install --path vow` to get `vow` on PATH):
+`./vowc` is the primary compiler for all Vow development. It is a self-hosted, verified fixed-point binary produced by `scripts/bootstrap.sh`.
+
+**CRITICAL:** Always use `ulimit -v 2000000` when running `./vowc` or any binary it produces.
 
 ```bash
-# Subcommands
-./target/release/vow build examples/divide.vow                   # compile + verify (default)
-./target/release/vow build --no-verify examples/divide.vow       # compile, skip verification
-./target/release/vow build --mode debug examples/divide.vow      # compile with runtime vow checks
-./target/release/vow verify examples/divide.vow                  # verify contracts only (no executable)
-./target/release/vow test                                        # run tests (not yet implemented)
-
-# Legacy mode (equivalent to `vow build`)
-./target/release/vow examples/divide.vow                         # compile + verify
-./target/release/vow --no-verify examples/divide.vow             # compile, skip verification
-./target/release/vow --mode debug examples/divide.vow            # compile with runtime vow checks
+ulimit -v 2000000; ./vowc build examples/divide.vow                   # compile + verify (default)
+ulimit -v 2000000; ./vowc build --no-verify examples/divide.vow       # compile, skip verification
+ulimit -v 2000000; ./vowc build --mode debug examples/divide.vow      # compile with runtime vow checks
+ulimit -v 2000000; ./vowc verify examples/divide.vow                  # verify contracts only (no executable)
 
 # Help
-./target/release/vow --help                                      # JSON capability description (for agents)
-./target/release/vow --help --human                              # human-readable capability description
+ulimit -v 2000000; ./vowc --help                                      # JSON capability description (for agents)
+ulimit -v 2000000; ./vowc --help --human                              # human-readable capability description
 ```
 
 Debug mode is required to see runtime `VowViolation` output. Release omits all vow checks.
-`vow build` verifies by default; use `--no-verify` to skip ESBMC verification.
-`vow verify` runs only the frontend + verification pipeline (no codegen, no executable output).
+`vowc build` verifies by default; use `--no-verify` to skip ESBMC verification.
+`vowc verify` runs only the frontend + verification pipeline (no codegen, no executable output).
+
+## Bootstrap (Rust Compiler)
+
+To get `./vowc` in the first place, bootstrap from the Rust compiler:
+
+```bash
+scripts/bootstrap.sh --no-verify          # full bootstrap, skip ESBMC
+scripts/bootstrap.sh --no-verify --skip-cargo  # skip cargo build too
+scripts/bootstrap.sh                      # full bootstrap with verification
+```
+
+This builds `./target/release/vow` (stage 0), then uses it to compile and verify the self-hosted compiler, producing `./vowc`. The Rust compiler (`./target/release/vow`) is only needed for this bootstrap step.
 
 ## Architecture
 
@@ -83,9 +99,9 @@ All diagnostic output flows through **`vow-diag`**, which every other crate uses
 
 `Span { start: u32, len: u32 }` lives in `vow-syntax::span` and is the single source-location type. Every AST node and every token carries one.
 
-## Self-Hosted Compiler (Phase 9)
+## Self-Hosted Compiler
 
-`compiler/` contains a complete Vow implementation of the compiler (13 modules). The bootstrap triple test passes: the self-hosted compiler is a verified fixed point producing byte-identical binaries.
+`compiler/` contains a complete Vow implementation of the compiler (13 modules). `./vowc` is the primary compiler binary — a verified fixed point producing byte-identical binaries. The self-hosted compiler has full feature parity with the Rust compiler: subcommands, flags, structured diagnostics, verification pipeline, and parallel codegen+verify.
 
 ### Modules
 
@@ -94,17 +110,17 @@ All diagnostic output flows through **`vow-diag`**, which every other crate uses
 - `types.vow`, `env.vow`, `checker.vow` — type checker (Wave 3)
 - `ir.vow`, `ir_printer.vow`, `lower.vow` — IR lowering and printing (Wave 4)
 - `clif.vow` — Cranelift backend via FFI shims (`vow-clif-shim` crate)
-- `main.vow` — driver with `-o <path>` for native compilation or IR text output
+- `main.vow` — driver with subcommands (`build`, `verify`), flags, structured `--help`
 
 ### Building and running
 
 ```bash
-./target/release/vow --no-verify compiler/main.vow -o /tmp/vow_main  # compile self-hosted compiler
-ulimit -v 2000000; /tmp/vow_main compiler/lexer.vow                  # type-check, print IR
-ulimit -v 2000000; /tmp/vow_main -o /tmp/lexer compiler/lexer.vow    # compile to native binary
+ulimit -v 2000000; ./vowc build --no-verify compiler/main.vow -o /tmp/vow_main  # compile self-hosted compiler
+ulimit -v 2000000; /tmp/vow_main compiler/lexer.vow                             # type-check, print IR
+ulimit -v 2000000; /tmp/vow_main -o /tmp/lexer compiler/lexer.vow               # compile to native binary
 ```
 
-**CRITICAL:** Always use `ulimit -v 2000000` when running self-hosted compiler binaries (or any binary produced by them). Without it, the process can consume all system memory and freeze the machine. This applies to `./compiler/main`, `/tmp/vow_main`, and any binary compiled from `.vow` files.
+**CRITICAL:** Always use `ulimit -v 2000000` when running self-hosted compiler binaries (or any binary produced by them). Without it, the process can consume all system memory and freeze the machine. This applies to `./vowc`, `/tmp/vow_main`, and any binary compiled from `.vow` files.
 
 The self-hosted compiler supports DFS module loading via `use` declarations.
 
