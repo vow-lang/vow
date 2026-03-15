@@ -460,7 +460,7 @@ until a concrete verification need exceeds ESBMC's capabilities.
 
 ## References
 
-- Vow Design Sketch v3 (26.02.2026) — `vow_design_sketch_v3.md`
+- Vow Design Sketch v3 (26.02.2026) — `docs/vow_design_sketch.md`
 - Ideas for Improvement — `ideas-improvement.md`
 - Vericoding Benchmark: arxiv.org/abs/2509.22908
 - CEGIS Repair (AAAI 2025): arxiv.org/html/2502.07786v1
