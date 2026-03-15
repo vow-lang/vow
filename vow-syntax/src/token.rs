@@ -91,6 +91,9 @@ pub enum TokenKind {
     PipePipe, // ||
     Bang,     // !
 
+    // Bitwise operators
+    Caret, // ^
+
     // Other operators
     Amp,       // &
     Question,  // ?

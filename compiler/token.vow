@@ -87,6 +87,7 @@ fn tok_dot_dot() -> i64 vow { ensures: result >= 0 } { 74 }
 fn tok_underscore() -> i64 vow { ensures: result >= 0 } { 75 }
 fn tok_eof() -> i64 vow { ensures: result >= 0 } { 76 }
 fn tok_kw_const() -> i64 vow { ensures: result >= 0 } { 77 }
+fn tok_caret() -> i64 vow { ensures: result >= 0 } { 78 }
 
 fn tok_suffix_i8() -> i64 vow { ensures: result >= 0 } { 0 }
 fn tok_suffix_i16() -> i64 vow { ensures: result >= 0 } { 1 }

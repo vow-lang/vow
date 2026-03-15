@@ -46,6 +46,7 @@ fn BINOP_GT() -> i64 vow { ensures: result >= 0 } { 14 }
 fn BINOP_GE() -> i64 vow { ensures: result >= 0 } { 15 }
 fn BINOP_AND() -> i64 vow { ensures: result >= 0 } { 16 }
 fn BINOP_OR() -> i64 vow { ensures: result >= 0 } { 17 }
+fn BINOP_XOR() -> i64 vow { ensures: result >= 0 } { 18 }
 
 fn UNOP_NEG() -> i64 vow { ensures: result >= 0 } { 0 }
 fn UNOP_NOT() -> i64 vow { ensures: result >= 0 } { 1 }

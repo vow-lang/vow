@@ -107,8 +107,8 @@ Phase 21 has two tracks that can publish independently:
 - **Critical path (~~21.1~~ → 21.4 → 21.7):** ~~fix the verification pipeline,~~ run
   the Vericoding comparison with contract fidelity, publish the direct
   comparison. This is the minimum viable publication. 21.1 is complete.
-- **Parallel track (21.3 → 21.6 → 21.8):** build the standard library, run
-  ai-coding-lang-bench, publish the dual-track update.
+- **Parallel track (~~21.3~~ → 21.6 → 21.8):** ~~build the standard library,~~ run
+  ai-coding-lang-bench, publish the dual-track update. 21.3 is complete.
 
 Verification caching (21.2, complete) and example coverage (21.5) accelerate
 this work but are not on either critical path.
@@ -159,45 +159,32 @@ Implementation in both compilers:
 Performance: 23s → 0.001s on repeated verification of bisect.vow.
 New runtime builtins `fs_exists` and `fs_mkdir` added as prerequisites.
 
-### 21.3 Standard library core subset
+### 21.3 Standard library core subset ✅
 
-**Prerequisite for the real-world comparison track (21.6).**
+**Status: COMPLETE.**
 
-These are new runtime builtins registered in the type checker and lowerer.
-Scope for each: `vow-runtime` C implementations + type checker registration +
-IR lowerer builtin dispatch.
+20 new runtime builtins and one new operator, each wired through all 7
+layers: `vow-runtime` implementation, Rust type checker, Rust IR lowerer,
+Cranelift backend, `vow-clif-shim`, self-hosted checker, self-hosted lowerer.
+Bootstrap triple test passes with binary fixed point. 89/89 tests pass.
 
-**Filesystem builtins** (5 remaining `[IO]` functions — `fs_mkdir` and
-`fs_exists` landed in 21.2):
-- `fs_listdir(path: String) -> Vec<String>`
-- `fs_remove(path: String) -> i64`
-- `fs_remove_dir(path: String) -> i64`
-- `fs_is_dir(path: String) -> i64`
-- `fs_rename(old: String, new: String) -> i64`
+**Filesystem builtins** (5 functions, `[IO]`/`[Read]` effects):
+- `fs_listdir`, `fs_remove`, `fs_remove_dir`, `fs_is_dir`, `fs_rename`
 
-**String builtins** (11 new functions):
-- `string_substr(s: String, start: i64, len: i64) -> String`
-- `string_split(s: String, sep: String) -> Vec<String>`
-- `string_starts_with(s: String, prefix: String) -> i64`
-- `string_ends_with(s: String, suffix: String) -> i64`
-- `string_trim(s: String) -> String`
-- `string_to_upper(s: String) -> String`
-- `string_to_lower(s: String) -> String`
-- `string_replace(s: String, old: String, new: String) -> String`
-- `string_join(parts: Vec<String>, sep: String) -> String`
-- `parse_i64(s: String) -> i64`
-- `i64_to_string(n: i64) -> String`
+**String builtins** (11 pure functions):
+- `string_substr`, `string_split`, `string_starts_with`, `string_ends_with`
+- `string_trim`, `string_to_upper`, `string_to_lower`, `string_replace`
+- `string_join`, `parse_i64`, `i64_to_string`
 
-**Bitwise operations:**
-- `a ^ b` — bitwise XOR (new token kind + parser + IR opcode)
-- `hex_encode(data: Vec<u8>) -> String`
-- `hex_decode(s: String) -> Vec<u8>`
+**Bitwise XOR operator** (`^`):
+- New `Caret` token, `BitXor` BinOp, `XorI32`/`XorI64` IR opcodes
+- Precedence between `||` and `&&` in both parsers
+- C emitter and Cranelift backend emit `^` / `bxor`
 
-**Vec sorting:**
-- `vec_sort(v: Vec<i64>) -> Vec<i64>` — returns sorted copy
-
-**Time:**
-- `time_unix() -> i64` — current Unix timestamp in seconds
+**Utility builtins** (4 functions):
+- `hex_encode(Vec<u8>) -> String`, `hex_decode(String) -> Vec<u8>`
+- `vec_sort(Vec<i64>) -> Vec<i64>` — returns sorted copy
+- `time_unix() -> i64` — Unix timestamp (`[IO]` effect)
 
 ### 21.4 Vericoding comparison with contract fidelity
 
@@ -249,7 +236,7 @@ Each example should be a complete, runnable program that compiles and verifies.
 
 ### 21.6 Real-world comparison track (ai-coding-lang-bench)
 
-**Status: BLOCKED on 21.3 (standard library).**
+**Status: UNBLOCKED — 21.3 is complete.**
 
 Participate in `ai-coding-lang-bench`, which measures how efficiently Claude
 Code can implement a mini-git clone across programming languages. This provides
@@ -493,6 +480,7 @@ until a concrete verification need exceeds ESBMC's capabilities.
 
 *This document captures the forward-looking roadmap as of 15 March 2026.
 Phase 21 critical path: 21.1 → 21.4 → 21.7 (publish direct comparison).
-Parallel: 21.3 → 21.6 → 21.8 (publish dual-track update). Phase 22 improves
-agent ergonomics. Phase 23 is toolchain polish. Phases 24–25 are
-demand-driven. If a phase isn't earning its keep, cut it.*
+Parallel: 21.3 → 21.6 → 21.8 (publish dual-track update). 21.1–21.3 are
+complete; both tracks are unblocked. Phase 22 improves agent ergonomics.
+Phase 23 is toolchain polish. Phases 24–25 are demand-driven. If a phase
+isn't earning its keep, cut it.*

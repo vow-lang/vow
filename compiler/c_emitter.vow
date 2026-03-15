@@ -159,6 +159,7 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
                    || op == IOP_GT_I32() || op == IOP_GT_I64() || op == IOP_GT_F32() || op == IOP_GT_F64()
                    || op == IOP_GE_I32() || op == IOP_GE_I64() || op == IOP_GE_F32() || op == IOP_GE_F64()
                    || op == IOP_NOT() || op == IOP_AND() || op == IOP_OR()
+                   || op == IOP_XOR_I32() || op == IOP_XOR_I64()
                    || op == IOP_VOW_REQ() || op == IOP_VOW_ENS() || op == IOP_VOW_INV()
                    || op == IOP_BRANCH() || op == IOP_JUMP() || op == IOP_RETURN() || op == IOP_UNREACHABLE()
                    || op == IOP_PHI() || op == IOP_UPSILON() {
@@ -601,6 +602,10 @@ fn emit_inst(out: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64
     }
     if op == IOP_OR() {
         emit_cmp(out, id, iargs[0], iargs[1], String::from("||"));
+        return;
+    }
+    if op == IOP_XOR_I32() || op == IOP_XOR_I64() {
+        emit_cmp(out, id, iargs[0], iargs[1], String::from("^"));
         return;
     }
 

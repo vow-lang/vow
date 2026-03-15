@@ -407,6 +407,10 @@ fn lex(src: String) -> Vec<Token> {
             pos = pos + 1;
             let tok: Token = make_token(tok_question(), 0, 0, empty_str(), start, 1);
             tokens.push(tok);
+        } else if b == 94 {
+            pos = pos + 1;
+            let tok: Token = make_token(tok_caret(), 0, 0, empty_str(), start, 1);
+            tokens.push(tok);
         } else {
             pos = pos + 1;
         }

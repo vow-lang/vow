@@ -548,6 +548,9 @@ impl<'e> Checker<'e> {
                         }
                         Ty::Bool
                     }
+                    BinOp::BitXor => {
+                        self.check_same_numeric(lhs_ty, rhs_ty, expr.span)
+                    }
                     BinOp::And | BinOp::Or => {
                         if lhs_ty != Ty::Bool && lhs_ty != Ty::Never {
                             self.emit_error_with_hints(

@@ -236,6 +236,10 @@ impl<'src> Lexer<'src> {
                 self.pos += 1;
                 Ok(Token::new(TokenKind::Question, Span::new(start as u32, 1)))
             }
+            b'^' => {
+                self.pos += 1;
+                Ok(Token::new(TokenKind::Caret, Span::new(start as u32, 1)))
+            }
             _ => {
                 self.pos += 1;
                 Err(LexError {

@@ -435,15 +435,16 @@ pub fn print_type(ty: &Type) -> String {
 fn binop_precedence(op: BinOp) -> u8 {
     match op {
         BinOp::Or => 1,
-        BinOp::And => 2,
-        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => 3,
-        BinOp::Add | BinOp::Sub | BinOp::AddChecked | BinOp::SubChecked => 4,
+        BinOp::BitXor => 2,
+        BinOp::And => 3,
+        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => 4,
+        BinOp::Add | BinOp::Sub | BinOp::AddChecked | BinOp::SubChecked => 5,
         BinOp::Mul
         | BinOp::Div
         | BinOp::Rem
         | BinOp::MulChecked
         | BinOp::DivChecked
-        | BinOp::RemChecked => 5,
+        | BinOp::RemChecked => 6,
     }
 }
 
@@ -467,6 +468,7 @@ fn binop_str(op: BinOp) -> &'static str {
         BinOp::Ge => ">=",
         BinOp::And => "&&",
         BinOp::Or => "||",
+        BinOp::BitXor => "^",
     }
 }
 

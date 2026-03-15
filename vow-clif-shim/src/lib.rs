@@ -169,6 +169,9 @@ const IOP_LINEAR_BORROW: i64 = 80;
 const IOP_FIELD_GET: i64 = 81;
 const IOP_FIELD_SET: i64 = 82;
 
+const IOP_XOR_I32: i64 = 83;
+const IOP_XOR_I64: i64 = 84;
+
 // InstData kind constants (match compiler/ir.vow IDATA_*)
 #[allow(dead_code)]
 const IDATA_NONE: i64 = 0;
@@ -1035,6 +1038,11 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
                     set_val!(iid, val);
                 }
 
+                IOP_XOR_I32 | IOP_XOR_I64 => {
+                    let val = builder.ins().bxor(arg!(0), arg!(1));
+                    set_val!(iid, val);
+                }
+
                 // Memory
                 IOP_LOAD => {
                     let cl_ty = ity_to_cranelift(ity).unwrap_or(types::I64);
@@ -1679,6 +1687,77 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_fs_mkdir" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_fs_listdir" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_fs_remove" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_fs_remove_dir" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_fs_is_dir" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_fs_rename" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_substr" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_split" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_starts_with" | "__vow_string_ends_with" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_trim" | "__vow_string_to_upper" | "__vow_string_to_lower" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_replace" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_join" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_parse_i64" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_vec_sort" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_time_unix" => {
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_hex_encode" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_hex_decode" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }

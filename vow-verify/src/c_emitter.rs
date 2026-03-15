@@ -235,6 +235,8 @@ pub fn is_modelable(
                 | Opcode::Not
                 | Opcode::And
                 | Opcode::Or
+                | Opcode::XorI32
+                | Opcode::XorI64
                 | Opcode::VowRequires
                 | Opcode::VowEnsures
                 | Opcode::VowInvariant
@@ -478,6 +480,10 @@ fn emit_inst(
         Opcode::Or => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = (v{} || v{});\n", id, a, b));
+        }
+        Opcode::XorI32 | Opcode::XorI64 => {
+            let (a, b) = (inst.args[0].0, inst.args[1].0);
+            out.push_str(&format!("  v{} = (v{} ^ v{});\n", id, a, b));
         }
 
         // Vow checks → ESBMC intrinsics
