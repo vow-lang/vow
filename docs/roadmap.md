@@ -19,7 +19,7 @@ Achieved:
 - Structured JSON diagnostics with line:col source spans
 - `build`, `verify` subcommands; `--mode debug`, `--no-verify`, `--no-cache`, `--unwind N` flags
 - Verification caching: content-hash-based ESBMC result cache (23s → 0.001s on repeat)
-- Vericoding benchmark: **100% (36/36)** with claude-sonnet-4-6 on Vow's own suite
+- Vericoding benchmark: **100% (36/36)** on Vow's original suite; 67 HumanEval benchmarks translated
 - 89/89 tests passing, 40/40 CLI compatibility tests
 - Toolchain Skill document, structured `--help`, `--debug-trace`, incremental compilation
 - Bootstrap: `scripts/bootstrap.sh` produces `./vowc` from Rust stage 0
@@ -29,10 +29,9 @@ Achieved:
 **Strongest current claim:** Vow is an unusually strong agent-first,
 bounded-verification language with an integrated compile/verify/CEGIS loop,
 blame tracking, structured counterexamples, and a self-hosted verified compiler.
-What it does **not** yet have is a fair apples-to-apples comparison on spec
-strength against Dafny/Verus/Lean. The 36/36 result is on Vow's own benchmark
-suite; the Vericoding paper's numbers are on cross-language translated tasks
-with stronger specs.
+107 benchmarks (40 original + 67 HumanEval) are verified; 103/103 non-stretch
+references pass. Contract fidelity is machine-tracked (exact/partial/weak).
+Phase 21.4e–f (running the comparison protocol and generating reports) remain.
 
 Known limitations:
 - Arena deallocation is a no-op (`__vow_arena_free` leaks; fine for short-lived programs)
@@ -188,34 +187,43 @@ Bootstrap triple test passes with binary fixed point. 89/89 tests pass.
 
 ### 21.4 Vericoding comparison with contract fidelity
 
-**Status: UNBLOCKED — 21.1 is complete.**
+**Status: 21.4a–d COMPLETE. 21.4e–f remaining (run protocol, generate report).**
 
-The 10-task HumanEval pilot showed 10/10 verified with claude-sonnet-4-6
-(mean 1.3 CEGIS iterations), but only 2/10 have Dafny-equivalent contracts.
+**21.4a Infrastructure (COMPLETE).** `contract_fidelity` field added to all
+meta.toml files, `BenchmarkInfo`, `BenchmarkResult`. `--suite` flag
+(`vow`/`humaneval`/`all`) added to `run.py`. Fidelity-stratified tables
+(HE-All, HE-Exact, HE-Partial, HE-Weak) in `report.py`. Summary includes
+`by_fidelity` and `humaneval_*` breakdowns.
 
-**Contract fidelity classification.** Every translated task must be tagged:
+**21.4b Pilot upgrades (COMPLETE).** 2 benchmarks upgraded from WEAK/PARTIAL
+to EXACT using Phase 21.1 spec functions:
+- HE031 is_prime: WEAK → EXACT (spec fn `is_prime_check` with trial division)
+- HE049 modp: PARTIAL → EXACT (spec fn `power_mod`, bounds tightened to p≤100)
+- HE025/HE003: stay partial/weak (Vec-parameter spec fns fail — C model's
+  `__vow_vec_get_val` returns nondet values, making two loops over the same
+  Vec unprovably equivalent). Result: **4/10 EXACT** (was 2/10).
 
-- **Exact:** Vow contract matches the reference Dafny spec (same properties
-  verified).
-- **Partial:** same intent, weaker encoding (e.g., missing a quantified
-  property).
-- **Weak:** only bounds/shape/basic safety (trivial implementation could pass).
+**21.4c Triage (COMPLETE).** 162 HumanEval-Dafny tasks from the Vericoding
+benchmark triaged by type compatibility: 73 translatable (int/bool/seq\<int\>
+only), 34 maybe (string/char), 45 skip (real, seq\<string\>, multi-return,
+etc.). Output: `benchmarks/humaneval/triage.toml`.
 
-Publish pass rates separately for **Exact only** and **All translated tasks**.
-This avoids inflated comparisons from tasks with weak contracts.
+**21.4d Translation (COMPLETE).** 57 new HumanEval benchmarks created and
+verified. Total suite: **107 benchmarks** (40 original + 67 HumanEval), 103
+non-stretch. All 103/103 non-stretch references verified with `./vowc`.
+Scripts: `bench/triage_humaneval.py`, `bench/translate_dafny.py`.
 
-**Path to publishable comparison:**
-1. Land 21.1 (spec functions, Vec loops, let mut fixes).
-2. Re-translate the 10 HumanEval pilots with full-strength contracts.
-3. Scale to the full 162 HumanEval-Dafny set from the Vericoding benchmark.
-4. Run the same protocol (up to 5 CEGIS iterations) and compare against
-   their published per-model results.
+**21.4e Run the protocol.** Run LLMs against the HumanEval suite with up to
+5 CEGIS iterations. `--suite humaneval` flag enables HE-only runs.
+
+**21.4f Generate report.** Fidelity-stratified comparison: Vow vs
+Dafny/Verus/Lean pass rates, broken down by exact/partial/weak.
 
 **Resources:**
 - Vericoding benchmark: github.com/Beneficial-AI-Foundation/vericoding-benchmark
-- Vericoding scripts: github.com/Beneficial-AI-Foundation/vericoding
-- Pilot results: `bench/results/humaneval-pilot/`
-- Pilot benchmarks: `benchmarks/humaneval/HE*`
+- Triage: `benchmarks/humaneval/triage.toml`
+- Benchmarks: `benchmarks/humaneval/HE*` (67 directories)
+- Runner: `bench/run.py --suite humaneval`
 
 ### 21.5 Expand example coverage (not on critical path)
 
@@ -262,7 +270,7 @@ benchmark language can do.
 
 ### 21.7 Publish direct comparison
 
-**Status: BLOCKED on 21.4 only (21.1 complete).**
+**Status: BLOCKED on 21.4e–f (infrastructure and benchmarks complete).**
 
 Publish the Vericoding comparison as soon as the direct track is complete:
 
@@ -481,6 +489,7 @@ until a concrete verification need exceeds ESBMC's capabilities.
 *This document captures the forward-looking roadmap as of 15 March 2026.
 Phase 21 critical path: 21.1 → 21.4 → 21.7 (publish direct comparison).
 Parallel: 21.3 → 21.6 → 21.8 (publish dual-track update). 21.1–21.3 are
-complete; both tracks are unblocked. Phase 22 improves agent ergonomics.
-Phase 23 is toolchain polish. Phases 24–25 are demand-driven. If a phase
-isn't earning its keep, cut it.*
+complete; 21.4a–d are complete (107 benchmarks, 103/103 verified). Remaining:
+21.4e–f (run protocol, generate report) → 21.7 (publish). Phase 22 improves
+agent ergonomics. Phase 23 is toolchain polish. Phases 24–25 are
+demand-driven. If a phase isn't earning its keep, cut it.*

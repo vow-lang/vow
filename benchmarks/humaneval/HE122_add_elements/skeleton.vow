@@ -1,0 +1,15 @@
+module AddElements
+
+fn add_elements(arr: Vec<i64>, k: i64) -> i64 vow {
+  requires: arr.len() >= 0,
+  requires: arr.len() <= 8,
+  requires: k >= 0,
+  requires: k <= 100,
+  ensures: result >= 0
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  0
+}

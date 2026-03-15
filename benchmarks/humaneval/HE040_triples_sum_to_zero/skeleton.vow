@@ -1,0 +1,14 @@
+module TriplesSumToZero
+
+fn triples_sum_to_zero(l: Vec<i64>) -> i64 vow {
+  requires: l.len() >= 0,
+  requires: l.len() <= 8,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  0
+}

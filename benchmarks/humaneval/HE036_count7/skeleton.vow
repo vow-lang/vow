@@ -1,0 +1,13 @@
+module Count7
+
+fn count7(x: i64) -> i64 vow {
+  requires: x >= 0,
+  requires: x <= 100,
+  ensures: result >= 0
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  0
+}

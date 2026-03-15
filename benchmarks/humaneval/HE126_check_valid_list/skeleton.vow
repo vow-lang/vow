@@ -1,0 +1,14 @@
+module CheckValidList
+
+fn check_valid_list(lst: Vec<i64>) -> i64 vow {
+  requires: lst.len() >= 0,
+  requires: lst.len() <= 8,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  0
+}

@@ -1,0 +1,26 @@
+module CubeRoot
+
+fn cube_root(n: i64) -> i64 vow {
+  requires: n >= 0,
+  requires: n <= 100,
+  ensures: result >= 0
+} {
+  let mut r: i64 = 0;
+  while (r + 1) * (r + 1) * (r + 1) <= n vow {
+    invariant: r >= 0,
+    invariant: r * r * r <= n
+  } {
+    r = r + 1;
+  }
+  r
+}
+
+fn main() -> i32 [io] {
+  print_i64(cube_root(0));
+  print_i64(cube_root(1));
+  print_i64(cube_root(8));
+  print_i64(cube_root(27));
+  print_i64(cube_root(64));
+  print_i64(cube_root(100));
+  0
+}

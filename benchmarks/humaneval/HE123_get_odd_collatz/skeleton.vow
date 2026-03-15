@@ -1,0 +1,13 @@
+module GetOddCollatz
+
+fn get_odd_collatz(n: i64) -> Vec<i64> vow {
+  requires: n >= 1,
+  requires: n <= 4,
+  ensures: result.len() >= 0
+} {
+  Vec::new()
+}
+
+fn main() -> i32 [io] {
+  0
+}

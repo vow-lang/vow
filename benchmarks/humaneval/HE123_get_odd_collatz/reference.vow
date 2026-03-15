@@ -1,0 +1,55 @@
+module GetOddCollatz
+
+fn get_odd_collatz(n: i64) -> Vec<i64> vow {
+  requires: n >= 1,
+  requires: n <= 4,
+  ensures: result.len() >= 0
+} {
+  let odds: Vec<i64> = Vec::new();
+  let mut val: i64 = n;
+  while val != 1 {
+    if val % 2 == 1 {
+      odds.push(val);
+    } else {
+      0;
+    }
+    if val % 2 == 0 {
+      val = val / 2;
+    } else {
+      val = 3 * val + 1;
+    }
+  }
+  odds.push(1);
+  let mut a: i64 = 0;
+  while a < odds.len() vow {
+    invariant: a >= 0,
+    invariant: a <= odds.len()
+  } {
+    let mut b: i64 = a + 1;
+    while b < odds.len() vow {
+      invariant: b >= a + 1,
+      invariant: b <= odds.len()
+    } {
+      if odds[a] > odds[b] {
+        let tmp: i64 = odds[a];
+        odds[a] = odds[b];
+        odds[b] = tmp;
+      } else {
+        0;
+      }
+      b = b + 1;
+    }
+    a = a + 1;
+  }
+  odds
+}
+
+fn main() -> i32 [io] {
+  let r: Vec<i64> = get_odd_collatz(3);
+  let mut i: i64 = 0;
+  while i < r.len() {
+    print_i64(r[i]);
+    i = i + 1;
+  }
+  0
+}

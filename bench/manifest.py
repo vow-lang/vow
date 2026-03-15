@@ -16,6 +16,7 @@ class BenchmarkInfo:
     expected_status: str
     max_cegis_iterations: int
     tags: list[str]
+    contract_fidelity: str
     spec_md: str
     skeleton_vow: str
     reference_vow: str
@@ -41,6 +42,7 @@ def load_manifest(root: Path) -> list[BenchmarkInfo]:
             expected_status=entry["expected_status"],
             max_cegis_iterations=meta.get("max_cegis_iterations", 5),
             tags=meta.get("tags", []),
+            contract_fidelity=meta.get("contract_fidelity", "n/a"),
             spec_md=(bench_dir / "spec.md").read_text(),
             skeleton_vow=(bench_dir / "skeleton.vow").read_text(),
             reference_vow=(bench_dir / "reference.vow").read_text(),

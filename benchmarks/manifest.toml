@@ -1,7 +1,7 @@
 [suite]
 name = "vericoding"
-version = "1.1.0"
-total = 50
+version = "2.0.0"
+total = 107
 stretch_count = 4
 
 [[benchmarks]]
@@ -354,4 +354,403 @@ id = "HE060"
 name = "sum_to_n"
 difficulty = "easy"
 path = "humaneval/HE060_sum_to_n"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE024"
+name = "largest_divisor"
+difficulty = "medium"
+path = "humaneval/HE024_largest_divisor"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE026"
+name = "count"
+difficulty = "medium"
+path = "humaneval/HE026_count"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE030"
+name = "get_positive"
+difficulty = "medium"
+path = "humaneval/HE030_get_positive"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE034"
+name = "sort_seq"
+difficulty = "medium"
+path = "humaneval/HE034_sort_seq"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE035"
+name = "find_max_element"
+difficulty = "medium"
+path = "humaneval/HE035_find_max_element"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE036"
+name = "count7"
+difficulty = "easy"
+path = "humaneval/HE036_count7"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE038"
+name = "decode_cyclic"
+difficulty = "hard"
+path = "humaneval/HE038_decode_cyclic"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE040"
+name = "triples_sum_to_zero"
+difficulty = "medium"
+path = "humaneval/HE040_triples_sum_to_zero"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE043"
+name = "pairs_sum_to_zero"
+difficulty = "medium"
+path = "humaneval/HE043_pairs_sum_to_zero"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE046"
+name = "fib4"
+difficulty = "easy"
+path = "humaneval/HE046_fib4"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE052"
+name = "check_below_threshold"
+difficulty = "medium"
+path = "humaneval/HE052_check_below_threshold"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE053"
+name = "add"
+difficulty = "easy"
+path = "humaneval/HE053_add"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE055"
+name = "fib"
+difficulty = "easy"
+path = "humaneval/HE055_fib"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE057"
+name = "is_monotonic"
+difficulty = "medium"
+path = "humaneval/HE057_is_monotonic"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE059"
+name = "largest_prime_factor"
+difficulty = "medium"
+path = "humaneval/HE059_largest_prime_factor"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE062"
+name = "derivative"
+difficulty = "medium"
+path = "humaneval/HE062_derivative"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE063"
+name = "fibfib"
+difficulty = "easy"
+path = "humaneval/HE063_fibfib"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE068"
+name = "pluck"
+difficulty = "hard"
+path = "humaneval/HE068_pluck"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE069"
+name = "search"
+difficulty = "medium"
+path = "humaneval/HE069_search"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE072"
+name = "will_it_fly"
+difficulty = "medium"
+path = "humaneval/HE072_will_it_fly"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE073"
+name = "smallest_change"
+difficulty = "medium"
+path = "humaneval/HE073_smallest_change"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE075"
+name = "is_multiply_prime"
+difficulty = "easy"
+path = "humaneval/HE075_is_multiply_prime"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE076"
+name = "is_simple_power"
+difficulty = "easy"
+path = "humaneval/HE076_is_simple_power"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE077"
+name = "cube_root"
+difficulty = "easy"
+path = "humaneval/HE077_cube_root"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE083"
+name = "starts_one_ends"
+difficulty = "easy"
+path = "humaneval/HE083_starts_one_ends"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE084"
+name = "solve"
+difficulty = "easy"
+path = "humaneval/HE084_solve"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE085"
+name = "add"
+difficulty = "medium"
+path = "humaneval/HE085_add"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE088"
+name = "sort_array"
+difficulty = "medium"
+path = "humaneval/HE088_sort_array"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE094"
+name = "skjkasdkd"
+difficulty = "hard"
+path = "humaneval/HE094_skjkasdkd"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE096"
+name = "count_up_to"
+difficulty = "hard"
+path = "humaneval/HE096_count_up_to"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE097"
+name = "multiply"
+difficulty = "easy"
+path = "humaneval/HE097_multiply"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE100"
+name = "make_a_pile"
+difficulty = "medium"
+path = "humaneval/HE100_make_a_pile"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE102"
+name = "choose_num"
+difficulty = "easy"
+path = "humaneval/HE102_choose_num"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE104"
+name = "unique_digits"
+difficulty = "hard"
+path = "humaneval/HE104_unique_digits"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE106"
+name = "f"
+difficulty = "easy"
+path = "humaneval/HE106_f"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE108"
+name = "count_nums"
+difficulty = "medium"
+path = "humaneval/HE108_count_nums"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE109"
+name = "move_one_ball"
+difficulty = "hard"
+path = "humaneval/HE109_move_one_ball"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE114"
+name = "min_sub_array_sum"
+difficulty = "medium"
+path = "humaneval/HE114_min_sub_array_sum"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE116"
+name = "sort_array"
+difficulty = "medium"
+path = "humaneval/HE116_sort_array"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE120"
+name = "sort_seq"
+difficulty = "hard"
+path = "humaneval/HE120_sort_seq"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE121"
+name = "solution"
+difficulty = "medium"
+path = "humaneval/HE121_solution"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE122"
+name = "add_elements"
+difficulty = "medium"
+path = "humaneval/HE122_add_elements"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE123"
+name = "get_odd_collatz"
+difficulty = "hard"
+path = "humaneval/HE123_get_odd_collatz"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE126"
+name = "check_valid_list"
+difficulty = "medium"
+path = "humaneval/HE126_check_valid_list"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE130"
+name = "tribonacci"
+difficulty = "medium"
+path = "humaneval/HE130_tribonacci"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE132"
+name = "is_nested"
+difficulty = "medium"
+path = "humaneval/HE132_is_nested"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE135"
+name = "can_arrange"
+difficulty = "medium"
+path = "humaneval/HE135_can_arrange"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE138"
+name = "is_equal_to_sum_even"
+difficulty = "easy"
+path = "humaneval/HE138_is_equal_to_sum_even"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE139"
+name = "special_factorial"
+difficulty = "easy"
+path = "humaneval/HE139_special_factorial"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE142"
+name = "sum_squares"
+difficulty = "medium"
+path = "humaneval/HE142_sum_squares"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE145"
+name = "order_by_points"
+difficulty = "medium"
+path = "humaneval/HE145_order_by_points"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE146"
+name = "special_filter"
+difficulty = "medium"
+path = "humaneval/HE146_special_filter"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE147"
+name = "get_max_triples"
+difficulty = "easy"
+path = "humaneval/HE147_get_max_triples"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE150"
+name = "x_or_y"
+difficulty = "easy"
+path = "humaneval/HE150_x_or_y"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE152"
+name = "compare"
+difficulty = "medium"
+path = "humaneval/HE152_compare"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE159"
+name = "eat"
+difficulty = "medium"
+path = "humaneval/HE159_eat"
+expected_status = "Verified"
+
+[[benchmarks]]
+id = "HE163"
+name = "generate_integers"
+difficulty = "hard"
+path = "humaneval/HE163_generate_integers"
 expected_status = "Verified"

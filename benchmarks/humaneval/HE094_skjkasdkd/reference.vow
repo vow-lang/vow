@@ -1,0 +1,96 @@
+module Skjkasdkd
+
+fn is_prime(n: i64) -> i64 vow {
+  requires: n >= 0,
+  requires: n <= 100,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  if n < 2 {
+    0
+  } else {
+    let mut d: i64 = 2;
+    let mut composite: i64 = 0;
+    while d * d <= n vow {
+      invariant: d >= 2,
+      invariant: composite >= 0,
+      invariant: composite <= 1
+    } {
+      if n % d == 0 {
+        composite = 1;
+      } else {
+        0;
+      }
+      d = d + 1;
+    }
+    if composite == 1 {
+      0
+    } else {
+      1
+    }
+  }
+}
+
+fn digit_sum(n: i64) -> i64 vow {
+  requires: n >= 0,
+  requires: n <= 100,
+  ensures: result >= 0
+} {
+  let mut s: i64 = 0;
+  let mut x: i64 = n;
+  while x > 0 vow {
+    invariant: x >= 0,
+    invariant: s >= 0
+  } {
+    s = s + x % 10;
+    x = x / 10;
+  }
+  s
+}
+
+fn skjkasdkd(lst: Vec<i64>) -> i64 vow {
+  requires: lst.len() >= 0,
+  requires: lst.len() <= 8,
+  ensures: result >= 0
+} {
+  let mut largest: i64 = 0 - 1;
+  let mut i: i64 = 0;
+  while i < lst.len() vow {
+    invariant: i >= 0,
+    invariant: i <= lst.len()
+  } {
+    if lst[i] > 0 {
+      if is_prime(lst[i]) == 1 {
+        if largest < 0 {
+          largest = lst[i];
+        } else {
+          if lst[i] > largest {
+            largest = lst[i];
+          } else {
+            0;
+          }
+        }
+      } else {
+        0;
+      }
+    } else {
+      0;
+    }
+    i = i + 1;
+  }
+  if largest < 0 {
+    0
+  } else {
+    digit_sum(largest)
+  }
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(4);
+  v.push(7);
+  v.push(15);
+  v.push(13);
+  print_i64(skjkasdkd(v));
+  0
+}

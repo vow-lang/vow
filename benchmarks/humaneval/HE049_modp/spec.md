@@ -8,6 +8,9 @@ Compute `2^n mod p` using modular exponentiation. The result should be
 computed efficiently (e.g., using repeated squaring or iterative multiplication
 with modular reduction at each step).
 
+A spec function `power_mod(base, exp, m)` is provided that computes
+`base^exp mod m` iteratively. Your implementation must match `power_mod(2, n, p)`.
+
 ## Signature
 
 ```vow
@@ -19,16 +22,14 @@ fn modp(n: i64, p: i64) -> i64
 - `requires: n >= 0` — non-negative exponent
 - `requires: n <= 8` — bounded for verification
 - `requires: p >= 2` — modulus at least 2
-- `requires: p <= 1000` — bounded modulus
-- `ensures: result >= 0` — non-negative result
-- `ensures: result < p` — result is in valid range
+- `requires: p <= 100` — bounded modulus
+- `ensures: result == power_mod(2, n, p)` — matches spec function
 
 ## Contract Fidelity
 
-**PARTIAL** — the Dafny spec ensures `result == power(2, n) % p` using a
-recursive spec function `power`. Vow cannot call spec functions in ensures.
-The range contracts (`0 <= result < p`) verify the result is a valid modular
-residue, but not that it equals the correct power.
+**EXACT** — the spec function `power_mod` implements iterative modular
+exponentiation (equivalent to Dafny's recursive `power` function). The ensures
+clause verifies `result == power_mod(2, n, p)`.
 
 ## Hints
 

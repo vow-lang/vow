@@ -1,0 +1,36 @@
+module Count
+
+fn count(a: Vec<i64>, x: i64) -> i64 vow {
+  requires: a.len() >= 0,
+  requires: a.len() <= 8,
+  requires: x >= 0,
+  requires: x <= 100,
+  ensures: result >= 0
+} {
+  let mut cnt: i64 = 0;
+  let mut i: i64 = 0;
+  while i < a.len() vow {
+    invariant: i >= 0,
+    invariant: i <= a.len(),
+    invariant: cnt >= 0
+  } {
+    if a[i] == x {
+      cnt = cnt + 1;
+    } else {
+      0;
+    }
+    i = i + 1;
+  }
+  cnt
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v.push(2);
+  v.push(1);
+  v.push(3);
+  v.push(1);
+  print_i64(count(v, 1));
+  0
+}

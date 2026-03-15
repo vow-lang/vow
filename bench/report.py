@@ -57,11 +57,68 @@ def generate_report(results_dir: Path, run_id: str) -> str:
         "",
     ])
 
+    # HumanEval fidelity table (if any HE benchmarks present)
+    _add_fidelity_table(lines, models)
+
     # Per-model detail sections
     for model_name, data in models.items():
         lines.extend(_model_details(model_name, data))
 
     return "\n".join(lines)
+
+
+def _add_fidelity_table(lines: list[str], models: dict[str, dict]) -> None:
+    has_he = False
+    for data in models.values():
+        for r in data.get("results", []):
+            if r["benchmark_id"].startswith("HE"):
+                has_he = True
+                break
+        if has_he:
+            break
+    if not has_he:
+        return
+
+    lines.extend([
+        "## HumanEval Contract Fidelity",
+        "",
+        "| Model | HE-All | HE-Exact | HE-Partial | HE-Weak |",
+        "|-------|--------|----------|------------|---------|",
+    ])
+
+    for model_name, data in models.items():
+        results = data.get("results", [])
+        he = [r for r in results if r["benchmark_id"].startswith("HE")]
+        if not he:
+            continue
+
+        by_fid: dict[str, dict] = {}
+        for r in he:
+            fid = r.get("contract_fidelity", "n/a")
+            if fid not in by_fid:
+                by_fid[fid] = {"total": 0, "verified": 0}
+            by_fid[fid]["total"] += 1
+            if r["status"] == "verified":
+                by_fid[fid]["verified"] += 1
+
+        he_total = len(he)
+        he_verified = sum(1 for r in he if r["status"] == "verified")
+        exact = by_fid.get("exact", {"total": 0, "verified": 0})
+        partial = by_fid.get("partial", {"total": 0, "verified": 0})
+        weak = by_fid.get("weak", {"total": 0, "verified": 0})
+
+        compiler = data.get("compiler", "rust")
+        compiler_label = f", {compiler}" if compiler != "rust" else ""
+
+        lines.append(
+            f"| Vow ({_short_name(model_name)}{compiler_label}) "
+            f"| {he_verified}/{he_total} "
+            f"| {exact['verified']}/{exact['total']} "
+            f"| {partial['verified']}/{partial['total']} "
+            f"| {weak['verified']}/{weak['total']} |"
+        )
+
+    lines.append("")
 
 
 def _short_name(model_id: str) -> str:
@@ -104,13 +161,15 @@ def _model_details(model_name: str, data: dict) -> list[str]:
 
     # Per-benchmark table
     lines.extend([
-        "| ID | Name | Status | Iters | Time (s) | Failure |",
-        "|----|------|--------|-------|----------|---------|",
+        "| ID | Name | Fidelity | Status | Iters | Time (s) | Failure |",
+        "|----|------|----------|--------|-------|----------|---------|",
     ])
     for r in results:
         status_icon = "pass" if r["status"] == "verified" else "FAIL"
+        fidelity = r.get("contract_fidelity", "n/a")
         lines.append(
             f"| {r['benchmark_id']} | {r['benchmark_name']} "
+            f"| {fidelity} "
             f"| {status_icon} | {r['iterations']} "
             f"| {r['wall_clock_seconds']:.1f} "
             f"| {r.get('failure_mode', '—') or '—'} |"

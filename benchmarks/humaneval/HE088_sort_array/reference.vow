@@ -1,0 +1,78 @@
+module SortArray
+
+fn sort_array(arr: Vec<i64>) -> Vec<i64> vow {
+  requires: arr.len() >= 0,
+  requires: arr.len() <= 8,
+  ensures: result.len() >= 0
+} {
+  let out: Vec<i64> = Vec::new();
+  let mut i: i64 = 0;
+  while i < arr.len() vow {
+    invariant: i >= 0,
+    invariant: i <= arr.len()
+  } {
+    out.push(arr[i]);
+    i = i + 1;
+  }
+  let mut asc: i64 = 1;
+  if arr.len() >= 2 {
+    let s: i64 = arr[0] + arr[arr.len() - 1];
+    if s % 2 == 0 {
+      asc = 0;
+    } else {
+      0;
+    }
+  } else {
+    0;
+  }
+  let mut a: i64 = 0;
+  while a < out.len() vow {
+    invariant: a >= 0,
+    invariant: a <= out.len()
+  } {
+    let mut b: i64 = a + 1;
+    while b < out.len() vow {
+      invariant: b >= a + 1,
+      invariant: b <= out.len()
+    } {
+      let mut do_swap: i64 = 0;
+      if asc == 1 {
+        if out[a] > out[b] {
+          do_swap = 1;
+        } else {
+          0;
+        }
+      } else {
+        if out[a] < out[b] {
+          do_swap = 1;
+        } else {
+          0;
+        }
+      }
+      if do_swap == 1 {
+        let tmp: i64 = out[a];
+        out[a] = out[b];
+        out[b] = tmp;
+      } else {
+        0;
+      }
+      b = b + 1;
+    }
+    a = a + 1;
+  }
+  out
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(5);
+  v.push(3);
+  v.push(1);
+  let r: Vec<i64> = sort_array(v);
+  let mut i: i64 = 0;
+  while i < r.len() {
+    print_i64(r[i]);
+    i = i + 1;
+  }
+  0
+}

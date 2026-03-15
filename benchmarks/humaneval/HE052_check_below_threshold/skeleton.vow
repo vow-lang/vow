@@ -1,0 +1,16 @@
+module CheckBelowThreshold
+
+fn check_below_threshold(l: Vec<i64>, t: i64) -> i64 vow {
+  requires: l.len() >= 0,
+  requires: l.len() <= 8,
+  requires: t >= 0,
+  requires: t <= 100,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  0
+}

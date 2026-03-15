@@ -1,0 +1,52 @@
+module MoveOneBall
+
+fn move_one_ball(arr: Vec<i64>) -> i64 vow {
+  requires: arr.len() >= 0,
+  requires: arr.len() <= 8,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  if arr.len() <= 1 {
+    1
+  } else {
+    let mut descents: i64 = 0;
+    let mut i: i64 = 0;
+    let n: i64 = arr.len();
+    while i < n vow {
+      invariant: i >= 0,
+      invariant: i <= n,
+      invariant: descents >= 0
+    } {
+      let next: i64 = (i + 1) % n;
+      if arr[i] > arr[next] {
+        descents = descents + 1;
+      } else {
+        0;
+      }
+      i = i + 1;
+    }
+    if descents <= 1 {
+      1
+    } else {
+      0
+    }
+  }
+}
+
+fn main() -> i32 [io] {
+  let v1: Vec<i64> = Vec::new();
+  v1.push(3);
+  v1.push(4);
+  v1.push(5);
+  v1.push(1);
+  v1.push(2);
+  print_i64(move_one_ball(v1));
+  let v2: Vec<i64> = Vec::new();
+  v2.push(3);
+  v2.push(5);
+  v2.push(4);
+  v2.push(1);
+  v2.push(2);
+  print_i64(move_one_ball(v2));
+  0
+}

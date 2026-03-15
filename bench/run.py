@@ -37,6 +37,9 @@ def find_vow_binary(root: Path) -> Path:
 
 
 def find_self_hosted_binary(root: Path) -> Path:
+    vowc = root / "vowc"
+    if vowc.exists():
+        return vowc
     binary = root / "target" / "release" / "vow_self"
     if not binary.exists():
         rust_binary = find_vow_binary(root)
@@ -84,6 +87,15 @@ def cmd_run(args: argparse.Namespace) -> None:
     all_benchmarks = load_manifest(root)
     applicable = [b for b in all_benchmarks if b.expected_status != "Stretch"]
     stretch = [b for b in all_benchmarks if b.expected_status == "Stretch"]
+
+    # Filter by suite
+    suite = getattr(args, "suite", "all")
+    if suite == "vow":
+        applicable = [b for b in applicable if not b.id.startswith("HE")]
+        stretch = [b for b in stretch if not b.id.startswith("HE")]
+    elif suite == "humaneval":
+        applicable = [b for b in applicable if b.id.startswith("HE")]
+        stretch = [b for b in stretch if b.id.startswith("HE")]
 
     # Filter to single benchmark if requested
     if args.benchmark:
@@ -260,11 +272,34 @@ def _compute_summary(results: list[dict]) -> dict:
     verified_iters = [r["iterations"] for r in results if r["status"] == "verified"]
     mean_iters = sum(verified_iters) / len(verified_iters) if verified_iters else 0
 
+    by_fidelity: dict[str, dict] = {}
+    for r in results:
+        fid = r.get("contract_fidelity", "n/a")
+        if fid not in by_fidelity:
+            by_fidelity[fid] = {"total": 0, "verified": 0}
+        by_fidelity[fid]["total"] += 1
+        if r["status"] == "verified":
+            by_fidelity[fid]["verified"] += 1
+
+    he_results = [r for r in results if r["benchmark_id"].startswith("HE")]
+    he_total = len(he_results)
+    he_verified = sum(1 for r in he_results if r["status"] == "verified")
+    he_exact = [r for r in he_results if r.get("contract_fidelity") == "exact"]
+    he_exact_total = len(he_exact)
+    he_exact_verified = sum(1 for r in he_exact if r["status"] == "verified")
+
     return {
         "total_applicable": total,
         "verified": verified,
         "verification_rate": verified / total if total else 0,
         "by_difficulty": by_diff,
+        "by_fidelity": by_fidelity,
+        "humaneval_total": he_total,
+        "humaneval_verified": he_verified,
+        "humaneval_rate": he_verified / he_total if he_total else 0,
+        "humaneval_exact_total": he_exact_total,
+        "humaneval_exact_verified": he_exact_verified,
+        "humaneval_exact_rate": he_exact_verified / he_exact_total if he_exact_total else 0,
         "mean_cegis_iterations": round(mean_iters, 2),
     }
 
@@ -274,6 +309,7 @@ def _dict_to_result(d: dict) -> BenchmarkResult:
         benchmark_id=d["benchmark_id"],
         benchmark_name=d["benchmark_name"],
         difficulty=d["difficulty"],
+        contract_fidelity=d.get("contract_fidelity", "n/a"),
         status=d["status"],
         iterations=d["iterations"],
         wall_clock_seconds=d["wall_clock_seconds"],
@@ -298,6 +334,8 @@ def main() -> None:
     run_parser.add_argument("--run-id", help="Run ID (default: timestamp)")
     run_parser.add_argument("--compiler", choices=["rust", "self-hosted"], default="rust",
                             help="Which compiler to use for verification (default: rust)")
+    run_parser.add_argument("--suite", choices=["vow", "humaneval", "all"], default="all",
+                            help="Benchmark suite to run: vow (E/M/H), humaneval (HE*), all (default)")
     run_parser.set_defaults(func=cmd_run)
 
     # report

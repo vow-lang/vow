@@ -18,6 +18,7 @@ class BenchmarkResult:
     benchmark_id: str
     benchmark_name: str
     difficulty: str
+    contract_fidelity: str
     status: str  # verified / verify_failed / compile_failed / timeout / max_iterations / empty_response
     iterations: int
     wall_clock_seconds: float
@@ -120,6 +121,7 @@ def run_benchmark(
                 benchmark_id=bench.id,
                 benchmark_name=bench.name,
                 difficulty=bench.difficulty,
+                contract_fidelity=bench.contract_fidelity,
                 status="empty_response",
                 iterations=iteration,
                 wall_clock_seconds=elapsed,
@@ -142,6 +144,7 @@ def run_benchmark(
                 benchmark_id=bench.id,
                 benchmark_name=bench.name,
                 difficulty=bench.difficulty,
+                contract_fidelity=bench.contract_fidelity,
                 status="verified",
                 iterations=iteration,
                 wall_clock_seconds=elapsed,
@@ -174,6 +177,7 @@ def run_benchmark(
         benchmark_id=bench.id,
         benchmark_name=bench.name,
         difficulty=bench.difficulty,
+        contract_fidelity=bench.contract_fidelity,
         status=final_status,
         iterations=max_iters,
         wall_clock_seconds=elapsed,

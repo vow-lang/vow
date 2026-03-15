@@ -1,0 +1,36 @@
+module SumSquares
+
+fn sum_squares(lst: Vec<i64>) -> i64 vow {
+  requires: lst.len() >= 0,
+  requires: lst.len() <= 8,
+  ensures: result >= 0
+} {
+  let mut s: i64 = 0;
+  let mut i: i64 = 0;
+  while i < lst.len() vow {
+    invariant: i >= 0,
+    invariant: i <= lst.len(),
+    invariant: s >= 0
+  } {
+    if i % 3 == 0 {
+      s = s + lst[i] * lst[i];
+    } else {
+      if i % 4 == 0 {
+        s = s + lst[i] * lst[i] * lst[i];
+      } else {
+        s = s + lst[i];
+      }
+    }
+    i = i + 1;
+  }
+  s
+}
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(1);
+  v.push(2);
+  v.push(3);
+  print_i64(sum_squares(v));
+  0
+}

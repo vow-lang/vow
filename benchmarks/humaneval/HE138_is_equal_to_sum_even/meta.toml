@@ -1,0 +1,10 @@
+[benchmark]
+id = "HE138"
+name = "is_equal_to_sum_even"
+difficulty = "easy"
+tags = ["humaneval"]
+unwind = 10
+modules = 1
+expected_status = "Verified"
+max_cegis_iterations = 5
+contract_fidelity = "exact"

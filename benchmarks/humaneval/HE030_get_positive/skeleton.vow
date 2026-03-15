@@ -1,0 +1,13 @@
+module GetPositive
+
+fn get_positive(l: Vec<i64>) -> Vec<i64> vow {
+  requires: l.len() >= 0,
+  requires: l.len() <= 8,
+  ensures: result.len() >= 0
+} {
+  Vec::new()
+}
+
+fn main() -> i32 [io] {
+  0
+}

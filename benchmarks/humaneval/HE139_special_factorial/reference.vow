@@ -1,0 +1,29 @@
+module SpecialFactorial
+
+fn special_factorial(n: i64) -> i64 vow {
+  requires: n >= 0,
+  requires: n <= 8,
+  ensures: result >= 0
+} {
+  let mut fact: i64 = 1;
+  let mut special: i64 = 1;
+  let mut i: i64 = 1;
+  while i <= n vow {
+    invariant: i >= 1,
+    invariant: i <= n + 1,
+    invariant: fact >= 1,
+    invariant: special >= 1
+  } {
+    fact = fact * i;
+    special = special * fact;
+    i = i + 1;
+  }
+  special
+}
+
+fn main() -> i32 [io] {
+  print_i64(special_factorial(0));
+  print_i64(special_factorial(1));
+  print_i64(special_factorial(4));
+  0
+}

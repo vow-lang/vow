@@ -1,0 +1,13 @@
+module OrderByPoints
+
+fn order_by_points(s: Vec<i64>) -> Vec<i64> vow {
+  requires: s.len() >= 0,
+  requires: s.len() <= 8,
+  ensures: result.len() >= 0
+} {
+  Vec::new()
+}
+
+fn main() -> i32 [io] {
+  0
+}
