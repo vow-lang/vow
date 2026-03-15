@@ -52,9 +52,9 @@ Known limitations:
 | Primary goal | Agent correctness | General verification | Rust verification | Theorem proving |
 | Verification style | Bounded MC (ESBMC) | SMT (Z3) | SMT (Z3) | Interactive proofs |
 | Spec expressiveness | Bounded, no quantifiers* | Full first-order logic | Rust-embedded specs | Dependent types |
-| Automation burden | Zero (CEGIS loop) | Medium (ghost code) | Medium (proof hints) | High (tactic proofs) |
-| Agent ergonomics | Designed for agents | Retrofitted | Retrofitted | Retrofitted |
-| Counterexample quality | Structured JSON + blame | Basic | Basic | N/A |
+| Automation burden | Lowest (CEGIS loop, no ghost code) | Moderate (ghost code, lemmas) | Moderate (proof hints, triggers) | Highest (tactic proofs) |
+| Agent ergonomics | Agent-first design | Not agent-targeted | Not agent-targeted | Not agent-targeted |
+| Counterexample quality | Structured JSON + blame | Textual counterexamples | Limited | N/A (proof-based) |
 | Self-hosted pipeline | Yes (verified fixed point) | No | No | Yes (partial) |
 
 *Spec expressiveness improves after Phase 21.1 (spec function calls in ensures).
@@ -101,10 +101,16 @@ properties. This is the `ai-coding-lang-bench` target.
 
 **Priority: CRITICAL — competitive window is closing.**
 
-Phase 21 is not "publish and hope." It is: make the comparison fair on two
-tracks (Vericoding + real-world), then publish. This phase absorbs the standard
-library work (old Phase 23), the ai-coding-lang-bench work (old Phase 24), and
-verification caching (old Phase 25.1) as prerequisites.
+Phase 21 has two tracks that can publish independently:
+
+- **Critical path (21.1 → 21.4 → 21.7):** fix the verification pipeline, run
+  the Vericoding comparison with contract fidelity, publish the direct
+  comparison. This is the minimum viable publication.
+- **Parallel track (21.3 → 21.6 → 21.8):** build the standard library, run
+  ai-coding-lang-bench, publish the dual-track update.
+
+Verification caching (21.2) and example coverage (21.5) accelerate this work
+but are not on either critical path.
 
 ### 21.1 Verification pipeline prerequisites
 
@@ -129,12 +135,13 @@ C model generated for nested indexed access patterns.
 ESBMC errors — currently variables must be declared outside all enclosing
 loops. The C emitter needs to handle scoped declarations within loop bodies.
 
-### 21.2 Verification caching
+### 21.2 Verification caching (accelerator, not prerequisite)
 
 Cache ESBMC results by function content hash. If a function hasn't changed,
 skip re-verification. This directly speeds up the CEGIS loop — currently
 every `vow build` re-verifies all functions even if only one changed.
-Essential for comparison runs at scale (162 tasks × multiple iterations).
+Valuable for comparison runs at scale (162 tasks × multiple iterations), but
+not required for correctness of the comparison itself. Can land at any point.
 
 ### 21.3 Standard library core subset
 
@@ -208,10 +215,13 @@ This avoids inflated comparisons from tasks with weak contracts.
 - Pilot results: `bench/results/humaneval-pilot/`
 - Pilot benchmarks: `benchmarks/humaneval/HE*`
 
-### 21.5 Expand example coverage
+### 21.5 Expand example coverage (not on critical path)
 
-The `examples/` directory has significant feature gaps that weaken the skill
-document. Add examples demonstrating:
+Improves skill document quality and adoption, but does not block either
+comparison track. Can land at any point.
+
+The `examples/` directory has significant feature gaps. Add examples
+demonstrating:
 
 - `match` expressions on enums (currently zero examples)
 - `Option<T>` and `Result<T,E>` workflows
@@ -248,21 +258,35 @@ Run the benchmark with `vow build` (verification enabled). Demonstrate that
 Vow can produce a verified mini-git implementation — something no other
 benchmark language can do.
 
-### 21.7 Comparison matrix & publication
+### 21.7 Publish direct comparison
 
-**Status: BLOCKED on 21.4 and 21.6.**
+**Status: BLOCKED on 21.1 + 21.4 only.**
 
-Publish results from both tracks:
+Publish the Vericoding comparison as soon as the direct track is complete:
 
-1. **Vericoding track** — pass rates with contract fidelity breakdown (Exact
+1. **Vericoding results** — pass rates with contract fidelity breakdown (Exact
    vs All), compared against Dafny/Verus/Lean per-model results from the
    Vericoding paper.
-2. **Real-world track** — ai-coding-lang-bench pass rate and execution time,
-   with verified variant as a differentiator.
-3. **Comparison matrix** — the table from the Competitive Landscape section,
-   updated with empirical data from both tracks.
+2. **Comparison matrix** — the table from the Competitive Landscape section,
+   with empirical data from the Vericoding track.
+
+This is the minimum viable publication. It does not require the standard
+library, ai-coding-lang-bench, or any other parallel work.
 
 Target: blog post + arxiv preprint.
+
+### 21.8 Publish dual-track comparison update
+
+**Status: BLOCKED on 21.6 (real-world track).**
+
+Follow-up publication adding the real-world track:
+
+1. **ai-coding-lang-bench results** — pass rate and execution time, with
+   verified variant as a differentiator.
+2. **Updated comparison matrix** — empirical data from both tracks.
+
+This can be a second blog post or an updated preprint. It strengthens the
+story but does not gate the initial publication.
 
 ---
 
@@ -453,6 +477,7 @@ until a concrete verification need exceeds ESBMC's capabilities.
 ---
 
 *This document captures the forward-looking roadmap as of 15 March 2026.
-Phase 21 is the critical path (dual-track comparison). Phase 22 improves
+Phase 21 critical path: 21.1 → 21.4 → 21.7 (publish direct comparison).
+Parallel: 21.3 → 21.6 → 21.8 (publish dual-track update). Phase 22 improves
 agent ergonomics. Phase 23 is toolchain polish. Phases 24–25 are
 demand-driven. If a phase isn't earning its keep, cut it.*
