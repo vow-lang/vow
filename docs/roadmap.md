@@ -39,7 +39,7 @@ Known limitations:
 - 2/4 Stretch benchmarks hit ESBMC `--unwind` ceiling (H07, H10)
 - `divide.vow` release build has UB (no runtime checks; debug mode works)
 - Zero public visibility — benchmark results not yet published
-- Spec expressiveness gap: ensures clauses cannot call user-defined functions or express quantifiers
+- Spec expressiveness gap: ensures clauses cannot express quantifiers (user-defined function calls now work)
 
 ---
 
@@ -57,7 +57,7 @@ Known limitations:
 | Counterexample quality | Structured JSON + blame | Textual counterexamples | Limited | N/A (proof-based) |
 | Self-hosted pipeline | Yes (verified fixed point) | No | No | Yes (partial) |
 
-*Spec expressiveness improves after Phase 21.1 (spec function calls in ensures).
+*Spec expressiveness improved in Phase 21.1 — spec function calls in ensures now work.
 
 ### Adjacent comparators (positioning context)
 
@@ -103,37 +103,37 @@ properties. This is the `ai-coding-lang-bench` target.
 
 Phase 21 has two tracks that can publish independently:
 
-- **Critical path (21.1 → 21.4 → 21.7):** fix the verification pipeline, run
+- **Critical path (~~21.1~~ → 21.4 → 21.7):** ~~fix the verification pipeline,~~ run
   the Vericoding comparison with contract fidelity, publish the direct
-  comparison. This is the minimum viable publication.
+  comparison. This is the minimum viable publication. 21.1 is complete.
 - **Parallel track (21.3 → 21.6 → 21.8):** build the standard library, run
   ai-coding-lang-bench, publish the dual-track update.
 
 Verification caching (21.2) and example coverage (21.5) accelerate this work
 but are not on either critical path.
 
-### 21.1 Verification pipeline prerequisites
+### 21.1 Verification pipeline prerequisites ✅
 
-**Status: BLOCKED — these must land before retranslating benchmarks.**
+**Status: COMPLETE.**
 
-Three pipeline limitations prevent fair comparison:
+Three pipeline limitations fixed:
 
-**Spec function calls in ensures clauses.** The C emitter currently replaces
-non-constant function calls with `__VERIFIER_nondet()`, making them
-meaningless. If the emitter instead emitted the actual function body into the
-C model, ensures clauses could reference pure spec functions (e.g.,
-`ensures: result == is_prime_spec(n)`). ESBMC would then verify by bounded
-model checking — no quantifiers needed, no new syntax, just a verification
-pipeline fix. This makes Vow contracts as strong as Dafny's for bounded
-inputs.
+**C variable hoisting.** The C emitter now hoists ALL variable declarations to
+function scope, preventing C99 goto/scope errors when declarations appear
+inside goto-labeled blocks. This fixes `let mut` inside loop bodies and
+nested loop patterns. Upsilon temporaries (`__ups_*`) are also pre-declared.
 
-**Nested Vec loops.** Nested loops with Vec access fail ESBMC verification
-(had to drop 2SUM and 3SUM from the pilot). Requires investigation of the
-C model generated for nested indexed access patterns.
+**Spec function calls in ensures clauses.** Pure user-defined functions are now
+detected as "modelable" and emitted as real C functions in the verification
+output. `is_modelable()` checks purity and instruction coverage; callee
+functions are emitted in topological order with forward declarations. Ensures
+clauses can now reference spec functions (e.g., `ensures: is_even(result)`).
 
-**`let mut` inside loop bodies.** Variables declared inside loop bodies cause
-ESBMC errors — currently variables must be declared outside all enclosing
-loops. The C emitter needs to handle scoped declarations within loop bodies.
+**Nested Vec loops.** The variable hoisting fix resolved the core issue. An
+additional bug was found and fixed in the self-hosted IR lowerer: Upsilon
+instructions referencing sentinel instruction ID `-1` produced invalid C
+variable names (`__ups_-1`, `v-1`). Negative IDs are now filtered. 2SUM-style
+nested Vec loops verify successfully with both compilers.
 
 ### 21.2 Verification caching (accelerator, not prerequisite)
 
@@ -186,7 +186,7 @@ IR lowerer builtin dispatch.
 
 ### 21.4 Vericoding comparison with contract fidelity
 
-**Status: BLOCKED on 21.1.**
+**Status: UNBLOCKED — 21.1 is complete.**
 
 The 10-task HumanEval pilot showed 10/10 verified with claude-sonnet-4-6
 (mean 1.3 CEGIS iterations), but only 2/10 have Dafny-equivalent contracts.
@@ -260,7 +260,7 @@ benchmark language can do.
 
 ### 21.7 Publish direct comparison
 
-**Status: BLOCKED on 21.1 + 21.4 only.**
+**Status: BLOCKED on 21.4 only (21.1 complete).**
 
 Publish the Vericoding comparison as soon as the direct track is complete:
 

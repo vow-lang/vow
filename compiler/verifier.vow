@@ -192,10 +192,26 @@ fn emit_c_preamble() -> String {
 }
 
 fn emit_c_for_verify(f: IrFunction, m: IrModule) -> String {
-    let out: String = emit_c_preamble();
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
-    emit_c_function(out, f, const_fn_indices, m);
-    out.push_byte(10);
+    let callee_fis: Vec<i64> = collect_modelable_callees(f, m, const_fn_indices);
+
+    let out: String = {
+        if callee_fis.len() > 0 {
+            let modelable_fi_set: Vec<i64> = Vec::new();
+            let mut ci: i64 = 0;
+            while ci < callee_fis.len() {
+                modelable_fi_set.push(callee_fis[ci]);
+                ci = ci + 1;
+            }
+            emit_c_module_with_callees(m, f.id, callee_fis, modelable_fi_set)
+        } else {
+            let preamble: String = cemit_preamble();
+            let empty_modelable: Vec<i64> = Vec::new();
+            emit_c_function(preamble, f, const_fn_indices, empty_modelable, m);
+            preamble.push_byte(10);
+            preamble
+        }
+    };
     out.push_str(emit_harness(f));
     out
 }

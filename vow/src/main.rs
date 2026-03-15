@@ -14,7 +14,8 @@ use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{CollectingEmitter, Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
-    Counterexample, VerificationResult, detect_constant_functions, verify_function_with_const_fns,
+    Counterexample, VerificationResult, detect_constant_functions,
+    verify_function_with_module_and_const_fns,
 };
 
 // ---------------------------------------------------------------------------
@@ -998,7 +999,7 @@ fn run_verification_sync(
         if func.vows.is_empty() {
             continue;
         }
-        match verify_function_with_const_fns(func, &const_fns) {
+        match verify_function_with_module_and_const_fns(func, ir_module, &const_fns) {
             VerificationResult::Failed(ce) => {
                 let sce = build_structured_counterexample(func, &ce, file, call_site_index);
                 return VerifyOutcome::Failed {
