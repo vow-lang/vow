@@ -1256,6 +1256,14 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // data *VowVec<u8>
             sig.returns.push(AbiParam::new(types::I64)); // 0=ok, -1=err
         }
+        "__vow_fs_exists" => {
+            sig.params.push(AbiParam::new(types::I64)); // path *VowVec<u8>
+            sig.returns.push(AbiParam::new(types::I64)); // 1=exists, 0=not
+        }
+        "__vow_fs_mkdir" => {
+            sig.params.push(AbiParam::new(types::I64)); // path *VowVec<u8>
+            sig.returns.push(AbiParam::new(types::I64)); // 0=ok, -1=err
+        }
         "__vow_eprintln_str" => {
             sig.params.push(AbiParam::new(types::I64)); // C-string ptr
         }

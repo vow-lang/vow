@@ -23,6 +23,8 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "eprintln_str" => Some(("__vow_eprintln_str", Ty::Unit)),
         "fs_read" => Some(("__vow_fs_read", Ty::Ptr)),
         "fs_write" => Some(("__vow_fs_write", Ty::I64)),
+        "fs_exists" => Some(("__vow_fs_exists", Ty::I64)),
+        "fs_mkdir" => Some(("__vow_fs_mkdir", Ty::I64)),
         "args" => Some(("__vow_args", Ty::Ptr)),
         "process_exit" => Some(("__vow_process_exit", Ty::Unit)),
         "process_run" => Some(("__vow_process_run", Ty::I64)),
@@ -440,7 +442,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         },
         ExprKind::Ident(name) => {
             if let Some(&val) = ctx.const_map.get(name.as_str()) {
-                return ctx.emit(Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(val), span);
+                return ctx.emit(
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    vec![],
+                    InstData::ConstI64(val),
+                    span,
+                );
             }
             ctx.lookup(name)
                 .unwrap_or_else(|| panic!("undefined variable: {name}"))

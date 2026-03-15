@@ -473,6 +473,41 @@ pub unsafe extern "C" fn __vow_fs_write(path_ptr: *const u8, data_ptr: *const u8
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_fs_exists(path_ptr: *const u8) -> i64 {
+    if path_ptr.is_null() {
+        return 0;
+    }
+    let v = unsafe { &*(path_ptr as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let path = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    if std::path::Path::new(path).exists() {
+        1
+    } else {
+        0
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_fs_mkdir(path_ptr: *const u8) -> i64 {
+    if path_ptr.is_null() {
+        return -1;
+    }
+    let v = unsafe { &*(path_ptr as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let path = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    match std::fs::create_dir_all(path) {
+        Ok(_) => 0,
+        Err(_) => -1,
+    }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_eprintln_str(s: *const u8) {
     if !s.is_null() {
         let v = unsafe { &*(s as *const VowVec) };

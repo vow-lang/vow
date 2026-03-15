@@ -238,7 +238,10 @@ impl<'e> Checker<'e> {
                         if ty != Ty::I64 && ty != Ty::I32 {
                             self.emit_error(
                                 ErrorCode::TypeMismatch,
-                                format!("const `{}` has type `{}`, expected integer type", c.name, ty),
+                                format!(
+                                    "const `{}` has type `{}`, expected integer type",
+                                    c.name, ty
+                                ),
                                 c.span,
                             );
                         }
@@ -254,7 +257,10 @@ impl<'e> Checker<'e> {
                         }
                         self.const_values.insert(c.name.clone(), *b as i64);
                     }
-                    ExprKind::UnaryOp { op: UnOp::Neg, operand } => {
+                    ExprKind::UnaryOp {
+                        op: UnOp::Neg,
+                        operand,
+                    } => {
                         if let ExprKind::Lit(Lit::Int(v)) = &operand.kind {
                             self.const_values.insert(c.name.clone(), -(*v as i64));
                         } else {
@@ -505,7 +511,7 @@ impl<'e> Checker<'e> {
                         Ty::Unit
                     }
                 }
-            },
+            }
             ExprKind::BinaryOp { op, lhs, rhs } => {
                 let lhs_ty = self.check_expr(lhs);
                 let rhs_ty = self.check_expr(rhs);

@@ -201,30 +201,35 @@ pub fn verify_function_with_const_fns(
     verify_function_inner(func, const_fns)
 }
 
+pub fn emit_verify_c_source(
+    func: &Function,
+    module: &Module,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+) -> String {
+    let mut modelable_cache = HashMap::new();
+    let callee_ids = collect_modelable_callees(func, module, const_fns, &mut modelable_cache);
+
+    let mut c_src = if callee_ids.is_empty() {
+        emit_c_module(&[func], const_fns)
+    } else {
+        let modelable_fns: std::collections::HashSet<FuncId> = callee_ids.iter().copied().collect();
+        emit_c_module_with_callees(func, module, const_fns, &callee_ids, &modelable_fns)
+    };
+    c_src.push_str(&emit_harness(func));
+    c_src
+}
+
 pub fn verify_function_with_module_and_const_fns(
     func: &Function,
     module: &Module,
     const_fns: &HashMap<FuncId, ConstantValue>,
 ) -> VerificationResult {
-    let mut modelable_cache = HashMap::new();
-    let callee_ids = collect_modelable_callees(func, module, const_fns, &mut modelable_cache);
-
-    if callee_ids.is_empty() {
-        return verify_function_inner(func, const_fns);
-    }
-
-    let modelable_fns: std::collections::HashSet<FuncId> =
-        callee_ids.iter().copied().collect();
-
     let esbmc = match find_esbmc() {
         Some(p) => p,
         None => return VerificationResult::ToolNotFound,
     };
 
-    let mut c_src =
-        emit_c_module_with_callees(func, module, const_fns, &callee_ids, &modelable_fns);
-    c_src.push_str(&emit_harness(func));
-
+    let c_src = emit_verify_c_source(func, module, const_fns);
     run_esbmc(&esbmc, &c_src)
 }
 
@@ -243,7 +248,7 @@ fn verify_function_inner(
     run_esbmc(&esbmc, &c_src)
 }
 
-fn run_esbmc(esbmc: &std::path::Path, c_src: &str) -> VerificationResult {
+pub fn run_esbmc(esbmc: &std::path::Path, c_src: &str) -> VerificationResult {
     let mut tmp = match tempfile::Builder::new().suffix(".c").tempfile() {
         Ok(f) => f,
         Err(e) => return VerificationResult::ToolError(e.to_string()),

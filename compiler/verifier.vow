@@ -454,7 +454,60 @@ fn map_ce_values(c_names: Vec<String>, c_values: Vec<String>, map_keys: Vec<Stri
     }
 }
 
-fn verify_function_full(f: IrFunction, m: IrModule, unwind: String) -> VerifyResult [io] {
+fn VERIFY_CACHE_DIR() -> String { String::from("/tmp/.vow_verify_cache/") }
+
+fn vow_hash_string(s: String) -> i64 {
+    let mut h: i64 = 5381;
+    let mut i: i64 = 0;
+    while i < s.len() {
+        h = h * 33 + s.byte_at(i);
+        i = i + 1;
+    }
+    h
+}
+
+fn verify_cache_key(c_source: String, unwind: String) -> String {
+    let h: i64 = vow_hash_string(c_source);
+    let h2: i64 = h * 33 + vow_hash_string(unwind);
+    let abs_h: i64 = { if h2 < 0 { 0 - h2 } else { h2 } };
+    i64_to_str(abs_h)
+}
+
+fn verify_cache_ensure_dir() -> i64 [io] {
+    fs_mkdir(VERIFY_CACHE_DIR())
+}
+
+fn verify_cache_lookup(key: String) -> i64 [io] {
+    let path: String = String::from("");
+    path.push_str(VERIFY_CACHE_DIR());
+    path.push_str(key);
+    path.push_str(String::from(".vr"));
+    let exists: i64 = fs_exists(path);
+    if exists == 0 { return -1; }
+    let content: String = fs_read(path);
+    if content.len() == 0 { return -1; }
+    if str_find_str(content, String::from("PROVEN")) >= 0 {
+        return VERIFY_PROVEN();
+    }
+    if str_find_str(content, String::from("FAILED")) >= 0 {
+        return VERIFY_FAILED();
+    }
+    -1
+}
+
+fn verify_cache_store(key: String, status: i64) [io] {
+    let path: String = String::from("");
+    path.push_str(VERIFY_CACHE_DIR());
+    path.push_str(key);
+    path.push_str(String::from(".vr"));
+    let content: String = {
+        if status == VERIFY_PROVEN() { String::from("PROVEN\n") }
+        else { String::from("FAILED\n") }
+    };
+    fs_write(path, content);
+}
+
+fn verify_function_full(f: IrFunction, m: IrModule, unwind: String, use_cache: bool) -> VerifyResult [io] {
     let vows: Vec<IrVowEntry> = f.vows;
     if vows.len() == 0 {
         return VerifyResult {
@@ -467,6 +520,21 @@ fn verify_function_full(f: IrFunction, m: IrModule, unwind: String) -> VerifyRes
         };
     }
     let c_source: String = emit_c_for_verify(f, m);
+    if use_cache {
+        verify_cache_ensure_dir();
+        let cache_key: String = verify_cache_key(c_source, unwind);
+        let cached: i64 = verify_cache_lookup(cache_key);
+        if cached == VERIFY_PROVEN() {
+            return VerifyResult {
+                status: VERIFY_PROVEN(),
+                vow_id: -1,
+                var_names: Vec::new(),
+                var_values: Vec::new(),
+                block_visits: Vec::new(),
+                raw_output: String::from("(cached)"),
+            };
+        }
+    }
     let exit_code: i64 = run_esbmc(c_source, unwind, String::from("/tmp/__vow_verify.c"));
     if exit_code == -1 {
         return VerifyResult {
@@ -484,6 +552,12 @@ fn verify_function_full(f: IrFunction, m: IrModule, unwind: String) -> VerifyRes
     combined.push_str(stdout);
     combined.push_str(stderr);
     let status: i64 = parse_verify_status(combined);
+    if use_cache {
+        if status == VERIFY_PROVEN() || status == VERIFY_FAILED() {
+            let cache_key2: String = verify_cache_key(c_source, unwind);
+            verify_cache_store(cache_key2, status);
+        }
+    }
     let vow_id: i64 = {
         if status == VERIFY_FAILED() {
             parse_vow_id(combined)
@@ -514,12 +588,20 @@ fn verify_function_full(f: IrFunction, m: IrModule, unwind: String) -> VerifyRes
     }
 }
 
-fn verify_start(f: IrFunction, m: IrModule, unwind: String, idx: i64) -> i64 [io] {
+fn verify_start(f: IrFunction, m: IrModule, unwind: String, idx: i64, use_cache: bool) -> i64 [io] {
     let vows: Vec<IrVowEntry> = f.vows;
     if vows.len() == 0 {
         return -1;
     }
     let c_source: String = emit_c_for_verify(f, m);
+    if use_cache {
+        verify_cache_ensure_dir();
+        let cache_key: String = verify_cache_key(c_source, unwind);
+        let cached: i64 = verify_cache_lookup(cache_key);
+        if cached == VERIFY_PROVEN() {
+            return -2;
+        }
+    }
     let tmp_path: String = String::from("/tmp/__vow_verify_");
     tmp_path.push_str(i64_to_str(idx));
     tmp_path.push_str(String::from(".c"));

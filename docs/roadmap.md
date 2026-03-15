@@ -17,7 +17,8 @@ Achieved:
 - Full verification pipeline: compile → emit C → ESBMC → counterexample → blame
 - Parallel codegen + verification (all ESBMC instances concurrent with codegen)
 - Structured JSON diagnostics with line:col source spans
-- `build`, `verify` subcommands; `--mode debug`, `--no-verify`, `--unwind N` flags
+- `build`, `verify` subcommands; `--mode debug`, `--no-verify`, `--no-cache`, `--unwind N` flags
+- Verification caching: content-hash-based ESBMC result cache (23s → 0.001s on repeat)
 - Vericoding benchmark: **100% (36/36)** with claude-sonnet-4-6 on Vow's own suite
 - 89/89 tests passing, 40/40 CLI compatibility tests
 - Toolchain Skill document, structured `--help`, `--debug-trace`, incremental compilation
@@ -109,8 +110,8 @@ Phase 21 has two tracks that can publish independently:
 - **Parallel track (21.3 → 21.6 → 21.8):** build the standard library, run
   ai-coding-lang-bench, publish the dual-track update.
 
-Verification caching (21.2) and example coverage (21.5) accelerate this work
-but are not on either critical path.
+Verification caching (21.2, complete) and example coverage (21.5) accelerate
+this work but are not on either critical path.
 
 ### 21.1 Verification pipeline prerequisites ✅
 
@@ -135,13 +136,28 @@ instructions referencing sentinel instruction ID `-1` produced invalid C
 variable names (`__ups_-1`, `v-1`). Negative IDs are now filtered. 2SUM-style
 nested Vec loops verify successfully with both compilers.
 
-### 21.2 Verification caching (accelerator, not prerequisite)
+### 21.2 Verification caching ✅
 
-Cache ESBMC results by function content hash. If a function hasn't changed,
-skip re-verification. This directly speeds up the CEGIS loop — currently
-every `vow build` re-verifies all functions even if only one changed.
-Valuable for comparison runs at scale (162 tasks × multiple iterations), but
-not required for correctness of the comparison itself. Can land at any point.
+**Status: COMPLETE.**
+
+ESBMC results are cached by content hash of the emitted C verification
+source. If the C source (which captures all verification inputs — function
+IR, contracts, callees, constants) and unwind depth are unchanged, the
+cached result is returned without invoking ESBMC. Both `Proven` and `Failed`
+results (with full counterexample data) are cached in the Rust compiler;
+only `Proven` results are cached in the self-hosted compiler for simplicity.
+
+Implementation in both compilers:
+- **Rust compiler:** FNV-1a hash, cache at `~/.cache/vow/verify/{hash}.vr`,
+  line-oriented text format with counterexample serialization
+- **Self-hosted compiler:** polynomial hash, cache at
+  `/tmp/.vow_verify_cache/{hash}.vr`
+- `--no-cache` flag on both `build` and `verify` subcommands
+- Async verification path (parallel codegen + verify) returns sentinel for
+  cached hits, avoiding unnecessary ESBMC subprocess spawns
+
+Performance: 23s → 0.001s on repeated verification of bisect.vow.
+New runtime builtins `fs_exists` and `fs_mkdir` added as prerequisites.
 
 ### 21.3 Standard library core subset
 
@@ -151,9 +167,8 @@ These are new runtime builtins registered in the type checker and lowerer.
 Scope for each: `vow-runtime` C implementations + type checker registration +
 IR lowerer builtin dispatch.
 
-**Filesystem builtins** (7 new `[IO]` functions):
-- `fs_mkdir(path: String) -> i64`
-- `fs_exists(path: String) -> i64`
+**Filesystem builtins** (5 remaining `[IO]` functions — `fs_mkdir` and
+`fs_exists` landed in 21.2):
 - `fs_listdir(path: String) -> Vec<String>`
 - `fs_remove(path: String) -> i64`
 - `fs_remove_dir(path: String) -> i64`

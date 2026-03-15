@@ -249,13 +249,9 @@ pub fn is_modelable(
                     InstData::CallExtern(name) => is_known_builtin(name),
                     InstData::CallTarget(fid) => {
                         const_fns.contains_key(fid)
-                            || module
-                                .functions
-                                .iter()
-                                .find(|f| f.id == *fid)
-                                .is_some_and(|callee| {
-                                    is_modelable(callee, module, const_fns, cache)
-                                })
+                            || module.functions.iter().find(|f| f.id == *fid).is_some_and(
+                                |callee| is_modelable(callee, module, const_fns, cache),
+                            )
                     }
                     _ => false,
                 },
@@ -298,7 +294,14 @@ pub fn collect_modelable_callees(
 ) -> Vec<FuncId> {
     let mut visited = HashSet::new();
     let mut order = Vec::new();
-    collect_callees_dfs(func, module, const_fns, modelable_cache, &mut visited, &mut order);
+    collect_callees_dfs(
+        func,
+        module,
+        const_fns,
+        modelable_cache,
+        &mut visited,
+        &mut order,
+    );
     order
 }
 
@@ -322,14 +325,7 @@ fn collect_callees_dfs(
                     && is_modelable(callee, module, const_fns, modelable_cache)
                 {
                     visited.insert(*fid);
-                    collect_callees_dfs(
-                        callee,
-                        module,
-                        const_fns,
-                        modelable_cache,
-                        visited,
-                        order,
-                    );
+                    collect_callees_dfs(callee, module, const_fns, modelable_cache, visited, order);
                     order.push(*fid);
                 }
             }
@@ -763,9 +759,7 @@ fn emit_inst(
         }
 
         // Modelable function calls: emit actual C function call
-        Opcode::Call
-            if matches!(&inst.data, InstData::CallTarget(fid) if modelable_fns.contains(fid)) =>
-        {
+        Opcode::Call if matches!(&inst.data, InstData::CallTarget(fid) if modelable_fns.contains(fid)) => {
             if let InstData::CallTarget(fid) = &inst.data
                 && let Some(callee) = module.functions.iter().find(|f| f.id == *fid)
             {
@@ -783,11 +777,7 @@ fn emit_inst(
                         args_str.join(", ")
                     ));
                 } else {
-                    out.push_str(&format!(
-                        "  {}({});\n",
-                        callee.name,
-                        args_str.join(", ")
-                    ));
+                    out.push_str(&format!("  {}({});\n", callee.name, args_str.join(", ")));
                 }
             }
         }
@@ -850,13 +840,18 @@ fn c_nondet_suffix(ty: Ty) -> &'static str {
 // ---------------------------------------------------------------------------
 
 pub fn emit_c_function(func: &Function, const_fns: &HashMap<FuncId, ConstantValue>) -> String {
-    emit_c_function_full(func, const_fns, &HashSet::new(), &Module {
-        name: String::new(),
-        functions: vec![],
-        strings: vec![],
-        struct_layouts: vec![],
-        enum_layouts: vec![],
-    })
+    emit_c_function_full(
+        func,
+        const_fns,
+        &HashSet::new(),
+        &Module {
+            name: String::new(),
+            functions: vec![],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+        },
+    )
 }
 
 pub fn emit_c_function_full(
@@ -1156,13 +1151,23 @@ pub fn emit_c_module_with_callees(
     // Callee function bodies in topological order
     for fid in callee_ids {
         if let Some(callee) = module.functions.iter().find(|f| f.id == *fid) {
-            out.push_str(&emit_c_function_full(callee, const_fns, modelable_fns, module));
+            out.push_str(&emit_c_function_full(
+                callee,
+                const_fns,
+                modelable_fns,
+                module,
+            ));
             out.push('\n');
         }
     }
 
     // Target function
-    out.push_str(&emit_c_function_full(target, const_fns, modelable_fns, module));
+    out.push_str(&emit_c_function_full(
+        target,
+        const_fns,
+        modelable_fns,
+        module,
+    ));
     out.push('\n');
     out
 }
@@ -2938,10 +2943,7 @@ mod tests {
             &HashSet::new(),
             &empty_module,
         );
-        assert!(
-            out.contains("v5 = 42LL;"),
-            "inlined constant: {out}"
-        );
+        assert!(out.contains("v5 = 42LL;"), "inlined constant: {out}");
     }
 
     #[test]

@@ -389,6 +389,8 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("eprintln_str") { return String::from("__vow_eprintln_str"); }
     if name == String::from("fs_read") { return String::from("__vow_fs_read"); }
     if name == String::from("fs_write") { return String::from("__vow_fs_write"); }
+    if name == String::from("fs_exists") { return String::from("__vow_fs_exists"); }
+    if name == String::from("fs_mkdir") { return String::from("__vow_fs_mkdir"); }
     if name == String::from("args") { return String::from("__vow_args"); }
     if name == String::from("process_exit") { return String::from("__vow_process_exit"); }
     if name == String::from("process_run") { return String::from("__vow_process_run"); }
@@ -407,6 +409,8 @@ fn builtin_ret_ty(name: String) -> i64 {
     if name == String::from("eprintln_str") { return ITY_UNIT(); }
     if name == String::from("fs_read") { return ITY_PTR(); }
     if name == String::from("fs_write") { return ITY_I64(); }
+    if name == String::from("fs_exists") { return ITY_I64(); }
+    if name == String::from("fs_mkdir") { return ITY_I64(); }
     if name == String::from("args") { return ITY_PTR(); }
     if name == String::from("process_exit") { return ITY_UNIT(); }
     if name == String::from("process_run") { return ITY_I64(); }

@@ -100,6 +100,22 @@ impl TypeEnv {
             },
         );
         env.define_fn(
+            "fs_exists",
+            FnSig {
+                params: vec![Ty::Str],
+                return_ty: Ty::I64,
+                effects: [Effect::Read].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "fs_mkdir",
+            FnSig {
+                params: vec![Ty::Str],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
             "eprintln_str",
             FnSig {
                 params: vec![Ty::Str],
