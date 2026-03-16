@@ -19,6 +19,7 @@ fn EC_NON_EXHAUSTIVE_MATCH() -> i64 vow { ensures: result >= 0 } { 7 }
 fn EC_VOW_REQUIRES_VIOLATED() -> i64 vow { ensures: result >= 0 } { 8 }
 fn EC_VOW_ENSURES_VIOLATED() -> i64 vow { ensures: result >= 0 } { 9 }
 fn EC_VOW_INVARIANT_VIOLATED() -> i64 vow { ensures: result >= 0 } { 10 }
+fn EC_IO_ERROR() -> i64 vow { ensures: result >= 0 } { 11 }
 
 struct Diagnostic {
     severity: i64,
@@ -129,18 +130,6 @@ fn diag_ctx_has_errors(ctx: DiagCtx) -> bool {
     ctx.error_count > 0
 }
 
-fn sev_name(s: i64) -> String {
-    if s == SEV_ERROR() {
-        String::from("Error")
-    } else {
-        if s == SEV_WARNING() {
-            String::from("Warning")
-        } else {
-            String::from("Note")
-        }
-    }
-}
-
 fn diag_blame_name(b: i64) -> String {
     if b == DIAG_BLAME_CALLER() {
         String::from("Caller")
@@ -192,8 +181,11 @@ fn ec_name(code: i64) -> String {
     if code == EC_VOW_ENSURES_VIOLATED() {
         String::from("VowEnsuresViolated")
     } else {
+    if code == EC_VOW_INVARIANT_VIOLATED() {
         String::from("VowInvariantViolated")
-    }}}}}}}}}}
+    } else {
+        String::from("IoError")
+    }}}}}}}}}}}
 }
 
 fn sev_name_lower(s: i64) -> String {

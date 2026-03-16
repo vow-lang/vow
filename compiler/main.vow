@@ -154,7 +154,7 @@ fn load_deps(root_dir: String, m: Module, arena: AstArena, all_items: Vec<i64>, 
             visited.push(dep_path);
             let src: String = fs_read(dep_path);
             if src.len() == 0 {
-                let d: Diagnostic = diag_error(EC_MISSING_DELIMITER(), str2(String::from("cannot read "), dep_path), dep_path, 0, 0);
+                let d: Diagnostic = diag_error(EC_IO_ERROR(), str2(String::from("cannot read "), dep_path), dep_path, 0, 0);
                 diag_ctx_emit(dctx, d);
             } else {
                 diag_ctx_add_source(dctx, dep_path, src);
