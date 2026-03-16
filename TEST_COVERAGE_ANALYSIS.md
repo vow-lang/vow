@@ -1,19 +1,19 @@
 # Test Coverage Analysis
 
-**Date:** 2026-03-08
-**Baseline:** 536 `#[test]` functions across 9 crates (72 passed, 14 failed due to missing release binary)
+**Date:** 2026-03-08 (updated 2026-03-16 against current `main`)
+**Baseline:** 540 `#[test]` functions across 9 crates (~526 pass, 14 fail due to missing release binary)
 
 ## Summary
 
 | Crate | Tests | Coverage | Priority |
 |-------|------:|----------|----------|
-| vow-syntax | 113 | Good | Low |
-| vow-types | 162 | Good | Low |
+| vow-syntax | 139 | Good | Low |
+| vow-types | 137 | Good | Low |
 | vow-ir | 51 | Moderate | **Medium** |
 | vow-codegen | 56 | Good | Low |
 | vow-verify | 69 | Good | Low |
 | vow-diag | 5 | **Weak** | **Medium** |
-| vow (CLI) | 79 | Good | Low |
+| vow (CLI) | 83 | Good | Low |
 | vow-runtime | 0 | **None** | **High** |
 | vow-clif-shim | 0 | **None** | Low (FFI) |
 
@@ -98,7 +98,7 @@ Only covers `JsonEmitter` and `HumanEmitter` basics. Missing:
 
 ### 3. vow-ir lowering — 7 tests (MEDIUM priority)
 
-The IR lowerer handles 17+ expression types but only tests 4 (const, add, let, if-else, empty fn, ensures, while). Major untested paths:
+The IR lowerer handles 17+ expression types but only tests 7 (const, add, let, if-else, empty fn, ensures, while). Major untested paths:
 
 **Expression lowering gaps:**
 - `lower_unary_neg` — negation
@@ -189,11 +189,13 @@ Add ~15 tests for untested expression types. Each test is small (parse a snippet
 
 | Crate | Current | Target | Delta |
 |-------|--------:|-------:|------:|
-| vow-runtime | 0 | 25 | +25 |
+| vow-syntax | 139 | 139 | +0 |
+| vow-types | 137 | 137 | +0 |
+| vow-ir | 51 | 75 | +24 |
+| vow-codegen | 56 | 58 | +2 |
+| vow-verify | 69 | 69 | +0 |
 | vow-diag | 5 | 15 | +10 |
-| vow-ir | 51 | 70 | +19 |
-| vow (CLI) | 79 | 87 | +8 |
-| vow-ir validator | 8 | 13 | +5 |
-| vow module_loader | 3 | 8 | +5 |
-| vow-codegen linker | 1 | 3 | +2 |
-| **Total** | **536** | **610** | **+74** |
+| vow (CLI) | 83 | 96 | +13 |
+| vow-runtime | 0 | 25 | +25 |
+| vow-clif-shim | 0 | 0 | +0 |
+| **Total** | **540** | **614** | **+74** |
