@@ -33,11 +33,11 @@ All 14 failures are in the `vow` crate's end-to-end tests that compile `.vow` pr
 
 ### 1. vow-runtime — 0 tests (HIGH priority)
 
-The runtime crate has **27 public `extern "C"` functions** with zero test coverage. These implement core runtime behavior that compiled Vow programs depend on.
+The runtime crate has **71 public `extern "C"` functions** (15 safe + 56 unsafe) with zero test coverage. These implement core runtime behavior that compiled Vow programs depend on.
 
 **Recommended tests (grouped by subsystem):**
 
-#### Vector runtime (`__vow_vec_*`)
+#### Vector runtime (`__vow_vec_*`) — 10 tests
 - `vec_new_val_creates_empty_vec` — length 0 after creation
 - `vec_push_val_increments_len` — push N items, verify len == N
 - `vec_get_val_returns_pushed_value` — push then get at same index
@@ -45,8 +45,11 @@ The runtime crate has **27 public `extern "C"` functions** with zero test covera
 - `vec_pop_decrements_len` — push N, pop, verify len == N-1
 - `vec_get_val_out_of_bounds_panics` — index >= len triggers bounds check
 - `vec_capacity_doubles_on_growth` — push past initial capacity
+- `vec_get_ptr_returns_element_pointer` — push then get_ptr at same index
+- `vec_sort_returns_sorted_copy` — push [3,1,2], verify sorted [1,2,3]
+- `vec_sort_empty_returns_empty` — sort empty vec returns empty vec
 
-#### String runtime (`__vow_string_*`)
+#### String core (`__vow_string_*`) — 9 tests
 - `string_new_and_len` — create from bytes, verify len
 - `string_from_cstr_null_terminated` — from C string
 - `string_eq_same_content` — equal strings return 1
@@ -57,7 +60,19 @@ The runtime crate has **27 public `extern "C"` functions** with zero test covera
 - `string_byte_at_returns_correct_byte` — indexing
 - `string_from_i64_formats_correctly` — 0, positive, negative
 
-#### HashMap runtime (`__vow_map_*`)
+#### String utility (`__vow_string_substr`, `_split`, etc.) — 10 tests
+- `string_substr_extracts_range` — substr("hello", 1, 3) == "ell"
+- `string_split_by_delimiter` — "a,b,c" split on "," yields 3 parts
+- `string_split_empty_separator` — returns whole string as single element
+- `string_starts_with_positive_negative` — prefix match and mismatch
+- `string_ends_with_positive_negative` — suffix match and mismatch
+- `string_trim_whitespace` — leading/trailing spaces removed
+- `string_to_upper_converts` — "hello" → "HELLO"
+- `string_to_lower_converts` — "HELLO" → "hello"
+- `string_replace_all_occurrences` — "aXbXc" replace "X" with "Y"
+- `string_join_with_separator` — ["a","b","c"] join "," == "a,b,c"
+
+#### HashMap runtime (`__vow_map_*`) — 6 tests
 - `map_new_is_empty` — len == 0
 - `map_insert_and_get` — insert then retrieve
 - `map_insert_updates_existing_key` — insert same key twice
@@ -65,10 +80,57 @@ The runtime crate has **27 public `extern "C"` functions** with zero test covera
 - `map_remove_decrements_len` — remove existing key
 - `map_remove_nonexistent_key` — no-op, len unchanged
 
-#### Violation handler
+#### Violation handler — 3 tests
 - `vow_violation_exits_with_code_1` — verify exit code and JSON on stderr
+- `arithmetic_overflow_exits_with_code_1` — verify exit code and JSON on stderr
+- `unwrap_panic_exits_with_code_1` — verify exit code and JSON on stderr
 
-**Testing approach:** These are `unsafe extern "C"` functions. Tests can call them directly with `unsafe` blocks. The vec/string/map functions are pure memory operations and straightforward to test. The violation/overflow handlers call `exit()` so they need process-based tests.
+#### Tracing (`__vow_trace_*`) — 3 tests
+- `trace_enter_emits_json` — verify `{"event":"enter","fn":"..."}` on stderr
+- `trace_exit_emits_json` — verify `{"event":"exit","fn":"..."}` on stderr
+- `trace_vow_emits_json` — verify `{"event":"vow","fn":"...","vow_id":N,"passed":true/false}`
+
+#### Arena (`__vow_arena_*`) — 3 tests
+- `arena_alloc_returns_non_null` — allocate 64 bytes, verify non-null
+- `arena_alloc_zero_size_returns_sentinel` — size 0 returns align as pointer
+- `arena_free_is_noop` — calling free does not crash (no-op by design)
+
+#### I/O print — 3 tests
+- `print_i64_writes_to_stdout` — capture stdout, verify output
+- `print_str_writes_vowvec_to_stdout` — capture stdout, verify bytes
+- `eprintln_str_writes_to_stderr` — capture stderr, verify output
+
+#### File I/O (`__vow_fs_*`) — 8 tests
+- `fs_write_read_roundtrip` — write then read, verify identical content
+- `fs_exists_positive_negative` — exists after write, not before
+- `fs_mkdir_creates_directory` — mkdir then is_dir returns 1
+- `fs_remove_deletes_file` — write, remove, exists returns 0
+- `fs_remove_dir_deletes_directory` — mkdir, remove_dir, is_dir returns 0
+- `fs_is_dir_positive_negative` — file vs directory distinction
+- `fs_rename_moves_file` — write, rename, old gone, new exists
+- `fs_listdir_returns_entries` — create files in dir, verify names
+
+#### Process (`__vow_process_*`) — 5 tests
+- `process_run_captures_stdout` — run `echo hello`, verify stdout
+- `process_run_returns_exit_code` — run failing command, verify non-zero
+- `process_start_and_wait` — start, wait, get stdout
+- `process_exit_terminates` — verify exit code (process-based test)
+- `args_returns_command_line_args` — verify args vec (process-based test)
+
+#### Utility/encoding — 5 tests
+- `parse_i64_valid_number` — "42" → 42
+- `parse_i64_invalid_returns_zero` — "abc" → 0
+- `time_unix_returns_positive` — verify > 0
+- `hex_encode_decode_roundtrip` — encode then decode, verify identical
+- `hex_decode_invalid_returns_empty` — odd-length or non-hex input
+
+#### Deallocation (`__vow_*_free`) — 4 tests
+- `string_free_does_not_crash` — alloc, free, no segfault
+- `vec_free_val_does_not_crash` — alloc, push, free, no segfault
+- `map_free_does_not_crash` — alloc, insert, free, no segfault
+- `free_null_is_safe` — free(null) for all three types, no crash
+
+**Testing approach:** These are `unsafe extern "C"` functions. Tests can call them directly with `unsafe` blocks. The vec/string/map/arena functions are pure memory operations and straightforward to test. Process-based tests (spawning a subprocess to verify exit codes) are needed for: violation handlers (`__vow_violation`, `__vow_arithmetic_overflow`, `__vow_unwrap_panic`), tracing output, print I/O capture, `__vow_process_exit`, and `__vow_args`. File I/O tests should use `std::env::temp_dir()` with unique subdirectories to avoid conflicts.
 
 ---
 
@@ -172,7 +234,7 @@ This is an FFI shim calling Cranelift. Unit testing individual shim functions is
 2. **Add `#[ignore]` annotations** with a clear message if release binary is intentionally required.
 
 ### Phase 2: vow-runtime tests (highest impact)
-Add ~25 tests covering vec, string, map, and violation handler. These are the most safety-critical untested functions — bugs here cause UB in every compiled Vow program.
+Add ~69 tests covering all 13 runtime subsystems: vec (10), string-core (9), string-utility (10), map (6), violation (3), tracing (3), arena (3), I/O print (3), file I/O (8), process (5), utility/encoding (5), deallocation (4). These are the most safety-critical untested functions — bugs here cause UB in every compiled Vow program.
 
 ### Phase 3: vow-diag tests (quick, high value)
 Add ~10 tests. Small crate, fast to test, important for error reporting correctness.
@@ -196,6 +258,6 @@ Add ~15 tests for untested expression types. Each test is small (parse a snippet
 | vow-verify | 69 | 69 | +0 |
 | vow-diag | 5 | 15 | +10 |
 | vow (CLI) | 83 | 96 | +13 |
-| vow-runtime | 0 | 25 | +25 |
+| vow-runtime | 0 | 69 | +69 |
 | vow-clif-shim | 0 | 0 | +0 |
-| **Total** | **540** | **614** | **+74** |
+| **Total** | **540** | **658** | **+118** |
