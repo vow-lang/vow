@@ -52,7 +52,7 @@ if [[ -n "$CASES" ]]; then
 fi
 
 if [[ "$MINIMIZE" == "true" ]]; then
-    export PROPTEST_CASES="${PROPTEST_CASES:-10}"
+    export PROPTEST_CASES=10
 fi
 
 echo "=== Vow Property-Based Tests ==="

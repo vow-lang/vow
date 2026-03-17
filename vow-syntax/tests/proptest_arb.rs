@@ -254,6 +254,15 @@ pub fn arb_block() -> impl Strategy<Value = Block> {
     arb_block_inner(2)
 }
 
+fn arb_fn_vow_clause() -> impl Strategy<Value = VowClause> {
+    let pred = arb_expr_inner(2);
+    (prop::sample::select(&["requires", "ensures"]), pred).prop_map(|(kind, expr)| match kind {
+        "requires" => VowClause::Requires { expr, span: z() },
+        _ => VowClause::Ensures { expr, span: z() },
+    })
+}
+
+#[allow(dead_code)]
 pub fn arb_vow_clause() -> impl Strategy<Value = VowClause> {
     let pred = arb_expr_inner(2);
     (
@@ -268,7 +277,7 @@ pub fn arb_vow_clause() -> impl Strategy<Value = VowClause> {
 }
 
 pub fn arb_vow_block() -> impl Strategy<Value = VowBlock> {
-    prop::collection::vec(arb_vow_clause(), 1..=3)
+    prop::collection::vec(arb_fn_vow_clause(), 1..=3)
         .prop_map(|clauses| VowBlock { clauses, span: z() })
 }
 
