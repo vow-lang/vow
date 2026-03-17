@@ -5,7 +5,6 @@
 #   ./scripts/proptest.sh              # Run all property tests with default case count
 #   ./scripts/proptest.sh --cases 1000 # Run with more cases (for CI or deep testing)
 #   ./scripts/proptest.sh --crate vow-syntax  # Run only vow-syntax property tests
-#   ./scripts/proptest.sh --seed 12345 # Reproduce a specific failure
 #   ./scripts/proptest.sh --minimize   # Run with minimal cases for quick smoke test
 #
 # For agentic use:
@@ -17,7 +16,6 @@ set -euo pipefail
 
 CASES="${PROPTEST_CASES:-}"
 CRATE=""
-SEED=""
 MINIMIZE=false
 
 while [[ $# -gt 0 ]]; do
@@ -30,16 +28,12 @@ while [[ $# -gt 0 ]]; do
             CRATE="$2"
             shift 2
             ;;
-        --seed)
-            SEED="$2"
-            shift 2
-            ;;
         --minimize)
             MINIMIZE=true
             shift
             ;;
         --help|-h)
-            head -14 "$0" | tail -12
+            head -13 "$0" | tail -11
             exit 0
             ;;
         *)
@@ -59,13 +53,6 @@ fi
 
 if [[ "$MINIMIZE" == "true" ]]; then
     export PROPTEST_CASES="${PROPTEST_CASES:-10}"
-fi
-
-if [[ -n "$SEED" ]]; then
-    # Proptest reads seeds from its persistence files, not env vars,
-    # but we can pass through PROPTEST_DISABLE_FAILURE_PERSISTENCE=0
-    # to ensure failures are persisted for replay.
-    export PROPTEST_DISABLE_FAILURE_PERSISTENCE=0
 fi
 
 echo "=== Vow Property-Based Tests ==="
@@ -114,7 +101,7 @@ if [[ "$FAILED" -eq 0 ]]; then
 else
     echo "=== Some property tests FAILED ===" >&2
     echo ""
-    echo "To reproduce failures, check proptest-regressions/ files in each crate."
-    echo "Run with --cases 1 --seed <seed> to replay a specific case."
+    echo "To reproduce failures, re-run the failing test — proptest auto-replays"
+    echo "from .proptest-regressions files saved in each crate."
     exit 1
 fi

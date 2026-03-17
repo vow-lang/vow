@@ -1,25 +1,3 @@
-// Property-based tests for the Vow compiler frontend.
-//
-// These tests verify key compiler invariants using randomly generated inputs:
-//
-// 1. **Parse-Print Roundtrip** (canonical form):
-//    For any AST `a`, `parse(print(a))` produces an AST structurally equal to `a`
-//    (modulo spans), and `print(parse(print(a))) == print(a)`.
-//
-// 2. **Lexer-Parser Agreement**:
-//    Any source that the lexer tokenizes successfully should either parse
-//    successfully or produce a well-formed diagnostic (no panics).
-//
-// 3. **Printer Totality**:
-//    The printer never panics on any well-formed AST.
-//
-// 4. **Idempotent Canonical Form**:
-//    `print(parse(src))` applied twice yields identical output.
-//
-// These properties are critical for the self-hosted compiler: since the
-// self-hosted compiler's source code is itself Vow, any parse-print
-// inconsistency could cause bootstrap failures.
-
 mod proptest_arb;
 
 use proptest::prelude::*;
@@ -27,10 +5,6 @@ use vow_syntax::ast::*;
 use vow_syntax::parser::parse_module;
 use vow_syntax::printer::print_module;
 use vow_syntax::span::Span;
-
-// ---------------------------------------------------------------------------
-// Span stripping (reused from integration tests)
-// ---------------------------------------------------------------------------
 
 fn z() -> Span {
     Span::new(0, 0)
@@ -323,6 +297,7 @@ fn strip_item(item: Item) -> Item {
         Item::Impl(i) => Item::Impl(i),
         Item::TypeAlias(t) => Item::TypeAlias(t),
         Item::Extern(e) => Item::Extern(e),
+        Item::Const(c) => Item::Const(c),
     }
 }
 
@@ -335,16 +310,9 @@ fn strip_module(m: Module) -> Module {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Property: parse(print(ast)) roundtrips (canonical form)
-// ---------------------------------------------------------------------------
-
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(200))]
 
-    /// For any generated module AST, printing it to source and parsing back
-    /// must produce a structurally identical AST (modulo spans), and the
-    /// printed form must be idempotent: print(parse(print(ast))) == print(ast).
     #[test]
     fn print_parse_roundtrip(module in proptest_arb::arb_module()) {
         let printed1 = print_module(&module);
@@ -379,7 +347,6 @@ proptest! {
         );
     }
 
-    /// Printing any well-formed function definition should produce parseable output.
     #[test]
     fn fn_def_roundtrip(f in proptest_arb::arb_fn_def()) {
         let module = Module {
@@ -398,7 +365,6 @@ proptest! {
         );
     }
 
-    /// Printing any well-formed struct definition should produce parseable output.
     #[test]
     fn struct_def_roundtrip(s in proptest_arb::arb_struct_def()) {
         let module = Module {
@@ -417,7 +383,6 @@ proptest! {
         );
     }
 
-    /// Printing any well-formed enum definition should produce parseable output.
     #[test]
     fn enum_def_roundtrip(e in proptest_arb::arb_enum_def()) {
         let module = Module {
@@ -437,39 +402,24 @@ proptest! {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Property: lexer robustness — random strings don't panic
-// ---------------------------------------------------------------------------
-
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(500))]
 
-    /// The lexer must not panic on arbitrary input. It should either
-    /// successfully tokenize or return a LexError.
     #[test]
     fn lexer_never_panics(input in ".*") {
         let lexer = vow_syntax::lexer::Lexer::new(&input);
-        let _ = lexer.tokenize(); // Must not panic
+        let _ = lexer.tokenize();
     }
 
-    /// The parser must not panic on arbitrary input. It should produce
-    /// diagnostics for invalid input, never crash.
     #[test]
     fn parser_never_panics(input in "module [A-Z][a-z]*\n(fn [a-z]+ *\\( *\\) *-> *i64 *\\{ *[0-9]+ *\\}\n?)*") {
         let (_, _) = parse_module(&input, "<fuzz>");
-        // Just asserting it doesn't panic
     }
 }
-
-// ---------------------------------------------------------------------------
-// Property: expressions roundtrip through print/parse within a function body
-// ---------------------------------------------------------------------------
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(300))]
 
-    /// Any generated expression, when wrapped in a minimal function and module,
-    /// should roundtrip through print→parse→print.
     #[test]
     fn expr_in_fn_roundtrip(expr in proptest_arb::arb_expr()) {
         let module = Module {

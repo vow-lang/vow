@@ -1,24 +1,12 @@
-// Arbitrary generators for Vow AST types, used by property-based tests.
-//
-// Strategy: generate well-formed AST nodes and print them to source text,
-// then verify that parse(print(ast)) round-trips correctly. This catches
-// bugs in both the printer and parser simultaneously.
-
 use proptest::prelude::*;
 use vow_syntax::ast::*;
 use vow_syntax::span::Span;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 fn z() -> Span {
     Span::new(0, 0)
 }
 
-/// Generate a valid Vow identifier (must not be a keyword, must start with a letter).
 pub fn arb_ident() -> impl Strategy<Value = String> {
-    // Use a prefix that can't collide with keywords
     prop::sample::select(&[
         "x", "y", "z", "a", "b", "c", "foo", "bar", "baz", "val", "tmp", "acc", "idx", "ptr",
         "lhs", "rhs", "cnt", "buf", "res", "ans", "item", "node", "data", "elem",
@@ -26,7 +14,6 @@ pub fn arb_ident() -> impl Strategy<Value = String> {
     .prop_map(|s| s.to_string())
 }
 
-/// Generate a valid module name (capitalized).
 pub fn arb_module_name() -> impl Strategy<Value = String> {
     prop::sample::select(&[
         "Main", "Test", "Foo", "Bar", "Module1", "MyMod", "Alpha", "Beta",
@@ -34,7 +21,6 @@ pub fn arb_module_name() -> impl Strategy<Value = String> {
     .prop_map(|s| s.to_string())
 }
 
-/// Generate a valid type name.
 pub fn arb_type_name() -> impl Strategy<Value = String> {
     prop::sample::select(&[
         "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "f32", "f64", "bool",
@@ -43,17 +29,12 @@ pub fn arb_type_name() -> impl Strategy<Value = String> {
     .prop_map(|s| s.to_string())
 }
 
-/// Generate a struct/enum name (capitalized, not a keyword).
 pub fn arb_user_type_name() -> impl Strategy<Value = String> {
     prop::sample::select(&[
         "Point", "Color", "Node", "Pair", "Entry", "State", "Config", "Result2",
     ])
     .prop_map(|s| s.to_string())
 }
-
-// ---------------------------------------------------------------------------
-// Type generators
-// ---------------------------------------------------------------------------
 
 pub fn arb_type() -> impl Strategy<Value = Type> {
     arb_type_inner(3)
@@ -85,16 +66,10 @@ fn arb_type_leaf() -> impl Strategy<Value = Type> {
     ]
 }
 
-// ---------------------------------------------------------------------------
-// Expression generators
-// ---------------------------------------------------------------------------
-
 pub fn arb_lit() -> impl Strategy<Value = Lit> {
     prop_oneof![
-        // Keep int range small to avoid printing issues
         (0i128..1000).prop_map(Lit::Int),
         prop::bool::ANY.prop_map(Lit::Bool),
-        // Simple strings without escapes
         prop::sample::select(&["hello", "world", "test", ""])
             .prop_map(|s| Lit::String(s.to_string())),
     ]
@@ -119,8 +94,6 @@ fn arb_expr_inner(depth: u32) -> impl Strategy<Value = Expr> {
     .boxed()
 }
 
-/// Expression strategy that includes control flow (if-expressions).
-/// Only use this where a standalone expression is expected (e.g. trailing_expr).
 fn arb_expr_or_if(depth: u32) -> impl Strategy<Value = Expr> {
     if depth == 0 {
         return arb_expr_leaf().boxed();
@@ -165,6 +138,7 @@ fn arb_binop() -> impl Strategy<Value = BinOp> {
         BinOp::Ge,
         BinOp::And,
         BinOp::Or,
+        BinOp::BitXor,
     ])
 }
 
@@ -235,10 +209,6 @@ fn arb_call_expr(depth: u32) -> impl Strategy<Value = Expr> {
         })
 }
 
-// ---------------------------------------------------------------------------
-// Statement / Block generators
-// ---------------------------------------------------------------------------
-
 fn arb_stmt(depth: u32) -> impl Strategy<Value = Stmt> {
     prop_oneof![
         // let binding
@@ -284,12 +254,7 @@ pub fn arb_block() -> impl Strategy<Value = Block> {
     arb_block_inner(2)
 }
 
-// ---------------------------------------------------------------------------
-// Vow clause generators
-// ---------------------------------------------------------------------------
-
 pub fn arb_vow_clause() -> impl Strategy<Value = VowClause> {
-    // Vow predicates should be boolean expressions
     let pred = arb_expr_inner(2);
     (
         prop::sample::select(&["requires", "ensures", "invariant"]),
@@ -306,10 +271,6 @@ pub fn arb_vow_block() -> impl Strategy<Value = VowBlock> {
     prop::collection::vec(arb_vow_clause(), 1..=3)
         .prop_map(|clauses| VowBlock { clauses, span: z() })
 }
-
-// ---------------------------------------------------------------------------
-// Effect generators
-// ---------------------------------------------------------------------------
 
 pub fn arb_effects() -> impl Strategy<Value = Vec<Effect>> {
     prop::collection::vec(
@@ -329,10 +290,6 @@ pub fn arb_effects() -> impl Strategy<Value = Vec<Effect>> {
     })
 }
 
-// ---------------------------------------------------------------------------
-// Param generator
-// ---------------------------------------------------------------------------
-
 pub fn arb_param() -> impl Strategy<Value = Param> {
     (arb_ident(), arb_type()).prop_map(|(name, ty)| Param {
         name,
@@ -341,10 +298,6 @@ pub fn arb_param() -> impl Strategy<Value = Param> {
         span: z(),
     })
 }
-
-// ---------------------------------------------------------------------------
-// Function definition generator
-// ---------------------------------------------------------------------------
 
 pub fn arb_fn_def() -> impl Strategy<Value = FnDef> {
     (
@@ -367,10 +320,6 @@ pub fn arb_fn_def() -> impl Strategy<Value = FnDef> {
             is_declaration: false,
         })
 }
-
-// ---------------------------------------------------------------------------
-// Struct definition generator
-// ---------------------------------------------------------------------------
 
 pub fn arb_field_def() -> impl Strategy<Value = FieldDef> {
     (arb_ident(), arb_type()).prop_map(|(name, ty)| FieldDef {
@@ -395,16 +344,11 @@ pub fn arb_struct_def() -> impl Strategy<Value = StructDef> {
         })
 }
 
-// ---------------------------------------------------------------------------
-// Enum definition generator
-// ---------------------------------------------------------------------------
-
 pub fn arb_enum_def() -> impl Strategy<Value = EnumDef> {
     (
         arb_user_type_name(),
         prop::collection::vec(
             arb_ident().prop_map(|name| {
-                // Capitalize the variant name
                 let capped = {
                     let mut c = name.chars();
                     match c.next() {
@@ -429,10 +373,6 @@ pub fn arb_enum_def() -> impl Strategy<Value = EnumDef> {
         })
 }
 
-// ---------------------------------------------------------------------------
-// Item generator
-// ---------------------------------------------------------------------------
-
 pub fn arb_item() -> impl Strategy<Value = Item> {
     prop_oneof![
         6 => arb_fn_def().prop_map(Item::Fn),
@@ -440,10 +380,6 @@ pub fn arb_item() -> impl Strategy<Value = Item> {
         2 => arb_enum_def().prop_map(Item::Enum),
     ]
 }
-
-// ---------------------------------------------------------------------------
-// Module generator
-// ---------------------------------------------------------------------------
 
 pub fn arb_module() -> impl Strategy<Value = Module> {
     (arb_module_name(), prop::collection::vec(arb_item(), 1..=4)).prop_map(|(name, items)| Module {

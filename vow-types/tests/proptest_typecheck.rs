@@ -1,21 +1,9 @@
-// Property-based tests for the Vow type checker.
-//
-// These tests verify that:
-// 1. The type checker never panics on syntactically valid programs.
-// 2. Well-typed programs remain well-typed after roundtripping through print/parse.
-// 3. Type errors are deterministic — the same input always produces the same errors.
-
 use proptest::prelude::*;
 use vow_diag::{Diagnostic, DiagnosticEmitter};
 use vow_syntax::parser::parse_module;
 use vow_syntax::printer::print_module;
 use vow_types::check::Checker;
 
-// ---------------------------------------------------------------------------
-// Test infrastructure
-// ---------------------------------------------------------------------------
-
-/// Collects diagnostics into a Vec for inspection.
 struct CollectingEmitter {
     diagnostics: Vec<Diagnostic>,
 }
@@ -35,7 +23,6 @@ impl DiagnosticEmitter for CollectingEmitter {
     fn finish(&mut self) {}
 }
 
-/// Type-check a source string and return the diagnostics.
 fn typecheck_source(src: &str) -> Vec<Diagnostic> {
     let (module, parse_diags) = parse_module(src, "<proptest>");
     if !parse_diags.is_empty() {
@@ -49,13 +36,7 @@ fn typecheck_source(src: &str) -> Vec<Diagnostic> {
     emitter.diagnostics
 }
 
-// ---------------------------------------------------------------------------
-// Well-typed program generators
-// ---------------------------------------------------------------------------
-
-/// Generate a simple well-typed Vow program.
 fn arb_welltyped_program() -> impl Strategy<Value = String> {
-    // Generate programs with varying structure but known-good typing
     let arb_int_body = (0i64..1000).prop_map(|n| format!("{}", n));
     let arb_arith = (0i64..100, 1i64..100, prop::sample::select(&["+", "-", "*"]))
         .prop_map(|(a, b, op)| format!("{} {} {}", a, op, b));
@@ -76,7 +57,6 @@ fn arb_welltyped_program() -> impl Strategy<Value = String> {
         "eval",
     ]);
 
-    // Generate a function with i64 params and i64 return
     let arb_param_count = 0usize..=3;
     let param_names = ["a", "b", "c", "d"];
 
@@ -93,13 +73,11 @@ fn arb_welltyped_program() -> impl Strategy<Value = String> {
             let params_str = params.join(", ");
 
             let vow_block = if has_vow && param_count > 0 {
-                // Simple requires clause using the first param
                 format!(" vow {{\n    requires: {} > 0\n}}", param_names[0])
             } else {
                 String::new()
             };
 
-            // Build a small body with a let binding and the return expression
             let let_binding = if param_count > 0 {
                 format!("    let tmp: i64 = {};\n", param_names[0])
             } else {
@@ -113,7 +91,6 @@ fn arb_welltyped_program() -> impl Strategy<Value = String> {
         })
 }
 
-/// Generate a program with a struct definition and a function that uses it.
 fn arb_struct_program() -> impl Strategy<Value = String> {
     let field_count = 1usize..=3;
     let field_names = ["x", "y", "z"];
@@ -134,7 +111,6 @@ fn arb_struct_program() -> impl Strategy<Value = String> {
     })
 }
 
-/// Generate a program with if-else control flow.
 fn arb_if_program() -> impl Strategy<Value = String> {
     (0i64..100, 0i64..100, 0i64..100).prop_map(|(threshold, then_val, else_val)| {
         format!(
@@ -144,7 +120,6 @@ fn arb_if_program() -> impl Strategy<Value = String> {
     })
 }
 
-/// Generate a program with a while loop and optional invariant.
 fn arb_loop_program() -> impl Strategy<Value = String> {
     (1i64..20, prop::bool::ANY).prop_map(|(limit, has_invariant)| {
         let inv = if has_invariant {
@@ -159,35 +134,24 @@ fn arb_loop_program() -> impl Strategy<Value = String> {
     })
 }
 
-// ---------------------------------------------------------------------------
-// Properties
-// ---------------------------------------------------------------------------
-
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(200))]
 
-    /// The type checker must never panic on any syntactically valid program.
-    /// It may produce type errors, but must not crash.
     #[test]
     fn typecheck_never_panics(src in arb_welltyped_program()) {
         let _ = typecheck_source(&src);
-        // Just asserting it doesn't panic
     }
 
-    /// Well-typed programs should remain well-typed after print→parse roundtrip.
-    /// This verifies that the printer preserves semantic meaning.
     #[test]
     fn welltyped_roundtrip_preserves_typing(src in arb_welltyped_program()) {
         let diags1 = typecheck_source(&src);
 
-        // Parse and reprint
         let (module, parse_diags) = parse_module(&src, "<test>");
         prop_assume!(parse_diags.is_empty());
 
         let reprinted = print_module(&module);
         let diags2 = typecheck_source(&reprinted);
 
-        // Same number of errors (type-checking is deterministic on equivalent input)
         prop_assert_eq!(
             diags1.len(),
             diags2.len(),
@@ -197,7 +161,6 @@ proptest! {
         );
     }
 
-    /// Type checking is deterministic: the same source always produces the same diagnostics.
     #[test]
     fn typecheck_deterministic(src in arb_welltyped_program()) {
         let diags1 = typecheck_source(&src);
@@ -219,33 +182,25 @@ proptest! {
         }
     }
 
-    /// Struct programs should type-check without panics.
     #[test]
     fn struct_program_typechecks(src in arb_struct_program()) {
         let _ = typecheck_source(&src);
     }
 
-    /// If-else programs should type-check without panics.
     #[test]
     fn if_program_typechecks(src in arb_if_program()) {
         let _ = typecheck_source(&src);
     }
 
-    /// Loop programs should type-check without panics.
     #[test]
     fn loop_program_typechecks(src in arb_loop_program()) {
         let _ = typecheck_source(&src);
     }
 }
 
-// ---------------------------------------------------------------------------
-// Property: error messages are informative
-// ---------------------------------------------------------------------------
-
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(100))]
 
-    /// Type errors should always have non-empty messages.
     #[test]
     fn type_errors_have_messages(src in arb_welltyped_program()) {
         let diags = typecheck_source(&src);
