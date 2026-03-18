@@ -6,3 +6,6 @@ edition = "2024"
 [dependencies]
 vow-syntax = { path = "../vow-syntax" }
 vow-diag = { path = "../vow-diag" }
+
+[dev-dependencies]
+proptest = "1"
