@@ -157,10 +157,12 @@ fn skill_json() -> String {
     "--no-verify": "Skip ESBMC static verification",
     "--dump-ir": "Dump IR text to stdout and exit (skip codegen/verify)",
     "--debug-trace <off|calls|full>": "Emit JSON trace lines to stderr at runtime (default: off)",
-    "--no-cache": "Disable compile and verify caching"
+    "--no-cache": "Disable compile and verify caching",
+    "--unwind <N>": "ESBMC loop unwind bound (default: 10)"
   },
   "verify_options": {
-    "--no-cache": "Disable verification result caching"
+    "--no-cache": "Disable verification result caching",
+    "--unwind <N>": "ESBMC loop unwind bound (default: 10)"
   },
   "global_options": {
     "--help": "Print this JSON capability description",
@@ -180,25 +182,74 @@ fn skill_json() -> String {
   },
   "language": {
     "module": "module <Name>",
+    "use_declaration": "use foo.bar",
     "function": "fn <name>(<params>) -> <RetTy> [<effects>] { <body> }",
+    "public_function": "pub fn <name>(<params>) -> <RetTy> [<effects>] { <body> }",
     "vow_function": "fn <name>(<params>) -> <RetTy> vow { requires: <expr>; ensures: <expr> } { <body> }",
     "while_with_invariant": "while <cond> vow { invariant: <expr> } { <body> }",
-    "types": ["i32", "i64", "f32", "f64", "bool", "()"],
+    "types": ["i32", "i64", "f32", "f64", "bool", "()", "String", "Vec<T>", "Option<T>", "Result<T, E>", "HashMap<K, V>"],
     "effects": ["io", "read", "write", "panic", "unsafe"],
     "builtins": {
-      "print_str": "fn(s: str) -> () [io]",
-      "print_i64": "fn(v: i64) -> () [io]"
+      "print_str": "fn(s: String) -> () [io]",
+      "print_i64": "fn(v: i64) -> () [io]",
+      "eprintln_str": "fn(s: String) -> () [io]",
+      "fs_read": "fn(path: String) -> String [read]",
+      "fs_write": "fn(path: String, data: String) -> () [write]",
+      "args": "fn() -> Vec<String> [read]",
+      "process_exit": "fn(code: i64) -> () [io]"
     },
     "operators": {
       "arithmetic": ["+", "-", "*", "/", "%"],
       "checked_arithmetic": ["+!", "-!", "*!", "/!", "%!"],
       "comparison": ["==", "!=", "<", "<=", ">", ">="],
-      "logical": ["&&", "||", "!"]
+      "logical": ["&&", "||", "!"],
+      "unary": ["-", "!", "&", "?"]
     },
     "vow_clauses": {
       "requires": "precondition — blame=Caller on violation",
       "ensures": "postcondition — blame=Callee on violation; use `result` for return value",
       "invariant": "loop invariant — checked at top of each iteration"
+    },
+    "where_clauses": "fn f(x: i64 where x >= 0) -> i64 — refinement types on parameters",
+    "structs": {
+      "definition": "struct Name { field: Type, ... }",
+      "linear": "linear struct Name { field: Type, ... } — must be consumed exactly once",
+      "literal": "Name { field: value, ... }",
+      "field_access": "value.field"
+    },
+    "enums": {
+      "definition": "enum Name { Variant1(T), Variant2, Variant3 { field: T } }",
+      "construction": "Name::Variant(value)",
+      "builtin_option": "Option<T> — variants: Some(T), None",
+      "builtin_result": "Result<T, E> — variants: Ok(T), Err(E)"
+    },
+    "match_expression": {
+      "syntax": "match value { Pattern => expr, ... }",
+      "patterns": ["wildcard (_)", "identifier (x)", "mutable (mut x)", "literal (0, true, \"hi\")", "tuple ((a, b))", "enum variant (Option::Some(x))", "struct (Point { x, y })", "or (0 | 1 | 2)"]
+    },
+    "control_flow": {
+      "if_else": "if cond { expr } else { expr } — expression, both branches same type",
+      "while": "while cond { body }",
+      "loop": "loop { ... break value; } — infinite loop, break to exit",
+      "break": "break; or break value;",
+      "return": "return; or return value;"
+    },
+    "modules": {
+      "declaration": "module Name",
+      "import": "use foo.bar — resolves to <rootdir>/foo/bar.vow",
+      "visibility": "pub fn — public functions visible to importers"
+    },
+    "type_aliases": "type Name = Type",
+    "extern_blocks": "extern { fn c_function(x: i64) -> i64 [unsafe] }",
+    "methods": {
+      "Vec<T>": ["Vec::new()", ".push(val)", ".pop()", ".len()", "v[i]", "v[i] = val"],
+      "String": ["String::from(lit)", ".len()", ".byte_at(i)", ".push_byte(b)", ".push_str(s)", ".contains(s)", ".eq(s)"],
+      "HashMap<K,V>": ["HashMap::new()", ".insert(k, v)", ".get(k)", ".contains_key(k)", ".remove(k)", ".len()"],
+      "Option<T>": [".unwrap() [panic]", "? operator"]
+    },
+    "indexing": {
+      "read": "v[i] — Vec index access",
+      "write": "v[i] = val — Vec index assignment"
     }
   }
 }"#
@@ -224,9 +275,11 @@ BUILD OPTIONS
   --dump-ir             Dump IR text to stdout and exit
   --debug-trace <off|calls|full>  Emit JSON trace to stderr (default: off)
   --no-cache            Disable compile and verify caching
+  --unwind <N>          ESBMC loop unwind bound (default: 10)
 
 VERIFY OPTIONS
   --no-cache            Disable verification result caching
+  --unwind <N>          ESBMC loop unwind bound (default: 10)
 
 GLOBAL OPTIONS
   --help                Print JSON capability description (agent-friendly)
@@ -246,6 +299,9 @@ EXIT CODES
 
 LANGUAGE SUMMARY
   module Hello
+  use math.utils
+
+  struct Point {{ x: i64, y: i64 }}
 
   fn add(x: i64, y: i64) -> i64 {{
     x + y
@@ -259,14 +315,20 @@ LANGUAGE SUMMARY
   }}
 
   fn main() -> i32 [io] {{
-    print_i64(divide(10, 2));
+    let v: Vec<i64> = Vec::new();
+    v.push(divide(10, 2));
+    print_i64(v[0]);
     0
   }}
 
-TYPES     : i32  i64  f32  f64  bool  ()
+TYPES     : i32  i64  f32  f64  bool  ()  String  Vec<T>  Option<T>  Result<T,E>  HashMap<K,V>
 EFFECTS   : io  read  write  panic  unsafe
-BUILTINS  : print_str(str) [io]   print_i64(i64) [io]
-OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !"
+BUILTINS  : print_str(String) [io]   print_i64(i64) [io]   eprintln_str(String) [io]
+            fs_read(String) [read]   fs_write(String,String) [write]
+            args() [read]   process_exit(i64) [io]
+METHODS   : Vec: new/push/pop/len/v[i]   String: from/len/byte_at/push_str/contains
+            HashMap: new/insert/get/contains_key/remove/len   Option: unwrap/?
+OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & ?"
         .to_string()
 }
 
@@ -1959,6 +2021,37 @@ fn main() -> i32 [io] {
         );
         assert!(json.contains("print_i64"), "missing print_i64 builtin");
         assert!(json.contains("print_str"), "missing print_str builtin");
+
+        // Must describe types added in Phases 7-8
+        assert!(json.contains("String"), "missing String type");
+        assert!(json.contains("Vec<T>"), "missing Vec<T> type");
+        assert!(json.contains("Option<T>"), "missing Option<T> type");
+        assert!(json.contains("Result<T, E>"), "missing Result<T, E> type");
+        assert!(json.contains("HashMap<K, V>"), "missing HashMap<K, V> type");
+
+        // Must describe builtins added in Phase 8
+        assert!(json.contains("fs_read"), "missing fs_read builtin");
+        assert!(json.contains("fs_write"), "missing fs_write builtin");
+        assert!(json.contains("args"), "missing args builtin");
+        assert!(json.contains("eprintln_str"), "missing eprintln_str builtin");
+        assert!(json.contains("process_exit"), "missing process_exit builtin");
+
+        // Must describe structural language features
+        assert!(json.contains("\"structs\""), "missing structs section");
+        assert!(json.contains("\"enums\""), "missing enums section");
+        assert!(json.contains("\"methods\""), "missing methods section");
+        assert!(
+            json.contains("\"match_expression\""),
+            "missing match_expression section"
+        );
+        assert!(
+            json.contains("\"where_clauses\""),
+            "missing where_clauses section"
+        );
+        assert!(
+            json.contains("\"modules\""),
+            "missing modules section"
+        );
 
         // Now verify that a program an LLM would write from this description compiles and runs.
         // The LLM reads: function with requires/ensures, print_i64 builtin, [io] effect.
