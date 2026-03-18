@@ -647,6 +647,9 @@ pub fn print_expr(expr: &Expr) -> String {
         ExprKind::Block(b) => print_block(b, 0),
         ExprKind::Borrow { expr } => format!("&{}", print_expr(expr)),
         ExprKind::Question { expr } => format!("{}?", print_expr(expr)),
+        ExprKind::Cast { expr, target_ty } => {
+            format!("{} as {}", print_expr(expr), print_type(target_ty))
+        }
         ExprKind::Assign { lhs, rhs } => {
             format!("{} = {}", print_expr(lhs), print_expr(rhs))
         }

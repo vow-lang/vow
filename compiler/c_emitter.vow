@@ -160,6 +160,10 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
                    || op == IOP_GE_I32() || op == IOP_GE_I64() || op == IOP_GE_F32() || op == IOP_GE_F64()
                    || op == IOP_NOT() || op == IOP_AND() || op == IOP_OR()
                    || op == IOP_XOR_I32() || op == IOP_XOR_I64()
+                   || op == IOP_WADD_U64() || op == IOP_WSUB_U64() || op == IOP_WMUL_U64() || op == IOP_WDIV_U64() || op == IOP_WREM_U64()
+                   || op == IOP_CADD_U64() || op == IOP_CSUB_U64() || op == IOP_CMUL_U64() || op == IOP_CDIV_U64() || op == IOP_CREM_U64()
+                   || op == IOP_EQ_U64() || op == IOP_NE_U64() || op == IOP_LT_U64() || op == IOP_LE_U64() || op == IOP_GT_U64() || op == IOP_GE_U64()
+                   || op == IOP_XOR_U64() || op == IOP_CONST_U64() || op == IOP_CAST_I64_TO_U64() || op == IOP_CAST_U64_TO_I64()
                    || op == IOP_VOW_REQ() || op == IOP_VOW_ENS() || op == IOP_VOW_INV()
                    || op == IOP_BRANCH() || op == IOP_JUMP() || op == IOP_RETURN() || op == IOP_UNREACHABLE()
                    || op == IOP_PHI() || op == IOP_UPSILON() {
@@ -276,6 +280,7 @@ fn ir_ty_to_c(ty: i64) -> String {
     if ty == ITY_UNIT() { return String::from("int32_t"); }
     if ty == ITY_PTR() { return String::from("void*"); }
     if ty == ITY_LPTR() { return String::from("void*"); }
+    if ty == ITY_U64() { return String::from("uint64_t"); }
     String::from("int64_t")
 }
 
@@ -287,6 +292,7 @@ fn c_nondet_suffix(ty: i64) -> String {
     if ty == ITY_BOOL() { return String::from("bool"); }
     if ty == ITY_PTR() { return String::from("long"); }
     if ty == ITY_LPTR() { return String::from("long"); }
+    if ty == ITY_U64() { return String::from("unsigned_long"); }
     String::from("int")
 }
 
@@ -316,7 +322,7 @@ fn detect_const_fns(m: IrModule) -> Vec<i64> {
                     let ri_args: Vec<i64> = ri.args;
                     if ri_args.len() > 0 {
                         if ri_args[0] == ci.id {
-                            if ci.op == IOP_CONST_I32() || ci.op == IOP_CONST_I64() || ci.op == IOP_CONST_BOOL() {
+                            if ci.op == IOP_CONST_I32() || ci.op == IOP_CONST_I64() || ci.op == IOP_CONST_U64() || ci.op == IOP_CONST_BOOL() {
                                 result.push(fi);
                             }
                         }
@@ -342,6 +348,9 @@ fn const_fn_value_str(m: IrModule, fi: i64) -> String {
         if inst.op == IOP_CONST_I64() {
             return str2(i64_to_str(inst.dv), String::from("LL"));
         }
+        if inst.op == IOP_CONST_U64() {
+            return str2(i64_to_str(inst.dv), String::from("ULL"));
+        }
         if inst.op == IOP_CONST_BOOL() {
             if inst.dv != 0 { return String::from("1"); }
             return String::from("0");
@@ -360,6 +369,7 @@ fn const_fn_type_str(m: IrModule, fi: i64) -> String {
         let inst: IrInst = insts[ii];
         if inst.op == IOP_CONST_I32() { return String::from("int32_t"); }
         if inst.op == IOP_CONST_I64() { return String::from("int64_t"); }
+        if inst.op == IOP_CONST_U64() { return String::from("uint64_t"); }
         if inst.op == IOP_CONST_BOOL() { return String::from("_Bool"); }
         ii = ii + 1;
     }
@@ -517,6 +527,11 @@ fn emit_inst(out: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64
         out.push_str(str3(String::from("  v"), i64_to_str(id), String::from(" = 0;\n")));
         return;
     }
+    if op == IOP_CONST_U64() {
+        out.push_str(str3(String::from("  v"), i64_to_str(id),
+            str3(String::from(" = "), i64_to_str(inst.dv), String::from("ULL;\n"))));
+        return;
+    }
     if op == IOP_CONST_STR() {
         out.push_str(str3(String::from("  v"), i64_to_str(id), String::from(" = 0; /* string not modelled */\n")));
         return;
@@ -524,23 +539,23 @@ fn emit_inst(out: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64
 
     if op == IOP_GET_ARG() { return; }
 
-    if op == IOP_WADD_I32() || op == IOP_WADD_I64() || op == IOP_CADD_I32() || op == IOP_CADD_I64() {
+    if op == IOP_WADD_I32() || op == IOP_WADD_I64() || op == IOP_CADD_I32() || op == IOP_CADD_I64() || op == IOP_WADD_U64() || op == IOP_CADD_U64() {
         emit_binop(out, ty, id, iargs[0], iargs[1], String::from("+"));
         return;
     }
-    if op == IOP_WSUB_I32() || op == IOP_WSUB_I64() || op == IOP_CSUB_I32() || op == IOP_CSUB_I64() {
+    if op == IOP_WSUB_I32() || op == IOP_WSUB_I64() || op == IOP_CSUB_I32() || op == IOP_CSUB_I64() || op == IOP_WSUB_U64() || op == IOP_CSUB_U64() {
         emit_binop(out, ty, id, iargs[0], iargs[1], String::from("-"));
         return;
     }
-    if op == IOP_WMUL_I32() || op == IOP_WMUL_I64() || op == IOP_CMUL_I32() || op == IOP_CMUL_I64() {
+    if op == IOP_WMUL_I32() || op == IOP_WMUL_I64() || op == IOP_CMUL_I32() || op == IOP_CMUL_I64() || op == IOP_WMUL_U64() || op == IOP_CMUL_U64() {
         emit_binop(out, ty, id, iargs[0], iargs[1], String::from("*"));
         return;
     }
-    if op == IOP_WDIV_I32() || op == IOP_WDIV_I64() || op == IOP_CDIV_I32() || op == IOP_CDIV_I64() {
+    if op == IOP_WDIV_I32() || op == IOP_WDIV_I64() || op == IOP_CDIV_I32() || op == IOP_CDIV_I64() || op == IOP_WDIV_U64() || op == IOP_CDIV_U64() {
         emit_binop(out, ty, id, iargs[0], iargs[1], String::from("/"));
         return;
     }
-    if op == IOP_WREM_I32() || op == IOP_WREM_I64() || op == IOP_CREM_I32() || op == IOP_CREM_I64() {
+    if op == IOP_WREM_I32() || op == IOP_WREM_I64() || op == IOP_CREM_I32() || op == IOP_CREM_I64() || op == IOP_WREM_U64() || op == IOP_CREM_U64() {
         emit_binop(out, ty, id, iargs[0], iargs[1], String::from("%"));
         return;
     }
@@ -566,27 +581,27 @@ fn emit_inst(out: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64
         return;
     }
 
-    if op == IOP_EQ_I32() || op == IOP_EQ_I64() || op == IOP_EQ_F32() || op == IOP_EQ_F64() {
+    if op == IOP_EQ_I32() || op == IOP_EQ_I64() || op == IOP_EQ_F32() || op == IOP_EQ_F64() || op == IOP_EQ_U64() {
         emit_cmp(out, id, iargs[0], iargs[1], String::from("=="));
         return;
     }
-    if op == IOP_NE_I32() || op == IOP_NE_I64() || op == IOP_NE_F32() || op == IOP_NE_F64() {
+    if op == IOP_NE_I32() || op == IOP_NE_I64() || op == IOP_NE_F32() || op == IOP_NE_F64() || op == IOP_NE_U64() {
         emit_cmp(out, id, iargs[0], iargs[1], String::from("!="));
         return;
     }
-    if op == IOP_LT_I32() || op == IOP_LT_I64() || op == IOP_LT_F32() || op == IOP_LT_F64() {
+    if op == IOP_LT_I32() || op == IOP_LT_I64() || op == IOP_LT_F32() || op == IOP_LT_F64() || op == IOP_LT_U64() {
         emit_cmp(out, id, iargs[0], iargs[1], String::from("<"));
         return;
     }
-    if op == IOP_LE_I32() || op == IOP_LE_I64() || op == IOP_LE_F32() || op == IOP_LE_F64() {
+    if op == IOP_LE_I32() || op == IOP_LE_I64() || op == IOP_LE_F32() || op == IOP_LE_F64() || op == IOP_LE_U64() {
         emit_cmp(out, id, iargs[0], iargs[1], String::from("<="));
         return;
     }
-    if op == IOP_GT_I32() || op == IOP_GT_I64() || op == IOP_GT_F32() || op == IOP_GT_F64() {
+    if op == IOP_GT_I32() || op == IOP_GT_I64() || op == IOP_GT_F32() || op == IOP_GT_F64() || op == IOP_GT_U64() {
         emit_cmp(out, id, iargs[0], iargs[1], String::from(">"));
         return;
     }
-    if op == IOP_GE_I32() || op == IOP_GE_I64() || op == IOP_GE_F32() || op == IOP_GE_F64() {
+    if op == IOP_GE_I32() || op == IOP_GE_I64() || op == IOP_GE_F32() || op == IOP_GE_F64() || op == IOP_GE_U64() {
         emit_cmp(out, id, iargs[0], iargs[1], String::from(">="));
         return;
     }
@@ -604,8 +619,19 @@ fn emit_inst(out: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64
         emit_cmp(out, id, iargs[0], iargs[1], String::from("||"));
         return;
     }
-    if op == IOP_XOR_I32() || op == IOP_XOR_I64() {
+    if op == IOP_XOR_I32() || op == IOP_XOR_I64() || op == IOP_XOR_U64() {
         emit_cmp(out, id, iargs[0], iargs[1], String::from("^"));
+        return;
+    }
+
+    if op == IOP_CAST_I64_TO_U64() {
+        out.push_str(str4(String::from("  v"), i64_to_str(id), String::from(" = (uint64_t)v"),
+            str2(i64_to_str(iargs[0]), String::from(";\n"))));
+        return;
+    }
+    if op == IOP_CAST_U64_TO_I64() {
+        out.push_str(str4(String::from("  v"), i64_to_str(id), String::from(" = (int64_t)v"),
+            str2(i64_to_str(iargs[0]), String::from(";\n"))));
         return;
     }
 

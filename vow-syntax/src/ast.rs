@@ -305,6 +305,10 @@ pub enum ExprKind {
     Question {
         expr: Box<Expr>,
     },
+    Cast {
+        expr: Box<Expr>,
+        target_ty: Box<Type>,
+    },
     Assign {
         lhs: Box<Expr>,
         rhs: Box<Expr>,

@@ -265,3 +265,22 @@ A counterexample in the JSON output:
 | `source`    | Byte offset in the source file of the violated clause  |
 
 Variable names prefixed with `_esbmc_` are ESBMC internal variables; named inputs map directly to function parameters.
+
+## Unsigned Integer Contracts
+
+The `u64` type works naturally in contracts. Use `as u64` to cast literal values in contract expressions:
+
+```vow
+fn safe_add(a: u64, b: u64) -> u64
+vow {
+    requires: a <= 1000 as u64
+    requires: b <= 1000 as u64
+    ensures: result >= a
+    ensures: result >= b
+}
+{
+    a + b
+}
+```
+
+ESBMC verifies `u64` contracts using `uint64_t` and unsigned nondet values.

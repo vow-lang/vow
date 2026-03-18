@@ -576,7 +576,16 @@ impl<'e> Checker<'e> {
                 let operand_ty = self.check_expr(operand);
                 match op {
                     UnOp::Neg => {
-                        if !operand_ty.is_numeric() && operand_ty != Ty::Never {
+                        if operand_ty.is_unsigned() {
+                            self.emit_error(
+                                ErrorCode::TypeMismatch,
+                                format!(
+                                    "unary negation is not allowed on unsigned type `{operand_ty}`"
+                                ),
+                                operand.span,
+                            );
+                            Ty::Unit
+                        } else if !operand_ty.is_numeric() && operand_ty != Ty::Never {
                             self.emit_error(
                                 ErrorCode::TypeMismatch,
                                 format!(
@@ -1024,6 +1033,31 @@ impl<'e> Checker<'e> {
                         Ty::Struct(name.clone())
                     }
                 }
+            }
+            ExprKind::Cast { expr, target_ty } => {
+                let src_ty = self.check_expr(expr);
+                let tgt_ty = match target_ty.as_ref() {
+                    vow_syntax::ast::Type::Named { name, .. } => {
+                        Ty::from_primitive_name(name).unwrap_or(Ty::Unit)
+                    }
+                    _ => Ty::Unit,
+                };
+                let valid = matches!(
+                    (&src_ty, &tgt_ty),
+                    (Ty::I64, Ty::U64)
+                        | (Ty::U64, Ty::I64)
+                        | (Ty::I32, Ty::U64)
+                        | (Ty::I32, Ty::I64)
+                );
+                if !valid && src_ty != Ty::Never {
+                    self.emit_error_with_hints(
+                        ErrorCode::TypeMismatch,
+                        format!("cannot cast `{src_ty}` to `{tgt_ty}`"),
+                        expr.span,
+                        vec!["only i64 <-> u64 casts are allowed".to_string()],
+                    );
+                }
+                tgt_ty
             }
             ExprKind::EnumConstruct { path, fields } => {
                 let enum_name = path.first().map(|s| s.as_str()).unwrap_or("");

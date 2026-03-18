@@ -31,6 +31,7 @@ const TAG_I64: u8 = 1;
 const TAG_F32: u8 = 2;
 const TAG_F64: u8 = 3;
 const TAG_BOOL: u8 = 4;
+const TAG_U64: u8 = 5;
 
 #[repr(C)]
 pub struct VowBinding {
@@ -47,6 +48,7 @@ fn fmt_payload(tag: u8, payload: u64) -> String {
         TAG_F32 => format!("{}", f32::from_bits(payload as u32)),
         TAG_F64 => format!("{}", f64::from_bits(payload)),
         TAG_BOOL => if payload != 0 { "true" } else { "false" }.to_string(),
+        TAG_U64 => format!("{payload}"),
         _ => format!("0x{payload:x}"),
     }
 }
@@ -116,6 +118,12 @@ pub unsafe extern "C" fn __vow_print_str(s: *const u8) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_print_i64(v: i64) {
+    print!("{v}");
+    let _ = std::io::stdout().flush();
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_print_u64(v: u64) {
     print!("{v}");
     let _ = std::io::stdout().flush();
 }

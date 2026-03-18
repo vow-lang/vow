@@ -442,6 +442,9 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         if op == UNOP_NOT() {
             return CTY_BOOL();
         }
+        if op == UNOP_NEG() && ty_is_unsigned(e.ts, operand_tid) {
+            env_emit_error(e, String::from("unary negation is not allowed on unsigned type"), expr_span(a, eid));
+        }
         return operand_tid;
     }
 
@@ -728,6 +731,23 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         return e.cur_ret_tid;
     }
 
+    if tag == EXPR_CAST() {
+        let inner_eid: i64 = expr_a(a, eid);
+        let target_ast_tid: i64 = expr_b(a, eid);
+        let src_tid: i64 = check_expr(e, m, inner_eid);
+        let tgt_tid: i64 = resolve_ast_ty(e, m, target_ast_tid);
+        let src_tag: i64 = ty_tag(e.ts, src_tid);
+        let tgt_tag: i64 = ty_tag(e.ts, tgt_tid);
+        let valid: bool = (src_tag == CTY_I64() && tgt_tag == CTY_U64())
+            || (src_tag == CTY_U64() && tgt_tag == CTY_I64())
+            || (src_tag == CTY_I32() && tgt_tag == CTY_U64())
+            || (src_tag == CTY_I32() && tgt_tag == CTY_I64());
+        if !valid && !is_opaque(src_tid) {
+            env_emit_error(e, String::from("invalid cast"), expr_span(a, eid));
+        }
+        return tgt_tid;
+    }
+
     if tag == EXPR_TUPLE() {
         let elems_lid: i64 = expr_a(a, eid);
         let n: i64 = list_len(a, elems_lid);
@@ -870,6 +890,11 @@ fn collect_calls_in_expr(e: CheckEnv, m: Module, eid: i64, calls: Vec<String>) [
             collect_calls_in_expr(e, m, list_get(a, args_lid, i), calls);
             i = i + 1;
         }
+        return;
+    }
+
+    if tag == EXPR_CAST() {
+        collect_calls_in_expr(e, m, expr_a(a, eid), calls);
         return;
     }
 

@@ -597,6 +597,10 @@ fn parse_postfix(p: Parser) -> i64 {
         } else if at(p, tok_question()) {
             let _q: Token = advance(p);
             e = arena_add_expr(p.arena, EXPR_QUESTION(), e, 0, 0, 0);
+        } else if at(p, tok_kw_as()) {
+            let _as: Token = advance(p);
+            let target_tid: i64 = parse_type(p);
+            e = arena_add_expr(p.arena, EXPR_CAST(), e, target_tid, 0, 0);
         } else if at(p, tok_eq()) {
             let _eq: Token = advance(p);
             let rhs: i64 = parse_expr(p);
@@ -625,9 +629,19 @@ fn parse_call_args(p: Parser) -> i64 {
 fn parse_primary(p: Parser) -> i64 {
     let t: Token = peek(p);
     let tag: i64 = t.tag;
-    if tag == tok_lit_int() || tag == tok_lit_int_suffixed() {
+    if tag == tok_lit_int() {
         let _adv: Token = advance(p);
         arena_add_expr(p.arena, EXPR_LIT_INT(), t.int_val, 0, 0, 0)
+    } else if tag == tok_lit_int_suffixed() {
+        let _adv: Token = advance(p);
+        let lit_eid: i64 = arena_add_expr(p.arena, EXPR_LIT_INT(), t.int_val, 0, 0, 0);
+        if t.int_val2 == tok_suffix_u64() {
+            let u64_sid: i64 = arena_intern_str(p.arena, String::from("u64"));
+            let target_tid: i64 = arena_add_type(p.arena, TY_NAMED(), u64_sid, 0, 0);
+            arena_add_expr(p.arena, EXPR_CAST(), lit_eid, target_tid, 0, 0)
+        } else {
+            lit_eid
+        }
     } else if tag == tok_lit_bool() {
         let _adv: Token = advance(p);
         arena_add_expr(p.arena, EXPR_LIT_BOOL(), t.int_val, 0, 0, 0)

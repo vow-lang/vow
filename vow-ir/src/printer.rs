@@ -7,6 +7,7 @@ impl fmt::Display for Ty {
         let s = match self {
             Ty::I32 => "i32",
             Ty::I64 => "i64",
+            Ty::U64 => "u64",
             Ty::F32 => "f32",
             Ty::F64 => "f64",
             Ty::Bool => "Bool",
@@ -87,6 +88,26 @@ fn opcode_name(opcode: &Opcode) -> &'static str {
         Opcode::Or => "Or",
         Opcode::XorI32 => "XorI32",
         Opcode::XorI64 => "XorI64",
+        Opcode::WrappingAddU64 => "WrappingAddU64",
+        Opcode::WrappingSubU64 => "WrappingSubU64",
+        Opcode::WrappingMulU64 => "WrappingMulU64",
+        Opcode::WrappingDivU64 => "WrappingDivU64",
+        Opcode::WrappingRemU64 => "WrappingRemU64",
+        Opcode::CheckedAddU64 => "CheckedAddU64",
+        Opcode::CheckedSubU64 => "CheckedSubU64",
+        Opcode::CheckedMulU64 => "CheckedMulU64",
+        Opcode::CheckedDivU64 => "CheckedDivU64",
+        Opcode::CheckedRemU64 => "CheckedRemU64",
+        Opcode::EqU64 => "EqU64",
+        Opcode::NeU64 => "NeU64",
+        Opcode::LtU64 => "LtU64",
+        Opcode::LeU64 => "LeU64",
+        Opcode::GtU64 => "GtU64",
+        Opcode::GeU64 => "GeU64",
+        Opcode::XorU64 => "XorU64",
+        Opcode::ConstU64 => "ConstU64",
+        Opcode::CastI64ToU64 => "CastI64ToU64",
+        Opcode::CastU64ToI64 => "CastU64ToI64",
         Opcode::Load => "Load",
         Opcode::Store => "Store",
         Opcode::Branch => "Branch",
@@ -113,6 +134,7 @@ fn format_data(data: &InstData) -> Option<String> {
         InstData::None => None,
         InstData::ConstI32(v) => Some(v.to_string()),
         InstData::ConstI64(v) => Some(v.to_string()),
+        InstData::ConstU64(v) => Some(format!("{v}u64")),
         InstData::ConstF32(v) => Some(v.to_string()),
         InstData::ConstF64(v) => Some(v.to_string()),
         InstData::ConstBool(v) => Some(v.to_string()),
@@ -402,6 +424,7 @@ mod tests {
     fn ty_display_all_variants() {
         assert_eq!(Ty::I32.to_string(), "i32");
         assert_eq!(Ty::I64.to_string(), "i64");
+        assert_eq!(Ty::U64.to_string(), "u64");
         assert_eq!(Ty::F32.to_string(), "f32");
         assert_eq!(Ty::F64.to_string(), "f64");
         assert_eq!(Ty::Bool.to_string(), "Bool");
@@ -491,6 +514,26 @@ mod tests {
             (Opcode::LinearBorrow, "LinearBorrow"),
             (Opcode::FieldGet, "FieldGet"),
             (Opcode::FieldSet, "FieldSet"),
+            (Opcode::WrappingAddU64, "WrappingAddU64"),
+            (Opcode::WrappingSubU64, "WrappingSubU64"),
+            (Opcode::WrappingMulU64, "WrappingMulU64"),
+            (Opcode::WrappingDivU64, "WrappingDivU64"),
+            (Opcode::WrappingRemU64, "WrappingRemU64"),
+            (Opcode::CheckedAddU64, "CheckedAddU64"),
+            (Opcode::CheckedSubU64, "CheckedSubU64"),
+            (Opcode::CheckedMulU64, "CheckedMulU64"),
+            (Opcode::CheckedDivU64, "CheckedDivU64"),
+            (Opcode::CheckedRemU64, "CheckedRemU64"),
+            (Opcode::EqU64, "EqU64"),
+            (Opcode::NeU64, "NeU64"),
+            (Opcode::LtU64, "LtU64"),
+            (Opcode::LeU64, "LeU64"),
+            (Opcode::GtU64, "GtU64"),
+            (Opcode::GeU64, "GeU64"),
+            (Opcode::XorU64, "XorU64"),
+            (Opcode::ConstU64, "ConstU64"),
+            (Opcode::CastI64ToU64, "CastI64ToU64"),
+            (Opcode::CastU64ToI64, "CastU64ToI64"),
         ];
         for (op, expected) in pairs {
             assert_eq!(opcode_name(&op), expected);
@@ -502,6 +545,10 @@ mod tests {
         assert_eq!(format_data(&InstData::None), None);
         assert_eq!(format_data(&InstData::ConstI32(7)), Some("7".to_string()));
         assert_eq!(format_data(&InstData::ConstI64(-1)), Some("-1".to_string()));
+        assert_eq!(
+            format_data(&InstData::ConstU64(42)),
+            Some("42u64".to_string())
+        );
         assert_eq!(
             format_data(&InstData::ConstBool(false)),
             Some("false".to_string())

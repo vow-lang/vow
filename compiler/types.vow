@@ -175,6 +175,11 @@ fn ty_is_integer(ts: TyStore, tid: i64) -> bool {
     tag >= CTY_I8() && tag <= CTY_U128()
 }
 
+fn ty_is_unsigned(ts: TyStore, tid: i64) -> bool {
+    let tag: i64 = ty_tag(ts, tid);
+    tag >= CTY_U8() && tag <= CTY_U128()
+}
+
 fn ty_is_numeric(ts: TyStore, tid: i64) -> bool {
     let tag: i64 = ty_tag(ts, tid);
     tag >= CTY_I8() && tag <= CTY_F64()

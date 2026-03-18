@@ -84,6 +84,14 @@ impl TypeEnv {
             },
         );
         env.define_fn(
+            "print_u64",
+            FnSig {
+                params: vec![Ty::U64],
+                return_ty: Ty::Unit,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
             "fs_read",
             FnSig {
                 params: vec![Ty::Str],

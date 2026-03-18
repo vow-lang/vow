@@ -99,6 +99,7 @@ fn collect_calls_in_expr<'a>(expr: &'a Expr, calls: &mut Vec<(&'a Expr, &'a str)
                 collect_calls_in_expr(e, calls);
             }
         }
+        ExprKind::Cast { expr, .. } => collect_calls_in_expr(expr, calls),
     }
 }
 

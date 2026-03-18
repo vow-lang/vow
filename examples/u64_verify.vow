@@ -1,0 +1,21 @@
+module U64Verify
+
+fn safe_add(a: u64, b: u64) -> u64
+vow {
+    requires: a <= 1000 as u64
+    requires: b <= 1000 as u64
+    ensures: result >= a
+    ensures: result >= b
+}
+{
+    a + b
+}
+
+fn unsigned_div(x: u64, y: u64) -> u64
+vow {
+    requires: y != 0 as u64
+    ensures: result <= x
+}
+{
+    x / y
+}

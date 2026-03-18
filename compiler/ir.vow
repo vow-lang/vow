@@ -101,6 +101,27 @@ fn IOP_FIELD_SET() -> i64 vow { ensures: result >= 0 } { 82 }
 fn IOP_XOR_I32() -> i64 vow { ensures: result >= 0 } { 83 }
 fn IOP_XOR_I64() -> i64 vow { ensures: result >= 0 } { 84 }
 
+fn IOP_WADD_U64() -> i64 vow { ensures: result >= 0 } { 85 }
+fn IOP_WSUB_U64() -> i64 vow { ensures: result >= 0 } { 86 }
+fn IOP_WMUL_U64() -> i64 vow { ensures: result >= 0 } { 87 }
+fn IOP_WDIV_U64() -> i64 vow { ensures: result >= 0 } { 88 }
+fn IOP_WREM_U64() -> i64 vow { ensures: result >= 0 } { 89 }
+fn IOP_CADD_U64() -> i64 vow { ensures: result >= 0 } { 90 }
+fn IOP_CSUB_U64() -> i64 vow { ensures: result >= 0 } { 91 }
+fn IOP_CMUL_U64() -> i64 vow { ensures: result >= 0 } { 92 }
+fn IOP_CDIV_U64() -> i64 vow { ensures: result >= 0 } { 93 }
+fn IOP_CREM_U64() -> i64 vow { ensures: result >= 0 } { 94 }
+fn IOP_EQ_U64() -> i64 vow { ensures: result >= 0 } { 95 }
+fn IOP_NE_U64() -> i64 vow { ensures: result >= 0 } { 96 }
+fn IOP_LT_U64() -> i64 vow { ensures: result >= 0 } { 97 }
+fn IOP_LE_U64() -> i64 vow { ensures: result >= 0 } { 98 }
+fn IOP_GT_U64() -> i64 vow { ensures: result >= 0 } { 99 }
+fn IOP_GE_U64() -> i64 vow { ensures: result >= 0 } { 100 }
+fn IOP_XOR_U64() -> i64 vow { ensures: result >= 0 } { 101 }
+fn IOP_CONST_U64() -> i64 vow { ensures: result >= 0 } { 102 }
+fn IOP_CAST_I64_TO_U64() -> i64 vow { ensures: result >= 0 } { 103 }
+fn IOP_CAST_U64_TO_I64() -> i64 vow { ensures: result >= 0 } { 104 }
+
 fn iop_is_terminal(op: i64) -> bool vow {
     requires: op >= 0
 } {
@@ -115,6 +136,7 @@ fn ITY_BOOL() -> i64 vow { ensures: result >= 0 } { 4 }
 fn ITY_UNIT() -> i64 vow { ensures: result >= 0 } { 5 }
 fn ITY_PTR() -> i64 vow { ensures: result >= 0 } { 6 }
 fn ITY_LPTR() -> i64 vow { ensures: result >= 0 } { 7 }
+fn ITY_U64() -> i64 vow { ensures: result >= 0 } { 8 }
 
 fn IDATA_NONE() -> i64 vow { ensures: result >= 0 } { 0 }
 fn IDATA_CONST_I32() -> i64 vow { ensures: result >= 0 } { 1 }
@@ -133,6 +155,7 @@ fn IDATA_REGION_ID() -> i64 vow { ensures: result >= 0 } { 13 }
 fn IDATA_VOW_ID() -> i64 vow { ensures: result >= 0 } { 14 }
 fn IDATA_ALLOC_SIZE() -> i64 vow { ensures: result >= 0 } { 15 }
 fn IDATA_FIELD() -> i64 vow { ensures: result >= 0 } { 16 }
+fn IDATA_CONST_U64() -> i64 vow { ensures: result >= 0 } { 17 }
 
 fn BLAME_CALLER() -> i64 vow { ensures: result >= 0 } { 0 }
 fn BLAME_CALLEE() -> i64 vow { ensures: result >= 0 } { 1 }

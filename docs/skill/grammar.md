@@ -101,6 +101,7 @@ pub fn api_function(x: i64) -> i64 {
 |--------|--------------------------|
 | `i32`  | 32-bit signed integer    |
 | `i64`  | 64-bit signed integer    |
+| `u64`  | 64-bit unsigned integer  |
 | `f32`  | 32-bit float (limited support — avoid in contracts) |
 | `f64`  | 64-bit float (limited support — avoid in contracts) |
 | `bool` | Boolean                  |
@@ -130,7 +131,9 @@ Structs and enums (see below).
 0
 ```
 
-All unsuffixed integer literals are `i64`.
+All unsuffixed integer literals are `i64`. Integer literals coerce to `u64` in annotation context (e.g. `let x: u64 = 42;`).
+
+Suffixed integer literals: `42u64` produces a `u64` value directly.
 
 ### Float Literals
 
@@ -171,7 +174,7 @@ Supported escape sequences: `\n`, `\t`, `\r`, `\\`, `\"`, `\0`.
 | `/`      | Div (wrapping) |
 | `%`      | Rem (wrapping) |
 
-Wrapping operators silently wrap on overflow.
+Wrapping operators silently wrap on overflow. For `u64` operands, division and remainder use unsigned semantics.
 
 ### Checked Arithmetic
 
@@ -208,10 +211,21 @@ Checked operators abort with `ArithmeticOverflow` on overflow.
 
 | Operator | Meaning    |
 |----------|------------|
-| `-`      | Negation   |
+| `-`      | Negation (not allowed on `u64`) |
 | `!`      | Logical NOT|
 | `&`      | Borrow     |
 | `?`      | Unwrap (propagate error) |
+
+### Type Cast
+
+```vow
+x as u64    // i64 -> u64
+y as i64    // u64 -> i64
+```
+
+The `as` operator converts between `i64` and `u64`. No implicit conversions: `i64 + u64` is a type error.
+
+In debug mode, out-of-range casts (negative i64 to u64, or u64 > i64::MAX to i64) are no-ops at the machine level (bit reinterpretation). In release mode, the same applies.
 
 ## Let Bindings
 
@@ -507,6 +521,7 @@ Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they 
 |------------------|--------------------------------------------|------------|
 | `print_str`      | `fn(s: String) -> ()`                      | `[io]`     |
 | `print_i64`      | `fn(v: i64) -> ()`                         | `[io]`     |
+| `print_u64`      | `fn(v: u64) -> ()`                         | `[io]`     |
 | `eprintln_str`   | `fn(s: String) -> ()`                      | `[io]`     |
 | `fs_read`        | `fn(path: String) -> String`               | `[read]`   |
 | `fs_write`       | `fn(path: String, data: String) -> ()`     | `[write]`  |

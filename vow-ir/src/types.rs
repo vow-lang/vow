@@ -94,6 +94,29 @@ pub enum Opcode {
     XorI32,
     XorI64,
 
+    WrappingAddU64,
+    WrappingSubU64,
+    WrappingMulU64,
+    WrappingDivU64,
+    WrappingRemU64,
+    CheckedAddU64,
+    CheckedSubU64,
+    CheckedMulU64,
+    CheckedDivU64,
+    CheckedRemU64,
+    EqU64,
+    NeU64,
+    LtU64,
+    LeU64,
+    GtU64,
+    GeU64,
+    XorU64,
+
+    ConstU64,
+
+    CastI64ToU64,
+    CastU64ToI64,
+
     Load,
     Store,
 
@@ -140,6 +163,7 @@ pub enum InstData {
     ConstBool(bool),
     ArgIndex(u32),
     PhiTarget(InstId),
+    ConstU64(u64),
     ConstStr(u32),
     CallTarget(FuncId),
     CallExtern(String),
@@ -161,6 +185,7 @@ pub enum InstData {
 pub enum Ty {
     I32,
     I64,
+    U64,
     F32,
     F64,
     Bool,

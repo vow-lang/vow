@@ -164,6 +164,7 @@ fn ir_ty_to_cranelift(ty: IrTy) -> Option<types::Type> {
         IrTy::F32 => Some(types::F32),
         IrTy::F64 => Some(types::F64),
         IrTy::Bool => Some(types::I8),
+        IrTy::U64 => Some(types::I64),
         IrTy::Unit => None,
         IrTy::Ptr | IrTy::LinearPtr => Some(types::I64),
     }
@@ -248,6 +249,12 @@ fn lower_inst(
                 ctx.value_map.insert(inst.id, val);
             }
         }
+        Opcode::ConstU64 => {
+            if let InstData::ConstU64(v) = inst.data {
+                let val = builder.ins().iconst(types::I64, v as i64);
+                ctx.value_map.insert(inst.id, val);
+            }
+        }
         Opcode::ConstF32 => {
             if let InstData::ConstF32(v) = inst.data {
                 let val = builder.ins().f32const(v);
@@ -298,15 +305,15 @@ fn lower_inst(
         // ------------------------------------------------------------------
         // Wrapping integer arithmetic
         // ------------------------------------------------------------------
-        Opcode::WrappingAddI32 | Opcode::WrappingAddI64 => {
+        Opcode::WrappingAddI32 | Opcode::WrappingAddI64 | Opcode::WrappingAddU64 => {
             let val = builder.ins().iadd(arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
-        Opcode::WrappingSubI32 | Opcode::WrappingSubI64 => {
+        Opcode::WrappingSubI32 | Opcode::WrappingSubI64 | Opcode::WrappingSubU64 => {
             let val = builder.ins().isub(arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
-        Opcode::WrappingMulI32 | Opcode::WrappingMulI64 => {
+        Opcode::WrappingMulI32 | Opcode::WrappingMulI64 | Opcode::WrappingMulU64 => {
             let val = builder.ins().imul(arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
@@ -314,8 +321,16 @@ fn lower_inst(
             let val = builder.ins().sdiv(arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
+        Opcode::WrappingDivU64 => {
+            let val = builder.ins().udiv(arg!(0), arg!(1));
+            ctx.value_map.insert(inst.id, val);
+        }
         Opcode::WrappingRemI32 | Opcode::WrappingRemI64 => {
             let val = builder.ins().srem(arg!(0), arg!(1));
+            ctx.value_map.insert(inst.id, val);
+        }
+        Opcode::WrappingRemU64 => {
+            let val = builder.ins().urem(arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
 
@@ -327,13 +342,28 @@ fn lower_inst(
             emit_overflow_check(builder, overflow, ctx)?;
             ctx.value_map.insert(inst.id, result);
         }
+        Opcode::CheckedAddU64 => {
+            let (result, overflow) = builder.ins().uadd_overflow(arg!(0), arg!(1));
+            emit_overflow_check(builder, overflow, ctx)?;
+            ctx.value_map.insert(inst.id, result);
+        }
         Opcode::CheckedSubI32 | Opcode::CheckedSubI64 => {
             let (result, overflow) = builder.ins().ssub_overflow(arg!(0), arg!(1));
             emit_overflow_check(builder, overflow, ctx)?;
             ctx.value_map.insert(inst.id, result);
         }
+        Opcode::CheckedSubU64 => {
+            let (result, overflow) = builder.ins().usub_overflow(arg!(0), arg!(1));
+            emit_overflow_check(builder, overflow, ctx)?;
+            ctx.value_map.insert(inst.id, result);
+        }
         Opcode::CheckedMulI32 | Opcode::CheckedMulI64 => {
             let (result, overflow) = builder.ins().smul_overflow(arg!(0), arg!(1));
+            emit_overflow_check(builder, overflow, ctx)?;
+            ctx.value_map.insert(inst.id, result);
+        }
+        Opcode::CheckedMulU64 => {
+            let (result, overflow) = builder.ins().umul_overflow(arg!(0), arg!(1));
             emit_overflow_check(builder, overflow, ctx)?;
             ctx.value_map.insert(inst.id, result);
         }
@@ -345,6 +375,13 @@ fn lower_inst(
             let val = builder.ins().sdiv(arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
+        Opcode::CheckedDivU64 => {
+            let zero = builder.ins().iconst(types::I64, 0);
+            let is_zero = builder.ins().icmp(IntCC::Equal, arg!(1), zero);
+            emit_overflow_check(builder, is_zero, ctx)?;
+            let val = builder.ins().udiv(arg!(0), arg!(1));
+            ctx.value_map.insert(inst.id, val);
+        }
         Opcode::CheckedRemI32 | Opcode::CheckedRemI64 => {
             let cl_ty = ir_ty_to_cranelift(inst.ty).unwrap_or(types::I64);
             let zero = builder.ins().iconst(cl_ty, 0);
@@ -353,20 +390,31 @@ fn lower_inst(
             let val = builder.ins().srem(arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
+        Opcode::CheckedRemU64 => {
+            let zero = builder.ins().iconst(types::I64, 0);
+            let is_zero = builder.ins().icmp(IntCC::Equal, arg!(1), zero);
+            emit_overflow_check(builder, is_zero, ctx)?;
+            let val = builder.ins().urem(arg!(0), arg!(1));
+            ctx.value_map.insert(inst.id, val);
+        }
 
         // ------------------------------------------------------------------
         // Integer comparisons (return Bool / I8)
         // ------------------------------------------------------------------
-        Opcode::EqI32 | Opcode::EqI64 => {
+        Opcode::EqI32 | Opcode::EqI64 | Opcode::EqU64 => {
             let val = builder.ins().icmp(IntCC::Equal, arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
-        Opcode::NeI32 | Opcode::NeI64 => {
+        Opcode::NeI32 | Opcode::NeI64 | Opcode::NeU64 => {
             let val = builder.ins().icmp(IntCC::NotEqual, arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
         Opcode::LtI32 | Opcode::LtI64 => {
             let val = builder.ins().icmp(IntCC::SignedLessThan, arg!(0), arg!(1));
+            ctx.value_map.insert(inst.id, val);
+        }
+        Opcode::LtU64 => {
+            let val = builder.ins().icmp(IntCC::UnsignedLessThan, arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
         Opcode::LeI32 | Opcode::LeI64 => {
@@ -375,16 +423,34 @@ fn lower_inst(
                 .icmp(IntCC::SignedLessThanOrEqual, arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
+        Opcode::LeU64 => {
+            let val = builder
+                .ins()
+                .icmp(IntCC::UnsignedLessThanOrEqual, arg!(0), arg!(1));
+            ctx.value_map.insert(inst.id, val);
+        }
         Opcode::GtI32 | Opcode::GtI64 => {
             let val = builder
                 .ins()
                 .icmp(IntCC::SignedGreaterThan, arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
+        Opcode::GtU64 => {
+            let val = builder
+                .ins()
+                .icmp(IntCC::UnsignedGreaterThan, arg!(0), arg!(1));
+            ctx.value_map.insert(inst.id, val);
+        }
         Opcode::GeI32 | Opcode::GeI64 => {
             let val = builder
                 .ins()
                 .icmp(IntCC::SignedGreaterThanOrEqual, arg!(0), arg!(1));
+            ctx.value_map.insert(inst.id, val);
+        }
+        Opcode::GeU64 => {
+            let val = builder
+                .ins()
+                .icmp(IntCC::UnsignedGreaterThanOrEqual, arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
 
@@ -465,7 +531,7 @@ fn lower_inst(
         // ------------------------------------------------------------------
         // Bitwise XOR
         // ------------------------------------------------------------------
-        Opcode::XorI32 | Opcode::XorI64 => {
+        Opcode::XorI32 | Opcode::XorI64 | Opcode::XorU64 => {
             let val = builder.ins().bxor(arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
@@ -751,6 +817,14 @@ fn lower_inst(
                 let unit = builder.ins().iconst(types::I32, 0);
                 ctx.value_map.insert(inst.id, unit);
             }
+        }
+
+        // ------------------------------------------------------------------
+        // Casts (i64 <-> u64 — no-op at machine level, both are I64)
+        // ------------------------------------------------------------------
+        Opcode::CastI64ToU64 | Opcode::CastU64ToI64 => {
+            let val = arg!(0);
+            ctx.value_map.insert(inst.id, val);
         }
     }
     Ok(())
@@ -1181,7 +1255,7 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_print_str" => {
             sig.params.push(AbiParam::new(types::I64)); // ptr
         }
-        "__vow_print_i64" => {
+        "__vow_print_i64" | "__vow_print_u64" => {
             sig.params.push(AbiParam::new(types::I64)); // value
         }
         "__vow_vec_new" => {

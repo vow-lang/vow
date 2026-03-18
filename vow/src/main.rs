@@ -190,6 +190,7 @@ fn skill_json() -> String {
     "types": [
       "i32",
       "i64",
+      "u64",
       "f32",
       "f64",
       "bool",
@@ -210,6 +211,7 @@ fn skill_json() -> String {
     "builtins": {
       "print_str": "fn(s: String) -> () [io]",
       "print_i64": "fn(v: i64) -> () [io]",
+      "print_u64": "fn(v: u64) -> () [io]",
       "eprintln_str": "fn(s: String) -> () [io]",
       "fs_read": "fn(path: String) -> String [read]",
       "fs_write": "fn(path: String, data: String) -> () [write]",
@@ -401,10 +403,10 @@ LANGUAGE SUMMARY
     0
   }
 
-TYPES     : i32  i64  f32  f64  bool  ()  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>
+TYPES     : i32  i64  u64  f32  f64  bool  ()  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>
 EFFECTS   : io  read  write  panic  unsafe
-BUILTINS  : print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [io]   eprintln_str: fn(s: String) -> () [io]
-            fs_read: fn(path: String) -> String [read]   fs_write: fn(path: String, data: String) -> () [write]   args: fn() -> Vec<String> [read]   process_exit: fn(code: i64) -> () [io]
+BUILTINS  : print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [io]   print_u64: fn(v: u64) -> () [io]
+            eprintln_str: fn(s: String) -> () [io]   fs_read: fn(path: String) -> String [read]   fs_write: fn(path: String, data: String) -> () [write]   args: fn() -> Vec<String> [read]   process_exit: fn(code: i64) -> () [io]
 METHODS   : Vec: Vec::new/push/pop/len/v[i]/v[i] = val   String: String::from/len/byte_at/push_byte/push_str/contains/eq
             HashMap: HashMap::new/insert/get/contains_key/remove/len   Option: unwrap
 OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   - ! & ?"#

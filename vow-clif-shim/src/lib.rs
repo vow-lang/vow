@@ -58,6 +58,7 @@ const ITY_BOOL: i64 = 4;
 const ITY_UNIT: i64 = 5;
 const ITY_PTR: i64 = 6;
 const ITY_LPTR: i64 = 7;
+const ITY_U64: i64 = 8;
 
 fn ity_to_cranelift(ty: i64) -> Option<types::Type> {
     match ty {
@@ -66,6 +67,7 @@ fn ity_to_cranelift(ty: i64) -> Option<types::Type> {
         ITY_F32 => Some(types::F32),
         ITY_F64 => Some(types::F64),
         ITY_BOOL => Some(types::I8),
+        ITY_U64 => Some(types::I64),
         ITY_UNIT => None,
         ITY_PTR | ITY_LPTR => Some(types::I64),
         _ => None,
@@ -172,6 +174,27 @@ const IOP_FIELD_SET: i64 = 82;
 const IOP_XOR_I32: i64 = 83;
 const IOP_XOR_I64: i64 = 84;
 
+const IOP_WADD_U64: i64 = 85;
+const IOP_WSUB_U64: i64 = 86;
+const IOP_WMUL_U64: i64 = 87;
+const IOP_WDIV_U64: i64 = 88;
+const IOP_WREM_U64: i64 = 89;
+const IOP_CADD_U64: i64 = 90;
+const IOP_CSUB_U64: i64 = 91;
+const IOP_CMUL_U64: i64 = 92;
+const IOP_CDIV_U64: i64 = 93;
+const IOP_CREM_U64: i64 = 94;
+const IOP_EQ_U64: i64 = 95;
+const IOP_NE_U64: i64 = 96;
+const IOP_LT_U64: i64 = 97;
+const IOP_LE_U64: i64 = 98;
+const IOP_GT_U64: i64 = 99;
+const IOP_GE_U64: i64 = 100;
+const IOP_XOR_U64: i64 = 101;
+const IOP_CONST_U64: i64 = 102;
+const IOP_CAST_I64_TO_U64: i64 = 103;
+const IOP_CAST_U64_TO_I64: i64 = 104;
+
 // InstData kind constants (match compiler/ir.vow IDATA_*)
 #[allow(dead_code)]
 const IDATA_NONE: i64 = 0;
@@ -192,6 +215,7 @@ const IDATA_REGION_ID: i64 = 13;
 const IDATA_VOW_ID: i64 = 14;
 const IDATA_ALLOC_SIZE: i64 = 15;
 const IDATA_FIELD: i64 = 16;
+const IDATA_CONST_U64: i64 = 17;
 
 // ---------------------------------------------------------------------------
 // Module context (opaque handle passed through FFI)
@@ -1038,8 +1062,101 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
                     set_val!(iid, val);
                 }
 
-                IOP_XOR_I32 | IOP_XOR_I64 => {
+                IOP_XOR_I32 | IOP_XOR_I64 | IOP_XOR_U64 => {
                     let val = builder.ins().bxor(arg!(0), arg!(1));
+                    set_val!(iid, val);
+                }
+
+                // U64 wrapping arithmetic
+                IOP_WADD_U64 => {
+                    let val = builder.ins().iadd(arg!(0), arg!(1));
+                    set_val!(iid, val);
+                }
+                IOP_WSUB_U64 => {
+                    let val = builder.ins().isub(arg!(0), arg!(1));
+                    set_val!(iid, val);
+                }
+                IOP_WMUL_U64 => {
+                    let val = builder.ins().imul(arg!(0), arg!(1));
+                    set_val!(iid, val);
+                }
+                IOP_WDIV_U64 => {
+                    let val = builder.ins().udiv(arg!(0), arg!(1));
+                    set_val!(iid, val);
+                }
+                IOP_WREM_U64 => {
+                    let val = builder.ins().urem(arg!(0), arg!(1));
+                    set_val!(iid, val);
+                }
+
+                // U64 checked arithmetic
+                IOP_CADD_U64 => {
+                    let (result, overflow) = builder.ins().uadd_overflow(arg!(0), arg!(1));
+                    emit_overflow_check(&mut builder, overflow, overflow_ref);
+                    set_val!(iid, result);
+                }
+                IOP_CSUB_U64 => {
+                    let (result, overflow) = builder.ins().usub_overflow(arg!(0), arg!(1));
+                    emit_overflow_check(&mut builder, overflow, overflow_ref);
+                    set_val!(iid, result);
+                }
+                IOP_CMUL_U64 => {
+                    let (result, overflow) = builder.ins().umul_overflow(arg!(0), arg!(1));
+                    emit_overflow_check(&mut builder, overflow, overflow_ref);
+                    set_val!(iid, result);
+                }
+                IOP_CDIV_U64 => {
+                    let zero = builder.ins().iconst(types::I64, 0);
+                    let is_zero = builder.ins().icmp(IntCC::Equal, arg!(1), zero);
+                    emit_overflow_check(&mut builder, is_zero, overflow_ref);
+                    let val = builder.ins().udiv(arg!(0), arg!(1));
+                    set_val!(iid, val);
+                }
+                IOP_CREM_U64 => {
+                    let zero = builder.ins().iconst(types::I64, 0);
+                    let is_zero = builder.ins().icmp(IntCC::Equal, arg!(1), zero);
+                    emit_overflow_check(&mut builder, is_zero, overflow_ref);
+                    let val = builder.ins().urem(arg!(0), arg!(1));
+                    set_val!(iid, val);
+                }
+
+                // U64 comparisons
+                IOP_EQ_U64 => {
+                    let val = builder.ins().icmp(IntCC::Equal, arg!(0), arg!(1));
+                    set_val!(iid, val);
+                }
+                IOP_NE_U64 => {
+                    let val = builder.ins().icmp(IntCC::NotEqual, arg!(0), arg!(1));
+                    set_val!(iid, val);
+                }
+                IOP_LT_U64 => {
+                    let val = builder.ins().icmp(IntCC::UnsignedLessThan, arg!(0), arg!(1));
+                    set_val!(iid, val);
+                }
+                IOP_LE_U64 => {
+                    let val = builder.ins().icmp(IntCC::UnsignedLessThanOrEqual, arg!(0), arg!(1));
+                    set_val!(iid, val);
+                }
+                IOP_GT_U64 => {
+                    let val = builder.ins().icmp(IntCC::UnsignedGreaterThan, arg!(0), arg!(1));
+                    set_val!(iid, val);
+                }
+                IOP_GE_U64 => {
+                    let val = builder.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, arg!(0), arg!(1));
+                    set_val!(iid, val);
+                }
+
+                // ConstU64
+                IOP_CONST_U64 => {
+                    if dk == IDATA_CONST_U64 {
+                        let val = builder.ins().iconst(types::I64, dv);
+                        set_val!(iid, val);
+                    }
+                }
+
+                // Cast (no-op at machine level)
+                IOP_CAST_I64_TO_U64 | IOP_CAST_U64_TO_I64 => {
+                    let val = arg!(0);
                     set_val!(iid, val);
                 }
 

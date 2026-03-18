@@ -139,6 +139,10 @@ fn strip_expr(expr: Expr) -> Expr {
             path,
             fields: fields.into_iter().map(strip_expr).collect(),
         },
+        ExprKind::Cast { expr, target_ty } => ExprKind::Cast {
+            expr: Box::new(strip_expr(*expr)),
+            target_ty: Box::new(strip_type(*target_ty)),
+        },
     };
     Expr { kind, span: z() }
 }

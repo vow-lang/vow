@@ -62,6 +62,7 @@ fn esbmc_nondet_call(ty: Ty) -> &'static str {
     match ty {
         Ty::I32 => "__VERIFIER_nondet_int()",
         Ty::I64 => "__VERIFIER_nondet_long()",
+        Ty::U64 => "__VERIFIER_nondet_unsigned_long()",
         Ty::F32 => "__VERIFIER_nondet_float()",
         Ty::F64 => "__VERIFIER_nondet_double()",
         Ty::Bool => "__VERIFIER_nondet_bool()",

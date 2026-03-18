@@ -77,6 +77,7 @@ fn ir_ty_str(ty: i64) -> String {
     if ty == ITY_UNIT() { return String::from("Void"); }
     if ty == ITY_PTR() { return String::from("ptr"); }
     if ty == ITY_LPTR() { return String::from("linear_ptr"); }
+    if ty == ITY_U64() { return String::from("u64"); }
     String::from("???")
 }
 
@@ -166,6 +167,26 @@ fn opcode_name(op: i64) -> String {
     if op == IOP_LINEAR_BORROW() { return String::from("LinearBorrow"); }
     if op == IOP_FIELD_GET() { return String::from("FieldGet"); }
     if op == IOP_FIELD_SET() { return String::from("FieldSet"); }
+    if op == IOP_WADD_U64() { return String::from("WrappingAddU64"); }
+    if op == IOP_WSUB_U64() { return String::from("WrappingSubU64"); }
+    if op == IOP_WMUL_U64() { return String::from("WrappingMulU64"); }
+    if op == IOP_WDIV_U64() { return String::from("WrappingDivU64"); }
+    if op == IOP_WREM_U64() { return String::from("WrappingRemU64"); }
+    if op == IOP_CADD_U64() { return String::from("CheckedAddU64"); }
+    if op == IOP_CSUB_U64() { return String::from("CheckedSubU64"); }
+    if op == IOP_CMUL_U64() { return String::from("CheckedMulU64"); }
+    if op == IOP_CDIV_U64() { return String::from("CheckedDivU64"); }
+    if op == IOP_CREM_U64() { return String::from("CheckedRemU64"); }
+    if op == IOP_EQ_U64() { return String::from("EqU64"); }
+    if op == IOP_NE_U64() { return String::from("NeU64"); }
+    if op == IOP_LT_U64() { return String::from("LtU64"); }
+    if op == IOP_LE_U64() { return String::from("LeU64"); }
+    if op == IOP_GT_U64() { return String::from("GtU64"); }
+    if op == IOP_GE_U64() { return String::from("GeU64"); }
+    if op == IOP_XOR_U64() { return String::from("XorU64"); }
+    if op == IOP_CONST_U64() { return String::from("ConstU64"); }
+    if op == IOP_CAST_I64_TO_U64() { return String::from("CastI64ToU64"); }
+    if op == IOP_CAST_U64_TO_I64() { return String::from("CastU64ToI64"); }
     String::from("???")
 }
 
@@ -263,6 +284,11 @@ fn format_data(inst: IrInst) -> String {
     if dk == IDATA_FIELD() {
         let out: String = String::from("field_");
         out.push_str(i64_to_str(inst.dv));
+        return out;
+    }
+    if dk == IDATA_CONST_U64() {
+        let out: String = i64_to_str(inst.dv);
+        out.push_str(String::from("u64"));
         return out;
     }
     String::from("")

@@ -1,4 +1,4 @@
-use crate::ast::{BinOp, Expr, ExprKind, Lit, MatchArm, UnOp};
+use crate::ast::{BinOp, Expr, ExprKind, Lit, MatchArm, Type, UnOp};
 use crate::span::Span;
 use crate::token::TokenKind;
 
@@ -79,6 +79,25 @@ impl Parser {
                 continue;
             }
 
+            if kind == TokenKind::KwAs {
+                let lbp = 13;
+                if lbp < min_bp {
+                    break;
+                }
+                let as_span = self.current_span();
+                self.advance();
+                let target_ty = self.parse_type_inner();
+                let span = lhs.span.merge(target_ty.span()).merge(as_span);
+                lhs = Expr {
+                    kind: ExprKind::Cast {
+                        expr: Box::new(lhs),
+                        target_ty: Box::new(target_ty),
+                    },
+                    span,
+                };
+                continue;
+            }
+
             if kind == TokenKind::Eq {
                 if min_bp > 0 {
                     break;
@@ -134,11 +153,28 @@ impl Parser {
                     span: start,
                 }
             }
-            TokenKind::LitIntSuffixed { value, .. } => {
+            TokenKind::LitIntSuffixed { value, suffix } => {
                 self.advance();
-                Expr {
-                    kind: ExprKind::Lit(Lit::Int(value)),
-                    span: start,
+                use crate::token::IntSuffix;
+                if suffix == IntSuffix::U64 {
+                    Expr {
+                        kind: ExprKind::Cast {
+                            expr: Box::new(Expr {
+                                kind: ExprKind::Lit(Lit::Int(value)),
+                                span: start,
+                            }),
+                            target_ty: Box::new(Type::Named {
+                                name: "u64".to_string(),
+                                span: start,
+                            }),
+                        },
+                        span: start,
+                    }
+                } else {
+                    Expr {
+                        kind: ExprKind::Lit(Lit::Int(value)),
+                        span: start,
+                    }
                 }
             }
             TokenKind::LitFloat(v) => {

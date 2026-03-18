@@ -1,0 +1,19 @@
+module U64Cast
+
+fn to_unsigned(x: i64) -> u64
+vow {
+    requires: x >= 0
+    ensures: result == x as u64
+}
+{
+    x as u64
+}
+
+fn to_signed(x: u64) -> i64
+vow {
+    requires: x <= 9223372036854775807 as u64
+    ensures: result >= 0
+}
+{
+    x as i64
+}

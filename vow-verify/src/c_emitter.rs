@@ -63,10 +63,11 @@ fn ir_ty_to_c(ty: Ty) -> &'static str {
     match ty {
         Ty::I32 => "int32_t",
         Ty::I64 => "int64_t",
+        Ty::U64 => "uint64_t",
         Ty::F32 => "float",
         Ty::F64 => "double",
         Ty::Bool => "_Bool",
-        Ty::Unit => "int32_t", // treated as void internally, but needs a type for vars
+        Ty::Unit => "int32_t",
         Ty::Ptr | Ty::LinearPtr => "void*",
     }
 }
@@ -237,6 +238,26 @@ pub fn is_modelable(
                 | Opcode::Or
                 | Opcode::XorI32
                 | Opcode::XorI64
+                | Opcode::WrappingAddU64
+                | Opcode::WrappingSubU64
+                | Opcode::WrappingMulU64
+                | Opcode::WrappingDivU64
+                | Opcode::WrappingRemU64
+                | Opcode::CheckedAddU64
+                | Opcode::CheckedSubU64
+                | Opcode::CheckedMulU64
+                | Opcode::CheckedDivU64
+                | Opcode::CheckedRemU64
+                | Opcode::EqU64
+                | Opcode::NeU64
+                | Opcode::LtU64
+                | Opcode::LeU64
+                | Opcode::GtU64
+                | Opcode::GeU64
+                | Opcode::XorU64
+                | Opcode::ConstU64
+                | Opcode::CastI64ToU64
+                | Opcode::CastU64ToI64
                 | Opcode::VowRequires
                 | Opcode::VowEnsures
                 | Opcode::VowInvariant
@@ -391,35 +412,45 @@ fn emit_inst(
         Opcode::WrappingAddI32
         | Opcode::WrappingAddI64
         | Opcode::CheckedAddI32
-        | Opcode::CheckedAddI64 => {
+        | Opcode::CheckedAddI64
+        | Opcode::WrappingAddU64
+        | Opcode::CheckedAddU64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = v{} + v{};\n", id, a, b));
         }
         Opcode::WrappingSubI32
         | Opcode::WrappingSubI64
         | Opcode::CheckedSubI32
-        | Opcode::CheckedSubI64 => {
+        | Opcode::CheckedSubI64
+        | Opcode::WrappingSubU64
+        | Opcode::CheckedSubU64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = v{} - v{};\n", id, a, b));
         }
         Opcode::WrappingMulI32
         | Opcode::WrappingMulI64
         | Opcode::CheckedMulI32
-        | Opcode::CheckedMulI64 => {
+        | Opcode::CheckedMulI64
+        | Opcode::WrappingMulU64
+        | Opcode::CheckedMulU64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = v{} * v{};\n", id, a, b));
         }
         Opcode::WrappingDivI32
         | Opcode::WrappingDivI64
         | Opcode::CheckedDivI32
-        | Opcode::CheckedDivI64 => {
+        | Opcode::CheckedDivI64
+        | Opcode::WrappingDivU64
+        | Opcode::CheckedDivU64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = v{} / v{};\n", id, a, b));
         }
         Opcode::WrappingRemI32
         | Opcode::WrappingRemI64
         | Opcode::CheckedRemI32
-        | Opcode::CheckedRemI64 => {
+        | Opcode::CheckedRemI64
+        | Opcode::WrappingRemU64
+        | Opcode::CheckedRemU64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = v{} % v{};\n", id, a, b));
         }
@@ -443,27 +474,27 @@ fn emit_inst(
         }
 
         // Integer comparisons
-        Opcode::EqI32 | Opcode::EqI64 | Opcode::EqF32 | Opcode::EqF64 => {
+        Opcode::EqI32 | Opcode::EqI64 | Opcode::EqF32 | Opcode::EqF64 | Opcode::EqU64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = (v{} == v{});\n", id, a, b));
         }
-        Opcode::NeI32 | Opcode::NeI64 | Opcode::NeF32 | Opcode::NeF64 => {
+        Opcode::NeI32 | Opcode::NeI64 | Opcode::NeF32 | Opcode::NeF64 | Opcode::NeU64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = (v{} != v{});\n", id, a, b));
         }
-        Opcode::LtI32 | Opcode::LtI64 | Opcode::LtF32 | Opcode::LtF64 => {
+        Opcode::LtI32 | Opcode::LtI64 | Opcode::LtF32 | Opcode::LtF64 | Opcode::LtU64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = (v{} < v{});\n", id, a, b));
         }
-        Opcode::LeI32 | Opcode::LeI64 | Opcode::LeF32 | Opcode::LeF64 => {
+        Opcode::LeI32 | Opcode::LeI64 | Opcode::LeF32 | Opcode::LeF64 | Opcode::LeU64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = (v{} <= v{});\n", id, a, b));
         }
-        Opcode::GtI32 | Opcode::GtI64 | Opcode::GtF32 | Opcode::GtF64 => {
+        Opcode::GtI32 | Opcode::GtI64 | Opcode::GtF32 | Opcode::GtF64 | Opcode::GtU64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = (v{} > v{});\n", id, a, b));
         }
-        Opcode::GeI32 | Opcode::GeI64 | Opcode::GeF32 | Opcode::GeF64 => {
+        Opcode::GeI32 | Opcode::GeI64 | Opcode::GeF32 | Opcode::GeF64 | Opcode::GeU64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = (v{} >= v{});\n", id, a, b));
         }
@@ -481,9 +512,24 @@ fn emit_inst(
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = (v{} || v{});\n", id, a, b));
         }
-        Opcode::XorI32 | Opcode::XorI64 => {
+        Opcode::XorI32 | Opcode::XorI64 | Opcode::XorU64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = (v{} ^ v{});\n", id, a, b));
+        }
+
+        Opcode::ConstU64 => {
+            if let InstData::ConstU64(v) = inst.data {
+                out.push_str(&format!("  v{} = {}ULL;\n", id, v));
+            }
+        }
+
+        Opcode::CastI64ToU64 => {
+            let a = inst.args[0].0;
+            out.push_str(&format!("  v{} = (uint64_t)v{};\n", id, a));
+        }
+        Opcode::CastU64ToI64 => {
+            let a = inst.args[0].0;
+            out.push_str(&format!("  v{} = (int64_t)v{};\n", id, a));
         }
 
         // Vow checks → ESBMC intrinsics
@@ -833,6 +879,7 @@ fn c_nondet_suffix(ty: Ty) -> &'static str {
     match ty {
         Ty::I32 => "int",
         Ty::I64 => "long",
+        Ty::U64 => "unsigned_long",
         Ty::F32 => "float",
         Ty::F64 => "double",
         Ty::Bool => "bool",

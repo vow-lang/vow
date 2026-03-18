@@ -669,6 +669,7 @@ fn skill_json() -> String {
     r.push_str(String::from("    \"types\": [\n"));
     r.push_str(String::from("      \"i32\",\n"));
     r.push_str(String::from("      \"i64\",\n"));
+    r.push_str(String::from("      \"u64\",\n"));
     r.push_str(String::from("      \"f32\",\n"));
     r.push_str(String::from("      \"f64\",\n"));
     r.push_str(String::from("      \"bool\",\n"));
@@ -689,6 +690,7 @@ fn skill_json() -> String {
     r.push_str(String::from("    \"builtins\": {\n"));
     r.push_str(String::from("      \"print_str\": \"fn(s: String) -> () [io]\",\n"));
     r.push_str(String::from("      \"print_i64\": \"fn(v: i64) -> () [io]\",\n"));
+    r.push_str(String::from("      \"print_u64\": \"fn(v: u64) -> () [io]\",\n"));
     r.push_str(String::from("      \"eprintln_str\": \"fn(s: String) -> () [io]\",\n"));
     r.push_str(String::from("      \"fs_read\": \"fn(path: String) -> String [read]\",\n"));
     r.push_str(String::from("      \"fs_write\": \"fn(path: String, data: String) -> () [write]\",\n"));
@@ -880,10 +882,10 @@ fn skill_human() -> String {
     r.push_str(String::from("    0\n"));
     r.push_str(String::from("  }\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("TYPES     : i32  i64  f32  f64  bool  ()  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>\n"));
+    r.push_str(String::from("TYPES     : i32  i64  u64  f32  f64  bool  ()  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>\n"));
     r.push_str(String::from("EFFECTS   : io  read  write  panic  unsafe\n"));
-    r.push_str(String::from("BUILTINS  : print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [io]   eprintln_str: fn(s: String) -> () [io]\n"));
-    r.push_str(String::from("            fs_read: fn(path: String) -> String [read]   fs_write: fn(path: String, data: String) -> () [write]   args: fn() -> Vec<String> [read]   process_exit: fn(code: i64) -> () [io]\n"));
+    r.push_str(String::from("BUILTINS  : print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [io]   print_u64: fn(v: u64) -> () [io]\n"));
+    r.push_str(String::from("            eprintln_str: fn(s: String) -> () [io]   fs_read: fn(path: String) -> String [read]   fs_write: fn(path: String, data: String) -> () [write]   args: fn() -> Vec<String> [read]   process_exit: fn(code: i64) -> () [io]\n"));
     r.push_str(String::from("METHODS   : Vec: Vec::new/push/pop/len/v[i]/v[i] = val   String: String::from/len/byte_at/push_byte/push_str/contains/eq\n"));
     r.push_str(String::from("            HashMap: HashMap::new/insert/get/contains_key/remove/len   Option: unwrap\n"));
     r.push_str(String::from("OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   - ! & ?\n"));

@@ -20,6 +20,7 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
     match name {
         "print_str" => Some(("__vow_string_print", Ty::Unit)),
         "print_i64" => Some(("__vow_print_i64", Ty::Unit)),
+        "print_u64" => Some(("__vow_print_u64", Ty::Unit)),
         "eprintln_str" => Some(("__vow_eprintln_str", Ty::Unit)),
         "fs_read" => Some(("__vow_fs_read", Ty::Ptr)),
         "fs_write" => Some(("__vow_fs_write", Ty::I64)),
@@ -71,6 +72,7 @@ pub(crate) fn lower_ty(ast_ty: &AstType) -> Ty {
         AstType::Named { name, .. } => match name.as_str() {
             "i32" => Ty::I32,
             "i64" => Ty::I64,
+            "u64" => Ty::U64,
             "f32" => Ty::F32,
             "f64" => Ty::F64,
             "bool" => Ty::Bool,
@@ -502,7 +504,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     eq_result
                 }
             } else {
-                let (opcode, ty) = binop_opcode(*op);
+                let operand_ty = ctx.inst_ty(lhs_id);
+                let (opcode, ty) = binop_opcode(*op, &operand_ty);
                 ctx.emit(opcode, ty, vec![lhs_id, rhs_id], InstData::None, span)
             }
         }
@@ -1586,31 +1589,69 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 span,
             )
         }
+        ExprKind::Cast { expr, target_ty } => {
+            let val = lower_expr(ctx, expr);
+            let src_ty = ctx.inst_ty(val);
+            let tgt = lower_ty(target_ty);
+            match (src_ty, tgt) {
+                (Ty::I64, Ty::U64) | (Ty::I32, Ty::U64) => {
+                    // If the source is a literal, emit ConstU64 directly
+                    if let ExprKind::Lit(Lit::Int(v)) = &expr.kind {
+                        ctx.emit(
+                            Opcode::ConstU64,
+                            Ty::U64,
+                            vec![],
+                            InstData::ConstU64(*v as u64),
+                            span,
+                        )
+                    } else {
+                        ctx.emit(
+                            Opcode::CastI64ToU64,
+                            Ty::U64,
+                            vec![val],
+                            InstData::None,
+                            span,
+                        )
+                    }
+                }
+                (Ty::U64, Ty::I64) => {
+                    ctx.emit(
+                        Opcode::CastU64ToI64,
+                        Ty::I64,
+                        vec![val],
+                        InstData::None,
+                        span,
+                    )
+                }
+                _ => val,
+            }
+        }
         _ => todo!("IR lowering not implemented for {:?}", expr.kind),
     }
 }
 
-fn binop_opcode(op: BinOp) -> (Opcode, Ty) {
+fn binop_opcode(op: BinOp, operand_ty: &Ty) -> (Opcode, Ty) {
+    let is_u64 = *operand_ty == Ty::U64;
     match op {
-        BinOp::Add => (Opcode::WrappingAddI64, Ty::I64),
-        BinOp::Sub => (Opcode::WrappingSubI64, Ty::I64),
-        BinOp::Mul => (Opcode::WrappingMulI64, Ty::I64),
-        BinOp::Div => (Opcode::WrappingDivI64, Ty::I64),
-        BinOp::Rem => (Opcode::WrappingRemI64, Ty::I64),
-        BinOp::AddChecked => (Opcode::CheckedAddI64, Ty::I64),
-        BinOp::SubChecked => (Opcode::CheckedSubI64, Ty::I64),
-        BinOp::MulChecked => (Opcode::CheckedMulI64, Ty::I64),
-        BinOp::DivChecked => (Opcode::CheckedDivI64, Ty::I64),
-        BinOp::RemChecked => (Opcode::CheckedRemI64, Ty::I64),
-        BinOp::Eq => (Opcode::EqI64, Ty::Bool),
-        BinOp::Ne => (Opcode::NeI64, Ty::Bool),
-        BinOp::Lt => (Opcode::LtI64, Ty::Bool),
-        BinOp::Le => (Opcode::LeI64, Ty::Bool),
-        BinOp::Gt => (Opcode::GtI64, Ty::Bool),
-        BinOp::Ge => (Opcode::GeI64, Ty::Bool),
+        BinOp::Add => if is_u64 { (Opcode::WrappingAddU64, Ty::U64) } else { (Opcode::WrappingAddI64, Ty::I64) },
+        BinOp::Sub => if is_u64 { (Opcode::WrappingSubU64, Ty::U64) } else { (Opcode::WrappingSubI64, Ty::I64) },
+        BinOp::Mul => if is_u64 { (Opcode::WrappingMulU64, Ty::U64) } else { (Opcode::WrappingMulI64, Ty::I64) },
+        BinOp::Div => if is_u64 { (Opcode::WrappingDivU64, Ty::U64) } else { (Opcode::WrappingDivI64, Ty::I64) },
+        BinOp::Rem => if is_u64 { (Opcode::WrappingRemU64, Ty::U64) } else { (Opcode::WrappingRemI64, Ty::I64) },
+        BinOp::AddChecked => if is_u64 { (Opcode::CheckedAddU64, Ty::U64) } else { (Opcode::CheckedAddI64, Ty::I64) },
+        BinOp::SubChecked => if is_u64 { (Opcode::CheckedSubU64, Ty::U64) } else { (Opcode::CheckedSubI64, Ty::I64) },
+        BinOp::MulChecked => if is_u64 { (Opcode::CheckedMulU64, Ty::U64) } else { (Opcode::CheckedMulI64, Ty::I64) },
+        BinOp::DivChecked => if is_u64 { (Opcode::CheckedDivU64, Ty::U64) } else { (Opcode::CheckedDivI64, Ty::I64) },
+        BinOp::RemChecked => if is_u64 { (Opcode::CheckedRemU64, Ty::U64) } else { (Opcode::CheckedRemI64, Ty::I64) },
+        BinOp::Eq => if is_u64 { (Opcode::EqU64, Ty::Bool) } else { (Opcode::EqI64, Ty::Bool) },
+        BinOp::Ne => if is_u64 { (Opcode::NeU64, Ty::Bool) } else { (Opcode::NeI64, Ty::Bool) },
+        BinOp::Lt => if is_u64 { (Opcode::LtU64, Ty::Bool) } else { (Opcode::LtI64, Ty::Bool) },
+        BinOp::Le => if is_u64 { (Opcode::LeU64, Ty::Bool) } else { (Opcode::LeI64, Ty::Bool) },
+        BinOp::Gt => if is_u64 { (Opcode::GtU64, Ty::Bool) } else { (Opcode::GtI64, Ty::Bool) },
+        BinOp::Ge => if is_u64 { (Opcode::GeU64, Ty::Bool) } else { (Opcode::GeI64, Ty::Bool) },
         BinOp::And => (Opcode::And, Ty::Bool),
         BinOp::Or => (Opcode::Or, Ty::Bool),
-        BinOp::BitXor => (Opcode::XorI64, Ty::I64),
+        BinOp::BitXor => if is_u64 { (Opcode::XorU64, Ty::U64) } else { (Opcode::XorI64, Ty::I64) },
     }
 }
 
@@ -1629,14 +1670,27 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
         Stmt::Let {
             pattern, init, ty, ..
         } => {
-            let val = lower_expr(ctx, init);
+            let mut val = lower_expr(ctx, init);
+            let span = init.span;
+            if let Some(AstType::Named { name: type_name, .. }) = ty
+                && type_name == "u64"
+                && ctx.inst_ty(val) != Ty::U64
+            {
+                val = ctx.emit(
+                    Opcode::CastI64ToU64,
+                    Ty::U64,
+                    vec![val],
+                    InstData::None,
+                    span,
+                );
+            }
             if let PatKind::Ident { name, .. } = &pattern.kind {
                 if let Some(ann) = ty {
                     match ann {
                         AstType::Named {
                             name: type_name, ..
                         } => match type_name.as_str() {
-                            "i32" | "i64" | "f32" | "f64" | "bool" => {}
+                            "i32" | "i64" | "u64" | "f32" | "f64" | "bool" => {}
                             _ => {
                                 ctx.inst_struct_type.insert(val, type_name.clone());
                             }

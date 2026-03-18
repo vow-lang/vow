@@ -237,6 +237,9 @@ fn check_expr(
                 check_expr(e, tracker, env, file, emitter, true);
             }
         }
+        ExprKind::Cast { expr: inner, .. } => {
+            check_expr(inner, tracker, env, file, emitter, consume);
+        }
     }
 }
 

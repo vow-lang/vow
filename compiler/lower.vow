@@ -334,6 +334,7 @@ fn lower_ast_ty(a: AstArena, tid: i64) -> i64 {
         let name: String = arena_str(a, name_sid);
         if name == String::from("i32") { return ITY_I32(); }
         if name == String::from("i64") { return ITY_I64(); }
+        if name == String::from("u64") { return ITY_U64(); }
         if name == String::from("f32") { return ITY_F32(); }
         if name == String::from("f64") { return ITY_F64(); }
         if name == String::from("bool") { return ITY_BOOL(); }
@@ -345,32 +346,33 @@ fn lower_ast_ty(a: AstArena, tid: i64) -> i64 {
     ITY_UNIT()
 }
 
-fn binop_opcode(op: i64) -> i64 vow {
+fn binop_opcode(op: i64, operand_ty: i64) -> i64 vow {
     requires: op >= 0
 } {
-    if op == BINOP_ADD() { return IOP_WADD_I64(); }
-    if op == BINOP_SUB() { return IOP_WSUB_I64(); }
-    if op == BINOP_MUL() { return IOP_WMUL_I64(); }
-    if op == BINOP_DIV() { return IOP_WDIV_I64(); }
-    if op == BINOP_REM() { return IOP_WREM_I64(); }
-    if op == BINOP_ADD_CHK() { return IOP_CADD_I64(); }
-    if op == BINOP_SUB_CHK() { return IOP_CSUB_I64(); }
-    if op == BINOP_MUL_CHK() { return IOP_CMUL_I64(); }
-    if op == BINOP_DIV_CHK() { return IOP_CDIV_I64(); }
-    if op == BINOP_REM_CHK() { return IOP_CREM_I64(); }
-    if op == BINOP_EQ() { return IOP_EQ_I64(); }
-    if op == BINOP_NE() { return IOP_NE_I64(); }
-    if op == BINOP_LT() { return IOP_LT_I64(); }
-    if op == BINOP_LE() { return IOP_LE_I64(); }
-    if op == BINOP_GT() { return IOP_GT_I64(); }
-    if op == BINOP_GE() { return IOP_GE_I64(); }
+    let is_u64: bool = operand_ty == ITY_U64();
+    if op == BINOP_ADD() { return if is_u64 { IOP_WADD_U64() } else { IOP_WADD_I64() }; }
+    if op == BINOP_SUB() { return if is_u64 { IOP_WSUB_U64() } else { IOP_WSUB_I64() }; }
+    if op == BINOP_MUL() { return if is_u64 { IOP_WMUL_U64() } else { IOP_WMUL_I64() }; }
+    if op == BINOP_DIV() { return if is_u64 { IOP_WDIV_U64() } else { IOP_WDIV_I64() }; }
+    if op == BINOP_REM() { return if is_u64 { IOP_WREM_U64() } else { IOP_WREM_I64() }; }
+    if op == BINOP_ADD_CHK() { return if is_u64 { IOP_CADD_U64() } else { IOP_CADD_I64() }; }
+    if op == BINOP_SUB_CHK() { return if is_u64 { IOP_CSUB_U64() } else { IOP_CSUB_I64() }; }
+    if op == BINOP_MUL_CHK() { return if is_u64 { IOP_CMUL_U64() } else { IOP_CMUL_I64() }; }
+    if op == BINOP_DIV_CHK() { return if is_u64 { IOP_CDIV_U64() } else { IOP_CDIV_I64() }; }
+    if op == BINOP_REM_CHK() { return if is_u64 { IOP_CREM_U64() } else { IOP_CREM_I64() }; }
+    if op == BINOP_EQ() { return if is_u64 { IOP_EQ_U64() } else { IOP_EQ_I64() }; }
+    if op == BINOP_NE() { return if is_u64 { IOP_NE_U64() } else { IOP_NE_I64() }; }
+    if op == BINOP_LT() { return if is_u64 { IOP_LT_U64() } else { IOP_LT_I64() }; }
+    if op == BINOP_LE() { return if is_u64 { IOP_LE_U64() } else { IOP_LE_I64() }; }
+    if op == BINOP_GT() { return if is_u64 { IOP_GT_U64() } else { IOP_GT_I64() }; }
+    if op == BINOP_GE() { return if is_u64 { IOP_GE_U64() } else { IOP_GE_I64() }; }
     if op == BINOP_AND() { return IOP_AND(); }
     if op == BINOP_OR() { return IOP_OR(); }
-    if op == BINOP_XOR() { return IOP_XOR_I64(); }
+    if op == BINOP_XOR() { return if is_u64 { IOP_XOR_U64() } else { IOP_XOR_I64() }; }
     IOP_WADD_I64()
 }
 
-fn binop_result_ty(op: i64) -> i64 vow {
+fn binop_result_ty(op: i64, operand_ty: i64) -> i64 vow {
     requires: op >= 0
 } {
     if op == BINOP_EQ() { return ITY_BOOL(); }
@@ -381,6 +383,7 @@ fn binop_result_ty(op: i64) -> i64 vow {
     if op == BINOP_GE() { return ITY_BOOL(); }
     if op == BINOP_AND() { return ITY_BOOL(); }
     if op == BINOP_OR() { return ITY_BOOL(); }
+    if operand_ty == ITY_U64() { return ITY_U64(); }
     ITY_I64()
 }
 
@@ -660,8 +663,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             }
             return eq_id;
         }
-        let iop: i64 = binop_opcode(op);
-        let rty: i64 = binop_result_ty(op);
+        let lhs_ty: i64 = lctx_inst_ty(ctx, lhs_id);
+        let iop: i64 = binop_opcode(op, lhs_ty);
+        let rty: i64 = binop_result_ty(op, lhs_ty);
         let bin_args: Vec<i64> = Vec::new();
         bin_args.push(lhs_id);
         bin_args.push(rhs_id);
@@ -1585,6 +1589,42 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         return lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""));
     }
 
+    if tag == EXPR_CAST() {
+        let inner_eid: i64 = expr_a(a, eid);
+        let target_ast_tid: i64 = expr_b(a, eid);
+        let val_id: i64 = lower_expr(ctx, inner_eid);
+        let src_ty: i64 = lctx_inst_ty(ctx, val_id);
+        let tgt_ty: i64 = lower_ast_ty(a, target_ast_tid);
+        if src_ty == ITY_I64() && tgt_ty == ITY_U64() {
+            let inner_tag: i64 = expr_tag(a, inner_eid);
+            if inner_tag == EXPR_LIT_INT() {
+                let lit_val: i64 = expr_a(a, inner_eid);
+                let const_args: Vec<i64> = Vec::new();
+                return lctx_emit(ctx, IOP_CONST_U64(), ITY_U64(), const_args, IDATA_CONST_U64(), lit_val, 0, String::from(""));
+            }
+            let cast_args: Vec<i64> = Vec::new();
+            cast_args.push(val_id);
+            return lctx_emit(ctx, IOP_CAST_I64_TO_U64(), ITY_U64(), cast_args, IDATA_NONE(), 0, 0, String::from(""));
+        }
+        if src_ty == ITY_U64() && tgt_ty == ITY_I64() {
+            let cast_args: Vec<i64> = Vec::new();
+            cast_args.push(val_id);
+            return lctx_emit(ctx, IOP_CAST_U64_TO_I64(), ITY_I64(), cast_args, IDATA_NONE(), 0, 0, String::from(""));
+        }
+        if src_ty == ITY_I32() && tgt_ty == ITY_U64() {
+            let inner_tag: i64 = expr_tag(a, inner_eid);
+            if inner_tag == EXPR_LIT_INT() {
+                let lit_val: i64 = expr_a(a, inner_eid);
+                let const_args: Vec<i64> = Vec::new();
+                return lctx_emit(ctx, IOP_CONST_U64(), ITY_U64(), const_args, IDATA_CONST_U64(), lit_val, 0, String::from(""));
+            }
+            let cast_args: Vec<i64> = Vec::new();
+            cast_args.push(val_id);
+            return lctx_emit(ctx, IOP_CAST_I64_TO_U64(), ITY_U64(), cast_args, IDATA_NONE(), 0, 0, String::from(""));
+        }
+        return val_id;
+    }
+
     let u_args: Vec<i64> = Vec::new();
     lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
 }
@@ -1596,7 +1636,7 @@ fn lower_stmt(ctx: LowerCtx, sid: i64) {
         let pat_id: i64 = stmt_a(a, sid);
         let ann_tid: i64 = stmt_b(a, sid);
         let init_eid: i64 = stmt_c(a, sid);
-        let val: i64 = lower_expr(ctx, init_eid);
+        let mut val: i64 = lower_expr(ctx, init_eid);
         let ptag: i64 = pat_tag(a, pat_id);
         if ptag == PAT_IDENT() {
             let name_sid: i64 = pat_a(a, pat_id);
@@ -1606,7 +1646,12 @@ fn lower_stmt(ctx: LowerCtx, sid: i64) {
                 if atag == TY_NAMED() {
                     let type_name_sid: i64 = type_a(a, ann_tid);
                     let type_name: String = arena_str(a, type_name_sid);
-                    if type_name != String::from("i32") && type_name != String::from("i64") && type_name != String::from("f32") && type_name != String::from("f64") && type_name != String::from("bool") {
+                    if type_name == String::from("u64") && lctx_inst_ty(ctx, val) != ITY_U64() {
+                        let cast_args: Vec<i64> = Vec::new();
+                        cast_args.push(val);
+                        val = lctx_emit(ctx, IOP_CAST_I64_TO_U64(), ITY_U64(), cast_args, IDATA_NONE(), 0, 0, String::from(""));
+                    }
+                    if type_name != String::from("i32") && type_name != String::from("i64") && type_name != String::from("u64") && type_name != String::from("f32") && type_name != String::from("f64") && type_name != String::from("bool") {
                         lctx_tag(ctx, val, type_name);
                     }
                 } else if atag == TY_GENERIC() {
@@ -1736,6 +1781,9 @@ fn collect_free_vars_in_expr(ctx: LowerCtx, eid: i64, out_names: Vec<String>, ou
             collect_free_vars_in_expr(ctx, arg_eid, out_names, out_ids);
             i = i + 1;
         }
+    } else if tag == EXPR_CAST() {
+        let inner_eid: i64 = expr_a(a, eid);
+        collect_free_vars_in_expr(ctx, inner_eid, out_names, out_ids);
     } else if tag == EXPR_IF() {
         let cond_eid: i64 = expr_a(a, eid);
         collect_free_vars_in_expr(ctx, cond_eid, out_names, out_ids);
@@ -1786,6 +1834,12 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
         }
         let result: String = String::from("-");
         result.push_str(inner_s);
+        return result;
+    }
+    if tag == EXPR_CAST() {
+        let inner_eid: i64 = expr_a(a, eid);
+        let result: String = print_expr_text(a, inner_eid);
+        result.push_str(String::from(" as <type>"));
         return result;
     }
     if tag == EXPR_CALL() {
