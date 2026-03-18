@@ -69,7 +69,16 @@ This builds `./target/release/vow` (stage 0), then uses it to compile and verify
 - **`errors.md`** — diagnostic error codes and their meanings
 - **`examples.md`** — worked examples
 
-When adding a new language feature or CLI flag, update the relevant `docs/skill/*.md` file **first** — it is the spec. The `--help` output in both compilers (`vow/src/main.rs` and `compiler/main.vow`) is generated from these skill files by `scripts/generate_help.py`. After updating a skill file, run `scripts/generate_help.py` to regenerate and then `scripts/bootstrap.sh --no-verify --skip-cargo` to rebuild `./vowc`. The staleness detector `scripts/check_help_coverage.py` (run in `full_test.sh`) will catch drift between grammar.md and --help.
+**Any change to Vow syntax, semantics, types, builtins, operators, effects, or CLI flags MUST include a corresponding update to the relevant `docs/skill/*.md` file.** The skill files are the spec — compiler code implements them, not the other way around. If you add a type, update `grammar.md`. If you change a builtin signature, update `grammar.md`. If you add a CLI flag, update `cli.md`. If you change contract semantics, update `contracts.md`.
+
+After updating a skill file, regenerate `--help` and rebuild:
+```bash
+uv run python scripts/generate_help.py          # regenerate --help in both compilers
+cargo build --release -p vow                     # rebuild Rust compiler
+scripts/bootstrap.sh --no-verify --skip-cargo    # rebuild ./vowc
+```
+
+The staleness detector `scripts/check_help_coverage.py` (run in `full_test.sh`) will catch drift between `grammar.md` and `--help`.
 
 ## Architecture
 
