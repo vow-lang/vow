@@ -63,6 +63,7 @@ This builds `./target/release/vow` (stage 0), then uses it to compile and verify
 
 `docs/skill/` contains the authoritative specification for the Vow language and CLI:
 
+- **`SKILL.md`** — Claude Code skill entry point (frontmatter + overview + reference table)
 - **`grammar.md`** — complete grammar: types, operators, control flow, structs, enums, match, modules, methods, effects, builtins
 - **`cli.md`** — CLI commands, flags, output JSON schema, exit codes, trace/error formats
 - **`contracts.md`** — vow blocks, requires/ensures/invariant, blame semantics
