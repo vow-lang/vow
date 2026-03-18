@@ -21,14 +21,23 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--no-verify`     | (off)       | Skip ESBMC static verification            |
 | `--dump-ir`       | (off)       | Print IR text to stdout and exit (no JSON output, no codegen) |
 | `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
+| `--no-cache`    | (off)       | Disable compile and verify caching           |
+| `--unwind <N>`  | `10`        | ESBMC loop unwind bound                      |
 
 ### `vow verify`
 
 Verify contracts only — no executable output. Emits the same JSON format as `vow build` but `executable` is always `null`.
 
 ```
-vow verify <source.vow>
+vow verify [OPTIONS] <source.vow>
 ```
+
+**Options:**
+
+| Flag              | Default     | Description                                |
+|-------------------|-------------|--------------------------------------------|
+| `--no-cache`      | (off)       | Disable verification result caching        |
+| `--unwind <N>`    | `10`        | ESBMC loop unwind bound                   |
 
 ### `vow test`
 

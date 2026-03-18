@@ -155,14 +155,14 @@ fn skill_json() -> String {
     "-o, --output <path>": "Output executable path (default: source without .vow extension)",
     "--mode <debug|release>": "Build mode; debug inserts runtime vow checks (default: release)",
     "--no-verify": "Skip ESBMC static verification",
-    "--dump-ir": "Dump IR text to stdout and exit (skip codegen/verify)",
+    "--dump-ir": "Print IR text to stdout and exit (no JSON output, no codegen)",
     "--debug-trace <off|calls|full>": "Emit JSON trace lines to stderr at runtime (default: off)",
     "--no-cache": "Disable compile and verify caching",
     "--unwind <N>": "ESBMC loop unwind bound (default: 10)"
   },
   "verify_options": {
     "--no-cache": "Disable verification result caching",
-    "--unwind <N>": "ESBMC loop unwind bound (default: 10)"
+    "--unwind <N>": "ESBMC loop unwind bound"
   },
   "global_options": {
     "--help": "Print this JSON capability description",
@@ -187,8 +187,26 @@ fn skill_json() -> String {
     "public_function": "pub fn <name>(<params>) -> <RetTy> [<effects>] { <body> }",
     "vow_function": "fn <name>(<params>) -> <RetTy> vow { requires: <expr>; ensures: <expr> } { <body> }",
     "while_with_invariant": "while <cond> vow { invariant: <expr> } { <body> }",
-    "types": ["i32", "i64", "f32", "f64", "bool", "()", "String", "Vec<T>", "Option<T>", "Result<T, E>", "HashMap<K, V>"],
-    "effects": ["io", "read", "write", "panic", "unsafe"],
+    "types": [
+      "i32",
+      "i64",
+      "f32",
+      "f64",
+      "bool",
+      "()",
+      "Vec<T>",
+      "Option<T>",
+      "Result<T, E>",
+      "String",
+      "HashMap<K, V>"
+    ],
+    "effects": [
+      "io",
+      "read",
+      "write",
+      "panic",
+      "unsafe"
+    ],
     "builtins": {
       "print_str": "fn(s: String) -> () [io]",
       "print_i64": "fn(v: i64) -> () [io]",
@@ -199,57 +217,121 @@ fn skill_json() -> String {
       "process_exit": "fn(code: i64) -> () [io]"
     },
     "operators": {
-      "arithmetic": ["+", "-", "*", "/", "%"],
-      "checked_arithmetic": ["+!", "-!", "*!", "/!", "%!"],
-      "comparison": ["==", "!=", "<", "<=", ">", ">="],
-      "logical": ["&&", "||", "!"],
-      "unary": ["-", "!", "&", "?"]
+      "arithmetic": [
+        "+",
+        "-",
+        "*",
+        "/",
+        "%"
+      ],
+      "checked_arithmetic": [
+        "+!",
+        "-!",
+        "*!",
+        "/!",
+        "%!"
+      ],
+      "comparison": [
+        "==",
+        "!=",
+        "<",
+        "<=",
+        ">",
+        ">="
+      ],
+      "logical": [
+        "&&",
+        "||",
+        "!"
+      ],
+      "unary": [
+        "-",
+        "!",
+        "&",
+        "?"
+      ]
     },
     "vow_clauses": {
-      "requires": "precondition — blame=Caller on violation",
-      "ensures": "postcondition — blame=Callee on violation; use `result` for return value",
-      "invariant": "loop invariant — checked at top of each iteration"
+      "requires": "precondition \u2014 blame=Caller on violation",
+      "ensures": "postcondition \u2014 blame=Callee on violation; use `result` for return value",
+      "invariant": "loop invariant \u2014 checked at top of each iteration"
     },
-    "where_clauses": "fn f(x: i64 where x >= 0) -> i64 — refinement types on parameters",
+    "where_clauses": "fn f(x: i64 where x >= 0) -> i64 \u2014 refinement types on parameters",
     "structs": {
       "definition": "struct Name { field: Type, ... }",
-      "linear": "linear struct Name { field: Type, ... } — must be consumed exactly once",
+      "linear": "linear struct Name { field: Type, ... } \u2014 must be consumed exactly once",
       "literal": "Name { field: value, ... }",
       "field_access": "value.field"
     },
     "enums": {
       "definition": "enum Name { Variant1(T), Variant2, Variant3 { field: T } }",
       "construction": "Name::Variant(value)",
-      "builtin_option": "Option<T> — variants: Some(T), None",
-      "builtin_result": "Result<T, E> — variants: Ok(T), Err(E)"
+      "builtin_option": "Option<T> \u2014 variants: Some(T), None",
+      "builtin_result": "Result<T, E> \u2014 variants: Ok(T), Err(E)"
     },
     "match_expression": {
       "syntax": "match value { Pattern => expr, ... }",
-      "patterns": ["wildcard (_)", "identifier (x)", "mutable (mut x)", "literal (0, true, \"hi\")", "tuple ((a, b))", "enum variant (Option::Some(x))", "struct (Point { x, y })", "or (0 | 1 | 2)"]
+      "patterns": [
+        "Wildcard (_)",
+        "Identifier binding (x)",
+        "Mutable identifier (mut x)",
+        "Literal (0, true, \"hello\")",
+        "Tuple ((a, b))",
+        "Enum variant (unit) (Option::None)",
+        "Enum variant (tuple) (Option::Some(x))",
+        "Enum variant (struct) (Shape::Named { x, y })",
+        "Or pattern (0 | 1 | 2)",
+        "Struct pattern (Point { x, y })"
+      ]
     },
     "control_flow": {
-      "if_else": "if cond { expr } else { expr } — expression, both branches same type",
+      "if_else": "if cond { expr } else { expr } \u2014 expression, both branches same type",
       "while": "while cond { body }",
-      "loop": "loop { ... break value; } — infinite loop, break to exit",
+      "loop": "loop { ... break value; } \u2014 infinite loop, break to exit",
       "break": "break; or break value;",
       "return": "return; or return value;"
     },
     "modules": {
       "declaration": "module Name",
-      "import": "use foo.bar — resolves to <rootdir>/foo/bar.vow",
-      "visibility": "pub fn — public functions visible to importers"
+      "import": "use foo.bar \u2014 resolves to <rootdir>/foo/bar.vow",
+      "visibility": "pub fn \u2014 public functions visible to importers"
     },
     "type_aliases": "type Name = Type",
     "extern_blocks": "extern { fn c_function(x: i64) -> i64 [unsafe] }",
     "methods": {
-      "Vec<T>": ["Vec::new()", ".push(val)", ".pop()", ".len()", "v[i]", "v[i] = val"],
-      "String": ["String::from(lit)", ".len()", ".byte_at(i)", ".push_byte(b)", ".push_str(s)", ".contains(s)", ".eq(s)"],
-      "HashMap<K,V>": ["HashMap::new()", ".insert(k, v)", ".get(k)", ".contains_key(k)", ".remove(k)", ".len()"],
-      "Option<T>": [".unwrap() [panic]", "? operator"]
+      "Vec<T>": [
+        "Vec::new()",
+        ".push(val)",
+        ".pop()",
+        ".len()",
+        "v[i]",
+        "v[i] = val"
+      ],
+      "String": [
+        "String::from(lit)",
+        ".len()",
+        ".byte_at(i)",
+        ".push_byte(b)",
+        ".push_str(s)",
+        ".contains(s)",
+        ".eq(s)"
+      ],
+      "HashMap<K,V>": [
+        "HashMap::new()",
+        ".insert(k, v)",
+        ".get(k)",
+        ".contains_key(k)",
+        ".remove(k)",
+        ".len()"
+      ],
+      "Option<T>": [
+        ".unwrap()",
+        "? operator"
+      ]
     },
     "indexing": {
-      "read": "v[i] — Vec index access",
-      "write": "v[i] = val — Vec index assignment"
+      "read": "v[i] \u2014 Vec index access",
+      "write": "v[i] = val \u2014 Vec index assignment"
     }
   }
 }"#
@@ -257,7 +339,7 @@ fn skill_json() -> String {
 }
 
 fn skill_human() -> String {
-    "vow — Vow compiler
+    r#"vow — Vow compiler
 
 USAGE
   vow build [OPTIONS] <source.vow>    Compile to native executable
@@ -267,19 +349,17 @@ USAGE
   vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)
 
 BUILD OPTIONS
-  -o, --output <path>   Output executable path
-  --mode <debug|release>  Build mode (default: release)
-                          debug: inserts runtime vow violation checks
-                          release: omits vow checks for performance
-  --no-verify           Skip ESBMC static verification
-  --dump-ir             Dump IR text to stdout and exit
-  --debug-trace <off|calls|full>  Emit JSON trace to stderr (default: off)
-  --no-cache            Disable compile and verify caching
-  --unwind <N>          ESBMC loop unwind bound (default: 10)
+  -o, --output <path>     Output executable path (default: source without .vow extension)
+  --mode <debug|release>  Build mode; debug inserts runtime vow checks (default: release)
+  --no-verify             Skip ESBMC static verification
+  --dump-ir               Print IR text to stdout and exit (no JSON output, no codegen)
+  --debug-trace <off|calls|full>  Emit JSON trace lines to stderr at runtime (default: off)
+  --no-cache              Disable compile and verify caching
+  --unwind <N>            ESBMC loop unwind bound (default: 10)
 
 VERIFY OPTIONS
-  --no-cache            Disable verification result caching
-  --unwind <N>          ESBMC loop unwind bound (default: 10)
+  --no-cache              Disable verification result caching
+  --unwind <N>            ESBMC loop unwind bound
 
 GLOBAL OPTIONS
   --help                Print JSON capability description (agent-friendly)
@@ -288,7 +368,7 @@ GLOBAL OPTIONS
 OUTPUT (JSON on stdout)
   status      : Verified | Unverified | CompileFailed | VerifyFailed
   executable  : path to compiled binary, or null
-  diagnostics : array of {{error_code, message, severity, span: {{file, offset, length}}}}
+  diagnostics : array of {error_code, message, severity, span: {file, offset, length}}
   message     : error detail (CompileFailed)
   function    : function name (VerifyFailed)
   counterexample: ESBMC counterexample (VerifyFailed)
@@ -301,34 +381,33 @@ LANGUAGE SUMMARY
   module Hello
   use math.utils
 
-  struct Point {{ x: i64, y: i64 }}
+  struct Point { x: i64, y: i64 }
 
-  fn add(x: i64, y: i64) -> i64 {{
+  fn add(x: i64, y: i64) -> i64 {
     x + y
-  }}
+  }
 
-  fn divide(x: i64, y: i64) -> i64 vow {{
+  fn divide(x: i64, y: i64) -> i64 vow {
     requires: y != 0
     ensures:  result * y == x
-  }} {{
+  } {
     x / y
-  }}
+  }
 
-  fn main() -> i32 [io] {{
+  fn main() -> i32 [io] {
     let v: Vec<i64> = Vec::new();
     v.push(divide(10, 2));
     print_i64(v[0]);
     0
-  }}
+  }
 
-TYPES     : i32  i64  f32  f64  bool  ()  String  Vec<T>  Option<T>  Result<T,E>  HashMap<K,V>
+TYPES     : i32  i64  f32  f64  bool  ()  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>
 EFFECTS   : io  read  write  panic  unsafe
-BUILTINS  : print_str(String) [io]   print_i64(i64) [io]   eprintln_str(String) [io]
-            fs_read(String) [read]   fs_write(String,String) [write]
-            args() [read]   process_exit(i64) [io]
-METHODS   : Vec: new/push/pop/len/v[i]   String: from/len/byte_at/push_str/contains
-            HashMap: new/insert/get/contains_key/remove/len   Option: unwrap/?
-OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & ?"
+BUILTINS  : print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [io]   eprintln_str: fn(s: String) -> () [io]
+            fs_read: fn(path: String) -> String [read]   fs_write: fn(path: String, data: String) -> () [write]   args: fn() -> Vec<String> [read]   process_exit: fn(code: i64) -> () [io]
+METHODS   : Vec: Vec::new/push/pop/len/v[i]/v[i] = val   String: String::from/len/byte_at/push_byte/push_str/contains/eq
+            HashMap: HashMap::new/insert/get/contains_key/remove/len   Option: unwrap
+OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   - ! & ?"#
         .to_string()
 }
 

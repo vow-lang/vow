@@ -501,17 +501,17 @@ If `caller` omitted `[io]`, the type checker would emit `EffectViolation`.
 
 Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they cannot call effectful functions.
 
-### Builtin Function Effects
+### Builtin Function Signatures
 
-| Function         | Effects    |
-|------------------|------------|
-| `print_str`      | `[io]`     |
-| `print_i64`      | `[io]`     |
-| `eprintln_str`   | `[io]`     |
-| `fs_read`        | `[read]`   |
-| `fs_write`       | `[write]`  |
-| `args`           | `[read]`   |
-| `process_exit`   | `[io]`     |
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `print_str`      | `fn(s: String) -> ()`                      | `[io]`     |
+| `print_i64`      | `fn(v: i64) -> ()`                         | `[io]`     |
+| `eprintln_str`   | `fn(s: String) -> ()`                      | `[io]`     |
+| `fs_read`        | `fn(path: String) -> String`               | `[read]`   |
+| `fs_write`       | `fn(path: String, data: String) -> ()`     | `[write]`  |
+| `args`           | `fn() -> Vec<String>`                      | `[read]`   |
+| `process_exit`   | `fn(code: i64) -> ()`                      | `[io]`     |
 
 ## Canonical Form
 

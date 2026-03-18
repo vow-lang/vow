@@ -59,6 +59,18 @@ scripts/bootstrap.sh                      # full bootstrap with verification
 
 This builds `./target/release/vow` (stage 0), then uses it to compile and verify the self-hosted compiler, producing `./vowc`. The Rust compiler (`./target/release/vow`) is only needed for this bootstrap step.
 
+## Canonical Source of Truth
+
+`docs/skill/` contains the authoritative specification for the Vow language and CLI:
+
+- **`grammar.md`** — complete grammar: types, operators, control flow, structs, enums, match, modules, methods, effects, builtins
+- **`cli.md`** — CLI commands, flags, output JSON schema, exit codes, trace/error formats
+- **`contracts.md`** — vow blocks, requires/ensures/invariant, blame semantics
+- **`errors.md`** — diagnostic error codes and their meanings
+- **`examples.md`** — worked examples
+
+When adding a new language feature or CLI flag, update the relevant `docs/skill/*.md` file **first** — it is the spec. The `--help` output in both compilers (`vow/src/main.rs` and `compiler/main.vow`) is generated from these skill files by `scripts/generate_help.py`. After updating a skill file, run `scripts/generate_help.py` to regenerate and then `scripts/bootstrap.sh --no-verify --skip-cargo` to rebuild `./vowc`. The staleness detector `scripts/check_help_coverage.py` (run in `full_test.sh`) will catch drift between grammar.md and --help.
+
 ## Architecture
 
 Vow is a Rust workspace where each crate maps to one compiler pipeline stage. The planned pipeline is:

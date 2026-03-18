@@ -100,7 +100,7 @@ def main():
             missing.append(f"effect:{e}")
 
     # 4. Builtin functions
-    builtins = extract_table_column(grammar, "Builtin Function Effects", 0)
+    builtins = extract_table_column(grammar, "Builtin Function Signatures", 0)
     assert len(builtins) >= 5, f"Expected >=5 builtins, got {len(builtins)}: {builtins}"
     builtins_flat = flatten_json(lang.get("builtins", {}))
     for b in builtins:
