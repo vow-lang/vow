@@ -390,6 +390,7 @@ fn binop_result_ty(op: i64, operand_ty: i64) -> i64 vow {
 fn builtin_to_extern(name: String) -> String {
     if name == String::from("print_str") { return String::from("__vow_string_print"); }
     if name == String::from("print_i64") { return String::from("__vow_print_i64"); }
+    if name == String::from("print_u64") { return String::from("__vow_print_u64"); }
     if name == String::from("eprintln_str") { return String::from("__vow_eprintln_str"); }
     if name == String::from("fs_read") { return String::from("__vow_fs_read"); }
     if name == String::from("fs_write") { return String::from("__vow_fs_write"); }
@@ -430,6 +431,7 @@ fn builtin_to_extern(name: String) -> String {
 fn builtin_ret_ty(name: String) -> i64 {
     if name == String::from("print_str") { return ITY_UNIT(); }
     if name == String::from("print_i64") { return ITY_UNIT(); }
+    if name == String::from("print_u64") { return ITY_UNIT(); }
     if name == String::from("eprintln_str") { return ITY_UNIT(); }
     if name == String::from("fs_read") { return ITY_PTR(); }
     if name == String::from("fs_write") { return ITY_I64(); }
