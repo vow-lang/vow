@@ -194,7 +194,7 @@ fn clif_emit_module(m: IrModule, output_path: String, mode: i64, trace: i64) -> 
     let link_result: i64 = __vow_clif_link(obj_path, output_path);
     if link_result != 0 {
         eprintln_str(String::from("clif: link failed"));
-        return -1;
+        return -2;
     }
 
     0

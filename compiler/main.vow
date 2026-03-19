@@ -415,10 +415,16 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         }
     }
     let result: i64 = clif_emit_module(ir_mod, out, mode, trace);
-    if result != 0 {
+    if result == -1 {
         eprintln_str(String::from("compilation failed"));
         diag_emit_build_verify_json(String::from("CompileFailed"), String::from(""), dctx, Vec::new());
         return 1;
+    }
+    if result == -2 {
+        if !do_verify {
+            diag_emit_build_verify_json(String::from("Unverified"), String::from(""), dctx, Vec::new());
+            return 0;
+        }
     }
     if !do_verify {
         diag_emit_build_verify_json(String::from("Unverified"), out, dctx, Vec::new());
@@ -603,11 +609,15 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
             let str_eids: Vec<i64> = e.expr_str_eids;
             let ir_mod: IrModule = lower_module_vow(merged, str_eids);
             let result: i64 = clif_emit_module(ir_mod, out, mode, trace);
-            if result != 0 {
+            if result == -1 {
                 eprintln_str(String::from("compilation failed"));
                 return 1;
             }
-            diag_emit_build_json(String::from("Unverified"), out, dctx);
+            if result == -2 {
+                diag_emit_build_json(String::from("Unverified"), String::from(""), dctx);
+            } else {
+                diag_emit_build_json(String::from("Unverified"), out, dctx);
+            }
         } else {
             let str_eids: Vec<i64> = e.expr_str_eids;
             let ir_mod: IrModule = lower_module_vow(merged, str_eids);

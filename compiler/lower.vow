@@ -1884,7 +1884,9 @@ fn print_expr_text(a: AstArena, eid: i64) -> String {
     }
     if tag == EXPR_CAST() {
         let inner_eid: i64 = expr_a(a, eid);
-        let result: String = print_expr_text(a, inner_eid);
+        let inner_s: String = print_expr_text(a, inner_eid);
+        let result: String = String::from("");
+        result.push_str(inner_s);
         result.push_str(String::from(" as <type>"));
         return result;
     }

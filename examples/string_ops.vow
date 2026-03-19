@@ -1,3 +1,5 @@
+module StringOps
+
 fn main() [io] {
     let s: String = String::from("Hello, World!");
 
