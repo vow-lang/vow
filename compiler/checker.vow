@@ -497,6 +497,19 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             if mname == String::from("byte_at") { return CTY_I64(); }
             if mname == String::from("push_str") { return CTY_UNIT(); }
             if mname == String::from("push_byte") { return CTY_UNIT(); }
+            if mname == String::from("substring") { return CTY_STR(); }
+            if mname == String::from("parse_i64") {
+                let opt_base: i64 = ts_make_enum(e.ts, String::from("Option"));
+                let opt_args: Vec<i64> = Vec::new();
+                opt_args.push(CTY_I64());
+                return ts_make_applied(e.ts, opt_base, opt_args);
+            }
+            if mname == String::from("parse_u64") {
+                let opt_base: i64 = ts_make_enum(e.ts, String::from("Option"));
+                let opt_args: Vec<i64> = Vec::new();
+                opt_args.push(CTY_U64());
+                return ts_make_applied(e.ts, opt_base, opt_args);
+            }
             return CTY_UNIT();
         }
         if recv_tag == CTY_APPLIED() {

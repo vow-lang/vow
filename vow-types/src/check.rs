@@ -698,6 +698,15 @@ impl<'e> Checker<'e> {
                         "contains" => Ty::Bool,
                         "byte_at" => Ty::I64,
                         "push_byte" => Ty::Unit,
+                        "substring" => Ty::Str,
+                        "parse_i64" => Ty::Applied(
+                            Box::new(Ty::Enum("Option".to_string())),
+                            vec![Ty::I64],
+                        ),
+                        "parse_u64" => Ty::Applied(
+                            Box::new(Ty::Enum("Option".to_string())),
+                            vec![Ty::U64],
+                        ),
                         _ => Ty::Unit,
                     }
                 } else if is_hashmap {

@@ -417,6 +417,7 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("hex_encode") { return String::from("__vow_hex_encode"); }
     if name == String::from("hex_decode") { return String::from("__vow_hex_decode"); }
     if name == String::from("args") { return String::from("__vow_args"); }
+    if name == String::from("stdin_read") { return String::from("__vow_stdin_read"); }
     if name == String::from("process_exit") { return String::from("__vow_process_exit"); }
     if name == String::from("process_run") { return String::from("__vow_process_run"); }
     if name == String::from("process_get_stdout") { return String::from("__vow_process_get_stdout"); }
@@ -458,6 +459,7 @@ fn builtin_ret_ty(name: String) -> i64 {
     if name == String::from("hex_encode") { return ITY_PTR(); }
     if name == String::from("hex_decode") { return ITY_PTR(); }
     if name == String::from("args") { return ITY_PTR(); }
+    if name == String::from("stdin_read") { return ITY_PTR(); }
     if name == String::from("process_exit") { return ITY_UNIT(); }
     if name == String::from("process_run") { return ITY_I64(); }
     if name == String::from("process_get_stdout") { return ITY_PTR(); }
@@ -713,7 +715,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 ai = ai + 1;
             }
             let result: i64 = lctx_emit(ctx, IOP_CALL(), ret_ty, call_args, IDATA_CALL_EXTERN(), 0, 0, ext);
-            if fn_name == String::from("fs_read") {
+            if fn_name == String::from("fs_read") || fn_name == String::from("stdin_read") {
                 lctx_tag(ctx, result, String::from("String"));
             }
             if fn_name == String::from("args") {
@@ -1265,6 +1267,48 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 call_args.push(recv_id);
                 call_args.push(arg_id);
                 return lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_push_byte"));
+            }
+            if method_name == String::from("substring") {
+                let nargs: i64 = list_len(a, args_lid);
+                let start_id: i64 = {
+                    if nargs > 0 {
+                        let ae: i64 = list_get(a, args_lid, 0);
+                        lower_expr(ctx, ae)
+                    } else {
+                        let u_args: Vec<i64> = Vec::new();
+                        lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), u_args, IDATA_CONST_I64(), 0, 0, String::from(""))
+                    }
+                };
+                let end_id: i64 = {
+                    if nargs > 1 {
+                        let ae: i64 = list_get(a, args_lid, 1);
+                        lower_expr(ctx, ae)
+                    } else {
+                        let u_args: Vec<i64> = Vec::new();
+                        lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), u_args, IDATA_CONST_I64(), 0, 0, String::from(""))
+                    }
+                };
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(recv_id);
+                call_args.push(start_id);
+                call_args.push(end_id);
+                let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_substring"));
+                lctx_tag(ctx, result, String::from("String"));
+                return result;
+            }
+            if method_name == String::from("parse_i64") {
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(recv_id);
+                let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_parse_i64_opt"));
+                lctx_tag(ctx, result, String::from("Option"));
+                return result;
+            }
+            if method_name == String::from("parse_u64") {
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(recv_id);
+                let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_parse_u64_opt"));
+                lctx_tag(ctx, result, String::from("Option"));
+                return result;
             }
             if method_name == String::from("contains") {
                 let nargs: i64 = list_len(a, args_lid);

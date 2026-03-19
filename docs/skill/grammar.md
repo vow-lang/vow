@@ -436,6 +436,9 @@ m.contains_key(k)
 | `.push_str(s)`      | `(String) -> ()`            |
 | `.contains(s)`      | `(String) -> bool`          |
 | `.eq(s)`            | `(String) -> bool`          |
+| `.substring(start, end)` | `(i64, i64) -> String` |
+| `.parse_i64()`      | `() -> Option<i64>`         |
+| `.parse_u64()`      | `() -> Option<u64>`         |
 
 ### HashMap<K, V> Methods
 
@@ -526,6 +529,7 @@ Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they 
 | `fs_read`        | `fn(path: String) -> String`               | `[read]`   |
 | `fs_write`       | `fn(path: String, data: String) -> ()`     | `[write]`  |
 | `args`           | `fn() -> Vec<String>`                      | `[read]`   |
+| `stdin_read`     | `fn() -> String`                           | `[read]`   |
 | `process_exit`   | `fn(code: i64) -> ()`                      | `[io]`     |
 
 ## Canonical Form

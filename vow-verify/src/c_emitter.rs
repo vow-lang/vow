@@ -118,6 +118,46 @@ fn collect_typed_vars(func: &Function, creator: &str, prefix: &str) -> HashSet<u
     vars
 }
 
+fn collect_option_vars(func: &Function) -> HashSet<u32> {
+    let mut vars = HashSet::new();
+
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.opcode == Opcode::Call
+                && let InstData::CallExtern(ref name) = inst.data
+                && (name == "__vow_string_parse_i64_opt"
+                    || name == "__vow_string_parse_u64_opt")
+            {
+                vars.insert(inst.id.0);
+            }
+        }
+    }
+
+    loop {
+        let mut changed = false;
+        for block in &func.blocks {
+            for inst in &block.insts {
+                if inst.opcode == Opcode::Upsilon
+                    && let InstData::PhiTarget(phi_id) = inst.data
+                    && !inst.args.is_empty()
+                {
+                    if vars.contains(&inst.args[0].0) && vars.insert(phi_id.0) {
+                        changed = true;
+                    }
+                    if vars.contains(&phi_id.0) && vars.insert(inst.args[0].0) {
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    vars
+}
+
 // ---------------------------------------------------------------------------
 // Modelable function detection (for cross-function spec verification)
 // ---------------------------------------------------------------------------
@@ -138,6 +178,9 @@ fn is_known_builtin(name: &str) -> bool {
             | "__vow_string_byte_at"
             | "__vow_string_eq"
             | "__vow_string_contains"
+            | "__vow_string_substring"
+            | "__vow_string_parse_i64_opt"
+            | "__vow_string_parse_u64_opt"
             | "__vow_string_print"
             | "__vow_map_new"
             | "__vow_map_len"
@@ -169,6 +212,7 @@ pub fn is_modelable(
     let vec_vars = collect_typed_vars(func, "__vow_vec_new", "__vow_vec_");
     let string_vars = collect_typed_vars(func, "__vow_string_from_cstr", "__vow_string_");
     let hashmap_vars = collect_typed_vars(func, "__vow_map_new", "__vow_map_");
+    let option_vars = collect_option_vars(func);
 
     for block in &func.blocks {
         for inst in &block.insts {
@@ -284,6 +328,7 @@ pub fn is_modelable(
                     vec_vars.contains(&iid)
                         || string_vars.contains(&iid)
                         || hashmap_vars.contains(&iid)
+                        || option_vars.contains(&inst.args.first().map_or(u32::MAX, |a| a.0))
                 }
 
                 Opcode::RemF32
@@ -367,6 +412,7 @@ fn emit_inst(
     vec_vars: &HashSet<u32>,
     string_vars: &HashSet<u32>,
     hashmap_vars: &HashSet<u32>,
+    option_vars: &HashSet<u32>,
     const_fns: &HashMap<FuncId, ConstantValue>,
     modelable_fns: &HashSet<FuncId>,
     module: &Module,
@@ -576,6 +622,7 @@ fn emit_inst(
                 if vec_vars.contains(&val_id.0)
                     || string_vars.contains(&val_id.0)
                     || hashmap_vars.contains(&val_id.0)
+                    || option_vars.contains(&val_id.0)
                 {
                     out.push_str("  return 0; /* modelled type return */\n");
                 } else {
@@ -711,6 +758,27 @@ fn emit_inst(
                              \x20     if (__match) {{ v{id} = 1; break; }}\n\
                              \x20   }}\n\
                              \x20 }}\n"
+                        ));
+                    }
+                    "__vow_string_substring" => {
+                        let s = inst.args[0].0;
+                        let start = inst.args[1].0;
+                        let end = inst.args[2].0;
+                        out.push_str(&format!(
+                            "  __ESBMC_assert(v{start} >= 0 && v{start} <= v{s}.len, \"substring start\");\n\
+                             \x20 __ESBMC_assert(v{end} >= v{start} && v{end} <= v{s}.len, \"substring end\");\n\
+                             \x20 v{id}.len = v{end} - v{start};\n\
+                             \x20 for (int64_t __i = 0; __i < v{id}.len && __i < {}; __i++) {{\n\
+                             \x20   v{id}.data[__i] = v{s}.data[v{start} + __i];\n\
+                             \x20 }}\n",
+                            VOW_STRING_MAX
+                        ));
+                    }
+                    "__vow_string_parse_i64_opt" | "__vow_string_parse_u64_opt" => {
+                        out.push_str(&format!(
+                            "  v{id}.tag = __VERIFIER_nondet_long();\n\
+                             \x20 __ESBMC_assume(v{id}.tag == 0 || v{id}.tag == 1);\n\
+                             \x20 if (v{id}.tag == 1) {{ v{id}.payload = __VERIFIER_nondet_long(); }}\n"
                         ));
                     }
                     "__vow_string_print" => {
@@ -852,6 +920,20 @@ fn emit_inst(
                 out.push_str(&format!("  /* FieldGet -> string */ v{}.len = 0;\n", id));
             } else if hashmap_vars.contains(&id) {
                 out.push_str(&format!("  /* FieldGet -> hashmap */ v{}.len = 0;\n", id));
+            } else if let Some(&src_id) = inst.args.first() {
+                if option_vars.contains(&src_id.0) {
+                    if let InstData::FieldIndex(idx) = inst.data {
+                        if idx == 0 {
+                            out.push_str(&format!("  v{id} = v{}.tag;\n", src_id.0));
+                        } else {
+                            out.push_str(&format!("  v{id} = v{}.payload;\n", src_id.0));
+                        }
+                    } else {
+                        emit_unmodelled(inst, out);
+                    }
+                } else {
+                    emit_unmodelled(inst, out);
+                }
             } else {
                 emit_unmodelled(inst, out);
             }
@@ -917,6 +999,7 @@ pub fn emit_c_function_full(
     let vec_vars = collect_typed_vars(func, "__vow_vec_new", "__vow_vec_");
     let string_vars = collect_typed_vars(func, "__vow_string_from_cstr", "__vow_string_");
     let hashmap_vars = collect_typed_vars(func, "__vow_map_new", "__vow_map_");
+    let option_vars = collect_option_vars(func);
 
     // Return type (use int64_t for Ptr since structs are opaque in verification)
     let ret_c = match func.return_ty {
@@ -972,6 +1055,8 @@ pub fn emit_c_function_full(
                         out.push_str(&format!("  __vow_string_t v{};\n  v{}.len = 0;\n", id, id));
                     } else if hashmap_vars.contains(&id) {
                         out.push_str(&format!("  __vow_hashmap_t v{};\n  v{}.len = 0;\n", id, id));
+                    } else if option_vars.contains(&id) {
+                        out.push_str(&format!("  __vow_option_t v{};\n  v{}.tag = 0;\n", id, id));
                     } else {
                         let c_ty = match inst.ty {
                             Ty::Ptr | Ty::LinearPtr => "int64_t",
@@ -1011,6 +1096,8 @@ pub fn emit_c_function_full(
                 out.push_str(&format!("  __vow_string_t v{};\n", id));
             } else if hashmap_vars.contains(&id) {
                 out.push_str(&format!("  __vow_hashmap_t v{};\n", id));
+            } else if option_vars.contains(&id) {
+                out.push_str(&format!("  __vow_option_t v{};\n", id));
             } else {
                 let c_ty = match inst.ty {
                     Ty::Unit => "int32_t",
@@ -1086,6 +1173,7 @@ pub fn emit_c_function_full(
                 &vec_vars,
                 &string_vars,
                 &hashmap_vars,
+                &option_vars,
                 const_fns,
                 modelable_fns,
                 module,
@@ -1107,6 +1195,7 @@ pub fn emit_c_function_full(
                 &vec_vars,
                 &string_vars,
                 &hashmap_vars,
+                &option_vars,
                 const_fns,
                 modelable_fns,
                 module,
@@ -1137,9 +1226,10 @@ fn emit_c_preamble(out: &mut String) {
         VOW_STRING_MAX
     ));
     out.push_str(&format!(
-        "typedef struct {{ int64_t len; int64_t keys[{}]; int64_t vals[{}]; }} __vow_hashmap_t;\n\n",
+        "typedef struct {{ int64_t len; int64_t keys[{}]; int64_t vals[{}]; }} __vow_hashmap_t;\n",
         VOW_HASHMAP_MAX, VOW_HASHMAP_MAX
     ));
+    out.push_str("typedef struct { int64_t tag; int64_t payload; } __vow_option_t;\n\n");
 }
 
 fn emit_forward_declaration(func: &Function, out: &mut String) {
@@ -2992,6 +3082,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
+            &HashSet::new(),
             &const_fns,
             &HashSet::new(),
             &empty_module,
@@ -3020,6 +3111,7 @@ mod tests {
         emit_inst(
             &call_inst,
             &mut out,
+            &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),

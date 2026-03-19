@@ -1373,6 +1373,16 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // len
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
+        "__vow_string_substring" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.params.push(AbiParam::new(types::I64)); // start
+            sig.params.push(AbiParam::new(types::I64)); // end (exclusive)
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_string_parse_i64_opt" | "__vow_string_parse_u64_opt" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.returns.push(AbiParam::new(types::I64)); // *Option enum (16 bytes: tag+payload)
+        }
         "__vow_string_split" => {
             sig.params.push(AbiParam::new(types::I64)); // haystack ptr
             sig.params.push(AbiParam::new(types::I64)); // separator ptr
@@ -1435,6 +1445,9 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         }
         "__vow_args" => {
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<String>
+        }
+        "__vow_stdin_read" => {
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
         "__vow_process_exit" => {
             sig.params.push(AbiParam::new(types::I64)); // exit code

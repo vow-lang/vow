@@ -47,6 +47,7 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "hex_encode" => Some(("__vow_hex_encode", Ty::Ptr)),
         "hex_decode" => Some(("__vow_hex_decode", Ty::Ptr)),
         "args" => Some(("__vow_args", Ty::Ptr)),
+        "stdin_read" => Some(("__vow_stdin_read", Ty::Ptr)),
         "process_exit" => Some(("__vow_process_exit", Ty::Unit)),
         "process_run" => Some(("__vow_process_run", Ty::I64)),
         "process_get_stdout" => Some(("__vow_process_get_stdout", Ty::Ptr)),
@@ -1398,6 +1399,45 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         InstData::CallExtern("__vow_string_push_byte".to_string()),
                         span,
                     )
+                }
+                (Some("String"), "substring") => {
+                    let start_id = args.first().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
+                        ctx.emit(Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0), span)
+                    });
+                    let end_id = args.get(1).map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
+                        ctx.emit(Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0), span)
+                    });
+                    let result = ctx.emit(
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![recv_id, start_id, end_id],
+                        InstData::CallExtern("__vow_string_substring".to_string()),
+                        span,
+                    );
+                    ctx.inst_struct_type.insert(result, "String".to_string());
+                    result
+                }
+                (Some("String"), "parse_i64") => {
+                    let result = ctx.emit(
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![recv_id],
+                        InstData::CallExtern("__vow_string_parse_i64_opt".to_string()),
+                        span,
+                    );
+                    ctx.inst_struct_type.insert(result, "Option".to_string());
+                    result
+                }
+                (Some("String"), "parse_u64") => {
+                    let result = ctx.emit(
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![recv_id],
+                        InstData::CallExtern("__vow_string_parse_u64_opt".to_string()),
+                        span,
+                    );
+                    ctx.inst_struct_type.insert(result, "Option".to_string());
+                    result
                 }
                 (Some("HashMap"), "len") => ctx.emit(
                     Opcode::Call,

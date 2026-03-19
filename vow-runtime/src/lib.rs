@@ -462,6 +462,20 @@ pub unsafe extern "C" fn __vow_string_substr(s: *const u8, start: i64, len: i64)
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_substring(s: *const u8, start: i64, end: i64) -> *mut u8 {
+    if s.is_null() {
+        return __vow_vec_new(1, 1);
+    }
+    let v = unsafe { &*(s as *const VowVec) };
+    let slen = v.len as i64;
+    let clamped_start = start.clamp(0, slen) as usize;
+    let clamped_end = end.clamp(clamped_start as i64, slen) as usize;
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let len = clamped_end - clamped_start;
+    unsafe { __vow_string_new(bytes[clamped_start..].as_ptr() as *const i8, len) }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_split(haystack: *const u8, separator: *const u8) -> *mut u8 {
     let result_vec = __vow_vec_new_val();
     if haystack.is_null() || separator.is_null() {
@@ -612,6 +626,58 @@ pub unsafe extern "C" fn __vow_string_join(vec_ptr: *const u8, sep: *const u8) -
         unsafe { __vow_string_push_str(result, str_ptr as *const u8) };
     }
     result
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_parse_i64_opt(s: *const u8) -> *mut u8 {
+    let ptr = __vow_vec_new(8, 8) as *mut i64;
+    if s.is_null() {
+        unsafe { *ptr = 0 };
+        return ptr as *mut u8;
+    }
+    let v = unsafe { &*(s as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    match std::str::from_utf8(bytes) {
+        Ok(text) => match text.trim().parse::<i64>() {
+            Ok(val) => {
+                unsafe { *ptr = 1 };
+                unsafe { *ptr.add(1) = val };
+            }
+            Err(_) => {
+                unsafe { *ptr = 0 };
+            }
+        },
+        Err(_) => {
+            unsafe { *ptr = 0 };
+        }
+    }
+    ptr as *mut u8
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_parse_u64_opt(s: *const u8) -> *mut u8 {
+    let ptr = __vow_vec_new(8, 8) as *mut i64;
+    if s.is_null() {
+        unsafe { *ptr = 0 };
+        return ptr as *mut u8;
+    }
+    let v = unsafe { &*(s as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    match std::str::from_utf8(bytes) {
+        Ok(text) => match text.trim().parse::<u64>() {
+            Ok(val) => {
+                unsafe { *ptr = 1 };
+                unsafe { *ptr.add(1) = val as i64 };
+            }
+            Err(_) => {
+                unsafe { *ptr = 0 };
+            }
+        },
+        Err(_) => {
+            unsafe { *ptr = 0 };
+        }
+    }
+    ptr as *mut u8
 }
 
 #[unsafe(no_mangle)]
@@ -879,6 +945,14 @@ pub unsafe extern "C" fn __vow_eprintln_str(s: *const u8) {
         let _ = std::io::stderr().write_all(bytes);
         let _ = writeln!(std::io::stderr());
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_stdin_read() -> *mut u8 {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    let _ = std::io::stdin().read_to_end(&mut buf);
+    unsafe { __vow_string_new(buf.as_ptr() as *const i8, buf.len()) }
 }
 
 #[unsafe(no_mangle)]

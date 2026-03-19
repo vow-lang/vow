@@ -1,0 +1,6 @@
+module stdin_read
+
+fn main() [read, io] {
+    let input: String = stdin_read();
+    print_str(input);
+}
