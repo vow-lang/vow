@@ -13,7 +13,7 @@
     },
     "executable": {
       "type": ["string", "null"],
-      "description": "Path to compiled binary, or null on failure"
+      "description": "Path to compiled binary, or null on failure or when source has no main function (library module)"
     },
     "diagnostics": {
       "type": "array",

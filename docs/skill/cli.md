@@ -138,7 +138,7 @@ vow verify --help --human  # same human text (works on all subcommands)
 | Field              | Type                | When Present      | Description                               |
 |--------------------|---------------------|-------------------|-------------------------------------------|
 | `status`           | string              | Always            | One of the four status values             |
-| `executable`       | string \| null      | Always            | Path to binary, null on compile failure   |
+| `executable`       | string \| null      | Always            | Path to binary, null on compile failure or library module (no main) |
 | `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |
 | `message`          | string              | CompileFailed     | Error category ("parse error", "type error", "module load error", or link error detail) |
 | `function`         | string              | VerifyFailed      | Function where verification failed        |

@@ -210,6 +210,10 @@ for vow_file in examples/*.vow; do
     fi
 
     compare_json "${name}/build-no-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+
+    # Save JSON for Section 3 (runtime execution)
+    echo "$rust_json" > "$TMPDIR/rust_${name}.json"
+    echo "$self_json" > "$TMPDIR/self_${name}.json"
 done
 echo ""
 
@@ -244,6 +248,20 @@ for vow_file in examples/*.vow; do
         skip "${name}/runtime" "division by zero UB in release mode"
         continue
     fi
+
+    # Check if build produced executables (from Section 1 JSON)
+    rust_exe=$(python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('executable') or '')" < "$TMPDIR/rust_${name}.json" 2>/dev/null) || rust_exe=""
+    self_exe=$(python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('executable') or '')" < "$TMPDIR/self_${name}.json" 2>/dev/null) || self_exe=""
+
+    if [ -z "$rust_exe" ] && [ -z "$self_exe" ]; then
+        skip "${name}/runtime" "no executable (library module)"
+        continue
+    fi
+    if [ -z "$rust_exe" ] || [ -z "$self_exe" ]; then
+        fail "${name}/runtime" "executable mismatch: rust='${rust_exe:-null}' self='${self_exe:-null}'"
+        continue
+    fi
+
     compare_runtime "${name}/runtime" "$TMPDIR/rust_${name}" "$TMPDIR/self_${name}"
 done
 echo ""
