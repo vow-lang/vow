@@ -106,7 +106,7 @@ All diagnostic output flows through **`vow-diag`**, which every other crate uses
 
 ### Key design invariants
 
-- **No comments in Vow source.** The lexer does not handle `//` or `/*`. Intent lives in contracts.
+- **Line comments only.** `//` comments are stripped at lex time (like whitespace). No block comments (`/* */`). Machine-relevant intent belongs in contracts; comments are for non-semantic rationale.
 - **Canonical form.** The printer is a compiler pass, not a formatter. `parse → print → parse` must be idempotent. Tests enforce this.
 - **Effects are explicit.** Pure functions have empty effect sets. Calling an effectful function from a pure one is a type error. Effect sets are part of every function's type.
 - **Vow blocks have blame.** `requires` violations blame the Caller; `ensures`/`invariant` violations blame the Callee. This is encoded in `vow-diag::Blame`.

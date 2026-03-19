@@ -13,7 +13,7 @@ This principle drives every design decision. Ambiguity is the enemy. Flexibility
 ## 2. Core Design Principles
 
 - **Canonical syntax enforced by the compiler.** No formatters, no style debates. The compiler includes a canonicalizer — there is exactly one surface representation for any given AST. This gives diff-stability for free and eliminates "was this a meaningful change or just reformatting?" ambiguity.
-- **No comments.** Intent is captured by contracts and specifications. API documentation is the type signature plus contracts plus the `--help`-as-skill system. If humans need to communicate meta-instructions to agents ("I want this to be fast, not just correct"), those are structured annotations, not free-text comments.
+- **Line comments for rationale.** Originally Vow banned all comments ("intent lives in contracts"). In practice, agents independently and consistently produce `//` comments — three agents on the vow-lean-kernel project all did this, and both Claude and Codex recommended adding them. Updated principle: **machine-relevant intent belongs in contracts; `//` comments are non-semantic rationale** (cross-turn breadcrumbs, multi-agent coordination, explaining *why* a contract exists). Only `//` line comments; no `/* */`. Comments are stripped at lex time — zero impact on parser, type checker, IR, codegen, or verification.
 - **Explicit semantics over implicit conventions.** No implicit conversions, no context-dependent parsing, no operator overloading. Every syntactic construct has exactly one semantic interpretation.
 - **Compositional and modular.** Small, orthogonal constructs that combine predictably. Clear interfaces with explicit contracts. Local reasoning without global context requirements.
 - **Verification as a first-class citizen.** Specifications are part of the syntax. Verification conditions are automatically generated. Proof obligations guide code generation.
@@ -286,7 +286,7 @@ fn hot_loop(data: &[u8]) -> u64 { ... }
 pub fn old_api() -> () { ... }
 ```
 
-Annotations are structured data. The compiler knows every valid annotation. No arbitrary strings.
+Annotations are structured data. The compiler knows every valid annotation. No arbitrary strings. `//` line comments are also available for free-text rationale — annotations remain for structured, compiler-understood metadata.
 
 ### Visibility
 
@@ -599,7 +599,7 @@ That's the language. Nothing more is needed.
 
 | Traditional | Vow |
 |---|---|
-| Comments explain intent | Contracts capture intent; no comments |
+| Comments explain intent | Contracts capture intent; `//` for non-semantic rationale |
 | Formatters enforce style | Canonicalizer is a compiler pass |
 | Rich FFI for ergonomic C interop | Thin verification boundary |
 | Complex type systems for expressiveness | Simple types + refinements checked by ESBMC |

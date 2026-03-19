@@ -19,7 +19,7 @@ In all documentation below, `vow` refers to the `./vowc` binary in the repositor
 
 ## What Vow Excludes
 
-No comments, no generics, no traits, no closures, no macros, no garbage collection.
+No block comments, no generics, no traits, no closures, no macros, no garbage collection. Line comments (`//`) are supported.
 
 ## CEGIS Workflow
 

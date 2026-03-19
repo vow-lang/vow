@@ -261,7 +261,12 @@ fn lex(src: String) -> Vec<Token> {
             }
         } else if b == 47 {
             let b1: i64 = src.byte_at(pos + 1);
-            if b1 == 33 {
+            if b1 == 47 {
+                pos = pos + 2;
+                while pos < src_len && src.byte_at(pos) != 10 {
+                    pos = pos + 1;
+                }
+            } else if b1 == 33 {
                 pos = pos + 2;
                 let tok: Token = make_token(tok_slash_checked(), 0, 0, empty_str(), start, 2);
                 tokens.push(tok);

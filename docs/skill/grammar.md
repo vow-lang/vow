@@ -2,7 +2,7 @@
 
 Complete grammar for the Vow programming language. Vow source files use the `.vow` extension.
 
-**No comments.** Vow has no comment syntax (`//`, `/*`). Intent lives in contracts.
+**Line comments.** `//` starts a line comment extending to end of line. Comments are stripped during lexing and never enter the token stream. Block comments (`/* */`) are not supported. Machine-relevant intent belongs in contracts; comments are for non-semantic rationale.
 
 ## Module Declaration
 

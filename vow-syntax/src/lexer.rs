@@ -35,6 +35,12 @@ impl<'src> Lexer<'src> {
         while self.pos < self.src.len() {
             match self.current_byte() {
                 b' ' | b'\t' | b'\n' | b'\r' => self.pos += 1,
+                b'/' if self.peek_byte(1) == Some(b'/') => {
+                    self.pos += 2;
+                    while self.pos < self.src.len() && self.current_byte() != b'\n' {
+                        self.pos += 1;
+                    }
+                }
                 _ => break,
             }
         }
@@ -610,6 +616,69 @@ mod tests {
         let tokens = Lexer::new("").tokenize().unwrap();
         assert_eq!(tokens[0].kind, TokenKind::Eof);
         assert_eq!(tokens[0].span, Span::new(0, 0));
+    }
+
+    #[test]
+    fn lex_line_comment_only() {
+        let kinds = lex("// comment\n");
+        assert_eq!(kinds, vec![TokenKind::Eof]);
+    }
+
+    #[test]
+    fn lex_comment_after_code() {
+        let kinds = lex("fn foo // comment\n");
+        assert_eq!(kinds[0], TokenKind::KwFn);
+        assert_eq!(kinds[1], TokenKind::Ident("foo".to_string()));
+        assert_eq!(kinds[2], TokenKind::Eof);
+    }
+
+    #[test]
+    fn lex_comment_at_eof_no_newline() {
+        let kinds = lex("fn foo // comment");
+        assert_eq!(kinds[0], TokenKind::KwFn);
+        assert_eq!(kinds[1], TokenKind::Ident("foo".to_string()));
+        assert_eq!(kinds[2], TokenKind::Eof);
+    }
+
+    #[test]
+    fn lex_slash_still_division() {
+        let kinds = lex("a / b");
+        assert_eq!(kinds[0], TokenKind::Ident("a".to_string()));
+        assert_eq!(kinds[1], TokenKind::Slash);
+        assert_eq!(kinds[2], TokenKind::Ident("b".to_string()));
+        assert_eq!(kinds[3], TokenKind::Eof);
+    }
+
+    #[test]
+    fn lex_slash_checked_still_works() {
+        let kinds = lex("a /! b");
+        assert_eq!(kinds[0], TokenKind::Ident("a".to_string()));
+        assert_eq!(kinds[1], TokenKind::SlashChecked);
+        assert_eq!(kinds[2], TokenKind::Ident("b".to_string()));
+        assert_eq!(kinds[3], TokenKind::Eof);
+    }
+
+    #[test]
+    fn lex_double_slash_in_string() {
+        let kinds = lex("\"hello // world\"");
+        assert!(matches!(&kinds[0], TokenKind::LitString(s) if s == "hello // world"));
+        assert_eq!(kinds[1], TokenKind::Eof);
+    }
+
+    #[test]
+    fn lex_multiple_comment_lines() {
+        let kinds = lex("// a\n// b\nfn x");
+        assert_eq!(kinds[0], TokenKind::KwFn);
+        assert_eq!(kinds[1], TokenKind::Ident("x".to_string()));
+        assert_eq!(kinds[2], TokenKind::Eof);
+    }
+
+    #[test]
+    fn lex_empty_comment() {
+        let kinds = lex("//\nfn x");
+        assert_eq!(kinds[0], TokenKind::KwFn);
+        assert_eq!(kinds[1], TokenKind::Ident("x".to_string()));
+        assert_eq!(kinds[2], TokenKind::Eof);
     }
 
     #[test]
