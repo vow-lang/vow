@@ -497,6 +497,8 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             if mname == String::from("byte_at") { return CTY_I64(); }
             if mname == String::from("push_str") { return CTY_UNIT(); }
             if mname == String::from("push_byte") { return CTY_UNIT(); }
+            if mname == String::from("eq") { return CTY_BOOL(); }
+            if mname == String::from("contains") { return CTY_BOOL(); }
             if mname == String::from("substring") { return CTY_STR(); }
             if mname == String::from("parse_i64") {
                 let opt_base: i64 = ts_make_enum(e.ts, String::from("Option"));
@@ -510,12 +512,16 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 opt_args.push(CTY_U64());
                 return ts_make_applied(e.ts, opt_base, opt_args);
             }
+            let err_msg: String = String::from("unknown method '");
+            err_msg.push_str(mname);
+            err_msg.push_str(String::from("' on type 'String'"));
+            env_emit_error_code(e, EC_UNKNOWN_METHOD(), err_msg, expr_span(a, eid));
             return CTY_UNIT();
         }
         if recv_tag == CTY_APPLIED() {
             let base_tid: i64 = ty_a(e.ts, recv_tid);
             let base_tag: i64 = ty_tag(e.ts, base_tid);
-            if base_tag == CTY_ENUM() {
+            if base_tag == CTY_ENUM() || base_tag == CTY_STRUCT() {
                 let base_name: String = ty_struct_name(e.ts, base_tid);
                 if base_name == String::from("Vec") {
                     let hargs_lid: i64 = ty_b(e.ts, recv_tid);
@@ -526,7 +532,12 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     };
                     if mname == String::from("len") { return CTY_I64(); }
                     if mname == String::from("push") { return CTY_UNIT(); }
+                    if mname == String::from("pop") { return CTY_UNIT(); }
                     if mname == String::from("get") { return inner_tid; }
+                    let verr_msg: String = String::from("unknown method '");
+                    verr_msg.push_str(mname);
+                    verr_msg.push_str(String::from("' on type 'Vec'"));
+                    env_emit_error_code(e, EC_UNKNOWN_METHOD(), verr_msg, expr_span(a, eid));
                     return CTY_UNIT();
                 }
                 if base_name == String::from("HashMap") {
@@ -540,10 +551,19 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     if mname == String::from("get") { return val_tid; }
                     if mname == String::from("contains_key") { return CTY_BOOL(); }
                     if mname == String::from("len") { return CTY_I64(); }
+                    if mname == String::from("remove") { return CTY_UNIT(); }
+                    let herr_msg: String = String::from("unknown method '");
+                    herr_msg.push_str(mname);
+                    herr_msg.push_str(String::from("' on type 'HashMap'"));
+                    env_emit_error_code(e, EC_UNKNOWN_METHOD(), herr_msg, expr_span(a, eid));
                     return CTY_UNIT();
                 }
             }
         }
+        let uerr_msg: String = String::from("unknown method '");
+        uerr_msg.push_str(mname);
+        uerr_msg.push_str(String::from("' on this type"));
+        env_emit_error_code(e, EC_UNKNOWN_METHOD(), uerr_msg, expr_span(a, eid));
         return CTY_UNIT();
     }
 

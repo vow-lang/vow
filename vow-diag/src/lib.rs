@@ -51,6 +51,9 @@ pub enum ErrorCode {
     VowRequiresViolated,
     VowEnsuresViolated,
     VowInvariantViolated,
+    // Method/feature errors
+    UnknownMethod,
+    UnsupportedFeature,
     // IO errors
     IoError,
 }

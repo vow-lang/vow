@@ -37,7 +37,7 @@ Known limitations:
 - Arena deallocation is a no-op (`__vow_arena_free` leaks; fine for short-lived programs)
 - Expression-level source spans are unpopulated (function/statement spans work)
 - 2/4 Stretch benchmarks hit ESBMC `--unwind` ceiling (H07, H10)
-- `divide.vow` release build has UB (no runtime checks; debug mode works)
+- `divide.vow` release build relies on hardware traps (SIGFPE) for division by zero — this is defined behavior, not UB; debug mode provides vow-level diagnostics with blame and captured values
 - Zero public visibility — benchmark results not yet published
 - Spec expressiveness gap: ensures clauses cannot express quantifiers (user-defined function calls now work)
 
