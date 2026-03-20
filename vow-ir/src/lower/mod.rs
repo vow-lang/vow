@@ -386,6 +386,11 @@ fn collect_assigned_in_expr(expr: &Expr, seen: &mut HashSet<String>, out: &mut V
             collect_assigned_in_expr(v, seen, out);
         }
         ExprKind::Return { value: None, .. } => {}
+        ExprKind::Match { arms, .. } => {
+            for arm in arms {
+                collect_assigned_in_expr(&arm.body, seen, out);
+            }
+        }
         _ => {}
     }
 }
@@ -1167,7 +1172,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         }
         ExprKind::Match { scrutinee, arms } => {
             let ptr_id = lower_expr(ctx, scrutinee);
-            // Load enum discriminant (stored as i64 at field 0)
             let tag_id = ctx.emit(
                 Opcode::FieldGet,
                 Ty::I64,
@@ -1177,7 +1181,24 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             );
 
             let merge_block = ctx.new_block();
-            let mut arm_results: Vec<(BlockId, InstId, Ty)> = Vec::new();
+
+            // Collect mutations across all arm bodies.
+            let mutations: Vec<(String, InstId)> = {
+                let mut seen = HashSet::new();
+                let mut names = vec![];
+                for arm in arms {
+                    collect_assigned_in_expr(&arm.body, &mut seen, &mut names);
+                }
+                names
+                    .into_iter()
+                    .filter_map(|name| ctx.lookup(&name).map(|id| (name, id)))
+                    .collect()
+            };
+
+            let scope_snap = ctx.snapshot_scope();
+
+            // Per-arm tracking: (exit_block, result_upsilon, result_ty, mut_vals)
+            let mut arm_results: Vec<(BlockId, InstId, Ty, Vec<InstId>)> = Vec::new();
 
             let mut arm_iter = arms.iter().peekable();
             while let Some(arm) = arm_iter.next() {
@@ -1222,7 +1243,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
                         ctx.switch_to_block(arm_block);
                         ctx.push_scope();
-                        // Bind payload fields
                         for (i, inner_pat) in inner.iter().enumerate() {
                             if let PatKind::Ident { name, .. } = &inner_pat.kind {
                                 let field_val = ctx.emit(
@@ -1238,6 +1258,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         let arm_result = lower_expr(ctx, &arm.body);
                         let arm_ty = ctx.inst_ty(arm_result);
                         ctx.pop_scope();
+
+                        let arm_mut_vals: Vec<InstId> = mutations
+                            .iter()
+                            .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
+                            .collect();
+
                         let up_id = ctx.emit(
                             Opcode::Upsilon,
                             Ty::Unit,
@@ -1252,14 +1278,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             InstData::JumpTarget(merge_block),
                             span,
                         );
-                        arm_results.push((arm_block, up_id, arm_ty));
+                        let exit_block = ctx.current_block;
+                        arm_results.push((exit_block, up_id, arm_ty, arm_mut_vals));
+
+                        ctx.restore_scope(scope_snap.clone());
 
                         if !is_last {
                             ctx.switch_to_block(next_check_block);
                         }
                     }
                     PatKind::Wildcard | PatKind::Ident { .. } => {
-                        // Catch-all arm — just lower the body
                         let arm_block = ctx.current_block;
                         if let PatKind::Ident { name, .. } = &arm.pattern.kind {
                             ctx.push_scope();
@@ -1270,6 +1298,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         let arm_result = lower_expr(ctx, &arm.body);
                         let arm_ty = ctx.inst_ty(arm_result);
                         ctx.pop_scope();
+
+                        let arm_mut_vals: Vec<InstId> = mutations
+                            .iter()
+                            .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
+                            .collect();
+
                         let up_id = ctx.emit(
                             Opcode::Upsilon,
                             Ty::Unit,
@@ -1284,13 +1318,18 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             InstData::JumpTarget(merge_block),
                             span,
                         );
-                        arm_results.push((arm_block, up_id, arm_ty));
+                        arm_results.push((arm_block, up_id, arm_ty, arm_mut_vals));
+
+                        ctx.restore_scope(scope_snap.clone());
                     }
                     _ => {
-                        // Other patterns not yet supported; emit a unit and jump to merge
                         let arm_block = ctx.current_block;
                         let unit =
                             ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span);
+
+                        let arm_mut_vals: Vec<InstId> =
+                            mutations.iter().map(|(_, pre_id)| *pre_id).collect();
+
                         let up_id = ctx.emit(
                             Opcode::Upsilon,
                             Ty::Unit,
@@ -1305,17 +1344,44 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             InstData::JumpTarget(merge_block),
                             span,
                         );
-                        arm_results.push((arm_block, up_id, Ty::Unit));
+                        arm_results.push((arm_block, up_id, Ty::Unit, arm_mut_vals));
                     }
                 }
             }
 
-            let phi_ty = arm_results.first().map(|(_, _, ty)| *ty).unwrap_or(Ty::I64);
+            ctx.restore_scope(scope_snap);
             ctx.switch_to_block(merge_block);
+
+            // Create Phis for mutated variables.
+            for (i, (name, pre_id)) in mutations.iter().enumerate() {
+                let changed = arm_results.iter().any(|(_, _, _, mvs)| mvs[i] != *pre_id);
+                if !changed {
+                    continue;
+                }
+                let phi_ty = ctx.inst_ty(arm_results[0].3[i]);
+                let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
+                for (exit_block, _, _, arm_mut_vals) in &arm_results {
+                    ctx.switch_to_block(*exit_block);
+                    ctx.emit(
+                        Opcode::Upsilon,
+                        phi_ty,
+                        vec![arm_mut_vals[i]],
+                        InstData::PhiTarget(phi_id),
+                        span,
+                    );
+                }
+                ctx.switch_to_block(merge_block);
+                ctx.assign(name, phi_id);
+            }
+
+            let phi_ty = arm_results
+                .first()
+                .map(|(_, _, ty, _)| *ty)
+                .unwrap_or(Ty::I64);
             let phi_id = ctx.emit(Opcode::Phi, phi_ty, vec![], InstData::None, span);
 
-            for (arm_block, up_id, _) in arm_results {
-                backpatch_upsilon(ctx, arm_block, up_id, phi_id);
+            for (arm_block, up_id, _, _) in &arm_results {
+                backpatch_upsilon(ctx, *arm_block, *up_id, phi_id);
             }
 
             phi_id

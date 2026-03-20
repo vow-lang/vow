@@ -504,6 +504,15 @@ fn collect_assigned_in_expr(ctx: LowerCtx, eid: i64, out: Vec<String>) {
     } else if tag == EXPR_WHILE() {
         let body_bid: i64 = expr_b(a, eid);
         collect_assigned_in_block(ctx, body_bid, out);
+    } else if tag == EXPR_MATCH() {
+        let arms_lid: i64 = expr_b(a, eid);
+        let n_arms: i64 = list_len(a, arms_lid) / 2;
+        let mut mai: i64 = 0;
+        while mai < n_arms {
+            let body_eid: i64 = list_get(a, arms_lid, mai * 2 + 1);
+            collect_assigned_in_expr(ctx, body_eid, out);
+            mai = mai + 1;
+        }
     }
 }
 
@@ -1452,8 +1461,34 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let merge_block: i64 = lctx_new_block(ctx);
         let n_arms: i64 = list_len(a, arms_lid) / 2;
 
+        let match_mut_names: Vec<String> = Vec::new();
+        let mut cmi: i64 = 0;
+        while cmi < n_arms {
+            let cb_eid: i64 = list_get(a, arms_lid, cmi * 2 + 1);
+            collect_assigned_in_expr(ctx, cb_eid, match_mut_names);
+            cmi = cmi + 1;
+        }
+        let match_muts: Vec<String> = Vec::new();
+        let mut cmj: i64 = 0;
+        while cmj < match_mut_names.len() {
+            let mname: String = match_mut_names[cmj];
+            if lctx_lookup(ctx, mname) != -1 {
+                match_muts.push(mname);
+            }
+            cmj = cmj + 1;
+        }
+        let nmut: i64 = match_muts.len();
+        let saved_mut_vals: Vec<i64> = Vec::new();
+        let mut smi: i64 = 0;
+        while smi < nmut {
+            saved_mut_vals.push(lctx_lookup(ctx, match_muts[smi]));
+            smi = smi + 1;
+        }
+        let snap: ScopeSnap = lctx_snapshot(ctx);
+
         let arm_exit_blocks: Vec<i64> = Vec::new();
         let arm_up_ids: Vec<i64> = Vec::new();
+        let arm_mut_ups: Vec<i64> = Vec::new();
 
         let mut ai: i64 = 0;
         while ai < n_arms {
@@ -1521,6 +1556,16 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let arm_result: i64 = lower_expr(ctx, body_eid);
                 lctx_pop_scope(ctx);
 
+                let mut mci: i64 = 0;
+                while mci < nmut {
+                    let mv: i64 = lctx_lookup(ctx, match_muts[mci]);
+                    let mu_args: Vec<i64> = Vec::new();
+                    mu_args.push(mv);
+                    let mu_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), mu_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+                    arm_mut_ups.push(mu_id);
+                    mci = mci + 1;
+                }
+
                 let up_args: Vec<i64> = Vec::new();
                 up_args.push(arm_result);
                 let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
@@ -1529,6 +1574,13 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
                 arm_exit_blocks.push(ctx.current_block);
                 arm_up_ids.push(up_id);
+
+                lctx_restore(ctx, snap);
+                let mut rmi: i64 = 0;
+                while rmi < nmut {
+                    lctx_assign(ctx, match_muts[rmi], saved_mut_vals[rmi]);
+                    rmi = rmi + 1;
+                }
 
                 if !is_last {
                     lctx_switch_to_block(ctx, next_check);
@@ -1543,6 +1595,16 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let arm_result: i64 = lower_expr(ctx, body_eid);
                 lctx_pop_scope(ctx);
 
+                let mut mci2: i64 = 0;
+                while mci2 < nmut {
+                    let mv2: i64 = lctx_lookup(ctx, match_muts[mci2]);
+                    let mu2_args: Vec<i64> = Vec::new();
+                    mu2_args.push(mv2);
+                    let mu2_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), mu2_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+                    arm_mut_ups.push(mu2_id);
+                    mci2 = mci2 + 1;
+                }
+
                 let up_args: Vec<i64> = Vec::new();
                 up_args.push(arm_result);
                 let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
@@ -1551,9 +1613,26 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
                 arm_exit_blocks.push(ctx.current_block);
                 arm_up_ids.push(up_id);
+
+                lctx_restore(ctx, snap);
+                let mut rmi2: i64 = 0;
+                while rmi2 < nmut {
+                    lctx_assign(ctx, match_muts[rmi2], saved_mut_vals[rmi2]);
+                    rmi2 = rmi2 + 1;
+                }
             } else {
                 let u_args: Vec<i64> = Vec::new();
                 let unit_id: i64 = lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""));
+
+                let mut mci3: i64 = 0;
+                while mci3 < nmut {
+                    let mu3_args: Vec<i64> = Vec::new();
+                    mu3_args.push(saved_mut_vals[mci3]);
+                    let mu3_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), mu3_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+                    arm_mut_ups.push(mu3_id);
+                    mci3 = mci3 + 1;
+                }
+
                 let up_args: Vec<i64> = Vec::new();
                 up_args.push(unit_id);
                 let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
@@ -1568,6 +1647,20 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
 
         lctx_switch_to_block(ctx, merge_block);
+
+        let mut mpi: i64 = 0;
+        while mpi < nmut {
+            let mphi_args: Vec<i64> = Vec::new();
+            let mphi_id: i64 = lctx_emit(ctx, IOP_PHI(), ITY_I64(), mphi_args, IDATA_NONE(), 0, 0, String::from(""));
+            let mut bpi: i64 = 0;
+            while bpi < n_arms {
+                backpatch_upsilon(ctx, arm_exit_blocks[bpi], arm_mut_ups[bpi * nmut + mpi], mphi_id);
+                bpi = bpi + 1;
+            }
+            lctx_assign(ctx, match_muts[mpi], mphi_id);
+            mpi = mpi + 1;
+        }
+
         let phi_args: Vec<i64> = Vec::new();
         let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), ITY_I64(), phi_args, IDATA_NONE(), 0, 0, String::from(""));
 

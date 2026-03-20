@@ -741,21 +741,39 @@ fn parse_path_expr(p: Parser, first_sid: i64) -> i64 {
     }
     let path_lid: i64 = arena_add_list(p.arena, path_items);
     if at(p, tok_lbrace()) {
-        let _lb: Token = advance(p);
-        let field_items: Vec<i64> = Vec::new();
-        while !at(p, tok_rbrace()) && !at_end(p) {
-            let fsid: i64 = expect_ident(p);
-            let _colon: bool = expect(p, tok_colon());
-            let feid: i64 = parse_expr(p);
-            field_items.push(fsid);
-            field_items.push(feid);
-            if at(p, tok_comma()) {
-                let _c: Token = advance(p);
+        let n_segs: i64 = path_items.len();
+        if n_segs > 1 {
+            let _lb: Token = advance(p);
+            let val_items: Vec<i64> = Vec::new();
+            while !at(p, tok_rbrace()) && !at_end(p) {
+                let _fsid: i64 = expect_ident(p);
+                let _colon: bool = expect(p, tok_colon());
+                let feid: i64 = parse_expr(p);
+                val_items.push(feid);
+                if at(p, tok_comma()) {
+                    let _c: Token = advance(p);
+                }
             }
+            let _rb: bool = expect(p, tok_rbrace());
+            let vals_lid: i64 = arena_add_list(p.arena, val_items);
+            arena_add_expr(p.arena, EXPR_ECTOR(), path_lid, vals_lid, 0, 0)
+        } else {
+            let _lb: Token = advance(p);
+            let field_items: Vec<i64> = Vec::new();
+            while !at(p, tok_rbrace()) && !at_end(p) {
+                let fsid: i64 = expect_ident(p);
+                let _colon: bool = expect(p, tok_colon());
+                let feid: i64 = parse_expr(p);
+                field_items.push(fsid);
+                field_items.push(feid);
+                if at(p, tok_comma()) {
+                    let _c: Token = advance(p);
+                }
+            }
+            let _rb: bool = expect(p, tok_rbrace());
+            let fields_lid: i64 = arena_add_list(p.arena, field_items);
+            arena_add_expr(p.arena, EXPR_SLIT(), path_lid, fields_lid, 0, 0)
         }
-        let _rb: bool = expect(p, tok_rbrace());
-        let fields_lid: i64 = arena_add_list(p.arena, field_items);
-        arena_add_expr(p.arena, EXPR_SLIT(), path_lid, fields_lid, 0, 0)
     } else if at(p, tok_lparen()) {
         let args_lid: i64 = parse_call_args(p);
         arena_add_expr(p.arena, EXPR_ECTOR(), path_lid, args_lid, 0, 0)
