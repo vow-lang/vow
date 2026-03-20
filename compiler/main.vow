@@ -47,7 +47,7 @@ fn get_source_path(argv: Vec<String>) -> String {
         if first_byte != 45 {
             if i > 1 {
                 let prev: String = argv[i - 1];
-                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--unwind") || prev == String::from("--debug-trace") {
+                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--unwind") || prev == String::from("--debug-trace") || prev == String::from("--filter") || prev == String::from("--timeout") {
                     i = i - 1;
                 } else {
                     return a;
@@ -547,6 +547,286 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
     };
     diag_emit_build_verify_json(status_str, out, dctx, ces);
     if all_proven == 0 {
+        return 1;
+    }
+    0
+}
+
+fn run_frontend_for_path(path: String) -> FrontendResult [io] {
+    let dctx: DiagCtx = diag_ctx_new();
+    let src: String = fs_read(path);
+    diag_ctx_add_source(dctx, path, src);
+    let tokens: Vec<Token> = lex(src);
+    let arena: AstArena = arena_new();
+    let m: Module = parse_module_into(tokens, arena, dctx, path);
+    let root_dir: String = get_dir_path(path);
+    let all_items: Vec<i64> = Vec::new();
+    let visited: Vec<String> = Vec::new();
+    visited.push(path);
+    load_deps(root_dir, m, arena, all_items, visited, dctx);
+    let root_items: Vec<i64> = m.items;
+    let n_root: i64 = root_items.len();
+    let mut ri: i64 = 0;
+    while ri < n_root {
+        all_items.push(root_items[ri]);
+        ri = ri + 1;
+    }
+    let merged: Module = Module {
+        name_sid: 0,
+        uses: Vec::new(),
+        items: all_items,
+        arena: arena,
+    };
+    let n_items: i64 = all_items.len();
+    let e: CheckEnv = env_new(dctx, path);
+    check_module(e, merged);
+    let n_errors: i64 = dctx.error_count;
+    let str_eids: Vec<i64> = e.expr_str_eids;
+    FrontendResult {
+        path: path,
+        dctx: dctx,
+        merged: merged,
+        str_eids: str_eids,
+        n_items: n_items,
+        n_errors: n_errors,
+    }
+}
+
+fn is_test_file(name: String) -> bool {
+    if string_ends_with(name, String::from(".vow")) == 0 {
+        return false;
+    }
+    if string_starts_with(name, String::from("test_")) != 0 {
+        return true;
+    }
+    let n: i64 = name.len();
+    if n > 9 {
+        let suffix: String = string_substr(name, n - 9, 9);
+        if suffix == String::from("_test.vow") {
+            return true;
+        }
+    }
+    false
+}
+
+fn str_contains(haystack: String, needle: String) -> bool {
+    let hl: i64 = haystack.len();
+    let nl: i64 = needle.len();
+    if nl == 0 { return true; }
+    if nl > hl { return false; }
+    let mut i: i64 = 0;
+    while i <= hl - nl {
+        let sub: String = string_substr(haystack, i, nl);
+        if sub == needle {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn test_json_escape(s: String) -> String {
+    diag_json_escape_str(s)
+}
+
+fn emit_test_entry_json(file: String, name: String, status: String, exit_code: i64, stdout: String, stderr: String, duration_ms: i64) -> String {
+    let r: String = String::from("{\"file\":\"");
+    r.push_str(test_json_escape(file));
+    r.push_str(String::from("\",\"name\":\""));
+    r.push_str(test_json_escape(name));
+    r.push_str(String::from("\",\"status\":\""));
+    r.push_str(status);
+    r.push_str(String::from("\","));
+    if exit_code >= 0 {
+        r.push_str(String::from("\"exit_code\":"));
+        r.push_str(i64_to_str(exit_code));
+    } else {
+        r.push_str(String::from("\"exit_code\":null"));
+    }
+    r.push_str(String::from(",\"stdout\":\""));
+    r.push_str(test_json_escape(stdout));
+    r.push_str(String::from("\",\"stderr\":\""));
+    r.push_str(test_json_escape(stderr));
+    r.push_str(String::from("\",\"duration_ms\":"));
+    r.push_str(i64_to_str(duration_ms));
+    r.push_str(String::from(",\"diagnostics\":[],\"counterexamples\":[]}"));
+    r
+}
+
+fn run_test(argv: Vec<String>) -> i32 [io] {
+    let path: String = get_source_path_sub(argv);
+    if path.len() == 0 {
+        path = String::from(".");
+    }
+    let filter: String = get_flag_arg(argv, String::from("--filter"));
+    let mode_str: String = get_flag_arg(argv, String::from("--mode"));
+    let mode: i64 = {
+        if mode_str == String::from("release") { 0 }
+        else { 1 }
+    };
+    let timeout_str: String = get_flag_arg(argv, String::from("--timeout"));
+    let timeout_ms: i64 = {
+        if timeout_str.len() > 0 { parse_i64(timeout_str) }
+        else { 30000 }
+    };
+    let do_verify: bool = has_flag(argv, String::from("--verify"));
+
+    // Discover test files
+    let test_files: Vec<String> = Vec::new();
+    if fs_is_dir(path) == 1 {
+        let entries: Vec<String> = fs_listdir(path);
+        let mut ei: i64 = 0;
+        while ei < entries.len() {
+            let entry: String = entries[ei];
+            if is_test_file(entry) {
+                if filter.len() == 0 || str_contains(entry, filter) {
+                    let full: String = str3(path, String::from("/"), entry);
+                    test_files.push(full);
+                }
+            }
+            ei = ei + 1;
+        }
+    } else {
+        test_files.push(path);
+    }
+
+    let entries_json: Vec<String> = Vec::new();
+    let mut passed: i64 = 0;
+    let mut failed: i64 = 0;
+    let mut total_fns: i64 = 0;
+    let mut fns_with_vows: i64 = 0;
+    let mut ti: i64 = 0;
+    while ti < test_files.len() {
+        let test_path: String = test_files[ti];
+        let test_name: String = strip_vow_ext(test_path);
+        // Strip directory prefix to get just the filename stem
+        let name_parts: Vec<String> = string_split(test_path, String::from("/"));
+        let short_name: String = {
+            if name_parts.len() > 0 {
+                strip_vow_ext(name_parts[name_parts.len() - 1])
+            } else {
+                test_name
+            }
+        };
+        let start_time: i64 = time_unix();
+
+        // Compile
+        let fr: FrontendResult = run_frontend_for_path(test_path);
+        if fr.n_errors > 0 {
+            let duration: i64 = time_unix() - start_time;
+            let entry: String = emit_test_entry_json(test_path, short_name, String::from("compile_error"), -1, String::from(""), String::from(""), duration);
+            entries_json.push(entry);
+            failed = failed + 1;
+            ti = ti + 1;
+        } else {
+            let ir_mod: IrModule = lower_module_vow(fr.merged, fr.str_eids);
+
+            // Count contract density
+            let fns2: Vec<IrFunction> = ir_mod.functions;
+            let mut fi: i64 = 0;
+            while fi < fns2.len() {
+                let f: IrFunction = fns2[fi];
+                if f.name != String::from("main") {
+                    total_fns = total_fns + 1;
+                    let vows: Vec<IrVowEntry> = f.vows;
+                    if vows.len() > 0 {
+                        fns_with_vows = fns_with_vows + 1;
+                    }
+                }
+                fi = fi + 1;
+            }
+
+            // Compile to binary
+            let tmp_out: String = str2(String::from("/tmp/vow_test_"), short_name);
+            let result: i64 = clif_emit_module(ir_mod, tmp_out, mode, 0);
+            if result == -1 {
+                let duration: i64 = time_unix() - start_time;
+                let entry: String = emit_test_entry_json(test_path, short_name, String::from("compile_error"), -1, String::from(""), String::from(""), duration);
+                entries_json.push(entry);
+                failed = failed + 1;
+                ti = ti + 1;
+            } else {
+                // Execute with ulimit wrapper
+                let sh_cmd: String = str3(String::from("ulimit -v 2000000; "), tmp_out, String::from(""));
+                let sh_args: Vec<String> = Vec::new();
+                sh_args.push(String::from("-c"));
+                sh_args.push(sh_cmd);
+                let handle: i64 = process_start(String::from("sh"), sh_args);
+                let exit_code: i64 = process_wait_timeout(handle, timeout_ms);
+                let stdout: String = {
+                    if exit_code == -2 {
+                        process_kill(handle);
+                        String::from("")
+                    } else {
+                        process_stdout_for(handle)
+                    }
+                };
+                let stderr: String = {
+                    if exit_code == -2 {
+                        String::from("timeout")
+                    } else {
+                        process_stderr_for(handle)
+                    }
+                };
+                fs_remove(tmp_out);
+                let duration: i64 = time_unix() - start_time;
+                let status: String = {
+                    if exit_code == 0 { String::from("passed") }
+                    else { String::from("failed") }
+                };
+                if exit_code == 0 {
+                    passed = passed + 1;
+                } else {
+                    failed = failed + 1;
+                }
+                let entry: String = emit_test_entry_json(test_path, short_name, status, exit_code, stdout, stderr, duration);
+                entries_json.push(entry);
+                ti = ti + 1;
+            }
+        }
+    }
+
+    // Emit JSON result
+    let total: i64 = passed + failed;
+    let result_status: String = {
+        if failed > 0 { String::from("TestsFailed") }
+        else { String::from("TestsPassed") }
+    };
+    let density_pct: i64 = {
+        if total_fns > 0 { (fns_with_vows * 1000) / total_fns }
+        else { 0 }
+    };
+    let r: String = String::from("{\"status\":\"");
+    r.push_str(result_status);
+    r.push_str(String::from("\",\"total\":"));
+    r.push_str(i64_to_str(total));
+    r.push_str(String::from(",\"passed\":"));
+    r.push_str(i64_to_str(passed));
+    r.push_str(String::from(",\"failed\":"));
+    r.push_str(i64_to_str(failed));
+    r.push_str(String::from(",\"skipped\":0,\"tests\":["));
+    let mut ji: i64 = 0;
+    while ji < entries_json.len() {
+        if ji > 0 {
+            r.push_str(String::from(","));
+        }
+        r.push_str(entries_json[ji]);
+        ji = ji + 1;
+    }
+    r.push_str(String::from("],\"contract_density\":{\"functions_total\":"));
+    r.push_str(i64_to_str(total_fns));
+    r.push_str(String::from(",\"functions_with_vows\":"));
+    r.push_str(i64_to_str(fns_with_vows));
+    r.push_str(String::from(",\"density_pct\":"));
+    // Emit density as X.Y
+    let whole: i64 = density_pct / 10;
+    let frac: i64 = density_pct - (whole * 10);
+    r.push_str(i64_to_str(whole));
+    r.push_str(String::from("."));
+    r.push_str(i64_to_str(frac));
+    r.push_str(String::from("}}"));
+    print_str(r);
+    if failed > 0 {
         return 1;
     }
     0
@@ -1229,8 +1509,7 @@ fn main() -> i32 [io] {
     }
     let cmd: i64 = get_subcommand(argv);
     if cmd == CMD_TEST() {
-        eprintln_str("test: not yet implemented");
-        return 1;
+        return run_test(argv);
     }
     if cmd == CMD_BUILD() {
         return run_build(argv);
