@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vow-lang.dev/schemas/test-result.schema.json",
+  "title": "TestResult",
+  "description": "JSON output from `vow test` on stdout",
+  "type": "object",
+  "required": ["status", "total", "passed", "failed", "skipped", "tests", "contract_density"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["TestsPassed", "TestsFailed"],
+      "description": "Overall test outcome"
+    },
+    "total": {
+      "type": "integer",
+      "description": "Total number of tests discovered"
+    },
+    "passed": {
+      "type": "integer",
+      "description": "Number of tests that passed"
+    },
+    "failed": {
+      "type": "integer",
+      "description": "Number of tests that failed"
+    },
+    "skipped": {
+      "type": "integer",
+      "description": "Number of tests that were skipped"
+    },
+    "tests": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/TestEntry" },
+      "description": "Per-test results"
+    },
+    "contract_density": {
+      "$ref": "#/$defs/ContractDensity",
+      "description": "Contract density across tested modules"
+    }
+  },
+  "$defs": {
+    "TestEntry": {
+      "type": "object",
+      "required": ["file", "name", "status", "stdout", "stderr", "duration_ms", "diagnostics", "counterexamples"],
+      "properties": {
+        "file": { "type": "string", "description": "Path to the test .vow file" },
+        "name": { "type": "string", "description": "Test name (file stem)" },
+        "status": {
+          "type": "string",
+          "enum": ["passed", "failed", "skipped", "compile_error", "verify_failed"],
+          "description": "Per-test outcome"
+        },
+        "exit_code": {
+          "type": ["integer", "null"],
+          "description": "Process exit code, null on compile/verify failure or timeout"
+        },
+        "stdout": { "type": "string", "description": "Captured stdout from test binary" },
+        "stderr": { "type": "string", "description": "Captured stderr from test binary" },
+        "duration_ms": { "type": "integer", "description": "Wall-clock duration in milliseconds" },
+        "diagnostics": {
+          "type": "array",
+          "items": { "$ref": "diagnostic.schema.json" },
+          "description": "Compiler diagnostics (on compile_error)"
+        },
+        "counterexamples": {
+          "type": "array",
+          "items": { "$ref": "counterexample.schema.json" },
+          "description": "ESBMC counterexamples (on verify_failed)"
+        }
+      }
+    },
+    "ContractDensity": {
+      "type": "object",
+      "required": ["functions_total", "functions_with_vows", "density_pct"],
+      "properties": {
+        "functions_total": { "type": "integer", "description": "Total non-main functions across tested modules" },
+        "functions_with_vows": { "type": "integer", "description": "Functions with at least one vow block" },
+        "density_pct": { "type": "number", "description": "Percentage of functions with vow contracts" }
+      }
+    }
+  }
+}
