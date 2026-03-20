@@ -26,6 +26,8 @@ struct LowerCtx {
     const_names: Vec<String>,
     const_values: Vec<i64>,
     loop_exit_blocks: Vec<i64>,
+    vec_elem_inst_ids: Vec<i64>,
+    vec_elem_names: Vec<String>,
 }
 
 struct ScopeSnap {
@@ -61,6 +63,8 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         const_names: Vec::new(),
         const_values: Vec::new(),
         loop_exit_blocks: Vec::new(),
+        vec_elem_inst_ids: Vec::new(),
+        vec_elem_names: Vec::new(),
     }
 }
 
@@ -221,6 +225,23 @@ fn lctx_is_str_eid(ctx: LowerCtx, eid: i64) -> bool {
         i = i + 1;
     }
     false
+}
+
+fn lctx_tag_vec_elem(ctx: LowerCtx, inst_id: i64, elem_name: String) {
+    ctx.vec_elem_inst_ids.push(inst_id);
+    ctx.vec_elem_names.push(elem_name);
+}
+
+fn lctx_get_vec_elem(ctx: LowerCtx, inst_id: i64) -> String {
+    let n: i64 = ctx.vec_elem_inst_ids.len();
+    let mut i: i64 = n;
+    while i > 0 {
+        i = i - 1;
+        if ctx.vec_elem_inst_ids[i] == inst_id {
+            return ctx.vec_elem_names[i];
+        }
+    }
+    String::from("")
 }
 
 fn lctx_intern_str(ctx: LowerCtx, s: String) -> i64 {
@@ -1205,7 +1226,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let args_lid: i64 = expr_c(a, eid);
         let method_name: String = arena_str(a, method_sid);
         let recv_id: i64 = lower_expr(ctx, recv_eid);
-        let recv_tag_str: String = lctx_get_tag(ctx, recv_id);
+        let mut recv_tag_str: String = lctx_get_tag(ctx, recv_id);
+        if recv_tag_str == String::from("") && lctx_is_str_eid(ctx, recv_eid) {
+            recv_tag_str = String::from("String");
+        }
 
         if recv_tag_str == String::from("String") {
             if method_name == String::from("len") {
@@ -1446,7 +1470,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let call_args: Vec<i64> = Vec::new();
         call_args.push(vec_ptr);
         call_args.push(idx_id);
-        return lctx_emit(ctx, IOP_CALL(), ITY_I64(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_get_val"));
+        let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_I64(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_get_val"));
+        let elem_name: String = lctx_get_vec_elem(ctx, vec_ptr);
+        if elem_name.len() > 0 {
+            lctx_tag(ctx, result, elem_name);
+        }
+        return result;
     }
 
     if tag == EXPR_MATCH() {
@@ -1797,6 +1826,18 @@ fn lower_stmt(ctx: LowerCtx, sid: i64) {
                     let type_name_sid: i64 = type_a(a, ann_tid);
                     let type_name: String = arena_str(a, type_name_sid);
                     lctx_tag(ctx, val, type_name);
+                    if type_name == String::from("Vec") {
+                        let args_lid: i64 = type_b(a, ann_tid);
+                        if list_len(a, args_lid) > 0 {
+                            let elem_tid: i64 = list_get(a, args_lid, 0);
+                            let etag: i64 = type_tag(a, elem_tid);
+                            if etag == TY_NAMED() {
+                                let elem_name_sid: i64 = type_a(a, elem_tid);
+                                let elem_name: String = arena_str(a, elem_name_sid);
+                                lctx_tag_vec_elem(ctx, val, elem_name);
+                            }
+                        }
+                    }
                 }
             }
             ctx.func.local_names_ids.push(val);
@@ -2146,6 +2187,8 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     ctx.scope_starts = Vec::new();
     ctx.tag_inst_ids = Vec::new();
     ctx.tag_names = Vec::new();
+    ctx.vec_elem_inst_ids = Vec::new();
+    ctx.vec_elem_names = Vec::new();
 
     if vow_lid != -1 {
         ctx.cur_vow_lid = vow_lid;
@@ -2185,6 +2228,16 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
                     lctx_tag(ctx, arg_id, String::from("HashMap"));
                 } else if tn == String::from("Vec") {
                     lctx_tag(ctx, arg_id, String::from("Vec"));
+                    let pargs_lid: i64 = type_b(a, ptid);
+                    if list_len(a, pargs_lid) > 0 {
+                        let pelem_tid: i64 = list_get(a, pargs_lid, 0);
+                        let petag: i64 = type_tag(a, pelem_tid);
+                        if petag == TY_NAMED() {
+                            let pelem_sid: i64 = type_a(a, pelem_tid);
+                            let pelem_name: String = arena_str(a, pelem_sid);
+                            lctx_tag_vec_elem(ctx, arg_id, pelem_name);
+                        }
+                    }
                 }
             }
         }

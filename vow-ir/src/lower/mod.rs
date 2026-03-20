@@ -1392,7 +1392,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             args,
         } => {
             let recv_id = lower_expr(ctx, receiver);
-            let recv_struct = ctx.inst_struct_type.get(&recv_id).cloned();
+            let recv_struct = ctx.inst_struct_type.get(&recv_id).cloned().or_else(|| {
+                if ctx.string_exprs.contains(&(receiver.as_ref() as *const Expr as usize)) {
+                    Some("String".to_string())
+                } else {
+                    None
+                }
+            });
             match (recv_struct.as_deref(), method.as_str()) {
                 (Some("String"), "len") => ctx.emit(
                     Opcode::Call,
