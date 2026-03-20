@@ -119,7 +119,23 @@ struct VerifyArgs {
 #[derive(clap::Args, Debug)]
 #[command(disable_help_flag = true)]
 struct TestArgs {
-    source: Option<PathBuf>,
+    /// Directory to scan for test files, or a single .vow file
+    path: Option<PathBuf>,
+    /// Run ESBMC verification on test files (off by default)
+    #[arg(long)]
+    verify: bool,
+    /// Only run tests whose name contains this substring
+    #[arg(long)]
+    filter: Option<String>,
+    /// Build mode (debug enables runtime vow checks)
+    #[arg(long, value_enum, default_value = "debug")]
+    mode: ModeArg,
+    /// Per-test execution timeout in milliseconds
+    #[arg(long, default_value = "30000")]
+    timeout: u64,
+    /// ESBMC loop unwind bound (only with --verify)
+    #[arg(long, default_value = "10")]
+    unwind: u32,
     #[arg(long)]
     help: bool,
     #[arg(long)]
@@ -719,6 +735,41 @@ pub struct ContractsResultJson {
     pub summary: ContractsSummaryJson,
 }
 
+// ---------------------------------------------------------------------------
+// Test output types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TestResult {
+    pub status: String,
+    pub total: usize,
+    pub passed: usize,
+    pub failed: usize,
+    pub skipped: usize,
+    pub tests: Vec<TestEntry>,
+    pub contract_density: ContractDensity,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TestEntry {
+    pub file: String,
+    pub name: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    pub duration_ms: u64,
+    pub diagnostics: Vec<DiagnosticJson>,
+    pub counterexamples: Vec<CounterexampleJson>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContractDensity {
+    pub functions_total: usize,
+    pub functions_with_vows: usize,
+    pub density_pct: f64,
+}
 impl DiagnosticJson {
     fn from_diagnostic(d: &Diagnostic) -> Self {
         let blame = match d.blame {
@@ -1694,6 +1745,276 @@ fn run_pipeline_inner(
 }
 
 // ---------------------------------------------------------------------------
+// Test pipeline (vow test)
+// ---------------------------------------------------------------------------
+
+fn discover_test_files(path: &Path) -> Vec<PathBuf> {
+    if path.is_file() {
+        return vec![path.to_path_buf()];
+    }
+    let mut files: Vec<PathBuf> = match std::fs::read_dir(path) {
+        Ok(entries) => entries
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if name.ends_with(".vow")
+                    && (name.starts_with("test_") || name.ends_with("_test.vow"))
+                {
+                    Some(e.path())
+                } else {
+                    None
+                }
+            })
+            .collect(),
+        Err(_) => vec![],
+    };
+    files.sort();
+    files
+}
+
+fn count_contract_density(ir_module: &vow_ir::Module) -> ContractDensity {
+    let mut total = 0usize;
+    let mut with_vows = 0usize;
+    for func in &ir_module.functions {
+        if func.name == "main" {
+            continue;
+        }
+        total += 1;
+        if !func.vows.is_empty() {
+            with_vows += 1;
+        }
+    }
+    let pct = if total > 0 {
+        (with_vows as f64 / total as f64) * 100.0
+    } else {
+        0.0
+    };
+    ContractDensity {
+        functions_total: total,
+        functions_with_vows: with_vows,
+        density_pct: (pct * 10.0).round() / 10.0,
+    }
+}
+
+fn run_test_command(
+    path: &Path,
+    verify: bool,
+    filter: Option<&str>,
+    mode: BuildMode,
+    timeout_ms: u64,
+    _unwind: u32,
+) {
+    let test_files = discover_test_files(path);
+    let test_files: Vec<PathBuf> = match filter {
+        Some(pat) => test_files
+            .into_iter()
+            .filter(|f| {
+                f.file_stem()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|name| name.contains(pat))
+            })
+            .collect(),
+        None => test_files,
+    };
+
+    let mut entries = Vec::new();
+    let mut total_density = ContractDensity {
+        functions_total: 0,
+        functions_with_vows: 0,
+        density_pct: 0.0,
+    };
+
+    for test_file in &test_files {
+        let start = std::time::Instant::now();
+        let file_str = test_file.to_string_lossy().to_string();
+        let name = test_file
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        // Compile
+        let result = run_pipeline_inner(
+            test_file,
+            None,
+            mode,
+            !verify,
+            false,
+            TraceMode::Off,
+            true,
+        );
+
+        let diagnostics: Vec<DiagnosticJson> = result
+            .diagnostics
+            .iter()
+            .map(DiagnosticJson::from_diagnostic)
+            .collect();
+        let counterexamples: Vec<CounterexampleJson> = result
+            .counterexamples
+            .iter()
+            .map(CounterexampleJson::from_structured)
+            .collect();
+
+        match &result.status {
+            BuildStatus::CompileFailed { .. } => {
+                entries.push(TestEntry {
+                    file: file_str,
+                    name,
+                    status: "compile_error".to_string(),
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    diagnostics,
+                    counterexamples,
+                });
+                continue;
+            }
+            BuildStatus::VerifyFailed { .. } => {
+                entries.push(TestEntry {
+                    file: file_str,
+                    name,
+                    status: "verify_failed".to_string(),
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    diagnostics,
+                    counterexamples,
+                });
+                continue;
+            }
+            _ => {}
+        }
+
+        // Accumulate contract density from compiled modules
+        if let Ok(frontend) = compile_frontend(test_file) {
+            let density = count_contract_density(&frontend.ir_module);
+            total_density.functions_total += density.functions_total;
+            total_density.functions_with_vows += density.functions_with_vows;
+        }
+
+        let exe_path = match &result.executable {
+            Some(p) => p.clone(),
+            None => {
+                entries.push(TestEntry {
+                    file: file_str,
+                    name,
+                    status: "compile_error".to_string(),
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    diagnostics,
+                    counterexamples,
+                });
+                continue;
+            }
+        };
+
+        // Execute with ulimit wrapper and timeout
+        let exe_abs = std::fs::canonicalize(&exe_path).unwrap_or(exe_path.clone());
+        let shell_cmd = format!("ulimit -v 2000000; {}", exe_abs.display());
+        let child = std::process::Command::new("sh")
+            .args(["-c", &shell_cmd])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn();
+
+        let (exit_code, stdout_str, stderr_str) = match child {
+            Ok(mut child) => {
+                let timeout = std::time::Duration::from_millis(timeout_ms);
+                let deadline = std::time::Instant::now() + timeout;
+                loop {
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            use std::io::Read;
+                            let mut stdout = String::new();
+                            let mut stderr = String::new();
+                            if let Some(mut so) = child.stdout.take() {
+                                let _ = so.read_to_string(&mut stdout);
+                            }
+                            if let Some(mut se) = child.stderr.take() {
+                                let _ = se.read_to_string(&mut stderr);
+                            }
+                            break (status.code(), stdout, stderr);
+                        }
+                        Ok(None) => {
+                            if std::time::Instant::now() >= deadline {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                                break (None, String::new(), "timeout".to_string());
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        Err(_) => break (Some(-1), String::new(), String::new()),
+                    }
+                }
+            }
+            Err(e) => (Some(-1), String::new(), e.to_string()),
+        };
+
+        // Clean up the produced binary
+        let _ = std::fs::remove_file(&exe_path);
+
+        let status = match exit_code {
+            Some(0) => "passed",
+            Some(_) => "failed",
+            None => "failed", // timeout
+        };
+
+        entries.push(TestEntry {
+            file: file_str,
+            name,
+            status: status.to_string(),
+            exit_code,
+            stdout: stdout_str,
+            stderr: stderr_str,
+            duration_ms: start.elapsed().as_millis() as u64,
+            diagnostics,
+            counterexamples,
+        });
+    }
+
+    // Compute final density
+    if total_density.functions_total > 0 {
+        let pct = (total_density.functions_with_vows as f64
+            / total_density.functions_total as f64)
+            * 100.0;
+        total_density.density_pct = (pct * 10.0).round() / 10.0;
+    }
+
+    let passed = entries.iter().filter(|e| e.status == "passed").count();
+    let failed = entries
+        .iter()
+        .filter(|e| matches!(e.status.as_str(), "failed" | "compile_error" | "verify_failed"))
+        .count();
+    let skipped = entries.iter().filter(|e| e.status == "skipped").count();
+
+    let status = if failed > 0 {
+        "TestsFailed"
+    } else {
+        "TestsPassed"
+    };
+
+    let test_result = TestResult {
+        status: status.to_string(),
+        total: entries.len(),
+        passed,
+        failed,
+        skipped,
+        tests: entries,
+        contract_density: total_density,
+    };
+
+    let json = serde_json::to_string(&test_result).expect("TestResult must be serializable");
+    println!("{json}");
+
+    if failed > 0 {
+        std::process::exit(1);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -2038,8 +2359,12 @@ fn main() {
                 }
                 return;
             }
-            eprintln!("vow test: not yet implemented");
-            std::process::exit(1);
+            let path = t.path.unwrap_or_else(|| PathBuf::from("."));
+            let mode = match t.mode {
+                ModeArg::Debug => BuildMode::Debug,
+                ModeArg::Release => BuildMode::Release,
+            };
+            run_test_command(&path, t.verify, t.filter.as_deref(), mode, t.timeout, t.unwind);
         }
         Some(Command::Decl(d)) => {
             if d.help {
