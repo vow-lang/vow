@@ -1,0 +1,35 @@
+module Stack
+use node
+
+struct Stack {
+    data: Vec<i64>,
+    size: i64,
+}
+
+fn stack_new() -> Stack {
+    let v: Vec<i64> = Vec::new();
+    Stack { data: v, size: 0 }
+}
+
+fn stack_push(s: Stack, val: i64) -> Stack vow {
+    ensures: result.size == s.size + 1
+} {
+    let mut d: Vec<i64> = s.data;
+    d.push(val);
+    Stack { data: d, size: s.size + 1 }
+}
+
+fn stack_size(s: Stack) -> i64 {
+    s.size
+}
+
+fn stack_peek(s: Stack) -> i64 vow {
+    requires: s.size > 0
+} {
+    let idx: i64 = s.size - 1;
+    s.data[idx]
+}
+
+fn stack_is_empty(s: Stack) -> bool {
+    s.size == 0
+}

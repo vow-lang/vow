@@ -1,0 +1,17 @@
+// TEST: counterexample-fn "push_one"
+// TEST: counterexample-blame callee
+module StringEmpty
+
+fn push_one() -> String vow {
+  ensures: result.len() == 0
+} {
+  let s: String = String::from("");
+  s.push_byte(65);
+  s
+}
+
+fn main() -> i32 [io] {
+  let s: String = push_one();
+  print_i64(s.len());
+  0
+}

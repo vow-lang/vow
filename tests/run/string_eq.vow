@@ -1,0 +1,42 @@
+// TEST: stdout "111"
+module StringEq
+
+fn get_greeting() -> String {
+  String::from("hello")
+}
+
+fn get_name() -> String {
+  String::from("world")
+}
+
+fn build_a() -> String [io] {
+  let mut s: String = String::from("");
+  s.push_byte(65);
+  s
+}
+
+fn main() -> i32 [io] {
+  let a: String = get_greeting();
+  let b: String = String::from("hello");
+  if a == b {
+    print_i64(1)
+  } else {
+    print_i64(0)
+  };
+  let c: String = get_name();
+  if a == c {
+    print_i64(0)
+  } else {
+    print_i64(1)
+  };
+  let v: Vec<String> = Vec::new();
+  v.push(build_a());
+  let stored = v[0];
+  let fresh: String = build_a();
+  if stored.eq(fresh) {
+    print_i64(1)
+  } else {
+    print_i64(0)
+  };
+  0
+}

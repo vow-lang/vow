@@ -1,0 +1,16 @@
+// TEST: stdout "0"
+module Countdown
+
+fn countdown(n: i64) -> i64 {
+  let mut i: i64 = n;
+  while i > 0 {
+    i = i - 1;
+  }
+  i
+}
+
+fn main() -> i32 [io] {
+  let result: i64 = countdown(5);
+  print_i64(result);
+  0
+}

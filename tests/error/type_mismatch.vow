@@ -1,0 +1,7 @@
+// TEST: stderr "TypeMismatch"
+module TypeMismatch
+
+fn main() -> i32 {
+  let x: bool = 42;
+  0
+}

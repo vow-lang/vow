@@ -1,0 +1,21 @@
+// TEST: stdout "80\n"
+module ConstSimple
+
+const STRIDE: i64 = 8;
+const MAX_ITEMS: i64 = 100;
+
+fn compute_offset(index: i64) -> i64 vow {
+    requires: index >= 0
+    requires: index < MAX_ITEMS
+    ensures: result >= 0
+    ensures: result == index * STRIDE
+} {
+    index * STRIDE
+}
+
+fn main() -> i64 [io] {
+    let offset: i64 = compute_offset(10);
+    print_i64(offset);
+    print_str("\n");
+    0
+}

@@ -1,0 +1,17 @@
+// TEST: stdout "found hello\nxyz not found\n"
+module StringContains
+
+fn main() -> i32 [io] {
+    let s: String = String::from("hello world");
+    if s.contains(String::from("hello")) {
+        print_str("found hello\n");
+    } else {
+        print_str("not found\n");
+    }
+    if s.contains(String::from("xyz")) {
+        print_str("found xyz\n");
+    } else {
+        print_str("xyz not found\n");
+    }
+    0
+}

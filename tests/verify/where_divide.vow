@@ -1,0 +1,15 @@
+module WhereDivide
+
+fn safe_div(x: i64, y: i64 where y != 0) -> i64 {
+  x / y
+}
+
+fn safe_mod(x: i64, m: i64 where m > 0) -> i64 {
+  x - (x / m) * m
+}
+
+fn main() -> i32 [io] {
+  print_i64(safe_div(10, 3));
+  print_i64(safe_mod(17, 5));
+  0
+}

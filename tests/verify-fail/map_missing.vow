@@ -1,0 +1,17 @@
+// TEST: counterexample-fn "insert_wrong"
+// TEST: counterexample-blame callee
+module MapMissing
+
+fn insert_wrong() -> HashMap<i64, i64> vow {
+  ensures: result.contains_key(42)
+} {
+  let m: HashMap<i64, i64> = HashMap::new();
+  m.insert(1, 100);
+  m
+}
+
+fn main() -> i32 [io] {
+  let m: HashMap<i64, i64> = insert_wrong();
+  print_i64(m.len());
+  0
+}

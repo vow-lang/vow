@@ -1,0 +1,8 @@
+// TEST: stderr "let binding type mismatch"
+module AssignMismatch
+
+fn main() -> i32 {
+  let x: i64 = 1;
+  let y: bool = x;
+  0
+}

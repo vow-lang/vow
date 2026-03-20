@@ -1,0 +1,28 @@
+// TEST: stdout "123"
+module match_mut
+
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+fn classify(c: Color) -> i64 {
+    let mut result: i64 = 0;
+    match c {
+        Color::Red => { result = 1; },
+        Color::Green => { result = 2; },
+        Color::Blue => { result = 3; },
+    }
+    result
+}
+
+fn main() -> i32 [io] {
+    let r: Color = Color::Red();
+    let g: Color = Color::Green();
+    let b: Color = Color::Blue();
+    print_i64(classify(r));
+    print_i64(classify(g));
+    print_i64(classify(b));
+    0
+}

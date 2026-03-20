@@ -1,0 +1,6 @@
+// TEST: stderr "IoError"
+module MissingModule
+
+use nonexistent.thing
+
+fn main() -> i32 { 0 }

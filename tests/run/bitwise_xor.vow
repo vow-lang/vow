@@ -1,0 +1,27 @@
+// TEST: stdout "65280 ^ 255 = 65535\n42 ^ 42 = 0\nxor_swap(10, 20) = 30\n"
+module BitXor
+
+fn xor_swap(a: i64, b: i64) -> i64 {
+    a ^ b
+}
+
+fn main() [io] {
+    let x: i64 = 65280;
+    let y: i64 = 255;
+    let result: i64 = x ^ y;
+    print_str(String::from("65280 ^ 255 = "));
+    print_i64(result);
+    print_str(String::from("\n"));
+
+    let a: i64 = 42;
+    let b: i64 = 42;
+    let zero: i64 = a ^ b;
+    print_str(String::from("42 ^ 42 = "));
+    print_i64(zero);
+    print_str(String::from("\n"));
+
+    let c: i64 = xor_swap(10, 20);
+    print_str(String::from("xor_swap(10, 20) = "));
+    print_i64(c);
+    print_str(String::from("\n"));
+}

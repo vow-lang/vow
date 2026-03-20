@@ -1,0 +1,49 @@
+module Shape
+use point
+
+enum Shape {
+    Circle(i64),
+    Rectangle(i64, i64),
+}
+
+fn circle_area(r: i64) -> i64 vow {
+    requires: r >= 0
+    requires: r <= 1000000
+    ensures: result >= 0
+} {
+    r * r * 3
+}
+
+fn rect_area(w: i64, h: i64) -> i64 vow {
+    requires: w >= 0
+    requires: h >= 0
+    requires: w <= 1000000
+    requires: h <= 1000000
+    ensures: result >= 0
+} {
+    w * h
+}
+
+fn circle_perimeter(r: i64) -> i64 vow {
+    requires: r >= 0
+    requires: r <= 1000000
+    ensures: result >= 0
+} {
+    2 * 3 * r
+}
+
+fn rect_perimeter(w: i64, h: i64) -> i64 vow {
+    requires: w >= 0
+    requires: h >= 0
+    requires: w <= 1000000
+    requires: h <= 1000000
+    ensures: result >= 0
+} {
+    2 * (w + h)
+}
+
+fn shape_at(p: Point) -> Point {
+    let origin: Point = point_new(0, 0);
+    let dist: i64 = point_distance_sq(origin, p);
+    point_new(dist, circle_area(5))
+}
