@@ -13,6 +13,10 @@ Syntactic convenience for humans (string interpolation, pattern matching sugar, 
 
 **Crisp rule:** add surface sugar only when it desugars to today's core semantics with near-zero verifier impact; reject anything that introduces a new type-system axis. This preserves Vow's identity.
 
+## Vow Compiler
+
+When implementing changes across Vow compilers, always modify BOTH the Rust compiler and the self-hosted compiler in the same session. Run the full test suite (`cargo test` and self-hosted tests) after changes to both.
+
 ## Bootstrap Commands (Rust Stage 0)
 
 These Rust workspace commands build the stage 0 bootstrap compiler only. For day-to-day development, use `./vowc` (see below).
