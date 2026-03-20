@@ -1948,6 +1948,15 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_process_wait_timeout" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_process_kill" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_process_stdout_for" | "__vow_process_stderr_for" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));

@@ -1511,6 +1511,15 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // handle
             sig.returns.push(AbiParam::new(types::I64)); // exit code
         }
+        "__vow_process_wait_timeout" => {
+            sig.params.push(AbiParam::new(types::I64)); // handle
+            sig.params.push(AbiParam::new(types::I64)); // timeout_ms
+            sig.returns.push(AbiParam::new(types::I64)); // exit code or -2 timeout
+        }
+        "__vow_process_kill" => {
+            sig.params.push(AbiParam::new(types::I64)); // handle
+            sig.returns.push(AbiParam::new(types::I64)); // 0 success, -1 error
+        }
         "__vow_process_stdout_for" | "__vow_process_stderr_for" => {
             sig.params.push(AbiParam::new(types::I64)); // handle
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
