@@ -353,6 +353,7 @@ mod tests {
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
             &std::collections::HashSet::new(),
             &std::collections::HashMap::new(),
         );
@@ -396,6 +397,7 @@ mod tests {
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
             &std::collections::HashSet::new(),
             &std::collections::HashMap::new(),
         );
@@ -436,6 +438,7 @@ mod tests {
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
             &std::collections::HashSet::new(),
             &std::collections::HashMap::new(),
         );
@@ -467,6 +470,7 @@ mod tests {
             &fn_def,
             "",
             &std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
@@ -545,6 +549,7 @@ mod tests {
             &fn_def,
             "",
             &std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
@@ -652,6 +657,7 @@ mod tests {
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
             &std::collections::HashSet::new(),
             &std::collections::HashMap::new(),
         );
@@ -748,6 +754,7 @@ mod tests {
             struct_field_map,
             std::collections::HashMap::new(),
             struct_field_type_names,
+            std::collections::HashMap::new(),
             &std::collections::HashSet::new(),
             &std::collections::HashMap::new(),
         );

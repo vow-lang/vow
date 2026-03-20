@@ -111,6 +111,10 @@ pub struct LowerCtx {
     const_map: HashMap<String, i64>,
     // loop exit block stack for break
     loop_exit_blocks: Vec<BlockId>,
+    // InstId of a Vec allocation → element type name (for struct-in-Vec field access)
+    inst_vec_elem_type: HashMap<InstId, String>,
+    // struct name → per-field Vec element type name (for FieldGet → Vec propagation)
+    struct_field_vec_elems: HashMap<String, Vec<String>>,
 }
 
 impl LowerCtx {
@@ -126,6 +130,7 @@ impl LowerCtx {
         struct_field_map: HashMap<String, Vec<String>>,
         enum_variant_map: HashMap<String, Vec<String>>,
         struct_field_type_names: HashMap<String, Vec<String>>,
+        struct_field_vec_elems: HashMap<String, Vec<String>>,
         string_exprs: StringExprSet,
     ) -> Self {
         let entry = BasicBlock {
@@ -168,6 +173,8 @@ impl LowerCtx {
             string_exprs,
             const_map: HashMap::new(),
             loop_exit_blocks: Vec::new(),
+            inst_vec_elem_type: HashMap::new(),
+            struct_field_vec_elems,
         }
     }
 
@@ -1047,6 +1054,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             {
                 ctx.inst_struct_type.insert(result_id, type_name.clone());
             }
+            if let Some(vec_elems) = ctx.struct_field_vec_elems.get(&struct_name)
+                && let Some(elem_name) = vec_elems.get(field_idx as usize)
+                && !elem_name.is_empty()
+            {
+                ctx.inst_vec_elem_type
+                    .insert(result_id, elem_name.clone());
+            }
             result_id
         }
         ExprKind::StructLiteral { name, fields } => {
@@ -1606,13 +1620,17 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         ExprKind::Index { base, index } => {
             let vec_ptr = lower_expr(ctx, base);
             let idx_id = lower_expr(ctx, index);
-            ctx.emit(
+            let result = ctx.emit(
                 Opcode::Call,
                 Ty::I64,
                 vec![vec_ptr, idx_id],
                 InstData::CallExtern("__vow_vec_get_val".to_string()),
                 span,
-            )
+            );
+            if let Some(elem_name) = ctx.inst_vec_elem_type.get(&vec_ptr).cloned() {
+                ctx.inst_struct_type.insert(result, elem_name);
+            }
+            result
         }
         // ? operator: unwrap Option::Some or short-circuit with None
         ExprKind::Question { expr: inner } => {
@@ -1808,9 +1826,17 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
                             }
                         },
                         AstType::Generic {
-                            name: type_name, ..
+                            name: type_name,
+                            args,
+                            ..
                         } => {
                             ctx.inst_struct_type.insert(val, type_name.clone());
+                            if type_name == "Vec"
+                                && let Some(AstType::Named { name: elem_name, .. }) = args.first()
+                                && !matches!(elem_name.as_str(), "i32" | "i64" | "u64" | "f32" | "f64" | "bool")
+                            {
+                                ctx.inst_vec_elem_type.insert(val, elem_name.clone());
+                            }
                         }
                         _ => {}
                     }
@@ -1864,6 +1890,7 @@ pub fn lower_function(
     struct_field_map: HashMap<String, Vec<String>>,
     enum_variant_map: HashMap<String, Vec<String>>,
     struct_field_type_names: HashMap<String, Vec<String>>,
+    struct_field_vec_elems: HashMap<String, Vec<String>>,
     string_exprs: &StringExprSet,
     const_map: &HashMap<String, i64>,
 ) -> (Function, Vec<String>) {
@@ -1883,6 +1910,7 @@ pub fn lower_function(
         struct_field_map,
         enum_variant_map,
         struct_field_type_names,
+        struct_field_vec_elems,
         string_exprs.clone(),
     );
 
@@ -1908,8 +1936,13 @@ pub fn lower_function(
             AstType::Generic { name, .. } if name == "HashMap" => {
                 ctx.inst_struct_type.insert(arg_id, "HashMap".to_string());
             }
-            AstType::Generic { name, .. } if name == "Vec" => {
+            AstType::Generic { name, args, .. } if name == "Vec" => {
                 ctx.inst_struct_type.insert(arg_id, "Vec".to_string());
+                if let Some(AstType::Named { name: elem_name, .. }) = args.first()
+                    && !matches!(elem_name.as_str(), "i32" | "i64" | "u64" | "f32" | "f64" | "bool")
+                {
+                    ctx.inst_vec_elem_type.insert(arg_id, elem_name.clone());
+                }
             }
             AstType::Named { name, .. } if ctx.struct_field_map.contains_key(name.as_str()) => {
                 ctx.inst_struct_type.insert(arg_id, name.clone());
@@ -2026,6 +2059,8 @@ pub fn lower_module(module: &AstModule, file: &str, string_exprs: &StringExprSet
 
     // Build struct field type names for FieldGet auto-tagging
     let mut struct_field_type_names: HashMap<String, Vec<String>> = HashMap::new();
+    // struct name → per-field Vec element type name (empty if not Vec<Named>)
+    let mut struct_field_vec_elems: HashMap<String, Vec<String>> = HashMap::new();
     for item in &module.items {
         if let Item::Struct(s) = item {
             let type_names: Vec<String> = s
@@ -2037,7 +2072,23 @@ pub fn lower_module(module: &AstModule, file: &str, string_exprs: &StringExprSet
                     _ => String::new(),
                 })
                 .collect();
+            let vec_elems: Vec<String> = s
+                .fields
+                .iter()
+                .map(|f| match &f.ty {
+                    AstType::Generic { name, args, .. } if name == "Vec" => {
+                        if let Some(AstType::Named { name: elem_name, .. }) = args.first()
+                            && !matches!(elem_name.as_str(), "i32" | "i64" | "u64" | "f32" | "f64" | "bool")
+                        {
+                            return elem_name.clone();
+                        }
+                        String::new()
+                    }
+                    _ => String::new(),
+                })
+                .collect();
             struct_field_type_names.insert(s.name.clone(), type_names);
+            struct_field_vec_elems.insert(s.name.clone(), vec_elems);
         }
     }
 
@@ -2097,6 +2148,7 @@ pub fn lower_module(module: &AstModule, file: &str, string_exprs: &StringExprSet
                 struct_field_map.clone(),
                 enum_variant_map.clone(),
                 struct_field_type_names.clone(),
+                struct_field_vec_elems.clone(),
                 string_exprs,
                 &const_map,
             );
@@ -2222,6 +2274,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
+            HashMap::new(),
             &HashSet::new(),
             &HashMap::new(),
         );
@@ -2263,6 +2316,7 @@ mod tests {
             &fn_def,
             "",
             &HashMap::new(),
+            HashMap::new(),
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -2313,6 +2367,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
+            HashMap::new(),
             &HashSet::new(),
             &HashMap::new(),
         );
@@ -2352,6 +2407,7 @@ mod tests {
             &fn_def,
             "",
             &HashMap::new(),
+            HashMap::new(),
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -2395,6 +2451,7 @@ mod tests {
             &fn_def,
             "",
             &HashMap::new(),
+            HashMap::new(),
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -2448,6 +2505,7 @@ mod tests {
             &fn_def,
             "",
             &HashMap::new(),
+            HashMap::new(),
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -2550,6 +2608,7 @@ mod tests {
             &fn_def,
             "",
             &HashMap::new(),
+            HashMap::new(),
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
