@@ -1,0 +1,35 @@
+module TestVow
+
+fn clamp(x: i64, lo: i64, hi: i64) -> i64
+    vow {
+        requires: lo <= hi
+        ensures: result >= lo
+        ensures: result <= hi
+    }
+{
+    if x < lo {
+        lo
+    } else if x > hi {
+        hi
+    } else {
+        x
+    }
+}
+
+fn abs(x: i64) -> i64
+    vow {
+        ensures: result >= 0
+    }
+{
+    if x < 0 { 0 - x } else { x }
+}
+
+fn main() -> i32 {
+    if clamp(5, 0, 10) != 5 { return 1; }
+    if clamp(-5, 0, 10) != 0 { return 2; }
+    if clamp(15, 0, 10) != 10 { return 3; }
+    if abs(5) != 5 { return 4; }
+    if abs(-5) != 5 { return 5; }
+    if abs(0) != 0 { return 6; }
+    0
+}

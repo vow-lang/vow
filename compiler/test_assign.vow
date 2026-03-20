@@ -1,8 +1,13 @@
 module TestAssign
 
-fn main() -> i32 [io] {
+fn main() -> i32 {
     let mut x: i64 = 10;
+    if x != 10 { return 1; }
     x = 20;
-    print_i64(x);
+    if x != 20 { return 2; }
+    x = x + 5;
+    if x != 25 { return 3; }
+    let y: i64 = 42;
+    if y != 42 { return 4; }
     0
 }
