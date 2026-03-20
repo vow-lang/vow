@@ -474,6 +474,59 @@ for name in clamp max callee_blame cegis_broken; do
 done
 echo ""
 
+# ─── Section 10: Test Subcommand ────────────────────────────────────
+
+echo -e "${BOLD}--- Section 10: Test Subcommand ---${RESET}"
+
+# Run vowc test with both compilers on compiler/ directory
+rust_test_json=$($RUST test compiler/ 2>/dev/null) || true
+self_test_json=$(run_self test compiler/ 2>/dev/null) || true
+
+if [ -z "$rust_test_json" ] || [ -z "$self_test_json" ]; then
+    skip "test/subcommand" "empty output"
+else
+    # Check that both report TestsPassed
+    rust_status=$(echo "$rust_test_json" | uv run python -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null) || rust_status=""
+    self_status=$(echo "$self_test_json" | uv run python -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null) || self_status=""
+
+    if [ "$rust_status" = "TestsPassed" ] && [ "$self_status" = "TestsPassed" ]; then
+        pass "test/status"
+    else
+        fail "test/status" "rust=$rust_status self=$self_status"
+    fi
+
+    # Check counts match
+    rust_total=$(echo "$rust_test_json" | uv run python -c "import json,sys; print(json.load(sys.stdin)['total'])" 2>/dev/null) || rust_total=""
+    self_total=$(echo "$self_test_json" | uv run python -c "import json,sys; print(json.load(sys.stdin)['total'])" 2>/dev/null) || self_total=""
+
+    if [ "$rust_total" = "$self_total" ] && [ -n "$rust_total" ] && [ "$rust_total" -gt 0 ]; then
+        pass "test/counts"
+    else
+        fail "test/counts" "rust_total=$rust_total self_total=$self_total"
+    fi
+
+    # Check contract_density field exists
+    rust_cd=$(echo "$rust_test_json" | uv run python -c "import json,sys; d=json.load(sys.stdin); print('ok' if 'contract_density' in d else 'missing')" 2>/dev/null) || rust_cd=""
+    self_cd=$(echo "$self_test_json" | uv run python -c "import json,sys; d=json.load(sys.stdin); print('ok' if 'contract_density' in d else 'missing')" 2>/dev/null) || self_cd=""
+
+    if [ "$rust_cd" = "ok" ] && [ "$self_cd" = "ok" ]; then
+        pass "test/contract-density"
+    else
+        fail "test/contract-density" "rust=$rust_cd self=$self_cd"
+    fi
+
+    # Check --filter works
+    rust_filter=$($RUST test compiler/ --filter arith 2>/dev/null) || true
+    filter_total=$(echo "$rust_filter" | uv run python -c "import json,sys; print(json.load(sys.stdin)['total'])" 2>/dev/null) || filter_total=""
+
+    if [ "$filter_total" = "1" ]; then
+        pass "test/filter"
+    else
+        fail "test/filter" "expected 1 test with --filter arith, got $filter_total"
+    fi
+fi
+echo ""
+
 # ─── Summary ────────────────────────────────────────────────────────
 
 echo -e "${BOLD}=== Summary ===${RESET}"
