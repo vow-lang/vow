@@ -179,6 +179,10 @@ fn build_signature(ir_func: &IrFunction, call_conv: cranelift_codegen::isa::Call
     }
     if let Some(cl_ty) = ir_ty_to_cranelift(ir_func.return_ty) {
         sig.returns.push(AbiParam::new(cl_ty));
+    } else if ir_func.name == "main" {
+        // main must return i32 to the C runtime so the process exit code is
+        // well-defined (0) rather than whatever happens to be in rax.
+        sig.returns.push(AbiParam::new(types::I32));
     }
     sig
 }
@@ -602,7 +606,12 @@ fn lower_inst(
                 builder.ins().call(exit_ref, &[name_ptr]);
             }
             if ctx.return_ty == IrTy::Unit {
-                builder.ins().return_(&[]);
+                if ctx.ir_func.name == "main" {
+                    let zero = builder.ins().iconst(types::I32, 0);
+                    builder.ins().return_(&[zero]);
+                } else {
+                    builder.ins().return_(&[]);
+                }
             } else if let Some(&val_id) = inst.args.first() {
                 if let Some(&val) = ctx.value_map.get(&val_id) {
                     let val = coerce_return_value(builder, val, ctx.return_ty);

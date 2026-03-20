@@ -373,6 +373,10 @@ pub unsafe extern "C" fn __vow_clif_declare_function(
     }
     if let Some(cl_ty) = ity_to_cranelift(ret_ty) {
         sig.returns.push(AbiParam::new(cl_ty));
+    } else if is_main != 0 {
+        // main must return i32 to the C runtime so the process exit code is
+        // well-defined (0) rather than whatever happens to be in rax.
+        sig.returns.push(AbiParam::new(types::I32));
     }
 
     let linkage = if is_main != 0 {
@@ -563,8 +567,11 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
             sig.params.push(AbiParam::new(cl_ty));
         }
     }
+    let is_main = ctx.func_decls[fi].is_main;
     if let Some(cl_ty) = ity_to_cranelift(ret_ty) {
         sig.returns.push(AbiParam::new(cl_ty));
+    } else if is_main {
+        sig.returns.push(AbiParam::new(types::I32));
     }
 
     let cl_func_id = ctx.func_decls[fi].cl_id;
@@ -1196,7 +1203,12 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
                         builder.ins().call(exit_ref, &[name_ptr]);
                     }
                     if ret_ty == ITY_UNIT {
-                        builder.ins().return_(&[]);
+                        if is_main {
+                            let zero = builder.ins().iconst(types::I32, 0);
+                            builder.ins().return_(&[zero]);
+                        } else {
+                            builder.ins().return_(&[]);
+                        }
                     } else if alen > 0 {
                         let val_id = all_args[aoff];
                         if let Some(&val) = value_map.get(&val_id) {

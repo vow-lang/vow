@@ -1,4 +1,4 @@
-// TEST: exit 128
+// TEST: exit 0
 // TEST: stdout "42\n99\n"
 module string_parse
 
