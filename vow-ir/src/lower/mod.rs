@@ -78,6 +78,8 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "process_get_stderr" => Some(("__vow_process_get_stderr", Ty::Ptr)),
         "process_start" => Some(("__vow_process_start", Ty::I64)),
         "process_wait" => Some(("__vow_process_wait", Ty::I64)),
+        "process_wait_timeout" => Some(("__vow_process_wait_timeout", Ty::I64)),
+        "process_kill" => Some(("__vow_process_kill", Ty::I64)),
         "process_stdout_for" => Some(("__vow_process_stdout_for", Ty::Ptr)),
         "process_stderr_for" => Some(("__vow_process_stderr_for", Ty::Ptr)),
         "__vow_clif_create" => Some(("__vow_clif_create", Ty::I64)),

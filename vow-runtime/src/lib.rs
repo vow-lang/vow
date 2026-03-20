@@ -974,9 +974,12 @@ pub unsafe extern "C" fn __vow_fs_listdir(path_ptr: *const u8) -> *mut u8 {
         Ok(e) => e,
         Err(_) => return result_vec,
     };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
+    let mut names: Vec<String> = entries
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    for name_str in &names {
         let str_vec =
             unsafe { __vow_string_new(name_str.as_ptr() as *const i8, name_str.len()) } as i64;
         unsafe { __vow_vec_push_val(result_vec, str_vec) };
@@ -1247,6 +1250,87 @@ pub extern "C" fn __vow_process_stderr_for(handle: i64) -> *mut u8 {
         unsafe { __vow_string_new(stderr.as_ptr() as *const i8, stderr.len()) }
     } else {
         unsafe { __vow_string_new(std::ptr::null(), 0) }
+    }
+}
+
+/// Wait for a process with a timeout in milliseconds.
+/// Returns exit code on success, -2 on timeout, -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_process_wait_timeout(handle: i64, timeout_ms: i64) -> i64 {
+    let mut guard = PROCESS_MAP.lock().unwrap();
+    let map = process_map_init(&mut guard);
+    let state = match map.remove(&handle) {
+        Some(s) => s,
+        None => return -1,
+    };
+    match state {
+        ProcessState::Running(mut child) => {
+            let timeout = std::time::Duration::from_millis(timeout_ms.max(0) as u64);
+            let start = std::time::Instant::now();
+            loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        let output_result = {
+                            use std::io::Read;
+                            let mut stdout = Vec::new();
+                            let mut stderr = Vec::new();
+                            if let Some(mut so) = child.stdout.take() {
+                                let _ = so.read_to_end(&mut stdout);
+                            }
+                            if let Some(mut se) = child.stderr.take() {
+                                let _ = se.read_to_end(&mut stderr);
+                            }
+                            (stdout, stderr)
+                        };
+                        let exit_code = status.code().unwrap_or(-1) as i64;
+                        map.insert(
+                            handle,
+                            ProcessState::Completed {
+                                stdout: output_result.0,
+                                stderr: output_result.1,
+                            },
+                        );
+                        return exit_code;
+                    }
+                    Ok(None) => {
+                        if start.elapsed() >= timeout {
+                            map.insert(handle, ProcessState::Running(child));
+                            return -2; // timeout
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Err(_) => return -1,
+                }
+            }
+        }
+        ProcessState::Completed { stdout, stderr } => {
+            map.insert(handle, ProcessState::Completed { stdout, stderr });
+            0
+        }
+    }
+}
+
+/// Kill a running process. Returns 0 on success, -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_process_kill(handle: i64) -> i64 {
+    let mut guard = PROCESS_MAP.lock().unwrap();
+    let map = process_map_init(&mut guard);
+    let state = match map.remove(&handle) {
+        Some(s) => s,
+        None => return -1,
+    };
+    match state {
+        ProcessState::Running(mut child) => match child.kill() {
+            Ok(_) => {
+                let _ = child.wait();
+                0
+            }
+            Err(_) => -1,
+        },
+        ProcessState::Completed { stdout, stderr } => {
+            map.insert(handle, ProcessState::Completed { stdout, stderr });
+            0
+        }
     }
 }
 

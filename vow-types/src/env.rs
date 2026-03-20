@@ -381,6 +381,22 @@ impl TypeEnv {
             },
         );
         env.define_fn(
+            "process_wait_timeout",
+            FnSig {
+                params: vec![Ty::I64, Ty::I64],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "process_kill",
+            FnSig {
+                params: vec![Ty::I64],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
             "process_stdout_for",
             FnSig {
                 params: vec![Ty::I64],
