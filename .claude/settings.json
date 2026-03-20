@@ -1,6 +1,17 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/scripts/session-start.sh",
+            "timeout": 30000
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Edit|Write",
@@ -11,6 +22,20 @@
           }
         ]
       }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(cargo build*)",
+      "Bash(cargo test*)",
+      "Bash(cargo clippy*)",
+      "Bash(cargo fmt*)",
+      "Bash(ulimit -v 2000000*)",
+      "Bash(scripts/bootstrap.sh*)",
+      "Bash(scripts/full_test.sh*)",
+      "Bash(scripts/cli_compat_test.sh*)",
+      "Bash(scripts/concat_vow.sh*)",
+      "Bash(uv run*)"
     ]
   }
 }
