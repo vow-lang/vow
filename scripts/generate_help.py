@@ -155,6 +155,24 @@ def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
             flag, _default, desc = row[0], row[1], row[2]
             verify_options[flag] = desc
 
+    # --- CLI: test options ---
+    test_opt_rows = extract_table(cli, "vow test", heading_level=3)
+    test_options = {}
+    for row in test_opt_rows:
+        if len(row) >= 3:
+            flag, default, desc = row[0], row[1], row[2]
+            if flag == "--mode debug":
+                test_options["--mode <debug|release>"] = (
+                    f"Build mode; debug inserts runtime vow checks (default: {default})"
+                )
+                continue
+            if flag == "--mode release":
+                continue
+            desc_with_default = desc
+            if default not in ("", "(off)", "(none)") and not desc.endswith(")"):
+                desc_with_default = f"{desc} (default: {default})"
+            test_options[flag] = desc_with_default
+
     # --- CLI: contracts options ---
     contracts_opt_rows = extract_table(cli, "vow contracts", heading_level=3)
     contracts_options = {}
@@ -181,13 +199,14 @@ def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
         "commands": {
             "build": "Compile source to native executable (verifies by default; use --no-verify to skip)",
             "verify": "Verify contracts without producing an executable (use --no-cache to skip cache)",
-            "test": "Run tests (not yet implemented)",
+            "test": "Run tests: discover, compile, execute test_*.vow files with JSON results",
             "decl": "Emit declaration file (.vow.d) with type signatures only",
             "contracts": "List all contracts with optional verification status",
         },
         "legacy_usage": "vow [OPTIONS] <source.vow> (equivalent to vow build)",
         "build_options": build_options,
         "verify_options": verify_options,
+        "test_options": test_options,
         "contracts_options": contracts_options,
         "global_options": {
             "--help": "Print this JSON capability description",
@@ -286,7 +305,7 @@ def build_help_human(data: dict) -> str:
     lines.append("USAGE")
     lines.append("  vow build [OPTIONS] <source.vow>    Compile to native executable")
     lines.append("  vow verify [OPTIONS] <source.vow>    Verify contracts only (no executable)")
-    lines.append("  vow test [<source.vow>]             Run tests (not yet implemented)")
+    lines.append("  vow test [OPTIONS] [<path>]          Run tests (test_*.vow / *_test.vow)")
     lines.append("  vow contracts [OPTIONS] <source.vow> List all contracts")
     lines.append("  vow decl [OPTIONS] <source.vow>    Emit declaration file (.vow.d)")
     lines.append("  vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)")
@@ -300,6 +319,12 @@ def build_help_human(data: dict) -> str:
 
     lines.append("VERIFY OPTIONS")
     for flag, desc in data["verify_options"].items():
+        pad = max(24, len(flag) + 2)
+        lines.append(f"  {flag:<{pad}s}{desc}")
+    lines.append("")
+
+    lines.append("TEST OPTIONS")
+    for flag, desc in data["test_options"].items():
         pad = max(24, len(flag) + 2)
         lines.append(f"  {flag:<{pad}s}{desc}")
     lines.append("")

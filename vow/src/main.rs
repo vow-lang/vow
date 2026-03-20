@@ -182,7 +182,7 @@ fn skill_json() -> String {
   "commands": {
     "build": "Compile source to native executable (verifies by default; use --no-verify to skip)",
     "verify": "Verify contracts without producing an executable (use --no-cache to skip cache)",
-    "test": "Run tests (not yet implemented)",
+    "test": "Run tests: discover, compile, execute test_*.vow files with JSON results",
     "decl": "Emit declaration file (.vow.d) with type signatures only",
     "contracts": "List all contracts with optional verification status"
   },
@@ -199,6 +199,14 @@ fn skill_json() -> String {
   "verify_options": {
     "--no-cache": "Disable verification result caching",
     "--unwind <N>": "ESBMC loop unwind bound"
+  },
+  "test_options": {
+    "<path>": "Directory to scan or single .vow file (default: .)",
+    "--verify": "Run ESBMC verification on test files",
+    "--filter <pat>": "Only run tests whose name contains pat",
+    "--mode <debug|release>": "Build mode; debug inserts runtime vow checks (default: (default))",
+    "--timeout <ms>": "Per-test execution timeout in milliseconds (default: 30000)",
+    "--unwind <N>": "ESBMC loop unwind bound (with --verify)"
   },
   "contracts_options": {
     "--verify": "Run ESBMC verification and report per-contract status",
@@ -435,7 +443,7 @@ fn skill_human() -> String {
 USAGE
   vow build [OPTIONS] <source.vow>    Compile to native executable
   vow verify [OPTIONS] <source.vow>    Verify contracts only (no executable)
-  vow test [<source.vow>]             Run tests (not yet implemented)
+  vow test [OPTIONS] [<path>]          Run tests (test_*.vow / *_test.vow)
   vow contracts [OPTIONS] <source.vow> List all contracts
   vow decl [OPTIONS] <source.vow>    Emit declaration file (.vow.d)
   vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)
@@ -452,6 +460,14 @@ BUILD OPTIONS
 VERIFY OPTIONS
   --no-cache              Disable verification result caching
   --unwind <N>            ESBMC loop unwind bound
+
+TEST OPTIONS
+  <path>                  Directory to scan or single .vow file (default: .)
+  --verify                Run ESBMC verification on test files
+  --filter <pat>          Only run tests whose name contains pat
+  --mode <debug|release>  Build mode; debug inserts runtime vow checks (default: (default))
+  --timeout <ms>          Per-test execution timeout in milliseconds (default: 30000)
+  --unwind <N>            ESBMC loop unwind bound (with --verify)
 
 CONTRACTS OPTIONS
   --verify                Run ESBMC verification and report per-contract status
