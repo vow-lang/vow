@@ -7,7 +7,7 @@ edition = "2024"
 vow-ir = { path = "../vow-ir" }
 vow-diag = { path = "../vow-diag" }
 cranelift-codegen = "0.130"
-cranelift-frontend = "0.129"
+cranelift-frontend = "0.130"
 cranelift-module = "0.130"
 cranelift-object = "0.130"
 cranelift-native = "0.130"
