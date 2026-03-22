@@ -608,6 +608,39 @@ pub fn print_expr(expr: &Expr) -> String {
             out.push_str(&print_block(body, 0));
             out
         }
+        ExprKind::ForEach {
+            binding,
+            iterable,
+            vow,
+            body,
+        } => {
+            let mut out = format!("for {} in {}", binding, print_expr(iterable));
+            if let Some(v) = vow {
+                out.push_str(" vow {\n");
+                for clause in &v.clauses {
+                    match clause {
+                        VowClause::Requires { expr, .. } => {
+                            out.push_str(&format!("{}requires: {}\n", indent(1), print_expr(expr)));
+                        }
+                        VowClause::Ensures { expr, .. } => {
+                            out.push_str(&format!("{}ensures: {}\n", indent(1), print_expr(expr)));
+                        }
+                        VowClause::Invariant { expr, .. } => {
+                            out.push_str(&format!(
+                                "{}invariant: {}\n",
+                                indent(1),
+                                print_expr(expr)
+                            ));
+                        }
+                    }
+                }
+                out.push_str("} ");
+            } else {
+                out.push(' ');
+            }
+            out.push_str(&print_block(body, 0));
+            out
+        }
         ExprKind::Loop { vow, body } => {
             let mut out = "loop".to_string();
             if let Some(v) = vow {

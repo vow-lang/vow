@@ -979,6 +979,37 @@ impl<'e> Checker<'e> {
                 self.in_loop -= 1;
                 Ty::Unit
             }
+            ExprKind::ForEach {
+                binding,
+                iterable,
+                body,
+                ..
+            } => {
+                let iter_ty = self.check_expr(iterable);
+                let elem_ty = match &iter_ty {
+                    Ty::Applied(base, args) if **base == Ty::Struct("Vec".to_string()) => {
+                        args.first().cloned().unwrap_or(Ty::I64)
+                    }
+                    Ty::Never => Ty::Never,
+                    _ => {
+                        self.emit_error(
+                            ErrorCode::TypeMismatch,
+                            format!(
+                                "for-each requires `Vec<T>` iterable, got `{iter_ty}`"
+                            ),
+                            expr.span,
+                        );
+                        Ty::I64
+                    }
+                };
+                self.env.push_scope();
+                self.env.define(binding, elem_ty);
+                self.in_loop += 1;
+                self.check_block(body);
+                self.in_loop -= 1;
+                self.env.pop_scope();
+                Ty::Unit
+            }
             ExprKind::Loop { body, .. } => {
                 self.in_loop += 1;
                 self.break_types_stack.push(Some(Vec::new()));

@@ -61,6 +61,7 @@ impl Parser {
             lhs.kind,
             ExprKind::If { .. }
                 | ExprKind::While { .. }
+                | ExprKind::ForEach { .. }
                 | ExprKind::Loop { .. }
                 | ExprKind::Block(_)
                 | ExprKind::Match { .. }
@@ -257,6 +258,7 @@ impl Parser {
             }
             TokenKind::KwIf => self.parse_if_expr(),
             TokenKind::KwWhile => self.parse_while_expr(),
+            TokenKind::KwFor => self.parse_for_expr(),
             TokenKind::KwLoop => self.parse_loop_expr(),
             TokenKind::KwBreak => {
                 self.advance();
@@ -477,6 +479,32 @@ impl Parser {
         }
     }
 
+    fn parse_for_expr(&mut self) -> Expr {
+        let start = self.current_span();
+        self.expect(TokenKind::KwFor);
+        let (binding, _) = self
+            .expect_ident()
+            .unwrap_or(("<error>".to_string(), self.current_span()));
+        self.expect(TokenKind::KwIn);
+        let iterable = self.parse_expr_inner(0);
+        let vow = if self.at(&TokenKind::KwVow) {
+            self.parse_vow_block()
+        } else {
+            None
+        };
+        let body = self.parse_block_required();
+        let end = body.span;
+        Expr {
+            kind: ExprKind::ForEach {
+                binding,
+                iterable: Box::new(iterable),
+                vow,
+                body: Box::new(body),
+            },
+            span: start.merge(end),
+        }
+    }
+
     fn parse_loop_expr(&mut self) -> Expr {
         let start = self.current_span();
         self.expect(TokenKind::KwLoop);
@@ -546,6 +574,7 @@ impl Parser {
                 | TokenKind::LBrace
                 | TokenKind::KwIf
                 | TokenKind::KwWhile
+                | TokenKind::KwFor
                 | TokenKind::KwLoop
                 | TokenKind::KwMatch
         )
