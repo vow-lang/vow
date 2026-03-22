@@ -66,7 +66,7 @@ fn ity_to_cranelift(ty: i64) -> Option<types::Type> {
         ITY_I64 => Some(types::I64),
         ITY_F32 => Some(types::F32),
         ITY_F64 => Some(types::F64),
-        ITY_BOOL => Some(types::I8),
+        ITY_BOOL => Some(types::I64),
         ITY_U64 => Some(types::I64),
         ITY_UNIT => None,
         ITY_PTR | ITY_LPTR => Some(types::I64),
@@ -836,14 +836,18 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
                 ($id:expr, $val:expr) => {{
                     let id_ = $id;
                     let val_ = $val;
-                    value_map.insert(id_, val_);
+                    let src_ty = builder.func.dfg.value_type(val_);
+                    // Widen i8 (booleans from icmp/fcmp/const_bool) to i64 so
+                    // value_map always holds i64 for booleans, matching slot loads.
+                    let norm = match src_ty {
+                        types::I8 => builder.ins().uextend(types::I64, val_),
+                        _ => val_,
+                    };
+                    value_map.insert(id_, norm);
                     if let Some(&slot) = slot_map.get(&id_) {
-                        // Widen to I64 before storing to stack slot
-                        let src_ty = builder.func.dfg.value_type(val_);
-                        let store_val = match src_ty {
-                            types::I32 => builder.ins().sextend(types::I64, val_),
-                            types::I8 => builder.ins().uextend(types::I64, val_),
-                            _ => val_,
+                        let store_val = match builder.func.dfg.value_type(norm) {
+                            types::I32 => builder.ins().sextend(types::I64, norm),
+                            _ => norm,
                         };
                         builder.ins().stack_store(store_val, slot, 0);
                     }
@@ -877,7 +881,7 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
                 }
                 IOP_CONST_BOOL => {
                     let b = if dk == IDATA_CONST_BOOL { dv } else { 0 };
-                    let val = builder.ins().iconst(types::I8, b);
+                    let val = builder.ins().iconst(types::I64, b);
                     set_val!(iid, val);
                 }
                 IOP_CONST_STR => {
@@ -1049,7 +1053,7 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
 
                 // Boolean
                 IOP_NOT => {
-                    let one = builder.ins().iconst(types::I8, 1);
+                    let one = builder.ins().iconst(types::I64, 1);
                     let val = builder.ins().bxor(arg!(0), one);
                     set_val!(iid, val);
                 }
@@ -1599,7 +1603,7 @@ fn emit_vow_check(
     trace_vow_ref: Option<FuncRef>,
     fn_name_gv: Option<GlobalValue>,
 ) {
-    let one = builder.ins().iconst(types::I8, 1);
+    let one = builder.ins().iconst(types::I64, 1);
     let inv = builder.ins().bxor(predicate, one);
 
     let violation_block = builder.create_block();
@@ -1648,7 +1652,7 @@ fn emit_vow_check(
                         builder.ins().uextend(types::I64, bits)
                     }
                     ITY_F64 => builder.ins().bitcast(types::I64, MemFlags::new(), *cl_val),
-                    ITY_BOOL => builder.ins().uextend(types::I64, *cl_val),
+                    ITY_BOOL => *cl_val,
                     _ => builder.ins().iconst(types::I64, 0),
                 };
                 builder
