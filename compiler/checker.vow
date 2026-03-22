@@ -173,21 +173,38 @@ fn register_const(e: CheckEnv, m: Module, cid: i64) [io] {
     let a: AstArena = m.arena;
     let name_sid: i64 = cdef_name_sid(a, cid);
     let name: String = arena_str(a, name_sid);
+    let type_tid: i64 = cdef_type_tid(a, cid);
+    let resolved_tid: i64 = resolve_ast_ty(e, m, type_tid);
     let val_eid: i64 = cdef_value_eid(a, cid);
     let val_tag: i64 = expr_tag(a, val_eid);
     let val: i64 = {
         if val_tag == EXPR_LIT_INT() {
+            if resolved_tid != CTY_I64() && resolved_tid != CTY_I32() {
+                env_emit_error(e, String::from("const has integer value but non-integer type"), expr_span(a, val_eid));
+            }
             expr_a(a, val_eid)
         } else if val_tag == EXPR_LIT_BOOL() {
+            if resolved_tid != CTY_BOOL() {
+                env_emit_error(e, String::from("const has bool value but non-bool type"), expr_span(a, val_eid));
+            }
             expr_a(a, val_eid)
         } else if val_tag == EXPR_UNOP() {
-            let inner_eid: i64 = expr_b(a, val_eid);
-            let inner_tag: i64 = expr_tag(a, inner_eid);
-            if inner_tag == EXPR_LIT_INT() {
-                0 - expr_a(a, inner_eid)
-            } else {
+            let op: i64 = expr_a(a, val_eid);
+            if op != UNOP_NEG() {
                 env_emit_error(e, String::from("const value must be a literal"), expr_span(a, val_eid));
                 0
+            } else {
+                if resolved_tid != CTY_I64() && resolved_tid != CTY_I32() {
+                    env_emit_error(e, String::from("const has negated value but non-integer type"), expr_span(a, val_eid));
+                }
+                let inner_eid: i64 = expr_b(a, val_eid);
+                let inner_tag: i64 = expr_tag(a, inner_eid);
+                if inner_tag == EXPR_LIT_INT() {
+                    0 - expr_a(a, inner_eid)
+                } else {
+                    env_emit_error(e, String::from("const value must be a literal"), expr_span(a, val_eid));
+                    0
+                }
             }
         } else {
             env_emit_error(e, String::from("const value must be a literal"), expr_span(a, val_eid));
@@ -196,6 +213,7 @@ fn register_const(e: CheckEnv, m: Module, cid: i64) [io] {
     };
     e.const_names.push(name);
     e.const_values.push(val);
+    e.const_tids.push(resolved_tid);
 }
 
 fn register_fn(e: CheckEnv, m: Module, fid: i64) [io] {
@@ -459,7 +477,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         while ci < ncnst {
             let cn: String = e.const_names[ci];
             if cn.eq(name) {
-                return CTY_I64();
+                return e.const_tids[ci];
             }
             ci = ci + 1;
         }

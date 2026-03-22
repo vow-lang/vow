@@ -107,8 +107,8 @@ pub struct LowerCtx {
     pub(super) struct_field_type_names: HashMap<String, Vec<String>>,
     // expr addresses whose resolved type is String (from checker)
     string_exprs: StringExprSet,
-    // const name → compile-time integer value
-    const_map: HashMap<String, i64>,
+    // const name → (compile-time value, declared type)
+    const_map: HashMap<String, (i64, Ty)>,
     // loop exit block stack for break
     loop_exit_blocks: Vec<BlockId>,
     // InstId of a Vec allocation → element type name (for struct-in-Vec field access)
@@ -476,14 +476,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
         },
         ExprKind::Ident(name) => {
-            if let Some(&val) = ctx.const_map.get(name.as_str()) {
-                return ctx.emit(
-                    Opcode::ConstI64,
-                    Ty::I64,
-                    vec![],
-                    InstData::ConstI64(val),
-                    span,
-                );
+            if let Some(&(val, ref ty)) = ctx.const_map.get(name.as_str()) {
+                let (opcode, data) = if *ty == Ty::Bool {
+                    (Opcode::ConstBool, InstData::ConstBool(val != 0))
+                } else {
+                    (Opcode::ConstI64, InstData::ConstI64(val))
+                };
+                return ctx.emit(opcode, *ty, vec![], data, span);
             }
             ctx.lookup(name)
                 .unwrap_or_else(|| panic!("undefined variable: {name}"))
@@ -1892,7 +1891,7 @@ pub fn lower_function(
     struct_field_type_names: HashMap<String, Vec<String>>,
     struct_field_vec_elems: HashMap<String, Vec<String>>,
     string_exprs: &StringExprSet,
-    const_map: &HashMap<String, i64>,
+    const_map: &HashMap<String, (i64, Ty)>,
 ) -> (Function, Vec<String>) {
     let params: Vec<Ty> = fn_def.params.iter().map(|p| lower_ty(&p.ty)).collect();
     let param_names: Vec<String> = fn_def.params.iter().map(|p| p.name.clone()).collect();
@@ -2012,7 +2011,7 @@ pub fn lower_module(module: &AstModule, file: &str, string_exprs: &StringExprSet
         .collect();
 
     // Collect const declarations
-    let mut const_map: HashMap<String, i64> = HashMap::new();
+    let mut const_map: HashMap<String, (i64, Ty)> = HashMap::new();
     for item in &module.items {
         if let Item::Const(c) = item {
             let val = match &c.value.kind {
@@ -2030,7 +2029,8 @@ pub fn lower_module(module: &AstModule, file: &str, string_exprs: &StringExprSet
                 }
                 _ => 0,
             };
-            const_map.insert(c.name.clone(), val);
+            let ty = lower_ty(&c.ty);
+            const_map.insert(c.name.clone(), (val, ty));
         }
     }
 

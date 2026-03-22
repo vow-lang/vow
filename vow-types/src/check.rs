@@ -51,6 +51,7 @@ pub struct Checker<'e> {
     string_exprs: StringExprSet,
     in_loop: u32,
     pub const_values: HashMap<String, i64>,
+    pub const_types: HashMap<String, Ty>,
 }
 
 impl<'e> Checker<'e> {
@@ -65,6 +66,7 @@ impl<'e> Checker<'e> {
             string_exprs: HashSet::new(),
             in_loop: 0,
             const_values: HashMap::new(),
+            const_types: HashMap::new(),
         }
     }
 
@@ -246,6 +248,7 @@ impl<'e> Checker<'e> {
                             );
                         }
                         self.const_values.insert(c.name.clone(), *v as i64);
+                        self.const_types.insert(c.name.clone(), ty.clone());
                     }
                     ExprKind::Lit(Lit::Bool(b)) => {
                         if ty != Ty::Bool {
@@ -256,13 +259,25 @@ impl<'e> Checker<'e> {
                             );
                         }
                         self.const_values.insert(c.name.clone(), *b as i64);
+                        self.const_types.insert(c.name.clone(), ty.clone());
                     }
                     ExprKind::UnaryOp {
                         op: UnOp::Neg,
                         operand,
                     } => {
+                        if ty != Ty::I64 && ty != Ty::I32 {
+                            self.emit_error(
+                                ErrorCode::TypeMismatch,
+                                format!(
+                                    "const `{}` has type `{}`, expected integer type",
+                                    c.name, ty
+                                ),
+                                c.span,
+                            );
+                        }
                         if let ExprKind::Lit(Lit::Int(v)) = &operand.kind {
                             self.const_values.insert(c.name.clone(), -(*v as i64));
+                            self.const_types.insert(c.name.clone(), ty.clone());
                         } else {
                             self.emit_error(
                                 ErrorCode::TypeMismatch,
@@ -506,8 +521,8 @@ impl<'e> Checker<'e> {
                 Lit::String(_) => Ty::Str,
             },
             ExprKind::Ident(name) => {
-                if self.const_values.contains_key(name.as_str()) {
-                    return Ty::I64;
+                if let Some(ty) = self.const_types.get(name.as_str()) {
+                    return ty.clone();
                 }
                 match self.env.lookup(name) {
                     Some(ty) => ty.clone(),

@@ -25,6 +25,7 @@ struct LowerCtx {
     str_eids: Vec<i64>,
     const_names: Vec<String>,
     const_values: Vec<i64>,
+    const_tids: Vec<i64>,
     loop_exit_blocks: Vec<i64>,
     vec_elem_inst_ids: Vec<i64>,
     vec_elem_names: Vec<String>,
@@ -62,6 +63,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         str_eids: str_eids,
         const_names: Vec::new(),
         const_values: Vec::new(),
+        const_tids: Vec::new(),
         loop_exit_blocks: Vec::new(),
         vec_elem_inst_ids: Vec::new(),
         vec_elem_names: Vec::new(),
@@ -643,7 +645,11 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let cn: String = ctx.const_names[ci];
             if cn.eq(name) {
                 let cv: i64 = ctx.const_values[ci];
+                let ct: i64 = ctx.const_tids[ci];
                 let args: Vec<i64> = Vec::new();
+                if ct == ITY_BOOL() {
+                    return lctx_emit(ctx, IOP_CONST_BOOL(), ITY_BOOL(), args, IDATA_CONST_BOOL(), cv, 0, String::from(""));
+                }
                 return lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), args, IDATA_CONST_I64(), cv, 0, String::from(""));
             }
             ci = ci + 1;
@@ -2396,6 +2402,7 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>) -> IrModule {
 
     let cnames: Vec<String> = Vec::new();
     let cvals: Vec<i64> = Vec::new();
+    let ctids: Vec<i64> = Vec::new();
     let mut ci: i64 = 0;
     while ci < n_items {
         let item: i64 = m.items[ci];
@@ -2423,8 +2430,16 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>) -> IrModule {
                     0
                 }
             };
+            let ct: i64 = {
+                if cv_tag == EXPR_LIT_BOOL() {
+                    ITY_BOOL()
+                } else {
+                    ITY_I64()
+                }
+            };
             cnames.push(cn);
             cvals.push(cv);
+            ctids.push(ct);
         }
         ci = ci + 1;
     }
@@ -2439,6 +2454,7 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>) -> IrModule {
     ctx.enum_variant_lists = enum_variant_lists;
     ctx.const_names = cnames;
     ctx.const_values = cvals;
+    ctx.const_tids = ctids;
 
     let all_strings: Vec<String> = Vec::new();
     let mut func_idx: i64 = 0;

@@ -355,7 +355,13 @@ use nonexistent
 fn main() -> i32 { 0 }
 EOF
 
-for fixture in parse_error type_error missing_module; do
+cat > "$TMPDIR/const_type_mismatch.vow" <<'EOF'
+module Bad
+const BAD: bool = 42;
+fn main() -> i32 { 0 }
+EOF
+
+for fixture in parse_error type_error missing_module const_type_mismatch; do
     rust_json="" self_json="" rust_exit=0 self_exit=0
     rust_json=$($RUST build --no-verify "$TMPDIR/${fixture}.vow" -o "$TMPDIR/rust_${fixture}" 2>/dev/null) || rust_exit=$?
     self_json=$(run_self build --no-verify "$TMPDIR/${fixture}.vow" -o "$TMPDIR/self_${fixture}" 2>/dev/null) || self_exit=$?
