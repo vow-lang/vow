@@ -227,6 +227,7 @@ struct IrModule {
     strings: Vec<String>,
     struct_layouts: Vec<IrStructLayout>,
     enum_layouts: Vec<IrEnumLayout>,
+    warnings: Vec<String>,
 }
 
 fn ir_inst_new(id: i64, op: i64, ty: i64, args: Vec<i64>, dk: i64, dv: i64, dv2: i64, ds: String) -> IrInst {
@@ -273,5 +274,6 @@ fn ir_module_new(name: String) -> IrModule {
         strings: Vec::new(),
         struct_layouts: Vec::new(),
         enum_layouts: Vec::new(),
+        warnings: Vec::new(),
     }
 }

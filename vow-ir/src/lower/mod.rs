@@ -1038,7 +1038,15 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .struct_field_map
                 .get(&struct_name)
                 .and_then(|names| names.iter().position(|n| n == field))
-                .unwrap_or(0) as u32;
+                .unwrap_or_else(|| {
+                    if !struct_name.is_empty() {
+                        eprintln!(
+                            "warning: field '{}' not found in struct '{}' — defaulting to index 0",
+                            field, struct_name
+                        );
+                    }
+                    0
+                }) as u32;
             let result_id = ctx.emit(
                 Opcode::FieldGet,
                 Ty::I64,
@@ -1065,12 +1073,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         ExprKind::StructLiteral { name, fields } => {
             let field_names = ctx.struct_field_map.get(name).cloned().unwrap_or_default();
             let n_fields = field_names.len().max(fields.len());
+            // Allocate one extra guard slot (8 bytes) beyond the last field.
+            // This prevents SIGSEGV from off-by-one accesses past the end of
+            // the struct, which can happen when struct type tags are lost and
+            // field index lookups silently default to wrong indices.
             let ptr_id = ctx.emit(
                 Opcode::RegionAlloc,
                 Ty::Ptr,
                 vec![],
                 InstData::AllocSize {
-                    size: n_fields as u32 * 8,
+                    size: (n_fields as u32 + 1) * 8,
                     align: 8,
                 },
                 span,

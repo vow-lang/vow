@@ -30,6 +30,7 @@ struct LowerCtx {
     loop_exit_blocks: Vec<i64>,
     vec_elem_inst_ids: Vec<i64>,
     vec_elem_names: Vec<String>,
+    warnings: Vec<String>,
 }
 
 struct ScopeSnap {
@@ -69,6 +70,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         loop_exit_blocks: Vec::new(),
         vec_elem_inst_ids: Vec::new(),
         vec_elem_names: Vec::new(),
+        warnings: Vec::new(),
     }
 }
 
@@ -323,6 +325,14 @@ fn lctx_struct_field_index(ctx: LowerCtx, struct_name: String, field_name: Strin
             return i;
         }
         i = i + 1;
+    }
+    if struct_name.len() > 0 {
+        let w: String = String::from("warning: field '");
+        w.push_str(field_name);
+        w.push_str(String::from("' not found in struct '"));
+        w.push_str(struct_name);
+        w.push_str(String::from("' -- defaulting to index 0"));
+        ctx.warnings.push(w);
     }
     0
 }
@@ -1078,6 +1088,14 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let recv_id: i64 = lower_expr(ctx, recv_eid);
             let val_id: i64 = lower_expr(ctx, rhs_eid);
             let recv_tag_str: String = lctx_get_tag(ctx, recv_id);
+            if recv_tag_str.len() == 0 {
+                let w: String = String::from("warning: FieldSet on untagged instruction %");
+                w.push_str(i64_to_string(recv_id));
+                w.push_str(String::from(", field '"));
+                w.push_str(field_name);
+                w.push_str(String::from("' -- defaulting to index 0"));
+                ctx.warnings.push(w);
+            }
             let fidx: i64 = lctx_struct_field_index(ctx, recv_tag_str, field_name);
             let fs_args: Vec<i64> = Vec::new();
             fs_args.push(recv_id);
@@ -1111,6 +1129,14 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let field_name: String = arena_str(a, field_sid);
         let recv_id: i64 = lower_expr(ctx, recv_eid);
         let recv_tag_str: String = lctx_get_tag(ctx, recv_id);
+        if recv_tag_str.len() == 0 {
+            let w: String = String::from("warning: FieldGet on untagged instruction %");
+            w.push_str(i64_to_string(recv_id));
+            w.push_str(String::from(", field '"));
+            w.push_str(field_name);
+            w.push_str(String::from("' -- defaulting to index 0"));
+            ctx.warnings.push(w);
+        }
         let fidx: i64 = lctx_struct_field_index(ctx, recv_tag_str, field_name);
         let fg_args: Vec<i64> = Vec::new();
         fg_args.push(recv_id);
@@ -1146,7 +1172,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let actual_n: i64 = {
             if n_fields > nlit { n_fields } else { nlit }
         };
-        let alloc_size: i64 = actual_n * 8;
+        let alloc_size: i64 = (actual_n + 1) * 8;
         let alloc_args: Vec<i64> = Vec::new();
         let ptr_id: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), ITY_PTR(), alloc_args, IDATA_ALLOC_SIZE(), alloc_size, 8, String::from(""));
         lctx_tag(ctx, ptr_id, struct_name);
@@ -2558,5 +2584,11 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>) -> IrModule {
     }
 
     ir_mod.strings = all_strings;
+    let nw: i64 = ctx.warnings.len();
+    let mut wi: i64 = 0;
+    while wi < nw {
+        ir_mod.warnings.push(ctx.warnings[wi]);
+        wi = wi + 1;
+    }
     ir_mod
 }

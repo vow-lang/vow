@@ -316,6 +316,15 @@ fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, path: String, ces: Ve
     all_proven
 }
 
+fn print_ir_warnings(ir_mod: IrModule) [io] {
+    let ws: Vec<String> = ir_mod.warnings;
+    let mut i: i64 = 0;
+    while i < ws.len() {
+        eprintln_str(ws[i]);
+        i = i + 1;
+    }
+}
+
 fn run_verify(argv: Vec<String>) -> i32 [io] {
     let fr: FrontendResult = run_frontend(argv, true);
     let path: String = fr.path;
@@ -337,6 +346,7 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
     };
     let use_cache: bool = !has_flag(argv, String::from("--no-cache"));
     let ir_mod: IrModule = lower_module_vow(merged, str_eids);
+    print_ir_warnings(ir_mod);
     let fns: Vec<IrFunction> = ir_mod.functions;
     let ces: Vec<VerifyCE> = Vec::new();
     let all_proven: i64 = run_verify_loop(fns, ir_mod, path, ces, unwind, use_cache);
@@ -390,6 +400,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         else { 0 }
     };
     let ir_mod: IrModule = lower_module_vow(merged, str_eids);
+    print_ir_warnings(ir_mod);
     let do_verify: bool = !has_flag(argv, String::from("--no-verify"));
     let use_cache: bool = !has_flag(argv, String::from("--no-cache"));
     let unwind_str: String = get_flag_arg(argv, String::from("--unwind"));
@@ -570,6 +581,7 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
             };
             let str_eids: Vec<i64> = e.expr_str_eids;
             let ir_mod: IrModule = lower_module_vow(merged, str_eids);
+            print_ir_warnings(ir_mod);
             let fns: Vec<IrFunction> = ir_mod.functions;
             let ces: Vec<VerifyCE> = Vec::new();
             let use_cache_leg: bool = !has_flag(argv, String::from("--no-cache"));
@@ -588,6 +600,7 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
         } else if emit_c {
             let str_eids: Vec<i64> = e.expr_str_eids;
             let ir_mod: IrModule = lower_module_vow(merged, str_eids);
+            print_ir_warnings(ir_mod);
             let c_code: String = emit_c_module(ir_mod);
             print_str(c_code);
         } else if has_output {
@@ -608,6 +621,7 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
             };
             let str_eids: Vec<i64> = e.expr_str_eids;
             let ir_mod: IrModule = lower_module_vow(merged, str_eids);
+            print_ir_warnings(ir_mod);
             let result: i64 = clif_emit_module(ir_mod, out, mode, trace);
             if result == -1 {
                 eprintln_str(String::from("compilation failed"));
@@ -621,6 +635,7 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
         } else {
             let str_eids: Vec<i64> = e.expr_str_eids;
             let ir_mod: IrModule = lower_module_vow(merged, str_eids);
+            print_ir_warnings(ir_mod);
             let ir_text: String = print_module(ir_mod);
             print_str(ir_text);
         }
