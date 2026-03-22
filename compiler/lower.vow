@@ -16,6 +16,7 @@ struct LowerCtx {
     struct_names: Vec<String>,
     struct_field_lists: Vec<Vec<String>>,
     struct_field_type_names: Vec<Vec<String>>,
+    struct_field_vec_elems: Vec<Vec<String>>,
     enum_names: Vec<String>,
     enum_variant_lists: Vec<Vec<String>>,
     tag_inst_ids: Vec<i64>,
@@ -53,6 +54,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         struct_names: Vec::new(),
         struct_field_lists: Vec::new(),
         struct_field_type_names: Vec::new(),
+        struct_field_vec_elems: Vec::new(),
         enum_names: Vec::new(),
         enum_variant_lists: Vec::new(),
         tag_inst_ids: Vec::new(),
@@ -329,6 +331,16 @@ fn lctx_struct_field_type(ctx: LowerCtx, struct_name: String, field_idx: i64) ->
     let type_names: Vec<String> = ctx.struct_field_type_names[sidx];
     if field_idx < type_names.len() {
         return type_names[field_idx];
+    }
+    String::from("")
+}
+
+fn lctx_struct_field_vec_elem(ctx: LowerCtx, struct_name: String, field_idx: i64) -> String {
+    let sidx: i64 = lctx_find_struct(ctx, struct_name);
+    if sidx == -1 { return String::from(""); }
+    let vec_elems: Vec<String> = ctx.struct_field_vec_elems[sidx];
+    if field_idx < vec_elems.len() {
+        return vec_elems[field_idx];
     }
     String::from("")
 }
@@ -1102,6 +1114,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             if field_type != String::from("i32") && field_type != String::from("i64") && field_type != String::from("f32") && field_type != String::from("f64") && field_type != String::from("bool") {
                 lctx_tag(ctx, result, field_type);
             }
+        }
+        let vec_elem: String = lctx_struct_field_vec_elem(ctx, recv_tag_str, fidx);
+        if vec_elem.len() > 0 {
+            lctx_tag_vec_elem(ctx, result, vec_elem);
         }
         return result;
     }
@@ -2302,6 +2318,7 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>) -> IrModule {
     let struct_names: Vec<String> = Vec::new();
     let struct_field_lists: Vec<Vec<String>> = Vec::new();
     let struct_field_type_names: Vec<Vec<String>> = Vec::new();
+    let struct_field_vec_elems: Vec<Vec<String>> = Vec::new();
     let enum_names: Vec<String> = Vec::new();
     let enum_variant_lists: Vec<Vec<String>> = Vec::new();
 
@@ -2325,6 +2342,7 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>) -> IrModule {
             let nf: i64 = list_len(a, fields_lid) / 2;
             let fnames: Vec<String> = Vec::new();
             let ftypes: Vec<String> = Vec::new();
+            let fvec_elems: Vec<String> = Vec::new();
             let ir_fields: Vec<IrFieldLayout> = Vec::new();
             let mut fi: i64 = 0;
             while fi < nf {
@@ -2346,6 +2364,42 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>) -> IrModule {
                     }
                 };
                 ftypes.push(ftype_name);
+                let fve: String = {
+                    if ftid != -1 {
+                        let ftag: i64 = type_tag(a, ftid);
+                        if ftag == TY_GENERIC() {
+                            let ftn_sid: i64 = type_a(a, ftid);
+                            let ftn: String = arena_str(a, ftn_sid);
+                            if ftn == String::from("Vec") {
+                                let args_lid: i64 = type_b(a, ftid);
+                                if list_len(a, args_lid) > 0 {
+                                    let elem_tid: i64 = list_get(a, args_lid, 0);
+                                    let etag: i64 = type_tag(a, elem_tid);
+                                    if etag == TY_NAMED() {
+                                        let en_sid: i64 = type_a(a, elem_tid);
+                                        let en: String = arena_str(a, en_sid);
+                                        if en != String::from("i32") && en != String::from("i64") && en != String::from("u64") && en != String::from("f32") && en != String::from("f64") && en != String::from("bool") {
+                                            en
+                                        } else {
+                                            String::from("")
+                                        }
+                                    } else {
+                                        String::from("")
+                                    }
+                                } else {
+                                    String::from("")
+                                }
+                            } else {
+                                String::from("")
+                            }
+                        } else {
+                            String::from("")
+                        }
+                    } else {
+                        String::from("")
+                    }
+                };
+                fvec_elems.push(fve);
                 let ir_ty: i64 = lower_ast_ty(a, ftid);
                 let fl: IrFieldLayout = IrFieldLayout { name: fname, ty: ir_ty };
                 ir_fields.push(fl);
@@ -2354,6 +2408,7 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>) -> IrModule {
             struct_names.push(sname);
             struct_field_lists.push(fnames);
             struct_field_type_names.push(ftypes);
+            struct_field_vec_elems.push(fvec_elems);
             let is_linear: i64 = a.sdef_data[iid * 4 + 2];
             let sl: IrStructLayout = IrStructLayout { name: sname, fields: ir_fields, is_linear: is_linear };
             ir_mod.struct_layouts.push(sl);
@@ -2435,6 +2490,7 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>) -> IrModule {
     ctx.struct_names = struct_names;
     ctx.struct_field_lists = struct_field_lists;
     ctx.struct_field_type_names = struct_field_type_names;
+    ctx.struct_field_vec_elems = struct_field_vec_elems;
     ctx.enum_names = enum_names;
     ctx.enum_variant_lists = enum_variant_lists;
     ctx.const_names = cnames;

@@ -1,0 +1,37 @@
+module VecNestedIndex
+
+pub struct Inner {
+    a: i64,
+    b: i64,
+    c: i64,
+}
+
+pub struct Outer {
+    name: i64,
+    items: Vec<Inner>,
+}
+
+fn main() -> i32 [io] {
+    let inners: Vec<Inner> = Vec::new();
+    inners.push(Inner { a: 10, b: 20, c: 30 });
+    inners.push(Inner { a: 40, b: 50, c: 60 });
+
+    let outers: Vec<Outer> = Vec::new();
+    outers.push(Outer { name: 1, items: inners });
+
+    // Nested Vec indexing: outers[0].items[i].field
+    print_i64(outers[0].items[0].a);
+    print_str(" ");
+    print_i64(outers[0].items[0].b);
+    print_str(" ");
+    print_i64(outers[0].items[0].c);
+    print_str(" ");
+    print_i64(outers[0].items[1].a);
+    print_str(" ");
+    print_i64(outers[0].items[1].b);
+    print_str(" ");
+    print_i64(outers[0].items[1].c);
+    print_str("\n");
+
+    0
+}

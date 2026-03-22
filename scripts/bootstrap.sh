@@ -92,6 +92,7 @@ sha_vowc3=$(sha256sum ./vowc3 | awk '{print $1}')
 
 if [ "$sha_vowc2" = "$sha_vowc3" ]; then
     printf "  ${GREEN}MATCH${RESET}  %s\n" "$sha_vowc2"
+    mv ./vowc2 ./vowc
     rm -f ./vowc3
     printf "\n${GREEN}${BOLD}Bootstrap successful.${RESET} ./vowc is the self-hosted compiler.\n"
 else
