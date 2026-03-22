@@ -34,17 +34,15 @@ cargo fmt --all            # format all code
 
 `./vowc` is the primary compiler for all Vow development. It is a self-hosted, verified fixed-point binary produced by `scripts/bootstrap.sh`.
 
-**CRITICAL:** Always use `ulimit -v 2000000` when running `./vowc` or any binary it produces.
-
 ```bash
-ulimit -v 2000000; ./vowc build examples/divide.vow                   # compile + verify (default)
-ulimit -v 2000000; ./vowc build --no-verify examples/divide.vow       # compile, skip verification
-ulimit -v 2000000; ./vowc build --mode debug examples/divide.vow      # compile with runtime vow checks
-ulimit -v 2000000; ./vowc verify examples/divide.vow                  # verify contracts only (no executable)
+./vowc build examples/divide.vow                   # compile + verify (default)
+./vowc build --no-verify examples/divide.vow       # compile, skip verification
+./vowc build --mode debug examples/divide.vow      # compile with runtime vow checks
+./vowc verify examples/divide.vow                  # verify contracts only (no executable)
 
 # Help
-ulimit -v 2000000; ./vowc --help                                      # JSON capability description (for agents)
-ulimit -v 2000000; ./vowc --help --human                              # human-readable capability description
+./vowc --help                                      # JSON capability description (for agents)
+./vowc --help --human                              # human-readable capability description
 ```
 
 Debug mode is required to see runtime `VowViolation` output. Release omits all vow checks.
@@ -141,12 +139,10 @@ All diagnostic output flows through **`vow-diag`**, which every other crate uses
 ### Building and running
 
 ```bash
-ulimit -v 2000000; ./vowc build --no-verify compiler/main.vow -o /tmp/vow_main  # compile self-hosted compiler
-ulimit -v 2000000; /tmp/vow_main compiler/lexer.vow                             # type-check, print IR
-ulimit -v 2000000; /tmp/vow_main -o /tmp/lexer compiler/lexer.vow               # compile to native binary
+./vowc build --no-verify compiler/main.vow -o /tmp/vow_main  # compile self-hosted compiler
+/tmp/vow_main compiler/lexer.vow                             # type-check, print IR
+/tmp/vow_main -o /tmp/lexer compiler/lexer.vow               # compile to native binary
 ```
-
-**CRITICAL:** Always use `ulimit -v 2000000` when running self-hosted compiler binaries (or any binary produced by them). Without it, the process can consume all system memory and freeze the machine. This applies to `./vowc`, `/tmp/vow_main`, and any binary compiled from `.vow` files.
 
 The self-hosted compiler supports DFS module loading via `use` declarations.
 
@@ -157,12 +153,11 @@ The self-hosted compiler supports DFS module loading via `use` declarations.
 ```bash
 ./scripts/concat_vow.sh clif > /tmp/compiler_clif.vow
 ./target/release/vow --no-verify /tmp/compiler_clif.vow -o /tmp/compiler_a  # Stage 0: Rust → Binary A
-ulimit -v 2000000; /tmp/compiler_a -o /tmp/compiler_b /tmp/compiler_clif.vow  # Stage 1: A → B
-ulimit -v 2000000; /tmp/compiler_b -o /tmp/compiler_c /tmp/compiler_clif.vow  # Stage 2: B → C
+/tmp/compiler_a -o /tmp/compiler_b /tmp/compiler_clif.vow                   # Stage 1: A → B
+/tmp/compiler_b -o /tmp/compiler_c /tmp/compiler_clif.vow                   # Stage 2: B → C
 sha256sum /tmp/compiler_b /tmp/compiler_c              # must be identical (binary fixed point)
 ```
 
-**Important:** Always use `ulimit -v 2000000` when running self-compiled binaries to cap memory.
 
 ### vow-clif-shim architecture
 
