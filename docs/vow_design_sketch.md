@@ -1,4 +1,4 @@
-# Vow Language Design Sketch — v3 (26.02.2026)
+# Vow Language Design Sketch — v4 (22.03.2026)
 
 ## 1. Vision
 
@@ -22,6 +22,8 @@ This principle drives every design decision. Ambiguity is the enemy. Flexibility
 ## 3. The Vow Block
 
 The central language construct. Every module declares its vows — preconditions, postconditions, invariants — in a structured block that serves as both human-readable documentation and machine-checkable specification.
+
+> **Status: Target.** Module-level vow blocks are not yet parsed or represented in the AST. Function-level vow blocks are fully implemented.
 
 ```
 module PathFilter
@@ -73,6 +75,8 @@ while low < high {
 ```
 
 Invariants are checked at loop entry and preservation (back-edge). ESBMC verifies them as inductive invariants.
+
+> **Status: Target — quantifiers.** `forall` and `exists` keywords are not yet in the lexer or parser. Invariants on loops and simple `requires`/`ensures` predicates are fully implemented.
 
 ## 4. Type System
 
@@ -151,6 +155,8 @@ type NonZero = { x: i64 | x != 0 }
 type ValidPort = { p: u16 | p >= 1 && p <= 65535 }
 ```
 
+> **Status: Partial.** Refinement type syntax (`{ x: T | predicate }`) is parsed but the predicate is semantically erased — not forwarded to ESBMC for verification. `where` clauses on parameters are fully implemented — they desugar to `requires` preconditions in both the Rust and self-hosted IR lowerers. Function-level `requires`/`ensures` predicates are the current mechanism for expressing refinement properties.
+
 This separation is key: types are decidable and mechanical; refinements are expressive and handled by ESBMC. Most of the expressiveness of dependent types without the complexity.
 
 ### Deliberately excluded
@@ -172,7 +178,7 @@ This separation is key: types are decidable and mechanical; refinements are expr
 
 | Feature | Rust | Vow | Reason for divergence |
 |---------|------|-----|----------------------|
-| Comments | `//` and `/* */` | None | Intent lives in vow blocks |
+| Comments | `//` and `/* */` | `//` only | Machine-relevant intent in contracts; `//` for non-semantic rationale |
 | Formatting | rustfmt (convention) | Canonicalizer (compiler pass) | Single representation |
 | Error handling | `Result<T,E>` + `?` | Same | No divergence |
 | Null | `Option<T>` | Same | No divergence |
@@ -186,6 +192,7 @@ This separation is key: types are decidable and mechanical; refinements are expr
 | Integer `+!` | N/A | Checked → `Option<T>` | Unambiguous |
 | Macros | `macro_rules!`, proc macros | None | Destroys local reasoning |
 | Generics | `<T: Bound>` | None | §4.1 |
+| Bitwise XOR | `^` | `^` | No divergence |
 | Operator overloading | Via traits | None | Ambiguity |
 
 ### Integer arithmetic: two operators, two meanings
@@ -207,11 +214,12 @@ The `!` reads as "watch out, this checks." Floats use standard operators (`+`, `
 
 **Saturating arithmetic is not in the language.** It is a domain-specific behavior available as a standard library function call. The language provides what the hardware provides (wrapping) plus a safe alternative (checked). Everything else is a library concern.
 
-### Comparison and boolean operators
+### Comparison, boolean, and bitwise operators
 
 ```
 a == b      a != b      a < b       a > b       a <= b      a >= b
 a && b      a || b      !a
+a ^ b
 ```
 
 These have fixed semantics. No overloading.
@@ -250,6 +258,11 @@ let x = if cond { 1 } else { 2 };          // if/else is an expression
 
 while cond { body; }                         // while loop
 
+while i < len {                              // while with break
+    if xs[i] == target { break; }
+    i = i + 1;
+}
+
 let result = loop {                          // loop with break-value
     if done { break value; }
 };
@@ -277,6 +290,8 @@ fn read_config(path: &str) -> Result<Config, IoError> [Read] {
 A function with no effect annotation is pure. The compiler enforces: calling a `[Read]` function from a pure function is a type error.
 
 ### Annotations (replacing comments)
+
+> **Status: Target.** No `@` token exists in the lexer. Annotations are not parsed or represented in the AST.
 
 ```
 @[optimize(speed)]
@@ -315,6 +330,8 @@ fn copy_file(src: &str, dst: &str) -> Result<(), IoError> [Read, Write] { ... }
 - `[Panic]` — can panic (functions that call `.unwrap()` etc.)
 - `[Unsafe]` — contains unsafe operations, excluded from verification
 
+> **Status: Partial.** All effects are parsed and type-checked. Effect propagation between user-defined functions is fully enforced — calling a `[Read]` function from a pure function is a type error. However, builtins (`.unwrap()`, etc.) are not annotated with `[Panic]` or `[Unsafe]` effects, so calling a panicking builtin from a pure function is not yet flagged.
+
 ### Effect propagation
 
 The compiler checks: if you call a `[Read]` function, your function must declare `[Read]`. This is a type error, not a warning.
@@ -333,6 +350,8 @@ The effect system enables:
 **Region-based allocation with compiler-assisted placement.** No garbage collector, no Rust-style lifetime annotations.
 
 ### Arena-per-scope (MVP)
+
+> **Status: Target.** The current implementation uses malloc/free (leak-on-allocate). VowVec is a 24-byte struct `{ ptr, len, cap }` with no RegionId. Arena-per-scope allocation is planned but not implemented.
 
 The initial memory model is simple: every function has an implicit arena. Allocations go to this arena. On function return, the arena is freed (except values that escape via the return value, which are allocated in the caller's arena).
 
@@ -431,14 +450,16 @@ Growable array backed by arena allocation.
 let mut v = Vec::new();
 v.push(42);
 let x = v[0];              // bounds-checked, panics on OOB
-let y = v.get(0);          // returns Option<&T>
+let y = v.get(0);          // returns Option<T>
 ```
 
-Layout: `{ ptr: *T, len: usize, capacity: usize, region: RegionId }`. Iteration via while loop with index — no iterators, no closures.
+Layout: `{ ptr: *T, len: usize, capacity: usize }` (24 bytes). Iteration via while loop with index — no iterators, no closures.
+
+> **Status: Partial — Vec layout.** Current layout is 24 bytes with no `RegionId`. Arena-based `region` field is part of the target memory model (§7).
 
 ### HashMap\<K, V\>
 
-Hash map backed by arena allocation. Open addressing with linear probing.
+Hash map backed by a flat array of key-value pairs. Linear scan lookup (O(n)).
 
 ```
 let mut m = HashMap::new();
@@ -522,6 +543,8 @@ Traditional source-level debuggers are the wrong tool for agentic debugging. An 
 
 The runtime produces structured execution traces — a first-class facility where a failing execution yields a complete, machine-readable record of function calls, argument values, return values, state transitions, and effect logs.
 
+> **Status: Partial.** `--mode debug` exists and produces enter/exit/vow events at function boundaries and contract checks. Full state-transition recording, argument/return value capture, and effect logs are not yet implemented.
+
 Two compilation modes:
 - **Development build:** fully instrumented, every function boundary and contract check.
 - **Production build:** traces compiled out entirely, zero overhead.
@@ -556,6 +579,8 @@ extern "C" {
 - The wrapper is verified against that contract.
 - The C code itself is opaque and untrusted.
 - No implicit C header parsing, no automatic binding generation.
+
+> **Status: Target — mandatory contracts.** The current implementation makes vow blocks on extern declarations optional. Enforcement of mandatory extern contracts is planned (see roadmap Phase 25).
 
 For self-hosting, the Cranelift API is wrapped in C-compatible shim functions (Rust `#[no_mangle] extern "C"` functions) and called through `extern` blocks with vow contracts. ESBMC is invoked as a subprocess.
 
@@ -679,7 +704,7 @@ That's the language. Nothing more is needed.
 
 **What this replaces:** v2 listed three modes (wrapping, checked, saturating) without specifying operators. The operator syntax and the exclusion of saturating from the language are new.
 
-### A.6. No assert/assume statements (v4, 08.03.2026)
+### A.6. No assert/assume statements (v3, 08.03.2026)
 
 **Decision:** Vow does not provide `assert` or `assume` as inline statement-level constructs. All verification properties are expressed through vow blocks (`requires`, `ensures`, `invariant`).
 
@@ -693,6 +718,39 @@ That's the language. Nothing more is needed.
 
 **What this replaces:** An implemented prototype (assert/assume keywords, AST nodes, IR opcodes, codegen, ESBMC emission) was reverted in favor of this design decision.
 
+### A.7. `const` declarations (v4, 22.03.2026)
+
+**Decision:** Support `const NAME: TYPE = LITERAL;` declarations with compile-time folding.
+
+**Rationale:** Constants eliminate magic numbers in contracts and make verification conditions clearer. `const` values are folded at compile time — no runtime cost, no allocation, no effect. The verifier sees the literal value directly. This is pure sugar over inlining literals, with near-zero compiler complexity.
+
+**What this replaces:** Inline literal constants with no named constant mechanism.
+
+### A.8. `break` statement (v4, 22.03.2026)
+
+**Decision:** Support `break;` to exit `while` loops and `break value;` to return a value from `loop` expressions.
+
+**Rationale:** Without `break`, early loop exits require flag variables and extra conditionals — needless complexity that makes both the code and its verification conditions harder to read. `break` desugars to a jump to the loop's exit block in the IR. `break value` in `loop` expressions enables `loop` as an expression form (already shown in §5 control flow).
+
+**What this replaces:** Flag variable plus conditional exit patterns for early loop termination.
+
+### A.9. Documenting previously unspecified features (v4, 22.03.2026)
+
+**Decision:** Retroactively document features implemented during self-hosting but omitted from earlier sketch versions.
+
+**Rationale:** The self-hosted compiler required capabilities that were implemented incrementally without design sketch entries. Documenting them closes the gap between specification and implementation.
+
+**What this replaces:** Undocumented implementation details scattered across commit history.
+
+The features documented:
+
+- **Bitwise XOR (`^`)** — new token, BinOp, and IR opcodes. Added to the operator table in §5.
+- **Suffixed integer literals** (`42u64`, `100i32`) — all unsuffixed integer literals are `i64`; suffixed literals coerce to the specified type.
+- **Type aliases** (`type Foo = i64;`) — parsed and resolved in the type checker. Not user-defined generics: aliases are concrete type synonyms.
+- **Verification caching** — content-hash-based ESBMC result cache. Avoids re-verifying unchanged functions (23s → 0.001s on cache hit).
+- **76 runtime builtins** — filesystem, string, vec, hashmap, hex encoding, time. See `docs/skill/grammar.md` for the full list.
+- **String comparison deallocation** — temporary strings created for `==`/`!=` comparisons are freed after use to prevent memory leaks.
+
 ---
 
-*This document captures the current state of design thinking as of February 2026. It is a living sketch, not a specification.*
+*This document captures the current state of design thinking as of March 2026. It is a living sketch, not a specification.*
