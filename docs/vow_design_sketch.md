@@ -155,7 +155,7 @@ type NonZero = { x: i64 | x != 0 }
 type ValidPort = { p: u16 | p >= 1 && p <= 65535 }
 ```
 
-> **Status: Partial.** Refinement type syntax (`{ x: T | predicate }`) is parsed but the predicate is semantically erased — not forwarded to ESBMC for verification. `where` clauses on parameters are not yet implemented. Function-level `requires`/`ensures` predicates are the current mechanism for expressing refinement properties.
+> **Status: Partial.** Refinement type syntax (`{ x: T | predicate }`) is parsed but the predicate is semantically erased — not forwarded to ESBMC for verification. `where` clauses on parameters are fully implemented — they desugar to `requires` preconditions in both the Rust and self-hosted IR lowerers. Function-level `requires`/`ensures` predicates are the current mechanism for expressing refinement properties.
 
 This separation is key: types are decidable and mechanical; refinements are expressive and handled by ESBMC. Most of the expressiveness of dependent types without the complexity.
 
