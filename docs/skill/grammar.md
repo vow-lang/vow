@@ -24,6 +24,18 @@ use foo.bar
 
 This resolves to `<rootdir>/foo/bar.vow` relative to the main source file.
 
+## Const Declarations
+
+Named constants with compile-time values:
+
+```vow
+const MAX_SIZE: i64 = 1024;
+const NEG_ONE: i64 = -1;
+const DEBUG: bool = true;
+```
+
+Supported value forms: integer literals, boolean literals, negated integer literals. Constants are inlined at every use site (zero runtime cost). The type must be `i64`, `i32`, or `bool`. Constants are referenced by name in expressions like any other identifier.
+
 ## Functions
 
 ### Pure Function

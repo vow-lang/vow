@@ -140,6 +140,17 @@ fn check_module(e: CheckEnv, m: Module) [io] {
         let item: i64 = m.items[i];
         let kind: i64 = item_kind(item);
         let id: i64 = item_id(item);
+        if kind == ITEM_CONST() {
+            register_const(e, m, id);
+        }
+        i = i + 1;
+    }
+
+    i = 0;
+    while i < n {
+        let item: i64 = m.items[i];
+        let kind: i64 = item_kind(item);
+        let id: i64 = item_id(item);
         if kind == ITEM_FN() {
             register_fn(e, m, id);
         }
@@ -156,6 +167,35 @@ fn check_module(e: CheckEnv, m: Module) [io] {
         }
         i = i + 1;
     }
+}
+
+fn register_const(e: CheckEnv, m: Module, cid: i64) [io] {
+    let a: AstArena = m.arena;
+    let name_sid: i64 = cdef_name_sid(a, cid);
+    let name: String = arena_str(a, name_sid);
+    let val_eid: i64 = cdef_value_eid(a, cid);
+    let val_tag: i64 = expr_tag(a, val_eid);
+    let val: i64 = {
+        if val_tag == EXPR_LIT_INT() {
+            expr_a(a, val_eid)
+        } else if val_tag == EXPR_LIT_BOOL() {
+            expr_a(a, val_eid)
+        } else if val_tag == EXPR_UNOP() {
+            let inner_eid: i64 = expr_b(a, val_eid);
+            let inner_tag: i64 = expr_tag(a, inner_eid);
+            if inner_tag == EXPR_LIT_INT() {
+                0 - expr_a(a, inner_eid)
+            } else {
+                env_emit_error(e, String::from("const value must be a literal"), expr_span(a, val_eid));
+                0
+            }
+        } else {
+            env_emit_error(e, String::from("const value must be a literal"), expr_span(a, val_eid));
+            0
+        }
+    };
+    e.const_names.push(name);
+    e.const_values.push(val);
 }
 
 fn register_fn(e: CheckEnv, m: Module, fid: i64) [io] {
@@ -414,6 +454,15 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
     if tag == EXPR_IDENT() {
         let name_sid: i64 = expr_a(a, eid);
         let name: String = arena_str(a, name_sid);
+        let ncnst: i64 = e.const_names.len();
+        let mut ci: i64 = 0;
+        while ci < ncnst {
+            let cn: String = e.const_names[ci];
+            if cn.eq(name) {
+                return CTY_I64();
+            }
+            ci = ci + 1;
+        }
         return env_lookup_var(e, name);
     }
 
