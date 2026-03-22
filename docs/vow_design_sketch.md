@@ -219,7 +219,7 @@ The `!` reads as "watch out, this checks." Floats use standard operators (`+`, `
 ```
 a == b      a != b      a < b       a > b       a <= b      a >= b
 a && b      a || b      !a
-a ^ b       // bitwise XOR
+a ^ b
 ```
 
 These have fixed semantics. No overloading.
@@ -257,6 +257,11 @@ The compiler rejects non-exhaustive matches. `::` for enum variant paths (Rust c
 let x = if cond { 1 } else { 2 };          // if/else is an expression
 
 while cond { body; }                         // while loop
+
+while i < len {                              // while with break
+    if xs[i] == target { break; }
+    i = i + 1;
+}
 
 let result = loop {                          // loop with break-value
     if done { break value; }
@@ -325,7 +330,7 @@ fn copy_file(src: &str, dst: &str) -> Result<(), IoError> [Read, Write] { ... }
 - `[Panic]` — can panic (functions that call `.unwrap()` etc.)
 - `[Unsafe]` — contains unsafe operations, excluded from verification
 
-> **Status: Partial.** All effects are parsed and type-checked (effect propagation is enforced). However, `[Panic]` and `[Unsafe]` are defined but not enforced: no builtins are annotated with these effects, so calling `.unwrap()` from a pure function is not flagged.
+> **Status: Partial.** All effects are parsed and type-checked. Effect propagation between user-defined functions is fully enforced — calling a `[Read]` function from a pure function is a type error. However, builtins (`.unwrap()`, etc.) are not annotated with `[Panic]` or `[Unsafe]` effects, so calling a panicking builtin from a pure function is not yet flagged.
 
 ### Effect propagation
 
@@ -445,7 +450,7 @@ Growable array backed by arena allocation.
 let mut v = Vec::new();
 v.push(42);
 let x = v[0];              // bounds-checked, panics on OOB
-let y = v.get(0);          // returns Option<&T>
+let y = v.get(0);          // returns Option<T>
 ```
 
 Layout: `{ ptr: *T, len: usize, capacity: usize }` (24 bytes). Iteration via while loop with index — no iterators, no closures.
@@ -454,7 +459,7 @@ Layout: `{ ptr: *T, len: usize, capacity: usize }` (24 bytes). Iteration via whi
 
 ### HashMap\<K, V\>
 
-Hash map backed by arena allocation. Open addressing with linear probing.
+Hash map backed by a flat array of key-value pairs. Linear scan lookup (O(n)).
 
 ```
 let mut m = HashMap::new();
@@ -699,7 +704,7 @@ That's the language. Nothing more is needed.
 
 **What this replaces:** v2 listed three modes (wrapping, checked, saturating) without specifying operators. The operator syntax and the exclusion of saturating from the language are new.
 
-### A.6. No assert/assume statements (v4, 08.03.2026)
+### A.6. No assert/assume statements (v3, 08.03.2026)
 
 **Decision:** Vow does not provide `assert` or `assume` as inline statement-level constructs. All verification properties are expressed through vow blocks (`requires`, `ensures`, `invariant`).
 
@@ -715,25 +720,35 @@ That's the language. Nothing more is needed.
 
 ### A.7. `const` declarations (v4, 22.03.2026)
 
-**Decision:** Add `const NAME: TYPE = LITERAL;` declarations with compile-time folding.
+**Decision:** Support `const NAME: TYPE = LITERAL;` declarations with compile-time folding.
 
 **Rationale:** Constants eliminate magic numbers in contracts and make verification conditions clearer. `const` values are folded at compile time — no runtime cost, no allocation, no effect. The verifier sees the literal value directly. This is pure sugar over inlining literals, with near-zero compiler complexity.
 
+**What this replaces:** Inline literal constants with no named constant mechanism.
+
 ### A.8. `break` statement (v4, 22.03.2026)
 
-**Decision:** Add `break;` to exit `while` loops and `break value;` to return a value from `loop` expressions.
+**Decision:** Support `break;` to exit `while` loops and `break value;` to return a value from `loop` expressions.
 
 **Rationale:** Without `break`, early loop exits require flag variables and extra conditionals — needless complexity that makes both the code and its verification conditions harder to read. `break` desugars to a jump to the loop's exit block in the IR. `break value` in `loop` expressions enables `loop` as an expression form (already shown in §5 control flow).
 
-### A.9. Implemented features not in earlier sketch versions (v4, 22.03.2026)
+**What this replaces:** Flag variable plus conditional exit patterns for early loop termination.
 
-The following features are implemented and used in the self-hosted compiler but were not documented in v3:
+### A.9. Documenting previously unspecified features (v4, 22.03.2026)
+
+**Decision:** Retroactively document features implemented during self-hosting but omitted from earlier sketch versions.
+
+**Rationale:** The self-hosted compiler required capabilities that were implemented incrementally without design sketch entries. Documenting them closes the gap between specification and implementation.
+
+**What this replaces:** Undocumented implementation details scattered across commit history.
+
+The features documented:
 
 - **Bitwise XOR (`^`)** — new token, BinOp, and IR opcodes. Added to the operator table in §5.
 - **Suffixed integer literals** (`42u64`, `100i32`) — all unsuffixed integer literals are `i64`; suffixed literals coerce to the specified type.
 - **Type aliases** (`type Foo = i64;`) — parsed and resolved in the type checker. Not user-defined generics: aliases are concrete type synonyms.
 - **Verification caching** — content-hash-based ESBMC result cache. Avoids re-verifying unchanged functions (23s → 0.001s on cache hit).
-- **77 runtime builtins** — filesystem, string, vec, hashmap, hex encoding, time. See `docs/skill/grammar.md` for the full list.
+- **76 runtime builtins** — filesystem, string, vec, hashmap, hex encoding, time. See `docs/skill/grammar.md` for the full list.
 - **String comparison deallocation** — temporary strings created for `==`/`!=` comparisons are freed after use to prevent memory leaks.
 
 ---
