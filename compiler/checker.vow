@@ -713,6 +713,12 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         return CTY_UNIT();
     }
 
+    if tag == EXPR_LOOP() {
+        let body_bid: i64 = expr_a(a, eid);
+        let _body_tid: i64 = check_block(e, m, body_bid);
+        return CTY_NEVER();
+    }
+
     if tag == EXPR_MATCH() {
         let scrutinee_eid: i64 = expr_a(a, eid);
         let arms_lid: i64 = expr_b(a, eid);
@@ -752,6 +758,10 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
     }
 
     if tag == EXPR_BREAK() {
+        let val_eid: i64 = expr_a(a, eid);
+        if val_eid != -1 {
+            let _val_tid: i64 = check_expr(e, m, val_eid);
+        }
         return CTY_NEVER();
     }
 
@@ -935,6 +945,11 @@ fn collect_calls_in_expr(e: CheckEnv, m: Module, eid: i64, calls: Vec<String>) [
     if tag == EXPR_WHILE() {
         collect_calls_in_expr(e, m, expr_a(a, eid), calls);
         collect_calls_in_block(e, m, expr_b(a, eid), calls);
+        return;
+    }
+
+    if tag == EXPR_LOOP() {
+        collect_calls_in_block(e, m, expr_a(a, eid), calls);
         return;
     }
 
