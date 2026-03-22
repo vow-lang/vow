@@ -1,4 +1,4 @@
-# Vow Roadmap — Revised (15.03.2026)
+# Vow Roadmap — Revised (22.03.2026)
 
 This revision replaces the March 7 roadmap. Phases 10–20 are complete. The
 self-hosted compiler (`./vowc`) is the primary driver. This document focuses
@@ -19,7 +19,7 @@ Achieved:
 - Structured JSON diagnostics with line:col source spans
 - `build`, `verify` subcommands; `--mode debug`, `--no-verify`, `--no-cache`, `--unwind N` flags
 - Verification caching: content-hash-based ESBMC result cache (23s → 0.001s on repeat)
-- Vericoding benchmark: **100% (36/36)** on Vow's original suite; 67 HumanEval benchmarks translated
+- Vericoding benchmark: **100% (36/36)** on Vow's original suite; **98.5% (66/67)** on HumanEval
 - 89/89 tests passing, 40/40 CLI compatibility tests
 - Toolchain Skill document, structured `--help`, `--debug-trace`, incremental compilation
 - Bootstrap: `scripts/bootstrap.sh` produces `./vowc` from Rust stage 0
