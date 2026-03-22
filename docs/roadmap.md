@@ -31,7 +31,9 @@ bounded-verification language with an integrated compile/verify/CEGIS loop,
 blame tracking, structured counterexamples, and a self-hosted verified compiler.
 107 benchmarks (40 original + 67 HumanEval) are verified; 103/103 non-stretch
 references pass. Contract fidelity is machine-tracked (exact/partial/weak).
-Phase 21.4e–f (running the comparison protocol and generating reports) remain.
+Phase 21.4e–f complete: Claude Sonnet 4 achieves **99.0% combined** (102/103),
+**98.5% HumanEval** (66/67) vs Dafny 82%, Verus 44%, Lean 27%.
+Publication report: `reports/2026-03-22-publication-comparison.md`.
 
 Known limitations:
 - Arena deallocation is a no-op (`__vow_arena_free` leaks; fine for short-lived programs)
@@ -187,7 +189,7 @@ Bootstrap triple test passes with binary fixed point. 89/89 tests pass.
 
 ### 21.4 Vericoding comparison with contract fidelity
 
-**Status: 21.4a–d COMPLETE. 21.4e–f remaining (run protocol, generate report).**
+**Status: COMPLETE (21.4a–f all done).**
 
 **21.4a Infrastructure (COMPLETE).** `contract_fidelity` field added to all
 meta.toml files, `BenchmarkInfo`, `BenchmarkResult`. `--suite` flag
@@ -213,11 +215,17 @@ verified. Total suite: **107 benchmarks** (40 original + 67 HumanEval), 103
 non-stretch. All 103/103 non-stretch references verified with `./vowc`.
 Scripts: `bench/triage_humaneval.py`, `bench/translate_dafny.py`.
 
-**21.4e Run the protocol.** Run LLMs against the HumanEval suite with up to
-5 CEGIS iterations. `--suite humaneval` flag enables HE-only runs.
+**21.4e Run the protocol (COMPLETE).** Claude Sonnet 4 run against HumanEval
+suite: **66/67 (98.5%)**, mean 1.32 CEGIS iterations. Combined with original
+suite: **102/103 (99.0%)**. Single failure: HE062 (loop invariant convergence).
+Results: `bench/results/humaneval-2026-03-15/claude-sonnet-4-20250514.json`.
 
-**21.4f Generate report.** Fidelity-stratified comparison: Vow vs
-Dafny/Verus/Lean pass rates, broken down by exact/partial/weak.
+**21.4f Generate report (COMPLETE).** Publication-quality fidelity-stratified
+comparison report: `reports/2026-03-22-publication-comparison.md`. Includes
+comparison table (Vow vs Dafny/Verus/Lean), fidelity breakdown (Exact 96.9%,
+Partial 100%, Weak 100%), CEGIS iteration analysis, methodology, and four
+documented caveats (ESBMC bounds, spec expressiveness, benchmark provenance,
+Vec nondeterminism).
 
 **Resources:**
 - Vericoding benchmark: github.com/Beneficial-AI-Foundation/vericoding-benchmark
@@ -270,7 +278,7 @@ benchmark language can do.
 
 ### 21.7 Publish direct comparison
 
-**Status: BLOCKED on 21.4e–f (infrastructure and benchmarks complete).**
+**Status: UNBLOCKED — 21.4e–f complete. Ready for publication.**
 
 Publish the Vericoding comparison as soon as the direct track is complete:
 
@@ -486,10 +494,10 @@ until a concrete verification need exceeds ESBMC's capabilities.
 
 ---
 
-*This document captures the forward-looking roadmap as of 15 March 2026.
+*This document captures the forward-looking roadmap as of 22 March 2026.
 Phase 21 critical path: 21.1 → 21.4 → 21.7 (publish direct comparison).
-Parallel: 21.3 → 21.6 → 21.8 (publish dual-track update). 21.1–21.3 are
-complete; 21.4a–d are complete (107 benchmarks, 103/103 verified). Remaining:
-21.4e–f (run protocol, generate report) → 21.7 (publish). Phase 22 improves
-agent ergonomics. Phase 23 is toolchain polish. Phases 24–25 are
-demand-driven. If a phase isn't earning its keep, cut it.*
+Parallel: 21.3 → 21.6 → 21.8 (publish dual-track update). 21.1–21.4 are
+complete (107 benchmarks, 102/103 verified by Sonnet 4, publication report
+generated). Next: 21.7 (publish). Phase 22 improves agent ergonomics.
+Phase 23 is toolchain polish. Phases 24–25 are demand-driven. If a phase
+isn't earning its keep, cut it.*

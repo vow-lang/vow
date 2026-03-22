@@ -20,12 +20,21 @@ def generate_report(results_dir: Path, run_id: str) -> str:
     if not models:
         return f"No results found for run_id: {run_id}"
 
+    # Compute dynamic column sizes from first model's data
+    first_data = next(iter(models.values()))
+    first_summary = first_data.get("summary", {})
+    by_diff = first_summary.get("by_difficulty", {})
+    easy_total = by_diff.get("easy", {}).get("total", 0)
+    medium_total = by_diff.get("medium", {}).get("total", 0)
+    hard_total = by_diff.get("hard", {}).get("total", 0)
+    grand_total = first_summary.get("total_applicable", easy_total + medium_total + hard_total)
+
     lines = [
         f"# Vericoding Benchmark Results — {run_id}",
         "",
         "## Comparison Table",
         "",
-        "| Language/Model | Easy (15) | Medium (15) | Hard (6) | Total (36) | Rate |",
+        f"| Language/Model | Easy ({easy_total}) | Medium ({medium_total}) | Hard ({hard_total}) | Total ({grand_total}) | Rate |",
         "|----------------|-----------|-------------|----------|------------|------|",
         "| Dafny (paper)  | —         | —           | —        | —          | 82%  |",
     ]
@@ -37,16 +46,16 @@ def generate_report(results_dir: Path, run_id: str) -> str:
         medium = by_diff.get("medium", {})
         hard = by_diff.get("hard", {})
         total = summary.get("verified", 0)
-        total_applicable = summary.get("total_applicable", 36)
+        total_applicable = summary.get("total_applicable", grand_total)
         rate = summary.get("verification_rate", 0)
         compiler = data.get("compiler", "rust")
         compiler_label = f", {compiler}" if compiler != "rust" else ""
 
         lines.append(
             f"| Vow ({_short_name(model_name)}{compiler_label}) "
-            f"| {easy.get('verified', 0)}/{easy.get('total', 15)} "
-            f"| {medium.get('verified', 0)}/{medium.get('total', 15)} "
-            f"| {hard.get('verified', 0)}/{hard.get('total', 6)} "
+            f"| {easy.get('verified', 0)}/{easy.get('total', easy_total)} "
+            f"| {medium.get('verified', 0)}/{medium.get('total', medium_total)} "
+            f"| {hard.get('verified', 0)}/{hard.get('total', hard_total)} "
             f"| {total}/{total_applicable} "
             f"| {rate:.0%} |"
         )
@@ -144,7 +153,7 @@ def _model_details(model_name: str, data: dict) -> list[str]:
     if verified_iters:
         mean_iters = sum(verified_iters) / len(verified_iters)
         lines.append(f"**Mean CEGIS iterations (verified):** {mean_iters:.1f}")
-    lines.append(f"**Total verified:** {summary.get('verified', 0)}/{summary.get('total_applicable', 36)}")
+    lines.append(f"**Total verified:** {summary.get('verified', 0)}/{summary.get('total_applicable', len(results))}")
     lines.append("")
 
     # Failure modes
