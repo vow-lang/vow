@@ -290,6 +290,8 @@ fn skill_json() -> String {
     "control_flow": {
       "if_else": "if cond { expr } else { expr } \u2014 expression, both branches same type",
       "while": "while cond { body }",
+      "for_each": "for item in vec { body } \u2014 iterate Vec elements",
+      "for_enumerate": "for i, item in vec { body } \u2014 iterate with index",
       "loop": "loop { ... break value; } \u2014 infinite loop, break to exit",
       "break": "break; or break value;",
       "return": "return; or return value;"
@@ -339,6 +341,12 @@ fn skill_json() -> String {
       "read": "v[i] \u2014 Vec index access",
       "write": "v[i] = val \u2014 Vec index assignment"
     }
+  },
+  "verification_limits": {
+    "loop_unwind": 10,
+    "Vec<T>": 128,
+    "String": 256,
+    "HashMap<K, V>": 64
   }
 }"#
     .to_string()
@@ -413,7 +421,13 @@ BUILTINS  : print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [i
             eprintln_str: fn(s: String) -> () [io]   fs_read: fn(path: String) -> String [read]   fs_write: fn(path: String, data: String) -> () [write]   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   process_exit: fn(code: i64) -> () [io]
 METHODS   : Vec: Vec::new/push/pop/len/v[i]/v[i] = val   String: String::from/len/byte_at/push_byte/push_str/contains/eq/substring/parse_i64/parse_u64
             HashMap: HashMap::new/insert/get/contains_key/remove/len   Option: unwrap
-OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   - ! & ?"#
+OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   - ! & ?
+
+VERIFICATION LIMITS
+  Loop unwind  : 10 iterations
+  Vec<T>        : 128 max capacity
+  String        : 256 max capacity
+  HashMap<K, V> : 64 max capacity"#
         .to_string()
 }
 
