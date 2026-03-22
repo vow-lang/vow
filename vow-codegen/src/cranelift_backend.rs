@@ -163,7 +163,7 @@ fn ir_ty_to_cranelift(ty: IrTy) -> Option<types::Type> {
         IrTy::I64 => Some(types::I64),
         IrTy::F32 => Some(types::F32),
         IrTy::F64 => Some(types::F64),
-        IrTy::Bool => Some(types::I8),
+        IrTy::Bool => Some(types::I64),
         IrTy::U64 => Some(types::I64),
         IrTy::Unit => None,
         IrTy::Ptr | IrTy::LinearPtr => Some(types::I64),
@@ -269,7 +269,7 @@ fn lower_inst(
         }
         Opcode::ConstBool => {
             let b = matches!(inst.data, InstData::ConstBool(true));
-            let val = builder.ins().iconst(types::I8, b as i64);
+            let val = builder.ins().iconst(types::I64, b as i64);
             ctx.value_map.insert(inst.id, val);
         }
         Opcode::ConstStr => {
@@ -399,58 +399,68 @@ fn lower_inst(
         }
 
         // ------------------------------------------------------------------
-        // Integer comparisons (return Bool / I8)
+        // Integer comparisons (return Bool)
         // ------------------------------------------------------------------
         Opcode::EqI32 | Opcode::EqI64 | Opcode::EqU64 => {
-            let val = builder.ins().icmp(IntCC::Equal, arg!(0), arg!(1));
+            let cmp = builder.ins().icmp(IntCC::Equal, arg!(0), arg!(1));
+            let val = builder.ins().uextend(types::I64, cmp);
             ctx.value_map.insert(inst.id, val);
         }
         Opcode::NeI32 | Opcode::NeI64 | Opcode::NeU64 => {
-            let val = builder.ins().icmp(IntCC::NotEqual, arg!(0), arg!(1));
+            let cmp = builder.ins().icmp(IntCC::NotEqual, arg!(0), arg!(1));
+            let val = builder.ins().uextend(types::I64, cmp);
             ctx.value_map.insert(inst.id, val);
         }
         Opcode::LtI32 | Opcode::LtI64 => {
-            let val = builder.ins().icmp(IntCC::SignedLessThan, arg!(0), arg!(1));
+            let cmp = builder.ins().icmp(IntCC::SignedLessThan, arg!(0), arg!(1));
+            let val = builder.ins().uextend(types::I64, cmp);
             ctx.value_map.insert(inst.id, val);
         }
         Opcode::LtU64 => {
-            let val = builder.ins().icmp(IntCC::UnsignedLessThan, arg!(0), arg!(1));
+            let cmp = builder.ins().icmp(IntCC::UnsignedLessThan, arg!(0), arg!(1));
+            let val = builder.ins().uextend(types::I64, cmp);
             ctx.value_map.insert(inst.id, val);
         }
         Opcode::LeI32 | Opcode::LeI64 => {
-            let val = builder
+            let cmp = builder
                 .ins()
                 .icmp(IntCC::SignedLessThanOrEqual, arg!(0), arg!(1));
+            let val = builder.ins().uextend(types::I64, cmp);
             ctx.value_map.insert(inst.id, val);
         }
         Opcode::LeU64 => {
-            let val = builder
+            let cmp = builder
                 .ins()
                 .icmp(IntCC::UnsignedLessThanOrEqual, arg!(0), arg!(1));
+            let val = builder.ins().uextend(types::I64, cmp);
             ctx.value_map.insert(inst.id, val);
         }
         Opcode::GtI32 | Opcode::GtI64 => {
-            let val = builder
+            let cmp = builder
                 .ins()
                 .icmp(IntCC::SignedGreaterThan, arg!(0), arg!(1));
+            let val = builder.ins().uextend(types::I64, cmp);
             ctx.value_map.insert(inst.id, val);
         }
         Opcode::GtU64 => {
-            let val = builder
+            let cmp = builder
                 .ins()
                 .icmp(IntCC::UnsignedGreaterThan, arg!(0), arg!(1));
+            let val = builder.ins().uextend(types::I64, cmp);
             ctx.value_map.insert(inst.id, val);
         }
         Opcode::GeI32 | Opcode::GeI64 => {
-            let val = builder
+            let cmp = builder
                 .ins()
                 .icmp(IntCC::SignedGreaterThanOrEqual, arg!(0), arg!(1));
+            let val = builder.ins().uextend(types::I64, cmp);
             ctx.value_map.insert(inst.id, val);
         }
         Opcode::GeU64 => {
-            let val = builder
+            let cmp = builder
                 .ins()
                 .icmp(IntCC::UnsignedGreaterThanOrEqual, arg!(0), arg!(1));
+            let val = builder.ins().uextend(types::I64, cmp);
             ctx.value_map.insert(inst.id, val);
         }
 
@@ -483,39 +493,45 @@ fn lower_inst(
         // Float comparisons
         // ------------------------------------------------------------------
         Opcode::EqF32 | Opcode::EqF64 => {
-            let val = builder.ins().fcmp(FloatCC::Equal, arg!(0), arg!(1));
+            let cmp = builder.ins().fcmp(FloatCC::Equal, arg!(0), arg!(1));
+            let val = builder.ins().uextend(types::I64, cmp);
             ctx.value_map.insert(inst.id, val);
         }
         Opcode::NeF32 | Opcode::NeF64 => {
-            let val = builder.ins().fcmp(FloatCC::NotEqual, arg!(0), arg!(1));
+            let cmp = builder.ins().fcmp(FloatCC::NotEqual, arg!(0), arg!(1));
+            let val = builder.ins().uextend(types::I64, cmp);
             ctx.value_map.insert(inst.id, val);
         }
         Opcode::LtF32 | Opcode::LtF64 => {
-            let val = builder.ins().fcmp(FloatCC::LessThan, arg!(0), arg!(1));
+            let cmp = builder.ins().fcmp(FloatCC::LessThan, arg!(0), arg!(1));
+            let val = builder.ins().uextend(types::I64, cmp);
             ctx.value_map.insert(inst.id, val);
         }
         Opcode::LeF32 | Opcode::LeF64 => {
-            let val = builder
+            let cmp = builder
                 .ins()
                 .fcmp(FloatCC::LessThanOrEqual, arg!(0), arg!(1));
+            let val = builder.ins().uextend(types::I64, cmp);
             ctx.value_map.insert(inst.id, val);
         }
         Opcode::GtF32 | Opcode::GtF64 => {
-            let val = builder.ins().fcmp(FloatCC::GreaterThan, arg!(0), arg!(1));
+            let cmp = builder.ins().fcmp(FloatCC::GreaterThan, arg!(0), arg!(1));
+            let val = builder.ins().uextend(types::I64, cmp);
             ctx.value_map.insert(inst.id, val);
         }
         Opcode::GeF32 | Opcode::GeF64 => {
-            let val = builder
+            let cmp = builder
                 .ins()
                 .fcmp(FloatCC::GreaterThanOrEqual, arg!(0), arg!(1));
+            let val = builder.ins().uextend(types::I64, cmp);
             ctx.value_map.insert(inst.id, val);
         }
 
         // ------------------------------------------------------------------
-        // Boolean operations (I8)
+        // Boolean operations
         // ------------------------------------------------------------------
         Opcode::Not => {
-            let one = builder.ins().iconst(types::I8, 1);
+            let one = builder.ins().iconst(types::I64, 1);
             let val = builder.ins().bxor(arg!(0), one);
             ctx.value_map.insert(inst.id, val);
         }
@@ -736,7 +752,14 @@ fn lower_inst(
                 let unit = builder.ins().iconst(types::I32, 0);
                 ctx.value_map.insert(inst.id, unit);
             } else {
-                ctx.value_map.insert(inst.id, results[0]);
+                let r = results[0];
+                let rt = builder.func.dfg.value_type(r);
+                let norm = if rt == types::I8 {
+                    builder.ins().uextend(types::I64, r)
+                } else {
+                    r
+                };
+                ctx.value_map.insert(inst.id, norm);
             }
         }
 
@@ -873,7 +896,7 @@ fn emit_vow_check(
     vow_offset: u32,
     ctx: &mut LowerCtx,
 ) -> Result<(), CodegenError> {
-    let one = builder.ins().iconst(types::I8, 1);
+    let one = builder.ins().iconst(types::I64, 1);
     let inv = builder.ins().bxor(predicate, one);
 
     let violation_block = builder.create_block();
@@ -962,7 +985,7 @@ fn emit_vow_violation_body(
                         builder.ins().uextend(types::I64, bits)
                     }
                     IrTy::F64 => builder.ins().bitcast(types::I64, MemFlags::new(), *cl_val),
-                    IrTy::Bool => builder.ins().uextend(types::I64, *cl_val),
+                    IrTy::Bool => *cl_val,
                     _ => builder.ins().iconst(types::I64, 0),
                 };
                 builder
