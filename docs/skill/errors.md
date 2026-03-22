@@ -113,6 +113,37 @@ fn f(o: Option<i64>) -> i64 {
 
 **Fix:** Add a `_ => ...` wildcard arm or cover all variants (`Option::None => ...`).
 
+### UnknownMethod
+
+**Phase:** Type Checker
+**Meaning:** A method call uses a name that does not exist on the receiver type.
+
+```vow
+fn f() -> () {
+    let v: Vec<i64> = Vec::new();
+    v.psh(42);
+}
+```
+
+**Output:** `unknown method 'psh' on type 'Vec<i64>'`
+
+**Fix:** Check the method name for typos. Use `--help` to see available methods for each type.
+
+### UnsupportedFeature
+
+**Phase:** Type Checker
+**Meaning:** A language feature that is not supported in Vow was used.
+
+```vow
+trait Foo {
+    fn bar() -> i64;
+}
+```
+
+**Output:** `trait blocks are not supported in Vow`
+
+**Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
+
 ### VowRequiresViolated
 
 **Phase:** Verification (ESBMC)

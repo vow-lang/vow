@@ -343,10 +343,25 @@ impl<'e> Checker<'e> {
     }
 
     fn check_item(&mut self, item: &Item) {
-        if let Item::Fn(fn_def) = item
-            && !fn_def.is_declaration
-        {
-            self.check_fn(fn_def);
+        match item {
+            Item::Fn(fn_def) if !fn_def.is_declaration => {
+                self.check_fn(fn_def);
+            }
+            Item::Trait(t) => {
+                self.emit_error(
+                    ErrorCode::UnsupportedFeature,
+                    "trait blocks are not supported in Vow",
+                    t.span,
+                );
+            }
+            Item::Impl(i) => {
+                self.emit_error(
+                    ErrorCode::UnsupportedFeature,
+                    "impl blocks are not supported in Vow",
+                    i.span,
+                );
+            }
+            _ => {}
         }
     }
 
@@ -690,50 +705,94 @@ impl<'e> Checker<'e> {
                 let is_hashmap = matches!(&recv_ty,
                     Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Struct(n) if n == "HashMap")
                 );
-                if is_str {
-                    match method.as_str() {
-                        "len" => Ty::I64,
-                        "push_str" => Ty::Unit,
-                        "eq" => Ty::Bool,
-                        "contains" => Ty::Bool,
-                        "byte_at" => Ty::I64,
-                        "push_byte" => Ty::Unit,
-                        "substring" => Ty::Str,
-                        "parse_i64" => Ty::Applied(
+                let (known_methods, result_ty): (&[&str], Option<Ty>) = if is_str {
+                    let methods: &[&str] = &[
+                        "len", "push_str", "eq", "contains", "byte_at", "push_byte",
+                        "substring", "parse_i64", "parse_u64",
+                    ];
+                    let ty = match method.as_str() {
+                        "len" => Some(Ty::I64),
+                        "push_str" => Some(Ty::Unit),
+                        "eq" => Some(Ty::Bool),
+                        "contains" => Some(Ty::Bool),
+                        "byte_at" => Some(Ty::I64),
+                        "push_byte" => Some(Ty::Unit),
+                        "substring" => Some(Ty::Str),
+                        "parse_i64" => Some(Ty::Applied(
                             Box::new(Ty::Enum("Option".to_string())),
                             vec![Ty::I64],
-                        ),
-                        "parse_u64" => Ty::Applied(
+                        )),
+                        "parse_u64" => Some(Ty::Applied(
                             Box::new(Ty::Enum("Option".to_string())),
                             vec![Ty::U64],
-                        ),
-                        _ => Ty::Unit,
-                    }
+                        )),
+                        _ => None,
+                    };
+                    (methods, ty)
                 } else if is_hashmap {
-                    match method.as_str() {
-                        "len" => Ty::I64,
-                        "insert" => Ty::Unit,
-                        "get" => Ty::I64,
-                        "contains_key" => Ty::Bool,
-                        "remove" => Ty::Unit,
-                        _ => Ty::Unit,
-                    }
+                    let methods: &[&str] = &["len", "insert", "get", "contains_key", "remove"];
+                    let ty = match method.as_str() {
+                        "len" => Some(Ty::I64),
+                        "insert" => Some(Ty::Unit),
+                        "get" => Some(Ty::I64),
+                        "contains_key" => Some(Ty::Bool),
+                        "remove" => Some(Ty::Unit),
+                        _ => None,
+                    };
+                    (methods, ty)
                 } else if is_vec {
-                    match method.as_str() {
-                        "len" => Ty::I64,
-                        "push" => Ty::Unit,
-                        "get" => Ty::Applied(
+                    let methods: &[&str] = &["len", "push", "pop", "get"];
+                    let ty = match method.as_str() {
+                        "len" => Some(Ty::I64),
+                        "push" => Some(Ty::Unit),
+                        "pop" => Some(Ty::Unit),
+                        "get" => Some(Ty::Applied(
                             Box::new(Ty::Enum("Option".to_string())),
                             vec![if let Ty::Applied(_, args) = &recv_ty {
                                 args.first().cloned().unwrap_or(Ty::I64)
                             } else {
                                 Ty::I64
                             }],
-                        ),
-                        _ => Ty::Unit,
-                    }
+                        )),
+                        _ => None,
+                    };
+                    (methods, ty)
                 } else {
-                    Ty::Unit
+                    (&[] as &[&str], None)
+                };
+                match result_ty {
+                    Some(ty) => ty,
+                    None => {
+                        let type_name = if is_str {
+                            "String".to_string()
+                        } else if is_hashmap {
+                            "HashMap".to_string()
+                        } else if is_vec {
+                            "Vec".to_string()
+                        } else {
+                            format!("{recv_ty}")
+                        };
+                        let candidates: Vec<String> =
+                            known_methods.iter().map(|s| s.to_string()).collect();
+                        let mut hints = Vec::new();
+                        if let Some(s) = suggest_similar(method, &candidates, 3) {
+                            hints.push(format!("did you mean `{s}`?"));
+                        } else if !candidates.is_empty() {
+                            hints.push(format!(
+                                "available methods: {}",
+                                candidates.join(", ")
+                            ));
+                        }
+                        self.emit_error_with_hints(
+                            ErrorCode::UnknownMethod,
+                            format!(
+                                "unknown method `{method}` on type `{type_name}`"
+                            ),
+                            expr.span,
+                            hints,
+                        );
+                        Ty::Unit
+                    }
                 }
             }
             ExprKind::FieldAccess { base, field } => {
@@ -1723,7 +1782,7 @@ mod tests {
     // --- MethodCall ---
 
     #[test]
-    fn method_call_returns_unit() {
+    fn method_call_unknown_method_errors() {
         let mut emitter = TestEmitter(vec![]);
         let mut checker = new_checker(&mut emitter);
         let ty = checker.check_expr(&make_expr(ExprKind::MethodCall {
@@ -1732,7 +1791,7 @@ mod tests {
             args: vec![],
         }));
         assert_eq!(ty, Ty::Unit);
-        assert!(!checker.has_errors());
+        assert!(checker.has_errors());
     }
 
     // --- FieldAccess ---
