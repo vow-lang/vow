@@ -111,6 +111,9 @@ pub struct LowerCtx {
     const_map: HashMap<String, (i64, Ty)>,
     // loop exit block stack for break
     loop_exit_blocks: Vec<BlockId>,
+    // Per-loop break-value Upsilon collector.  `Some(vec)` for `loop` (collects
+    // (source_block, upsilon_id, value_ty)), `None` for `while`.
+    loop_break_upsilons: Vec<Option<Vec<(BlockId, InstId, Ty)>>>,
     // InstId of a Vec allocation → element type name (for struct-in-Vec field access)
     inst_vec_elem_type: HashMap<InstId, String>,
     // struct name → per-field Vec element type name (for FieldGet → Vec propagation)
@@ -174,6 +177,7 @@ impl LowerCtx {
             string_exprs,
             const_map: HashMap::new(),
             loop_exit_blocks: Vec::new(),
+            loop_break_upsilons: Vec::new(),
             inst_vec_elem_type: HashMap::new(),
             struct_field_vec_elems,
             warnings: Vec::new(),
@@ -395,6 +399,14 @@ fn collect_assigned_in_expr(expr: &Expr, seen: &mut HashSet<String>, out: &mut V
             condition, body, ..
         } => {
             collect_assigned_in_expr(condition, seen, out);
+            for s in &body.stmts {
+                collect_assigned_in_stmt(s, seen, out);
+            }
+            if let Some(e) = &body.trailing_expr {
+                collect_assigned_in_expr(e, seen, out);
+            }
+        }
+        ExprKind::Loop { body, .. } => {
             for s in &body.stmts {
                 collect_assigned_in_stmt(s, seen, out);
             }
@@ -919,7 +931,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             // Body: lower body (push/pop scope handles lets inside body).
             ctx.switch_to_block(body_block);
             ctx.loop_exit_blocks.push(exit_block);
+            ctx.loop_break_upsilons.push(None);
             lower_block(ctx, body);
+            ctx.loop_break_upsilons.pop();
             ctx.loop_exit_blocks.pop();
 
             // Emit back-edge Upsilons with the current scope values.
@@ -1007,7 +1021,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
 
             ctx.loop_exit_blocks.push(exit_block);
+            ctx.loop_break_upsilons.push(Some(Vec::new()));
             lower_block(ctx, body);
+            let break_ups = ctx.loop_break_upsilons.pop().unwrap();
             ctx.loop_exit_blocks.pop();
 
             // Back-edge Upsilons
@@ -1037,7 +1053,23 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
 
             ctx.switch_to_block(exit_block);
-            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+
+            // If any break carried a value, emit a Phi to merge them.
+            if let Some(ups) = break_ups {
+                if ups.is_empty() {
+                    ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                } else {
+                    let ty = ups[0].2;
+                    let phi_id =
+                        ctx.emit(Opcode::Phi, ty, vec![], InstData::None, span);
+                    for (block, up_id, _) in &ups {
+                        backpatch_upsilon(ctx, *block, *up_id, phi_id);
+                    }
+                    phi_id
+                }
+            } else {
+                ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+            }
         }
         ExprKind::Break { value } => {
             let exit_block = ctx
@@ -1045,9 +1077,27 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .last()
                 .copied()
                 .expect("break outside of loop");
+
             if let Some(val_expr) = value {
-                lower_expr(ctx, val_expr);
+                let val_id = lower_expr(ctx, val_expr);
+                // If inside a `loop` (Some), emit Upsilon for the break-value Phi.
+                let is_loop = matches!(ctx.loop_break_upsilons.last(), Some(Some(_)));
+                if is_loop {
+                    let val_ty = ctx.inst_ty(val_id);
+                    let up_id = ctx.emit(
+                        Opcode::Upsilon,
+                        val_ty,
+                        vec![val_id],
+                        InstData::PhiTarget(InstId(u32::MAX)),
+                        span,
+                    );
+                    let block = ctx.current_block;
+                    if let Some(Some(ups)) = ctx.loop_break_upsilons.last_mut() {
+                        ups.push((block, up_id, val_ty));
+                    }
+                }
             }
+
             ctx.emit(
                 Opcode::Jump,
                 Ty::Unit,

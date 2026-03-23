@@ -709,8 +709,49 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let cond_eid: i64 = expr_a(a, eid);
         let body_bid: i64 = expr_b(a, eid);
         let _cond_tid: i64 = check_expr(e, m, cond_eid);
+        e.loop_kind_stack.push(0);
+        e.break_counts.push(0);
         let _body_tid: i64 = check_block(e, m, body_bid);
+        e.break_counts.pop();
+        e.loop_kind_stack.pop();
         return CTY_UNIT();
+    }
+
+    if tag == EXPR_LOOP() {
+        let body_bid: i64 = expr_a(a, eid);
+        let break_start: i64 = e.break_tids.len();
+        e.loop_kind_stack.push(1);
+        e.break_counts.push(0);
+        let _body_tid: i64 = check_block(e, m, body_bid);
+        let bc_idx: i64 = e.break_counts.len() - 1;
+        let bc: i64 = e.break_counts[bc_idx];
+        let mut loop_tid: i64 = CTY_NEVER();
+        let mut bi: i64 = 0;
+        while bi < bc {
+            let btid: i64 = e.break_tids[break_start + bi];
+            if !is_opaque(btid) {
+                if is_opaque(loop_tid) {
+                    loop_tid = btid;
+                } else {
+                    if !is_coercible(e.ts, btid, loop_tid) {
+                        env_emit_error(e, String::from("break type mismatch in loop"), expr_span(a, eid));
+                        break;
+                    }
+                }
+            }
+            bi = bi + 1;
+        }
+        if is_opaque(loop_tid) {
+            loop_tid = CTY_UNIT();
+        }
+        let mut ti: i64 = 0;
+        while ti < bc {
+            e.break_tids.pop();
+            ti = ti + 1;
+        }
+        e.break_counts.pop();
+        e.loop_kind_stack.pop();
+        return loop_tid;
     }
 
     if tag == EXPR_MATCH() {
@@ -752,6 +793,25 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
     }
 
     if tag == EXPR_BREAK() {
+        let val_eid: i64 = expr_a(a, eid);
+        let mut val_tid: i64 = CTY_UNIT();
+        if val_eid != -1 {
+            val_tid = check_expr(e, m, val_eid);
+            let nk: i64 = e.loop_kind_stack.len();
+            if nk > 0 {
+                if e.loop_kind_stack[nk - 1] == 0 {
+                    env_emit_error(e, String::from("`break` with a value is only allowed inside `loop`, not `while`"), expr_span(a, eid));
+                }
+            }
+        }
+        let nk2: i64 = e.loop_kind_stack.len();
+        if nk2 > 0 {
+            if e.loop_kind_stack[nk2 - 1] == 1 {
+                e.break_tids.push(val_tid);
+                let cnt_idx: i64 = e.break_counts.len() - 1;
+                e.break_counts[cnt_idx] = e.break_counts[cnt_idx] + 1;
+            }
+        }
         return CTY_NEVER();
     }
 
@@ -935,6 +995,11 @@ fn collect_calls_in_expr(e: CheckEnv, m: Module, eid: i64, calls: Vec<String>) [
     if tag == EXPR_WHILE() {
         collect_calls_in_expr(e, m, expr_a(a, eid), calls);
         collect_calls_in_block(e, m, expr_b(a, eid), calls);
+        return;
+    }
+
+    if tag == EXPR_LOOP() {
+        collect_calls_in_block(e, m, expr_a(a, eid), calls);
         return;
     }
 

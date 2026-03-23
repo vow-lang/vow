@@ -538,7 +538,7 @@ fn tok_to_binop(tag: i64) -> i64 {
 
 fn is_block_expr(a: AstArena, eid: i64) -> bool {
     let tag: i64 = expr_tag(a, eid);
-    tag == EXPR_IF() || tag == EXPR_WHILE() || tag == EXPR_MATCH() || tag == EXPR_BLOCK()
+    tag == EXPR_IF() || tag == EXPR_WHILE() || tag == EXPR_LOOP() || tag == EXPR_MATCH() || tag == EXPR_BLOCK()
 }
 
 fn parse_expr_prec(p: Parser, min_prec: i64) -> i64 {
@@ -696,9 +696,16 @@ fn parse_primary(p: Parser) -> i64 {
             let val: i64 = parse_expr(p);
             arena_add_expr(p.arena, EXPR_RETURN(), val, 0, 0, 0)
         }
+    } else if tag == tok_kw_loop() {
+        parse_loop_expr(p)
     } else if tag == tok_kw_break() {
         let _kw: Token = advance(p);
-        arena_add_expr(p.arena, EXPR_BREAK(), -1, 0, 0, 0)
+        if at(p, tok_semicolon()) || at(p, tok_rbrace()) {
+            arena_add_expr(p.arena, EXPR_BREAK(), -1, 0, 0, 0)
+        } else {
+            let val: i64 = parse_expr(p);
+            arena_add_expr(p.arena, EXPR_BREAK(), val, 0, 0, 0)
+        }
     } else if tag == tok_lbrace() {
         let bid: i64 = parse_block(p);
         arena_add_expr(p.arena, EXPR_BLOCK(), bid, 0, 0, 0)
@@ -806,6 +813,13 @@ fn parse_while_expr(p: Parser) -> i64 {
     let vow_lid: i64 = parse_vow_block(p);
     let body_bid: i64 = parse_block(p);
     arena_add_expr(p.arena, EXPR_WHILE(), cond, body_bid, vow_lid, 0)
+}
+
+fn parse_loop_expr(p: Parser) -> i64 {
+    let _kw: bool = expect(p, tok_kw_loop());
+    let vow_lid: i64 = parse_vow_block(p);
+    let body_bid: i64 = parse_block(p);
+    arena_add_expr(p.arena, EXPR_LOOP(), body_bid, vow_lid, 0, 0)
 }
 
 fn parse_match_expr(p: Parser) -> i64 {

@@ -50,6 +50,9 @@ pub struct Checker<'e> {
     pub(crate) emitter: &'e mut dyn DiagnosticEmitter,
     string_exprs: StringExprSet,
     in_loop: u32,
+    /// Stack of break-value type collectors. `Some(vec)` for `loop` (collects
+    /// break types), `None` for `while` (break-with-value is an error).
+    break_types_stack: Vec<Option<Vec<Ty>>>,
     pub const_values: HashMap<String, i64>,
     pub const_types: HashMap<String, Ty>,
 }
@@ -65,6 +68,7 @@ impl<'e> Checker<'e> {
             emitter,
             string_exprs: HashSet::new(),
             in_loop: 0,
+            break_types_stack: Vec::new(),
             const_values: HashMap::new(),
             const_types: HashMap::new(),
         }
@@ -969,15 +973,48 @@ impl<'e> Checker<'e> {
             } => {
                 self.check_expr(condition);
                 self.in_loop += 1;
+                self.break_types_stack.push(None);
                 self.check_block(body);
+                self.break_types_stack.pop();
                 self.in_loop -= 1;
                 Ty::Unit
             }
             ExprKind::Loop { body, .. } => {
                 self.in_loop += 1;
+                self.break_types_stack.push(Some(Vec::new()));
                 self.check_block(body);
+                let break_tys = self.break_types_stack.pop().unwrap();
                 self.in_loop -= 1;
-                Ty::Unit
+                if let Some(tys) = break_tys {
+                    let mut result_ty = Ty::Unit;
+                    let mut found = false;
+                    for ty in &tys {
+                        if *ty == Ty::Never {
+                            continue;
+                        }
+                        if !found {
+                            result_ty = ty.clone();
+                            found = true;
+                        } else {
+                            let ok = *ty == result_ty
+                                || (*ty == Ty::I32 && result_ty.is_integer())
+                                || (result_ty == Ty::I32 && ty.is_integer());
+                            if !ok {
+                                self.emit_error(
+                                    ErrorCode::TypeMismatch,
+                                    format!(
+                                        "break type mismatch: expected `{result_ty}`, found `{ty}`"
+                                    ),
+                                    expr.span,
+                                );
+                                break;
+                            }
+                        }
+                    }
+                    result_ty
+                } else {
+                    Ty::Unit
+                }
             }
             ExprKind::Break { value } => {
                 if self.in_loop == 0 {
@@ -987,8 +1024,24 @@ impl<'e> Checker<'e> {
                         expr.span,
                     );
                 }
-                if let Some(v) = value {
-                    self.check_expr(v);
+                let val_ty = if let Some(v) = value {
+                    let ty = self.check_expr(v);
+                    // break-with-value only allowed inside `loop`, not `while`
+                    if let Some(top) = self.break_types_stack.last()
+                        && top.is_none()
+                    {
+                        self.emit_error(
+                            ErrorCode::TypeMismatch,
+                            "`break` with a value is only allowed inside `loop`, not `while`",
+                            expr.span,
+                        );
+                    }
+                    ty
+                } else {
+                    Ty::Unit
+                };
+                if let Some(Some(tys)) = self.break_types_stack.last_mut() {
+                    tys.push(val_ty);
                 }
                 Ty::Never
             }
@@ -1989,6 +2042,68 @@ mod tests {
         let mut checker = new_checker(&mut emitter);
         let ty = checker.check_expr(&make_expr(ExprKind::Break { value: None }));
         assert_eq!(ty, Ty::Never);
+    }
+
+    #[test]
+    fn loop_with_break_value_returns_break_type() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        // loop { break 42; }  →  should have type I32
+        let ty = checker.check_expr(&make_expr(ExprKind::Loop {
+            vow: None,
+            body: Box::new(Block {
+                stmts: vec![],
+                trailing_expr: Some(Box::new(make_expr(ExprKind::Break {
+                    value: Some(Box::new(int_lit())),
+                }))),
+                span: dummy_span(),
+            }),
+        }));
+        assert_eq!(ty, Ty::I32);
+        assert!(!checker.has_errors());
+    }
+
+    #[test]
+    fn break_with_value_in_while_is_error() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.check_expr(&make_expr(ExprKind::While {
+            condition: Box::new(bool_lit()),
+            vow: None,
+            body: Box::new(Block {
+                stmts: vec![],
+                trailing_expr: Some(Box::new(make_expr(ExprKind::Break {
+                    value: Some(Box::new(int_lit())),
+                }))),
+                span: dummy_span(),
+            }),
+        }));
+        assert!(checker.has_errors());
+    }
+
+    #[test]
+    fn break_type_mismatch_is_error() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        // loop { break 42; break true; } — mismatched break types
+        checker.check_expr(&make_expr(ExprKind::Loop {
+            vow: None,
+            body: Box::new(Block {
+                stmts: vec![Stmt::Expr {
+                    expr: make_expr(ExprKind::Break {
+                        value: Some(Box::new(int_lit())),
+                    }),
+                    has_semicolon: true,
+                    span: dummy_span(),
+                }],
+                trailing_expr: Some(Box::new(make_expr(ExprKind::Break {
+                    value: Some(Box::new(bool_lit())),
+                }))),
+                span: dummy_span(),
+            }),
+        }));
+        assert!(checker.has_errors());
+        assert!(emitter.0.iter().any(|d| d.message.contains("break type mismatch")));
     }
 
     // --- Return ---

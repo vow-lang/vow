@@ -308,21 +308,27 @@ while i < n vow {
 
 ### Loop (Infinite)
 
+`loop` creates an infinite loop. The expression returns the type of the `break` value:
+
 ```vow
-loop {
-    if done {
-        break result_value;
+let idx: i64 = loop {
+    if data[i] == target {
+        break i;
     }
-}
+    i = i + 1;
+    if i >= n { break -1; }
+};
 ```
 
 ESBMC cannot verify unbounded `loop` constructs — use `while` with invariants for verifiable loops.
 
 ### Break
 
+`break` exits the innermost loop. Inside `loop`, `break value` sets the loop's result:
+
 ```vow
-break;
-break value;
+break;           // exit while or loop (loop returns Unit)
+break value;     // exit loop with a value (only inside loop, not while)
 ```
 
 ### Return
