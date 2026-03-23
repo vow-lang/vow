@@ -1171,7 +1171,6 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             }
             return break_phi;
         }
-        // Trim break arrays (no breaks)
         let u_args2: Vec<i64> = Vec::new();
         return lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args2, IDATA_NONE(), 0, 0, String::from(""));
     }

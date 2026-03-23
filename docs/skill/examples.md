@@ -1,6 +1,6 @@
-# Worked CEGIS Examples
+# Worked Examples
 
-Three complete Counterexample-Guided Inductive Synthesis (CEGIS) cycles. Each example shows the full workflow: write spec, build, read JSON, diagnose, fix, verify.
+Verification workflow examples. The first three demonstrate Counterexample-Guided Inductive Synthesis (CEGIS) cycles: write spec, build, read JSON, diagnose, fix, verify. The fourth shows break-with-value in loop expressions.
 
 ## 1. Safe Division — Requires Pattern
 
@@ -190,3 +190,66 @@ $ vow build examples/vec_fill.vow
 - `requires: n <= 8` keeps iterations within ESBMC's unwind bound (10)
 - `invariant: i >= 0, invariant: i <= n` is inductive: true on entry, preserved by the loop body
 - The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`
+
+---
+
+## 4. Linear Search — Break-with-Value
+
+### Goal
+
+Search a vector for a target value and return its index, or `-1` if not found. Uses `loop` with `break <value>` to produce a result directly from the loop expression.
+
+### Step 1: Write the spec
+
+```vow
+module Search
+
+fn linear_search(data: Vec<i64>, target: i64) -> i64
+    vow { requires: data.len() > 0 }
+{
+    let mut i: i64 = 0;
+    let n: i64 = data.len();
+    let result: i64 = loop {
+        if i >= n {
+            break -1;
+        }
+        if data[i] == target {
+            break i;
+        }
+        i = i + 1;
+    };
+    result
+}
+
+fn main() -> i32 [io] {
+    let data: Vec<i64> = Vec::new();
+    data.push(10);
+    data.push(20);
+    data.push(30);
+    data.push(40);
+    data.push(50);
+
+    let idx: i64 = linear_search(data, 30);
+    print_i64(idx);
+
+    let idx2: i64 = linear_search(data, 99);
+    print_i64(idx2);
+    0
+}
+```
+
+### Step 2: Build and verify
+
+```
+$ vow build examples/search.vow
+```
+
+```json
+{"status":"Verified","executable":"examples/search","diagnostics":[],"counterexamples":[]}
+```
+
+**Key points:**
+- `loop { ... break <value>; ... }` is an expression that evaluates to the break value
+- All `break` expressions in a `loop` must produce the same type (`i64` here)
+- `break <value>` is only allowed in `loop`, not in `while` (which always evaluates to `()`)
+- The result is bound with `let result: i64 = loop { ... };`

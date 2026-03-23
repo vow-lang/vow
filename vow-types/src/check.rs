@@ -986,7 +986,32 @@ impl<'e> Checker<'e> {
                 let break_tys = self.break_types_stack.pop().unwrap();
                 self.in_loop -= 1;
                 if let Some(tys) = break_tys {
-                    tys.into_iter().find(|t| *t != Ty::Never).unwrap_or(Ty::Unit)
+                    let mut result_ty = Ty::Unit;
+                    let mut found = false;
+                    for ty in &tys {
+                        if *ty == Ty::Never {
+                            continue;
+                        }
+                        if !found {
+                            result_ty = ty.clone();
+                            found = true;
+                        } else {
+                            let ok = *ty == result_ty
+                                || (*ty == Ty::I32 && result_ty.is_integer())
+                                || (result_ty == Ty::I32 && ty.is_integer());
+                            if !ok {
+                                self.emit_error(
+                                    ErrorCode::TypeMismatch,
+                                    format!(
+                                        "break type mismatch: expected `{result_ty}`, found `{ty}`"
+                                    ),
+                                    expr.span,
+                                );
+                                break;
+                            }
+                        }
+                    }
+                    result_ty
                 } else {
                     Ty::Unit
                 }
@@ -2054,6 +2079,31 @@ mod tests {
             }),
         }));
         assert!(checker.has_errors());
+    }
+
+    #[test]
+    fn break_type_mismatch_is_error() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        // loop { break 42; break true; } — mismatched break types
+        checker.check_expr(&make_expr(ExprKind::Loop {
+            vow: None,
+            body: Box::new(Block {
+                stmts: vec![Stmt::Expr {
+                    expr: make_expr(ExprKind::Break {
+                        value: Some(Box::new(int_lit())),
+                    }),
+                    has_semicolon: true,
+                    span: dummy_span(),
+                }],
+                trailing_expr: Some(Box::new(make_expr(ExprKind::Break {
+                    value: Some(Box::new(bool_lit())),
+                }))),
+                span: dummy_span(),
+            }),
+        }));
+        assert!(checker.has_errors());
+        assert!(emitter.0.iter().any(|d| d.message.contains("break type mismatch")));
     }
 
     // --- Return ---
