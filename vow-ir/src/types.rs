@@ -315,6 +315,7 @@ pub struct Module {
     pub strings: Vec<String>,
     pub struct_layouts: Vec<StructLayout>,
     pub enum_layouts: Vec<EnumLayout>,
+    pub warnings: Vec<vow_diag::Diagnostic>,
 }
 
 #[cfg(test)]
@@ -383,6 +384,7 @@ mod tests {
             strings: vec![],
             struct_layouts: vec![],
             enum_layouts: vec![],
+            warnings: vec![],
         };
         assert_eq!(module.functions.len(), 1);
         assert_eq!(module.functions[0].blocks.len(), 1);

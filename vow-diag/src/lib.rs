@@ -21,7 +21,7 @@ pub struct SourceLocation {
     pub byte_len: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Diagnostic {
     pub severity: Severity,
     pub code: ErrorCode,
@@ -54,6 +54,8 @@ pub enum ErrorCode {
     // Method/feature errors
     UnknownMethod,
     UnsupportedFeature,
+    // Lowering warnings
+    LoweringWarning,
     // IO errors
     IoError,
 }

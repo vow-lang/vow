@@ -346,7 +346,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn_with_vow(Some(vow_block));
-        let (func, _) = lower_function(
+        let (func, _, _) = lower_function(
             &fn_def,
             "",
             &std::collections::HashMap::new(),
@@ -390,7 +390,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn_with_vow(Some(vow_block));
-        let (func, _) = lower_function(
+        let (func, _, _) = lower_function(
             &fn_def,
             "",
             &std::collections::HashMap::new(),
@@ -431,7 +431,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn_with_vow(Some(vow_block));
-        let (func, _) = lower_function(
+        let (func, _, _) = lower_function(
             &fn_def,
             "",
             &std::collections::HashMap::new(),
@@ -466,7 +466,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn_with_vow(Some(vow_block));
-        let (func, _) = lower_function(
+        let (func, _, _) = lower_function(
             &fn_def,
             "",
             &std::collections::HashMap::new(),
@@ -545,7 +545,7 @@ mod tests {
             span: sp(),
             is_declaration: false,
         };
-        let (func, _) = lower_function(
+        let (func, _, _) = lower_function(
             &fn_def,
             "",
             &std::collections::HashMap::new(),
@@ -650,7 +650,7 @@ mod tests {
             span: sp(),
             is_declaration: false,
         };
-        let (func, _) = lower_function(
+        let (func, _, _) = lower_function(
             &fn_def,
             "",
             &std::collections::HashMap::new(),
@@ -747,7 +747,7 @@ mod tests {
             "Stack".to_string(),
             vec!["Vec".to_string(), "i64".to_string()],
         );
-        let (func, _) = lower_function(
+        let (func, _, _) = lower_function(
             &fn_def,
             "",
             &std::collections::HashMap::new(),

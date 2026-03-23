@@ -214,6 +214,7 @@ mod tests {
             strings: vec![],
             struct_layouts: vec![],
             enum_layouts: vec![],
+            warnings: vec![],
         };
         assert!(validate(&module).is_ok());
     }
@@ -227,6 +228,7 @@ mod tests {
             strings: vec![],
             struct_layouts: vec![],
             enum_layouts: vec![],
+            warnings: vec![],
         };
         let result = validate(&module);
         assert!(!result.is_ok());
@@ -258,6 +260,7 @@ mod tests {
             strings: vec![],
             struct_layouts: vec![],
             enum_layouts: vec![],
+            warnings: vec![],
         };
         let result = validate(&module);
         assert!(!result.is_ok());
@@ -293,6 +296,7 @@ mod tests {
             strings: vec![],
             struct_layouts: vec![],
             enum_layouts: vec![],
+            warnings: vec![],
         };
         let result = validate(&module);
         assert!(!result.is_ok());
@@ -321,6 +325,7 @@ mod tests {
             strings: vec![],
             struct_layouts: vec![],
             enum_layouts: vec![],
+            warnings: vec![],
         };
         let result = validate(&module);
         assert!(!result.is_ok());
@@ -355,6 +360,7 @@ mod tests {
             strings: vec![],
             struct_layouts: vec![],
             enum_layouts: vec![],
+            warnings: vec![],
         };
         let result = validate(&module);
         assert!(!result.is_ok());
@@ -403,6 +409,7 @@ mod tests {
             strings: vec![],
             struct_layouts: vec![],
             enum_layouts: vec![],
+            warnings: vec![],
         };
         let result = validate(&module);
         assert!(!result.is_ok());
@@ -431,6 +438,7 @@ mod tests {
             strings: vec![],
             struct_layouts: vec![],
             enum_layouts: vec![],
+            warnings: vec![],
         };
         let result = validate(&module);
         assert!(!result.is_ok());
