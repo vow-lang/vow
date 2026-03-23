@@ -48,7 +48,7 @@ def generate_report(results_dir: Path, run_id: str) -> str:
         "",
         header_row,
         sep_row,
-        "| Dafny (paper)  | —         | —           | —        | —          | 82%  |",
+        "| Dafny (paper) | — | — | — | — | 82% |",
     ]
 
     for model_name, data in models.items():

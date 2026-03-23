@@ -29,8 +29,8 @@ Achieved:
 **Strongest current claim:** Vow is an unusually strong agent-first,
 bounded-verification language with an integrated compile/verify/CEGIS loop,
 blame tracking, structured counterexamples, and a self-hosted verified compiler.
-107 benchmarks (40 original + 67 HumanEval) are verified; 103/103 non-stretch
-references pass. Contract fidelity is machine-tracked (exact/partial/weak).
+107 benchmarks (40 original + 67 HumanEval); all 103 non-stretch reference
+implementations verified. Contract fidelity is machine-tracked (exact/partial/weak).
 Phase 21.4e–f complete: Claude Sonnet 4 achieves **99.0% combined** (102/103),
 **98.5% HumanEval** (66/67) vs Dafny 82%, Verus 44%, Lean 27%.
 Publication report: `reports/2026-03-22-publication-comparison.md`.
