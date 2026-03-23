@@ -96,6 +96,7 @@ def run_benchmark(
     messages: list[dict[str, str]] = []
     raw_responses: list[str] = []
     verify_outputs: list[str] = []
+    previous_violations: list[str] = []
     total_input = 0
     total_output = 0
     final_code = ""
@@ -155,9 +156,31 @@ def run_benchmark(
                 verify_outputs=verify_outputs,
             )
 
+        # Track violation summary for previous-attempt context
+        violation_summary = ""
+        if vr.parsed:
+            ces = vr.parsed.get("counterexamples", [])
+            if ces:
+                ce0 = ces[0]
+                violation_summary = f"violation: {ce0.get('violation', '?')}"
+                vals = ce0.get("values", {})
+                if vals:
+                    val_str = ", ".join(f"{k}={v}" for k, v in vals.items())
+                    violation_summary += f" ({val_str})"
+            elif vr.parsed.get("status") == "CompileFailed":
+                diags = vr.parsed.get("diagnostics", [])
+                if diags:
+                    violation_summary = f"compile error: {diags[0].get('message', '?')}"
+        previous_violations.append(violation_summary)
+
         # Not verified — if iterations remain, send CEGIS feedback
         if iteration < max_iters:
-            cegis_msg = build_cegis_user_prompt(vr.raw_json)
+            cegis_msg = build_cegis_user_prompt(
+                vr.raw_json,
+                iteration=iteration,
+                previous_violations=previous_violations,
+                parsed=vr.parsed,
+            )
             messages.append({"role": "user", "content": cegis_msg})
 
     # Exhausted iterations
