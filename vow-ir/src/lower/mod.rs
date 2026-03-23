@@ -16,6 +16,20 @@ use crate::types::{
     Opcode, StructLayout, Ty, VariantLayout, VowEntry, VowId,
 };
 
+fn builtin_alloc_tag(sym: &str) -> &'static str {
+    match sym {
+        "__vow_fs_read" | "__vow_string_substr" | "__vow_string_trim"
+        | "__vow_string_to_upper" | "__vow_string_to_lower" | "__vow_string_replace"
+        | "__vow_string_join" | "__vow_string_from_i64" | "__vow_stdin_read"
+        | "__vow_process_get_stdout" | "__vow_process_get_stderr"
+        | "__vow_process_stdout_for" | "__vow_process_stderr_for"
+        | "__vow_hex_encode" => "String",
+        "__vow_fs_listdir" | "__vow_string_split" | "__vow_vec_sort"
+        | "__vow_hex_decode" | "__vow_args" => "Vec",
+        _ => "",
+    }
+}
+
 fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
     match name {
         "print_str" => Some(("__vow_string_print", Ty::Unit)),
@@ -119,6 +133,10 @@ pub struct LowerCtx {
     // struct name → per-field Vec element type name (for FieldGet → Vec propagation)
     struct_field_vec_elems: HashMap<String, Vec<String>>,
     warnings: Vec<vow_diag::Diagnostic>,
+    // Function-exit deallocation: heap allocations made at top-level (branch_depth==0)
+    local_heap_allocs: Vec<(InstId, String)>,
+    escaped_allocs: HashSet<InstId>,
+    branch_depth: u32,
 }
 
 impl LowerCtx {
@@ -181,6 +199,40 @@ impl LowerCtx {
             inst_vec_elem_type: HashMap::new(),
             struct_field_vec_elems,
             warnings: Vec::new(),
+            local_heap_allocs: Vec::new(),
+            escaped_allocs: HashSet::new(),
+            branch_depth: 0,
+        }
+    }
+
+    pub(super) fn track_heap_alloc(&mut self, id: InstId, tag: &str) {
+        if self.branch_depth == 0 {
+            self.local_heap_allocs.push((id, tag.to_string()));
+        }
+    }
+
+    pub(super) fn mark_escaped(&mut self, id: InstId) {
+        self.escaped_allocs.insert(id);
+    }
+
+    pub(super) fn emit_return_frees(&mut self, return_val: InstId, span: Span) {
+        for (id, tag) in self.local_heap_allocs.clone() {
+            if self.escaped_allocs.contains(&id) || id == return_val {
+                continue;
+            }
+            let sym = match tag.as_str() {
+                "String" => "__vow_string_free",
+                "Vec" => "__vow_vec_free_val",
+                "HashMap" => "__vow_map_free",
+                _ => continue,
+            };
+            self.emit(
+                Opcode::Call,
+                Ty::Unit,
+                vec![id],
+                InstData::CallExtern(sym.to_string()),
+                span,
+            );
         }
     }
 
@@ -510,6 +562,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 );
                 ctx.inst_struct_type.insert(vow_str, "String".to_string());
+                ctx.track_heap_alloc(vow_str, "String");
                 vow_str
             }
         },
@@ -589,6 +642,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             };
             let call_info = ctx.func_index.get(&callee_name).copied();
             if let Some((fid, ret_ty)) = call_info {
+                for &aid in &arg_ids {
+                    ctx.mark_escaped(aid);
+                }
                 ctx.emit(
                     Opcode::Call,
                     ret_ty,
@@ -597,14 +653,27 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 )
             } else if let Some((sym, ret_ty)) = vow_builtin_to_runtime(&callee_name) {
-                ctx.emit(
+                for &aid in &arg_ids {
+                    ctx.mark_escaped(aid);
+                }
+                let result = ctx.emit(
                     Opcode::Call,
                     ret_ty,
                     arg_ids,
                     InstData::CallExtern(sym.to_string()),
                     span,
-                )
+                );
+                if ret_ty == Ty::Ptr {
+                    let tag = builtin_alloc_tag(sym);
+                    if !tag.is_empty() {
+                        ctx.track_heap_alloc(result, tag);
+                    }
+                }
+                result
             } else {
+                for &aid in &arg_ids {
+                    ctx.mark_escaped(aid);
+                }
                 ctx.emit(
                     Opcode::Call,
                     Ty::Unit,
@@ -641,6 +710,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             // Snapshot scope so then-branch mutations don't bleed into else-branch.
             let scope_snap = ctx.snapshot_scope();
+            ctx.branch_depth += 1;
 
             // Lower then-branch.
             ctx.switch_to_block(then_block);
@@ -710,6 +780,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             // Restore scope before building merge.
             ctx.restore_scope(scope_snap);
+            ctx.branch_depth -= 1;
 
             ctx.switch_to_block(merge_block);
 
@@ -788,12 +859,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 if let Some(vow_block) = ctx.vow_block.clone() {
                     vow::lower_ensures(ctx, &vow_block, val);
                 }
+                ctx.emit_return_frees(val, span);
                 ctx.emit(Opcode::Return, Ty::Unit, vec![val], InstData::None, span)
             } else {
                 let unit = ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span);
                 if let Some(vow_block) = ctx.vow_block.clone() {
                     vow::lower_ensures(ctx, &vow_block, unit);
                 }
+                ctx.emit_return_frees(unit, span);
                 ctx.emit(Opcode::Return, Ty::Unit, vec![unit], InstData::None, span)
             }
         }
@@ -838,6 +911,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         }
                         0
                     } as u32;
+                    ctx.mark_escaped(new_val);
                     ctx.emit(
                         Opcode::FieldSet,
                         Ty::Unit,
@@ -849,6 +923,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ExprKind::Index { base, index } => {
                     let vec_ptr = lower_expr(ctx, base);
                     let idx_id = lower_expr(ctx, index);
+                    ctx.mark_escaped(new_val);
                     ctx.emit(
                         Opcode::Call,
                         Ty::Unit,
@@ -940,8 +1015,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.switch_to_block(body_block);
             ctx.loop_exit_blocks.push(exit_block);
             ctx.loop_break_upsilons.push(None);
+            ctx.branch_depth += 1;
             lower_block(ctx, body);
             ctx.loop_break_upsilons.pop();
+            ctx.branch_depth -= 1;
             ctx.loop_exit_blocks.pop();
 
             // Emit back-edge Upsilons with the current scope values.
@@ -1219,8 +1296,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             ctx.loop_exit_blocks.push(exit_block);
             ctx.loop_break_upsilons.push(Some(Vec::new()));
+            ctx.branch_depth += 1;
             lower_block(ctx, body);
             let break_ups = ctx.loop_break_upsilons.pop().unwrap();
+            ctx.branch_depth -= 1;
             ctx.loop_exit_blocks.pop();
 
             // Back-edge Upsilons
@@ -1428,6 +1507,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 );
                 ctx.inst_struct_type.insert(result, "HashMap".to_string());
+                ctx.track_heap_alloc(result, "HashMap");
                 return result;
             }
             // Vec::new() builtin
@@ -1446,13 +1526,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     InstData::ConstI64(8),
                     span,
                 );
-                return ctx.emit(
+                let result = ctx.emit(
                     Opcode::Call,
                     Ty::Ptr,
                     vec![size_val, align_val],
                     InstData::CallExtern("__vow_vec_new".to_string()),
                     span,
                 );
+                ctx.inst_struct_type.insert(result, "Vec".to_string());
+                ctx.track_heap_alloc(result, "Vec");
+                return result;
             }
             let tag = ctx
                 .enum_variant_map
@@ -1521,6 +1604,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             };
 
             let scope_snap = ctx.snapshot_scope();
+            ctx.branch_depth += 1;
 
             // Per-arm tracking: (exit_block, result_upsilon, result_ty, mut_vals)
             let mut arm_results: Vec<(BlockId, InstId, Ty, Vec<InstId>)> = Vec::new();
@@ -1675,6 +1759,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
 
             ctx.restore_scope(scope_snap);
+            ctx.branch_depth -= 1;
             ctx.switch_to_block(merge_block);
 
             // Create Phis for mutated variables.
@@ -1717,6 +1802,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             args,
         } => {
             let recv_id = lower_expr(ctx, receiver);
+            ctx.mark_escaped(recv_id);
             let recv_struct = ctx.inst_struct_type.get(&recv_id).cloned().or_else(|| {
                 if ctx.string_exprs.contains(&(receiver.as_ref() as *const Expr as usize)) {
                     Some("String".to_string())
@@ -1850,6 +1936,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     let v_id = args.get(1).map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
                         ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
                     });
+                    ctx.mark_escaped(k_id);
+                    ctx.mark_escaped(v_id);
                     ctx.emit(
                         Opcode::Call,
                         Ty::Unit,
@@ -1905,6 +1993,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     let elem_id = args.first().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
                         ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
                     });
+                    ctx.mark_escaped(elem_id);
                     ctx.emit(
                         Opcode::Call,
                         Ty::Unit,
@@ -2012,6 +2101,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             if let Some(vow_block) = ctx.vow_block.clone() {
                 vow::lower_ensures(ctx, &vow_block, none_ptr);
             }
+            ctx.emit_return_frees(none_ptr, span);
             ctx.emit(
                 Opcode::Return,
                 Ty::Unit,
@@ -2286,6 +2376,7 @@ pub fn lower_function(
         if let Some(vow_block) = &fn_def.vow {
             vow::lower_ensures(&mut ctx, vow_block, trailing);
         }
+        ctx.emit_return_frees(trailing, span);
         ctx.emit(
             Opcode::Return,
             Ty::Unit,

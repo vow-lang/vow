@@ -36,6 +36,10 @@ struct LowerCtx {
     vec_elem_inst_ids: Vec<i64>,
     vec_elem_names: Vec<String>,
     warnings: Vec<String>,
+    alloc_ids: Vec<i64>,
+    alloc_tags: Vec<String>,
+    escaped_ids: Vec<i64>,
+    branch_depth: i64,
 }
 
 struct ScopeSnap {
@@ -81,6 +85,10 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         vec_elem_inst_ids: Vec::new(),
         vec_elem_names: Vec::new(),
         warnings: Vec::new(),
+        alloc_ids: Vec::new(),
+        alloc_tags: Vec::new(),
+        escaped_ids: Vec::new(),
+        branch_depth: 0,
     }
 }
 

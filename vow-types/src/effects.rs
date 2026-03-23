@@ -69,7 +69,6 @@ fn collect_calls_in_expr<'a>(
             collect_calls_in_expr(condition, calls, panic_exprs);
             collect_calls_in_block(body, calls, panic_exprs);
         }
-<<<<<<< HEAD
         ExprKind::ForEach {
             iterable, body, ..
         } => {
