@@ -188,6 +188,15 @@ fn check_expr(
             check_block(body, tracker, env, file, emitter);
             tracker.in_loop = was_in_loop;
         }
+        ExprKind::ForEach {
+            iterable, body, ..
+        } => {
+            check_expr(iterable, tracker, env, file, emitter, false);
+            let was_in_loop = tracker.in_loop;
+            tracker.in_loop = true;
+            check_block(body, tracker, env, file, emitter);
+            tracker.in_loop = was_in_loop;
+        }
         ExprKind::Loop { body, .. } => {
             let was_in_loop = tracker.in_loop;
             tracker.in_loop = true;

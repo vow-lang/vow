@@ -538,7 +538,7 @@ fn tok_to_binop(tag: i64) -> i64 {
 
 fn is_block_expr(a: AstArena, eid: i64) -> bool {
     let tag: i64 = expr_tag(a, eid);
-    tag == EXPR_IF() || tag == EXPR_WHILE() || tag == EXPR_LOOP() || tag == EXPR_MATCH() || tag == EXPR_BLOCK()
+    tag == EXPR_IF() || tag == EXPR_WHILE() || tag == EXPR_LOOP() || tag == EXPR_FOR() || tag == EXPR_MATCH() || tag == EXPR_BLOCK()
 }
 
 fn parse_expr_prec(p: Parser, min_prec: i64) -> i64 {
@@ -686,6 +686,8 @@ fn parse_primary(p: Parser) -> i64 {
         parse_if_expr(p)
     } else if tag == tok_kw_while() {
         parse_while_expr(p)
+    } else if tag == tok_kw_for() {
+        parse_for_expr(p)
     } else if tag == tok_kw_match() {
         parse_match_expr(p)
     } else if tag == tok_kw_return() {
@@ -820,6 +822,21 @@ fn parse_loop_expr(p: Parser) -> i64 {
     let vow_lid: i64 = parse_vow_block(p);
     let body_bid: i64 = parse_block(p);
     arena_add_expr(p.arena, EXPR_LOOP(), body_bid, vow_lid, 0, 0)
+}
+
+fn parse_for_expr(p: Parser) -> i64 {
+    let _kw: bool = expect(p, tok_kw_for());
+    let name_tok: Token = advance(p);
+    let name_sid: i64 = arena_intern_str(p.arena, name_tok.str_val);
+    let _in: bool = expect(p, tok_kw_in());
+    let iterable: i64 = parse_expr(p);
+    let vow_lid: i64 = parse_vow_block(p);
+    let body_bid: i64 = parse_block(p);
+    let info_items: Vec<i64> = Vec::new();
+    info_items.push(name_sid);
+    info_items.push(vow_lid);
+    let info_lid: i64 = arena_add_list(p.arena, info_items);
+    arena_add_expr(p.arena, EXPR_FOR(), iterable, body_bid, info_lid, 0)
 }
 
 fn parse_match_expr(p: Parser) -> i64 {

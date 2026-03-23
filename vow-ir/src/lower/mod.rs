@@ -414,6 +414,14 @@ fn collect_assigned_in_expr(expr: &Expr, seen: &mut HashSet<String>, out: &mut V
                 collect_assigned_in_expr(e, seen, out);
             }
         }
+        ExprKind::ForEach { body, .. } => {
+            for s in &body.stmts {
+                collect_assigned_in_stmt(s, seen, out);
+            }
+            if let Some(e) = &body.trailing_expr {
+                collect_assigned_in_expr(e, seen, out);
+            }
+        }
         ExprKind::BinaryOp { lhs, rhs, .. } => {
             collect_assigned_in_expr(lhs, seen, out);
             collect_assigned_in_expr(rhs, seen, out);
@@ -964,6 +972,195 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
 
             // Exit block.
+            ctx.switch_to_block(exit_block);
+            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+        }
+        ExprKind::ForEach {
+            binding,
+            iterable,
+            body,
+            vow: for_vow,
+        } => {
+            // Desugar: for <binding> in <iterable> { <body> }
+            // into:    let iter = <iterable>; let len = iter.len(); let idx = 0;
+            //          while idx < len { let <binding> = iter[idx]; <body>; idx = idx + 1; }
+
+            let iter_id = lower_expr(ctx, iterable);
+            ctx.inst_struct_type
+                .insert(iter_id, "Vec".to_string());
+
+            let len_id = ctx.emit(
+                Opcode::Call,
+                Ty::I64,
+                vec![iter_id],
+                InstData::CallExtern("__vow_vec_len".to_string()),
+                span,
+            );
+            let idx_init = ctx.emit(
+                Opcode::ConstI64,
+                Ty::I64,
+                vec![],
+                InstData::ConstI64(0),
+                span,
+            );
+
+            let mutated = collect_assigned_vars(body);
+            let loop_vars: Vec<(String, InstId)> = mutated
+                .into_iter()
+                .filter_map(|name| ctx.lookup(&name).map(|id| (name, id)))
+                .collect();
+
+            let pre_header_block = ctx.current_block;
+            let header_block = ctx.new_block();
+            let body_block = ctx.new_block();
+            let exit_block = ctx.new_block();
+
+            // Pre-header: Upsilon for index
+            let idx_up = ctx.emit(
+                Opcode::Upsilon,
+                Ty::I64,
+                vec![idx_init],
+                InstData::PhiTarget(InstId(u32::MAX)),
+                span,
+            );
+
+            // Pre-header: Upsilons for user mutated vars
+            let mut upsilon_ids: Vec<(String, InstId)> = vec![];
+            for (name, pre_val) in &loop_vars {
+                let ty = ctx.inst_ty(*pre_val);
+                let up_id = ctx.emit(
+                    Opcode::Upsilon,
+                    ty,
+                    vec![*pre_val],
+                    InstData::PhiTarget(InstId(u32::MAX)),
+                    span,
+                );
+                upsilon_ids.push((name.clone(), up_id));
+            }
+            ctx.emit(
+                Opcode::Jump,
+                Ty::Unit,
+                vec![],
+                InstData::JumpTarget(header_block),
+                span,
+            );
+
+            // Header: Phi for index
+            ctx.switch_to_block(header_block);
+            let idx_phi = ctx.emit(Opcode::Phi, Ty::I64, vec![], InstData::None, span);
+            backpatch_upsilon(ctx, pre_header_block, idx_up, idx_phi);
+
+            // Header: Phi for user mutated vars
+            let mut phi_ids: Vec<(String, InstId)> = vec![];
+            for (name, pre_val) in &loop_vars {
+                let ty = ctx.inst_ty(*pre_val);
+                let phi_id = ctx.emit(Opcode::Phi, ty, vec![], InstData::None, span);
+                phi_ids.push((name.clone(), phi_id));
+            }
+            for (name, up_id) in &upsilon_ids {
+                let phi_id = phi_ids.iter().find(|(n, _)| n == name).unwrap().1;
+                backpatch_upsilon(ctx, pre_header_block, *up_id, phi_id);
+            }
+
+            // Update scope: rebind mutated vars to their Phis
+            for (name, phi_id) in &phi_ids {
+                ctx.assign(name, *phi_id);
+            }
+
+            // Lower vow invariant at top of header (before condition)
+            if let Some(wv) = for_vow {
+                vow::lower_invariant(ctx, wv);
+            }
+
+            // Condition: idx < len
+            let cond_id = ctx.emit(
+                Opcode::LtI64,
+                Ty::Bool,
+                vec![idx_phi, len_id],
+                InstData::None,
+                span,
+            );
+            ctx.emit(
+                Opcode::Branch,
+                Ty::Unit,
+                vec![cond_id],
+                InstData::BranchTargets {
+                    then_block: body_block,
+                    else_block: exit_block,
+                },
+                span,
+            );
+
+            // Body: get element and bind to loop variable
+            ctx.switch_to_block(body_block);
+            let elem_id = ctx.emit(
+                Opcode::Call,
+                Ty::I64,
+                vec![iter_id, idx_phi],
+                InstData::CallExtern("__vow_vec_get_val".to_string()),
+                span,
+            );
+            if let Some(elem_name) = ctx.inst_vec_elem_type.get(&iter_id).cloned() {
+                ctx.inst_struct_type.insert(elem_id, elem_name);
+            }
+
+            ctx.push_scope();
+            ctx.define(binding.clone(), elem_id);
+
+            ctx.loop_exit_blocks.push(exit_block);
+            lower_block(ctx, body);
+            ctx.loop_exit_blocks.pop();
+
+            ctx.pop_scope();
+
+            // Increment index and emit back-edge
+            if !ctx.is_terminated() {
+                let one = ctx.emit(
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    vec![],
+                    InstData::ConstI64(1),
+                    span,
+                );
+                let idx_next = ctx.emit(
+                    Opcode::WrappingAddI64,
+                    Ty::I64,
+                    vec![idx_phi, one],
+                    InstData::None,
+                    span,
+                );
+                ctx.emit(
+                    Opcode::Upsilon,
+                    Ty::I64,
+                    vec![idx_next],
+                    InstData::PhiTarget(idx_phi),
+                    span,
+                );
+                for (name, phi_id) in &phi_ids {
+                    if let Some(cur_val) = ctx.lookup(name) {
+                        ctx.emit(
+                            Opcode::Upsilon,
+                            ctx.inst_ty(cur_val),
+                            vec![cur_val],
+                            InstData::PhiTarget(*phi_id),
+                            span,
+                        );
+                    }
+                }
+                ctx.emit(
+                    Opcode::Jump,
+                    Ty::Unit,
+                    vec![],
+                    InstData::JumpTarget(header_block),
+                    span,
+                );
+            }
+
+            // Restore scope to Phi values for exit
+            for (name, phi_id) in &phi_ids {
+                ctx.assign(name, *phi_id);
+            }
+
             ctx.switch_to_block(exit_block);
             ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
         }

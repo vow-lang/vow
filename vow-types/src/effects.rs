@@ -58,6 +58,12 @@ fn collect_calls_in_expr<'a>(expr: &'a Expr, calls: &mut Vec<(&'a Expr, &'a str)
             collect_calls_in_expr(condition, calls);
             collect_calls_in_block(body, calls);
         }
+        ExprKind::ForEach {
+            iterable, body, ..
+        } => {
+            collect_calls_in_expr(iterable, calls);
+            collect_calls_in_block(body, calls);
+        }
         ExprKind::Loop { body, .. } => collect_calls_in_block(body, calls),
         ExprKind::Return { value } => {
             if let Some(v) = value {

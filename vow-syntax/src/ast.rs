@@ -288,6 +288,12 @@ pub enum ExprKind {
         vow: Option<VowBlock>,
         body: Box<Block>,
     },
+    ForEach {
+        binding: String,
+        iterable: Box<Expr>,
+        vow: Option<VowBlock>,
+        body: Box<Block>,
+    },
     Loop {
         vow: Option<VowBlock>,
         body: Box<Block>,

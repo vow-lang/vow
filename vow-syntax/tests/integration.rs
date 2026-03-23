@@ -106,6 +106,17 @@ fn strip_expr(expr: Expr) -> Expr {
             vow: vow.map(strip_vow_block),
             body: Box::new(strip_block(*body)),
         },
+        ExprKind::ForEach {
+            binding,
+            iterable,
+            vow,
+            body,
+        } => ExprKind::ForEach {
+            binding,
+            iterable: Box::new(strip_expr(*iterable)),
+            vow: vow.map(strip_vow_block),
+            body: Box::new(strip_block(*body)),
+        },
         ExprKind::Loop { vow, body } => ExprKind::Loop {
             vow: vow.map(strip_vow_block),
             body: Box::new(strip_block(*body)),

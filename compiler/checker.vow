@@ -754,6 +754,54 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         return loop_tid;
     }
 
+    if tag == EXPR_FOR() {
+        let iterable_eid: i64 = expr_a(a, eid);
+        let body_bid: i64 = expr_b(a, eid);
+        let info_lid: i64 = expr_c(a, eid);
+        let name_sid: i64 = list_get(a, info_lid, 0);
+        let binding_name: String = arena_str(a, name_sid);
+        let iter_tid: i64 = check_expr(e, m, iterable_eid);
+        let mut elem_tid: i64 = CTY_I64();
+        if is_opaque(iter_tid) {
+            elem_tid = iter_tid;
+        } else {
+            let iter_tag: i64 = ty_tag(e.ts, iter_tid);
+            if iter_tag == CTY_APPLIED() {
+                let base_tid: i64 = ty_a(e.ts, iter_tid);
+                let base_tag: i64 = ty_tag(e.ts, base_tid);
+                if base_tag == CTY_ENUM() || base_tag == CTY_STRUCT() {
+                    let base_name: String = ty_struct_name(e.ts, base_tid);
+                    if base_name == String::from("Vec") {
+                        let hargs_lid: i64 = ty_b(e.ts, iter_tid);
+                        if ts_arg_len(e.ts, hargs_lid) > 0 {
+                            elem_tid = ts_arg_get(e.ts, hargs_lid, 0);
+                        }
+                    } else {
+                        let ferr_msg: String = String::from("for-each requires `Vec<T>` iterable, got `");
+                        ferr_msg.push_str(base_name);
+                        ferr_msg.push_str(String::from("`"));
+                        env_emit_error_code(e, EC_TYPE_MISMATCH(), ferr_msg, expr_span(a, eid));
+                    }
+                } else {
+                    let ferr2_msg: String = String::from("for-each requires `Vec<T>` iterable");
+                    env_emit_error_code(e, EC_TYPE_MISMATCH(), ferr2_msg, expr_span(a, eid));
+                }
+            } else {
+                let ferr3_msg: String = String::from("for-each requires `Vec<T>` iterable");
+                env_emit_error_code(e, EC_TYPE_MISMATCH(), ferr3_msg, expr_span(a, eid));
+            }
+        }
+        env_push_scope(e);
+        env_define_var(e, binding_name, elem_tid);
+        e.loop_kind_stack.push(0);
+        e.break_counts.push(0);
+        let _body_tid: i64 = check_block(e, m, body_bid);
+        e.break_counts.pop();
+        e.loop_kind_stack.pop();
+        env_pop_scope(e);
+        return CTY_UNIT();
+    }
+
     if tag == EXPR_MATCH() {
         let scrutinee_eid: i64 = expr_a(a, eid);
         let arms_lid: i64 = expr_b(a, eid);
@@ -1000,6 +1048,12 @@ fn collect_calls_in_expr(e: CheckEnv, m: Module, eid: i64, calls: Vec<String>) [
 
     if tag == EXPR_LOOP() {
         collect_calls_in_block(e, m, expr_a(a, eid), calls);
+        return;
+    }
+
+    if tag == EXPR_FOR() {
+        collect_calls_in_expr(e, m, expr_a(a, eid), calls);
+        collect_calls_in_block(e, m, expr_b(a, eid), calls);
         return;
     }
 

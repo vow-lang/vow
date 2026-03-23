@@ -306,6 +306,26 @@ while i < n vow {
 }
 ```
 
+### For-Each Loop
+
+```vow
+for x in vec {
+    print_i64(x);
+}
+```
+
+Iterates over each element of a `Vec<T>`. The loop variable `x` is bound to each element in turn. Desugars to a `while` loop with index arithmetic — zero verification overhead.
+
+### For-Each Loop with Invariant
+
+```vow
+for x in vec vow {
+    invariant: total >= 0
+} {
+    total = total + x;
+}
+```
+
 ### Loop (Infinite)
 
 `loop` creates an infinite loop. The expression returns the type of the `break` value:

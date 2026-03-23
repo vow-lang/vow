@@ -530,6 +530,7 @@ impl Parser {
                             expr.kind,
                             ExprKind::If { .. }
                                 | ExprKind::While { .. }
+                                | ExprKind::ForEach { .. }
                                 | ExprKind::Loop { .. }
                                 | ExprKind::Block(_)
                                 | ExprKind::Match { .. }
