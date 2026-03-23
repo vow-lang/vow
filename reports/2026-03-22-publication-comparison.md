@@ -23,13 +23,9 @@ set -a && source .env && set +a
 # Validate all 103 non-stretch references
 uv run --project bench bench/run.py validate-references --compiler self-hosted
 
-# Run original Vow suite
+# Run all benchmarks (original Vow suite + HumanEval)
 uv run --project bench bench/run.py run \
-  --model claude-sonnet-4-20250514 --compiler self-hosted --suite vow
-
-# Run HumanEval suite
-uv run --project bench bench/run.py run \
-  --model claude-sonnet-4-20250514 --compiler self-hosted --suite humaneval
+  --model claude-sonnet-4-20250514 --compiler self-hosted
 
 # Generate report from results
 uv run --project bench bench/run.py report --run-id <run-id>
@@ -119,10 +115,10 @@ on the first attempt.
 | CEGIS Iterations | Count | Percentage |
 |-----------------|-------|-----------|
 | 1 (first attempt) | 55 | 82.1% |
-| 2 | 5 | 7.5% |
+| 2 | 4 | 6.0% |
 | 3 | 5 | 7.5% |
 | 4 | 1 | 1.5% |
-| 5 (max, failed) | 1 | 1.5% |
+| 5 | 2 | 3.0% |
 
 Total wall-clock time for the HumanEval suite: 511s (8.5 minutes).
 Token usage: ~1.1M input tokens, ~30K output tokens.
@@ -203,73 +199,73 @@ stable in the C model.
 
 | ID | Name | Difficulty | Fidelity | Status | Iters | Time (s) |
 |----|------|------------|----------|--------|-------|----------|
-| HE003 | below_zero | easy | weak | pass | 1 | 3.8 |
-| HE005 | insert_delimiter | easy | partial | pass | 3 | 14.9 |
-| HE009 | rolling_max | easy | partial | pass | 2 | 9.8 |
-| HE013 | gcd | easy | partial | pass | 1 | 39.5 |
+| HE003 | below_zero | medium | weak | pass | 1 | 3.8 |
+| HE005 | insert_delimiter | medium | partial | pass | 3 | 14.9 |
+| HE009 | rolling_max | medium | partial | pass | 2 | 9.8 |
+| HE013 | gcd | medium | partial | pass | 1 | 39.5 |
 | HE024 | largest_divisor | medium | partial | pass | 1 | 6.3 |
-| HE025 | factorize | easy | partial | pass | 1 | 12.8 |
+| HE025 | factorize | hard | partial | pass | 1 | 12.8 |
 | HE026 | count | medium | exact | pass | 1 | 4.2 |
 | HE030 | get_positive | medium | exact | pass | 1 | 3.0 |
-| HE031 | is_prime | easy | exact | pass | 1 | 5.2 |
+| HE031 | is_prime | medium | exact | pass | 1 | 5.2 |
 | HE034 | sort_seq | medium | partial | pass | 1 | 5.2 |
 | HE035 | find_max_element | medium | exact | pass | 1 | 3.3 |
-| HE036 | count7 | medium | exact | pass | 1 | 3.4 |
-| HE038 | decode_cyclic | medium | partial | pass | 1 | 4.1 |
+| HE036 | count7 | easy | exact | pass | 1 | 3.4 |
+| HE038 | decode_cyclic | hard | partial | pass | 1 | 4.1 |
 | HE040 | triples_sum_to_zero | medium | exact | pass | 1 | 3.6 |
 | HE041 | car_race_collision | easy | exact | pass | 1 | 2.2 |
-| HE042 | incr_list | easy | partial | pass | 1 | 4.0 |
+| HE042 | incr_list | medium | partial | pass | 1 | 4.0 |
 | HE043 | pairs_sum_to_zero | medium | exact | pass | 1 | 3.8 |
-| HE046 | fib4 | medium | partial | pass | 1 | 4.3 |
-| HE049 | modp | easy | exact | pass | 1 | 4.8 |
+| HE046 | fib4 | easy | partial | pass | 1 | 4.3 |
+| HE049 | modp | medium | exact | pass | 1 | 4.8 |
 | HE052 | check_below_threshold | medium | exact | pass | 1 | 3.8 |
 | HE053 | add | easy | exact | pass | 1 | 2.1 |
-| HE055 | fib | medium | partial | pass | 1 | 6.0 |
+| HE055 | fib | easy | partial | pass | 1 | 6.0 |
 | HE057 | is_monotonic | medium | exact | pass | 1 | 3.8 |
 | HE059 | largest_prime_factor | medium | partial | pass | 2 | 19.7 |
 | HE060 | sum_to_n | easy | exact | pass | 1 | 2.6 |
 | HE062 | derivative | medium | exact | **FAIL** | 5 | 14.3 |
-| HE063 | fibfib | medium | partial | pass | 1 | 4.4 |
-| HE068 | pluck | medium | partial | pass | 3 | 12.2 |
+| HE063 | fibfib | easy | partial | pass | 1 | 4.4 |
+| HE068 | pluck | hard | partial | pass | 3 | 12.2 |
 | HE069 | search | medium | exact | pass | 1 | 5.5 |
 | HE072 | will_it_fly | medium | exact | pass | 4 | 21.4 |
 | HE073 | smallest_change | medium | partial | pass | 1 | 3.8 |
-| HE075 | is_multiply_prime | medium | partial | pass | 3 | 28.6 |
-| HE076 | is_simple_power | medium | partial | pass | 1 | 4.3 |
-| HE077 | cube_root | medium | exact | pass | 1 | 3.0 |
-| HE083 | starts_one_ends | hard | partial | pass | 1 | 7.7 |
-| HE084 | solve | hard | exact | pass | 1 | 4.5 |
-| HE085 | add | hard | exact | pass | 1 | 3.8 |
-| HE088 | sort_array | hard | exact | pass | 3 | 18.9 |
+| HE075 | is_multiply_prime | easy | partial | pass | 3 | 28.6 |
+| HE076 | is_simple_power | easy | partial | pass | 1 | 4.3 |
+| HE077 | cube_root | easy | exact | pass | 1 | 3.0 |
+| HE083 | starts_one_ends | easy | partial | pass | 1 | 7.7 |
+| HE084 | solve | easy | exact | pass | 1 | 4.5 |
+| HE085 | add | medium | exact | pass | 1 | 3.8 |
+| HE088 | sort_array | medium | exact | pass | 3 | 18.9 |
 | HE094 | skjkasdkd | hard | partial | pass | 1 | 6.6 |
 | HE096 | count_up_to | hard | partial | pass | 1 | 4.3 |
 | HE097 | multiply | easy | exact | pass | 1 | 2.9 |
-| HE100 | make_a_pile | easy | partial | pass | 1 | 3.4 |
+| HE100 | make_a_pile | medium | partial | pass | 1 | 3.4 |
 | HE102 | choose_num | easy | exact | pass | 1 | 3.8 |
 | HE104 | unique_digits | hard | partial | pass | 1 | 6.1 |
-| HE106 | f | medium | partial | pass | 1 | 5.9 |
+| HE106 | f | easy | partial | pass | 1 | 5.9 |
 | HE108 | count_nums | medium | exact | pass | 1 | 5.3 |
 | HE109 | move_one_ball | hard | partial | pass | 5 | 25.1 |
 | HE114 | min_sub_array_sum | medium | partial | pass | 1 | 4.2 |
 | HE116 | sort_array | medium | partial | pass | 1 | 7.2 |
-| HE120 | sort_seq | medium | partial | pass | 1 | 5.1 |
+| HE120 | sort_seq | hard | partial | pass | 1 | 5.1 |
 | HE121 | solution | medium | exact | pass | 1 | 3.9 |
 | HE122 | add_elements | medium | exact | pass | 1 | 5.8 |
-| HE123 | get_odd_collatz | medium | partial | pass | 1 | 7.1 |
-| HE126 | check_valid_list | hard | exact | pass | 3 | 19.0 |
+| HE123 | get_odd_collatz | hard | partial | pass | 1 | 7.1 |
+| HE126 | check_valid_list | medium | exact | pass | 3 | 19.0 |
 | HE130 | tribonacci | medium | partial | pass | 1 | 19.2 |
 | HE132 | is_nested | medium | partial | pass | 1 | 5.6 |
 | HE135 | can_arrange | medium | partial | pass | 1 | 3.8 |
 | HE138 | is_equal_to_sum_even | easy | exact | pass | 1 | 2.9 |
-| HE139 | special_factorial | medium | partial | pass | 1 | 4.3 |
+| HE139 | special_factorial | easy | partial | pass | 1 | 4.3 |
 | HE142 | sum_squares | medium | exact | pass | 1 | 4.0 |
-| HE145 | order_by_points | hard | partial | pass | 1 | 8.2 |
+| HE145 | order_by_points | medium | partial | pass | 1 | 8.2 |
 | HE146 | special_filter | medium | partial | pass | 1 | 5.7 |
-| HE147 | get_max_triples | medium | exact | pass | 2 | 12.0 |
+| HE147 | get_max_triples | easy | exact | pass | 2 | 12.0 |
 | HE150 | x_or_y | easy | exact | pass | 1 | 4.8 |
-| HE152 | compare | easy | exact | pass | 1 | 4.6 |
-| HE159 | eat | easy | exact | pass | 1 | 3.5 |
-| HE163 | generate_integers | medium | partial | pass | 2 | 8.0 |
+| HE152 | compare | medium | exact | pass | 1 | 4.6 |
+| HE159 | eat | medium | exact | pass | 1 | 3.5 |
+| HE163 | generate_integers | hard | partial | pass | 2 | 8.0 |
 
 ## Per-Benchmark Results — Original Vow Suite
 
