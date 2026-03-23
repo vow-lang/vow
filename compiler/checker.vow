@@ -607,6 +607,22 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     env_emit_error_code(e, EC_UNKNOWN_METHOD(), verr_msg, expr_span(a, eid));
                     return CTY_UNIT();
                 }
+                if base_name == String::from("Option") || base_name == String::from("Result") {
+                    let hargs_lid: i64 = ty_b(e.ts, recv_tid);
+                    let inner_tid: i64 = if ts_arg_len(e.ts, hargs_lid) > 0 {
+                        ts_arg_get(e.ts, hargs_lid, 0)
+                    } else {
+                        CTY_UNIT()
+                    };
+                    if mname == String::from("unwrap") { return inner_tid; }
+                    let oerr_msg: String = String::from("unknown method '");
+                    oerr_msg.push_str(mname);
+                    oerr_msg.push_str(String::from("' on type '"));
+                    oerr_msg.push_str(base_name);
+                    oerr_msg.push_str(String::from("'"));
+                    env_emit_error_code(e, EC_UNKNOWN_METHOD(), oerr_msg, expr_span(a, eid));
+                    return CTY_UNIT();
+                }
                 if base_name == String::from("HashMap") {
                     let hargs_lid: i64 = ty_b(e.ts, recv_tid);
                     let val_tid: i64 = if ts_arg_len(e.ts, hargs_lid) > 1 {
@@ -997,6 +1013,7 @@ fn collect_calls_in_expr(e: CheckEnv, m: Module, eid: i64, calls: Vec<String>) [
 
     if tag == EXPR_METHOD() {
         let recv_eid: i64 = expr_a(a, eid);
+        let mname_sid: i64 = expr_b(a, eid);
         let args_lid: i64 = expr_c(a, eid);
         collect_calls_in_expr(e, m, recv_eid, calls);
         let n: i64 = list_len(a, args_lid);
@@ -1004,6 +1021,10 @@ fn collect_calls_in_expr(e: CheckEnv, m: Module, eid: i64, calls: Vec<String>) [
         while i < n {
             collect_calls_in_expr(e, m, list_get(a, args_lid, i), calls);
             i = i + 1;
+        }
+        let mname: String = arena_str(a, mname_sid);
+        if mname == String::from("unwrap") {
+            calls.push(String::from("__unwrap__"));
         }
         return;
     }
@@ -1158,13 +1179,20 @@ fn check_effects_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     collect_calls_in_block(e, m, body_bid, calls);
     let n: i64 = calls.len();
     let mut i: i64 = 0;
+    let eff_panic: i64 = 2;
     while i < n {
         let cname: String = calls[i];
-        let fidx: i64 = env_lookup_fn(e, cname);
-        if fidx != -1 {
-            let needed_eff: i64 = e.fn_effects[fidx];
-            if needed_eff != 0 && !effect_covered(declared_eff, needed_eff) {
-                env_emit_error(e, String::from("effectful call from pure function"), fn_span(a, fid));
+        if cname == String::from("__unwrap__") {
+            if !has_eff_bit(declared_eff, eff_panic) {
+                env_emit_error(e, String::from(".unwrap() requires [panic] effect"), fn_span(a, fid));
+            }
+        } else {
+            let fidx: i64 = env_lookup_fn(e, cname);
+            if fidx != -1 {
+                let needed_eff: i64 = e.fn_effects[fidx];
+                if needed_eff != 0 && !effect_covered(declared_eff, needed_eff) {
+                    env_emit_error(e, String::from("effectful call from pure function"), fn_span(a, fid));
+                }
             }
         }
         i = i + 1;

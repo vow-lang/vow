@@ -776,6 +776,23 @@ impl<'e> Checker<'e> {
                         _ => None,
                     };
                     (methods, ty)
+                } else if let Ty::Applied(base, type_args) = &recv_ty {
+                    let is_option_or_result = matches!(
+                        base.as_ref(),
+                        Ty::Enum(n) if n == "Option" || n == "Result"
+                    );
+                    if is_option_or_result {
+                        let methods: &[&str] = &["unwrap"];
+                        let ty = match method.as_str() {
+                            "unwrap" => Some(
+                                type_args.first().cloned().unwrap_or(Ty::Unit),
+                            ),
+                            _ => None,
+                        };
+                        (methods, ty)
+                    } else {
+                        (&[] as &[&str], None)
+                    }
                 } else {
                     (&[] as &[&str], None)
                 };
@@ -788,6 +805,10 @@ impl<'e> Checker<'e> {
                             "HashMap".to_string()
                         } else if is_vec {
                             "Vec".to_string()
+                        } else if matches!(&recv_ty, Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Enum(n) if n == "Option")) {
+                            "Option".to_string()
+                        } else if matches!(&recv_ty, Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Enum(n) if n == "Result")) {
+                            "Result".to_string()
                         } else {
                             format!("{recv_ty}")
                         };
