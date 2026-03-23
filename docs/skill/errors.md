@@ -144,6 +144,21 @@ trait Foo {
 
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
 
+### MissingContract
+
+**Phase:** Type Checker
+**Meaning:** An `extern "C"` block was declared without a `vow { ... }` contract. Every foreign function call requires a mandatory contract specifying expected behavior.
+
+```vow
+extern "C" {
+    fn write(fd: i32, ptr: i64, len: i64) -> i64 [io];
+}
+```
+
+**Output:** `extern block requires a vow contract`
+
+**Fix:** Add a `vow { ... }` block to the extern declaration with `requires` and/or `ensures` clauses.
+
 ### VowRequiresViolated
 
 **Phase:** Verification (ESBMC)

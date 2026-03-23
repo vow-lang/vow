@@ -333,6 +333,16 @@ impl<'e> Checker<'e> {
                     );
                 }
                 Item::Extern(block) => {
+                    if block.vow.is_none() && !block.fns.is_empty() {
+                        self.emit_error_with_hints(
+                            ErrorCode::MissingContract,
+                            "extern block requires a vow contract",
+                            block.span,
+                            vec![
+                                "add a `vow { ... }` block specifying contracts for foreign functions".to_string(),
+                            ],
+                        );
+                    }
                     for f in &block.fns {
                         let params = f
                             .params
