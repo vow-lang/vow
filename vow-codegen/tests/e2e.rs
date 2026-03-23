@@ -56,6 +56,7 @@ fn make_main_returns_42() -> Module {
         strings: vec![],
         struct_layouts: vec![],
         enum_layouts: vec![],
+        warnings: vec![],
         functions: vec![Function {
             id: FuncId(0),
             name: "main".to_string(),
@@ -206,6 +207,7 @@ fn vow_violation_exits_with_code_1_and_blames_caller() {
         strings: vec![],
         struct_layouts: vec![],
         enum_layouts: vec![],
+        warnings: vec![],
         functions: vec![divide, main_fn],
     };
 
@@ -320,6 +322,7 @@ fn vow_violation_reports_variable_values() {
         strings: vec![],
         struct_layouts: vec![],
         enum_layouts: vec![],
+        warnings: vec![],
         functions: vec![nonneg, main_fn],
     };
 

@@ -985,6 +985,7 @@ pub fn emit_c_function(func: &Function, const_fns: &HashMap<FuncId, ConstantValu
             strings: vec![],
             struct_layouts: vec![],
             enum_layouts: vec![],
+            warnings: vec![],
         },
     )
 }
@@ -2971,6 +2972,7 @@ mod tests {
             strings: vec![],
             struct_layouts: vec![],
             enum_layouts: vec![],
+            warnings: vec![],
         };
         let result = detect_constant_functions(&module);
         assert_eq!(result.len(), 1);
@@ -3013,6 +3015,7 @@ mod tests {
             strings: vec![],
             struct_layouts: vec![],
             enum_layouts: vec![],
+            warnings: vec![],
         };
         assert!(detect_constant_functions(&module).is_empty());
     }
@@ -3051,6 +3054,7 @@ mod tests {
             strings: vec![],
             struct_layouts: vec![],
             enum_layouts: vec![],
+            warnings: vec![],
         };
         assert!(detect_constant_functions(&module).is_empty());
     }
@@ -3074,6 +3078,7 @@ mod tests {
             strings: vec![],
             struct_layouts: vec![],
             enum_layouts: vec![],
+            warnings: vec![],
         };
         let mut out = String::new();
         emit_inst(
@@ -3098,6 +3103,7 @@ mod tests {
             strings: vec![],
             struct_layouts: vec![],
             enum_layouts: vec![],
+            warnings: vec![],
         };
         let call_inst = Inst {
             id: InstId(5),

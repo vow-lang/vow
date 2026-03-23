@@ -115,6 +115,7 @@ pub struct LowerCtx {
     inst_vec_elem_type: HashMap<InstId, String>,
     // struct name → per-field Vec element type name (for FieldGet → Vec propagation)
     struct_field_vec_elems: HashMap<String, Vec<String>>,
+    warnings: Vec<vow_diag::Diagnostic>,
 }
 
 impl LowerCtx {
@@ -175,6 +176,7 @@ impl LowerCtx {
             loop_exit_blocks: Vec::new(),
             inst_vec_elem_type: HashMap::new(),
             struct_field_vec_elems,
+            warnings: Vec::new(),
         }
     }
 
@@ -314,8 +316,24 @@ impl LowerCtx {
             .unwrap_or(false)
     }
 
-    pub fn finish(self) -> (Function, Vec<String>) {
-        (self.func, self.string_pool)
+    fn warn(&mut self, message: String, span: Span) {
+        self.warnings.push(vow_diag::Diagnostic {
+            severity: vow_diag::Severity::Warning,
+            code: vow_diag::ErrorCode::LoweringWarning,
+            message,
+            primary: vow_diag::SourceLocation {
+                file: self.file.clone(),
+                byte_offset: span.start,
+                byte_len: span.len,
+            },
+            secondary: vec![],
+            blame: vow_diag::Blame::None,
+            hints: vec![],
+        });
+    }
+
+    pub fn finish(self) -> (Function, Vec<String>, Vec<vow_diag::Diagnostic>) {
+        (self.func, self.string_pool, self.warnings)
     }
 }
 
@@ -773,16 +791,27 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         .cloned()
                         .unwrap_or_default();
                     if struct_name.is_empty() {
-                        eprintln!(
-                            "warning: FieldSet on untagged instruction %{}, field '{}' — defaulting to index 0",
-                            ptr_id.0, field
+                        ctx.warn(
+                            format!("FieldSet on untagged instruction %{}, field '{}' -- defaulting to index 0", ptr_id.0, field),
+                            span,
                         );
                     }
-                    let field_idx = ctx
+                    let field_idx_opt = ctx
                         .struct_field_map
                         .get(&struct_name)
-                        .and_then(|names| names.iter().position(|n| n == field))
-                        .unwrap_or(0) as u32;
+                        .and_then(|names| names.iter().position(|n| n == field));
+                    let field_idx = match field_idx_opt {
+                        Some(idx) => idx,
+                        None => {
+                            if !struct_name.is_empty() {
+                                ctx.warn(
+                                    format!("field '{}' not found in struct '{}' -- defaulting to index 0", field, struct_name),
+                                    span,
+                                );
+                            }
+                            0
+                        }
+                    } as u32;
                     ctx.emit(
                         Opcode::FieldSet,
                         Ty::Unit,
@@ -1029,24 +1058,27 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .cloned()
                 .unwrap_or_default();
             if struct_name.is_empty() {
-                eprintln!(
-                    "warning: FieldGet on untagged instruction %{}, field '{}' — defaulting to index 0",
-                    ptr_id.0, field
+                ctx.warn(
+                    format!("FieldGet on untagged instruction %{}, field '{}' -- defaulting to index 0", ptr_id.0, field),
+                    span,
                 );
             }
-            let field_idx = ctx
+            let field_idx_opt = ctx
                 .struct_field_map
                 .get(&struct_name)
-                .and_then(|names| names.iter().position(|n| n == field))
-                .unwrap_or_else(|| {
+                .and_then(|names| names.iter().position(|n| n == field));
+            let field_idx = match field_idx_opt {
+                Some(idx) => idx,
+                None => {
                     if !struct_name.is_empty() {
-                        eprintln!(
-                            "warning: field '{}' not found in struct '{}' — defaulting to index 0",
-                            field, struct_name
+                        ctx.warn(
+                            format!("field '{}' not found in struct '{}' -- defaulting to index 0", field, struct_name),
+                            span,
                         );
                     }
                     0
-                }) as u32;
+                }
+            } as u32;
             let result_id = ctx.emit(
                 Opcode::FieldGet,
                 Ty::I64,
@@ -1089,13 +1121,17 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             );
             ctx.inst_struct_type.insert(ptr_id, name.clone());
             for (field_name, field_expr) in fields {
-                let idx = field_names
-                    .iter()
-                    .position(|n| n == field_name)
-                    .unwrap_or_else(|| {
-                        eprintln!("warning: StructLiteral field '{}' not found in struct '{}' — defaulting to index 0", field_name, name);
+                let idx_opt = field_names.iter().position(|n| n == field_name);
+                let idx = match idx_opt {
+                    Some(i) => i,
+                    None => {
+                        ctx.warn(
+                            format!("StructLiteral field '{}' not found in struct '{}' -- defaulting to index 0", field_name, name),
+                            span,
+                        );
                         0
-                    }) as u32;
+                    }
+                } as u32;
                 let val_id = lower_expr(ctx, field_expr);
                 ctx.emit(
                     Opcode::FieldSet,
@@ -1160,7 +1196,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .and_then(|vs| vs.iter().position(|v| v == variant_name))
                 .unwrap_or(0) as i64;
             let n_payload = fields.len();
-            let size = (1 + n_payload) as u32 * 8;
+            let size = (2 + n_payload) as u32 * 8;
             let ptr_id = ctx.emit(
                 Opcode::RegionAlloc,
                 Ty::Ptr,
@@ -1684,7 +1720,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             // Early return: wrap as None and return
             ctx.switch_to_block(early_return_block);
-            let none_size: u32 = 8; // just the discriminant slot
+            let none_size: u32 = 16; // discriminant + guard slot
             let none_ptr = ctx.emit(
                 Opcode::RegionAlloc,
                 Ty::Ptr,
@@ -1904,7 +1940,7 @@ pub fn lower_function(
     struct_field_vec_elems: HashMap<String, Vec<String>>,
     string_exprs: &StringExprSet,
     const_map: &HashMap<String, (i64, Ty)>,
-) -> (Function, Vec<String>) {
+) -> (Function, Vec<String>, Vec<vow_diag::Diagnostic>) {
     let params: Vec<Ty> = fn_def.params.iter().map(|p| lower_ty(&p.ty)).collect();
     let param_names: Vec<String> = fn_def.params.iter().map(|p| p.name.clone()).collect();
     let return_ty = lower_ty(&fn_def.return_ty);
@@ -2149,11 +2185,12 @@ pub fn lower_module(module: &AstModule, file: &str, string_exprs: &StringExprSet
     }
 
     let mut all_strings: Vec<String> = Vec::new();
+    let mut all_warnings: Vec<vow_diag::Diagnostic> = Vec::new();
     let functions: Vec<Function> = fn_items
         .iter()
         .enumerate()
         .map(|(idx, fn_def)| {
-            let (mut func, pool) = lower_function(
+            let (mut func, pool, func_warnings) = lower_function(
                 fn_def,
                 file,
                 &func_index,
@@ -2176,6 +2213,7 @@ pub fn lower_module(module: &AstModule, file: &str, string_exprs: &StringExprSet
                 }
             }
             all_strings.extend(pool);
+            all_warnings.extend(func_warnings);
             func
         })
         .collect();
@@ -2186,6 +2224,7 @@ pub fn lower_module(module: &AstModule, file: &str, string_exprs: &StringExprSet
         struct_layouts,
         enum_layouts,
         functions,
+        warnings: all_warnings,
     }
 }
 
@@ -2279,7 +2318,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn("const_fn", vec![], i64_ty(), body, vec![]);
-        let (func, _) = lower_function(
+        let (func, _, _) = lower_function(
             &fn_def,
             "",
             &HashMap::new(),
@@ -2324,7 +2363,7 @@ mod tests {
             body,
             vec![],
         );
-        let (func, _) = lower_function(
+        let (func, _, _) = lower_function(
             &fn_def,
             "",
             &HashMap::new(),
@@ -2372,7 +2411,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn("let_fn", vec![], i64_ty(), body, vec![]);
-        let (func, _) = lower_function(
+        let (func, _, _) = lower_function(
             &fn_def,
             "",
             &HashMap::new(),
@@ -2415,7 +2454,7 @@ mod tests {
             span: sp(),
         };
         let fn_def = make_fn("if_fn", vec![], i64_ty(), body, vec![]);
-        let (func, _) = lower_function(
+        let (func, _, _) = lower_function(
             &fn_def,
             "",
             &HashMap::new(),
@@ -2459,7 +2498,7 @@ mod tests {
     #[test]
     fn lower_empty_function() {
         let fn_def = make_fn("empty_fn", vec![], unit_ty(), empty_block(), vec![]);
-        let (func, _) = lower_function(
+        let (func, _, _) = lower_function(
             &fn_def,
             "",
             &HashMap::new(),
@@ -2513,7 +2552,7 @@ mod tests {
             span: sp(),
             is_declaration: false,
         };
-        let (func, _) = lower_function(
+        let (func, _, _) = lower_function(
             &fn_def,
             "",
             &HashMap::new(),
@@ -2616,7 +2655,7 @@ mod tests {
         };
 
         let fn_def = make_fn("countdown", vec![param_n], i64_ty, body, vec![]);
-        let (func, _) = lower_function(
+        let (func, _, _) = lower_function(
             &fn_def,
             "",
             &HashMap::new(),
@@ -2668,5 +2707,84 @@ mod tests {
             func.blocks.len() >= 4,
             "expected entry+header+body+exit blocks"
         );
+    }
+
+    #[test]
+    fn struct_alloc_includes_guard_slot() {
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(Expr {
+                kind: ExprKind::StructLiteral {
+                    name: "Point".to_string(),
+                    fields: vec![
+                        ("x".to_string(), int_expr(1)),
+                        ("y".to_string(), int_expr(2)),
+                        ("z".to_string(), int_expr(3)),
+                    ],
+                },
+                span: sp(),
+            })),
+            span: sp(),
+        };
+        let fn_def = make_fn("make_point", vec![], i64_ty(), body, vec![]);
+        let mut sfm = HashMap::new();
+        sfm.insert(
+            "Point".to_string(),
+            vec!["x".to_string(), "y".to_string(), "z".to_string()],
+        );
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            sfm,
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        let alloc = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .find(|i| i.opcode == Opcode::RegionAlloc)
+            .expect("expected RegionAlloc");
+        // 3 fields + 1 guard = 4 slots * 8 bytes = 32
+        assert_eq!(alloc.data, InstData::AllocSize { size: 32, align: 8 });
+    }
+
+    #[test]
+    fn enum_alloc_includes_guard_slot() {
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(Expr {
+                kind: ExprKind::EnumConstruct {
+                    path: vec!["Option".to_string(), "Some".to_string()],
+                    fields: vec![int_expr(42)],
+                },
+                span: sp(),
+            })),
+            span: sp(),
+        };
+        let fn_def = make_fn("make_some", vec![], i64_ty(), body, vec![]);
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        let alloc = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .find(|i| i.opcode == Opcode::RegionAlloc)
+            .expect("expected RegionAlloc");
+        // 1 discriminant + 1 payload + 1 guard = 3 slots * 8 bytes = 24
+        assert_eq!(alloc.data, InstData::AllocSize { size: 24, align: 8 });
     }
 }

@@ -212,3 +212,12 @@ The `blame` field indicates who is at fault:
 ```
 
 **Fix:** Add a bounds check before indexing, or add contracts: `requires: i >= 0, requires: i < v.len()`.
+
+## Warnings
+
+### LoweringWarning
+
+**Phase:** IR Lowering
+**Meaning:** The IR lowerer could not resolve a struct type tag or field name, defaulting to index 0. This usually indicates a missing type annotation on a `let` binding, causing the compiler to lose track of which struct type a pointer refers to.
+
+**Fix:** Add an explicit type annotation: `let x: MyStruct = ...;` so the compiler can track struct type tags through the IR.

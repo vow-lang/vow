@@ -1131,11 +1131,16 @@ fn compile_frontend(source: &Path) -> Result<FrontendResult, Box<BuildOutput>> {
         }));
     }
 
-    let ir_module = Arc::new(vow_ir::lower_module(
+    let module = vow_ir::lower_module(
         &ast,
         &source.to_string_lossy(),
         &string_exprs,
-    ));
+    );
+    for w in &module.warnings {
+        stderr_emit.emit(w);
+    }
+    all_diagnostics.extend(module.warnings.iter().cloned());
+    let ir_module = Arc::new(module);
 
     Ok(FrontendResult {
         ir_module,
@@ -3953,6 +3958,7 @@ fn main() -> i32 {
             strings: vec![],
             struct_layouts: vec![],
             enum_layouts: vec![],
+            warnings: vec![],
         };
 
         let index = build_call_site_index(&module, "test.vow");
@@ -4282,6 +4288,7 @@ fn main() -> i32 {
             strings: vec![],
             struct_layouts: vec![],
             enum_layouts: vec![],
+            warnings: vec![],
         };
         let index = build_call_site_index(&module, "test.vow");
         let sites = index.get("callee").expect("callee should have call sites");

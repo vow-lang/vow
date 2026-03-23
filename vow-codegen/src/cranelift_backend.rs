@@ -1792,6 +1792,7 @@ mod tests {
             strings: vec![],
             struct_layouts: vec![],
             enum_layouts: vec![],
+            warnings: vec![],
         }
     }
 

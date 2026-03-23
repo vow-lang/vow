@@ -316,7 +316,15 @@ fn lctx_find_variant_tag(ctx: LowerCtx, enum_name: String, variant_name: String)
 
 fn lctx_struct_field_index(ctx: LowerCtx, struct_name: String, field_name: String) -> i64 {
     let sidx: i64 = lctx_find_struct(ctx, struct_name);
-    if sidx == -1 { return 0; }
+    if sidx == -1 {
+        if struct_name.len() > 0 {
+            let w: String = String::from("warning: struct '");
+            w.push_str(struct_name);
+            w.push_str(String::from("' not registered -- field lookup defaulting to index 0"));
+            ctx.warnings.push(w);
+        }
+        return 0;
+    }
     let fields: Vec<String> = ctx.struct_field_lists[sidx];
     let n: i64 = fields.len();
     let mut i: i64 = 0;
@@ -1243,7 +1251,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
         let tag_val: i64 = lctx_find_variant_tag(ctx, enum_name, variant_name);
         let n_payload: i64 = list_len(a, fields_lid);
-        let size: i64 = (1 + n_payload) * 8;
+        let size: i64 = (2 + n_payload) * 8;
         let alloc_args: Vec<i64> = Vec::new();
         let ptr_id: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), ITY_PTR(), alloc_args, IDATA_ALLOC_SIZE(), size, 8, String::from(""));
         lctx_tag(ctx, ptr_id, enum_name);
@@ -1774,7 +1782,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
         lctx_switch_to_block(ctx, early_block);
         let alloc_args: Vec<i64> = Vec::new();
-        let none_ptr: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), ITY_PTR(), alloc_args, IDATA_ALLOC_SIZE(), 8, 8, String::from(""));
+        let none_ptr: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), ITY_PTR(), alloc_args, IDATA_ALLOC_SIZE(), 16, 8, String::from(""));
         let none_tag_args: Vec<i64> = Vec::new();
         let none_tag: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), none_tag_args, IDATA_CONST_I64(), 0, 0, String::from(""));
         let fs_args: Vec<i64> = Vec::new();

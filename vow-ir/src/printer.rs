@@ -414,6 +414,7 @@ mod tests {
             strings: vec![],
             struct_layouts: vec![],
             enum_layouts: vec![],
+            warnings: vec![],
         };
         let output = print_module(&module);
         assert!(output.contains("IO"));
@@ -640,6 +641,7 @@ mod tests {
                     },
                 ],
             }],
+            warnings: vec![],
         };
         let out = print_module(&module);
         assert!(out.contains("strings:"), "strings section: {out}");
