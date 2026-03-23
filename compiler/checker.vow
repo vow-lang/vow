@@ -735,6 +735,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 } else {
                     if !is_coercible(e.ts, btid, loop_tid) {
                         env_emit_error(e, String::from("break type mismatch in loop"), expr_span(a, eid));
+                        break;
                     }
                 }
             }
