@@ -796,21 +796,27 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             span,
                         );
                     }
-                    let field_idx_opt = ctx
-                        .struct_field_map
-                        .get(&struct_name)
-                        .and_then(|names| names.iter().position(|n| n == field));
-                    let field_idx = match field_idx_opt {
-                        Some(idx) => idx,
-                        None => {
-                            if !struct_name.is_empty() {
-                                ctx.warn(
-                                    format!("field '{}' not found in struct '{}' -- defaulting to index 0", field, struct_name),
-                                    span,
-                                );
+                    let field_idx = if let Some(names) = ctx.struct_field_map.get(&struct_name) {
+                        match names.iter().position(|n| n == field) {
+                            Some(idx) => idx,
+                            None => {
+                                if !struct_name.is_empty() {
+                                    ctx.warn(
+                                        format!("field '{}' not found in struct '{}' -- defaulting to index 0", field, struct_name),
+                                        span,
+                                    );
+                                }
+                                0
                             }
-                            0
                         }
+                    } else {
+                        if !struct_name.is_empty() {
+                            ctx.warn(
+                                format!("struct '{}' not registered -- field lookup defaulting to index 0", struct_name),
+                                span,
+                            );
+                        }
+                        0
                     } as u32;
                     ctx.emit(
                         Opcode::FieldSet,
@@ -1063,21 +1069,27 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 );
             }
-            let field_idx_opt = ctx
-                .struct_field_map
-                .get(&struct_name)
-                .and_then(|names| names.iter().position(|n| n == field));
-            let field_idx = match field_idx_opt {
-                Some(idx) => idx,
-                None => {
-                    if !struct_name.is_empty() {
-                        ctx.warn(
-                            format!("field '{}' not found in struct '{}' -- defaulting to index 0", field, struct_name),
-                            span,
-                        );
+            let field_idx = if let Some(names) = ctx.struct_field_map.get(&struct_name) {
+                match names.iter().position(|n| n == field) {
+                    Some(idx) => idx,
+                    None => {
+                        if !struct_name.is_empty() {
+                            ctx.warn(
+                                format!("field '{}' not found in struct '{}' -- defaulting to index 0", field, struct_name),
+                                span,
+                            );
+                        }
+                        0
                     }
-                    0
                 }
+            } else {
+                if !struct_name.is_empty() {
+                    ctx.warn(
+                        format!("struct '{}' not registered -- field lookup defaulting to index 0", struct_name),
+                        span,
+                    );
+                }
+                0
             } as u32;
             let result_id = ctx.emit(
                 Opcode::FieldGet,
@@ -1103,12 +1115,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             result_id
         }
         ExprKind::StructLiteral { name, fields } => {
-            let field_names = ctx.struct_field_map.get(name).cloned().unwrap_or_default();
+            let field_names = if let Some(names) = ctx.struct_field_map.get(name) {
+                names.clone()
+            } else {
+                ctx.warn(
+                    format!("struct '{}' not registered -- field lookup defaulting to index 0", name),
+                    span,
+                );
+                vec![]
+            };
             let n_fields = field_names.len().max(fields.len());
-            // Allocate one extra guard slot (8 bytes) beyond the last field.
-            // This prevents SIGSEGV from off-by-one accesses past the end of
-            // the struct, which can happen when struct type tags are lost and
-            // field index lookups silently default to wrong indices.
             let ptr_id = ctx.emit(
                 Opcode::RegionAlloc,
                 Ty::Ptr,
@@ -1121,14 +1137,15 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             );
             ctx.inst_struct_type.insert(ptr_id, name.clone());
             for (field_name, field_expr) in fields {
-                let idx_opt = field_names.iter().position(|n| n == field_name);
-                let idx = match idx_opt {
+                let idx = match field_names.iter().position(|n| n == field_name) {
                     Some(i) => i,
                     None => {
-                        ctx.warn(
-                            format!("StructLiteral field '{}' not found in struct '{}' -- defaulting to index 0", field_name, name),
-                            span,
-                        );
+                        if !field_names.is_empty() {
+                            ctx.warn(
+                                format!("StructLiteral field '{}' not found in struct '{}' -- defaulting to index 0", field_name, name),
+                                span,
+                            );
+                        }
                         0
                     }
                 } as u32;

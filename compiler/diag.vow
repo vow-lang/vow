@@ -21,6 +21,7 @@ fn EC_VOW_ENSURES_VIOLATED() -> i64 vow { ensures: result >= 0 } { 9 }
 fn EC_VOW_INVARIANT_VIOLATED() -> i64 vow { ensures: result >= 0 } { 10 }
 fn EC_UNKNOWN_METHOD() -> i64 vow { ensures: result >= 0 } { 12 }
 fn EC_UNSUPPORTED_FEATURE() -> i64 vow { ensures: result >= 0 } { 13 }
+fn EC_LOWERING_WARNING() -> i64 vow { ensures: result >= 0 } { 14 }
 fn EC_IO_ERROR() -> i64 vow { ensures: result >= 0 } { 11 }
 
 struct Diagnostic {
@@ -192,8 +193,11 @@ fn ec_name(code: i64) -> String {
     if code == EC_UNSUPPORTED_FEATURE() {
         String::from("UnsupportedFeature")
     } else {
+    if code == EC_LOWERING_WARNING() {
+        String::from("LoweringWarning")
+    } else {
         String::from("IoError")
-    }}}}}}}}}}}}}
+    }}}}}}}}}}}}}}
 }
 
 fn sev_name_lower(s: i64) -> String {
