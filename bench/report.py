@@ -20,14 +20,35 @@ def generate_report(results_dir: Path, run_id: str) -> str:
     if not models:
         return f"No results found for run_id: {run_id}"
 
+    # Compute dynamic column sizes from first model's data.
+    # Assumes all models in a run share the same benchmark suite.
+    first_data = next(iter(models.values()))
+    first_summary = first_data.get("summary", {})
+    by_diff = first_summary.get("by_difficulty", {})
+    easy_total = by_diff.get("easy", {}).get("total", 0)
+    medium_total = by_diff.get("medium", {}).get("total", 0)
+    hard_total = by_diff.get("hard", {}).get("total", 0)
+    grand_total = first_summary.get("total_applicable", easy_total + medium_total + hard_total)
+
+    header_cols = [
+        "Language/Model",
+        f"Easy ({easy_total})",
+        f"Medium ({medium_total})",
+        f"Hard ({hard_total})",
+        f"Total ({grand_total})",
+        "Rate",
+    ]
+    header_row = "| " + " | ".join(f"{c}" for c in header_cols) + " |"
+    sep_row = "|" + "|".join("-" * (len(c) + 2) for c in header_cols) + "|"
+
     lines = [
         f"# Vericoding Benchmark Results — {run_id}",
         "",
         "## Comparison Table",
         "",
-        "| Language/Model | Easy (15) | Medium (15) | Hard (6) | Total (36) | Rate |",
-        "|----------------|-----------|-------------|----------|------------|------|",
-        "| Dafny (paper)  | —         | —           | —        | —          | 82%  |",
+        header_row,
+        sep_row,
+        "| Dafny (paper) | — | — | — | — | 82% |",
     ]
 
     for model_name, data in models.items():
@@ -37,16 +58,16 @@ def generate_report(results_dir: Path, run_id: str) -> str:
         medium = by_diff.get("medium", {})
         hard = by_diff.get("hard", {})
         total = summary.get("verified", 0)
-        total_applicable = summary.get("total_applicable", 36)
+        total_applicable = summary.get("total_applicable", grand_total)
         rate = summary.get("verification_rate", 0)
         compiler = data.get("compiler", "rust")
         compiler_label = f", {compiler}" if compiler != "rust" else ""
 
         lines.append(
             f"| Vow ({_short_name(model_name)}{compiler_label}) "
-            f"| {easy.get('verified', 0)}/{easy.get('total', 15)} "
-            f"| {medium.get('verified', 0)}/{medium.get('total', 15)} "
-            f"| {hard.get('verified', 0)}/{hard.get('total', 6)} "
+            f"| {easy.get('verified', 0)}/{easy.get('total', easy_total)} "
+            f"| {medium.get('verified', 0)}/{medium.get('total', medium_total)} "
+            f"| {hard.get('verified', 0)}/{hard.get('total', hard_total)} "
             f"| {total}/{total_applicable} "
             f"| {rate:.0%} |"
         )
@@ -62,7 +83,7 @@ def generate_report(results_dir: Path, run_id: str) -> str:
 
     # Per-model detail sections
     for model_name, data in models.items():
-        lines.extend(_model_details(model_name, data))
+        lines.extend(_model_details(model_name, data, grand_total))
 
     return "\n".join(lines)
 
@@ -130,7 +151,7 @@ def _short_name(model_id: str) -> str:
     return model_id
 
 
-def _model_details(model_name: str, data: dict) -> list[str]:
+def _model_details(model_name: str, data: dict, grand_total: int) -> list[str]:
     lines = [
         f"## {model_name}",
         "",
@@ -144,7 +165,7 @@ def _model_details(model_name: str, data: dict) -> list[str]:
     if verified_iters:
         mean_iters = sum(verified_iters) / len(verified_iters)
         lines.append(f"**Mean CEGIS iterations (verified):** {mean_iters:.1f}")
-    lines.append(f"**Total verified:** {summary.get('verified', 0)}/{summary.get('total_applicable', 36)}")
+    lines.append(f"**Total verified:** {summary.get('verified', 0)}/{summary.get('total_applicable', grand_total)}")
     lines.append("")
 
     # Failure modes
