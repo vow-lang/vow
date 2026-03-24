@@ -1,0 +1,22 @@
+module DeallocString
+
+fn build_greeting(name: String) -> String {
+    let greeting: String = String::from("Hello, ");
+    greeting.push_str(name);
+    greeting
+}
+
+fn unused_strings() -> i64 {
+    let a: String = String::from("temporary");
+    let b: String = String::from("also temporary");
+    let len: i64 = a.len() + b.len();
+    len
+}
+
+fn main() -> i32 [io] {
+    let g: String = build_greeting(String::from("world"));
+    print_str(g);
+    let n: i64 = unused_strings();
+    print_i64(n);
+    0
+}
