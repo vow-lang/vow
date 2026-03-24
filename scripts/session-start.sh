@@ -55,8 +55,4 @@ else
     status=1
 fi
 
-# ─── Reminder ──────────────────────────────────────────────────────
-echo ""
-echo "reminder: Always use 'ulimit -v 2000000' before running ./vowc or any Vow-compiled binary."
-
 exit $status
