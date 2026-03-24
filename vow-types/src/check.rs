@@ -1010,42 +1010,6 @@ impl<'e> Checker<'e> {
                 self.env.pop_scope();
                 Ty::Unit
             }
-            ExprKind::For {
-                binding,
-                index_binding,
-                iterable,
-                body,
-                ..
-            } => {
-                let iter_ty = self.check_expr(iterable);
-                let elem_ty = match &iter_ty {
-                    Ty::Applied(base, args)
-                        if matches!(base.as_ref(), Ty::Struct(n) if n == "Vec")
-                            && !args.is_empty() =>
-                    {
-                        args[0].clone()
-                    }
-                    Ty::Never => Ty::Never,
-                    _ => {
-                        self.emit_error(
-                            ErrorCode::TypeMismatch,
-                            format!("for loop requires Vec<T>, found `{iter_ty}`"),
-                            expr.span,
-                        );
-                        Ty::Never
-                    }
-                };
-                self.env.push_scope();
-                if let Some(idx) = index_binding {
-                    self.env.define(idx, Ty::I64);
-                }
-                self.env.define(binding, elem_ty);
-                self.in_loop += 1;
-                self.check_block(body);
-                self.in_loop -= 1;
-                self.env.pop_scope();
-                Ty::Unit
-            }
             ExprKind::Loop { body, .. } => {
                 self.in_loop += 1;
                 self.break_types_stack.push(Some(Vec::new()));
