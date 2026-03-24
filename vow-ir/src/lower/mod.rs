@@ -255,6 +255,7 @@ impl LowerCtx {
     }
 
     pub(super) fn emit_string_free(&mut self, id: InstId, span: Span) {
+        self.escaped_allocs.insert(id);
         self.emit(
             Opcode::Call,
             Ty::Unit,
@@ -1476,6 +1477,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     }
                 } as u32;
                 let val_id = lower_expr(ctx, field_expr);
+                ctx.mark_escaped(val_id);
                 ctx.emit(
                     Opcode::FieldSet,
                     Ty::Unit,
@@ -1568,6 +1570,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             );
             for (i, field_expr) in fields.iter().enumerate() {
                 let val_id = lower_expr(ctx, field_expr);
+                ctx.mark_escaped(val_id);
                 ctx.emit(
                     Opcode::FieldSet,
                     Ty::Unit,
