@@ -24,13 +24,13 @@ An agent's task: read `spec.md` and `skeleton.vow`, fill in the function bodies 
 
 ```bash
 # Verify a single reference implementation
-ulimit -v 2000000; ./vowc verify benchmarks/easy/E01_absolute_value/reference.vow
+ulimit -v 2000000; build/vowc verify benchmarks/easy/E01_absolute_value/reference.vow
 
 # Verify an agent's solution (replace reference.vow with the agent's output)
-ulimit -v 2000000; ./vowc verify solution.vow
+ulimit -v 2000000; build/vowc verify solution.vow
 
 # Compile a skeleton (should succeed — placeholder body compiles)
-ulimit -v 2000000; ./vowc build --no-verify benchmarks/easy/E01_absolute_value/skeleton.vow
+ulimit -v 2000000; build/vowc build --no-verify benchmarks/easy/E01_absolute_value/skeleton.vow
 ```
 
 ## Scoring

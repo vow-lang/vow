@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-VOWC="$ROOT_DIR/vowc"
+VOWC="$ROOT_DIR/build/vowc"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
@@ -141,7 +141,7 @@ if [[ "$NO_BOOTSTRAP" == false ]]; then
   section_header "Phase 0: Bootstrap gate"
 
   if [[ ! -x "$VOWC" ]]; then
-    echo -e "${RED}FATAL: ./vowc not found${RESET}"
+    echo -e "${RED}FATAL: build/vowc not found${RESET}"
     exit 1
   fi
 
@@ -153,7 +153,7 @@ if [[ "$NO_BOOTSTRAP" == false ]]; then
   echo "  Concatenating compiler sources..."
   "$CONCAT" clif > "$COMPILER_VOW"
 
-  echo "  Stage 1: ./vowc → stage2..."
+  echo "  Stage 1: build/vowc → stage2..."
   run_vowc build --no-verify "$COMPILER_VOW" -o "$STAGE2" > /dev/null 2>&1
 
   echo "  Stage 2: stage2 → stage3..."

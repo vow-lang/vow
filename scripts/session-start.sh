@@ -18,7 +18,7 @@ else
 fi
 
 # ─── Check self-hosted compiler ─────────────────────────────────────
-if [ -x "./vowc" ]; then
+if [ -x "build/vowc" ]; then
     echo "vowc: ok (self-hosted compiler present)"
 else
     echo "vowc: MISSING (run 'scripts/bootstrap.sh --no-verify' to build)"

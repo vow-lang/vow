@@ -15,7 +15,7 @@ globs: "**/*.vow"
 
 Vow is a systems programming language with built-in contracts (preconditions, postconditions, loop invariants) that are statically verified by ESBMC bounded model checking. Programs compile to native executables via Cranelift. The compiler emits structured JSON for machine consumption.
 
-In all documentation below, `vow` refers to the `./vowc` binary in the repository root. Always use `ulimit -v 2000000` before invoking the compiler or any binary it produces — without this, the process can consume all system memory.
+In all documentation below, `vow` refers to the `build/vowc` binary. Always use `ulimit -v 2000000` before invoking the compiler or any binary it produces — without this, the process can consume all system memory.
 
 ## What Vow Excludes
 
@@ -26,7 +26,7 @@ No block comments, no generics, no traits, no closures, no macros, no garbage co
 The standard workflow for writing verified Vow programs:
 
 1. **Write** — Create a `.vow` file with function contracts (`requires`, `ensures`, `invariant`)
-2. **Build** — Run `ulimit -v 2000000; ./vowc build <file.vow>`
+2. **Build** — Run `ulimit -v 2000000; build/vowc build <file.vow>`
 3. **Parse JSON** — Read the JSON object from stdout
 4. **Handle status:**
    - `Verified` → Done. Binary is at `executable`.
@@ -46,9 +46,9 @@ fn main() -> i32 [io] {
 }
 ```
 
-Build and run (`./vowc` is the primary compiler binary, produced by `scripts/bootstrap.sh`):
+Build and run (`build/vowc` is the primary compiler binary, produced by `scripts/bootstrap.sh`):
 ```
-$ ulimit -v 2000000; ./vowc build hello.vow
+$ ulimit -v 2000000; build/vowc build hello.vow
 $ ulimit -v 2000000; ./hello
 Hello, world!
 ```

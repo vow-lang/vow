@@ -37,7 +37,7 @@ def find_vow_binary(root: Path) -> Path:
 
 
 def find_self_hosted_binary(root: Path) -> Path:
-    vowc = root / "vowc"
+    vowc = root / "build" / "vowc"
     if vowc.exists():
         return vowc
     binary = root / "target" / "release" / "vow_self"

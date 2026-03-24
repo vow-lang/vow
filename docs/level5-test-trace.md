@@ -1,18 +1,18 @@
 # Level 5 Agent Capability Test — Trace
 
 **Date:** 2026-03-13
-**Compiler:** `./vowc` (self-hosted, Phase 20.3 bootstrap)
-**Rust compiler used:** Never (only `./vowc` after bootstrap)
+**Compiler:** `build/vowc` (self-hosted, Phase 20.3 bootstrap)
+**Rust compiler used:** Never (only `build/vowc` after bootstrap)
 **Program:** Safe Math + Stats Library (`examples/safemath/`)
 
 ---
 
 ## Pre-flight
 
-### Confirm `./vowc` runs
+### Confirm `build/vowc` runs
 
 ```
-$ ulimit -v 2000000; ./vowc --help --human
+$ ulimit -v 2000000; build/vowc --help --human
 vow -- Vow compiler
 
 USAGE
@@ -24,7 +24,7 @@ USAGE
 ### Sanity check: single-module build + verify
 
 ```
-$ ulimit -v 2000000; ./vowc build examples/clamp.vow -o /tmp/clamp_test
+$ ulimit -v 2000000; build/vowc build examples/clamp.vow -o /tmp/clamp_test
 2 items, 0 errors
   clamp: PROVEN
 {"status":"Verified","executable":"/tmp/clamp_test","diagnostics":[],"counterexamples":[]}
@@ -33,7 +33,7 @@ $ ulimit -v 2000000; ./vowc build examples/clamp.vow -o /tmp/clamp_test
 ### Sanity check: multi-module build
 
 ```
-$ ulimit -v 2000000; ./vowc build --no-verify examples/geometry/main.vow -o /tmp/geom_test
+$ ulimit -v 2000000; build/vowc build --no-verify examples/geometry/main.vow -o /tmp/geom_test
 12 items, 0 errors
 {"status":"Unverified","executable":"/tmp/geom_test","diagnostics":[],"counterexamples":[]}
 ```
@@ -109,7 +109,7 @@ Initial version had simpler contracts: `safe_add` had `requires: a >= 0, b >= 0`
 without overflow bounds, and `abs_val` had no requires at all.
 
 ```
-$ ulimit -v 2000000; ./vowc verify examples/safemath/safemath.vow
+$ ulimit -v 2000000; build/vowc verify examples/safemath/safemath.vow
 5 items, 0 errors
 Verifying safe_add...
   safe_add: FAILED
@@ -140,7 +140,7 @@ Verifying clamp...
 ## Step 3: Verification After Fixes — CEGIS Iteration 2
 
 ```
-$ ulimit -v 2000000; ./vowc verify examples/safemath/safemath.vow
+$ ulimit -v 2000000; build/vowc verify examples/safemath/safemath.vow
 5 items, 0 errors
 Verifying safe_add...
   safe_add: PROVEN
@@ -194,7 +194,7 @@ fn mean_of(a: i64, b: i64) -> i64 vow {
 ## Step 5: Verify `stats.vow` — CEGIS Iteration 1
 
 ```
-$ ulimit -v 2000000; ./vowc verify examples/safemath/stats.vow
+$ ulimit -v 2000000; build/vowc verify examples/safemath/stats.vow
 9 items, 0 errors
   safe_add: PROVEN
   safe_sub: PROVEN
@@ -240,7 +240,7 @@ fn mean_of(a: i64, b: i64) -> i64 vow {
 ## Step 7: Re-verify `stats.vow` — CEGIS Iteration 3
 
 ```
-$ ulimit -v 2000000; ./vowc verify examples/safemath/stats.vow
+$ ulimit -v 2000000; build/vowc verify examples/safemath/stats.vow
 9 items, 0 errors
   safe_add: PROVEN
   safe_sub: PROVEN
@@ -284,7 +284,7 @@ fn main() -> i32 [io] {
 ```
 
 ```
-$ ulimit -v 2000000; ./vowc build examples/safemath/main.vow -o /tmp/safemath
+$ ulimit -v 2000000; build/vowc build examples/safemath/main.vow -o /tmp/safemath
 10 items, 0 errors
 Starting verification of safe_add...
 Starting verification of safe_sub...
@@ -346,7 +346,7 @@ All results correct:
 Added `safe_div(10, 0)` to `main.vow`. Built with `--mode debug --no-verify`:
 
 ```
-$ ulimit -v 2000000; ./vowc build --mode debug --no-verify examples/safemath/main.vow -o /tmp/safemath_debug
+$ ulimit -v 2000000; build/vowc build --mode debug --no-verify examples/safemath/main.vow -o /tmp/safemath_debug
 10 items, 0 errors
 {"status":"Unverified","executable":"/tmp/safemath_debug","diagnostics":[],"counterexamples":[]}
 ```
@@ -380,7 +380,7 @@ Reverted the violation call after capturing output.
 
 | Metric | Value |
 |--------|-------|
-| Compiler used | `./vowc` (self-hosted) exclusively |
+| Compiler used | `build/vowc` (self-hosted) exclusively |
 | Rust compiler invocations | 0 |
 | Modules written | 3 (`safemath.vow`, `stats.vow`, `main.vow`) |
 | Functions | 10 (5 pure math + 4 stats + 1 main) |
@@ -409,8 +409,8 @@ Reverted the violation call after capturing output.
    - Unconstrained `safe_div` result → inline the computation
 
 4. **Cross-module verification works.** `stats.vow` imports `safemath` and all
-   9 functions across both modules verify in a single `./vowc verify` invocation.
+   9 functions across both modules verify in a single `build/vowc verify` invocation.
 
-5. **Parallel pipeline works.** `./vowc build` launches all ESBMC instances in
+5. **Parallel pipeline works.** `build/vowc build` launches all ESBMC instances in
    parallel with codegen. The full build (compile + verify 9 functions + link)
    completes in one command.

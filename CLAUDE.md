@@ -19,7 +19,7 @@ When implementing changes across Vow compilers, always modify BOTH the Rust comp
 
 ## Bootstrap Commands (Rust Stage 0)
 
-These Rust workspace commands build the stage 0 bootstrap compiler only. For day-to-day development, use `./vowc` (see below).
+These Rust workspace commands build the stage 0 bootstrap compiler only. For day-to-day development, use `build/vowc` (see below).
 
 ```bash
 cargo build --all          # build all crates
@@ -32,17 +32,17 @@ cargo fmt --all            # format all code
 
 ## Day-to-Day Usage (Self-Hosted Compiler)
 
-`./vowc` is the primary compiler for all Vow development. It is a self-hosted, verified fixed-point binary produced by `scripts/bootstrap.sh`.
+`build/vowc` is the primary compiler for all Vow development. It is a self-hosted, verified fixed-point binary produced by `scripts/bootstrap.sh`.
 
 ```bash
-./vowc build examples/divide.vow                   # compile + verify (default)
-./vowc build --no-verify examples/divide.vow       # compile, skip verification
-./vowc build --mode debug examples/divide.vow      # compile with runtime vow checks
-./vowc verify examples/divide.vow                  # verify contracts only (no executable)
+build/vowc build examples/divide.vow                   # compile + verify (default)
+build/vowc build --no-verify examples/divide.vow       # compile, skip verification
+build/vowc build --mode debug examples/divide.vow      # compile with runtime vow checks
+build/vowc verify examples/divide.vow                  # verify contracts only (no executable)
 
 # Help
-./vowc --help                                      # JSON capability description (for agents)
-./vowc --help --human                              # human-readable capability description
+build/vowc --help                                      # JSON capability description (for agents)
+build/vowc --help --human                              # human-readable capability description
 ```
 
 Debug mode is required to see runtime `VowViolation` output. Release omits all vow checks.
@@ -51,7 +51,7 @@ Debug mode is required to see runtime `VowViolation` output. Release omits all v
 
 ## Bootstrap (Rust Compiler)
 
-To get `./vowc` in the first place, bootstrap from the Rust compiler:
+To get `build/vowc` in the first place, bootstrap from the Rust compiler:
 
 ```bash
 scripts/bootstrap.sh --no-verify          # full bootstrap, skip ESBMC
@@ -59,7 +59,7 @@ scripts/bootstrap.sh --no-verify --skip-cargo  # skip cargo build too
 scripts/bootstrap.sh                      # full bootstrap with verification
 ```
 
-This builds `./target/release/vow` (stage 0), then uses it to compile and verify the self-hosted compiler, producing `./vowc`. The Rust compiler (`./target/release/vow`) is only needed for this bootstrap step.
+This builds `./target/release/vow` (stage 0), then uses it to compile and verify the self-hosted compiler, producing `build/vowc`. The Rust compiler (`./target/release/vow`) is only needed for this bootstrap step.
 
 ## Canonical Source of Truth
 
@@ -78,7 +78,7 @@ After updating a skill file, regenerate `--help` and rebuild:
 ```bash
 uv run python scripts/generate_help.py          # regenerate --help in both compilers
 cargo build --release -p vow                     # rebuild Rust compiler
-scripts/bootstrap.sh --no-verify --skip-cargo    # rebuild ./vowc
+scripts/bootstrap.sh --no-verify --skip-cargo    # rebuild build/vowc
 ```
 
 The staleness detector `scripts/check_help_coverage.py` (run in `full_test.sh`) will catch drift between `grammar.md` and `--help`.
@@ -125,7 +125,7 @@ All diagnostic output flows through **`vow-diag`**, which every other crate uses
 
 ## Self-Hosted Compiler
 
-`compiler/` contains a complete Vow implementation of the compiler (13 modules). `./vowc` is the primary compiler binary — a verified fixed point producing byte-identical binaries. The self-hosted compiler has full feature parity with the Rust compiler: subcommands, flags, structured diagnostics, verification pipeline, and parallel codegen+verify.
+`compiler/` contains a complete Vow implementation of the compiler (13 modules). `build/vowc` is the primary compiler binary — a verified fixed point producing byte-identical binaries. The self-hosted compiler has full feature parity with the Rust compiler: subcommands, flags, structured diagnostics, verification pipeline, and parallel codegen+verify.
 
 ### Modules
 
@@ -139,7 +139,7 @@ All diagnostic output flows through **`vow-diag`**, which every other crate uses
 ### Building and running
 
 ```bash
-./vowc build --no-verify compiler/main.vow -o /tmp/vow_main  # compile self-hosted compiler
+build/vowc build --no-verify compiler/main.vow -o /tmp/vow_main  # compile self-hosted compiler
 /tmp/vow_main compiler/lexer.vow                             # type-check, print IR
 /tmp/vow_main -o /tmp/lexer compiler/lexer.vow               # compile to native binary
 ```

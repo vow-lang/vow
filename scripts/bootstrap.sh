@@ -7,6 +7,7 @@ RED="\033[31m"
 RESET="\033[0m"
 
 cd "$(dirname "$0")/.."
+mkdir -p build
 
 NO_VERIFY=""
 SKIP_CARGO=false
@@ -18,9 +19,9 @@ usage() {
     echo ""
     echo "Stages:"
     echo "  0: cargo build --all --release      -> ./target/release/vow"
-    echo "  1: Rust compiler builds self-hosted  -> ./vowc"
-    echo "  2: Self-hosted rebuilds itself       -> ./vowc2"
-    echo "  3: Second self-hosted rebuild        -> ./vowc3"
+    echo "  1: Rust compiler builds self-hosted  -> build/vowc"
+    echo "  2: Self-hosted rebuilds itself       -> build/vowc2"
+    echo "  3: Second self-hosted rebuild        -> build/vowc3"
     echo "  Verify: sha256(vowc2) == sha256(vowc3)"
     echo ""
     echo "Options:"
@@ -51,33 +52,33 @@ else
     printf "  done in %ds\n" $((t1 - t0))
 fi
 
-# ─── Stage 1: Rust compiler -> ./vowc ────────────────────────────────
+# ─── Stage 1: Rust compiler -> build/vowc ────────────────────────────
 
-printf "${BOLD}Stage 1:${RESET} Rust compiler -> ./vowc\n"
+printf "${BOLD}Stage 1:${RESET} Rust compiler -> build/vowc\n"
 t0=$(date +%s)
-if ! output=$(./target/release/vow build $NO_VERIFY compiler/main.vow -o ./vowc 2>&1); then
+if ! output=$(./target/release/vow build $NO_VERIFY compiler/main.vow -o build/vowc 2>&1); then
     printf "  ${RED}FAILED${RESET}\n%s\n" "$output"
     exit 1
 fi
 t1=$(date +%s)
 printf "  done in %ds\n" $((t1 - t0))
 
-# ─── Stage 2: Self-hosted compiler -> ./vowc2 ────────────────────────
+# ─── Stage 2: Self-hosted compiler -> build/vowc2 ────────────────────
 
-printf "${BOLD}Stage 2:${RESET} ./vowc -> ./vowc2\n"
+printf "${BOLD}Stage 2:${RESET} build/vowc -> build/vowc2\n"
 t0=$(date +%s)
-if ! output=$(ulimit -v 2000000; ./vowc build $NO_VERIFY compiler/main.vow -o ./vowc2 2>&1); then
+if ! output=$(ulimit -v 2000000; build/vowc build $NO_VERIFY compiler/main.vow -o build/vowc2 2>&1); then
     printf "  ${RED}FAILED${RESET}\n%s\n" "$output"
     exit 1
 fi
 t1=$(date +%s)
 printf "  done in %ds\n" $((t1 - t0))
 
-# ─── Stage 3: Second self-hosted rebuild -> ./vowc3 ──────────────────
+# ─── Stage 3: Second self-hosted rebuild -> build/vowc3 ──────────────
 
-printf "${BOLD}Stage 3:${RESET} ./vowc2 -> ./vowc3\n"
+printf "${BOLD}Stage 3:${RESET} build/vowc2 -> build/vowc3\n"
 t0=$(date +%s)
-if ! output=$(ulimit -v 2000000; ./vowc2 build $NO_VERIFY compiler/main.vow -o ./vowc3 2>&1); then
+if ! output=$(ulimit -v 2000000; build/vowc2 build $NO_VERIFY compiler/main.vow -o build/vowc3 2>&1); then
     printf "  ${RED}FAILED${RESET}\n%s\n" "$output"
     exit 1
 fi
@@ -87,14 +88,14 @@ printf "  done in %ds\n" $((t1 - t0))
 # ─── Verify: SHA-256 fixed point ─────────────────────────────────────
 
 printf "${BOLD}Verify:${RESET}  SHA-256 fixed point (vowc2 == vowc3)\n"
-sha_vowc2=$(sha256sum ./vowc2 | awk '{print $1}')
-sha_vowc3=$(sha256sum ./vowc3 | awk '{print $1}')
+sha_vowc2=$(sha256sum build/vowc2 | awk '{print $1}')
+sha_vowc3=$(sha256sum build/vowc3 | awk '{print $1}')
 
 if [ "$sha_vowc2" = "$sha_vowc3" ]; then
     printf "  ${GREEN}MATCH${RESET}  %s\n" "$sha_vowc2"
-    mv ./vowc2 ./vowc
-    rm -f ./vowc3
-    printf "\n${GREEN}${BOLD}Bootstrap successful.${RESET} ./vowc is the self-hosted compiler.\n"
+    mv build/vowc2 build/vowc
+    rm -f build/vowc3
+    printf "\n${GREEN}${BOLD}Bootstrap successful.${RESET} build/vowc is the self-hosted compiler.\n"
 else
     printf "  ${RED}MISMATCH${RESET}\n"
     printf "  vowc2: %s\n" "$sha_vowc2"

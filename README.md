@@ -14,9 +14,9 @@ cargo build --all --release
 scripts/bootstrap.sh --no-verify
 
 # Day-to-day usage
-ulimit -v 2000000; ./vowc build examples/divide.vow              # compile + verify
-ulimit -v 2000000; ./vowc verify examples/divide.vow              # verify contracts only
-ulimit -v 2000000; ./vowc build --mode debug examples/divide.vow  # runtime vow checks
+ulimit -v 2000000; build/vowc build examples/divide.vow              # compile + verify
+ulimit -v 2000000; build/vowc verify examples/divide.vow              # verify contracts only
+ulimit -v 2000000; build/vowc build --mode debug examples/divide.vow  # runtime vow checks
 ```
 
 ## Vericoding Benchmark Suite
@@ -38,7 +38,7 @@ Results are compared against paper baselines: Dafny 82%, Verus/Rust 44%, Lean 27
 
 ## Self-Hosted Compiler
 
-The `compiler/` directory contains a complete Vow implementation of the compiler (13 modules). `./vowc` is the primary compiler for day-to-day development — a verified fixed-point binary with full feature parity: subcommands, flags, structured diagnostics, verification pipeline, and parallel codegen+verify. The Rust compiler (`./target/release/vow`) serves only as the stage 0 bootstrap.
+The `compiler/` directory contains a complete Vow implementation of the compiler (13 modules). `build/vowc` is the primary compiler for day-to-day development — a verified fixed-point binary with full feature parity: subcommands, flags, structured diagnostics, verification pipeline, and parallel codegen+verify. The Rust compiler (`./target/release/vow`) serves only as the stage 0 bootstrap.
 
 ## Project Status
 

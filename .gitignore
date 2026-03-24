@@ -1,8 +1,6 @@
 /target/
 compiler/main
-/vowc
-/vowc2
-/vowc3
+/build/
 compiler/*.o
 compiler/*.vow.c
 /.claude/*.local.json

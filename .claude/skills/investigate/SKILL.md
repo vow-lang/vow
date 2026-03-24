@@ -35,10 +35,10 @@ Extract:
 Write a minimal `.vow` file that triggers the reported bug. Compile and run with:
 
 ```bash
-ulimit -v 2000000; ./vowc build <test-file>.vow
+ulimit -v 2000000; build/vowc build <test-file>.vow
 ```
 
-- For verification bugs, use `./vowc verify`.
+- For verification bugs, use `build/vowc verify`.
 - For runtime bugs, use `--mode debug`.
 - Confirm the bug manifests before proceeding.
 
@@ -90,7 +90,7 @@ After both agents complete:
 
 1. Re-run the Phase 2 reproduction `.vow` file to confirm the bug is fixed:
    ```bash
-   ulimit -v 2000000; ./vowc build <test-file>.vow
+   ulimit -v 2000000; build/vowc build <test-file>.vow
    ```
 2. Run the full Rust test suite:
    ```bash
@@ -136,7 +136,7 @@ If the fix is partial or needs further review, skip this step and inform the use
 ## Key Project Rules
 
 - **Dual-compiler rule**: Every change to the Rust compiler must have a corresponding change in the self-hosted compiler (`compiler/*.vow`).
-- **Memory safety**: Always use `ulimit -v 2000000` when running `./vowc` or any binary it produces.
+- **Memory safety**: Always use `ulimit -v 2000000` when running `build/vowc` or any binary it produces.
 - **Commit authorship**: Never mention Claude or AI in commits for `pmatos@igalia.com`.
 - **Task tracking**: Convert plans to task lists (TaskCreate) before execution.
 - **Bootstrap rebuild**: After changing `compiler/*.vow`, rebuild with `scripts/bootstrap.sh --no-verify --skip-cargo`.

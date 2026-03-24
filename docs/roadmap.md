@@ -1,7 +1,7 @@
 # Vow Roadmap — Revised (22.03.2026)
 
 This revision replaces the March 7 roadmap. Phases 10–20 are complete. The
-self-hosted compiler (`./vowc`) is the primary driver. This document focuses
+self-hosted compiler (`build/vowc`) is the primary driver. This document focuses
 exclusively on what comes next, ordered by priority and impact.
 
 ---
@@ -22,7 +22,7 @@ Achieved:
 - Vericoding benchmark: **100% (36/36)** on Vow's original suite; **98.5% (66/67)** on HumanEval
 - 89/89 tests passing, 40/40 CLI compatibility tests
 - Toolchain Skill document, structured `--help`, `--debug-trace`, incremental compilation
-- Bootstrap: `scripts/bootstrap.sh` produces `./vowc` from Rust stage 0
+- Bootstrap: `scripts/bootstrap.sh` produces `build/vowc` from Rust stage 0
 
 **Current maturity: 9/10 for agent autonomy on verified programs.**
 
@@ -212,7 +212,7 @@ etc.). Output: `benchmarks/humaneval/triage.toml`.
 
 **21.4d Translation (COMPLETE).** 57 new HumanEval benchmarks created and
 verified. Total suite: **107 benchmarks** (40 original + 67 HumanEval), 103
-non-stretch. All 103/103 non-stretch references verified with `./vowc`.
+non-stretch. All 103/103 non-stretch references verified with `build/vowc`.
 Scripts: `bench/triage_humaneval.py`, `bench/translate_dafny.py`.
 
 **21.4e Run the protocol (COMPLETE).** Claude Sonnet 4 run against HumanEval
@@ -264,7 +264,7 @@ Fork the benchmark repository. Add Vow as a target language with build
 scripts, skill docs, and test infrastructure.
 
 **21.6b Pilot runs and iteration.**
-Run Claude Code against the mini-git specification using `./vowc`. Identify
+Run Claude Code against the mini-git specification using `build/vowc`. Identify
 failure modes. Fix the toolchain, not the agent.
 
 **21.6c Full benchmark execution.**
