@@ -732,18 +732,23 @@ fn lower_inst(
                 .args
                 .iter()
                 .enumerate()
-                .filter_map(|(i, id)| {
-                    let v = ctx.value_map.get(id).copied()?;
+                .map(|(i, id)| {
+                    let v = *ctx.value_map.get(id).unwrap_or_else(|| {
+                        panic!(
+                            "cranelift backend: Call value_map miss for arg {id:?} in inst {:?}",
+                            inst.id
+                        )
+                    });
                     if let Some(&expected_ty) = expected_types.get(i) {
                         let actual_ty = builder.func.dfg.value_type(v);
                         if actual_ty == types::I32 && expected_ty == types::I64 {
-                            return Some(builder.ins().sextend(types::I64, v));
+                            return builder.ins().sextend(types::I64, v);
                         }
                         if actual_ty == types::I8 && expected_ty == types::I64 {
-                            return Some(builder.ins().uextend(types::I64, v));
+                            return builder.ins().uextend(types::I64, v);
                         }
                     }
-                    Some(v)
+                    v
                 })
                 .collect();
             let call_inst = builder.ins().call(func_ref, &call_args);

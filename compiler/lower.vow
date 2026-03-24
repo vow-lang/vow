@@ -316,13 +316,43 @@ fn lctx_collect_return_sources(ctx: LowerCtx, return_val: i64) -> Vec<i64> {
 }
 
 fn lctx_emit_return_frees(ctx: LowerCtx, return_val: i64) {
-    // Self-hosted free emission disabled: the FFI shim's cross-block value
-    // resolution silently drops args not in value_map (filter_map in IOP_CALL
-    // handler), producing 0-argument free calls. The tracking infrastructure
-    // (alloc_ids/alloc_tags/alloc_sizes, escaped_ids, branch_depth,
-    // lctx_collect_return_sources) is complete; enabling requires fixing the
-    // shim's arg resolution for same-block extern calls. The Rust lowerer
-    // emits correct frees with Phi-aware return source tracing.
+    let sources: Vec<i64> = lctx_collect_return_sources(ctx, return_val);
+    let n: i64 = ctx.alloc_ids.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let id: i64 = ctx.alloc_ids[i];
+        let tag: String = ctx.alloc_tags[i];
+        let mut skip: bool = lctx_is_escaped(ctx, id);
+        if !skip {
+            let mut si: i64 = 0;
+            while si < sources.len() {
+                if sources[si] == id {
+                    skip = true;
+                }
+                si = si + 1;
+            }
+        }
+        if !skip {
+            // RegionFree for struct/enum allocs disabled: causes SIGSEGV in
+            // bootstrap Stage 3. String/Vec/HashMap Call-based frees work.
+            if tag == String::from("String") {
+                let free_args: Vec<i64> = Vec::new();
+                free_args.push(id);
+                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_free"));
+            }
+            if tag == String::from("Vec") {
+                let free_args: Vec<i64> = Vec::new();
+                free_args.push(id);
+                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_free_val"));
+            }
+            if tag == String::from("HashMap") {
+                let free_args: Vec<i64> = Vec::new();
+                free_args.push(id);
+                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_map_free"));
+            }
+        }
+        i = i + 1;
+    }
 }
 
 fn lctx_is_str_eid(ctx: LowerCtx, eid: i64) -> bool {
@@ -2670,6 +2700,11 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     ctx.tag_names = Vec::new();
     ctx.vec_elem_inst_ids = Vec::new();
     ctx.vec_elem_names = Vec::new();
+    ctx.alloc_ids = Vec::new();
+    ctx.alloc_tags = Vec::new();
+    ctx.alloc_sizes = Vec::new();
+    ctx.escaped_ids = Vec::new();
+    ctx.branch_depth = 0;
 
     if vow_lid != -1 {
         ctx.cur_vow_lid = vow_lid;

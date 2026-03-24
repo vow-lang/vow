@@ -194,10 +194,11 @@ pub extern "C" fn __vow_arena_alloc(size: usize, align: usize) -> *mut u8 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_arena_free(ptr: *mut u8, size: usize, align: usize) {
-    if size == 0 || ptr.is_null() || ptr == align as *mut u8 {
+    if size == 0 || ptr.is_null() {
         return;
     }
-    let layout = unsafe { std::alloc::Layout::from_size_align_unchecked(size, align) };
+    let layout =
+        std::alloc::Layout::from_size_align(size, align).expect("__vow_arena_free: invalid layout");
     unsafe { std::alloc::dealloc(ptr, layout) };
 }
 
