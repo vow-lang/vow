@@ -796,6 +796,8 @@ fn skill_json() -> String {
     r.push_str(String::from("    \"control_flow\": {\n"));
     r.push_str(String::from("      \"if_else\": \"if cond { expr } else { expr } \\u2014 expression, both branches same type\",\n"));
     r.push_str(String::from("      \"while\": \"while cond { body }\",\n"));
+    r.push_str(String::from("      \"for_each\": \"for item in vec { body } \\u2014 iterate Vec elements\",\n"));
+    r.push_str(String::from("      \"for_enumerate\": \"for i, item in vec { body } \\u2014 iterate with index\",\n"));
     r.push_str(String::from("      \"loop\": \"loop { ... break value; } \\u2014 infinite loop, break to exit\",\n"));
     r.push_str(String::from("      \"break\": \"break; or break value;\",\n"));
     r.push_str(String::from("      \"return\": \"return; or return value;\"\n"));
@@ -845,6 +847,12 @@ fn skill_json() -> String {
     r.push_str(String::from("      \"read\": \"v[i] \\u2014 Vec index access\",\n"));
     r.push_str(String::from("      \"write\": \"v[i] = val \\u2014 Vec index assignment\"\n"));
     r.push_str(String::from("    }\n"));
+    r.push_str(String::from("  },\n"));
+    r.push_str(String::from("  \"verification_limits\": {\n"));
+    r.push_str(String::from("    \"loop_unwind\": 10,\n"));
+    r.push_str(String::from("    \"Vec<T>\": 128,\n"));
+    r.push_str(String::from("    \"String\": 256,\n"));
+    r.push_str(String::from("    \"HashMap<K, V>\": 64\n"));
     r.push_str(String::from("  }\n"));
     r.push_str(String::from("}\n"));
     r
@@ -920,6 +928,12 @@ fn skill_human() -> String {
     r.push_str(String::from("METHODS   : Vec: Vec::new/push/pop/len/v[i]/v[i] = val   String: String::from/len/byte_at/push_byte/push_str/contains/eq/substring/parse_i64/parse_u64\n"));
     r.push_str(String::from("            HashMap: HashMap::new/insert/get/contains_key/remove/len   Option: unwrap\n"));
     r.push_str(String::from("OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   - ! & ?\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("VERIFICATION LIMITS\n"));
+    r.push_str(String::from("  Loop unwind  : 10 iterations\n"));
+    r.push_str(String::from("  Vec<T>        : 128 max capacity\n"));
+    r.push_str(String::from("  String        : 256 max capacity\n"));
+    r.push_str(String::from("  HashMap<K, V> : 64 max capacity\n"));
     r
 }
 

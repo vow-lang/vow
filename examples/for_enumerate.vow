@@ -1,0 +1,14 @@
+module ForEnumerate
+
+fn main() -> i32 [io] {
+    let v: Vec<i64> = Vec::new();
+    v.push(100);
+    v.push(200);
+    v.push(300);
+
+    for i, x in v {
+        print_i64(i);
+        print_i64(x);
+    }
+    0
+}

@@ -21,6 +21,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 GRAMMAR = REPO / "docs" / "skill" / "grammar.md"
 CLI = REPO / "docs" / "skill" / "cli.md"
+CONTRACTS = REPO / "docs" / "skill" / "contracts.md"
 MAIN_RS = REPO / "vow" / "src" / "main.rs"
 MAIN_VOW = REPO / "compiler" / "main.vow"
 
@@ -73,7 +74,7 @@ def extract_table_col(text: str, heading: str, col: int = 0, **kw) -> list[str]:
 # Build JSON structure from grammar.md + cli.md
 # ---------------------------------------------------------------------------
 
-def build_help_json(grammar: str, cli: str) -> dict:
+def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
     # --- Types ---
     prim_types = extract_table_col(grammar, "Primitive Types", 0)
     param_types = extract_table_col(grammar, "Built-in Parameterized Types", 0)
@@ -148,6 +149,17 @@ def build_help_json(grammar: str, cli: str) -> dict:
             flag, _default, desc = row[0], row[1], row[2]
             verify_options[flag] = desc
 
+    # --- Verification limits from contracts.md ---
+    collection_rows = extract_table(contracts, "Collection Models for Verification")
+    verification_limits: dict[str, str | int] = {
+        "loop_unwind": 10,
+    }
+    for row in collection_rows:
+        if len(row) >= 2:
+            type_name = row[0].strip()
+            capacity = int(row[1].strip())
+            verification_limits[type_name] = capacity
+
     return {
         "tool": "vow",
         "description": "Vow compiler: compiles Vow source to native executables with contract verification",
@@ -219,6 +231,8 @@ def build_help_json(grammar: str, cli: str) -> dict:
             "control_flow": {
                 "if_else": "if cond { expr } else { expr } \u2014 expression, both branches same type",
                 "while": "while cond { body }",
+                "for_each": "for item in vec { body } \u2014 iterate Vec elements",
+                "for_enumerate": "for i, item in vec { body } \u2014 iterate with index",
                 "loop": "loop { ... break value; } \u2014 infinite loop, break to exit",
                 "break": "break; or break value;",
                 "return": "return; or return value;",
@@ -241,6 +255,7 @@ def build_help_json(grammar: str, cli: str) -> dict:
                 "write": "v[i] = val \u2014 Vec index assignment",
             },
         },
+        "verification_limits": verification_limits,
     }
 
 
@@ -348,6 +363,15 @@ def build_help_human(data: dict) -> str:
     logical = " ".join(ops["logical"])
     unary = " ".join(ops["unary"])
     lines.append(f"OPERATORS : {arith}   {checked} (checked)   {comp}   {logical}   {unary}")
+    lines.append("")
+
+    vlimits = data.get("verification_limits", {})
+    if vlimits:
+        lines.append("VERIFICATION LIMITS")
+        lines.append(f"  Loop unwind  : {vlimits.get('loop_unwind', 10)} iterations")
+        for key, val in vlimits.items():
+            if key != "loop_unwind":
+                lines.append(f"  {key:<14s}: {val} max capacity")
 
     return "\n".join(lines)
 
@@ -429,8 +453,9 @@ def main() -> None:
 
     grammar = GRAMMAR.read_text()
     cli = CLI.read_text()
+    contracts = CONTRACTS.read_text()
 
-    data = build_help_json(grammar, cli)
+    data = build_help_json(grammar, cli, contracts)
     json_str = json.dumps(data, indent=2)
     human_str = build_help_human(data)
 
