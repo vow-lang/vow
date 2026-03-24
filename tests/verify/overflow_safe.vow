@@ -1,0 +1,15 @@
+// Fixed version of overflow_ensures: bounds on x prevent wrapping.
+module OverflowSafe
+
+fn twice(x: i64) -> i64 vow {
+  requires: x > 0,
+  requires: x <= 4000000000000000000,
+  ensures: result > x
+} {
+  x + x
+}
+
+fn main() -> i32 [io] {
+  print_i64(twice(5));
+  0
+}

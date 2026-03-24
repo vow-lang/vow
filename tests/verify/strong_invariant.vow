@@ -1,0 +1,26 @@
+// Fixed version of weak_invariant: invariant correctly relates sum to i.
+// sum == i*(i+1)/2 holds because we add (i+1) each iteration.
+module StrongInvariant
+
+fn fill_and_sum(n: i64) -> i64 vow {
+  requires: n >= 0,
+  requires: n <= 8,
+  ensures: result >= 0
+} {
+  let mut sum: i64 = 0;
+  let mut i: i64 = 0;
+  while i < n vow {
+    invariant: i >= 0,
+    invariant: i <= n,
+    invariant: sum == i * (i + 1) / 2
+  } {
+    sum = sum + i + 1;
+    i = i + 1;
+  }
+  sum
+}
+
+fn main() -> i32 [io] {
+  print_i64(fill_and_sum(5));
+  0
+}

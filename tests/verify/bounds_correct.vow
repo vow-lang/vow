@@ -1,0 +1,24 @@
+// Fixed version of off_by_one_bounds: access v[n-1] instead of v[n].
+module BoundsCorrect
+
+fn last_element(n: i64) -> i64 vow {
+  requires: n >= 1,
+  requires: n <= 8,
+  ensures: result == n
+} {
+  let v: Vec<i64> = Vec::new();
+  let mut i: i64 = 0;
+  while i < n vow {
+    invariant: i >= 0,
+    invariant: i <= n
+  } {
+    v.push(i + 1);
+    i = i + 1;
+  }
+  v[n - 1]
+}
+
+fn main() -> i32 [io] {
+  print_i64(last_element(3));
+  0
+}

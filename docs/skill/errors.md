@@ -180,6 +180,13 @@ extern "C" {
 
 **Fix:** Strengthen the invariant or fix the loop body.
 
+### EsbmcNotFound
+
+**Phase:** Verification
+**Meaning:** ESBMC is not installed or not on `$PATH`. Verification requires ESBMC. Without it, `vowc build` and `vowc verify` will fail.
+
+**Fix:** Install ESBMC, or use `--no-verify` to skip verification: `vowc build --no-verify <file>`.
+
 ## Runtime Errors
 
 These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).

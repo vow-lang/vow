@@ -305,7 +305,8 @@ fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, path: String, ces: Ve
                 all_proven = 0;
                 eprintln_str(str3(String::from("  "), f.name, String::from(": TIMEOUT")));
             } else if st == VERIFY_NOT_FOUND() {
-                eprintln_str(String::from("  esbmc not found"));
+                all_proven = 0;
+                eprintln_str(String::from("error: ESBMC not found; install ESBMC or use --no-verify"));
             } else {
                 all_proven = 0;
                 eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR")));
@@ -502,7 +503,8 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
                 all_proven = 0;
                 eprintln_str(str3(String::from("  "), f.name, String::from(": TIMEOUT")));
             } else if st == VERIFY_NOT_FOUND() {
-                eprintln_str(String::from("  esbmc not found"));
+                all_proven = 0;
+                eprintln_str(String::from("error: ESBMC not found; install ESBMC or use --no-verify"));
             } else {
                 all_proven = 0;
                 eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR")));

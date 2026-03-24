@@ -1,0 +1,17 @@
+// TEST: counterexample-fn "twice"
+// TEST: counterexample-blame callee
+// Looks correct: doubling should give a bigger number, right?
+// Fails when x is large enough that x+x wraps negative.
+module OverflowEnsures
+
+fn twice(x: i64) -> i64 vow {
+  requires: x > 0,
+  ensures: result > x
+} {
+  x + x
+}
+
+fn main() -> i32 [io] {
+  print_i64(twice(5));
+  0
+}

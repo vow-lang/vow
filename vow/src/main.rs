@@ -1359,7 +1359,34 @@ fn verify_outcome_to_output(
         ),
         VerifyOutcome::Skipped => (BuildStatus::Unverified, vec![], None, None),
         VerifyOutcome::Proven => (BuildStatus::Verified, vec![], None, None),
-        VerifyOutcome::ToolNotFound => (BuildStatus::Unverified, vec![], None, None),
+        VerifyOutcome::ToolNotFound => {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: vow_diag::ErrorCode::EsbmcNotFound,
+                message: "ESBMC not found; install ESBMC or use --no-verify to skip verification"
+                    .to_string(),
+                primary: vow_diag::SourceLocation {
+                    file: String::new(),
+                    byte_offset: 0,
+                    byte_len: 0,
+                },
+                secondary: vec![],
+                blame: vow_diag::Blame::None,
+                hints: vec![
+                    "ESBMC is required for contract verification".to_string(),
+                    "use --no-verify to compile without verification".to_string(),
+                ],
+            });
+            (
+                BuildStatus::VerifyFailed {
+                    function: String::new(),
+                    description: "ESBMC not found".to_string(),
+                },
+                vec![],
+                Some("tool_not_found".to_string()),
+                Some("ESBMC not found; install ESBMC or use --no-verify".to_string()),
+            )
+        }
     };
 
     BuildOutput {

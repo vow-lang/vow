@@ -1,0 +1,28 @@
+// TEST: counterexample-fn "last_element"
+// TEST: counterexample-blame none
+// Off-by-one: creates a vec of length n then accesses index n,
+// which is one past the end. The ensures claims result >= 0
+// but the access itself is out of bounds.
+module OffByOneBounds
+
+fn last_element(n: i64) -> i64 vow {
+  requires: n >= 1,
+  requires: n <= 8,
+  ensures: result >= 0
+} {
+  let v: Vec<i64> = Vec::new();
+  let mut i: i64 = 0;
+  while i < n vow {
+    invariant: i >= 0,
+    invariant: i <= n
+  } {
+    v.push(i + 1);
+    i = i + 1;
+  }
+  v[n]
+}
+
+fn main() -> i32 [io] {
+  print_i64(last_element(3));
+  0
+}

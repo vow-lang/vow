@@ -1,0 +1,15 @@
+// Fixed version of missing_precondition: requires x >= 0 AND y > 0.
+module DivisionGuarded
+
+fn divide_safe(x: i64, y: i64) -> i64 vow {
+  requires: x >= 0,
+  requires: y > 0,
+  ensures: result >= 0
+} {
+  x / y
+}
+
+fn main() -> i32 [io] {
+  print_i64(divide_safe(10, 2));
+  0
+}

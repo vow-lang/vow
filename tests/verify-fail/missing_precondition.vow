@@ -1,0 +1,22 @@
+// TEST: counterexample-fn "divide_weak"
+// TEST: counterexample-blame callee
+// Precondition is too weak: requires y >= 0 allows y == 0.
+// When x < 0 and y > 0, x/y is negative, violating ensures.
+// When y == 0, the guard returns 0 but for x < 0 the else branch fails.
+module MissingPrecondition
+
+fn divide_weak(x: i64, y: i64) -> i64 vow {
+  requires: y >= 0,
+  ensures: result >= 0
+} {
+  if y == 0 {
+    0
+  } else {
+    x / y
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(divide_weak(10, 2));
+  0
+}

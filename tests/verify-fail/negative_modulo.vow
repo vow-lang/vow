@@ -1,0 +1,17 @@
+// TEST: counterexample-fn "mod_positive"
+// TEST: counterexample-blame callee
+// Signed remainder: when x is negative, x - (x/m)*m can be negative.
+// Missing requires: x >= 0 allows negative remainders.
+module NegativeModulo
+
+fn mod_positive(x: i64, m: i64) -> i64 vow {
+  requires: m > 0,
+  ensures: result >= 0
+} {
+  x - (x / m) * m
+}
+
+fn main() -> i32 [io] {
+  print_i64(mod_positive(7, 3));
+  0
+}

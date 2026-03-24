@@ -70,9 +70,9 @@ vow verify --help --human  # same human text (works on all subcommands)
 | Status          | Meaning                                     |
 |-----------------|---------------------------------------------|
 | `Verified`      | Compiled + all contracts proved by ESBMC     |
-| `Unverified`    | Compiled but ESBMC was skipped or not found  |
+| `Unverified`    | Compiled with `--no-verify` (ESBMC skipped)  |
 | `CompileFailed` | Parse error, type error, module load error, or link failure |
-| `VerifyFailed`  | Compiled but ESBMC found a counterexample    |
+| `VerifyFailed`  | ESBMC found a counterexample, or ESBMC not found |
 
 ### Verified Example
 

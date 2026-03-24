@@ -1,0 +1,26 @@
+// TEST: counterexample-fn "clamp_strict"
+// TEST: counterexample-blame callee
+// Wrong comparison: uses strict > instead of >= in ensures.
+// Fails when x == lo (returns lo, but lo > lo is false).
+module ClampWrongOp
+
+fn clamp_strict(x: i64, lo: i64, hi: i64) -> i64 vow {
+  requires: lo <= hi,
+  ensures: result > lo,
+  ensures: result <= hi
+} {
+  if x < lo {
+    lo
+  } else {
+    if x > hi {
+      hi
+    } else {
+      x
+    }
+  }
+}
+
+fn main() -> i32 [io] {
+  print_i64(clamp_strict(5, 0, 10));
+  0
+}
