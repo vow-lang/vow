@@ -18,14 +18,22 @@ use crate::types::{
 
 fn builtin_alloc_tag(sym: &str) -> &'static str {
     match sym {
-        "__vow_fs_read" | "__vow_string_substr" | "__vow_string_trim"
-        | "__vow_string_to_upper" | "__vow_string_to_lower" | "__vow_string_replace"
-        | "__vow_string_join" | "__vow_string_from_i64" | "__vow_stdin_read"
-        | "__vow_process_get_stdout" | "__vow_process_get_stderr"
-        | "__vow_process_stdout_for" | "__vow_process_stderr_for"
+        "__vow_fs_read"
+        | "__vow_string_substr"
+        | "__vow_string_trim"
+        | "__vow_string_to_upper"
+        | "__vow_string_to_lower"
+        | "__vow_string_replace"
+        | "__vow_string_join"
+        | "__vow_string_from_i64"
+        | "__vow_stdin_read"
+        | "__vow_process_get_stdout"
+        | "__vow_process_get_stderr"
+        | "__vow_process_stdout_for"
+        | "__vow_process_stderr_for"
         | "__vow_hex_encode" => "String",
-        "__vow_fs_listdir" | "__vow_string_split" | "__vow_vec_sort"
-        | "__vow_hex_decode" | "__vow_args" => "Vec",
+        "__vow_fs_listdir" | "__vow_string_split" | "__vow_vec_sort" | "__vow_hex_decode"
+        | "__vow_args" => "Vec",
         _ => "",
     }
 }
@@ -1097,8 +1105,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             //          while idx < len { let <binding> = iter[idx]; <body>; idx = idx + 1; }
 
             let iter_id = lower_expr(ctx, iterable);
-            ctx.inst_struct_type
-                .insert(iter_id, "Vec".to_string());
+            ctx.inst_struct_type.insert(iter_id, "Vec".to_string());
 
             let len_id = ctx.emit(
                 Opcode::Call,
@@ -1370,8 +1377,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
                 } else {
                     let ty = ups[0].2;
-                    let phi_id =
-                        ctx.emit(Opcode::Phi, ty, vec![], InstData::None, span);
+                    let phi_id = ctx.emit(Opcode::Phi, ty, vec![], InstData::None, span);
                     for (block, up_id, _) in &ups {
                         backpatch_upsilon(ctx, *block, *up_id, phi_id);
                     }
@@ -1425,7 +1431,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .unwrap_or_default();
             if struct_name.is_empty() {
                 ctx.warn(
-                    format!("FieldGet on untagged instruction %{}, field '{}' -- defaulting to index 0", ptr_id.0, field),
+                    format!(
+                        "FieldGet on untagged instruction %{}, field '{}' -- defaulting to index 0",
+                        ptr_id.0, field
+                    ),
                     span,
                 );
             }
@@ -1435,7 +1444,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     None => {
                         if !struct_name.is_empty() {
                             ctx.warn(
-                                format!("field '{}' not found in struct '{}' -- defaulting to index 0", field, struct_name),
+                                format!(
+                                    "field '{}' not found in struct '{}' -- defaulting to index 0",
+                                    field, struct_name
+                                ),
                                 span,
                             );
                         }
@@ -1445,7 +1457,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             } else {
                 if !struct_name.is_empty() {
                     ctx.warn(
-                        format!("struct '{}' not registered -- field lookup defaulting to index 0", struct_name),
+                        format!(
+                            "struct '{}' not registered -- field lookup defaulting to index 0",
+                            struct_name
+                        ),
                         span,
                     );
                 }
@@ -1469,8 +1484,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 && let Some(elem_name) = vec_elems.get(field_idx as usize)
                 && !elem_name.is_empty()
             {
-                ctx.inst_vec_elem_type
-                    .insert(result_id, elem_name.clone());
+                ctx.inst_vec_elem_type.insert(result_id, elem_name.clone());
             }
             result_id
         }
@@ -1479,7 +1493,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 names.clone()
             } else {
                 ctx.warn(
-                    format!("struct '{}' not registered -- field lookup defaulting to index 0", name),
+                    format!(
+                        "struct '{}' not registered -- field lookup defaulting to index 0",
+                        name
+                    ),
                     span,
                 );
                 vec![]
@@ -1841,9 +1858,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             args,
         } => {
             let recv_id = lower_expr(ctx, receiver);
-            ctx.mark_escaped(recv_id);
             let recv_struct = ctx.inst_struct_type.get(&recv_id).cloned().or_else(|| {
-                if ctx.string_exprs.contains(&(receiver.as_ref() as *const Expr as usize)) {
+                if ctx
+                    .string_exprs
+                    .contains(&(receiver.as_ref() as *const Expr as usize))
+                {
                     Some("String".to_string())
                 } else {
                     None
@@ -1924,10 +1943,22 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 }
                 (Some("String"), "substring") => {
                     let start_id = args.first().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
-                        ctx.emit(Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0), span)
+                        ctx.emit(
+                            Opcode::ConstI64,
+                            Ty::I64,
+                            vec![],
+                            InstData::ConstI64(0),
+                            span,
+                        )
                     });
                     let end_id = args.get(1).map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
-                        ctx.emit(Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0), span)
+                        ctx.emit(
+                            Opcode::ConstI64,
+                            Ty::I64,
+                            vec![],
+                            InstData::ConstI64(0),
+                            span,
+                        )
                     });
                     let result = ctx.emit(
                         Opcode::Call,
@@ -2184,15 +2215,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         )
                     }
                 }
-                (Ty::U64, Ty::I64) => {
-                    ctx.emit(
-                        Opcode::CastU64ToI64,
-                        Ty::I64,
-                        vec![val],
-                        InstData::None,
-                        span,
-                    )
-                }
+                (Ty::U64, Ty::I64) => ctx.emit(
+                    Opcode::CastU64ToI64,
+                    Ty::I64,
+                    vec![val],
+                    InstData::None,
+                    span,
+                ),
                 _ => val,
             }
         }
@@ -2203,25 +2232,127 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 fn binop_opcode(op: BinOp, operand_ty: &Ty) -> (Opcode, Ty) {
     let is_u64 = *operand_ty == Ty::U64;
     match op {
-        BinOp::Add => if is_u64 { (Opcode::WrappingAddU64, Ty::U64) } else { (Opcode::WrappingAddI64, Ty::I64) },
-        BinOp::Sub => if is_u64 { (Opcode::WrappingSubU64, Ty::U64) } else { (Opcode::WrappingSubI64, Ty::I64) },
-        BinOp::Mul => if is_u64 { (Opcode::WrappingMulU64, Ty::U64) } else { (Opcode::WrappingMulI64, Ty::I64) },
-        BinOp::Div => if is_u64 { (Opcode::WrappingDivU64, Ty::U64) } else { (Opcode::WrappingDivI64, Ty::I64) },
-        BinOp::Rem => if is_u64 { (Opcode::WrappingRemU64, Ty::U64) } else { (Opcode::WrappingRemI64, Ty::I64) },
-        BinOp::AddChecked => if is_u64 { (Opcode::CheckedAddU64, Ty::U64) } else { (Opcode::CheckedAddI64, Ty::I64) },
-        BinOp::SubChecked => if is_u64 { (Opcode::CheckedSubU64, Ty::U64) } else { (Opcode::CheckedSubI64, Ty::I64) },
-        BinOp::MulChecked => if is_u64 { (Opcode::CheckedMulU64, Ty::U64) } else { (Opcode::CheckedMulI64, Ty::I64) },
-        BinOp::DivChecked => if is_u64 { (Opcode::CheckedDivU64, Ty::U64) } else { (Opcode::CheckedDivI64, Ty::I64) },
-        BinOp::RemChecked => if is_u64 { (Opcode::CheckedRemU64, Ty::U64) } else { (Opcode::CheckedRemI64, Ty::I64) },
-        BinOp::Eq => if is_u64 { (Opcode::EqU64, Ty::Bool) } else { (Opcode::EqI64, Ty::Bool) },
-        BinOp::Ne => if is_u64 { (Opcode::NeU64, Ty::Bool) } else { (Opcode::NeI64, Ty::Bool) },
-        BinOp::Lt => if is_u64 { (Opcode::LtU64, Ty::Bool) } else { (Opcode::LtI64, Ty::Bool) },
-        BinOp::Le => if is_u64 { (Opcode::LeU64, Ty::Bool) } else { (Opcode::LeI64, Ty::Bool) },
-        BinOp::Gt => if is_u64 { (Opcode::GtU64, Ty::Bool) } else { (Opcode::GtI64, Ty::Bool) },
-        BinOp::Ge => if is_u64 { (Opcode::GeU64, Ty::Bool) } else { (Opcode::GeI64, Ty::Bool) },
+        BinOp::Add => {
+            if is_u64 {
+                (Opcode::WrappingAddU64, Ty::U64)
+            } else {
+                (Opcode::WrappingAddI64, Ty::I64)
+            }
+        }
+        BinOp::Sub => {
+            if is_u64 {
+                (Opcode::WrappingSubU64, Ty::U64)
+            } else {
+                (Opcode::WrappingSubI64, Ty::I64)
+            }
+        }
+        BinOp::Mul => {
+            if is_u64 {
+                (Opcode::WrappingMulU64, Ty::U64)
+            } else {
+                (Opcode::WrappingMulI64, Ty::I64)
+            }
+        }
+        BinOp::Div => {
+            if is_u64 {
+                (Opcode::WrappingDivU64, Ty::U64)
+            } else {
+                (Opcode::WrappingDivI64, Ty::I64)
+            }
+        }
+        BinOp::Rem => {
+            if is_u64 {
+                (Opcode::WrappingRemU64, Ty::U64)
+            } else {
+                (Opcode::WrappingRemI64, Ty::I64)
+            }
+        }
+        BinOp::AddChecked => {
+            if is_u64 {
+                (Opcode::CheckedAddU64, Ty::U64)
+            } else {
+                (Opcode::CheckedAddI64, Ty::I64)
+            }
+        }
+        BinOp::SubChecked => {
+            if is_u64 {
+                (Opcode::CheckedSubU64, Ty::U64)
+            } else {
+                (Opcode::CheckedSubI64, Ty::I64)
+            }
+        }
+        BinOp::MulChecked => {
+            if is_u64 {
+                (Opcode::CheckedMulU64, Ty::U64)
+            } else {
+                (Opcode::CheckedMulI64, Ty::I64)
+            }
+        }
+        BinOp::DivChecked => {
+            if is_u64 {
+                (Opcode::CheckedDivU64, Ty::U64)
+            } else {
+                (Opcode::CheckedDivI64, Ty::I64)
+            }
+        }
+        BinOp::RemChecked => {
+            if is_u64 {
+                (Opcode::CheckedRemU64, Ty::U64)
+            } else {
+                (Opcode::CheckedRemI64, Ty::I64)
+            }
+        }
+        BinOp::Eq => {
+            if is_u64 {
+                (Opcode::EqU64, Ty::Bool)
+            } else {
+                (Opcode::EqI64, Ty::Bool)
+            }
+        }
+        BinOp::Ne => {
+            if is_u64 {
+                (Opcode::NeU64, Ty::Bool)
+            } else {
+                (Opcode::NeI64, Ty::Bool)
+            }
+        }
+        BinOp::Lt => {
+            if is_u64 {
+                (Opcode::LtU64, Ty::Bool)
+            } else {
+                (Opcode::LtI64, Ty::Bool)
+            }
+        }
+        BinOp::Le => {
+            if is_u64 {
+                (Opcode::LeU64, Ty::Bool)
+            } else {
+                (Opcode::LeI64, Ty::Bool)
+            }
+        }
+        BinOp::Gt => {
+            if is_u64 {
+                (Opcode::GtU64, Ty::Bool)
+            } else {
+                (Opcode::GtI64, Ty::Bool)
+            }
+        }
+        BinOp::Ge => {
+            if is_u64 {
+                (Opcode::GeU64, Ty::Bool)
+            } else {
+                (Opcode::GeI64, Ty::Bool)
+            }
+        }
         BinOp::And => (Opcode::And, Ty::Bool),
         BinOp::Or => (Opcode::Or, Ty::Bool),
-        BinOp::BitXor => if is_u64 { (Opcode::XorU64, Ty::U64) } else { (Opcode::XorI64, Ty::I64) },
+        BinOp::BitXor => {
+            if is_u64 {
+                (Opcode::XorU64, Ty::U64)
+            } else {
+                (Opcode::XorI64, Ty::I64)
+            }
+        }
     }
 }
 
@@ -2242,7 +2373,9 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
         } => {
             let mut val = lower_expr(ctx, init);
             let span = init.span;
-            if let Some(AstType::Named { name: type_name, .. }) = ty
+            if let Some(AstType::Named {
+                name: type_name, ..
+            }) = ty
                 && type_name == "u64"
                 && ctx.inst_ty(val) != Ty::U64
             {
@@ -2272,8 +2405,13 @@ fn lower_stmt(ctx: &mut LowerCtx, stmt: &Stmt) {
                         } => {
                             ctx.inst_struct_type.insert(val, type_name.clone());
                             if type_name == "Vec"
-                                && let Some(AstType::Named { name: elem_name, .. }) = args.first()
-                                && !matches!(elem_name.as_str(), "i32" | "i64" | "u64" | "f32" | "f64" | "bool")
+                                && let Some(AstType::Named {
+                                    name: elem_name, ..
+                                }) = args.first()
+                                && !matches!(
+                                    elem_name.as_str(),
+                                    "i32" | "i64" | "u64" | "f32" | "f64" | "bool"
+                                )
                             {
                                 ctx.inst_vec_elem_type.insert(val, elem_name.clone());
                             }
@@ -2378,8 +2516,13 @@ pub fn lower_function(
             }
             AstType::Generic { name, args, .. } if name == "Vec" => {
                 ctx.inst_struct_type.insert(arg_id, "Vec".to_string());
-                if let Some(AstType::Named { name: elem_name, .. }) = args.first()
-                    && !matches!(elem_name.as_str(), "i32" | "i64" | "u64" | "f32" | "f64" | "bool")
+                if let Some(AstType::Named {
+                    name: elem_name, ..
+                }) = args.first()
+                    && !matches!(
+                        elem_name.as_str(),
+                        "i32" | "i64" | "u64" | "f32" | "f64" | "bool"
+                    )
                 {
                     ctx.inst_vec_elem_type.insert(arg_id, elem_name.clone());
                 }
@@ -2519,8 +2662,13 @@ pub fn lower_module(module: &AstModule, file: &str, string_exprs: &StringExprSet
                 .iter()
                 .map(|f| match &f.ty {
                     AstType::Generic { name, args, .. } if name == "Vec" => {
-                        if let Some(AstType::Named { name: elem_name, .. }) = args.first()
-                            && !matches!(elem_name.as_str(), "i32" | "i64" | "u64" | "f32" | "f64" | "bool")
+                        if let Some(AstType::Named {
+                            name: elem_name, ..
+                        }) = args.first()
+                            && !matches!(
+                                elem_name.as_str(),
+                                "i32" | "i64" | "u64" | "f32" | "f64" | "bool"
+                            )
                         {
                             return elem_name.clone();
                         }
@@ -3400,15 +3548,14 @@ mod tests {
             &HashMap::new(),
         );
 
-        let has_string_free = func
-            .blocks
-            .iter()
-            .flat_map(|b| b.insts.iter())
-            .any(|i| {
-                i.opcode == Opcode::Call
-                    && i.data == InstData::CallExtern("__vow_string_free".to_string())
-            });
-        assert!(has_string_free, "expected __vow_string_free for unused string");
+        let has_string_free = func.blocks.iter().flat_map(|b| b.insts.iter()).any(|i| {
+            i.opcode == Opcode::Call
+                && i.data == InstData::CallExtern("__vow_string_free".to_string())
+        });
+        assert!(
+            has_string_free,
+            "expected __vow_string_free for unused string"
+        );
     }
 
     #[test]
@@ -3436,7 +3583,10 @@ mod tests {
             .find(|i| i.opcode == Opcode::RegionFree)
             .map(|i| i.data.clone())
             .expect("expected RegionFree");
-        assert_eq!(alloc_data, free_data, "RegionFree size must match RegionAlloc size");
+        assert_eq!(
+            alloc_data, free_data,
+            "RegionFree size must match RegionAlloc size"
+        );
     }
 
     #[test]
@@ -3493,9 +3643,9 @@ mod tests {
     }
 
     #[test]
-    fn receiver_method_marks_escaped_no_free() {
+    fn receiver_method_does_not_prevent_free() {
         // fn f() -> i64 { let s = String::from("x"); s.len() }
-        // s.len() marks s as escaped (receiver) → no __vow_string_free
+        // s.len() is read-only — s must still be freed (#71)
         let body = Block {
             stmts: vec![let_stmt(
                 "s",
@@ -3537,19 +3687,13 @@ mod tests {
             &HashMap::new(),
         );
 
-        let has_string_free = func
-            .blocks
-            .iter()
-            .flat_map(|b| b.insts.iter())
-            .any(|i| {
-                i.opcode == Opcode::Call
-                    && i.data == InstData::CallExtern("__vow_string_free".to_string())
-            });
-        // Current behavior: receiver is marked escaped, so no free is emitted.
-        // This documents the known limitation (see GitHub issue: receiver-escape leak).
+        let has_string_free = func.blocks.iter().flat_map(|b| b.insts.iter()).any(|i| {
+            i.opcode == Opcode::Call
+                && i.data == InstData::CallExtern("__vow_string_free".to_string())
+        });
         assert!(
-            !has_string_free,
-            "method receiver is marked escaped — no free expected (known limitation)"
+            has_string_free,
+            "method call on receiver must not prevent deallocation (#71)"
         );
     }
 
@@ -3608,10 +3752,7 @@ mod tests {
         };
         let fn_def = make_fn(
             "f",
-            vec![
-                make_param("a", bool_ty.clone()),
-                make_param("b", bool_ty),
-            ],
+            vec![make_param("a", bool_ty.clone()), make_param("b", bool_ty)],
             pair_ty(),
             body,
             vec![],
@@ -3628,6 +3769,170 @@ mod tests {
             region_frees.is_empty(),
             "struct reachable through nested Phi chain should not be freed, found {} RegionFree(s)",
             region_frees.len()
+        );
+    }
+
+    #[test]
+    fn string_freed_after_method_call() {
+        // fn f() -> i64 { let s: String = String::from("hello"); s.len() }
+        // s.len() is read-only — s must still be freed
+        let string_from = Expr {
+            kind: ExprKind::EnumConstruct {
+                path: vec!["String".to_string(), "from".to_string()],
+                fields: vec![Expr {
+                    kind: ExprKind::Lit(Lit::String("hello".to_string())),
+                    span: sp(),
+                }],
+            },
+            span: sp(),
+        };
+        let method_call = Expr {
+            kind: ExprKind::MethodCall {
+                receiver: Box::new(ident_expr("s")),
+                method: "len".to_string(),
+                args: vec![],
+            },
+            span: sp(),
+        };
+        let body = Block {
+            stmts: vec![let_stmt(
+                "s",
+                Some(Type::Named {
+                    name: "String".to_string(),
+                    span: sp(),
+                }),
+                string_from,
+            )],
+            trailing_expr: Some(Box::new(method_call)),
+            span: sp(),
+        };
+        let fn_def = make_fn("f", vec![], i64_ty(), body, vec![]);
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        let has_string_free = func.blocks.iter().flat_map(|b| b.insts.iter()).any(|i| {
+            i.opcode == Opcode::Call
+                && i.data == InstData::CallExtern("__vow_string_free".to_string())
+        });
+        assert!(
+            has_string_free,
+            "String used via .len() must still be freed at function exit"
+        );
+    }
+
+    #[test]
+    fn vec_freed_after_method_call() {
+        // fn f() -> i64 { let v: Vec<i64> = Vec::new(); v.len() }
+        // v.len() is read-only — v must still be freed
+        let vec_new = Expr {
+            kind: ExprKind::EnumConstruct {
+                path: vec!["Vec".to_string(), "new".to_string()],
+                fields: vec![],
+            },
+            span: sp(),
+        };
+        let method_call = Expr {
+            kind: ExprKind::MethodCall {
+                receiver: Box::new(ident_expr("v")),
+                method: "len".to_string(),
+                args: vec![],
+            },
+            span: sp(),
+        };
+        let body = Block {
+            stmts: vec![let_stmt(
+                "v",
+                Some(Type::Named {
+                    name: "Vec".to_string(),
+                    span: sp(),
+                }),
+                vec_new,
+            )],
+            trailing_expr: Some(Box::new(method_call)),
+            span: sp(),
+        };
+        let fn_def = make_fn("f", vec![], i64_ty(), body, vec![]);
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        let has_vec_free = func.blocks.iter().flat_map(|b| b.insts.iter()).any(|i| {
+            i.opcode == Opcode::Call
+                && i.data == InstData::CallExtern("__vow_vec_free_val".to_string())
+        });
+        assert!(
+            has_vec_free,
+            "Vec used via .len() must still be freed at function exit"
+        );
+    }
+
+    #[test]
+    fn hashmap_freed_after_method_call() {
+        // fn f() -> i64 { let m: HashMap = HashMap::new(); m.len() }
+        // m.len() is read-only — m must still be freed
+        let map_new = Expr {
+            kind: ExprKind::EnumConstruct {
+                path: vec!["HashMap".to_string(), "new".to_string()],
+                fields: vec![],
+            },
+            span: sp(),
+        };
+        let method_call = Expr {
+            kind: ExprKind::MethodCall {
+                receiver: Box::new(ident_expr("m")),
+                method: "len".to_string(),
+                args: vec![],
+            },
+            span: sp(),
+        };
+        let body = Block {
+            stmts: vec![let_stmt(
+                "m",
+                Some(Type::Named {
+                    name: "HashMap".to_string(),
+                    span: sp(),
+                }),
+                map_new,
+            )],
+            trailing_expr: Some(Box::new(method_call)),
+            span: sp(),
+        };
+        let fn_def = make_fn("f", vec![], i64_ty(), body, vec![]);
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        let has_map_free = func.blocks.iter().flat_map(|b| b.insts.iter()).any(|i| {
+            i.opcode == Opcode::Call && i.data == InstData::CallExtern("__vow_map_free".to_string())
+        });
+        assert!(
+            has_map_free,
+            "HashMap used via .len() must still be freed at function exit"
         );
     }
 }
