@@ -193,10 +193,12 @@ pub extern "C" fn __vow_arena_alloc(size: usize, align: usize) -> *mut u8 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn __vow_arena_free(_ptr: *mut u8) {
-    // No-op: struct deallocation deferred to future work.
-    // Typed free functions (__vow_string_free, __vow_vec_free_val, __vow_map_free) handle
-    // collection types directly without needing arena headers.
+pub unsafe extern "C" fn __vow_arena_free(ptr: *mut u8, size: usize, align: usize) {
+    if size == 0 || ptr.is_null() || ptr == align as *mut u8 {
+        return;
+    }
+    let layout = unsafe { std::alloc::Layout::from_size_align_unchecked(size, align) };
+    unsafe { std::alloc::dealloc(ptr, layout) };
 }
 
 #[repr(C)]

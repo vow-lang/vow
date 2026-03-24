@@ -38,6 +38,7 @@ struct LowerCtx {
     warnings: Vec<String>,
     alloc_ids: Vec<i64>,
     alloc_tags: Vec<String>,
+    alloc_sizes: Vec<i64>,
     escaped_ids: Vec<i64>,
     branch_depth: i64,
 }
@@ -87,6 +88,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         warnings: Vec::new(),
         alloc_ids: Vec::new(),
         alloc_tags: Vec::new(),
+        alloc_sizes: Vec::new(),
         escaped_ids: Vec::new(),
         branch_depth: 0,
     }
@@ -237,6 +239,37 @@ fn lctx_get_tag(ctx: LowerCtx, inst_id: i64) -> String {
         }
     }
     String::from("")
+}
+
+fn lctx_track_alloc(ctx: LowerCtx, id: i64, alloc_size: i64) {
+    if ctx.branch_depth == 0 {
+        ctx.alloc_ids.push(id);
+        ctx.alloc_sizes.push(alloc_size);
+    }
+}
+
+fn lctx_mark_escaped(ctx: LowerCtx, id: i64) {
+    ctx.escaped_ids.push(id);
+}
+
+fn lctx_is_escaped(ctx: LowerCtx, id: i64) -> bool {
+    let n: i64 = ctx.escaped_ids.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if ctx.escaped_ids[i] == id {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn lctx_emit_return_frees(ctx: LowerCtx, return_val: i64) {
+    // Disabled: self-hosted RegionFree emission causes invalid frees in
+    // the bootstrap (ptr=0x1). The tracking infrastructure (alloc_ids,
+    // alloc_sizes, escaped_ids, branch_depth) is in place; enabling this
+    // requires debugging the cross-block value resolution in the FFI shim.
+    // The Rust lowerer emits RegionFree correctly.
 }
 
 fn lctx_is_str_eid(ctx: LowerCtx, eid: i64) -> bool {
@@ -801,6 +834,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             while ai < nargs {
                 let arg_eid: i64 = list_get(a, args_lid, ai);
                 let arg_id: i64 = lower_expr(ctx, arg_eid);
+                lctx_mark_escaped(ctx, arg_id);
                 call_args.push(arg_id);
                 ai = ai + 1;
             }
@@ -836,6 +870,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             while ai < nargs {
                 let arg_eid: i64 = list_get(a, args_lid, ai);
                 let arg_id: i64 = lower_expr(ctx, arg_eid);
+                lctx_mark_escaped(ctx, arg_id);
                 call_args.push(arg_id);
                 ai = ai + 1;
             }
@@ -848,6 +883,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         while ai < nargs {
             let arg_eid: i64 = list_get(a, args_lid, ai);
             let arg_id: i64 = lower_expr(ctx, arg_eid);
+            lctx_mark_escaped(ctx, arg_id);
             call_args.push(arg_id);
             ai = ai + 1;
         }
@@ -880,6 +916,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         lctx_emit(ctx, IOP_BRANCH(), ITY_UNIT(), br_args, IDATA_BRANCH_TARGETS(), then_block, else_block, String::from(""));
 
         let snap: ScopeSnap = lctx_snapshot(ctx);
+        ctx.branch_depth = ctx.branch_depth + 1;
 
         lctx_switch_to_block(ctx, then_block);
         let then_result: i64 = lower_block(ctx, then_bid);
@@ -948,6 +985,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
 
         lctx_restore(ctx, snap);
+        ctx.branch_depth = ctx.branch_depth - 1;
         let mut rmi2: i64 = 0;
         while rmi2 < nmut {
             lctx_assign(ctx, mutations[rmi2], saved_mut_vals[rmi2]);
@@ -1054,7 +1092,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_exit_blocks.push(exit_block);
         ctx.loop_is_loop.push(0);
         ctx.loop_break_counts.push(0);
+        ctx.branch_depth = ctx.branch_depth + 1;
         lower_block(ctx, body_bid);
+        ctx.branch_depth = ctx.branch_depth - 1;
         ctx.loop_break_counts.pop();
         ctx.loop_is_loop.pop();
         ctx.loop_exit_blocks.pop();
@@ -1299,7 +1339,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_exit_blocks.push(exit_block);
         ctx.loop_is_loop.push(0);
         ctx.loop_break_counts.push(0);
+        ctx.branch_depth = ctx.branch_depth + 1;
         lower_block(ctx, body_bid);
+        ctx.branch_depth = ctx.branch_depth - 1;
         ctx.loop_break_counts.pop();
         ctx.loop_is_loop.pop();
         ctx.loop_exit_blocks.pop();
@@ -1365,6 +1407,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         if ctx.cur_vow_lid != -1 {
             lower_ensures_clauses(ctx, ctx.cur_vow_lid, val_id);
         }
+        lctx_emit_return_frees(ctx, val_id);
         let ret_args: Vec<i64> = Vec::new();
         ret_args.push(val_id);
         return lctx_emit(ctx, IOP_RETURN(), ITY_UNIT(), ret_args, IDATA_NONE(), 0, 0, String::from(""));
@@ -1390,6 +1433,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 ctx.warnings.push(w);
             }
             let fidx: i64 = lctx_struct_field_index(ctx, recv_tag_str, field_name);
+            lctx_mark_escaped(ctx, val_id);
             let fs_args: Vec<i64> = Vec::new();
             fs_args.push(recv_id);
             fs_args.push(val_id);
@@ -1401,6 +1445,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let recv_id: i64 = lower_expr(ctx, recv_eid);
             let idx_id: i64 = lower_expr(ctx, idx_eid);
             let val_id: i64 = lower_expr(ctx, rhs_eid);
+            lctx_mark_escaped(ctx, val_id);
             let set_args: Vec<i64> = Vec::new();
             set_args.push(recv_id);
             set_args.push(idx_id);
@@ -1469,6 +1514,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let alloc_args: Vec<i64> = Vec::new();
         let ptr_id: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), ITY_PTR(), alloc_args, IDATA_ALLOC_SIZE(), alloc_size, 8, String::from(""));
         lctx_tag(ctx, ptr_id, struct_name);
+        lctx_track_alloc(ctx, ptr_id, alloc_size);
         let mut fi: i64 = 0;
         while fi < nlit {
             let fname_sid: i64 = list_get(a, fields_lid, fi * 2);
@@ -1476,6 +1522,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let fname: String = arena_str(a, fname_sid);
             let fidx: i64 = lctx_struct_field_index(ctx, struct_name, fname);
             let val_id: i64 = lower_expr(ctx, fval_eid);
+            lctx_mark_escaped(ctx, val_id);
             let fs_args: Vec<i64> = Vec::new();
             fs_args.push(ptr_id);
             fs_args.push(val_id);
@@ -1540,6 +1587,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let alloc_args: Vec<i64> = Vec::new();
         let ptr_id: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), ITY_PTR(), alloc_args, IDATA_ALLOC_SIZE(), size, 8, String::from(""));
         lctx_tag(ctx, ptr_id, enum_name);
+        lctx_track_alloc(ctx, ptr_id, size);
 
         let tag_args: Vec<i64> = Vec::new();
         let tag_id: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), tag_args, IDATA_CONST_I64(), tag_val, 0, String::from(""));
@@ -1552,6 +1600,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         while pi < n_payload {
             let payload_eid: i64 = list_get(a, fields_lid, pi);
             let val_id: i64 = lower_expr(ctx, payload_eid);
+            lctx_mark_escaped(ctx, val_id);
             let pfs_args: Vec<i64> = Vec::new();
             pfs_args.push(ptr_id);
             pfs_args.push(val_id);
@@ -1567,6 +1616,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let args_lid: i64 = expr_c(a, eid);
         let method_name: String = arena_str(a, method_sid);
         let recv_id: i64 = lower_expr(ctx, recv_eid);
+        lctx_mark_escaped(ctx, recv_id);
         let mut recv_tag_str: String = lctx_get_tag(ctx, recv_id);
         if recv_tag_str == String::from("") && lctx_is_str_eid(ctx, recv_eid) {
             recv_tag_str = String::from("String");
@@ -1855,6 +1905,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             smi = smi + 1;
         }
         let snap: ScopeSnap = lctx_snapshot(ctx);
+        ctx.branch_depth = ctx.branch_depth + 1;
 
         let arm_exit_blocks: Vec<i64> = Vec::new();
         let arm_up_ids: Vec<i64> = Vec::new();
@@ -2016,6 +2067,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             ai = ai + 1;
         }
 
+        ctx.branch_depth = ctx.branch_depth - 1;
         lctx_switch_to_block(ctx, merge_block);
 
         let mut mpi: i64 = 0;
@@ -2077,6 +2129,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         if ctx.cur_vow_lid != -1 {
             lower_ensures_clauses(ctx, ctx.cur_vow_lid, none_ptr);
         }
+        lctx_emit_return_frees(ctx, none_ptr);
         let ret_args: Vec<i64> = Vec::new();
         ret_args.push(none_ptr);
         lctx_emit(ctx, IOP_RETURN(), ITY_UNIT(), ret_args, IDATA_NONE(), 0, 0, String::from(""));
@@ -2643,6 +2696,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
         if vow_lid != -1 {
             lower_ensures_clauses(ctx, vow_lid, trailing);
         }
+        lctx_emit_return_frees(ctx, trailing);
         let ret_args: Vec<i64> = Vec::new();
         ret_args.push(trailing);
         lctx_emit(ctx, IOP_RETURN(), ITY_UNIT(), ret_args, IDATA_NONE(), 0, 0, String::from(""));

@@ -784,7 +784,16 @@ fn lower_inst(
             if let Some(&ptr_id) = inst.args.first()
                 && let Some(&ptr_val) = ctx.value_map.get(&ptr_id)
             {
-                builder.ins().call(ctx.arena_free_ref, &[ptr_val]);
+                let (size, align) = if let InstData::AllocSize { size, align } = inst.data {
+                    (size as i64, align as i64)
+                } else {
+                    (0, 8)
+                };
+                let size_val = builder.ins().iconst(types::I64, size);
+                let align_val = builder.ins().iconst(types::I64, align);
+                builder
+                    .ins()
+                    .call(ctx.arena_free_ref, &[ptr_val, size_val, align_val]);
             }
             let unit = builder.ins().iconst(types::I32, 0);
             ctx.value_map.insert(inst.id, unit);
@@ -1673,6 +1682,8 @@ impl Backend for CraneliftBackend {
 
         let mut arena_free_sig = obj_module.make_signature();
         arena_free_sig.params.push(AbiParam::new(types::I64)); // *mut u8
+        arena_free_sig.params.push(AbiParam::new(types::I64)); // size
+        arena_free_sig.params.push(AbiParam::new(types::I64)); // align
         let arena_free_id = obj_module
             .declare_function("__vow_arena_free", Linkage::Import, &arena_free_sig)
             .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
@@ -2886,7 +2897,13 @@ mod tests {
                         vec![],
                         InstData::AllocSize { size: 64, align: 8 },
                     ),
-                    inst(1, Opcode::RegionFree, Ty::Unit, vec![0], InstData::None),
+                    inst(
+                        1,
+                        Opcode::RegionFree,
+                        Ty::Unit,
+                        vec![0],
+                        InstData::AllocSize { size: 64, align: 8 },
+                    ),
                     inst(2, Opcode::Return, Ty::Unit, vec![], InstData::None),
                 ],
             )],

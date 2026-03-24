@@ -1,0 +1,17 @@
+module StructLeak
+
+struct Pair {
+    a: i64,
+    b: i64,
+}
+
+fn use_pair() -> i64 {
+    let p: Pair = Pair { a: 1, b: 2 };
+    p.a + p.b
+}
+
+fn main() -> i32 [io] {
+    let r: i64 = use_pair();
+    print_i64(r);
+    0
+}

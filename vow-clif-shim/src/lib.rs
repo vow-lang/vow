@@ -483,7 +483,9 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
         .expect("declare arena_alloc");
 
     let mut arena_free_sig = ctx.obj_module.make_signature();
-    arena_free_sig.params.push(AbiParam::new(types::I64));
+    arena_free_sig.params.push(AbiParam::new(types::I64)); // ptr
+    arena_free_sig.params.push(AbiParam::new(types::I64)); // size
+    arena_free_sig.params.push(AbiParam::new(types::I64)); // align
     let arena_free_id = ctx
         .obj_module
         .declare_function("__vow_arena_free", Linkage::Import, &arena_free_sig)
@@ -1355,7 +1357,16 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
                     if alen > 0 {
                         let ptr_id = all_args[aoff];
                         if let Some(&ptr_val) = value_map.get(&ptr_id) {
-                            builder.ins().call(arena_free_ref, &[ptr_val]);
+                            let (size, align) = if dk == IDATA_ALLOC_SIZE {
+                                (dv, dv2)
+                            } else {
+                                (0, 8)
+                            };
+                            let size_val = builder.ins().iconst(types::I64, size);
+                            let align_val = builder.ins().iconst(types::I64, align);
+                            builder
+                                .ins()
+                                .call(arena_free_ref, &[ptr_val, size_val, align_val]);
                         }
                     }
                     let unit = builder.ins().iconst(types::I32, 0);

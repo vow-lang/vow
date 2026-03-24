@@ -220,6 +220,17 @@ impl LowerCtx {
             if self.escaped_allocs.contains(&id) || id == return_val {
                 continue;
             }
+            if let Some(size_str) = tag.strip_prefix("region:") {
+                let size: u32 = size_str.parse().unwrap_or(0);
+                self.emit(
+                    Opcode::RegionFree,
+                    Ty::Unit,
+                    vec![id],
+                    InstData::AllocSize { size, align: 8 },
+                    span,
+                );
+                continue;
+            }
             let sym = match tag.as_str() {
                 "String" => "__vow_string_free",
                 "Vec" => "__vow_vec_free_val",
@@ -1463,6 +1474,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 span,
             );
             ctx.inst_struct_type.insert(ptr_id, name.clone());
+            let alloc_size = (n_fields as u32 + 1) * 8;
+            ctx.track_heap_alloc(ptr_id, &format!("region:{alloc_size}"));
             for (field_name, field_expr) in fields {
                 let idx = match field_names.iter().position(|n| n == field_name) {
                     Some(i) => i,
@@ -1554,6 +1567,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 span,
             );
             ctx.inst_struct_type.insert(ptr_id, enum_name.to_string());
+            ctx.track_heap_alloc(ptr_id, &format!("region:{size}"));
             let tag_val = ctx.emit(
                 Opcode::ConstI64,
                 Ty::I64,
