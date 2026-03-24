@@ -808,7 +808,7 @@ fn skill_json() -> String {
     r.push_str(String::from("      \"visibility\": \"pub fn \\u2014 public functions visible to importers\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"type_aliases\": \"type Name = Type\",\n"));
-    r.push_str(String::from("    \"extern_blocks\": \"extern { fn c_function(x: i64) -> i64 [unsafe] }\",\n"));
+    r.push_str(String::from("    \"extern_blocks\": \"extern \\\"C\\\" vow { requires: ... } { fn name(x: i64) -> i64 [unsafe] }\",\n"));
     r.push_str(String::from("    \"methods\": {\n"));
     r.push_str(String::from("      \"Vec<T>\": [\n"));
     r.push_str(String::from("        \"Vec::new()\",\n"));

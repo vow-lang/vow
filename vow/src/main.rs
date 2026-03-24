@@ -302,7 +302,7 @@ fn skill_json() -> String {
       "visibility": "pub fn \u2014 public functions visible to importers"
     },
     "type_aliases": "type Name = Type",
-    "extern_blocks": "extern { fn c_function(x: i64) -> i64 [unsafe] }",
+    "extern_blocks": "extern \"C\" vow { requires: ... } { fn name(x: i64) -> i64 [unsafe] }",
     "methods": {
       "Vec<T>": [
         "Vec::new()",

@@ -13,111 +13,126 @@ fn effect_covered(declared: &[Effect], needed: &Effect) -> bool {
     false
 }
 
-fn collect_calls_in_expr<'a>(expr: &'a Expr, calls: &mut Vec<(&'a Expr, &'a str)>) {
+fn collect_calls_in_expr<'a>(
+    expr: &'a Expr,
+    calls: &mut Vec<(&'a Expr, &'a str)>,
+    panic_exprs: &mut Vec<&'a Expr>,
+) {
     match &expr.kind {
         ExprKind::Call { callee, args } => {
             if let ExprKind::Ident(name) = &callee.kind {
                 calls.push((callee, name.as_str()));
             }
             for arg in args {
-                collect_calls_in_expr(arg, calls);
+                collect_calls_in_expr(arg, calls, panic_exprs);
             }
         }
         ExprKind::BinaryOp { lhs, rhs, .. } => {
-            collect_calls_in_expr(lhs, calls);
-            collect_calls_in_expr(rhs, calls);
+            collect_calls_in_expr(lhs, calls, panic_exprs);
+            collect_calls_in_expr(rhs, calls, panic_exprs);
         }
-        ExprKind::UnaryOp { operand, .. } => collect_calls_in_expr(operand, calls),
-        ExprKind::MethodCall { receiver, args, .. } => {
-            collect_calls_in_expr(receiver, calls);
+        ExprKind::UnaryOp { operand, .. } => collect_calls_in_expr(operand, calls, panic_exprs),
+        ExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } => {
+            collect_calls_in_expr(receiver, calls, panic_exprs);
             for arg in args {
-                collect_calls_in_expr(arg, calls);
+                collect_calls_in_expr(arg, calls, panic_exprs);
+            }
+            if method == "unwrap" {
+                panic_exprs.push(expr);
             }
         }
-        ExprKind::Block(block) => collect_calls_in_block(block, calls),
+        ExprKind::Block(block) => collect_calls_in_block(block, calls, panic_exprs),
         ExprKind::If {
             condition,
             then_branch,
             else_branch,
         } => {
-            collect_calls_in_expr(condition, calls);
-            collect_calls_in_block(then_branch, calls);
+            collect_calls_in_expr(condition, calls, panic_exprs);
+            collect_calls_in_block(then_branch, calls, panic_exprs);
             if let Some(e) = else_branch {
-                collect_calls_in_expr(e, calls);
+                collect_calls_in_expr(e, calls, panic_exprs);
             }
         }
         ExprKind::Match { scrutinee, arms } => {
-            collect_calls_in_expr(scrutinee, calls);
+            collect_calls_in_expr(scrutinee, calls, panic_exprs);
             for arm in arms {
-                collect_calls_in_expr(&arm.body, calls);
+                collect_calls_in_expr(&arm.body, calls, panic_exprs);
             }
         }
         ExprKind::While {
             condition, body, ..
         } => {
-            collect_calls_in_expr(condition, calls);
-            collect_calls_in_block(body, calls);
+            collect_calls_in_expr(condition, calls, panic_exprs);
+            collect_calls_in_block(body, calls, panic_exprs);
         }
         ExprKind::ForEach {
             iterable, body, ..
         } => {
-            collect_calls_in_expr(iterable, calls);
-            collect_calls_in_block(body, calls);
+            collect_calls_in_expr(iterable, calls, panic_exprs);
+            collect_calls_in_block(body, calls, panic_exprs);
         }
-        ExprKind::Loop { body, .. } => collect_calls_in_block(body, calls),
+        ExprKind::Loop { body, .. } => collect_calls_in_block(body, calls, panic_exprs),
         ExprKind::Return { value } => {
             if let Some(v) = value {
-                collect_calls_in_expr(v, calls);
+                collect_calls_in_expr(v, calls, panic_exprs);
             }
         }
         ExprKind::Borrow { expr } | ExprKind::Question { expr } => {
-            collect_calls_in_expr(expr, calls);
+            collect_calls_in_expr(expr, calls, panic_exprs);
         }
         ExprKind::FieldAccess { base, .. } => {
-            collect_calls_in_expr(base, calls);
+            collect_calls_in_expr(base, calls, panic_exprs);
         }
         ExprKind::Index { base, index } => {
-            collect_calls_in_expr(base, calls);
-            collect_calls_in_expr(index, calls);
+            collect_calls_in_expr(base, calls, panic_exprs);
+            collect_calls_in_expr(index, calls, panic_exprs);
         }
         ExprKind::Assign { lhs, rhs } => {
-            collect_calls_in_expr(lhs, calls);
-            collect_calls_in_expr(rhs, calls);
+            collect_calls_in_expr(lhs, calls, panic_exprs);
+            collect_calls_in_expr(rhs, calls, panic_exprs);
         }
         ExprKind::Tuple(exprs) => {
             for e in exprs {
-                collect_calls_in_expr(e, calls);
+                collect_calls_in_expr(e, calls, panic_exprs);
             }
         }
         ExprKind::Break { value } => {
             if let Some(v) = value {
-                collect_calls_in_expr(v, calls);
+                collect_calls_in_expr(v, calls, panic_exprs);
             }
         }
         ExprKind::Lit(_) | ExprKind::Ident(_) | ExprKind::Result => {}
         ExprKind::StructLiteral { fields, .. } => {
             for (_, e) in fields {
-                collect_calls_in_expr(e, calls);
+                collect_calls_in_expr(e, calls, panic_exprs);
             }
         }
         ExprKind::EnumConstruct { fields, .. } => {
             for e in fields {
-                collect_calls_in_expr(e, calls);
+                collect_calls_in_expr(e, calls, panic_exprs);
             }
         }
-        ExprKind::Cast { expr, .. } => collect_calls_in_expr(expr, calls),
+        ExprKind::Cast { expr, .. } => collect_calls_in_expr(expr, calls, panic_exprs),
     }
 }
 
-fn collect_calls_in_block<'a>(block: &'a Block, calls: &mut Vec<(&'a Expr, &'a str)>) {
+fn collect_calls_in_block<'a>(
+    block: &'a Block,
+    calls: &mut Vec<(&'a Expr, &'a str)>,
+    panic_exprs: &mut Vec<&'a Expr>,
+) {
     for stmt in &block.stmts {
         match stmt {
-            Stmt::Let { init, .. } => collect_calls_in_expr(init, calls),
-            Stmt::Expr { expr, .. } => collect_calls_in_expr(expr, calls),
+            Stmt::Let { init, .. } => collect_calls_in_expr(init, calls, panic_exprs),
+            Stmt::Expr { expr, .. } => collect_calls_in_expr(expr, calls, panic_exprs),
         }
     }
     if let Some(e) = &block.trailing_expr {
-        collect_calls_in_expr(e, calls);
+        collect_calls_in_expr(e, calls, panic_exprs);
     }
 }
 
@@ -143,7 +158,8 @@ pub fn check_fn_effects(
     emitter: &mut dyn DiagnosticEmitter,
 ) {
     let mut calls = Vec::new();
-    collect_calls_in_block(&fn_def.body, &mut calls);
+    let mut panic_exprs = Vec::new();
+    collect_calls_in_block(&fn_def.body, &mut calls, &mut panic_exprs);
 
     for (callee_expr, callee_name) in &calls {
         if let Some(sig) = env.lookup_fn(callee_name) {
@@ -179,6 +195,32 @@ pub fn check_fn_effects(
         }
     }
 
+    if !panic_exprs.is_empty() && !effect_covered(&fn_def.effects, &Effect::Panic) {
+        for panic_expr in &panic_exprs {
+            let msg = format!(
+                "function `{}` is declared with effects {} but calls `.unwrap()` which requires effect `Panic`",
+                fn_def.name,
+                effects_display(&fn_def.effects),
+            );
+            emitter.emit(&Diagnostic {
+                severity: Severity::Error,
+                code: ErrorCode::EffectViolation,
+                message: msg,
+                primary: SourceLocation {
+                    file: file.to_string(),
+                    byte_offset: panic_expr.span.start,
+                    byte_len: panic_expr.span.len,
+                },
+                secondary: vec![],
+                blame: Blame::None,
+                hints: vec![format!(
+                    "add 'Panic' to `{}`'s effect list, or use `?` to propagate the error instead",
+                    fn_def.name,
+                )],
+            });
+        }
+    }
+
     if let Some(vow_block) = &fn_def.vow {
         check_vow_purity(vow_block, env, file, emitter);
     }
@@ -198,7 +240,8 @@ pub fn check_vow_purity(
         };
 
         let mut calls = Vec::new();
-        collect_calls_in_expr(expr, &mut calls);
+        let mut panic_exprs = Vec::new();
+        collect_calls_in_expr(expr, &mut calls, &mut panic_exprs);
 
         for (callee_expr, callee_name) in &calls {
             if let Some(sig) = env.lookup_fn(callee_name)
@@ -622,6 +665,66 @@ mod tests {
         assert!(
             emitter.0[0].hints.iter().any(|h| h.contains("pure")),
             "expected hint about purity"
+        );
+    }
+
+    fn unwrap_method_call() -> Expr {
+        Expr {
+            kind: ExprKind::MethodCall {
+                receiver: Box::new(Expr {
+                    kind: ExprKind::Ident("opt".to_string()),
+                    span: dummy_span(),
+                }),
+                method: "unwrap".to_string(),
+                args: vec![],
+            },
+            span: dummy_span(),
+        }
+    }
+
+    fn body_with_unwrap() -> Block {
+        Block {
+            stmts: vec![Stmt::Expr {
+                expr: unwrap_method_call(),
+                has_semicolon: true,
+                span: dummy_span(),
+            }],
+            trailing_expr: None,
+            span: dummy_span(),
+        }
+    }
+
+    #[test]
+    fn unwrap_without_panic_effect_emits_violation() {
+        let env = TypeEnv::new();
+        let caller = make_fn("caller", vec![], body_with_unwrap());
+        let mut emitter = TestEmitter(vec![]);
+        check_fn_effects(&caller, &env, "test.vow", &mut emitter);
+        assert_eq!(emitter.0.len(), 1);
+        assert_eq!(emitter.0[0].code, ErrorCode::EffectViolation);
+        assert!(emitter.0[0].message.contains(".unwrap()"));
+        assert!(emitter.0[0].message.contains("Panic"));
+    }
+
+    #[test]
+    fn unwrap_with_panic_effect_no_error() {
+        let env = TypeEnv::new();
+        let caller = make_fn("caller", vec![Effect::Panic], body_with_unwrap());
+        let mut emitter = TestEmitter(vec![]);
+        check_fn_effects(&caller, &env, "test.vow", &mut emitter);
+        assert!(emitter.0.is_empty());
+    }
+
+    #[test]
+    fn unwrap_violation_includes_hint() {
+        let env = TypeEnv::new();
+        let caller = make_fn("caller", vec![], body_with_unwrap());
+        let mut emitter = TestEmitter(vec![]);
+        check_fn_effects(&caller, &env, "test.vow", &mut emitter);
+        assert_eq!(emitter.0.len(), 1);
+        assert!(
+            emitter.0[0].hints.iter().any(|h| h.contains("Panic") || h.contains("?")),
+            "expected hint about adding Panic or using ?"
         );
     }
 }

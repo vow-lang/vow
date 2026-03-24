@@ -506,13 +506,19 @@ v[i] = new_val;
 
 ## Extern Blocks
 
-Declare external C functions:
+Declare external C functions (a `vow` contract block is required):
 
 ```vow
-extern {
-    fn c_function(x: i64) -> i64 [unsafe]
+extern "C" vow {
+    requires: fd >= 0
+    ensures: return >= 0
+}
+{
+    fn write(fd: i32, ptr: i64, len: i64) -> i64 [io]
 }
 ```
+
+Omitting the `vow` block produces a `MissingContract` error (see [errors.md](errors.md)).
 
 ## Type Aliases
 

@@ -284,3 +284,19 @@ vow {
 ```
 
 ESBMC verifies `u64` contracts using `uint64_t` and unsigned nondet values.
+
+## Extern Block Contracts
+
+Every `extern "C"` block **must** include a `vow { ... }` contract specifying the expected behavior of foreign functions. Omitting the contract is a `MissingContract` error.
+
+```vow
+extern "C" vow {
+    requires: fd >= 0
+    ensures: return >= 0
+}
+{
+    fn write(fd: i32, ptr: i64, len: i64) -> i64 [io]
+}
+```
+
+The contract applies to all functions declared in the block. ESBMC uses `requires` as assumptions and `ensures` as assertions when verifying callers of extern functions.

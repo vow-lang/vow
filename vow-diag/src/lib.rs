@@ -56,6 +56,8 @@ pub enum ErrorCode {
     UnsupportedFeature,
     // Lowering warnings
     LoweringWarning,
+    // Contract errors
+    MissingContract,
     // IO errors
     IoError,
 }
