@@ -1718,7 +1718,6 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let args_lid: i64 = expr_c(a, eid);
         let method_name: String = arena_str(a, method_sid);
         let recv_id: i64 = lower_expr(ctx, recv_eid);
-        lctx_mark_escaped(ctx, recv_id);
         let mut recv_tag_str: String = lctx_get_tag(ctx, recv_id);
         if recv_tag_str == String::from("") && lctx_is_str_eid(ctx, recv_eid) {
             recv_tag_str = String::from("String");

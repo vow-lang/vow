@@ -125,8 +125,7 @@ fn collect_option_vars(func: &Function) -> HashSet<u32> {
         for inst in &block.insts {
             if inst.opcode == Opcode::Call
                 && let InstData::CallExtern(ref name) = inst.data
-                && (name == "__vow_string_parse_i64_opt"
-                    || name == "__vow_string_parse_u64_opt")
+                && (name == "__vow_string_parse_i64_opt" || name == "__vow_string_parse_u64_opt")
             {
                 vars.insert(inst.id.0);
             }

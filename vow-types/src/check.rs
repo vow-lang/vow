@@ -592,9 +592,7 @@ impl<'e> Checker<'e> {
                         }
                         Ty::Bool
                     }
-                    BinOp::BitXor => {
-                        self.check_same_numeric(lhs_ty, rhs_ty, expr.span)
-                    }
+                    BinOp::BitXor => self.check_same_numeric(lhs_ty, rhs_ty, expr.span),
                     BinOp::And | BinOp::Or => {
                         if lhs_ty != Ty::Bool && lhs_ty != Ty::Never {
                             self.emit_error_with_hints(
@@ -736,8 +734,15 @@ impl<'e> Checker<'e> {
                 );
                 let (known_methods, result_ty): (&[&str], Option<Ty>) = if is_str {
                     let methods: &[&str] = &[
-                        "len", "push_str", "eq", "contains", "byte_at", "push_byte",
-                        "substring", "parse_i64", "parse_u64",
+                        "len",
+                        "push_str",
+                        "eq",
+                        "contains",
+                        "byte_at",
+                        "push_byte",
+                        "substring",
+                        "parse_i64",
+                        "parse_u64",
                     ];
                     let ty = match method.as_str() {
                         "len" => Some(Ty::I64),
@@ -794,9 +799,7 @@ impl<'e> Checker<'e> {
                     if is_option_or_result {
                         let methods: &[&str] = &["unwrap"];
                         let ty = match method.as_str() {
-                            "unwrap" => Some(
-                                type_args.first().cloned().unwrap_or(Ty::Unit),
-                            ),
+                            "unwrap" => Some(type_args.first().cloned().unwrap_or(Ty::Unit)),
                             _ => None,
                         };
                         (methods, ty)
@@ -815,9 +818,11 @@ impl<'e> Checker<'e> {
                             "HashMap".to_string()
                         } else if is_vec {
                             "Vec".to_string()
-                        } else if matches!(&recv_ty, Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Enum(n) if n == "Option")) {
+                        } else if matches!(&recv_ty, Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Enum(n) if n == "Option"))
+                        {
                             "Option".to_string()
-                        } else if matches!(&recv_ty, Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Enum(n) if n == "Result")) {
+                        } else if matches!(&recv_ty, Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Enum(n) if n == "Result"))
+                        {
                             "Result".to_string()
                         } else {
                             format!("{recv_ty}")
@@ -828,16 +833,11 @@ impl<'e> Checker<'e> {
                         if let Some(s) = suggest_similar(method, &candidates, 3) {
                             hints.push(format!("did you mean `{s}`?"));
                         } else if !candidates.is_empty() {
-                            hints.push(format!(
-                                "available methods: {}",
-                                candidates.join(", ")
-                            ));
+                            hints.push(format!("available methods: {}", candidates.join(", ")));
                         }
                         self.emit_error_with_hints(
                             ErrorCode::UnknownMethod,
-                            format!(
-                                "unknown method `{method}` on type `{type_name}`"
-                            ),
+                            format!("unknown method `{method}` on type `{type_name}`"),
                             expr.span,
                             hints,
                         );
@@ -1025,9 +1025,7 @@ impl<'e> Checker<'e> {
                     _ => {
                         self.emit_error(
                             ErrorCode::TypeMismatch,
-                            format!(
-                                "for-each requires `Vec<T>` iterable, got `{iter_ty}`"
-                            ),
+                            format!("for-each requires `Vec<T>` iterable, got `{iter_ty}`"),
                             expr.span,
                         );
                         Ty::I64
@@ -2165,7 +2163,12 @@ mod tests {
             }),
         }));
         assert!(checker.has_errors());
-        assert!(emitter.0.iter().any(|d| d.message.contains("break type mismatch")));
+        assert!(
+            emitter
+                .0
+                .iter()
+                .any(|d| d.message.contains("break type mismatch"))
+        );
     }
 
     // --- Return ---

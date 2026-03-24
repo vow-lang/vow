@@ -1136,19 +1136,28 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
                     set_val!(iid, val);
                 }
                 IOP_LT_U64 => {
-                    let val = builder.ins().icmp(IntCC::UnsignedLessThan, arg!(0), arg!(1));
+                    let val = builder
+                        .ins()
+                        .icmp(IntCC::UnsignedLessThan, arg!(0), arg!(1));
                     set_val!(iid, val);
                 }
                 IOP_LE_U64 => {
-                    let val = builder.ins().icmp(IntCC::UnsignedLessThanOrEqual, arg!(0), arg!(1));
+                    let val = builder
+                        .ins()
+                        .icmp(IntCC::UnsignedLessThanOrEqual, arg!(0), arg!(1));
                     set_val!(iid, val);
                 }
                 IOP_GT_U64 => {
-                    let val = builder.ins().icmp(IntCC::UnsignedGreaterThan, arg!(0), arg!(1));
+                    let val = builder
+                        .ins()
+                        .icmp(IntCC::UnsignedGreaterThan, arg!(0), arg!(1));
                     set_val!(iid, val);
                 }
                 IOP_GE_U64 => {
-                    let val = builder.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, arg!(0), arg!(1));
+                    let val =
+                        builder
+                            .ins()
+                            .icmp(IntCC::UnsignedGreaterThanOrEqual, arg!(0), arg!(1));
                     set_val!(iid, val);
                 }
 

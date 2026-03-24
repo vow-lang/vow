@@ -1145,11 +1145,7 @@ fn compile_frontend(source: &Path) -> Result<FrontendResult, Box<BuildOutput>> {
         }));
     }
 
-    let module = vow_ir::lower_module(
-        &ast,
-        &source.to_string_lossy(),
-        &string_exprs,
-    );
+    let module = vow_ir::lower_module(&ast, &source.to_string_lossy(), &string_exprs);
     for w in &module.warnings {
         stderr_emit.emit(w);
     }
@@ -2137,8 +2133,14 @@ fn main() -> i32 [io] {
         assert!(json.contains("fs_read"), "missing fs_read builtin");
         assert!(json.contains("fs_write"), "missing fs_write builtin");
         assert!(json.contains("args"), "missing args builtin");
-        assert!(json.contains("eprintln_str"), "missing eprintln_str builtin");
-        assert!(json.contains("process_exit"), "missing process_exit builtin");
+        assert!(
+            json.contains("eprintln_str"),
+            "missing eprintln_str builtin"
+        );
+        assert!(
+            json.contains("process_exit"),
+            "missing process_exit builtin"
+        );
 
         // Must describe structural language features
         assert!(json.contains("\"structs\""), "missing structs section");
@@ -2152,10 +2154,7 @@ fn main() -> i32 [io] {
             json.contains("\"where_clauses\""),
             "missing where_clauses section"
         );
-        assert!(
-            json.contains("\"modules\""),
-            "missing modules section"
-        );
+        assert!(json.contains("\"modules\""), "missing modules section");
 
         // Now verify that a program an LLM would write from this description compiles and runs.
         // The LLM reads: function with requires/ensures, print_i64 builtin, [io] effect.
