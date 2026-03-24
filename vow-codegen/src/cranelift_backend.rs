@@ -786,20 +786,23 @@ fn lower_inst(
             ctx.value_map.insert(inst.id, ptr);
         }
         Opcode::RegionFree => {
-            if let Some(&ptr_id) = inst.args.first()
-                && let Some(&ptr_val) = ctx.value_map.get(&ptr_id)
-            {
-                let (size, align) = if let InstData::AllocSize { size, align } = inst.data {
-                    (size as i64, align as i64)
-                } else {
-                    (0, 8)
-                };
-                let size_val = builder.ins().iconst(types::I64, size);
-                let align_val = builder.ins().iconst(types::I64, align);
-                builder
-                    .ins()
-                    .call(ctx.arena_free_ref, &[ptr_val, size_val, align_val]);
-            }
+            let ptr_id = *inst.args.first().expect("RegionFree missing arg");
+            let ptr_val = *ctx.value_map.get(&ptr_id).unwrap_or_else(|| {
+                panic!(
+                    "cranelift backend: RegionFree value_map miss for {:?}",
+                    inst.id
+                )
+            });
+            let (size, align) = if let InstData::AllocSize { size, align } = inst.data {
+                (size as i64, align as i64)
+            } else {
+                (0, 8)
+            };
+            let size_val = builder.ins().iconst(types::I64, size);
+            let align_val = builder.ins().iconst(types::I64, align);
+            builder
+                .ins()
+                .call(ctx.arena_free_ref, &[ptr_val, size_val, align_val]);
             let unit = builder.ins().iconst(types::I32, 0);
             ctx.value_map.insert(inst.id, unit);
         }

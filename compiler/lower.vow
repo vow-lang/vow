@@ -333,8 +333,12 @@ fn lctx_emit_return_frees(ctx: LowerCtx, return_val: i64) {
             }
         }
         if !skip {
-            // RegionFree for struct/enum allocs disabled: causes SIGSEGV in
-            // bootstrap Stage 3. String/Vec/HashMap Call-based frees work.
+            if lower_str_starts_with(tag, String::from("region:")) {
+                let size: i64 = ctx.alloc_sizes[i];
+                let free_args: Vec<i64> = Vec::new();
+                free_args.push(id);
+                lctx_emit(ctx, IOP_REGION_FREE(), ITY_UNIT(), free_args, IDATA_ALLOC_SIZE(), size, 8, String::from(""));
+            }
             if tag == String::from("String") {
                 let free_args: Vec<i64> = Vec::new();
                 free_args.push(id);
@@ -1875,6 +1879,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     let ae: i64 = list_get(a, args_lid, 1);
                     lower_expr(ctx, ae)
                 };
+                lctx_mark_escaped(ctx, k_id);
+                lctx_mark_escaped(ctx, v_id);
                 let call_args: Vec<i64> = Vec::new();
                 call_args.push(recv_id);
                 call_args.push(k_id);
@@ -1929,6 +1935,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
                 }
             };
+            lctx_mark_escaped(ctx, elem_id);
             let call_args: Vec<i64> = Vec::new();
             call_args.push(recv_id);
             call_args.push(elem_id);
