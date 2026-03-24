@@ -69,9 +69,7 @@ fn collect_calls_in_expr<'a>(
             collect_calls_in_expr(condition, calls, panic_exprs);
             collect_calls_in_block(body, calls, panic_exprs);
         }
-        ExprKind::ForEach {
-            iterable, body, ..
-        } => {
+        ExprKind::ForEach { iterable, body, .. } => {
             collect_calls_in_expr(iterable, calls, panic_exprs);
             collect_calls_in_block(body, calls, panic_exprs);
         }
@@ -723,7 +721,10 @@ mod tests {
         check_fn_effects(&caller, &env, "test.vow", &mut emitter);
         assert_eq!(emitter.0.len(), 1);
         assert!(
-            emitter.0[0].hints.iter().any(|h| h.contains("Panic") || h.contains("?")),
+            emitter.0[0]
+                .hints
+                .iter()
+                .any(|h| h.contains("Panic") || h.contains("?")),
             "expected hint about adding Panic or using ?"
         );
     }

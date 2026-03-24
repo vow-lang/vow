@@ -417,7 +417,9 @@ fn lower_inst(
             ctx.value_map.insert(inst.id, val);
         }
         Opcode::LtU64 => {
-            let cmp = builder.ins().icmp(IntCC::UnsignedLessThan, arg!(0), arg!(1));
+            let cmp = builder
+                .ins()
+                .icmp(IntCC::UnsignedLessThan, arg!(0), arg!(1));
             let val = builder.ins().uextend(types::I64, cmp);
             ctx.value_map.insert(inst.id, val);
         }
