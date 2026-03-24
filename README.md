@@ -39,13 +39,3 @@ Results are compared against paper baselines: Dafny 82%, Verus/Rust 44%, Lean 27
 ## Self-Hosted Compiler
 
 The `compiler/` directory contains a complete Vow implementation of the compiler (13 modules). `build/vowc` is the primary compiler for day-to-day development — a verified fixed-point binary with full feature parity: subcommands, flags, structured diagnostics, verification pipeline, and parallel codegen+verify. The Rust compiler (`./target/release/vow`) serves only as the stage 0 bootstrap.
-
-## Project Status
-
-- Phases 1–14: Complete (lexer, parser, type checker, IR, codegen, verification, self-hosting, contracts, CEGIS)
-- Phase 15: Complete (vericoding benchmark suite — 36/36 non-Stretch verified; benchmark runner CLI; 100% with Claude Sonnet)
-- Phase 16: Complete (self-hosted vow contracts — debug mode, blame, VowViolation JSON)
-- Phase 17: Complete (self-hosted diagnostics — structured types, JSON + human dual emitter, source spans)
-- Phase 18: Complete (self-hosted verification pipeline — C emitter, ESBMC invocation, counterexample mapping)
-- Phase 19: Complete (CLI parity — subcommands, flags, structured --help, parallel codegen+verify; 40/40 compat tests)
-- Phase 20: Complete (switchover — full test suite 82/82, benchmark suite under self-hosted, bootstrap release, documentation)
