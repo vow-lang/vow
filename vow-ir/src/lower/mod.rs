@@ -215,9 +215,42 @@ impl LowerCtx {
         self.escaped_allocs.insert(id);
     }
 
+    fn collect_return_sources(&self, return_val: InstId) -> HashSet<InstId> {
+        let mut sources = HashSet::new();
+        sources.insert(return_val);
+        let mut worklist = vec![return_val];
+        while let Some(val) = worklist.pop() {
+            for block in &self.func.blocks {
+                for inst in &block.insts {
+                    if inst.opcode == Opcode::Upsilon
+                        && let InstData::PhiTarget(target) = inst.data
+                        && target == val
+                        && let Some(&src) = inst.args.first()
+                        && sources.insert(src)
+                    {
+                        worklist.push(src);
+                    }
+                }
+            }
+        }
+        sources
+    }
+
     pub(super) fn emit_return_frees(&mut self, return_val: InstId, span: Span) {
+        let return_sources = self.collect_return_sources(return_val);
         for (id, tag) in self.local_heap_allocs.clone() {
-            if self.escaped_allocs.contains(&id) || id == return_val {
+            if self.escaped_allocs.contains(&id) || return_sources.contains(&id) {
+                continue;
+            }
+            if let Some(size_str) = tag.strip_prefix("region:") {
+                let size: u32 = size_str.parse().unwrap_or(0);
+                self.emit(
+                    Opcode::RegionFree,
+                    Ty::Unit,
+                    vec![id],
+                    InstData::AllocSize { size, align: 8 },
+                    span,
+                );
                 continue;
             }
             let sym = match tag.as_str() {
@@ -1463,6 +1496,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 span,
             );
             ctx.inst_struct_type.insert(ptr_id, name.clone());
+            let alloc_size = (n_fields as u32 + 1) * 8;
+            ctx.track_heap_alloc(ptr_id, &format!("region:{alloc_size}"));
             for (field_name, field_expr) in fields {
                 let idx = match field_names.iter().position(|n| n == field_name) {
                     Some(i) => i,
@@ -1554,6 +1589,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 span,
             );
             ctx.inst_struct_type.insert(ptr_id, enum_name.to_string());
+            ctx.track_heap_alloc(ptr_id, &format!("region:{size}"));
             let tag_val = ctx.emit(
                 Opcode::ConstI64,
                 Ty::I64,
@@ -3144,5 +3180,454 @@ mod tests {
             .expect("expected RegionAlloc");
         // 1 discriminant + 1 payload + 1 guard = 3 slots * 8 bytes = 24
         assert_eq!(alloc.data, InstData::AllocSize { size: 24, align: 8 });
+    }
+
+    // --- Deallocation tests ---
+
+    fn pair_ty() -> Type {
+        Type::Named {
+            name: "Pair".to_string(),
+            span: sp(),
+        }
+    }
+
+    fn let_stmt(name: &str, ty: Option<Type>, init: Expr) -> Stmt {
+        Stmt::Let {
+            pattern: Pat {
+                kind: PatKind::Ident {
+                    name: name.to_string(),
+                    is_mut: false,
+                },
+                span: sp(),
+            },
+            ty,
+            init: Box::new(init),
+            span: sp(),
+        }
+    }
+
+    fn pair_literal(a: i128, b: i128) -> Expr {
+        Expr {
+            kind: ExprKind::StructLiteral {
+                name: "Pair".to_string(),
+                fields: vec![
+                    ("a".to_string(), int_expr(a)),
+                    ("b".to_string(), int_expr(b)),
+                ],
+            },
+            span: sp(),
+        }
+    }
+
+    fn lower_with_structs(fn_def: &FnDef, fields: Vec<&str>) -> Function {
+        let mut sfm = HashMap::new();
+        sfm.insert(
+            "Pair".to_string(),
+            fields.into_iter().map(|s| s.to_string()).collect(),
+        );
+        let (func, _, _) = lower_function(
+            fn_def,
+            "",
+            &HashMap::new(),
+            sfm,
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        func
+    }
+
+    #[test]
+    fn region_free_emitted_for_unused_struct() {
+        // fn f() -> i64 { let p = Pair{a:1, b:2}; 42 }
+        let body = Block {
+            stmts: vec![let_stmt("p", Some(pair_ty()), pair_literal(1, 2))],
+            trailing_expr: Some(Box::new(int_expr(42))),
+            span: sp(),
+        };
+        let fn_def = make_fn("f", vec![], i64_ty(), body, vec![]);
+        let func = lower_with_structs(&fn_def, vec!["a", "b"]);
+
+        let has_region_free = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .any(|i| i.opcode == Opcode::RegionFree);
+        assert!(has_region_free, "expected RegionFree for unused struct");
+    }
+
+    #[test]
+    fn no_region_free_for_returned_struct() {
+        // fn f() -> Pair { Pair{a:1, b:2} }
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(pair_literal(1, 2))),
+            span: sp(),
+        };
+        let fn_def = make_fn("f", vec![], pair_ty(), body, vec![]);
+        let func = lower_with_structs(&fn_def, vec!["a", "b"]);
+
+        let has_region_free = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .any(|i| i.opcode == Opcode::RegionFree);
+        assert!(!has_region_free, "returned struct should not be freed");
+    }
+
+    #[test]
+    fn no_region_free_for_phi_returned_struct() {
+        // fn f(flag: bool) -> Pair {
+        //   let p = Pair{a:1, b:2};
+        //   if flag { p } else { Pair{a:3, b:4} }
+        // }
+        let body = Block {
+            stmts: vec![let_stmt("p", Some(pair_ty()), pair_literal(1, 2))],
+            trailing_expr: Some(Box::new(Expr {
+                kind: ExprKind::If {
+                    condition: Box::new(ident_expr("flag")),
+                    then_branch: Box::new(Block {
+                        stmts: vec![],
+                        trailing_expr: Some(Box::new(ident_expr("p"))),
+                        span: sp(),
+                    }),
+                    else_branch: Some(Box::new(Expr {
+                        kind: ExprKind::Block(Box::new(Block {
+                            stmts: vec![],
+                            trailing_expr: Some(Box::new(pair_literal(3, 4))),
+                            span: sp(),
+                        })),
+                        span: sp(),
+                    })),
+                },
+                span: sp(),
+            })),
+            span: sp(),
+        };
+        let bool_ty = Type::Named {
+            name: "bool".to_string(),
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "f",
+            vec![make_param("flag", bool_ty)],
+            pair_ty(),
+            body,
+            vec![],
+        );
+        let func = lower_with_structs(&fn_def, vec!["a", "b"]);
+
+        let region_frees: Vec<_> = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .filter(|i| i.opcode == Opcode::RegionFree)
+            .collect();
+        assert!(
+            region_frees.is_empty(),
+            "struct returned through Phi should not be freed, found {} RegionFree(s)",
+            region_frees.len()
+        );
+    }
+
+    #[test]
+    fn no_free_for_escaped_struct() {
+        // fn f(sink: fn(Pair)->i64) -> i64 { let p = Pair{a:1, b:2}; sink(p) }
+        let body = Block {
+            stmts: vec![let_stmt("p", Some(pair_ty()), pair_literal(1, 2))],
+            trailing_expr: Some(Box::new(Expr {
+                kind: ExprKind::Call {
+                    callee: Box::new(ident_expr("sink")),
+                    args: vec![ident_expr("p")],
+                },
+                span: sp(),
+            })),
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "f",
+            vec![make_param("sink", i64_ty())],
+            i64_ty(),
+            body,
+            vec![],
+        );
+        let func = lower_with_structs(&fn_def, vec!["a", "b"]);
+
+        let has_region_free = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .any(|i| i.opcode == Opcode::RegionFree);
+        assert!(!has_region_free, "escaped struct should not be freed");
+    }
+
+    #[test]
+    fn string_free_emitted_for_unused_string() {
+        // fn f() -> i64 { let s = String::from("hello"); 42 }
+        let body = Block {
+            stmts: vec![let_stmt(
+                "s",
+                Some(Type::Named {
+                    name: "String".to_string(),
+                    span: sp(),
+                }),
+                Expr {
+                    kind: ExprKind::EnumConstruct {
+                        path: vec!["String".to_string(), "from".to_string()],
+                        fields: vec![Expr {
+                            kind: ExprKind::Lit(Lit::String("hello".to_string())),
+                            span: sp(),
+                        }],
+                    },
+                    span: sp(),
+                },
+            )],
+            trailing_expr: Some(Box::new(int_expr(42))),
+            span: sp(),
+        };
+        let fn_def = make_fn("f", vec![], i64_ty(), body, vec![]);
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        let has_string_free = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .any(|i| {
+                i.opcode == Opcode::Call
+                    && i.data == InstData::CallExtern("__vow_string_free".to_string())
+            });
+        assert!(has_string_free, "expected __vow_string_free for unused string");
+    }
+
+    #[test]
+    fn region_free_has_correct_size() {
+        // Verify RegionFree carries the same AllocSize as RegionAlloc
+        let body = Block {
+            stmts: vec![let_stmt("p", Some(pair_ty()), pair_literal(1, 2))],
+            trailing_expr: Some(Box::new(int_expr(0))),
+            span: sp(),
+        };
+        let fn_def = make_fn("f", vec![], i64_ty(), body, vec![]);
+        let func = lower_with_structs(&fn_def, vec!["a", "b"]);
+
+        let alloc_data = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .find(|i| i.opcode == Opcode::RegionAlloc)
+            .map(|i| i.data.clone())
+            .expect("expected RegionAlloc");
+        let free_data = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .find(|i| i.opcode == Opcode::RegionFree)
+            .map(|i| i.data.clone())
+            .expect("expected RegionFree");
+        assert_eq!(alloc_data, free_data, "RegionFree size must match RegionAlloc size");
+    }
+
+    #[test]
+    fn no_region_free_for_struct_returned_through_phi() {
+        // fn f(flag: bool) -> Pair { if flag { Pair{a:1,b:2} } else { Pair{a:3,b:4} } }
+        // Both allocations feed the return Phi — neither should be freed
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(Expr {
+                kind: ExprKind::If {
+                    condition: Box::new(ident_expr("flag")),
+                    then_branch: Box::new(Block {
+                        stmts: vec![],
+                        trailing_expr: Some(Box::new(pair_literal(1, 2))),
+                        span: sp(),
+                    }),
+                    else_branch: Some(Box::new(Expr {
+                        kind: ExprKind::Block(Box::new(Block {
+                            stmts: vec![],
+                            trailing_expr: Some(Box::new(pair_literal(3, 4))),
+                            span: sp(),
+                        })),
+                        span: sp(),
+                    })),
+                },
+                span: sp(),
+            })),
+            span: sp(),
+        };
+        let bool_ty = Type::Named {
+            name: "bool".to_string(),
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "f",
+            vec![make_param("flag", bool_ty)],
+            pair_ty(),
+            body,
+            vec![],
+        );
+        let func = lower_with_structs(&fn_def, vec!["a", "b"]);
+
+        let region_frees: Vec<_> = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .filter(|i| i.opcode == Opcode::RegionFree)
+            .collect();
+        assert!(
+            region_frees.is_empty(),
+            "struct returned directly through Phi should not be freed, found {} RegionFree(s)",
+            region_frees.len()
+        );
+    }
+
+    #[test]
+    fn receiver_method_marks_escaped_no_free() {
+        // fn f() -> i64 { let s = String::from("x"); s.len() }
+        // s.len() marks s as escaped (receiver) → no __vow_string_free
+        let body = Block {
+            stmts: vec![let_stmt(
+                "s",
+                Some(Type::Named {
+                    name: "String".to_string(),
+                    span: sp(),
+                }),
+                Expr {
+                    kind: ExprKind::EnumConstruct {
+                        path: vec!["String".to_string(), "from".to_string()],
+                        fields: vec![Expr {
+                            kind: ExprKind::Lit(Lit::String("x".to_string())),
+                            span: sp(),
+                        }],
+                    },
+                    span: sp(),
+                },
+            )],
+            trailing_expr: Some(Box::new(Expr {
+                kind: ExprKind::MethodCall {
+                    receiver: Box::new(ident_expr("s")),
+                    method: "len".to_string(),
+                    args: vec![],
+                },
+                span: sp(),
+            })),
+            span: sp(),
+        };
+        let fn_def = make_fn("f", vec![], i64_ty(), body, vec![]);
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        let has_string_free = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .any(|i| {
+                i.opcode == Opcode::Call
+                    && i.data == InstData::CallExtern("__vow_string_free".to_string())
+            });
+        // Current behavior: receiver is marked escaped, so no free is emitted.
+        // This documents the known limitation (see GitHub issue: receiver-escape leak).
+        assert!(
+            !has_string_free,
+            "method receiver is marked escaped — no free expected (known limitation)"
+        );
+    }
+
+    #[test]
+    fn nested_phi_struct_not_freed() {
+        // fn f(a: bool, b: bool) -> Pair {
+        //   let p = Pair{a:1,b:2};
+        //   if a { if b { p } else { Pair{a:3,b:4} } } else { Pair{a:5,b:6} }
+        // }
+        // p flows through nested Phi chain → must not be freed
+        let inner_if = Expr {
+            kind: ExprKind::If {
+                condition: Box::new(ident_expr("b")),
+                then_branch: Box::new(Block {
+                    stmts: vec![],
+                    trailing_expr: Some(Box::new(ident_expr("p"))),
+                    span: sp(),
+                }),
+                else_branch: Some(Box::new(Expr {
+                    kind: ExprKind::Block(Box::new(Block {
+                        stmts: vec![],
+                        trailing_expr: Some(Box::new(pair_literal(3, 4))),
+                        span: sp(),
+                    })),
+                    span: sp(),
+                })),
+            },
+            span: sp(),
+        };
+        let body = Block {
+            stmts: vec![let_stmt("p", Some(pair_ty()), pair_literal(1, 2))],
+            trailing_expr: Some(Box::new(Expr {
+                kind: ExprKind::If {
+                    condition: Box::new(ident_expr("a")),
+                    then_branch: Box::new(Block {
+                        stmts: vec![],
+                        trailing_expr: Some(Box::new(inner_if)),
+                        span: sp(),
+                    }),
+                    else_branch: Some(Box::new(Expr {
+                        kind: ExprKind::Block(Box::new(Block {
+                            stmts: vec![],
+                            trailing_expr: Some(Box::new(pair_literal(5, 6))),
+                            span: sp(),
+                        })),
+                        span: sp(),
+                    })),
+                },
+                span: sp(),
+            })),
+            span: sp(),
+        };
+        let bool_ty = Type::Named {
+            name: "bool".to_string(),
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "f",
+            vec![
+                make_param("a", bool_ty.clone()),
+                make_param("b", bool_ty),
+            ],
+            pair_ty(),
+            body,
+            vec![],
+        );
+        let func = lower_with_structs(&fn_def, vec!["a", "b"]);
+
+        let region_frees: Vec<_> = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .filter(|i| i.opcode == Opcode::RegionFree)
+            .collect();
+        assert!(
+            region_frees.is_empty(),
+            "struct reachable through nested Phi chain should not be freed, found {} RegionFree(s)",
+            region_frees.len()
+        );
     }
 }

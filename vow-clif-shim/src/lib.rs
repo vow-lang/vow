@@ -483,7 +483,9 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
         .expect("declare arena_alloc");
 
     let mut arena_free_sig = ctx.obj_module.make_signature();
-    arena_free_sig.params.push(AbiParam::new(types::I64));
+    arena_free_sig.params.push(AbiParam::new(types::I64)); // ptr
+    arena_free_sig.params.push(AbiParam::new(types::I64)); // size
+    arena_free_sig.params.push(AbiParam::new(types::I64)); // align
     let arena_free_id = ctx
         .obj_module
         .declare_function("__vow_arena_free", Linkage::Import, &arena_free_sig)
@@ -1313,19 +1315,23 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
                         .map(|p| p.value_type)
                         .collect();
                     let call_args: Vec<Value> = (0..alen)
-                        .filter_map(|i| {
+                        .map(|i| {
                             let arg_id = all_args[aoff + i];
-                            let v = value_map.get(&arg_id).copied()?;
+                            let v = *value_map.get(&arg_id).unwrap_or_else(|| {
+                                panic!(
+                                    "clif shim: IOP_CALL value_map miss: inst_id={iid} arg_id={arg_id} (block={bi}, inst_idx={ii}, func_idx={func_idx})"
+                                )
+                            });
                             if let Some(&expected_ty) = expected_types.get(i) {
                                 let actual_ty = builder.func.dfg.value_type(v);
                                 if actual_ty == types::I32 && expected_ty == types::I64 {
-                                    return Some(builder.ins().sextend(types::I64, v));
+                                    return builder.ins().sextend(types::I64, v);
                                 }
                                 if actual_ty == types::I8 && expected_ty == types::I64 {
-                                    return Some(builder.ins().uextend(types::I64, v));
+                                    return builder.ins().uextend(types::I64, v);
                                 }
                             }
-                            Some(v)
+                            v
                         })
                         .collect();
                     let call_inst = builder.ins().call(func_ref, &call_args);
@@ -1354,9 +1360,21 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
                 IOP_REGION_FREE => {
                     if alen > 0 {
                         let ptr_id = all_args[aoff];
-                        if let Some(&ptr_val) = value_map.get(&ptr_id) {
-                            builder.ins().call(arena_free_ref, &[ptr_val]);
-                        }
+                        let ptr_val = *value_map.get(&ptr_id).unwrap_or_else(|| {
+                            panic!(
+                                "clif shim: IOP_REGION_FREE value_map miss: inst_id={iid} ptr_id={ptr_id} (block={bi}, inst_idx={ii}, func_idx={func_idx})"
+                            )
+                        });
+                        let (size, align) = if dk == IDATA_ALLOC_SIZE {
+                            (dv, dv2)
+                        } else {
+                            (0, 8)
+                        };
+                        let size_val = builder.ins().iconst(types::I64, size);
+                        let align_val = builder.ins().iconst(types::I64, align);
+                        builder
+                            .ins()
+                            .call(arena_free_ref, &[ptr_val, size_val, align_val]);
                     }
                     let unit = builder.ins().iconst(types::I32, 0);
                     set_val!(iid, unit);

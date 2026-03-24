@@ -38,6 +38,7 @@ struct LowerCtx {
     warnings: Vec<String>,
     alloc_ids: Vec<i64>,
     alloc_tags: Vec<String>,
+    alloc_sizes: Vec<i64>,
     escaped_ids: Vec<i64>,
     branch_depth: i64,
 }
@@ -87,6 +88,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         warnings: Vec::new(),
         alloc_ids: Vec::new(),
         alloc_tags: Vec::new(),
+        alloc_sizes: Vec::new(),
         escaped_ids: Vec::new(),
         branch_depth: 0,
     }
@@ -237,6 +239,124 @@ fn lctx_get_tag(ctx: LowerCtx, inst_id: i64) -> String {
         }
     }
     String::from("")
+}
+
+fn lctx_track_alloc(ctx: LowerCtx, id: i64, tag: String, alloc_size: i64) {
+    if ctx.branch_depth == 0 {
+        ctx.alloc_ids.push(id);
+        ctx.alloc_tags.push(tag);
+        ctx.alloc_sizes.push(alloc_size);
+    }
+}
+
+fn lctx_mark_escaped(ctx: LowerCtx, id: i64) {
+    ctx.escaped_ids.push(id);
+}
+
+fn lctx_is_escaped(ctx: LowerCtx, id: i64) -> bool {
+    let n: i64 = ctx.escaped_ids.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if ctx.escaped_ids[i] == id {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn lower_str_starts_with(s: String, prefix: String) -> bool {
+    let plen: i64 = prefix.len();
+    if s.len() < plen { return false; }
+    let mut i: i64 = 0;
+    while i < plen {
+        if s.byte_at(i) != prefix.byte_at(i) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn lctx_collect_return_sources(ctx: LowerCtx, return_val: i64) -> Vec<i64> {
+    let mut sources: Vec<i64> = Vec::new();
+    sources.push(return_val);
+    let mut wi: i64 = 0;
+    while wi < sources.len() {
+        let val: i64 = sources[wi];
+        let nb: i64 = ctx.func.blocks.len();
+        let mut bi: i64 = 0;
+        while bi < nb {
+            let blk: IrBlock = ctx.func.blocks[bi];
+            let ni: i64 = blk.insts.len();
+            let mut ii: i64 = 0;
+            while ii < ni {
+                let inst: IrInst = blk.insts[ii];
+                if inst.op == IOP_UPSILON() && inst.dk == IDATA_PHI_TARGET() && inst.dv == val {
+                    if inst.args.len() > 0 {
+                        let src: i64 = inst.args[0];
+                        let mut found: bool = false;
+                        let mut si: i64 = 0;
+                        while si < sources.len() {
+                            if sources[si] == src {
+                                found = true;
+                            }
+                            si = si + 1;
+                        }
+                        if !found {
+                            sources.push(src);
+                        }
+                    }
+                }
+                ii = ii + 1;
+            }
+            bi = bi + 1;
+        }
+        wi = wi + 1;
+    }
+    sources
+}
+
+fn lctx_emit_return_frees(ctx: LowerCtx, return_val: i64) {
+    let sources: Vec<i64> = lctx_collect_return_sources(ctx, return_val);
+    let n: i64 = ctx.alloc_ids.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let id: i64 = ctx.alloc_ids[i];
+        let tag: String = ctx.alloc_tags[i];
+        let mut skip: bool = lctx_is_escaped(ctx, id);
+        if !skip {
+            let mut si: i64 = 0;
+            while si < sources.len() {
+                if sources[si] == id {
+                    skip = true;
+                }
+                si = si + 1;
+            }
+        }
+        if !skip {
+            if lower_str_starts_with(tag, String::from("region:")) {
+                let size: i64 = ctx.alloc_sizes[i];
+                let free_args: Vec<i64> = Vec::new();
+                free_args.push(id);
+                lctx_emit(ctx, IOP_REGION_FREE(), ITY_UNIT(), free_args, IDATA_ALLOC_SIZE(), size, 8, String::from(""));
+            }
+            if tag == String::from("String") {
+                let free_args: Vec<i64> = Vec::new();
+                free_args.push(id);
+                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_free"));
+            }
+            if tag == String::from("Vec") {
+                let free_args: Vec<i64> = Vec::new();
+                free_args.push(id);
+                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_free_val"));
+            }
+            if tag == String::from("HashMap") {
+                let free_args: Vec<i64> = Vec::new();
+                free_args.push(id);
+                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_map_free"));
+            }
+        }
+        i = i + 1;
+    }
 }
 
 fn lctx_is_str_eid(ctx: LowerCtx, eid: i64) -> bool {
@@ -681,6 +801,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         call_args.push(str_id);
         let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_from_cstr"));
         lctx_tag(ctx, result, String::from("String"));
+        lctx_track_alloc(ctx, result, String::from("String"), 0);
         return result;
     }
 
@@ -801,30 +922,38 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             while ai < nargs {
                 let arg_eid: i64 = list_get(a, args_lid, ai);
                 let arg_id: i64 = lower_expr(ctx, arg_eid);
+                lctx_mark_escaped(ctx, arg_id);
                 call_args.push(arg_id);
                 ai = ai + 1;
             }
             let result: i64 = lctx_emit(ctx, IOP_CALL(), ret_ty, call_args, IDATA_CALL_EXTERN(), 0, 0, ext);
             if fn_name == String::from("fs_read") || fn_name == String::from("stdin_read") {
                 lctx_tag(ctx, result, String::from("String"));
+                lctx_track_alloc(ctx, result, String::from("String"), 0);
             }
             if fn_name == String::from("args") {
                 lctx_tag(ctx, result, String::from("Vec"));
+                lctx_track_alloc(ctx, result, String::from("Vec"), 0);
             }
             if fn_name == String::from("fs_listdir") {
                 lctx_tag(ctx, result, String::from("Vec"));
+                lctx_track_alloc(ctx, result, String::from("Vec"), 0);
             }
             if fn_name == String::from("string_substr") || fn_name == String::from("string_trim") || fn_name == String::from("string_to_upper") || fn_name == String::from("string_to_lower") || fn_name == String::from("string_replace") || fn_name == String::from("string_join") || fn_name == String::from("i64_to_string") {
                 lctx_tag(ctx, result, String::from("String"));
+                lctx_track_alloc(ctx, result, String::from("String"), 0);
             }
             if fn_name == String::from("string_split") {
                 lctx_tag(ctx, result, String::from("Vec"));
+                lctx_track_alloc(ctx, result, String::from("Vec"), 0);
             }
             if fn_name == String::from("hex_encode") {
                 lctx_tag(ctx, result, String::from("String"));
+                lctx_track_alloc(ctx, result, String::from("String"), 0);
             }
             if fn_name == String::from("vec_sort") || fn_name == String::from("hex_decode") {
                 lctx_tag(ctx, result, String::from("Vec"));
+                lctx_track_alloc(ctx, result, String::from("Vec"), 0);
             }
             return result;
         }
@@ -836,6 +965,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             while ai < nargs {
                 let arg_eid: i64 = list_get(a, args_lid, ai);
                 let arg_id: i64 = lower_expr(ctx, arg_eid);
+                lctx_mark_escaped(ctx, arg_id);
                 call_args.push(arg_id);
                 ai = ai + 1;
             }
@@ -848,6 +978,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         while ai < nargs {
             let arg_eid: i64 = list_get(a, args_lid, ai);
             let arg_id: i64 = lower_expr(ctx, arg_eid);
+            lctx_mark_escaped(ctx, arg_id);
             call_args.push(arg_id);
             ai = ai + 1;
         }
@@ -880,6 +1011,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         lctx_emit(ctx, IOP_BRANCH(), ITY_UNIT(), br_args, IDATA_BRANCH_TARGETS(), then_block, else_block, String::from(""));
 
         let snap: ScopeSnap = lctx_snapshot(ctx);
+        ctx.branch_depth = ctx.branch_depth + 1;
 
         lctx_switch_to_block(ctx, then_block);
         let then_result: i64 = lower_block(ctx, then_bid);
@@ -948,6 +1080,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
 
         lctx_restore(ctx, snap);
+        ctx.branch_depth = ctx.branch_depth - 1;
         let mut rmi2: i64 = 0;
         while rmi2 < nmut {
             lctx_assign(ctx, mutations[rmi2], saved_mut_vals[rmi2]);
@@ -1054,7 +1187,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_exit_blocks.push(exit_block);
         ctx.loop_is_loop.push(0);
         ctx.loop_break_counts.push(0);
+        ctx.branch_depth = ctx.branch_depth + 1;
         lower_block(ctx, body_bid);
+        ctx.branch_depth = ctx.branch_depth - 1;
         ctx.loop_break_counts.pop();
         ctx.loop_is_loop.pop();
         ctx.loop_exit_blocks.pop();
@@ -1299,7 +1434,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_exit_blocks.push(exit_block);
         ctx.loop_is_loop.push(0);
         ctx.loop_break_counts.push(0);
+        ctx.branch_depth = ctx.branch_depth + 1;
         lower_block(ctx, body_bid);
+        ctx.branch_depth = ctx.branch_depth - 1;
         ctx.loop_break_counts.pop();
         ctx.loop_is_loop.pop();
         ctx.loop_exit_blocks.pop();
@@ -1365,6 +1502,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         if ctx.cur_vow_lid != -1 {
             lower_ensures_clauses(ctx, ctx.cur_vow_lid, val_id);
         }
+        lctx_emit_return_frees(ctx, val_id);
         let ret_args: Vec<i64> = Vec::new();
         ret_args.push(val_id);
         return lctx_emit(ctx, IOP_RETURN(), ITY_UNIT(), ret_args, IDATA_NONE(), 0, 0, String::from(""));
@@ -1390,6 +1528,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 ctx.warnings.push(w);
             }
             let fidx: i64 = lctx_struct_field_index(ctx, recv_tag_str, field_name);
+            lctx_mark_escaped(ctx, val_id);
             let fs_args: Vec<i64> = Vec::new();
             fs_args.push(recv_id);
             fs_args.push(val_id);
@@ -1401,6 +1540,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let recv_id: i64 = lower_expr(ctx, recv_eid);
             let idx_id: i64 = lower_expr(ctx, idx_eid);
             let val_id: i64 = lower_expr(ctx, rhs_eid);
+            lctx_mark_escaped(ctx, val_id);
             let set_args: Vec<i64> = Vec::new();
             set_args.push(recv_id);
             set_args.push(idx_id);
@@ -1469,6 +1609,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let alloc_args: Vec<i64> = Vec::new();
         let ptr_id: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), ITY_PTR(), alloc_args, IDATA_ALLOC_SIZE(), alloc_size, 8, String::from(""));
         lctx_tag(ctx, ptr_id, struct_name);
+        let mut region_tag: String = String::from("region:");
+        region_tag.push_str(i64_to_string(alloc_size));
+        lctx_track_alloc(ctx, ptr_id, region_tag, alloc_size);
         let mut fi: i64 = 0;
         while fi < nlit {
             let fname_sid: i64 = list_get(a, fields_lid, fi * 2);
@@ -1476,6 +1619,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let fname: String = arena_str(a, fname_sid);
             let fidx: i64 = lctx_struct_field_index(ctx, struct_name, fname);
             let val_id: i64 = lower_expr(ctx, fval_eid);
+            lctx_mark_escaped(ctx, val_id);
             let fs_args: Vec<i64> = Vec::new();
             fs_args.push(ptr_id);
             fs_args.push(val_id);
@@ -1520,6 +1664,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let call_args: Vec<i64> = Vec::new();
             let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_map_new"));
             lctx_tag(ctx, result, String::from("HashMap"));
+            lctx_track_alloc(ctx, result, String::from("HashMap"), 0);
             return result;
         }
 
@@ -1531,7 +1676,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let call_args: Vec<i64> = Vec::new();
             call_args.push(size_val);
             call_args.push(align_val);
-            return lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_new"));
+            let vec_result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_new"));
+            lctx_track_alloc(ctx, vec_result, String::from("Vec"), 0);
+            return vec_result;
         }
 
         let tag_val: i64 = lctx_find_variant_tag(ctx, enum_name, variant_name);
@@ -1540,6 +1687,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let alloc_args: Vec<i64> = Vec::new();
         let ptr_id: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), ITY_PTR(), alloc_args, IDATA_ALLOC_SIZE(), size, 8, String::from(""));
         lctx_tag(ctx, ptr_id, enum_name);
+        let mut enum_region_tag: String = String::from("region:");
+        enum_region_tag.push_str(i64_to_string(size));
+        lctx_track_alloc(ctx, ptr_id, enum_region_tag, size);
 
         let tag_args: Vec<i64> = Vec::new();
         let tag_id: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), tag_args, IDATA_CONST_I64(), tag_val, 0, String::from(""));
@@ -1552,6 +1702,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         while pi < n_payload {
             let payload_eid: i64 = list_get(a, fields_lid, pi);
             let val_id: i64 = lower_expr(ctx, payload_eid);
+            lctx_mark_escaped(ctx, val_id);
             let pfs_args: Vec<i64> = Vec::new();
             pfs_args.push(ptr_id);
             pfs_args.push(val_id);
@@ -1567,6 +1718,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let args_lid: i64 = expr_c(a, eid);
         let method_name: String = arena_str(a, method_sid);
         let recv_id: i64 = lower_expr(ctx, recv_eid);
+        lctx_mark_escaped(ctx, recv_id);
         let mut recv_tag_str: String = lctx_get_tag(ctx, recv_id);
         if recv_tag_str == String::from("") && lctx_is_str_eid(ctx, recv_eid) {
             recv_tag_str = String::from("String");
@@ -1727,6 +1879,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     let ae: i64 = list_get(a, args_lid, 1);
                     lower_expr(ctx, ae)
                 };
+                lctx_mark_escaped(ctx, k_id);
+                lctx_mark_escaped(ctx, v_id);
                 let call_args: Vec<i64> = Vec::new();
                 call_args.push(recv_id);
                 call_args.push(k_id);
@@ -1781,6 +1935,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
                 }
             };
+            lctx_mark_escaped(ctx, elem_id);
             let call_args: Vec<i64> = Vec::new();
             call_args.push(recv_id);
             call_args.push(elem_id);
@@ -1855,6 +2010,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             smi = smi + 1;
         }
         let snap: ScopeSnap = lctx_snapshot(ctx);
+        ctx.branch_depth = ctx.branch_depth + 1;
 
         let arm_exit_blocks: Vec<i64> = Vec::new();
         let arm_up_ids: Vec<i64> = Vec::new();
@@ -2016,6 +2172,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             ai = ai + 1;
         }
 
+        ctx.branch_depth = ctx.branch_depth - 1;
         lctx_switch_to_block(ctx, merge_block);
 
         let mut mpi: i64 = 0;
@@ -2077,6 +2234,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         if ctx.cur_vow_lid != -1 {
             lower_ensures_clauses(ctx, ctx.cur_vow_lid, none_ptr);
         }
+        lctx_emit_return_frees(ctx, none_ptr);
         let ret_args: Vec<i64> = Vec::new();
         ret_args.push(none_ptr);
         lctx_emit(ctx, IOP_RETURN(), ITY_UNIT(), ret_args, IDATA_NONE(), 0, 0, String::from(""));
@@ -2549,6 +2707,11 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     ctx.tag_names = Vec::new();
     ctx.vec_elem_inst_ids = Vec::new();
     ctx.vec_elem_names = Vec::new();
+    ctx.alloc_ids = Vec::new();
+    ctx.alloc_tags = Vec::new();
+    ctx.alloc_sizes = Vec::new();
+    ctx.escaped_ids = Vec::new();
+    ctx.branch_depth = 0;
 
     if vow_lid != -1 {
         ctx.cur_vow_lid = vow_lid;
@@ -2643,6 +2806,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
         if vow_lid != -1 {
             lower_ensures_clauses(ctx, vow_lid, trailing);
         }
+        lctx_emit_return_frees(ctx, trailing);
         let ret_args: Vec<i64> = Vec::new();
         ret_args.push(trailing);
         lctx_emit(ctx, IOP_RETURN(), ITY_UNIT(), ret_args, IDATA_NONE(), 0, 0, String::from(""));

@@ -193,10 +193,13 @@ pub extern "C" fn __vow_arena_alloc(size: usize, align: usize) -> *mut u8 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn __vow_arena_free(_ptr: *mut u8) {
-    // No-op: struct deallocation deferred to future work.
-    // Typed free functions (__vow_string_free, __vow_vec_free_val, __vow_map_free) handle
-    // collection types directly without needing arena headers.
+pub unsafe extern "C" fn __vow_arena_free(ptr: *mut u8, size: usize, align: usize) {
+    if size == 0 || ptr.is_null() {
+        return;
+    }
+    let layout =
+        std::alloc::Layout::from_size_align(size, align).expect("__vow_arena_free: invalid layout");
+    unsafe { std::alloc::dealloc(ptr, layout) };
 }
 
 #[repr(C)]
@@ -1273,4 +1276,32 @@ pub unsafe extern "C" fn __vow_map_free(m: *mut u8) {
     }
     let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
     unsafe { std::alloc::dealloc(m, header_layout) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arena_alloc_free_roundtrip() {
+        let ptr = __vow_arena_alloc(64, 8);
+        assert!(!ptr.is_null());
+        unsafe { __vow_arena_free(ptr, 64, 8) };
+    }
+
+    #[test]
+    fn arena_free_null_is_noop() {
+        unsafe { __vow_arena_free(std::ptr::null_mut(), 64, 8) };
+    }
+
+    #[test]
+    fn arena_free_zero_size_is_noop() {
+        unsafe { __vow_arena_free(0x8 as *mut u8, 0, 8) };
+    }
+
+    #[test]
+    fn arena_alloc_zero_returns_sentinel() {
+        let ptr = __vow_arena_alloc(0, 8);
+        assert_eq!(ptr, 8 as *mut u8);
+    }
 }

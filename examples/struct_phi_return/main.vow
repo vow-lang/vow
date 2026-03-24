@@ -1,0 +1,24 @@
+module StructPhiReturn
+
+struct Pair {
+    a: i64,
+    b: i64,
+}
+
+fn make_pair(flag: bool) -> i64 {
+    let p: Pair = Pair { a: 10, b: 20 };
+    let result: i64 = if flag {
+        p.a + p.b
+    } else {
+        p.a
+    };
+    result
+}
+
+fn main() -> i32 [io] {
+    let r1: i64 = make_pair(true);
+    print_i64(r1);
+    let r2: i64 = make_pair(false);
+    print_i64(r2);
+    0
+}
