@@ -215,9 +215,31 @@ impl LowerCtx {
         self.escaped_allocs.insert(id);
     }
 
+    fn collect_return_sources(&self, return_val: InstId) -> HashSet<InstId> {
+        let mut sources = HashSet::new();
+        sources.insert(return_val);
+        let mut worklist = vec![return_val];
+        while let Some(val) = worklist.pop() {
+            for block in &self.func.blocks {
+                for inst in &block.insts {
+                    if inst.opcode == Opcode::Upsilon
+                        && let InstData::PhiTarget(target) = inst.data
+                        && target == val
+                        && let Some(&src) = inst.args.first()
+                        && sources.insert(src)
+                    {
+                        worklist.push(src);
+                    }
+                }
+            }
+        }
+        sources
+    }
+
     pub(super) fn emit_return_frees(&mut self, return_val: InstId, span: Span) {
+        let return_sources = self.collect_return_sources(return_val);
         for (id, tag) in self.local_heap_allocs.clone() {
-            if self.escaped_allocs.contains(&id) || id == return_val {
+            if self.escaped_allocs.contains(&id) || return_sources.contains(&id) {
                 continue;
             }
             if let Some(size_str) = tag.strip_prefix("region:") {

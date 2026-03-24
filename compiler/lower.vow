@@ -241,9 +241,10 @@ fn lctx_get_tag(ctx: LowerCtx, inst_id: i64) -> String {
     String::from("")
 }
 
-fn lctx_track_alloc(ctx: LowerCtx, id: i64, alloc_size: i64) {
+fn lctx_track_alloc(ctx: LowerCtx, id: i64, tag: String, alloc_size: i64) {
     if ctx.branch_depth == 0 {
         ctx.alloc_ids.push(id);
+        ctx.alloc_tags.push(tag);
         ctx.alloc_sizes.push(alloc_size);
     }
 }
@@ -264,12 +265,64 @@ fn lctx_is_escaped(ctx: LowerCtx, id: i64) -> bool {
     false
 }
 
+fn lower_str_starts_with(s: String, prefix: String) -> bool {
+    let plen: i64 = prefix.len();
+    if s.len() < plen { return false; }
+    let mut i: i64 = 0;
+    while i < plen {
+        if s.byte_at(i) != prefix.byte_at(i) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn lctx_collect_return_sources(ctx: LowerCtx, return_val: i64) -> Vec<i64> {
+    let mut sources: Vec<i64> = Vec::new();
+    sources.push(return_val);
+    let mut wi: i64 = 0;
+    while wi < sources.len() {
+        let val: i64 = sources[wi];
+        let nb: i64 = ctx.func.blocks.len();
+        let mut bi: i64 = 0;
+        while bi < nb {
+            let blk: IrBlock = ctx.func.blocks[bi];
+            let ni: i64 = blk.insts.len();
+            let mut ii: i64 = 0;
+            while ii < ni {
+                let inst: IrInst = blk.insts[ii];
+                if inst.op == IOP_UPSILON() && inst.dk == IDATA_PHI_TARGET() && inst.dv == val {
+                    if inst.args.len() > 0 {
+                        let src: i64 = inst.args[0];
+                        let mut found: bool = false;
+                        let mut si: i64 = 0;
+                        while si < sources.len() {
+                            if sources[si] == src {
+                                found = true;
+                            }
+                            si = si + 1;
+                        }
+                        if !found {
+                            sources.push(src);
+                        }
+                    }
+                }
+                ii = ii + 1;
+            }
+            bi = bi + 1;
+        }
+        wi = wi + 1;
+    }
+    sources
+}
+
 fn lctx_emit_return_frees(ctx: LowerCtx, return_val: i64) {
-    // Disabled: self-hosted RegionFree emission causes invalid frees in
-    // the bootstrap (ptr=0x1). The tracking infrastructure (alloc_ids,
-    // alloc_sizes, escaped_ids, branch_depth) is in place; enabling this
-    // requires debugging the cross-block value resolution in the FFI shim.
-    // The Rust lowerer emits RegionFree correctly.
+    // Self-hosted free emission disabled: the FFI shim's cross-block value
+    // resolution silently drops args not in value_map (filter_map in IOP_CALL
+    // handler), producing 0-argument free calls. The tracking infrastructure
+    // (alloc_ids/alloc_tags/alloc_sizes, escaped_ids, branch_depth,
+    // lctx_collect_return_sources) is complete; enabling requires fixing the
+    // shim's arg resolution for same-block extern calls. The Rust lowerer
+    // emits correct frees with Phi-aware return source tracing.
 }
 
 fn lctx_is_str_eid(ctx: LowerCtx, eid: i64) -> bool {
@@ -714,6 +767,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         call_args.push(str_id);
         let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_from_cstr"));
         lctx_tag(ctx, result, String::from("String"));
+        lctx_track_alloc(ctx, result, String::from("String"), 0);
         return result;
     }
 
@@ -841,24 +895,31 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let result: i64 = lctx_emit(ctx, IOP_CALL(), ret_ty, call_args, IDATA_CALL_EXTERN(), 0, 0, ext);
             if fn_name == String::from("fs_read") || fn_name == String::from("stdin_read") {
                 lctx_tag(ctx, result, String::from("String"));
+                lctx_track_alloc(ctx, result, String::from("String"), 0);
             }
             if fn_name == String::from("args") {
                 lctx_tag(ctx, result, String::from("Vec"));
+                lctx_track_alloc(ctx, result, String::from("Vec"), 0);
             }
             if fn_name == String::from("fs_listdir") {
                 lctx_tag(ctx, result, String::from("Vec"));
+                lctx_track_alloc(ctx, result, String::from("Vec"), 0);
             }
             if fn_name == String::from("string_substr") || fn_name == String::from("string_trim") || fn_name == String::from("string_to_upper") || fn_name == String::from("string_to_lower") || fn_name == String::from("string_replace") || fn_name == String::from("string_join") || fn_name == String::from("i64_to_string") {
                 lctx_tag(ctx, result, String::from("String"));
+                lctx_track_alloc(ctx, result, String::from("String"), 0);
             }
             if fn_name == String::from("string_split") {
                 lctx_tag(ctx, result, String::from("Vec"));
+                lctx_track_alloc(ctx, result, String::from("Vec"), 0);
             }
             if fn_name == String::from("hex_encode") {
                 lctx_tag(ctx, result, String::from("String"));
+                lctx_track_alloc(ctx, result, String::from("String"), 0);
             }
             if fn_name == String::from("vec_sort") || fn_name == String::from("hex_decode") {
                 lctx_tag(ctx, result, String::from("Vec"));
+                lctx_track_alloc(ctx, result, String::from("Vec"), 0);
             }
             return result;
         }
@@ -1514,7 +1575,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let alloc_args: Vec<i64> = Vec::new();
         let ptr_id: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), ITY_PTR(), alloc_args, IDATA_ALLOC_SIZE(), alloc_size, 8, String::from(""));
         lctx_tag(ctx, ptr_id, struct_name);
-        lctx_track_alloc(ctx, ptr_id, alloc_size);
+        let mut region_tag: String = String::from("region:");
+        region_tag.push_str(i64_to_string(alloc_size));
+        lctx_track_alloc(ctx, ptr_id, region_tag, alloc_size);
         let mut fi: i64 = 0;
         while fi < nlit {
             let fname_sid: i64 = list_get(a, fields_lid, fi * 2);
@@ -1567,6 +1630,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let call_args: Vec<i64> = Vec::new();
             let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_map_new"));
             lctx_tag(ctx, result, String::from("HashMap"));
+            lctx_track_alloc(ctx, result, String::from("HashMap"), 0);
             return result;
         }
 
@@ -1578,7 +1642,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let call_args: Vec<i64> = Vec::new();
             call_args.push(size_val);
             call_args.push(align_val);
-            return lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_new"));
+            let vec_result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_new"));
+            lctx_track_alloc(ctx, vec_result, String::from("Vec"), 0);
+            return vec_result;
         }
 
         let tag_val: i64 = lctx_find_variant_tag(ctx, enum_name, variant_name);
@@ -1587,7 +1653,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let alloc_args: Vec<i64> = Vec::new();
         let ptr_id: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), ITY_PTR(), alloc_args, IDATA_ALLOC_SIZE(), size, 8, String::from(""));
         lctx_tag(ctx, ptr_id, enum_name);
-        lctx_track_alloc(ctx, ptr_id, size);
+        let mut enum_region_tag: String = String::from("region:");
+        enum_region_tag.push_str(i64_to_string(size));
+        lctx_track_alloc(ctx, ptr_id, enum_region_tag, size);
 
         let tag_args: Vec<i64> = Vec::new();
         let tag_id: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), tag_args, IDATA_CONST_I64(), tag_val, 0, String::from(""));
