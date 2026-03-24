@@ -1277,3 +1277,31 @@ pub unsafe extern "C" fn __vow_map_free(m: *mut u8) {
     let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
     unsafe { std::alloc::dealloc(m, header_layout) };
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arena_alloc_free_roundtrip() {
+        let ptr = __vow_arena_alloc(64, 8);
+        assert!(!ptr.is_null());
+        unsafe { __vow_arena_free(ptr, 64, 8) };
+    }
+
+    #[test]
+    fn arena_free_null_is_noop() {
+        unsafe { __vow_arena_free(std::ptr::null_mut(), 64, 8) };
+    }
+
+    #[test]
+    fn arena_free_zero_size_is_noop() {
+        unsafe { __vow_arena_free(0x8 as *mut u8, 0, 8) };
+    }
+
+    #[test]
+    fn arena_alloc_zero_returns_sentinel() {
+        let ptr = __vow_arena_alloc(0, 8);
+        assert_eq!(ptr, 8 as *mut u8);
+    }
+}

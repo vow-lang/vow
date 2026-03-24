@@ -3438,4 +3438,196 @@ mod tests {
             .expect("expected RegionFree");
         assert_eq!(alloc_data, free_data, "RegionFree size must match RegionAlloc size");
     }
+
+    #[test]
+    fn no_region_free_for_struct_returned_through_phi() {
+        // fn f(flag: bool) -> Pair { if flag { Pair{a:1,b:2} } else { Pair{a:3,b:4} } }
+        // Both allocations feed the return Phi — neither should be freed
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(Expr {
+                kind: ExprKind::If {
+                    condition: Box::new(ident_expr("flag")),
+                    then_branch: Box::new(Block {
+                        stmts: vec![],
+                        trailing_expr: Some(Box::new(pair_literal(1, 2))),
+                        span: sp(),
+                    }),
+                    else_branch: Some(Box::new(Expr {
+                        kind: ExprKind::Block(Box::new(Block {
+                            stmts: vec![],
+                            trailing_expr: Some(Box::new(pair_literal(3, 4))),
+                            span: sp(),
+                        })),
+                        span: sp(),
+                    })),
+                },
+                span: sp(),
+            })),
+            span: sp(),
+        };
+        let bool_ty = Type::Named {
+            name: "bool".to_string(),
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "f",
+            vec![make_param("flag", bool_ty)],
+            pair_ty(),
+            body,
+            vec![],
+        );
+        let func = lower_with_structs(&fn_def, vec!["a", "b"]);
+
+        let region_frees: Vec<_> = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .filter(|i| i.opcode == Opcode::RegionFree)
+            .collect();
+        assert!(
+            region_frees.is_empty(),
+            "struct returned directly through Phi should not be freed, found {} RegionFree(s)",
+            region_frees.len()
+        );
+    }
+
+    #[test]
+    fn receiver_method_marks_escaped_no_free() {
+        // fn f() -> i64 { let s = String::from("x"); s.len() }
+        // s.len() marks s as escaped (receiver) → no __vow_string_free
+        let body = Block {
+            stmts: vec![let_stmt(
+                "s",
+                Some(Type::Named {
+                    name: "String".to_string(),
+                    span: sp(),
+                }),
+                Expr {
+                    kind: ExprKind::EnumConstruct {
+                        path: vec!["String".to_string(), "from".to_string()],
+                        fields: vec![Expr {
+                            kind: ExprKind::Lit(Lit::String("x".to_string())),
+                            span: sp(),
+                        }],
+                    },
+                    span: sp(),
+                },
+            )],
+            trailing_expr: Some(Box::new(Expr {
+                kind: ExprKind::MethodCall {
+                    receiver: Box::new(ident_expr("s")),
+                    method: "len".to_string(),
+                    args: vec![],
+                },
+                span: sp(),
+            })),
+            span: sp(),
+        };
+        let fn_def = make_fn("f", vec![], i64_ty(), body, vec![]);
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        let has_string_free = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .any(|i| {
+                i.opcode == Opcode::Call
+                    && i.data == InstData::CallExtern("__vow_string_free".to_string())
+            });
+        // Current behavior: receiver is marked escaped, so no free is emitted.
+        // This documents the known limitation (see GitHub issue: receiver-escape leak).
+        assert!(
+            !has_string_free,
+            "method receiver is marked escaped — no free expected (known limitation)"
+        );
+    }
+
+    #[test]
+    fn nested_phi_struct_not_freed() {
+        // fn f(a: bool, b: bool) -> Pair {
+        //   let p = Pair{a:1,b:2};
+        //   if a { if b { p } else { Pair{a:3,b:4} } } else { Pair{a:5,b:6} }
+        // }
+        // p flows through nested Phi chain → must not be freed
+        let inner_if = Expr {
+            kind: ExprKind::If {
+                condition: Box::new(ident_expr("b")),
+                then_branch: Box::new(Block {
+                    stmts: vec![],
+                    trailing_expr: Some(Box::new(ident_expr("p"))),
+                    span: sp(),
+                }),
+                else_branch: Some(Box::new(Expr {
+                    kind: ExprKind::Block(Box::new(Block {
+                        stmts: vec![],
+                        trailing_expr: Some(Box::new(pair_literal(3, 4))),
+                        span: sp(),
+                    })),
+                    span: sp(),
+                })),
+            },
+            span: sp(),
+        };
+        let body = Block {
+            stmts: vec![let_stmt("p", Some(pair_ty()), pair_literal(1, 2))],
+            trailing_expr: Some(Box::new(Expr {
+                kind: ExprKind::If {
+                    condition: Box::new(ident_expr("a")),
+                    then_branch: Box::new(Block {
+                        stmts: vec![],
+                        trailing_expr: Some(Box::new(inner_if)),
+                        span: sp(),
+                    }),
+                    else_branch: Some(Box::new(Expr {
+                        kind: ExprKind::Block(Box::new(Block {
+                            stmts: vec![],
+                            trailing_expr: Some(Box::new(pair_literal(5, 6))),
+                            span: sp(),
+                        })),
+                        span: sp(),
+                    })),
+                },
+                span: sp(),
+            })),
+            span: sp(),
+        };
+        let bool_ty = Type::Named {
+            name: "bool".to_string(),
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "f",
+            vec![
+                make_param("a", bool_ty.clone()),
+                make_param("b", bool_ty),
+            ],
+            pair_ty(),
+            body,
+            vec![],
+        );
+        let func = lower_with_structs(&fn_def, vec!["a", "b"]);
+
+        let region_frees: Vec<_> = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .filter(|i| i.opcode == Opcode::RegionFree)
+            .collect();
+        assert!(
+            region_frees.is_empty(),
+            "struct reachable through nested Phi chain should not be freed, found {} RegionFree(s)",
+            region_frees.len()
+        );
+    }
 }
