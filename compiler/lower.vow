@@ -40,7 +40,7 @@ struct LowerCtx {
     alloc_tags: Vec<String>,
     alloc_sizes: Vec<i64>,
     escaped_ids: Vec<i64>,
-    branch_depth: i64,
+    alloc_scope_starts: Vec<i64>,
     file: String,
 }
 
@@ -91,7 +91,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         alloc_tags: Vec::new(),
         alloc_sizes: Vec::new(),
         escaped_ids: Vec::new(),
-        branch_depth: 0,
+        alloc_scope_starts: Vec::new(),
         file: String::from(""),
     }
 }
@@ -244,10 +244,73 @@ fn lctx_get_tag(ctx: LowerCtx, inst_id: i64) -> String {
 }
 
 fn lctx_track_alloc(ctx: LowerCtx, id: i64, tag: String, alloc_size: i64) {
-    if ctx.branch_depth == 0 {
-        ctx.alloc_ids.push(id);
-        ctx.alloc_tags.push(tag);
-        ctx.alloc_sizes.push(alloc_size);
+    ctx.alloc_ids.push(id);
+    ctx.alloc_tags.push(tag);
+    ctx.alloc_sizes.push(alloc_size);
+}
+
+fn lctx_push_alloc_scope(ctx: LowerCtx) {
+    ctx.alloc_scope_starts.push(ctx.alloc_ids.len());
+}
+
+fn lctx_pop_alloc_scope_frees(ctx: LowerCtx, live_out: Vec<i64>) {
+    let scope_start: i64 = ctx.alloc_scope_starts[ctx.alloc_scope_starts.len() - 1];
+    ctx.alloc_scope_starts.pop();
+    let n: i64 = ctx.alloc_ids.len();
+    let mut i: i64 = scope_start;
+    while i < n {
+        let id: i64 = ctx.alloc_ids[i];
+        let tag: String = ctx.alloc_tags[i];
+        let mut skip: bool = lctx_is_escaped(ctx, id);
+        if !skip {
+            let mut li: i64 = 0;
+            while li < live_out.len() {
+                if live_out[li] == id {
+                    skip = true;
+                }
+                li = li + 1;
+            }
+        }
+        if !skip {
+            if lower_str_starts_with(tag, String::from("region:")) {
+                let size: i64 = ctx.alloc_sizes[i];
+                let free_args: Vec<i64> = Vec::new();
+                free_args.push(id);
+                lctx_emit(ctx, IOP_REGION_FREE(), ITY_UNIT(), free_args, IDATA_ALLOC_SIZE(), size, 8, String::from(""));
+            }
+            if tag == String::from("String") {
+                let free_args: Vec<i64> = Vec::new();
+                free_args.push(id);
+                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_free"));
+            }
+            if tag == String::from("Vec") {
+                let free_args: Vec<i64> = Vec::new();
+                free_args.push(id);
+                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_free_val"));
+            }
+            if tag == String::from("HashMap") {
+                let free_args: Vec<i64> = Vec::new();
+                free_args.push(id);
+                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_map_free"));
+            }
+        }
+        i = i + 1;
+    }
+    // Truncate the alloc arrays back to the scope start.
+    while ctx.alloc_ids.len() > scope_start {
+        ctx.alloc_ids.pop();
+        ctx.alloc_tags.pop();
+        ctx.alloc_sizes.pop();
+    }
+}
+
+fn lctx_discard_alloc_scope(ctx: LowerCtx) {
+    let scope_start: i64 = ctx.alloc_scope_starts[ctx.alloc_scope_starts.len() - 1];
+    ctx.alloc_scope_starts.pop();
+    while ctx.alloc_ids.len() > scope_start {
+        ctx.alloc_ids.pop();
+        ctx.alloc_tags.pop();
+        ctx.alloc_sizes.pop();
     }
 }
 
@@ -1063,12 +1126,15 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         lctx_emit(ctx, IOP_BRANCH(), ITY_UNIT(), br_args, IDATA_BRANCH_TARGETS(), then_block, else_block, String::from(""));
 
         let snap: ScopeSnap = lctx_snapshot(ctx);
-        ctx.branch_depth = ctx.branch_depth + 1;
 
         lctx_switch_to_block(ctx, then_block);
+        lctx_push_alloc_scope(ctx);
         let then_result: i64 = lower_block(ctx, then_bid);
         let then_terminated: bool = lctx_is_terminated(ctx);
         let then_exit_block: i64 = ctx.current_block;
+
+        // Discard branch alloc scope (branch temporaries freed at function exit).
+        lctx_discard_alloc_scope(ctx);
 
         let mut_up_then: Vec<i64> = Vec::new();
         let mut mi: i64 = 0;
@@ -1098,6 +1164,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             rmi = rmi + 1;
         }
         lctx_switch_to_block(ctx, else_block);
+        lctx_push_alloc_scope(ctx);
 
         let else_result: i64 = {
             if else_eid != -1 {
@@ -1109,6 +1176,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         };
         let else_terminated: bool = lctx_is_terminated(ctx);
         let else_exit_block: i64 = ctx.current_block;
+
+        // Discard branch alloc scope (branch temporaries freed at function exit).
+        lctx_discard_alloc_scope(ctx);
 
         let mut_up_else: Vec<i64> = Vec::new();
         let mut mi2: i64 = 0;
@@ -1132,7 +1202,6 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
 
         lctx_restore(ctx, snap);
-        ctx.branch_depth = ctx.branch_depth - 1;
         let mut rmi2: i64 = 0;
         while rmi2 < nmut {
             lctx_assign(ctx, mutations[rmi2], saved_mut_vals[rmi2]);
@@ -1239,12 +1308,26 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_exit_blocks.push(exit_block);
         ctx.loop_is_loop.push(0);
         ctx.loop_break_counts.push(0);
-        ctx.branch_depth = ctx.branch_depth + 1;
+        lctx_push_alloc_scope(ctx);
         lower_block(ctx, body_bid);
-        ctx.branch_depth = ctx.branch_depth - 1;
         ctx.loop_break_counts.pop();
         ctx.loop_is_loop.pop();
         ctx.loop_exit_blocks.pop();
+
+        // Free loop-body temporaries before back-edge.
+        if !lctx_is_terminated(ctx) {
+            let loop_live_out: Vec<i64> = Vec::new();
+            let mut li: i64 = 0;
+            while li < nassigned {
+                let vname: String = assigned[li];
+                let cur: i64 = lctx_lookup(ctx, vname);
+                loop_live_out.push(cur);
+                li = li + 1;
+            }
+            lctx_pop_alloc_scope_frees(ctx, loop_live_out);
+        } else {
+            lctx_discard_alloc_scope(ctx);
+        }
 
         if !lctx_is_terminated(ctx) {
             let mut ai3: i64 = 0;
@@ -1486,14 +1569,28 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_exit_blocks.push(exit_block);
         ctx.loop_is_loop.push(0);
         ctx.loop_break_counts.push(0);
-        ctx.branch_depth = ctx.branch_depth + 1;
+        lctx_push_alloc_scope(ctx);
         lower_block(ctx, body_bid);
-        ctx.branch_depth = ctx.branch_depth - 1;
         ctx.loop_break_counts.pop();
         ctx.loop_is_loop.pop();
         ctx.loop_exit_blocks.pop();
 
         lctx_pop_scope(ctx);
+
+        // Free loop-body temporaries before back-edge.
+        if !lctx_is_terminated(ctx) {
+            let loop_live_out: Vec<i64> = Vec::new();
+            let mut li: i64 = 0;
+            while li < nassigned {
+                let vname: String = assigned[li];
+                let cur: i64 = lctx_lookup(ctx, vname);
+                loop_live_out.push(cur);
+                li = li + 1;
+            }
+            lctx_pop_alloc_scope_frees(ctx, loop_live_out);
+        } else {
+            lctx_discard_alloc_scope(ctx);
+        }
 
         if !lctx_is_terminated(ctx) {
             let one_args: Vec<i64> = Vec::new();
@@ -2061,7 +2158,6 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             smi = smi + 1;
         }
         let snap: ScopeSnap = lctx_snapshot(ctx);
-        ctx.branch_depth = ctx.branch_depth + 1;
 
         let arm_exit_blocks: Vec<i64> = Vec::new();
         let arm_up_ids: Vec<i64> = Vec::new();
@@ -2113,6 +2209,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
                 lctx_switch_to_block(ctx, arm_block);
                 lctx_push_scope(ctx);
+                lctx_push_alloc_scope(ctx);
 
                 let n_inner: i64 = list_len(a, inner_lid);
                 let mut ii: i64 = 0;
@@ -2132,6 +2229,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
                 let arm_result: i64 = lower_expr(ctx, body_eid);
                 lctx_pop_scope(ctx);
+
+                // Discard match arm alloc scope.
+                lctx_discard_alloc_scope(ctx);
 
                 let mut mci: i64 = 0;
                 while mci < nmut {
@@ -2164,6 +2264,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 }
             } else if ptag == PAT_WILD() || ptag == PAT_IDENT() {
                 lctx_push_scope(ctx);
+                lctx_push_alloc_scope(ctx);
                 if ptag == PAT_IDENT() {
                     let name_sid: i64 = pat_a(a, pat_id);
                     let pname: String = arena_str(a, name_sid);
@@ -2171,6 +2272,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 }
                 let arm_result: i64 = lower_expr(ctx, body_eid);
                 lctx_pop_scope(ctx);
+
+                // Discard match arm alloc scope.
+                lctx_discard_alloc_scope(ctx);
 
                 let mut mci2: i64 = 0;
                 while mci2 < nmut {
@@ -2222,8 +2326,6 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
 
             ai = ai + 1;
         }
-
-        ctx.branch_depth = ctx.branch_depth - 1;
         lctx_switch_to_block(ctx, merge_block);
 
         let mut mpi: i64 = 0;
@@ -2765,7 +2867,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     ctx.alloc_tags = Vec::new();
     ctx.alloc_sizes = Vec::new();
     ctx.escaped_ids = Vec::new();
-    ctx.branch_depth = 0;
+    ctx.alloc_scope_starts = Vec::new();
 
     if vow_lid != -1 {
         ctx.cur_vow_lid = vow_lid;

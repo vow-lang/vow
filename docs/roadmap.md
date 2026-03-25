@@ -36,7 +36,7 @@ Phase 21.4e–f complete: Claude Sonnet 4 achieves **99.0% combined** (102/103),
 Publication report: `reports/2026-03-22-publication-comparison.md`.
 
 Known limitations:
-- Arena deallocation is a no-op (`__vow_arena_free` leaks; fine for short-lived programs)
+- RegionFree only frees at function exit; allocations inside branches and loops leak (see [#77](https://github.com/pmatos/vow-lang/issues/77))
 - Expression-level source spans are unpopulated (function/statement spans work)
 - 2/4 Stretch benchmarks hit ESBMC `--unwind` ceiling (H07, H10)
 - `divide.vow` release build relies on hardware traps (SIGFPE) for division by zero — this is defined behavior, not UB; debug mode provides vow-level diagnostics with blame and captured values
@@ -392,7 +392,7 @@ constant 2.7 MB RSS.
 **Remaining work (future):**
 - Scope-exit deallocation for `let`-bound strings (requires escape analysis)
 - Vec/Map/Struct deallocation
-- Arena header-based `__vow_arena_free` for struct allocations
+- Scope-based RegionFree for branch/loop allocations (see [#77](https://github.com/pmatos/vow-lang/issues/77))
 - `drop()` language builtin for manual control
 
 ### 24.2 Recursive type ESBMC bounds
