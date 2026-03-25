@@ -636,6 +636,22 @@ impl Parser {
             }
             self.expect(TokenKind::RParen);
             args
+        } else if self.at(&TokenKind::LBrace) && path.len() > 1 {
+            self.advance();
+            let mut args = Vec::new();
+            while !self.at(&TokenKind::RBrace) && !self.at_end() {
+                // Read field name and colon, but store only the value
+                let _ = self.expect_ident();
+                self.expect(TokenKind::Colon);
+                args.push(self.parse_expr_inner(0));
+                if self.at(&TokenKind::Comma) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect(TokenKind::RBrace);
+            args
         } else {
             vec![]
         };
@@ -1037,6 +1053,30 @@ mod tests {
                 assert!(vow.is_some());
             }
             _ => panic!("expected Loop"),
+        }
+    }
+
+    #[test]
+    fn enum_construct_struct_variant() {
+        let expr = parse_no_errors("Shape::Circle { radius: 5 }");
+        match &expr.kind {
+            ExprKind::EnumConstruct { path, fields } => {
+                assert_eq!(path, &["Shape", "Circle"]);
+                assert_eq!(fields.len(), 1);
+            }
+            _ => panic!("expected EnumConstruct, got {:?}", expr.kind),
+        }
+    }
+
+    #[test]
+    fn enum_construct_struct_variant_multi_field() {
+        let expr = parse_no_errors("Shape::Rect { width: 10, height: 20 }");
+        match &expr.kind {
+            ExprKind::EnumConstruct { path, fields } => {
+                assert_eq!(path, &["Shape", "Rect"]);
+                assert_eq!(fields.len(), 2);
+            }
+            _ => panic!("expected EnumConstruct, got {:?}", expr.kind),
         }
     }
 }

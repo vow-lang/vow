@@ -1,0 +1,48 @@
+// TEST: stdout "012after_pop:01after_truncate:0done"
+module vec_pop_enum
+
+enum ExprData {
+    BVar(i64),
+    Sort(i64),
+    Const(i64),
+}
+
+fn expr_tag(e: ExprData) -> i64 {
+    match e {
+        ExprData::BVar(v) => 0,
+        ExprData::Sort(v) => 1,
+        ExprData::Const(v) => 2,
+    }
+}
+
+fn main() -> i32 [io] {
+    let v: Vec<ExprData> = Vec::new();
+    v.push(ExprData::BVar(10));
+    v.push(ExprData::Sort(20));
+    v.push(ExprData::Const(30));
+
+    let mut i: i64 = 0;
+    while i < v.len() {
+        let e: ExprData = v[i];
+        print_i64(expr_tag(e));
+        i = i + 1;
+    }
+
+    v.pop();
+    print_str("after_pop:");
+    let mut j: i64 = 0;
+    while j < v.len() {
+        let e2: ExprData = v[j];
+        print_i64(expr_tag(e2));
+        j = j + 1;
+    }
+
+    while v.len() > 1 {
+        v.pop();
+    }
+    print_str("after_truncate:");
+    let e3: ExprData = v[0];
+    print_i64(expr_tag(e3));
+    print_str("done");
+    0
+}

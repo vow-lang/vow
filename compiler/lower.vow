@@ -1947,7 +1947,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         if method_name == String::from("pop") {
             let call_args: Vec<i64> = Vec::new();
             call_args.push(recv_id);
-            return lctx_emit(ctx, IOP_CALL(), ITY_I64(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_pop"));
+            return lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_pop"));
         }
 
         let nargs: i64 = list_len(a, args_lid);
