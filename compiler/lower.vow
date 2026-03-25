@@ -41,6 +41,7 @@ struct LowerCtx {
     alloc_sizes: Vec<i64>,
     escaped_ids: Vec<i64>,
     branch_depth: i64,
+    file: String,
 }
 
 struct ScopeSnap {
@@ -91,6 +92,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         alloc_sizes: Vec::new(),
         escaped_ids: Vec::new(),
         branch_depth: 0,
+        file: String::from(""),
     }
 }
 
@@ -503,7 +505,7 @@ fn lctx_struct_field_vec_elem(ctx: LowerCtx, struct_name: String, field_idx: i64
     String::from("")
 }
 
-fn lctx_alloc_vow(ctx: LowerCtx, desc: String, blame: i64, binding_ids: Vec<i64>, binding_names: Vec<String>) -> i64 {
+fn lctx_alloc_vow(ctx: LowerCtx, desc: String, blame: i64, binding_ids: Vec<i64>, binding_names: Vec<String>, offset: i64) -> i64 {
     let vid: i64 = ctx.func.vows.len();
     let entry: IrVowEntry = IrVowEntry {
         id: vid,
@@ -511,6 +513,8 @@ fn lctx_alloc_vow(ctx: LowerCtx, desc: String, blame: i64, binding_ids: Vec<i64>
         blame: blame,
         binding_ids: binding_ids,
         binding_names: binding_names,
+        file: ctx.file,
+        offset: offset,
     };
     ctx.func.vows.push(entry);
     vid
@@ -2620,7 +2624,8 @@ fn lower_requires_clauses(ctx: LowerCtx, vow_lid: i64) {
             let binding_names: Vec<String> = Vec::new();
             let binding_ids: Vec<i64> = Vec::new();
             collect_free_vars_in_expr(ctx, clause_eid, binding_names, binding_ids);
-            let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLER(), binding_ids, binding_names);
+            let clause_offset: i64 = span_unpack_start(expr_span(a, clause_eid));
+            let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLER(), binding_ids, binding_names, clause_offset);
             let pred_id: i64 = lower_expr(ctx, clause_eid);
             let vow_args: Vec<i64> = Vec::new();
             vow_args.push(pred_id);
@@ -2646,7 +2651,8 @@ fn lower_ensures_clauses(ctx: LowerCtx, vow_lid: i64, result_id: i64) {
             let binding_names: Vec<String> = Vec::new();
             let binding_ids: Vec<i64> = Vec::new();
             collect_free_vars_in_expr(ctx, clause_eid, binding_names, binding_ids);
-            let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLEE(), binding_ids, binding_names);
+            let clause_offset: i64 = span_unpack_start(expr_span(a, clause_eid));
+            let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLEE(), binding_ids, binding_names, clause_offset);
             let pred_id: i64 = lower_expr(ctx, clause_eid);
             let vow_args: Vec<i64> = Vec::new();
             vow_args.push(pred_id);
@@ -2671,7 +2677,8 @@ fn lower_invariant_clauses(ctx: LowerCtx, vow_lid: i64) {
             let binding_names: Vec<String> = Vec::new();
             let binding_ids: Vec<i64> = Vec::new();
             collect_free_vars_in_expr(ctx, clause_eid, binding_names, binding_ids);
-            let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLEE(), binding_ids, binding_names);
+            let clause_offset: i64 = span_unpack_start(expr_span(a, clause_eid));
+            let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLEE(), binding_ids, binding_names, clause_offset);
             let pred_id: i64 = lower_expr(ctx, clause_eid);
             let vow_args: Vec<i64> = Vec::new();
             vow_args.push(pred_id);
@@ -2782,7 +2789,8 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
             let binding_names: Vec<String> = Vec::new();
             let binding_ids: Vec<i64> = Vec::new();
             collect_free_vars_in_expr(ctx, ref_eid, binding_names, binding_ids);
-            let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLER(), binding_ids, binding_names);
+            let ref_offset: i64 = span_unpack_start(expr_span(a, ref_eid));
+            let vow_id: i64 = lctx_alloc_vow(ctx, desc, BLAME_CALLER(), binding_ids, binding_names, ref_offset);
             let pred_id: i64 = lower_expr(ctx, ref_eid);
             let vow_args: Vec<i64> = Vec::new();
             vow_args.push(pred_id);
@@ -2814,7 +2822,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     ctx.func
 }
 
-fn lower_module_vow(m: Module, str_eids: Vec<i64>) -> IrModule {
+fn lower_module_vow(m: Module, str_eids: Vec<i64>, file_path: String) -> IrModule {
     let a: AstArena = m.arena;
     let mod_name_sid: i64 = m.name_sid;
     let mod_name: String = arena_str(a, mod_name_sid);
@@ -3001,6 +3009,7 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>) -> IrModule {
     }
 
     let ctx: LowerCtx = lctx_new(String::from(""), ITY_UNIT(), 0, a, str_eids);
+    ctx.file = file_path;
     ctx.func_names = func_names;
     ctx.func_ret_tys = func_ret_tys;
     ctx.struct_names = struct_names;

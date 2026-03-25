@@ -178,6 +178,7 @@ fn CMD_NONE() -> i64 vow { ensures: result >= 0 } { 0 }
 fn CMD_BUILD() -> i64 vow { ensures: result >= 0 } { 1 }
 fn CMD_VERIFY() -> i64 vow { ensures: result >= 0 } { 2 }
 fn CMD_TEST() -> i64 vow { ensures: result >= 0 } { 3 }
+fn CMD_CONTRACTS() -> i64 vow { ensures: result >= 0 } { 4 }
 
 fn get_subcommand(argv: Vec<String>) -> i64 {
     if argv.len() < 1 {
@@ -192,6 +193,9 @@ fn get_subcommand(argv: Vec<String>) -> i64 {
     }
     if sub == String::from("test") {
         return CMD_TEST();
+    }
+    if sub == String::from("contracts") {
+        return CMD_CONTRACTS();
     }
     CMD_NONE()
 }
@@ -348,7 +352,7 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
         else { String::from("10") }
     };
     let use_cache: bool = !has_flag(argv, String::from("--no-cache"));
-    let ir_mod: IrModule = lower_module_vow(merged, str_eids);
+    let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
     emit_ir_warnings(ir_mod, dctx);
     let fns: Vec<IrFunction> = ir_mod.functions;
     let ces: Vec<VerifyCE> = Vec::new();
@@ -402,7 +406,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         else if trace_str == String::from("full") { 2 }
         else { 0 }
     };
-    let ir_mod: IrModule = lower_module_vow(merged, str_eids);
+    let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
     emit_ir_warnings(ir_mod, dctx);
     let do_verify: bool = !has_flag(argv, String::from("--no-verify"));
     let use_cache: bool = !has_flag(argv, String::from("--no-cache"));
@@ -584,7 +588,7 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
                 else { String::from("10") }
             };
             let str_eids: Vec<i64> = e.expr_str_eids;
-            let ir_mod: IrModule = lower_module_vow(merged, str_eids);
+            let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
             emit_ir_warnings(ir_mod, dctx);
             let fns: Vec<IrFunction> = ir_mod.functions;
             let ces: Vec<VerifyCE> = Vec::new();
@@ -603,7 +607,7 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
             }
         } else if emit_c {
             let str_eids: Vec<i64> = e.expr_str_eids;
-            let ir_mod: IrModule = lower_module_vow(merged, str_eids);
+            let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
             emit_ir_warnings(ir_mod, dctx);
             let c_code: String = emit_c_module(ir_mod);
             print_str(c_code);
@@ -624,7 +628,7 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
                 else { 0 }
             };
             let str_eids: Vec<i64> = e.expr_str_eids;
-            let ir_mod: IrModule = lower_module_vow(merged, str_eids);
+            let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
             emit_ir_warnings(ir_mod, dctx);
             let result: i64 = clif_emit_module(ir_mod, out, mode, trace);
             if result == -1 {
@@ -638,7 +642,7 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
             }
         } else {
             let str_eids: Vec<i64> = e.expr_str_eids;
-            let ir_mod: IrModule = lower_module_vow(merged, str_eids);
+            let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
             emit_ir_warnings(ir_mod, dctx);
             let ir_text: String = print_module(ir_mod);
             print_str(ir_text);
@@ -656,7 +660,8 @@ fn skill_json() -> String {
     r.push_str(String::from("    \"build\": \"Compile source to native executable (verifies by default; use --no-verify to skip)\",\n"));
     r.push_str(String::from("    \"verify\": \"Verify contracts without producing an executable (use --no-cache to skip cache)\",\n"));
     r.push_str(String::from("    \"test\": \"Run tests (not yet implemented)\",\n"));
-    r.push_str(String::from("    \"decl\": \"Emit declaration file (.vow.d) with type signatures only\"\n"));
+    r.push_str(String::from("    \"decl\": \"Emit declaration file (.vow.d) with type signatures only\",\n"));
+    r.push_str(String::from("    \"contracts\": \"List all contracts with optional verification status\"\n"));
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"legacy_usage\": \"vow [OPTIONS] <source.vow> (equivalent to vow build)\",\n"));
     r.push_str(String::from("  \"build_options\": {\n"));
@@ -669,6 +674,11 @@ fn skill_json() -> String {
     r.push_str(String::from("    \"--unwind <N>\": \"ESBMC loop unwind bound (default: 10)\"\n"));
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"verify_options\": {\n"));
+    r.push_str(String::from("    \"--no-cache\": \"Disable verification result caching\",\n"));
+    r.push_str(String::from("    \"--unwind <N>\": \"ESBMC loop unwind bound\"\n"));
+    r.push_str(String::from("  },\n"));
+    r.push_str(String::from("  \"contracts_options\": {\n"));
+    r.push_str(String::from("    \"--verify\": \"Run ESBMC verification and report per-contract status\",\n"));
     r.push_str(String::from("    \"--no-cache\": \"Disable verification result caching\",\n"));
     r.push_str(String::from("    \"--unwind <N>\": \"ESBMC loop unwind bound\"\n"));
     r.push_str(String::from("  },\n"));
@@ -867,6 +877,7 @@ fn skill_human() -> String {
     r.push_str(String::from("  vow build [OPTIONS] <source.vow>    Compile to native executable\n"));
     r.push_str(String::from("  vow verify [OPTIONS] <source.vow>    Verify contracts only (no executable)\n"));
     r.push_str(String::from("  vow test [<source.vow>]             Run tests (not yet implemented)\n"));
+    r.push_str(String::from("  vow contracts [OPTIONS] <source.vow> List all contracts\n"));
     r.push_str(String::from("  vow decl [OPTIONS] <source.vow>    Emit declaration file (.vow.d)\n"));
     r.push_str(String::from("  vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)\n"));
     r.push_str(String::from("\n"));
@@ -880,6 +891,11 @@ fn skill_human() -> String {
     r.push_str(String::from("  --unwind <N>            ESBMC loop unwind bound (default: 10)\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("VERIFY OPTIONS\n"));
+    r.push_str(String::from("  --no-cache              Disable verification result caching\n"));
+    r.push_str(String::from("  --unwind <N>            ESBMC loop unwind bound\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("CONTRACTS OPTIONS\n"));
+    r.push_str(String::from("  --verify                Run ESBMC verification and report per-contract status\n"));
     r.push_str(String::from("  --no-cache              Disable verification result caching\n"));
     r.push_str(String::from("  --unwind <N>            ESBMC loop unwind bound\n"));
     r.push_str(String::from("\n"));
@@ -939,6 +955,81 @@ fn skill_human() -> String {
     r
 }
 
+fn vow_kind_from_desc(desc: String) -> String {
+    if str_starts_with(desc, String::from("requires")) {
+        return String::from("requires");
+    }
+    if str_starts_with(desc, String::from("ensures")) {
+        return String::from("ensures");
+    }
+    if str_starts_with(desc, String::from("invariant")) {
+        return String::from("invariant");
+    }
+    String::from("unknown")
+}
+
+fn run_contracts(argv: Vec<String>) -> i32 [io] {
+    let fr: FrontendResult = run_frontend(argv, true);
+    let path: String = fr.path;
+    let dctx: DiagCtx = fr.dctx;
+    let merged: Module = fr.merged;
+    let str_eids: Vec<i64> = fr.str_eids;
+    let n_errors: i64 = fr.n_errors;
+    diag_ctx_print_all(dctx);
+    if n_errors > 0 {
+        diag_emit_verify_json(String::from("CompileFailed"), dctx, Vec::new());
+        return 1;
+    }
+    let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
+
+    let json: String = String::from("{\"contracts\":[");
+    let total: i64 = 0;
+    let nf: i64 = ir_mod.functions.len();
+    let mut fi: i64 = 0;
+    let first: bool = true;
+    while fi < nf {
+        let func: IrFunction = ir_mod.functions[fi];
+        let nv: i64 = func.vows.len();
+        let mut vi: i64 = 0;
+        while vi < nv {
+            let ve: IrVowEntry = func.vows[vi];
+            if !first {
+                json.push_str(String::from(","));
+            }
+            first = false;
+            json.push_str(String::from("{\"vow_id\":"));
+            json.push_str(i64_to_str(ve.id));
+            json.push_str(String::from(",\"function\":\""));
+            json.push_str(diag_json_escape_str(func.name));
+            json.push_str(String::from("\",\"kind\":\""));
+            json.push_str(vow_kind_from_desc(ve.description));
+            json.push_str(String::from("\",\"description\":\""));
+            json.push_str(diag_json_escape_str(ve.description));
+            json.push_str(String::from("\",\"blame\":\""));
+            if ve.blame == BLAME_CALLER() {
+                json.push_str(String::from("Caller"));
+            } else {
+                json.push_str(String::from("Callee"));
+            }
+            json.push_str(String::from("\",\"source\":{\"file\":\""));
+            json.push_str(diag_json_escape_str(ve.file));
+            json.push_str(String::from("\",\"offset\":"));
+            json.push_str(i64_to_str(ve.offset));
+            json.push_str(String::from("},\"status\":\"not_verified\"}"));
+            total = total + 1;
+            vi = vi + 1;
+        }
+        fi = fi + 1;
+    }
+    json.push_str(String::from("],\"summary\":{\"total\":"));
+    json.push_str(i64_to_str(total));
+    json.push_str(String::from(",\"proven\":0,\"failed\":0,\"unknown\":0,\"timeout\":0,\"error\":0,\"not_verified\":"));
+    json.push_str(i64_to_str(total));
+    json.push_str(String::from("}}"));
+    print_str(json);
+    0
+}
+
 fn main() -> i32 [io] {
     let argv: Vec<String> = args();
     if has_flag(argv, String::from("--help")) {
@@ -963,6 +1054,9 @@ fn main() -> i32 [io] {
     }
     if cmd == CMD_VERIFY() {
         return run_verify(argv);
+    }
+    if cmd == CMD_CONTRACTS() {
+        return run_contracts(argv);
     }
     run_legacy(argv)
 }

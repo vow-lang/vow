@@ -184,6 +184,8 @@ struct IrVowEntry {
     blame: i64,
     binding_ids: Vec<i64>,
     binding_names: Vec<String>,
+    file: String,
+    offset: i64,
 }
 
 struct IrFunction {

@@ -77,6 +77,8 @@ enum Command {
     Test(TestArgs),
     /// Emit declaration file (.vow.d) with type signatures only
     Decl(DeclArgs),
+    /// List all contracts in a program with optional verification status
+    Contracts(ContractsArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -135,6 +137,22 @@ struct DeclArgs {
     human: bool,
 }
 
+#[derive(clap::Args, Debug)]
+#[command(disable_help_flag = true)]
+struct ContractsArgs {
+    source: Option<PathBuf>,
+    #[arg(long)]
+    verify: bool,
+    #[arg(long)]
+    no_cache: bool,
+    #[arg(long)]
+    unwind: Option<u32>,
+    #[arg(long)]
+    help: bool,
+    #[arg(long)]
+    human: bool,
+}
+
 // ---------------------------------------------------------------------------
 // --help skill output
 // ---------------------------------------------------------------------------
@@ -148,7 +166,8 @@ fn skill_json() -> String {
     "build": "Compile source to native executable (verifies by default; use --no-verify to skip)",
     "verify": "Verify contracts without producing an executable (use --no-cache to skip cache)",
     "test": "Run tests (not yet implemented)",
-    "decl": "Emit declaration file (.vow.d) with type signatures only"
+    "decl": "Emit declaration file (.vow.d) with type signatures only",
+    "contracts": "List all contracts with optional verification status"
   },
   "legacy_usage": "vow [OPTIONS] <source.vow> (equivalent to vow build)",
   "build_options": {
@@ -161,6 +180,11 @@ fn skill_json() -> String {
     "--unwind <N>": "ESBMC loop unwind bound (default: 10)"
   },
   "verify_options": {
+    "--no-cache": "Disable verification result caching",
+    "--unwind <N>": "ESBMC loop unwind bound"
+  },
+  "contracts_options": {
+    "--verify": "Run ESBMC verification and report per-contract status",
     "--no-cache": "Disable verification result caching",
     "--unwind <N>": "ESBMC loop unwind bound"
   },
@@ -359,6 +383,7 @@ USAGE
   vow build [OPTIONS] <source.vow>    Compile to native executable
   vow verify [OPTIONS] <source.vow>    Verify contracts only (no executable)
   vow test [<source.vow>]             Run tests (not yet implemented)
+  vow contracts [OPTIONS] <source.vow> List all contracts
   vow decl [OPTIONS] <source.vow>    Emit declaration file (.vow.d)
   vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)
 
@@ -372,6 +397,11 @@ BUILD OPTIONS
   --unwind <N>            ESBMC loop unwind bound (default: 10)
 
 VERIFY OPTIONS
+  --no-cache              Disable verification result caching
+  --unwind <N>            ESBMC loop unwind bound
+
+CONTRACTS OPTIONS
+  --verify                Run ESBMC verification and report per-contract status
   --no-cache              Disable verification result caching
   --unwind <N>            ESBMC loop unwind bound
 
@@ -616,6 +646,40 @@ pub struct BuildResult {
     pub verify_status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verify_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContractEntryJson {
+    pub vow_id: u32,
+    pub function: String,
+    pub kind: String,
+    pub description: String,
+    pub blame: String,
+    pub source: ContractSourceJson,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContractSourceJson {
+    pub file: String,
+    pub offset: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContractsSummaryJson {
+    pub total: u32,
+    pub proven: u32,
+    pub failed: u32,
+    pub unknown: u32,
+    pub timeout: u32,
+    pub error: u32,
+    pub not_verified: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContractsResultJson {
+    pub contracts: Vec<ContractEntryJson>,
+    pub summary: ContractsSummaryJson,
 }
 
 impl DiagnosticJson {
@@ -1680,6 +1744,176 @@ fn run_verify_command(source: &Path, no_cache: bool) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Contracts listing (vow contracts)
+// ---------------------------------------------------------------------------
+
+fn vow_kind_from_description(desc: &str) -> &'static str {
+    if desc.starts_with("requires") {
+        "requires"
+    } else if desc.starts_with("ensures") {
+        "ensures"
+    } else if desc.starts_with("invariant") {
+        "invariant"
+    } else {
+        "unknown"
+    }
+}
+
+fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJson {
+    let mut summary = ContractsSummaryJson {
+        total: entries.len() as u32,
+        proven: 0,
+        failed: 0,
+        unknown: 0,
+        timeout: 0,
+        error: 0,
+        not_verified: 0,
+    };
+    for e in entries {
+        match e.status.as_str() {
+            "proven" => summary.proven += 1,
+            "failed" => summary.failed += 1,
+            "unknown" => summary.unknown += 1,
+            "timeout" => summary.timeout += 1,
+            "error" => summary.error += 1,
+            _ => summary.not_verified += 1,
+        }
+    }
+    summary
+}
+
+fn update_contract_statuses(
+    entries: &mut [ContractEntryJson],
+    ir_module: &vow_ir::Module,
+    verify_cache: Option<&VerifyCache>,
+) {
+    let const_fns = detect_constant_functions(ir_module);
+    for func in &ir_module.functions {
+        if func.vows.is_empty() {
+            continue;
+        }
+
+        let result = if let Some(vc) = verify_cache {
+            let c_src = emit_verify_c_source(func, ir_module, &const_fns);
+            let key = VerifyCache::cache_key(&c_src, 10);
+
+            if let Some(cached) = vc.lookup(&key) {
+                match cached {
+                    CachedVerifyResult::Proven => VerificationResult::Proven,
+                    CachedVerifyResult::Failed { .. } => {
+                        VerificationResult::Failed(cached.to_counterexample().unwrap())
+                    }
+                }
+            } else {
+                let esbmc = match find_esbmc() {
+                    Some(p) => p,
+                    None => {
+                        for entry in entries.iter_mut() {
+                            if entry.function == func.name {
+                                entry.status = "error".to_string();
+                            }
+                        }
+                        continue;
+                    }
+                };
+                let res = run_esbmc(&esbmc, &c_src);
+                match &res {
+                    VerificationResult::Proven => {
+                        vc.store(&key, &CachedVerifyResult::Proven);
+                    }
+                    VerificationResult::Failed(ce) => {
+                        vc.store(
+                            &key,
+                            &CachedVerifyResult::Failed {
+                                vow_id: ce.vow_id,
+                                description: ce.description.clone(),
+                                values: ce.values.clone(),
+                                block_visits: ce.block_visits.clone(),
+                                raw_output: ce.raw_output.clone(),
+                            },
+                        );
+                    }
+                    _ => {}
+                }
+                res
+            }
+        } else {
+            verify_function_with_module_and_const_fns(func, ir_module, &const_fns)
+        };
+
+        for entry in entries.iter_mut() {
+            if entry.function == func.name {
+                match &result {
+                    VerificationResult::Proven => {
+                        entry.status = "proven".to_string();
+                    }
+                    VerificationResult::Failed(ce) => {
+                        if ce.vow_id == Some(entry.vow_id) {
+                            entry.status = "failed".to_string();
+                        } else {
+                            entry.status = "unknown".to_string();
+                        }
+                    }
+                    VerificationResult::Timeout => {
+                        entry.status = "timeout".to_string();
+                    }
+                    VerificationResult::ToolError(_) | VerificationResult::ToolNotFound => {
+                        entry.status = "error".to_string();
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn run_contracts_command(source: &Path, verify: bool, no_cache: bool) {
+    let frontend = match compile_frontend(source) {
+        Ok(f) => f,
+        Err(output) => {
+            output.emit_json();
+            std::process::exit(1);
+        }
+    };
+
+    let mut entries: Vec<ContractEntryJson> = Vec::new();
+    for func in &frontend.ir_module.functions {
+        for vow in &func.vows {
+            let kind = vow_kind_from_description(&vow.description);
+            let blame = match vow.blame {
+                vow_diag::Blame::Caller => "Caller",
+                vow_diag::Blame::Callee => "Callee",
+                vow_diag::Blame::None => "None",
+            };
+            entries.push(ContractEntryJson {
+                vow_id: vow.id.0,
+                function: func.name.clone(),
+                kind: kind.to_string(),
+                description: vow.description.clone(),
+                blame: blame.to_string(),
+                source: ContractSourceJson {
+                    file: vow.file.clone(),
+                    offset: vow.offset,
+                },
+                status: "not_verified".to_string(),
+            });
+        }
+    }
+
+    if verify {
+        let verify_cache = if no_cache { None } else { VerifyCache::new() };
+        update_contract_statuses(&mut entries, &frontend.ir_module, verify_cache.as_ref());
+    }
+
+    let summary = build_contracts_summary(&entries);
+    let result = ContractsResultJson {
+        contracts: entries,
+        summary,
+    };
+    let json = serde_json::to_string(&result).expect("ContractsResult must be serializable");
+    println!("{json}");
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -1766,6 +2000,24 @@ fn main() {
                 }
             };
             run_decl_command(&source, d.output.as_deref());
+        }
+        Some(Command::Contracts(c)) => {
+            if c.help {
+                if c.human {
+                    println!("{}", skill_human());
+                } else {
+                    println!("{}", skill_json());
+                }
+                return;
+            }
+            let source = match c.source {
+                Some(s) => s,
+                None => {
+                    eprintln!("vow contracts: source file required (try --help)");
+                    std::process::exit(1);
+                }
+            };
+            run_contracts_command(&source, c.verify, c.no_cache);
         }
         None => {
             if args.help {

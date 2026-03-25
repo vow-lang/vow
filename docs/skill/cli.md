@@ -39,6 +39,22 @@ vow verify [OPTIONS] <source.vow>
 | `--no-cache`      | (off)       | Disable verification result caching        |
 | `--unwind <N>`    | `10`        | ESBMC loop unwind bound                   |
 
+### `vow contracts`
+
+List all contracts (requires, ensures, invariant) in a program. Runs frontend only by default (no codegen, no verification).
+
+```
+vow contracts [OPTIONS] <source.vow>
+```
+
+**Options:**
+
+| Flag              | Default     | Description                                |
+|-------------------|-------------|--------------------------------------------|
+| `--verify`        | (off)       | Run ESBMC verification and report per-contract status |
+| `--no-cache`      | (off)       | Disable verification result caching        |
+| `--unwind <N>`    | `10`        | ESBMC loop unwind bound                   |
+
 ### `vow test`
 
 Not yet implemented.
@@ -146,6 +162,71 @@ vow verify --help --human  # same human text (works on all subcommands)
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
 | `verify_status`    | string              | On timeout/error  | "timeout" or "error"                      |
 | `verify_message`   | string              | On error          | ESBMC error message                       |
+
+## Contracts Output JSON
+
+`vow contracts` emits a single JSON object to stdout. Schema: [`schemas/contracts-result.schema.json`](schemas/contracts-result.schema.json).
+
+### Example (without --verify)
+
+```json
+{
+  "contracts": [
+    {
+      "vow_id": 0,
+      "function": "divide",
+      "kind": "requires",
+      "description": "requires y != 0",
+      "blame": "Caller",
+      "source": { "file": "divide.vow", "offset": 42 },
+      "status": "not_verified"
+    }
+  ],
+  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1 }
+}
+```
+
+### Example (with --verify)
+
+```json
+{
+  "contracts": [
+    {
+      "vow_id": 0,
+      "function": "divide",
+      "kind": "requires",
+      "description": "requires y != 0",
+      "blame": "Caller",
+      "source": { "file": "divide.vow", "offset": 42 },
+      "status": "proven"
+    }
+  ],
+  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0 }
+}
+```
+
+### Contract Fields
+
+| Field         | Type    | Description                                              |
+|---------------|---------|----------------------------------------------------------|
+| `vow_id`      | integer | Unique contract identifier within the program            |
+| `function`    | string  | Function containing this contract                        |
+| `kind`        | string  | `"requires"`, `"ensures"`, or `"invariant"`              |
+| `description` | string  | Full contract text                                       |
+| `blame`       | string  | `"Caller"` (requires) or `"Callee"` (ensures/invariant)  |
+| `source`      | object  | `{ "file": string, "offset": integer }`                  |
+| `status`      | string  | `"proven"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, or `"not_verified"` |
+
+### Status Values
+
+| Status          | Meaning                                              |
+|-----------------|------------------------------------------------------|
+| `not_verified`  | Verification not requested (no `--verify` flag)      |
+| `proven`        | ESBMC proved this contract holds for all inputs      |
+| `failed`        | ESBMC found a counterexample violating this contract |
+| `unknown`       | Another contract in the same function failed; this one was not individually checked |
+| `timeout`       | ESBMC timed out on the containing function           |
+| `error`         | ESBMC error or tool not found                        |
 
 ## Trace Output (stderr, --debug-trace)
 

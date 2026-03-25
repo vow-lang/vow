@@ -149,6 +149,14 @@ def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
             flag, _default, desc = row[0], row[1], row[2]
             verify_options[flag] = desc
 
+    # --- CLI: contracts options ---
+    contracts_opt_rows = extract_table(cli, "vow contracts", heading_level=3)
+    contracts_options = {}
+    for row in contracts_opt_rows:
+        if len(row) >= 3:
+            flag, _default, desc = row[0], row[1], row[2]
+            contracts_options[flag] = desc
+
     # --- Verification limits from contracts.md ---
     collection_rows = extract_table(contracts, "Collection Models for Verification")
     verification_limits: dict[str, str | int] = {
@@ -169,10 +177,12 @@ def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
             "verify": "Verify contracts without producing an executable (use --no-cache to skip cache)",
             "test": "Run tests (not yet implemented)",
             "decl": "Emit declaration file (.vow.d) with type signatures only",
+            "contracts": "List all contracts with optional verification status",
         },
         "legacy_usage": "vow [OPTIONS] <source.vow> (equivalent to vow build)",
         "build_options": build_options,
         "verify_options": verify_options,
+        "contracts_options": contracts_options,
         "global_options": {
             "--help": "Print this JSON capability description",
             "--help --human": "Print human-readable capability description",
@@ -271,6 +281,7 @@ def build_help_human(data: dict) -> str:
     lines.append("  vow build [OPTIONS] <source.vow>    Compile to native executable")
     lines.append("  vow verify [OPTIONS] <source.vow>    Verify contracts only (no executable)")
     lines.append("  vow test [<source.vow>]             Run tests (not yet implemented)")
+    lines.append("  vow contracts [OPTIONS] <source.vow> List all contracts")
     lines.append("  vow decl [OPTIONS] <source.vow>    Emit declaration file (.vow.d)")
     lines.append("  vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)")
     lines.append("")
@@ -283,6 +294,12 @@ def build_help_human(data: dict) -> str:
 
     lines.append("VERIFY OPTIONS")
     for flag, desc in data["verify_options"].items():
+        pad = max(24, len(flag) + 2)
+        lines.append(f"  {flag:<{pad}s}{desc}")
+    lines.append("")
+
+    lines.append("CONTRACTS OPTIONS")
+    for flag, desc in data.get("contracts_options", {}).items():
         pad = max(24, len(flag) + 2)
         lines.append(f"  {flag:<{pad}s}{desc}")
     lines.append("")
@@ -433,8 +450,9 @@ def inject_vow(main_vow: Path, json_str: str, human_str: str) -> str:
     # Replace skill_human function body
     human_start_marker = "fn skill_human() -> String {\n    let r: String = String::from("
     human_start = content.index(human_start_marker)
-    # Find the closing "    r\n}" that ends this function - it's followed by a blank line and fn main
-    human_end_marker = "    r\n}\n\nfn main"
+    # Find the closing "    r\n}\n" that ends this function
+    # Search for the pattern "    r\n}\n\n" after skill_human start
+    human_end_marker = "    r\n}\n\n"
     human_end = content.index(human_end_marker, human_start) + len("    r\n}")
 
     first_human, rest_human = _vow_pushstr_body(human_str)
