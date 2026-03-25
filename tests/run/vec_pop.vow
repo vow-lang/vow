@@ -1,0 +1,51 @@
+// TEST: stdout "len3:321pop1:len2:32pop2:len1:3push:len2:37trunc:len1:3empty_pop:len0:done"
+module vec_pop
+
+fn main() -> i32 [io] {
+    let v: Vec<i64> = Vec::new();
+    v.push(3);
+    v.push(2);
+    v.push(1);
+
+    // basic state
+    print_str("len3:");
+    print_i64(v[0]);
+    print_i64(v[1]);
+    print_i64(v[2]);
+
+    // pop once
+    v.pop();
+    print_str("pop1:len2:");
+    print_i64(v[0]);
+    print_i64(v[1]);
+
+    // pop again
+    v.pop();
+    print_str("pop2:len1:");
+    print_i64(v[0]);
+
+    // push after pop
+    v.push(7);
+    print_str("push:len2:");
+    print_i64(v[0]);
+    print_i64(v[1]);
+
+    // truncate loop
+    v.push(100);
+    v.push(200);
+    while v.len() > 1 {
+        v.pop();
+    }
+    print_str("trunc:len1:");
+    print_i64(v[0]);
+
+    // pop to empty
+    v.pop();
+    print_str("empty_pop:len0:");
+
+    // pop on empty is a no-op
+    v.pop();
+
+    print_str("done");
+    0
+}

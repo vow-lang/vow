@@ -1365,4 +1365,67 @@ mod tests {
         }
         unsafe { __vow_vec_free_val(v) };
     }
+
+    #[test]
+    fn vec_pop_basic() {
+        let v = __vow_vec_new_val();
+        unsafe { __vow_vec_push_val(v, 10) };
+        unsafe { __vow_vec_push_val(v, 20) };
+        unsafe { __vow_vec_push_val(v, 30) };
+        assert_eq!(unsafe { &*(v as *const VowVec) }.len, 3);
+        unsafe { __vow_vec_pop(v) };
+        assert_eq!(unsafe { &*(v as *const VowVec) }.len, 2);
+        assert_eq!(unsafe { __vow_vec_get_val(v, 0) }, 10);
+        assert_eq!(unsafe { __vow_vec_get_val(v, 1) }, 20);
+        unsafe { __vow_vec_free_val(v) };
+    }
+
+    #[test]
+    fn vec_pop_empty_is_noop() {
+        let v = __vow_vec_new_val();
+        unsafe { __vow_vec_pop(v) };
+        assert_eq!(unsafe { &*(v as *const VowVec) }.len, 0);
+        unsafe { __vow_vec_free_val(v) };
+    }
+
+    #[test]
+    fn vec_pop_to_empty() {
+        let v = __vow_vec_new_val();
+        unsafe { __vow_vec_push_val(v, 42) };
+        unsafe { __vow_vec_pop(v) };
+        assert_eq!(unsafe { &*(v as *const VowVec) }.len, 0);
+        unsafe { __vow_vec_free_val(v) };
+    }
+
+    #[test]
+    fn vec_pop_then_push() {
+        let v = __vow_vec_new_val();
+        unsafe { __vow_vec_push_val(v, 1) };
+        unsafe { __vow_vec_push_val(v, 2) };
+        unsafe { __vow_vec_push_val(v, 3) };
+        unsafe { __vow_vec_pop(v) };
+        unsafe { __vow_vec_pop(v) };
+        unsafe { __vow_vec_push_val(v, 99) };
+        let vec = unsafe { &*(v as *const VowVec) };
+        assert_eq!(vec.len, 2);
+        assert_eq!(unsafe { __vow_vec_get_val(v, 0) }, 1);
+        assert_eq!(unsafe { __vow_vec_get_val(v, 1) }, 99);
+        unsafe { __vow_vec_free_val(v) };
+    }
+
+    #[test]
+    fn vec_pop_truncate_loop() {
+        let v = __vow_vec_new_val();
+        for i in 0..10 {
+            unsafe { __vow_vec_push_val(v, i) };
+        }
+        while unsafe { &*(v as *const VowVec) }.len > 3 {
+            unsafe { __vow_vec_pop(v) };
+        }
+        assert_eq!(unsafe { &*(v as *const VowVec) }.len, 3);
+        assert_eq!(unsafe { __vow_vec_get_val(v, 0) }, 0);
+        assert_eq!(unsafe { __vow_vec_get_val(v, 1) }, 1);
+        assert_eq!(unsafe { __vow_vec_get_val(v, 2) }, 2);
+        unsafe { __vow_vec_free_val(v) };
+    }
 }
