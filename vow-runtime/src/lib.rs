@@ -2,10 +2,10 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::ffi::{CStr, c_char};
+use std::ffi::{c_char, CStr};
 use std::io::Write as _;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Mutex;
 
 thread_local! {
     static LAST_STDOUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
@@ -213,26 +213,18 @@ const VEC_INITIAL_CAP: usize = 8;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_vec_new(elem_size: usize, align: usize) -> *mut u8 {
+    let _ = elem_size;
     let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
     let header_ptr = unsafe { std::alloc::alloc_zeroed(header_layout) } as *mut VowVec;
     if header_ptr.is_null() {
         std::process::abort();
     }
-    let buf_size = VEC_INITIAL_CAP * elem_size;
-    let buf_ptr = if buf_size > 0 {
-        let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(buf_size, align) };
-        let p = unsafe { std::alloc::alloc_zeroed(buf_layout) };
-        if p.is_null() {
-            std::process::abort();
-        }
-        p
-    } else {
-        align as *mut u8
-    };
+    // Lazy allocation: don't allocate buffer until first push.
+    // Use a dangling aligned pointer so from_raw_parts with len=0 is safe.
     unsafe {
-        (*header_ptr).ptr = buf_ptr;
+        (*header_ptr).ptr = align as *mut u8;
         (*header_ptr).len = 0;
-        (*header_ptr).cap = VEC_INITIAL_CAP;
+        (*header_ptr).cap = 0;
     }
     header_ptr as *mut u8
 }
@@ -378,7 +370,11 @@ pub unsafe extern "C" fn __vow_string_eq(a: *const u8, b: *const u8) -> i64 {
     }
     let sa = unsafe { std::slice::from_raw_parts(va.ptr, va.len) };
     let sb = unsafe { std::slice::from_raw_parts(vb.ptr, vb.len) };
-    if sa == sb { 1 } else { 0 }
+    if sa == sb {
+        1
+    } else {
+        0
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -517,7 +513,11 @@ pub unsafe extern "C" fn __vow_string_starts_with(s: *const u8, prefix: *const u
     let vp = unsafe { &*(prefix as *const VowVec) };
     let ss = unsafe { std::slice::from_raw_parts(vs.ptr, vs.len) };
     let sp = unsafe { std::slice::from_raw_parts(vp.ptr, vp.len) };
-    if ss.starts_with(sp) { 1 } else { 0 }
+    if ss.starts_with(sp) {
+        1
+    } else {
+        0
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -529,7 +529,11 @@ pub unsafe extern "C" fn __vow_string_ends_with(s: *const u8, suffix: *const u8)
     let vp = unsafe { &*(suffix as *const VowVec) };
     let ss = unsafe { std::slice::from_raw_parts(vs.ptr, vs.len) };
     let sp = unsafe { std::slice::from_raw_parts(vp.ptr, vp.len) };
-    if ss.ends_with(sp) { 1 } else { 0 }
+    if ss.ends_with(sp) {
+        1
+    } else {
+        0
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1291,5 +1295,74 @@ mod tests {
     fn arena_alloc_zero_returns_sentinel() {
         let ptr = __vow_arena_alloc(0, 8);
         assert_eq!(ptr, 8 as *mut u8);
+    }
+
+    #[test]
+    fn vec_new_lazy_allocation() {
+        let v = __vow_vec_new_val();
+        let vec = unsafe { &*(v as *const VowVec) };
+        assert_eq!(vec.len, 0);
+        assert_eq!(vec.cap, 0, "empty Vec should have cap=0 (lazy)");
+        unsafe { __vow_vec_free_val(v) };
+    }
+
+    #[test]
+    fn vec_first_push_allocates() {
+        let v = __vow_vec_new_val();
+        unsafe { __vow_vec_push_val(v, 42) };
+        let vec = unsafe { &*(v as *const VowVec) };
+        assert_eq!(vec.len, 1);
+        assert!(vec.cap >= 1, "cap should be allocated after first push");
+        assert_eq!(unsafe { __vow_vec_get_val(v, 0) }, 42);
+        unsafe { __vow_vec_free_val(v) };
+    }
+
+    #[test]
+    fn vec_free_empty_no_crash() {
+        let v = __vow_vec_new_val();
+        unsafe { __vow_vec_free_val(v) };
+    }
+
+    #[test]
+    fn string_new_empty_lazy() {
+        let s = __vow_vec_new(1, 1);
+        let vec = unsafe { &*(s as *const VowVec) };
+        assert_eq!(vec.len, 0);
+        assert_eq!(vec.cap, 0, "empty String should have cap=0 (lazy)");
+        unsafe { __vow_string_free(s) };
+    }
+
+    #[test]
+    fn string_from_empty_lazy() {
+        let s = unsafe { __vow_string_new(std::ptr::null(), 0) };
+        let vec = unsafe { &*(s as *const VowVec) };
+        assert_eq!(vec.len, 0);
+        assert_eq!(vec.cap, 0, "String::from(\"\") should have cap=0 (lazy)");
+        unsafe { __vow_string_free(s) };
+    }
+
+    #[test]
+    fn string_from_nonempty_allocates() {
+        let data = b"hello";
+        let s = unsafe { __vow_string_new(data.as_ptr() as *const i8, 5) };
+        let vec = unsafe { &*(s as *const VowVec) };
+        assert_eq!(vec.len, 5);
+        assert!(vec.cap >= 5);
+        unsafe { __vow_string_free(s) };
+    }
+
+    #[test]
+    fn vec_multiple_push_after_lazy() {
+        let v = __vow_vec_new_val();
+        for i in 0..20 {
+            unsafe { __vow_vec_push_val(v, i) };
+        }
+        let vec = unsafe { &*(v as *const VowVec) };
+        assert_eq!(vec.len, 20);
+        assert!(vec.cap >= 20);
+        for i in 0..20 {
+            assert_eq!(unsafe { __vow_vec_get_val(v, i as usize) }, i);
+        }
+        unsafe { __vow_vec_free_val(v) };
     }
 }
