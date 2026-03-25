@@ -1,0 +1,29 @@
+// TEST: stdout "and_ok or_ok chain_ok done"
+module short_circuit
+
+fn main() -> i32 [io] {
+    let v: Vec<i64> = Vec::new();
+    v.push(10);
+    v.push(20);
+
+    // && must short-circuit: 5 < 2 is false, v[5] must NOT be evaluated
+    let idx: i64 = 5;
+    if idx < v.len() && v[idx] == 10 {
+        print_str("FAIL");
+        return 1i32;
+    }
+    print_str("and_ok ");
+
+    // || must short-circuit: true || <crash> must not crash
+    if true || v[99] == 0 {
+        print_str("or_ok ");
+    }
+
+    // chained &&: all conditions met
+    if v.len() > 0 && v[0] == 10 && v[1] == 20 {
+        print_str("chain_ok ");
+    }
+
+    print_str("done");
+    0
+}

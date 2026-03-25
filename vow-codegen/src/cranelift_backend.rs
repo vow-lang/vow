@@ -1775,7 +1775,10 @@ impl Backend for CraneliftBackend {
             )?;
 
             if let Err(e) = obj_module.define_function(cl_id, &mut cl_ctx) {
-                return Err(CodegenError::FunctionDefine(e.to_string()));
+                return Err(CodegenError::FunctionDefine(format!(
+                    "in function '{}': {}",
+                    ir_func.name, e
+                )));
             }
             obj_module.clear_context(&mut cl_ctx);
         }

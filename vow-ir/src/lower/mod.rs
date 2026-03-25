@@ -621,6 +621,86 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .unwrap_or_else(|| panic!("undefined variable: {name}"))
         }
         ExprKind::BinaryOp { op, lhs, rhs } => {
+            // Short-circuit evaluation for && and ||
+            if *op == BinOp::And || *op == BinOp::Or {
+                let lhs_id = lower_expr(ctx, lhs);
+                let rhs_block = ctx.new_block();
+                let short_block = ctx.new_block();
+                let merge_block = ctx.new_block();
+
+                // For &&: if LHS false → short-circuit (false); else → evaluate RHS
+                // For ||: if LHS true → short-circuit (true); else → evaluate RHS
+                let (then_target, else_target) = if *op == BinOp::And {
+                    (rhs_block, short_block)
+                } else {
+                    (short_block, rhs_block)
+                };
+                ctx.emit(
+                    Opcode::Branch,
+                    Ty::Unit,
+                    vec![lhs_id],
+                    InstData::BranchTargets {
+                        then_block: then_target,
+                        else_block: else_target,
+                    },
+                    span,
+                );
+
+                // RHS block: evaluate RHS, feed into Phi
+                ctx.switch_to_block(rhs_block);
+                ctx.branch_depth += 1;
+                let rhs_id = lower_expr(ctx, rhs);
+                ctx.branch_depth -= 1;
+                let rhs_upsilon = ctx.emit(
+                    Opcode::Upsilon,
+                    Ty::Unit,
+                    vec![rhs_id],
+                    InstData::PhiTarget(InstId(u32::MAX)),
+                    span,
+                );
+                let rhs_upsilon_block = ctx.current_block;
+                ctx.emit(
+                    Opcode::Jump,
+                    Ty::Unit,
+                    vec![],
+                    InstData::JumpTarget(merge_block),
+                    span,
+                );
+
+                // Short-circuit block: produce constant false (&&) or true (||)
+                ctx.switch_to_block(short_block);
+                let short_val = ctx.emit(
+                    Opcode::ConstBool,
+                    Ty::Bool,
+                    vec![],
+                    InstData::ConstBool(*op == BinOp::Or),
+                    span,
+                );
+                let short_upsilon = ctx.emit(
+                    Opcode::Upsilon,
+                    Ty::Unit,
+                    vec![short_val],
+                    InstData::PhiTarget(InstId(u32::MAX)),
+                    span,
+                );
+                let short_upsilon_block = ctx.current_block;
+                ctx.emit(
+                    Opcode::Jump,
+                    Ty::Unit,
+                    vec![],
+                    InstData::JumpTarget(merge_block),
+                    span,
+                );
+
+                // Merge block: Phi collects the result
+                ctx.switch_to_block(merge_block);
+                let phi = ctx.emit(Opcode::Phi, Ty::Bool, vec![], InstData::None, span);
+                backpatch_upsilon(ctx, rhs_upsilon_block, rhs_upsilon, phi);
+                backpatch_upsilon(ctx, short_upsilon_block, short_upsilon, phi);
+
+                return phi;
+            }
+
             let lhs_id = lower_expr(ctx, lhs);
             let rhs_id = lower_expr(ctx, rhs);
             let lhs_is_str = ctx

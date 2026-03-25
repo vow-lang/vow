@@ -854,6 +854,54 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let op: i64 = expr_a(a, eid);
         let lhs_eid: i64 = expr_b(a, eid);
         let rhs_eid: i64 = expr_c(a, eid);
+
+        // Short-circuit evaluation for && and ||
+        if op == BINOP_AND() || op == BINOP_OR() {
+            let lhs_id: i64 = lower_expr(ctx, lhs_eid);
+            let rhs_block: i64 = lctx_new_block(ctx);
+            let short_block: i64 = lctx_new_block(ctx);
+            let merge_block: i64 = lctx_new_block(ctx);
+
+            // &&: if LHS true → evaluate RHS; else → short-circuit (false)
+            // ||: if LHS true → short-circuit (true); else → evaluate RHS
+            let then_target: i64 = if op == BINOP_AND() { rhs_block } else { short_block };
+            let else_target: i64 = if op == BINOP_AND() { short_block } else { rhs_block };
+
+            let br_args: Vec<i64> = Vec::new();
+            br_args.push(lhs_id);
+            lctx_emit(ctx, IOP_BRANCH(), ITY_UNIT(), br_args, IDATA_BRANCH_TARGETS(), then_target, else_target, String::from(""));
+
+            // RHS block: evaluate RHS, Upsilon, Jump to merge
+            lctx_switch_to_block(ctx, rhs_block);
+            let rhs_id: i64 = lower_expr(ctx, rhs_eid);
+            let rhs_up_args: Vec<i64> = Vec::new();
+            rhs_up_args.push(rhs_id);
+            let rhs_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), rhs_up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+            let rhs_up_block: i64 = ctx.current_block;
+            let rhs_jmp_args: Vec<i64> = Vec::new();
+            lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), rhs_jmp_args, IDATA_JUMP_TARGET(), merge_block, 0, String::from(""));
+
+            // Short-circuit block: produce false (&&) or true (||), Upsilon, Jump
+            lctx_switch_to_block(ctx, short_block);
+            let short_val_i: i64 = if op == BINOP_OR() { 1 } else { 0 };
+            let short_val_args: Vec<i64> = Vec::new();
+            let short_val: i64 = lctx_emit(ctx, IOP_CONST_BOOL(), ITY_BOOL(), short_val_args, IDATA_CONST_BOOL(), short_val_i, 0, String::from(""));
+            let short_up_args: Vec<i64> = Vec::new();
+            short_up_args.push(short_val);
+            let short_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), short_up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
+            let short_up_block: i64 = ctx.current_block;
+            let short_jmp_args: Vec<i64> = Vec::new();
+            lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), short_jmp_args, IDATA_JUMP_TARGET(), merge_block, 0, String::from(""));
+
+            // Merge block: Phi
+            lctx_switch_to_block(ctx, merge_block);
+            let phi_args: Vec<i64> = Vec::new();
+            let phi_id: i64 = lctx_emit(ctx, IOP_PHI(), ITY_BOOL(), phi_args, IDATA_NONE(), 0, 0, String::from(""));
+            backpatch_upsilon(ctx, rhs_up_block, rhs_up_id, phi_id);
+            backpatch_upsilon(ctx, short_up_block, short_up_id, phi_id);
+            return phi_id;
+        }
+
         let lhs_id: i64 = lower_expr(ctx, lhs_eid);
         let rhs_id: i64 = lower_expr(ctx, rhs_eid);
         let lhs_is_str: bool = lctx_is_str_eid(ctx, lhs_eid);

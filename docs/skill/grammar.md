@@ -215,9 +215,11 @@ Checked operators abort with `ArithmeticOverflow` on overflow.
 
 | Operator | Meaning    |
 |----------|------------|
-| `&&`     | Logical AND|
-| `\|\|`   | Logical OR |
+| `&&`     | Logical AND (short-circuit) |
+| `\|\|`   | Logical OR (short-circuit) |
 | `!`      | Logical NOT|
+
+`&&` and `||` use short-circuit evaluation: for `a && b`, `b` is only evaluated if `a` is true; for `a || b`, `b` is only evaluated if `a` is false.
 
 ### Unary Operators
 
