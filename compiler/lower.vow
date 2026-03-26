@@ -676,6 +676,7 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("hex_decode") { return String::from("__vow_hex_decode"); }
     if name == String::from("args") { return String::from("__vow_args"); }
     if name == String::from("stdin_read") { return String::from("__vow_stdin_read"); }
+    if name == String::from("stdin_read_line") { return String::from("__vow_stdin_read_line"); }
     if name == String::from("process_exit") { return String::from("__vow_process_exit"); }
     if name == String::from("process_run") { return String::from("__vow_process_run"); }
     if name == String::from("process_get_stdout") { return String::from("__vow_process_get_stdout"); }
@@ -718,6 +719,7 @@ fn builtin_ret_ty(name: String) -> i64 {
     if name == String::from("hex_decode") { return ITY_PTR(); }
     if name == String::from("args") { return ITY_PTR(); }
     if name == String::from("stdin_read") { return ITY_PTR(); }
+    if name == String::from("stdin_read_line") { return ITY_PTR(); }
     if name == String::from("process_exit") { return ITY_UNIT(); }
     if name == String::from("process_run") { return ITY_I64(); }
     if name == String::from("process_get_stdout") { return ITY_PTR(); }
@@ -1042,7 +1044,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 ai = ai + 1;
             }
             let result: i64 = lctx_emit(ctx, IOP_CALL(), ret_ty, call_args, IDATA_CALL_EXTERN(), 0, 0, ext);
-            if fn_name == String::from("fs_read") || fn_name == String::from("stdin_read") {
+            if fn_name == String::from("fs_read") || fn_name == String::from("stdin_read") || fn_name == String::from("stdin_read_line") {
                 lctx_tag(ctx, result, String::from("String"));
                 lctx_track_alloc(ctx, result, String::from("String"), 0);
             }

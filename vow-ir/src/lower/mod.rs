@@ -27,6 +27,7 @@ fn builtin_alloc_tag(sym: &str) -> &'static str {
         | "__vow_string_join"
         | "__vow_string_from_i64"
         | "__vow_stdin_read"
+        | "__vow_stdin_read_line"
         | "__vow_process_get_stdout"
         | "__vow_process_get_stderr"
         | "__vow_process_stdout_for"
@@ -70,6 +71,7 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "hex_decode" => Some(("__vow_hex_decode", Ty::Ptr)),
         "args" => Some(("__vow_args", Ty::Ptr)),
         "stdin_read" => Some(("__vow_stdin_read", Ty::Ptr)),
+        "stdin_read_line" => Some(("__vow_stdin_read_line", Ty::Ptr)),
         "process_exit" => Some(("__vow_process_exit", Ty::Unit)),
         "process_run" => Some(("__vow_process_run", Ty::I64)),
         "process_get_stdout" => Some(("__vow_process_get_stdout", Ty::Ptr)),

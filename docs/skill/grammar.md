@@ -579,6 +579,7 @@ Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they 
 | `fs_write`       | `fn(path: String, data: String) -> ()`     | `[write]`  |
 | `args`           | `fn() -> Vec<String>`                      | `[read]`   |
 | `stdin_read`     | `fn() -> String`                           | `[read]`   |
+| `stdin_read_line`| `fn() -> String`                           | `[read]`   |
 | `process_exit`   | `fn(code: i64) -> ()`                      | `[io]`     |
 
 ## Canonical Form

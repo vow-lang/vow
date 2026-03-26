@@ -1005,6 +1005,20 @@ pub extern "C" fn __vow_stdin_read() -> *mut u8 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn __vow_stdin_read_line() -> *mut u8 {
+    use std::io::BufRead;
+    let stdin = std::io::stdin();
+    let mut handle = stdin.lock();
+    let mut line = String::new();
+    let bytes_read = handle.read_line(&mut line).unwrap_or(0);
+    if bytes_read == 0 {
+        unsafe { __vow_string_new(std::ptr::null(), 0) }
+    } else {
+        unsafe { __vow_string_new(line.as_ptr() as *const i8, line.len()) }
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn __vow_args() -> *mut u8 {
     let result_vec = __vow_vec_new(8, 8);
     for arg in std::env::args().skip(1) {

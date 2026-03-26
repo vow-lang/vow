@@ -317,6 +317,14 @@ impl TypeEnv {
             },
         );
         env.define_fn(
+            "stdin_read_line",
+            FnSig {
+                params: vec![],
+                return_ty: Ty::Str,
+                effects: [Effect::Read].into_iter().collect(),
+            },
+        );
+        env.define_fn(
             "process_exit",
             FnSig {
                 params: vec![Ty::I64],
