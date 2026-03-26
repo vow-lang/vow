@@ -13,6 +13,15 @@ Syntactic convenience for humans (string interpolation, pattern matching sugar, 
 
 **Crisp rule:** add surface sugar only when it desugars to today's core semantics with near-zero verifier impact; reject anything that introduces a new type-system axis. This preserves Vow's identity.
 
+## Production Quality
+
+Vow is a serious, production-grade project. All implementation decisions must reflect this:
+
+- **No shortcuts.** Do not assume programs will be small, short-lived, or low-allocation. Vow programs may be long-running services, compile large codebases, or process substantial data.
+- **Memory management matters.** Every allocation must have a clear ownership story and a path to deallocation. "The process exits soon anyway" is never an acceptable justification for leaking memory.
+- **Scalability is a requirement.** Data structures, algorithms, and compiler passes must be chosen for reasonable asymptotic behavior, not just correctness on small inputs.
+- **No "experimental" excuses.** Do not defer correctness, robustness, or resource discipline with the rationale that the project is early-stage or experimental. Treat every change as if it will run in production.
+
 ## Vow Compiler
 
 When implementing changes across Vow compilers, always modify BOTH the Rust compiler and the self-hosted compiler in the same session. Run the full test suite (`cargo test` and self-hosted tests) after changes to both.
