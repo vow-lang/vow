@@ -2100,6 +2100,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         span,
                     )
                 }
+                (Some("String"), "clear") => ctx.emit(
+                    Opcode::Call,
+                    Ty::Unit,
+                    vec![recv_id],
+                    InstData::CallExtern("__vow_string_clear".to_string()),
+                    span,
+                ),
                 (Some("String"), "substring") => {
                     let start_id = args.first().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
                         ctx.emit(
@@ -2238,6 +2245,25 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     InstData::CallExtern("__vow_vec_pop".to_string()),
                     span,
                 ),
+                (_, "clear") => ctx.emit(
+                    Opcode::Call,
+                    Ty::Unit,
+                    vec![recv_id],
+                    InstData::CallExtern("__vow_vec_clear".to_string()),
+                    span,
+                ),
+                (_, "truncate") => {
+                    let len_id = args.first().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
+                        ctx.emit(Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0), span)
+                    });
+                    ctx.emit(
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![recv_id, len_id],
+                        InstData::CallExtern("__vow_vec_truncate".to_string()),
+                        span,
+                    )
+                }
                 _ => {
                     for a in args {
                         lower_expr(ctx, a);

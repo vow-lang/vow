@@ -1326,6 +1326,13 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_vec_pop" => {
             sig.params.push(AbiParam::new(types::I64)); // vec ptr
         }
+        "__vow_vec_clear" => {
+            sig.params.push(AbiParam::new(types::I64)); // vec ptr
+        }
+        "__vow_vec_truncate" => {
+            sig.params.push(AbiParam::new(types::I64)); // vec ptr
+            sig.params.push(AbiParam::new(types::I64)); // new_len
+        }
         // String runtime
         "__vow_string_new" => {
             sig.params.push(AbiParam::new(types::I64)); // ptr
@@ -1339,6 +1346,9 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_string_len" => {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.returns.push(AbiParam::new(types::I64)); // len
+        }
+        "__vow_string_clear" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
         }
         "__vow_string_eq" => {
             sig.params.push(AbiParam::new(types::I64)); // a ptr

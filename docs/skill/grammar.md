@@ -462,6 +462,8 @@ m.contains_key(k)
 | `.push(val)`   | `(T) -> ()`                      |
 | `.pop()`       | `() -> ()`                       |
 | `.len()`       | `() -> i64`                      |
+| `.clear()`     | `() -> ()` — frees buffer, resets to empty |
+| `.truncate(n)` | `(i64) -> ()` — shrinks to n elements, frees excess memory |
 | `v[i]`         | Index access (panics if out of bounds) |
 | `v[i] = val`   | Index assignment                 |
 
@@ -474,6 +476,7 @@ m.contains_key(k)
 | `.byte_at(i)`       | `(i64) -> i64`              |
 | `.push_byte(b)`     | `(i64) -> ()`               |
 | `.push_str(s)`      | `(String) -> ()`            |
+| `.clear()`          | `() -> ()` — frees buffer, resets to empty |
 | `.contains(s)`      | `(String) -> bool`          |
 | `.eq(s)`            | `(String) -> bool`          |
 | `.substring(start, end)` | `(i64, i64) -> String` |

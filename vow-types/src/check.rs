@@ -743,10 +743,12 @@ impl<'e> Checker<'e> {
                         "substring",
                         "parse_i64",
                         "parse_u64",
+                        "clear",
                     ];
                     let ty = match method.as_str() {
                         "len" => Some(Ty::I64),
                         "push_str" => Some(Ty::Unit),
+                        "clear" => Some(Ty::Unit),
                         "eq" => Some(Ty::Bool),
                         "contains" => Some(Ty::Bool),
                         "byte_at" => Some(Ty::I64),
@@ -775,11 +777,13 @@ impl<'e> Checker<'e> {
                     };
                     (methods, ty)
                 } else if is_vec {
-                    let methods: &[&str] = &["len", "push", "pop", "get"];
+                    let methods: &[&str] = &["len", "push", "pop", "get", "clear", "truncate"];
                     let ty = match method.as_str() {
                         "len" => Some(Ty::I64),
                         "push" => Some(Ty::Unit),
                         "pop" => Some(Ty::Unit),
+                        "clear" => Some(Ty::Unit),
+                        "truncate" => Some(Ty::Unit),
                         "get" => Some(Ty::Applied(
                             Box::new(Ty::Enum("Option".to_string())),
                             vec![if let Ty::Applied(_, args) = &recv_ty {

@@ -301,6 +301,46 @@ pub unsafe extern "C" fn __vow_vec_pop(vec: *mut u8) {
     }
 }
 
+/// Frees the data buffer and resets the Vec to an empty state (len=0, cap=0).
+/// The Vec header itself remains valid and can be reused with push().
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_clear(vec: *mut u8) {
+    let v = unsafe { &mut *(vec as *mut VowVec) };
+    if v.cap > 0 && !v.ptr.is_null() {
+        let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(v.cap * 8, 8) };
+        unsafe { std::alloc::dealloc(v.ptr, buf_layout) };
+    }
+    v.ptr = std::ptr::dangling_mut::<u64>() as *mut u8;
+    v.len = 0;
+    v.cap = 0;
+}
+
+/// Truncates the Vec to `new_len` elements and shrinks the buffer to fit.
+/// If `new_len >= len`, this is a no-op. If `new_len == 0`, equivalent to clear().
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_truncate(vec: *mut u8, new_len: usize) {
+    let v = unsafe { &mut *(vec as *mut VowVec) };
+    if new_len >= v.len {
+        return;
+    }
+    if new_len == 0 {
+        unsafe { __vow_vec_clear(vec) };
+        return;
+    }
+    v.len = new_len;
+    // Shrink buffer: reallocate to exactly new_len capacity (rounded up to next power of 2)
+    let new_cap = new_len.next_power_of_two().max(VEC_INITIAL_CAP);
+    if new_cap < v.cap {
+        let old_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(v.cap * 8, 8) };
+        let new_ptr = unsafe { std::alloc::realloc(v.ptr, old_layout, new_cap * 8) };
+        if new_ptr.is_null() {
+            std::process::abort();
+        }
+        v.ptr = new_ptr;
+        v.cap = new_cap;
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_set_val(vec: *mut u8, index: usize, value: i64) {
     let v = unsafe { &*(vec as *const VowVec) };
@@ -359,6 +399,20 @@ pub unsafe extern "C" fn __vow_string_from_cstr(ptr: *const i8) -> *mut u8 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_len(s: *const u8) -> usize {
     unsafe { __vow_vec_len(s) }
+}
+
+/// Frees the String's byte buffer and resets to empty (len=0, cap=0).
+/// The String header remains valid and can be reused with push_byte/push_str.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_clear(s: *mut u8) {
+    let v = unsafe { &mut *(s as *mut VowVec) };
+    if v.cap > 0 && !v.ptr.is_null() {
+        let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(v.cap, 1) };
+        unsafe { std::alloc::dealloc(v.ptr, buf_layout) };
+    }
+    v.ptr = std::ptr::dangling_mut::<u8>();
+    v.len = 0;
+    v.cap = 0;
 }
 
 #[unsafe(no_mangle)]
