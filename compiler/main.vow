@@ -982,49 +982,149 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     }
     let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
 
-    let json: String = String::from("{\"contracts\":[");
-    let total: i64 = 0;
+    let do_verify: bool = has_flag(argv, String::from("--verify"));
+    let use_cache: bool = !has_flag(argv, String::from("--no-cache"));
+    let unwind_str: String = get_flag_arg(argv, String::from("--unwind"));
+    let unwind: String = {
+        if unwind_str.len() > 0 { unwind_str }
+        else { String::from("10") }
+    };
+
+    // Collect per-contract entries into parallel arrays
+    let e_vow_ids: Vec<i64> = Vec::new();
+    let e_func_names: Vec<String> = Vec::new();
+    let e_kinds: Vec<String> = Vec::new();
+    let e_descs: Vec<String> = Vec::new();
+    let e_blames: Vec<String> = Vec::new();
+    let e_files: Vec<String> = Vec::new();
+    let e_offsets: Vec<i64> = Vec::new();
+    let e_statuses: Vec<String> = Vec::new();
+
     let nf: i64 = ir_mod.functions.len();
     let mut fi: i64 = 0;
-    let first: bool = true;
     while fi < nf {
         let func: IrFunction = ir_mod.functions[fi];
         let nv: i64 = func.vows.len();
         let mut vi: i64 = 0;
         while vi < nv {
             let ve: IrVowEntry = func.vows[vi];
-            if !first {
-                json.push_str(String::from(","));
-            }
-            first = false;
-            json.push_str(String::from("{\"vow_id\":"));
-            json.push_str(i64_to_str(ve.id));
-            json.push_str(String::from(",\"function\":\""));
-            json.push_str(diag_json_escape_str(func.name));
-            json.push_str(String::from("\",\"kind\":\""));
-            json.push_str(vow_kind_from_desc(ve.description));
-            json.push_str(String::from("\",\"description\":\""));
-            json.push_str(diag_json_escape_str(ve.description));
-            json.push_str(String::from("\",\"blame\":\""));
+            e_vow_ids.push(ve.id);
+            e_func_names.push(func.name);
+            e_kinds.push(vow_kind_from_desc(ve.description));
+            e_descs.push(ve.description);
             if ve.blame == BLAME_CALLER() {
-                json.push_str(String::from("Caller"));
+                e_blames.push(String::from("Caller"));
             } else {
-                json.push_str(String::from("Callee"));
+                e_blames.push(String::from("Callee"));
             }
-            json.push_str(String::from("\",\"source\":{\"file\":\""));
-            json.push_str(diag_json_escape_str(ve.file));
-            json.push_str(String::from("\",\"offset\":"));
-            json.push_str(i64_to_str(ve.offset));
-            json.push_str(String::from("},\"status\":\"not_verified\"}"));
-            total = total + 1;
+            e_files.push(ve.file);
+            e_offsets.push(ve.offset);
+            e_statuses.push(String::from("not_verified"));
             vi = vi + 1;
         }
         fi = fi + 1;
     }
+
+    // If --verify, run verification per function and update statuses
+    if do_verify {
+        fi = 0;
+        while fi < nf {
+            let func: IrFunction = ir_mod.functions[fi];
+            if func.vows.len() > 0 {
+                let vr: VerifyResult = verify_function_full(func, ir_mod, unwind, use_cache);
+                let st: i64 = vr.status;
+                let mut ei: i64 = 0;
+                while ei < e_func_names.len() {
+                    if e_func_names[ei] == func.name {
+                        if st == VERIFY_PROVEN() {
+                            e_statuses[ei] = String::from("proven");
+                        } else if st == VERIFY_FAILED() {
+                            if vr.vow_id == e_vow_ids[ei] {
+                                e_statuses[ei] = String::from("failed");
+                            } else {
+                                e_statuses[ei] = String::from("unknown");
+                            }
+                        } else if st == VERIFY_TIMEOUT() {
+                            e_statuses[ei] = String::from("timeout");
+                        } else {
+                            e_statuses[ei] = String::from("error");
+                        }
+                    }
+                    ei = ei + 1;
+                }
+            }
+            fi = fi + 1;
+        }
+    }
+
+    // Build JSON output
+    let total: i64 = e_vow_ids.len();
+    let json: String = String::from("{\"contracts\":[");
+    let mut ci: i64 = 0;
+    while ci < total {
+        if ci > 0 {
+            json.push_str(String::from(","));
+        }
+        json.push_str(String::from("{\"vow_id\":"));
+        json.push_str(i64_to_str(e_vow_ids[ci]));
+        json.push_str(String::from(",\"function\":\""));
+        json.push_str(diag_json_escape_str(e_func_names[ci]));
+        json.push_str(String::from("\",\"kind\":\""));
+        json.push_str(e_kinds[ci]);
+        json.push_str(String::from("\",\"description\":\""));
+        json.push_str(diag_json_escape_str(e_descs[ci]));
+        json.push_str(String::from("\",\"blame\":\""));
+        json.push_str(e_blames[ci]);
+        json.push_str(String::from("\",\"source\":{\"file\":\""));
+        json.push_str(diag_json_escape_str(e_files[ci]));
+        json.push_str(String::from("\",\"offset\":"));
+        json.push_str(i64_to_str(e_offsets[ci]));
+        json.push_str(String::from("},\"status\":\""));
+        json.push_str(e_statuses[ci]);
+        json.push_str(String::from("\"}"));
+        ci = ci + 1;
+    }
+
+    // Compute summary counts
+    let n_proven: i64 = 0;
+    let n_failed: i64 = 0;
+    let n_unknown: i64 = 0;
+    let n_timeout: i64 = 0;
+    let n_error: i64 = 0;
+    let n_not_verified: i64 = 0;
+    let mut si: i64 = 0;
+    while si < total {
+        let s: String = e_statuses[si];
+        if s == String::from("proven") {
+            n_proven = n_proven + 1;
+        } else if s == String::from("failed") {
+            n_failed = n_failed + 1;
+        } else if s == String::from("unknown") {
+            n_unknown = n_unknown + 1;
+        } else if s == String::from("timeout") {
+            n_timeout = n_timeout + 1;
+        } else if s == String::from("error") {
+            n_error = n_error + 1;
+        } else {
+            n_not_verified = n_not_verified + 1;
+        }
+        si = si + 1;
+    }
+
     json.push_str(String::from("],\"summary\":{\"total\":"));
     json.push_str(i64_to_str(total));
-    json.push_str(String::from(",\"proven\":0,\"failed\":0,\"unknown\":0,\"timeout\":0,\"error\":0,\"not_verified\":"));
-    json.push_str(i64_to_str(total));
+    json.push_str(String::from(",\"proven\":"));
+    json.push_str(i64_to_str(n_proven));
+    json.push_str(String::from(",\"failed\":"));
+    json.push_str(i64_to_str(n_failed));
+    json.push_str(String::from(",\"unknown\":"));
+    json.push_str(i64_to_str(n_unknown));
+    json.push_str(String::from(",\"timeout\":"));
+    json.push_str(i64_to_str(n_timeout));
+    json.push_str(String::from(",\"error\":"));
+    json.push_str(i64_to_str(n_error));
+    json.push_str(String::from(",\"not_verified\":"));
+    json.push_str(i64_to_str(n_not_verified));
     json.push_str(String::from("}}"));
     print_str(json);
     0
