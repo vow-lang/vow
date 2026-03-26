@@ -1778,6 +1778,28 @@ fn run_test_command(
         None => test_files,
     };
 
+    if test_files.is_empty() {
+        eprintln!("error: no test files found");
+        let result = TestResult {
+            status: "NoTestsFound".to_string(),
+            total: 0,
+            passed: 0,
+            failed: 0,
+            skipped: 0,
+            tests: vec![],
+            contract_density: ContractDensity {
+                functions_total: 0,
+                functions_with_vows: 0,
+                density_pct: 0.0,
+            },
+        };
+        println!(
+            "{}",
+            serde_json::to_string(&result).unwrap_or_default()
+        );
+        std::process::exit(1);
+    }
+
     let mut entries = Vec::new();
     let mut total_density = ContractDensity {
         functions_total: 0,
@@ -1874,7 +1896,7 @@ fn run_test_command(
 
         // Execute with ulimit wrapper and timeout
         let exe_abs = std::fs::canonicalize(&exe_path).unwrap_or(exe_path.clone());
-        let shell_cmd = format!("ulimit -v 2000000; {}", exe_abs.display());
+        let shell_cmd = format!("ulimit -v 2000000; '{}'", exe_abs.display());
         let child = std::process::Command::new("sh")
             .args(["-c", &shell_cmd])
             .stdout(std::process::Stdio::piped())

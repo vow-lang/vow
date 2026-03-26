@@ -668,6 +668,12 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
         test_files.push(path);
     }
 
+    if test_files.len() == 0 {
+        eprintln_str(String::from("error: no test files found"));
+        print_str(String::from("{\"status\":\"NoTestsFound\",\"total\":0,\"passed\":0,\"failed\":0,\"skipped\":0,\"tests\":[],\"contract_density\":{\"functions_total\":0,\"functions_with_vows\":0,\"density_pct\":0.0}}"));
+        return 1;
+    }
+
     let entries_json: Vec<String> = Vec::new();
     let mut passed: i64 = 0;
     let mut failed: i64 = 0;
@@ -717,7 +723,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
             // Compile to binary
             let tmp_out: String = str2(String::from("/tmp/vow_test_"), short_name);
             let result: i64 = clif_emit_module(ir_mod, tmp_out, mode, 0);
-            if result == -1 {
+            if result < 0 {
                 let duration: i64 = (time_unix() - start_time) * 1000;
                 let entry: String = emit_test_entry_json(test_path, short_name, String::from("compile_error"), -1, String::from(""), String::from(""), duration);
                 entries_json.push(entry);
@@ -725,7 +731,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                 ti = ti + 1;
             } else {
                 // Execute with ulimit wrapper
-                let sh_cmd: String = str3(String::from("ulimit -v 2000000; "), tmp_out, String::from(""));
+                let sh_cmd: String = str3(String::from("ulimit -v 2000000; '"), tmp_out, String::from("'"));
                 let sh_args: Vec<String> = Vec::new();
                 sh_args.push(String::from("-c"));
                 sh_args.push(sh_cmd);
