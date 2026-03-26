@@ -11,3 +11,4 @@ compiler/*.vow.c
 /lcov.info
 bench/results/
 __pycache__/
+vowc

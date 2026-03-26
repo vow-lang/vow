@@ -691,7 +691,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
         // Compile
         let fr: FrontendResult = run_frontend_for_path(test_path);
         if fr.n_errors > 0 {
-            let duration: i64 = time_unix() - start_time;
+            let duration: i64 = (time_unix() - start_time) * 1000;
             let entry: String = emit_test_entry_json(test_path, short_name, String::from("compile_error"), -1, String::from(""), String::from(""), duration);
             entries_json.push(entry);
             failed = failed + 1;
@@ -718,7 +718,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
             let tmp_out: String = str2(String::from("/tmp/vow_test_"), short_name);
             let result: i64 = clif_emit_module(ir_mod, tmp_out, mode, 0);
             if result == -1 {
-                let duration: i64 = time_unix() - start_time;
+                let duration: i64 = (time_unix() - start_time) * 1000;
                 let entry: String = emit_test_entry_json(test_path, short_name, String::from("compile_error"), -1, String::from(""), String::from(""), duration);
                 entries_json.push(entry);
                 failed = failed + 1;
@@ -747,7 +747,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                     }
                 };
                 fs_remove(tmp_out);
-                let duration: i64 = time_unix() - start_time;
+                let duration: i64 = (time_unix() - start_time) * 1000;
                 let status: String = {
                     if exit_code == 0 { String::from("passed") }
                     else { String::from("failed") }

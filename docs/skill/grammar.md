@@ -577,6 +577,15 @@ Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they 
 | `args`           | `fn() -> Vec<String>`                      | `[read]`   |
 | `stdin_read`     | `fn() -> String`                           | `[read]`   |
 | `process_exit`   | `fn(code: i64) -> ()`                      | `[io]`     |
+| `process_run`    | `fn(cmd: String, args: Vec<String>) -> i64`| `[io]`     |
+| `process_get_stdout` | `fn() -> String`                       | `[io]`     |
+| `process_get_stderr` | `fn() -> String`                       | `[io]`     |
+| `process_start`  | `fn(cmd: String, args: Vec<String>) -> i64`| `[io]`     |
+| `process_wait`   | `fn(handle: i64) -> i64`                   | `[io]`     |
+| `process_wait_timeout` | `fn(handle: i64, timeout_ms: i64) -> i64` | `[io]` |
+| `process_kill`   | `fn(handle: i64) -> i64`                   | `[io]`     |
+| `process_stdout_for` | `fn(handle: i64) -> String`             | `[io]`     |
+| `process_stderr_for` | `fn(handle: i64) -> String`             | `[io]`     |
 
 ## Canonical Form
 
