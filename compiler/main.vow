@@ -576,8 +576,10 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
         print_i64(n_errors);
         print_str(" errors\n");
     }
-    if n_errors > 0 && do_verify {
-        diag_emit_verify_json(String::from("CompileFailed"), dctx, Vec::new());
+    if n_errors > 0 {
+        if do_verify {
+            diag_emit_verify_json(String::from("CompileFailed"), dctx, Vec::new());
+        }
         return 1;
     }
     if n_errors == 0 {
