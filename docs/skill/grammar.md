@@ -582,6 +582,16 @@ Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they 
 | `stdin_read_line`| `fn() -> String`                           | `[read]`   |
 | `process_exit`   | `fn(code: i64) -> ()`                      | `[io]`     |
 
+**`stdin_read` vs `stdin_read_line`:** `stdin_read()` reads the entire stdin stream into a single String (unbounded memory). `stdin_read_line()` reads one line at a time, including the trailing newline. Returns `""` (empty string) at EOF. Use `stdin_read_line` for line-at-a-time processing with bounded memory:
+
+```vow
+let line: String = stdin_read_line();
+while str_len(line) > 0 {
+    // process line (has trailing \n)
+    line = stdin_read_line();
+}
+```
+
 ## Canonical Form
 
 The canonical printer normalizes source: `parse → print → parse` is idempotent. Effects are sorted alphabetically, indentation uses 4 spaces, trailing expressions omit semicolons.
