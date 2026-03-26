@@ -16,7 +16,7 @@ use verifier
 use diag
 
 fn has_flag(argv: Vec<String>, flag: String) -> bool {
-    let mut i: i64 = 0;
+    let mut i: i64 = 1;
     let found: bool = false;
     while i < argv.len() {
         if argv[i] == flag {
@@ -28,7 +28,7 @@ fn has_flag(argv: Vec<String>, flag: String) -> bool {
 }
 
 fn get_flag_arg(argv: Vec<String>, flag: String) -> String {
-    let mut i: i64 = 0;
+    let mut i: i64 = 1;
     while i < argv.len() - 1 {
         if argv[i] == flag {
             return argv[i + 1];
@@ -41,11 +41,11 @@ fn get_flag_arg(argv: Vec<String>, flag: String) -> String {
 fn get_source_path(argv: Vec<String>) -> String {
     let argc: i64 = argv.len();
     let mut i: i64 = argc - 1;
-    while i >= 0 {
+    while i >= 1 {
         let a: String = argv[i];
         let first_byte: i64 = a.byte_at(0);
         if first_byte != 45 {
-            if i > 0 {
+            if i > 1 {
                 let prev: String = argv[i - 1];
                 if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--unwind") || prev == String::from("--debug-trace") {
                     i = i - 1;
@@ -64,11 +64,11 @@ fn get_source_path(argv: Vec<String>) -> String {
 fn get_source_path_sub(argv: Vec<String>) -> String {
     let argc: i64 = argv.len();
     let mut i: i64 = argc - 1;
-    while i >= 1 {
+    while i >= 2 {
         let a: String = argv[i];
         let first_byte: i64 = a.byte_at(0);
         if first_byte != 45 {
-            if i > 1 {
+            if i > 2 {
                 let prev: String = argv[i - 1];
                 if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--unwind") || prev == String::from("--debug-trace") {
                     i = i - 1;
@@ -181,10 +181,10 @@ fn CMD_TEST() -> i64 vow { ensures: result >= 0 } { 3 }
 fn CMD_CONTRACTS() -> i64 vow { ensures: result >= 0 } { 4 }
 
 fn get_subcommand(argv: Vec<String>) -> i64 {
-    if argv.len() < 1 {
+    if argv.len() < 2 {
         return CMD_NONE();
     }
-    let sub: String = argv[0];
+    let sub: String = argv[1];
     if sub == String::from("build") {
         return CMD_BUILD();
     }
@@ -1144,7 +1144,7 @@ fn main() -> i32 [io] {
         }
         return 0;
     }
-    if argv.len() == 0 {
+    if argv.len() <= 1 {
         eprintln_str("usage: vowc <command> [options] <file.vow>");
         return 1;
     }

@@ -1021,7 +1021,7 @@ pub extern "C" fn __vow_stdin_read_line() -> *mut u8 {
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_args() -> *mut u8 {
     let result_vec = __vow_vec_new(8, 8);
-    for arg in std::env::args().skip(1) {
+    for arg in std::env::args() {
         let str_vec = unsafe { __vow_string_new(arg.as_ptr() as *const i8, arg.len()) } as i64;
         unsafe { __vow_vec_push_val(result_vec, str_vec) };
     }

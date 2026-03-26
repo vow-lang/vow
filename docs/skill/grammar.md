@@ -582,6 +582,10 @@ Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they 
 | `stdin_read_line`| `fn() -> String`                           | `[read]`   |
 | `process_exit`   | `fn(code: i64) -> ()`                      | `[io]`     |
 
+**`args` semantics:** `args()` returns all process arguments including the program name at index 0 (matching C `argv` and Rust `std::env::args()` conventions). For `./my_program foo bar`, `args()` returns `["./my_program", "foo", "bar"]`. Use `args[1]` onward for user-supplied arguments. The Vec is empty only if the OS provides no arguments (unusual). Returns an empty String element if an argument is empty (`""`). Non-UTF-8 arguments are included as-is (byte content preserved).
+
+**`fs_read` semantics:** `fs_read(path)` opens the file at `path`, reads its entire contents, and returns a String. Returns `""` (empty String) on any error (file not found, permission denied, I/O error, non-UTF-8 path). Does not block on regular files. Callers should check `result.len() == 0` to detect failure.
+
 **`stdin_read` vs `stdin_read_line`:** `stdin_read()` reads the entire stdin stream into a single String (unbounded memory). `stdin_read_line()` reads one line at a time, including the trailing newline. Returns `""` (empty string) at EOF. Use `stdin_read_line` for line-at-a-time processing with bounded memory:
 
 ```vow
