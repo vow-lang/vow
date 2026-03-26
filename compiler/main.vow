@@ -697,7 +697,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
             failed = failed + 1;
             ti = ti + 1;
         } else {
-            let ir_mod: IrModule = lower_module_vow(fr.merged, fr.str_eids);
+            let ir_mod: IrModule = lower_module_vow(fr.merged, fr.str_eids, fr.path);
 
             // Count contract density
             let fns2: Vec<IrFunction> = ir_mod.functions;
