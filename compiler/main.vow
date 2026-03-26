@@ -837,6 +837,7 @@ fn skill_json() -> String {
     r.push_str(String::from("      ],\n"));
     r.push_str(String::from("      \"String\": [\n"));
     r.push_str(String::from("        \"String::from(lit)\",\n"));
+    r.push_str(String::from("        \"String::new()\",\n"));
     r.push_str(String::from("        \".len()\",\n"));
     r.push_str(String::from("        \".byte_at(i)\",\n"));
     r.push_str(String::from("        \".push_byte(b)\",\n"));
@@ -949,7 +950,7 @@ fn skill_human() -> String {
     r.push_str(String::from("EFFECTS   : io  read  write  panic  unsafe\n"));
     r.push_str(String::from("BUILTINS  : print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [io]   print_u64: fn(v: u64) -> () [io]\n"));
     r.push_str(String::from("            eprintln_str: fn(s: String) -> () [io]   fs_read: fn(path: String) -> String [read]   fs_write: fn(path: String, data: String) -> () [write]   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   process_exit: fn(code: i64) -> () [io]\n"));
-    r.push_str(String::from("METHODS   : Vec: Vec::new/push/pop/len/clear/truncate/v[i]/v[i] = val   String: String::from/len/byte_at/push_byte/push_str/clear/contains/eq/substring/parse_i64/parse_u64\n"));
+    r.push_str(String::from("METHODS   : Vec: Vec::new/push/pop/len/clear/truncate/v[i]/v[i] = val   String: String::from/String::new/len/byte_at/push_byte/push_str/clear/contains/eq/substring/parse_i64/parse_u64\n"));
     r.push_str(String::from("            HashMap: HashMap::new/insert/get/contains_key/remove/len   Option: unwrap\n"));
     r.push_str(String::from("OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   - ! & ?\n"));
     r.push_str(String::from("\n"));

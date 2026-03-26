@@ -1270,6 +1270,9 @@ impl<'e> Checker<'e> {
                         }
                         return Ty::Str;
                     }
+                    ("String", "new") => {
+                        return Ty::Str;
+                    }
                     ("HashMap", "new") => {
                         return Ty::Never;
                     }

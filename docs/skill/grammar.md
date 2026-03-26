@@ -472,6 +472,7 @@ m.contains_key(k)
 | Method              | Signature                   |
 |---------------------|-----------------------------|
 | `String::from(lit)` | `(&str) -> String`          |
+| `String::new()`     | `() -> String`              |
 | `.len()`            | `() -> i64`                 |
 | `.byte_at(i)`       | `(i64) -> i64`              |
 | `.push_byte(b)`     | `(i64) -> ()`               |

@@ -1706,6 +1706,33 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ctx.inst_struct_type.insert(ptr_id, "String".to_string());
                 return ptr_id;
             }
+            // String::new() builtin — empty string via __vow_vec_new(1, 1)
+            if enum_name == "String" && variant_name == "new" {
+                let size_val = ctx.emit(
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    vec![],
+                    InstData::ConstI64(1),
+                    span,
+                );
+                let align_val = ctx.emit(
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    vec![],
+                    InstData::ConstI64(1),
+                    span,
+                );
+                let result = ctx.emit(
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![size_val, align_val],
+                    InstData::CallExtern("__vow_vec_new".to_string()),
+                    span,
+                );
+                ctx.inst_struct_type.insert(result, "String".to_string());
+                ctx.track_heap_alloc(result, "String");
+                return result;
+            }
             // HashMap::new() builtin
             if enum_name == "HashMap" && variant_name == "new" {
                 let result = ctx.emit(

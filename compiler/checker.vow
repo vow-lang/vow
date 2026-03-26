@@ -935,6 +935,9 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         if first_name == String::from("Result") {
             return ts_make_enum(e.ts, String::from("Result"));
         }
+        if first_name == String::from("String") {
+            return CTY_STR();
+        }
         if n_path > 1 {
             return CTY_UNKNOWN();
         }

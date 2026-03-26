@@ -1811,6 +1811,20 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             }
         }
 
+        if enum_name == String::from("String") && variant_name == String::from("new") {
+            let size_args: Vec<i64> = Vec::new();
+            let size_val: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), size_args, IDATA_CONST_I64(), 1, 0, String::from(""));
+            let align_args: Vec<i64> = Vec::new();
+            let align_val: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), align_args, IDATA_CONST_I64(), 1, 0, String::from(""));
+            let call_args: Vec<i64> = Vec::new();
+            call_args.push(size_val);
+            call_args.push(align_val);
+            let str_result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_new"));
+            lctx_tag(ctx, str_result, String::from("String"));
+            lctx_track_alloc(ctx, str_result, String::from("String"), 0);
+            return str_result;
+        }
+
         if enum_name == String::from("HashMap") && variant_name == String::from("new") {
             let call_args: Vec<i64> = Vec::new();
             let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_map_new"));
