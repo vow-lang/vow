@@ -49,6 +49,7 @@ fn keyword_tag(s: String) -> i64 {
     else if s.eq(String::from("while")) { tok_kw_while() }
     else if s.eq(String::from("loop")) { tok_kw_loop() }
     else if s.eq(String::from("break")) { tok_kw_break() }
+    else if s.eq(String::from("continue")) { tok_kw_continue() }
     else if s.eq(String::from("return")) { tok_kw_return() }
     else if s.eq(String::from("pub")) { tok_kw_pub() }
     else if s.eq(String::from("use")) { tok_kw_use() }

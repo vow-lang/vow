@@ -353,6 +353,16 @@ break;           // exit while or loop (loop returns Unit)
 break value;     // exit loop with a value (only inside loop, not while)
 ```
 
+### Continue
+
+`continue` skips the remaining statements in the current loop iteration and jumps back to the loop header:
+
+```vow
+continue;        // skip to next iteration of while, loop, or for
+```
+
+Inside `while` and `loop`, `continue` emits back-edge values for any mutated variables. Inside `for`, it also advances the loop index.
+
 ### Return
 
 ```vow

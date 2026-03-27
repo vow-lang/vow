@@ -708,6 +708,9 @@ fn parse_primary(p: Parser) -> i64 {
             let val: i64 = parse_expr(p);
             arena_add_expr(p.arena, EXPR_BREAK(), val, 0, 0, 0)
         }
+    } else if tag == tok_kw_continue() {
+        let _kw: Token = advance(p);
+        arena_add_expr(p.arena, EXPR_CONTINUE(), 0, 0, 0, 0)
     } else if tag == tok_lbrace() {
         let bid: i64 = parse_block(p);
         arena_add_expr(p.arena, EXPR_BLOCK(), bid, 0, 0, 0)

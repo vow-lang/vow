@@ -673,6 +673,7 @@ pub fn print_expr(expr: &Expr) -> String {
             Some(v) => format!("break {}", print_expr(v)),
             None => "break".to_string(),
         },
+        ExprKind::Continue => "continue".to_string(),
         ExprKind::Return { value } => match value {
             Some(v) => format!("return {}", print_expr(v)),
             None => "return".to_string(),

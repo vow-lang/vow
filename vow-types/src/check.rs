@@ -1109,6 +1109,16 @@ impl<'e> Checker<'e> {
                 }
                 Ty::Never
             }
+            ExprKind::Continue => {
+                if self.in_loop == 0 {
+                    self.emit_error(
+                        ErrorCode::TypeMismatch,
+                        "`continue` outside of a loop",
+                        expr.span,
+                    );
+                }
+                Ty::Never
+            }
             ExprKind::Return { value } => {
                 let val_ty = match value {
                     Some(v) => self.check_expr(v),

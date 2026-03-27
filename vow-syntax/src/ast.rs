@@ -301,6 +301,7 @@ pub enum ExprKind {
     Break {
         value: Option<Box<Expr>>,
     },
+    Continue,
     Return {
         value: Option<Box<Expr>>,
     },

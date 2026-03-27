@@ -273,6 +273,13 @@ impl Parser {
                     span: start.merge(end),
                 }
             }
+            TokenKind::KwContinue => {
+                self.advance();
+                Expr {
+                    kind: ExprKind::Continue,
+                    span: start,
+                }
+            }
             TokenKind::KwReturn => {
                 self.advance();
                 let value = if self.is_expr_start() {

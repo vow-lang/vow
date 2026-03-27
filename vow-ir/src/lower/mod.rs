@@ -135,6 +135,12 @@ pub struct LowerCtx {
     const_map: HashMap<String, (i64, Ty)>,
     // loop exit block stack for break
     loop_exit_blocks: Vec<BlockId>,
+    // loop header block stack for continue
+    loop_header_blocks: Vec<BlockId>,
+    // Per-loop Phi IDs for back-edge Upsilons on continue
+    loop_continue_phis: Vec<Vec<(String, InstId)>>,
+    // For for-each: the index Phi to increment on continue (None for while/loop)
+    loop_continue_idx_phi: Vec<Option<InstId>>,
     // Per-loop break-value Upsilon collector.  `Some(vec)` for `loop` (collects
     // (source_block, upsilon_id, value_ty)), `None` for `while`.
     loop_break_upsilons: Vec<Option<Vec<(BlockId, InstId, Ty)>>>,
@@ -205,6 +211,9 @@ impl LowerCtx {
             string_exprs,
             const_map: HashMap::new(),
             loop_exit_blocks: Vec::new(),
+            loop_header_blocks: Vec::new(),
+            loop_continue_phis: Vec::new(),
+            loop_continue_idx_phi: Vec::new(),
             loop_break_upsilons: Vec::new(),
             inst_vec_elem_type: HashMap::new(),
             struct_field_vec_elems,
@@ -1190,10 +1199,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             // Body: lower body (push/pop scope handles lets inside body).
             ctx.switch_to_block(body_block);
             ctx.loop_exit_blocks.push(exit_block);
+            ctx.loop_header_blocks.push(header_block);
+            ctx.loop_continue_phis.push(phi_ids.clone());
+            ctx.loop_continue_idx_phi.push(None);
             ctx.loop_break_upsilons.push(None);
             ctx.push_alloc_scope();
             lower_block(ctx, body);
             ctx.loop_break_upsilons.pop();
+            ctx.loop_continue_idx_phi.pop();
+            ctx.loop_continue_phis.pop();
+            ctx.loop_header_blocks.pop();
             ctx.loop_exit_blocks.pop();
 
             // Free loop-body temporaries before back-edge.
@@ -1371,7 +1386,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.define(binding.clone(), elem_id);
 
             ctx.loop_exit_blocks.push(exit_block);
+            ctx.loop_header_blocks.push(header_block);
+            ctx.loop_continue_phis.push(phi_ids.clone());
+            ctx.loop_continue_idx_phi.push(Some(idx_phi));
             lower_block(ctx, body);
+            ctx.loop_continue_idx_phi.pop();
+            ctx.loop_continue_phis.pop();
+            ctx.loop_header_blocks.pop();
             ctx.loop_exit_blocks.pop();
 
             ctx.pop_scope();
@@ -1481,10 +1502,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
 
             ctx.loop_exit_blocks.push(exit_block);
+            ctx.loop_header_blocks.push(header_block);
+            ctx.loop_continue_phis.push(phi_ids.clone());
+            ctx.loop_continue_idx_phi.push(None);
             ctx.loop_break_upsilons.push(Some(Vec::new()));
             ctx.push_alloc_scope();
             lower_block(ctx, body);
             let break_ups = ctx.loop_break_upsilons.pop().unwrap();
+            ctx.loop_continue_idx_phi.pop();
+            ctx.loop_continue_phis.pop();
+            ctx.loop_header_blocks.pop();
             ctx.loop_exit_blocks.pop();
 
             // Free loop-body temporaries before back-edge.
@@ -1574,6 +1601,61 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 Ty::Unit,
                 vec![],
                 InstData::JumpTarget(exit_block),
+                span,
+            )
+        }
+        ExprKind::Continue => {
+            let header_block = ctx
+                .loop_header_blocks
+                .last()
+                .copied()
+                .expect("continue outside of loop");
+            let phis = ctx.loop_continue_phis.last().cloned().unwrap_or_default();
+            let idx_phi = ctx.loop_continue_idx_phi.last().copied().flatten();
+
+            // Emit back-edge Upsilons for mutation variables.
+            for (name, phi_id) in &phis {
+                if let Some(cur_val) = ctx.lookup(name) {
+                    ctx.emit(
+                        Opcode::Upsilon,
+                        ctx.inst_ty(cur_val),
+                        vec![cur_val],
+                        InstData::PhiTarget(*phi_id),
+                        span,
+                    );
+                }
+            }
+
+            // For for-each: increment index and emit Upsilon for index Phi.
+            if let Some(ip) = idx_phi {
+                let one = ctx.emit(
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    vec![],
+                    InstData::ConstI64(1),
+                    span,
+                );
+                let idx_next = ctx.emit(
+                    Opcode::WrappingAddI64,
+                    Ty::I64,
+                    vec![ip, one],
+                    InstData::None,
+                    span,
+                );
+                ctx.emit(
+                    Opcode::Upsilon,
+                    Ty::I64,
+                    vec![idx_next],
+                    InstData::PhiTarget(ip),
+                    span,
+                );
+            }
+
+            ctx.emit(
+                Opcode::Jump,
+                Ty::Unit,
+                vec![],
+                InstData::JumpTarget(header_block),
                 span,
             )
         }

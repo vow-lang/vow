@@ -233,7 +233,7 @@ fn check_expr(
                 check_expr(v, tracker, env, file, emitter, true);
             }
         }
-        ExprKind::Lit(_) | ExprKind::Result => {}
+        ExprKind::Continue | ExprKind::Lit(_) | ExprKind::Result => {}
         ExprKind::StructLiteral { fields, .. } => {
             for (_, e) in fields {
                 check_expr(e, tracker, env, file, emitter, true);

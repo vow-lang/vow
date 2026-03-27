@@ -882,6 +882,10 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         return CTY_NEVER();
     }
 
+    if tag == EXPR_CONTINUE() {
+        return CTY_NEVER();
+    }
+
     if tag == EXPR_BLOCK() {
         let bid: i64 = expr_a(a, eid);
         return check_block(e, m, bid);

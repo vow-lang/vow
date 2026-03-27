@@ -26,6 +26,7 @@ fn EXPR_RESULT() -> i64 vow { ensures: result >= 0 } { 22 }
 fn EXPR_CAST() -> i64 vow { ensures: result >= 0 } { 23 }
 fn EXPR_LOOP() -> i64 vow { ensures: result >= 0 } { 24 }
 fn EXPR_FOR() -> i64 vow { ensures: result >= 0 } { 25 }
+fn EXPR_CONTINUE() -> i64 vow { ensures: result >= 0 } { 26 }
 
 fn CLAUSE_REQUIRES() -> i64 vow { ensures: result >= 0 } { 0 }
 fn CLAUSE_ENSURES() -> i64 vow { ensures: result >= 0 } { 1 }

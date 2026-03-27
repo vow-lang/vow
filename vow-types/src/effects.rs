@@ -103,6 +103,7 @@ fn collect_calls_in_expr<'a>(
                 collect_calls_in_expr(v, calls, panic_exprs);
             }
         }
+        ExprKind::Continue => {}
         ExprKind::Lit(_) | ExprKind::Ident(_) | ExprKind::Result => {}
         ExprKind::StructLiteral { fields, .. } => {
             for (_, e) in fields {

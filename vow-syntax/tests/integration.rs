@@ -124,6 +124,7 @@ fn strip_expr(expr: Expr) -> Expr {
         ExprKind::Break { value } => ExprKind::Break {
             value: value.map(|e| Box::new(strip_expr(*e))),
         },
+        ExprKind::Continue => ExprKind::Continue,
         ExprKind::Return { value } => ExprKind::Return {
             value: value.map(|e| Box::new(strip_expr(*e))),
         },
