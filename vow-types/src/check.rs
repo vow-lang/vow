@@ -2122,6 +2122,38 @@ mod tests {
     }
 
     #[test]
+    fn continue_is_never() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let ty = checker.check_expr(&make_expr(ExprKind::Continue));
+        assert_eq!(ty, Ty::Never);
+    }
+
+    #[test]
+    fn continue_outside_loop_is_error() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.check_expr(&make_expr(ExprKind::Continue));
+        assert!(checker.has_errors());
+    }
+
+    #[test]
+    fn continue_inside_while_is_ok() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.check_expr(&make_expr(ExprKind::While {
+            condition: Box::new(bool_lit()),
+            vow: None,
+            body: Box::new(Block {
+                stmts: vec![],
+                trailing_expr: Some(Box::new(make_expr(ExprKind::Continue))),
+                span: dummy_span(),
+            }),
+        }));
+        assert!(!checker.has_errors());
+    }
+
+    #[test]
     fn loop_with_break_value_returns_break_type() {
         let mut emitter = TestEmitter(vec![]);
         let mut checker = new_checker(&mut emitter);

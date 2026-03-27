@@ -1012,6 +1012,16 @@ mod tests {
     }
 
     #[test]
+    fn continue_expr() {
+        let tokens = crate::lexer::Lexer::new("continue")
+            .tokenize()
+            .expect("lex error");
+        let mut parser = Parser::new(tokens, String::new(), "<test>".to_string());
+        let expr = parser.parse_expr_inner(0);
+        assert!(matches!(&expr.kind, ExprKind::Continue));
+    }
+
+    #[test]
     fn if_else_if() {
         let expr = parse_no_errors("if a { 1 } else if b { 2 } else { 3 }");
         match &expr.kind {

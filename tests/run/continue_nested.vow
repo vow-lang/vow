@@ -1,0 +1,21 @@
+// TEST: stdout "6\n"
+module ContinueNested
+
+fn main() -> i32 [io] {
+    let mut sum: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 3 {
+        i = i + 1;
+        let mut j: i64 = 0;
+        while j < 3 {
+            j = j + 1;
+            if j == 2 {
+                continue;
+            }
+            sum = sum + 1;
+        }
+    }
+    print_i64(sum);
+    print_str("\n");
+    0
+}

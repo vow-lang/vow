@@ -3548,6 +3548,148 @@ mod tests {
     }
 
     #[test]
+    fn continue_in_while_emits_jump_to_header() {
+        // fn f() { let mut i = 0; while i < 10 { i = i + 1; if i == 5 { continue; } } }
+        let let_i = Stmt::Let {
+            pattern: Pat {
+                kind: PatKind::Ident {
+                    name: "i".to_string(),
+                    is_mut: true,
+                },
+                span: sp(),
+            },
+            ty: None,
+            init: Box::new(int_expr(0)),
+            span: sp(),
+        };
+
+        // i = i + 1
+        let incr = Stmt::Expr {
+            expr: Expr {
+                kind: ExprKind::Assign {
+                    lhs: Box::new(ident_expr("i")),
+                    rhs: Box::new(Expr {
+                        kind: ExprKind::BinaryOp {
+                            op: BinOp::Add,
+                            lhs: Box::new(ident_expr("i")),
+                            rhs: Box::new(int_expr(1)),
+                        },
+                        span: sp(),
+                    }),
+                },
+                span: sp(),
+            },
+            has_semicolon: true,
+            span: sp(),
+        };
+
+        // if i == 5 { continue; }
+        let if_continue = Stmt::Expr {
+            expr: Expr {
+                kind: ExprKind::If {
+                    condition: Box::new(Expr {
+                        kind: ExprKind::BinaryOp {
+                            op: BinOp::Eq,
+                            lhs: Box::new(ident_expr("i")),
+                            rhs: Box::new(int_expr(5)),
+                        },
+                        span: sp(),
+                    }),
+                    then_branch: Box::new(Block {
+                        stmts: vec![Stmt::Expr {
+                            expr: Expr {
+                                kind: ExprKind::Continue,
+                                span: sp(),
+                            },
+                            has_semicolon: true,
+                            span: sp(),
+                        }],
+                        trailing_expr: None,
+                        span: sp(),
+                    }),
+                    else_branch: None,
+                },
+                span: sp(),
+            },
+            has_semicolon: true,
+            span: sp(),
+        };
+
+        let while_body = Block {
+            stmts: vec![incr, if_continue],
+            trailing_expr: None,
+            span: sp(),
+        };
+
+        let while_expr = Expr {
+            kind: ExprKind::While {
+                condition: Box::new(Expr {
+                    kind: ExprKind::BinaryOp {
+                        op: BinOp::Lt,
+                        lhs: Box::new(ident_expr("i")),
+                        rhs: Box::new(int_expr(10)),
+                    },
+                    span: sp(),
+                }),
+                vow: None,
+                body: Box::new(while_body),
+            },
+            span: sp(),
+        };
+
+        let body = Block {
+            stmts: vec![
+                let_i,
+                Stmt::Expr {
+                    expr: while_expr,
+                    has_semicolon: true,
+                    span: sp(),
+                },
+            ],
+            trailing_expr: None,
+            span: sp(),
+        };
+
+        let fn_def = make_fn("f", vec![], unit_ty(), body, vec![]);
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
+
+        // continue produces an extra Jump to the header block (3 total: pre-header→header,
+        // continue→header, end-of-body→header)
+        let jumps: Vec<_> = all_insts
+            .iter()
+            .filter(|i| i.opcode == Opcode::Jump)
+            .collect();
+        assert!(
+            jumps.len() >= 3,
+            "expected at least 3 Jumps (pre-header, continue, back-edge), got {}",
+            jumps.len()
+        );
+
+        // continue also produces Upsilons for the mutation variable before the jump
+        let upsilons: Vec<_> = all_insts
+            .iter()
+            .filter(|i| i.opcode == Opcode::Upsilon)
+            .collect();
+        assert!(
+            upsilons.len() >= 3,
+            "expected at least 3 Upsilons (pre-header, continue, back-edge), got {}",
+            upsilons.len()
+        );
+    }
+
+    #[test]
     fn struct_alloc_includes_guard_slot() {
         let body = Block {
             stmts: vec![],

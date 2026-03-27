@@ -1,0 +1,20 @@
+// TEST: stdout "12\n"
+module ContinueLoop
+
+fn main() -> i32 [io] {
+    let mut i: i64 = 0;
+    let mut sum: i64 = 0;
+    loop {
+        if i >= 5 {
+            break;
+        }
+        i = i + 1;
+        if i == 3 {
+            continue;
+        }
+        sum = sum + i;
+    }
+    print_i64(sum);
+    print_str("\n");
+    0
+}

@@ -1,0 +1,20 @@
+// TEST: stdout "10\n8\n"
+module ContinueWhile
+
+fn main() -> i32 [io] {
+    let mut i: i64 = 0;
+    let mut count: i64 = 0;
+    while i < 10 {
+        if i == 5 {
+            i = i + 2;
+            continue;
+        }
+        count = count + 1;
+        i = i + 1;
+    }
+    print_i64(i);
+    print_str("\n");
+    print_i64(count);
+    print_str("\n");
+    0
+}

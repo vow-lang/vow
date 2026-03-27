@@ -1,0 +1,21 @@
+// TEST: stdout "120\n"
+module ContinueFor
+
+fn main() -> i32 [io] {
+    let v: Vec<i64> = Vec::new();
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    v.push(40);
+    v.push(50);
+    let mut sum: i64 = 0;
+    for x in v {
+        if x == 30 {
+            continue;
+        }
+        sum = sum + x;
+    }
+    print_i64(sum);
+    print_str("\n");
+    0
+}
