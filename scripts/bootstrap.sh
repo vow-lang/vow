@@ -9,11 +9,10 @@ RESET="\033[0m"
 cd "$(dirname "$0")/.."
 mkdir -p build
 
-NO_VERIFY=""
 SKIP_CARGO=false
 
 usage() {
-    echo "Usage: $0 [--no-verify] [--skip-cargo] [--help|-h]"
+    echo "Usage: $0 [--skip-cargo] [--help|-h]"
     echo ""
     echo "Bootstrap the self-hosted Vow compiler and verify the fixed point."
     echo ""
@@ -25,7 +24,6 @@ usage() {
     echo "  Verify: sha256(vowc2) == sha256(vowc3)"
     echo ""
     echo "Options:"
-    echo "  --no-verify   Skip ESBMC verification in Stage 1-3"
     echo "  --skip-cargo  Skip Stage 0 if Rust binary already built"
     echo "  -h, --help    Show this help"
     exit 0
@@ -33,7 +31,6 @@ usage() {
 
 for arg in "$@"; do
     case "$arg" in
-        --no-verify)  NO_VERIFY="--no-verify" ;;
         --skip-cargo) SKIP_CARGO=true ;;
         -h|--help)    usage ;;
         *)            echo "Unknown flag: $arg"; usage ;;
@@ -56,7 +53,7 @@ fi
 
 printf "${BOLD}Stage 1:${RESET} Rust compiler -> build/vowc\n"
 t0=$(date +%s)
-if ! output=$(./target/release/vow build $NO_VERIFY compiler/main.vow -o build/vowc 2>&1); then
+if ! output=$(./target/release/vow build compiler/main.vow -o build/vowc 2>&1); then
     printf "  ${RED}FAILED${RESET}\n%s\n" "$output"
     exit 1
 fi
@@ -67,7 +64,7 @@ printf "  done in %ds\n" $((t1 - t0))
 
 printf "${BOLD}Stage 2:${RESET} build/vowc -> build/vowc2\n"
 t0=$(date +%s)
-if ! output=$(ulimit -v 2000000; build/vowc build $NO_VERIFY compiler/main.vow -o build/vowc2 2>&1); then
+if ! output=$(ulimit -v 2000000; build/vowc build compiler/main.vow -o build/vowc2 2>&1); then
     printf "  ${RED}FAILED${RESET}\n%s\n" "$output"
     exit 1
 fi
@@ -78,7 +75,7 @@ printf "  done in %ds\n" $((t1 - t0))
 
 printf "${BOLD}Stage 3:${RESET} build/vowc2 -> build/vowc3\n"
 t0=$(date +%s)
-if ! output=$(ulimit -v 2000000; build/vowc2 build $NO_VERIFY compiler/main.vow -o build/vowc3 2>&1); then
+if ! output=$(ulimit -v 2000000; build/vowc2 build compiler/main.vow -o build/vowc3 2>&1); then
     printf "  ${RED}FAILED${RESET}\n%s\n" "$output"
     exit 1
 fi

@@ -63,9 +63,8 @@ Debug mode is required to see runtime `VowViolation` output. Release omits all v
 To get `build/vowc` in the first place, bootstrap from the Rust compiler:
 
 ```bash
-scripts/bootstrap.sh --no-verify          # full bootstrap, skip ESBMC
-scripts/bootstrap.sh --no-verify --skip-cargo  # skip cargo build too
 scripts/bootstrap.sh                      # full bootstrap with verification
+scripts/bootstrap.sh --skip-cargo         # skip cargo build if already built
 ```
 
 This builds `./target/release/vow` (stage 0), then uses it to compile and verify the self-hosted compiler, producing `build/vowc`. The Rust compiler (`./target/release/vow`) is only needed for this bootstrap step.
@@ -87,7 +86,7 @@ After updating a skill file, regenerate `--help` and rebuild:
 ```bash
 uv run python scripts/generate_help.py          # regenerate --help in both compilers
 cargo build --release -p vow                     # rebuild Rust compiler
-scripts/bootstrap.sh --no-verify --skip-cargo    # rebuild build/vowc
+scripts/bootstrap.sh --skip-cargo                 # rebuild build/vowc
 ```
 
 The staleness detector `scripts/check_help_coverage.py` (run in `full_test.sh`) will catch drift between `grammar.md` and `--help`.
