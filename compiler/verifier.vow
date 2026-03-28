@@ -220,6 +220,10 @@ fn esbmc_path() -> String {
     String::from("/home/pmatos/installs/esbmc-20260226/bin/esbmc")
 }
 
+fn esbmc_exists() -> bool [io] {
+    fs_exists(esbmc_path()) != 0
+}
+
 fn run_esbmc(c_source: String, unwind: String, tmp_path: String) -> i64 [io] {
     fs_write(tmp_path, c_source);
     let esbmc_args: Vec<String> = Vec::new();

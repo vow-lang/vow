@@ -352,6 +352,11 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
         else { String::from("10") }
     };
     let use_cache: bool = !has_flag(argv, String::from("--no-cache"));
+    if !esbmc_exists() {
+        eprintln_str(String::from("error: ESBMC not found; install ESBMC to run verification"));
+        diag_emit_verify_json(String::from("VerifyFailed"), dctx, Vec::new());
+        return 1;
+    }
     let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
     emit_ir_warnings(ir_mod, dctx);
     let fns: Vec<IrFunction> = ir_mod.functions;
@@ -409,6 +414,13 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
     let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
     emit_ir_warnings(ir_mod, dctx);
     let do_verify: bool = !has_flag(argv, String::from("--no-verify"));
+    if do_verify {
+        if !esbmc_exists() {
+            eprintln_str(String::from("error: ESBMC not found; install ESBMC or use --no-verify to skip verification"));
+            diag_emit_build_verify_json(String::from("VerifyFailed"), String::from(""), dctx, Vec::new());
+            return 1;
+        }
+    }
     let use_cache: bool = !has_flag(argv, String::from("--no-cache"));
     let unwind_str: String = get_flag_arg(argv, String::from("--unwind"));
     let unwind: String = {
@@ -584,6 +596,11 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
     }
     if n_errors == 0 {
         if do_verify {
+            if !esbmc_exists() {
+                eprintln_str(String::from("error: ESBMC not found; install ESBMC to run verification"));
+                diag_emit_verify_json(String::from("VerifyFailed"), dctx, Vec::new());
+                return 1;
+            }
             let unwind_str: String = get_flag_arg(argv, String::from("--unwind"));
             let unwind: String = {
                 if unwind_str.len() > 0 { unwind_str }
@@ -1034,6 +1051,10 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
 
     // If --verify, run verification per function and update statuses
     if do_verify {
+        if !esbmc_exists() {
+            eprintln_str(String::from("error: ESBMC not found; install ESBMC to run verification"));
+            return 1;
+        }
         fi = 0;
         while fi < nf {
             let func: IrFunction = ir_mod.functions[fi];

@@ -1482,6 +1482,14 @@ fn run_verify_only_inner(source: &Path, no_cache: bool) -> BuildOutput {
         Err(output) => return *output,
     };
 
+    if find_esbmc().is_none() {
+        return verify_outcome_to_output(
+            VerifyOutcome::ToolNotFound,
+            frontend.diagnostics,
+            None,
+        );
+    }
+
     let verify_cache = if no_cache { None } else { VerifyCache::new() };
     let file = source.to_string_lossy().to_string();
     let call_site_index = build_call_site_index(&frontend.ir_module, &file);
@@ -1556,6 +1564,11 @@ fn run_pipeline_inner(
             verify_status: None,
             verify_message: None,
         };
+    }
+
+    // Upfront ESBMC check: abort before codegen if verification is requested but ESBMC is missing
+    if !no_verify && find_esbmc().is_none() {
+        return verify_outcome_to_output(VerifyOutcome::ToolNotFound, all_diagnostics, None);
     }
 
     // Spawn verification thread
@@ -1906,6 +1919,15 @@ fn run_contracts_command(source: &Path, verify: bool, no_cache: bool) {
     }
 
     if verify {
+        if find_esbmc().is_none() {
+            let output = verify_outcome_to_output(
+                VerifyOutcome::ToolNotFound,
+                frontend.diagnostics,
+                None,
+            );
+            output.emit_json();
+            std::process::exit(1);
+        }
         let verify_cache = if no_cache { None } else { VerifyCache::new() };
         update_contract_statuses(&mut entries, &frontend.ir_module, verify_cache.as_ref());
     }

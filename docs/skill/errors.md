@@ -183,7 +183,7 @@ extern "C" {
 ### EsbmcNotFound
 
 **Phase:** Verification
-**Meaning:** ESBMC is not installed or not on `$PATH`. Verification requires ESBMC. Without it, `vowc build` and `vowc verify` will fail.
+**Meaning:** ESBMC is not installed or not on `$PATH`. When verification is enabled (the default for `vowc build`, always for `vowc verify`), the compiler checks for ESBMC upfront before compilation. If ESBMC is not found, the build aborts immediately with exit code 1.
 
 **Fix:** Install ESBMC, or use `--no-verify` to skip verification: `vowc build --no-verify <file>`.
 
