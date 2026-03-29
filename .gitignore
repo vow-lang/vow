@@ -1,6 +1,7 @@
 /target/
 compiler/main
 /build/
+*.o
 compiler/*.o
 compiler/*.vow.c
 /.claude/*.local.json
