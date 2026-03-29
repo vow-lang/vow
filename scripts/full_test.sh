@@ -305,8 +305,12 @@ echo ""
 
 echo -e "${BOLD}--- Section 5: Multi-Module ---${RESET}"
 
-for multi in stack geometry; do
-    main_file="examples/${multi}/main.vow"
+for multi in stack geometry bignum; do
+    if [ "$multi" = "bignum" ]; then
+        main_file="lib/${multi}/main.vow"
+    else
+        main_file="examples/${multi}/main.vow"
+    fi
     printf "${BOLD}%s${RESET}\n" "$multi"
 
     # build --no-verify
