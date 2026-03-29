@@ -1,0 +1,182 @@
+module Arithmetic
+
+// --- Absolute value ---
+
+fn abs(x: i64) -> i64 vow {
+  requires: x > -9223372036854775807,
+  ensures: result >= 0
+} {
+  if x < 0 { 0 - x } else { x }
+}
+
+// --- Min / Max ---
+
+fn min(a: i64, b: i64) -> i64 vow {
+  ensures: result <= a,
+  ensures: result <= b
+} {
+  if a <= b { a } else { b }
+}
+
+fn max(a: i64, b: i64) -> i64 vow {
+  ensures: result >= a,
+  ensures: result >= b
+} {
+  if a >= b { a } else { b }
+}
+
+// --- Clamp ---
+
+fn clamp(val: i64, lo: i64, hi: i64) -> i64 vow {
+  requires: lo <= hi,
+  ensures: result >= lo,
+  ensures: result <= hi
+} {
+  if val < lo {
+    lo
+  } else {
+    if val > hi {
+      hi
+    } else {
+      val
+    }
+  }
+}
+
+// --- Sign ---
+
+fn sign(x: i64) -> i64 vow {
+  ensures: result >= -1,
+  ensures: result <= 1
+} {
+  if x > 0 {
+    1
+  } else {
+    if x < 0 {
+      -1
+    } else {
+      0
+    }
+  }
+}
+
+// --- Safe arithmetic with overflow preconditions ---
+
+fn safe_add(a: i64, b: i64) -> i64 vow {
+  requires: a >= 0,
+  requires: b >= 0,
+  requires: a <= 4611686018427387903,
+  requires: b <= 4611686018427387903,
+  ensures: result == a + b,
+  ensures: result >= 0
+} {
+  a + b
+}
+
+fn safe_sub(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {
+  requires: a >= b,
+  ensures: result == a - b,
+  ensures: result >= 0
+} {
+  a - b
+}
+
+fn safe_mul(a: i64, b: i64) -> i64 vow {
+  requires: a >= 0,
+  requires: b >= 0,
+  requires: a <= 3037000499,
+  requires: b <= 3037000499,
+  ensures: result == a * b,
+  ensures: result >= 0
+} {
+  a * b
+}
+
+fn safe_div(a: i64, b: i64) -> i64 vow {
+  requires: b != 0,
+  ensures: result == a / b
+} {
+  a / b
+}
+
+fn safe_mod(a: i64, m: i64) -> i64 vow {
+  requires: a >= 0,
+  requires: m > 0,
+  ensures: result >= 0,
+  ensures: result < m
+} {
+  a % m
+}
+
+// --- Integer power ---
+
+fn pow(base: i64, exp: i64) -> i64 vow {
+  requires: exp >= 0,
+  requires: exp <= 16,
+  requires: base >= -100,
+  requires: base <= 100,
+  ensures: result >= -9223372036854775807
+} {
+  if exp == 0 {
+    1
+  } else {
+    let mut r: i64 = 1;
+    let mut i: i64 = 0;
+    while i < exp vow {
+      invariant: i >= 0,
+      invariant: i <= exp
+    } {
+      r = r * base;
+      i = i + 1;
+    }
+    r
+  }
+}
+
+// --- Midpoint (overflow-safe average of two values) ---
+
+fn midpoint(a: i64, b: i64) -> i64 vow {
+  requires: a >= 0,
+  requires: b >= 0,
+  ensures: result >= 0
+} {
+  a / 2 + b / 2 + (a % 2 + b % 2) / 2
+}
+
+// --- Difference (absolute difference) ---
+
+fn diff(a: i64, b: i64) -> i64 vow {
+  requires: a > -4611686018427387903,
+  requires: b > -4611686018427387903,
+  requires: a < 4611686018427387903,
+  requires: b < 4611686018427387903,
+  ensures: result >= 0
+} {
+  if a >= b { a - b } else { b - a }
+}
+
+// --- Divides evenly ---
+
+fn divides(d: i64, n: i64) -> i64 vow {
+  requires: d != 0,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  if n % d == 0 { 1 } else { 0 }
+}
+
+// --- Is even / is odd ---
+
+fn is_even(x: i64) -> i64 vow {
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  if x % 2 == 0 { 1 } else { 0 }
+}
+
+fn is_odd(x: i64) -> i64 vow {
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  if x % 2 != 0 { 1 } else { 0 }
+}

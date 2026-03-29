@@ -1,0 +1,225 @@
+module VecMath
+
+// --- Sum of vector elements ---
+
+fn vec_sum(v: Vec<i64>) -> i64 vow {
+  requires: v.len() >= 0,
+  requires: v.len() <= 64
+} {
+  let mut total: i64 = 0;
+  let mut i: i64 = 0;
+  let n: i64 = v.len();
+  while i < n vow {
+    invariant: i >= 0,
+    invariant: i <= n
+  } {
+    total = total + v[i];
+    i = i + 1;
+  }
+  total
+}
+
+// --- Minimum element (requires non-empty vector) ---
+
+fn vec_min(v: Vec<i64>) -> i64 vow {
+  requires: v.len() >= 1,
+  requires: v.len() <= 64
+} {
+  let mut m: i64 = v[0];
+  let mut i: i64 = 1;
+  let n: i64 = v.len();
+  while i < n vow {
+    invariant: i >= 1,
+    invariant: i <= n
+  } {
+    if v[i] < m {
+      m = v[i];
+    } else {
+      0;
+    }
+    i = i + 1;
+  }
+  m
+}
+
+// --- Maximum element (requires non-empty vector) ---
+
+fn vec_max(v: Vec<i64>) -> i64 vow {
+  requires: v.len() >= 1,
+  requires: v.len() <= 64
+} {
+  let mut m: i64 = v[0];
+  let mut i: i64 = 1;
+  let n: i64 = v.len();
+  while i < n vow {
+    invariant: i >= 1,
+    invariant: i <= n
+  } {
+    if v[i] > m {
+      m = v[i];
+    } else {
+      0;
+    }
+    i = i + 1;
+  }
+  m
+}
+
+// --- Mean (integer division, requires non-empty) ---
+
+fn vec_mean(v: Vec<i64>) -> i64 vow {
+  requires: v.len() >= 1,
+  requires: v.len() <= 64
+} {
+  let total: i64 = vec_sum(v);
+  let n: i64 = v.len();
+  total / n
+}
+
+// --- Dot product of two equal-length vectors ---
+
+fn vec_dot(a: Vec<i64>, b: Vec<i64>) -> i64 vow {
+  requires: a.len() == b.len(),
+  requires: a.len() >= 0,
+  requires: a.len() <= 64
+} {
+  let mut total: i64 = 0;
+  let mut i: i64 = 0;
+  let n: i64 = a.len();
+  while i < n vow {
+    invariant: i >= 0,
+    invariant: i <= n
+  } {
+    total = total + a[i] * b[i];
+    i = i + 1;
+  }
+  total
+}
+
+// --- Count occurrences of a value ---
+
+fn vec_count(v: Vec<i64>, target: i64) -> i64 vow {
+  requires: v.len() >= 0,
+  requires: v.len() <= 64,
+  ensures: result >= 0,
+  ensures: result <= v.len()
+} {
+  let mut count: i64 = 0;
+  let mut i: i64 = 0;
+  let n: i64 = v.len();
+  while i < n vow {
+    invariant: i >= 0,
+    invariant: i <= n,
+    invariant: count >= 0,
+    invariant: count <= i
+  } {
+    if v[i] == target {
+      count = count + 1;
+    } else {
+      0;
+    }
+    i = i + 1;
+  }
+  count
+}
+
+// --- Check if all elements satisfy a bound ---
+
+fn vec_all_in_range(v: Vec<i64>, lo: i64, hi: i64) -> i64 vow {
+  requires: lo <= hi,
+  requires: v.len() >= 0,
+  requires: v.len() <= 64,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  let mut i: i64 = 0;
+  let n: i64 = v.len();
+  while i < n vow {
+    invariant: i >= 0,
+    invariant: i <= n
+  } {
+    if v[i] < lo {
+      return 0;
+    } else {
+      0;
+    }
+    if v[i] > hi {
+      return 0;
+    } else {
+      0;
+    }
+    i = i + 1;
+  }
+  1
+}
+
+// --- Check if vector is sorted (non-decreasing) ---
+
+fn vec_is_sorted(v: Vec<i64>) -> i64 vow {
+  requires: v.len() >= 0,
+  requires: v.len() <= 64,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  let n: i64 = v.len();
+  if n <= 1 {
+    1
+  } else {
+    let mut i: i64 = 1;
+    while i < n vow {
+      invariant: i >= 1,
+      invariant: i <= n
+    } {
+      if v[i] < v[i - 1] {
+        return 0;
+      } else {
+        0;
+      }
+      i = i + 1;
+    }
+    1
+  }
+}
+
+// --- Prefix sum (returns new vector of running totals) ---
+
+fn vec_prefix_sum(v: Vec<i64>) -> Vec<i64> vow {
+  requires: v.len() >= 0,
+  requires: v.len() <= 64,
+  ensures: result.len() == v.len()
+} {
+  let mut out: Vec<i64> = Vec::new();
+  let mut total: i64 = 0;
+  let mut i: i64 = 0;
+  let n: i64 = v.len();
+  while i < n vow {
+    invariant: i >= 0,
+    invariant: i <= n,
+    invariant: out.len() == i
+  } {
+    total = total + v[i];
+    out.push(total);
+    i = i + 1;
+  }
+  out
+}
+
+// --- Reverse a vector ---
+
+fn vec_reverse(v: Vec<i64>) -> Vec<i64> vow {
+  requires: v.len() >= 0,
+  requires: v.len() <= 64,
+  ensures: result.len() == v.len()
+} {
+  let mut out: Vec<i64> = Vec::new();
+  let n: i64 = v.len();
+  let mut i: i64 = n - 1;
+  while i >= 0 vow {
+    invariant: i >= -1,
+    invariant: i < n
+  } {
+    out.push(v[i]);
+    i = i - 1;
+  }
+  out
+}

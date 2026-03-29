@@ -1,0 +1,232 @@
+module NumberTheory
+
+// --- Greatest common divisor (Euclidean algorithm) ---
+
+fn gcd(a: i64, b: i64) -> i64 vow {
+  requires: a >= 1,
+  requires: b >= 1,
+  requires: a <= 1000,
+  requires: b <= 1000,
+  ensures: result >= 1
+} {
+  let mut x: i64 = a;
+  let mut y: i64 = b;
+  while y > 0 vow {
+    invariant: x >= 1,
+    invariant: y >= 0,
+    invariant: x <= 1000,
+    invariant: y <= 1000
+  } {
+    let tmp: i64 = y;
+    y = x % y;
+    x = tmp;
+  }
+  x
+}
+
+// --- Least common multiple ---
+
+fn lcm(a: i64, b: i64) -> i64 vow {
+  requires: a >= 1,
+  requires: b >= 1,
+  requires: a <= 1000,
+  requires: b <= 1000,
+  ensures: result >= 1
+} {
+  let g: i64 = gcd(a, b);
+  (a / g) * b
+}
+
+// --- Primality test (trial division) ---
+
+fn is_prime(n: i64) -> i64 vow {
+  requires: n >= 0,
+  requires: n <= 1000,
+  ensures: result >= 0,
+  ensures: result <= 1
+} {
+  if n < 2 {
+    0
+  } else {
+    let mut d: i64 = 2;
+    let mut composite: i64 = 0;
+    while d * d <= n vow {
+      invariant: d >= 2,
+      invariant: composite >= 0,
+      invariant: composite <= 1
+    } {
+      if n % d == 0 {
+        composite = 1;
+      } else {
+        0;
+      }
+      d = d + 1;
+    }
+    if composite == 1 { 0 } else { 1 }
+  }
+}
+
+// --- Modular exponentiation: base^exp mod m ---
+
+fn power_mod(base: i64, exp: i64, m: i64) -> i64 vow {
+  requires: base >= 0,
+  requires: base <= 1000,
+  requires: exp >= 0,
+  requires: exp <= 30,
+  requires: m >= 2,
+  requires: m <= 1000,
+  ensures: result >= 0,
+  ensures: result < m
+} {
+  let mut r: i64 = 1;
+  let mut b: i64 = base % m;
+  let mut e: i64 = exp;
+  while e > 0 vow {
+    invariant: e >= 0,
+    invariant: r >= 0,
+    invariant: r < m,
+    invariant: b >= 0,
+    invariant: b < m
+  } {
+    if e % 2 == 1 {
+      r = (r * b) % m;
+    } else {
+      0;
+    }
+    b = (b * b) % m;
+    e = e / 2;
+  }
+  r
+}
+
+// --- Factorial ---
+
+fn factorial(n: i64) -> i64 vow {
+  requires: n >= 0,
+  requires: n <= 12,
+  ensures: result >= 1
+} {
+  let mut r: i64 = 1;
+  let mut i: i64 = 2;
+  while i <= n vow {
+    invariant: i >= 2,
+    invariant: i <= n + 1,
+    invariant: r >= 1
+  } {
+    r = r * i;
+    i = i + 1;
+  }
+  r
+}
+
+// --- Fibonacci ---
+
+fn fibonacci(n: i64) -> i64 vow {
+  requires: n >= 0,
+  requires: n <= 46,
+  ensures: result >= 0
+} {
+  if n <= 1 {
+    n
+  } else {
+    let mut a: i64 = 0;
+    let mut b: i64 = 1;
+    let mut i: i64 = 2;
+    while i <= n vow {
+      invariant: i >= 2,
+      invariant: i <= n + 1,
+      invariant: a >= 0,
+      invariant: b >= 0
+    } {
+      let tmp: i64 = a + b;
+      a = b;
+      b = tmp;
+      i = i + 1;
+    }
+    b
+  }
+}
+
+// --- Integer square root (floor) ---
+
+fn isqrt(n: i64) -> i64 vow {
+  requires: n >= 0,
+  requires: n <= 1000000,
+  ensures: result >= 0,
+  ensures: result * result <= n
+} {
+  if n == 0 {
+    0
+  } else {
+    let mut lo: i64 = 1;
+    let mut hi: i64 = n;
+    if hi > 1000 {
+      hi = 1000;
+    } else {
+      0;
+    }
+    let mut ans: i64 = 0;
+    while lo <= hi vow {
+      invariant: lo >= 1,
+      invariant: ans >= 0,
+      invariant: ans * ans <= n
+    } {
+      let mid: i64 = lo + (hi - lo) / 2;
+      if mid * mid <= n {
+        ans = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    ans
+  }
+}
+
+// --- Largest proper divisor ---
+
+fn largest_divisor(n: i64) -> i64 vow {
+  requires: n >= 2,
+  requires: n <= 1000,
+  ensures: result >= 1,
+  ensures: result < n,
+  ensures: n % result == 0
+} {
+  let mut d: i64 = n - 1;
+  while d >= 2 vow {
+    invariant: d >= 1,
+    invariant: d < n
+  } {
+    if n % d == 0 {
+      return d;
+    } else {
+      0;
+    }
+    d = d - 1;
+  }
+  1
+}
+
+// --- Count divisors ---
+
+fn count_divisors(n: i64) -> i64 vow {
+  requires: n >= 1,
+  requires: n <= 1000,
+  ensures: result >= 1
+} {
+  let mut count: i64 = 0;
+  let mut d: i64 = 1;
+  while d <= n vow {
+    invariant: d >= 1,
+    invariant: d <= n + 1,
+    invariant: count >= 0
+  } {
+    if n % d == 0 {
+      count = count + 1;
+    } else {
+      0;
+    }
+    d = d + 1;
+  }
+  count
+}
