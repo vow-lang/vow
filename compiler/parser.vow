@@ -37,6 +37,15 @@ fn at(p: Parser, tag: i64) -> bool {
     peek_tag(p) == tag
 }
 
+fn peek_offset(p: Parser, offset: i64) -> Token {
+    let idx: i64 = p.pos + offset;
+    if idx < p.tokens.len() {
+        p.tokens[idx]
+    } else {
+        p.tokens[p.tokens.len() - 1]
+    }
+}
+
 fn at_end(p: Parser) -> bool {
     peek_tag(p) == tok_eof()
 }
@@ -536,6 +545,18 @@ fn tok_to_binop(tag: i64) -> i64 {
     else { BINOP_OR() }
 }
 
+fn looks_like_struct_literal(p: Parser) -> bool {
+    let t1: Token = peek_offset(p, 1);
+    if t1.tag == tok_rbrace() {
+        return true;
+    }
+    if t1.tag == tok_ident() {
+        let t2: Token = peek_offset(p, 2);
+        return t2.tag == tok_colon();
+    }
+    false
+}
+
 fn is_block_expr(a: AstArena, eid: i64) -> bool {
     let tag: i64 = expr_tag(a, eid);
     tag == EXPR_IF() || tag == EXPR_WHILE() || tag == EXPR_LOOP() || tag == EXPR_FOR() || tag == EXPR_MATCH() || tag == EXPR_BLOCK()
@@ -660,7 +681,7 @@ fn parse_primary(p: Parser) -> i64 {
         let sid: i64 = arena_intern_str(p.arena, name_str);
         if at(p, tok_colon_colon()) {
             parse_path_expr(p, sid)
-        } else if at(p, tok_lbrace()) && first_byte >= 65 && first_byte <= 90 {
+        } else if at(p, tok_lbrace()) && first_byte >= 65 && first_byte <= 90 && looks_like_struct_literal(p) {
             let path_items: Vec<i64> = Vec::new();
             path_items.push(sid);
             let path_lid: i64 = arena_add_list(p.arena, path_items);
