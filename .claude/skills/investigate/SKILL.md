@@ -38,11 +38,13 @@ Write a minimal `.vow` file that triggers the reported bug. Compile and run with
 ulimit -v 2000000; build/vowc build <test-file>.vow
 ```
 
-- For verification bugs, use `build/vowc verify`.
-- For runtime bugs, use `--mode debug`.
+- For verification bugs, use `ulimit -v 2000000; build/vowc verify <test-file>.vow`.
+- For runtime bugs, use `ulimit -v 2000000; build/vowc build --mode debug <test-file>.vow`.
 - Confirm the bug manifests before proceeding.
 
-Keep the reproduction file for fix validation in Phase 5.
+**Critical:** Always use `ulimit -v 2000000` when running `build/vowc` or any binary it produces.
+
+Keep the reproduction file for fix validation and regression testing in later phases.
 
 ### Phase 3 — Create Task List
 
@@ -52,41 +54,40 @@ Typical tasks:
 1. Reproduce the bug (Phase 2 output)
 2. Identify root cause in Rust compiler
 3. Implement fix in Rust compiler
-4. Run `cargo test --all` until green
+4. Run `cargo test --all` and `cargo clippy --all -- -D warnings` until green
 5. Identify corresponding code in self-hosted compiler
 6. Implement equivalent fix in `compiler/*.vow`
-7. Rebuild self-hosted compiler and run `scripts/full_test.sh`
+7. Rebuild self-hosted compiler and run `ulimit -v 2000000; scripts/full_test.sh`
 8. Verify reproduction case is fixed
-9. Commit, push, and comment on issue
+9. Run `/codex:review` and address feedback
+10. Add regression test to appropriate `tests/` category
+11. Commit, push, and comment on issue
 
 Set up dependency relationships between tasks.
 
 ### Phase 4 — Fix Both Compilers
 
-Spawn **two sub-agents in parallel** using the Agent tool. Each agent works on
-independent files (Rust `.rs` files vs self-hosted `.vow` files), so there are no
-conflicts. If sub-agents encounter issues (stale worktrees, integration mismatches),
-fall back to sequential execution: fix Rust first, then self-hosted.
+Fix the compilers **sequentially** — Rust first, then self-hosted. Do not use parallel
+sub-agents; work incrementally and directly.
 
-**Agent 1 — Rust Compiler Fix:**
+**Step 1 — Rust Compiler Fix:**
 - Identify the root cause in the relevant crate (vow-syntax, vow-types, vow-ir, vow-codegen, vow-verify, vow-clif-shim, vow-runtime, vow-diag, or vow)
 - Implement the fix
 - Iterate: run `cargo test --all` until all tests pass
 - Run `cargo clippy --all -- -D warnings` to ensure no lint warnings
-- Report back: files changed, root cause summary, test results
+- Run `cargo fmt --all` to ensure formatting is clean
 
-**Agent 2 — Self-Hosted Compiler Fix:**
+**Step 2 — Self-Hosted Compiler Fix (if applicable):**
 - Identify the corresponding code in `compiler/*.vow` modules (see Crate-to-Module Mapping below)
 - Implement the equivalent fix
-- Rebuild: `scripts/bootstrap.sh --no-verify --skip-cargo`
+- Rebuild: `scripts/bootstrap.sh --skip-cargo`
 - Iterate: run `ulimit -v 2000000; scripts/full_test.sh` until all tests pass
-- Report back: files changed, root cause summary, test results
 
-**Critical:** Both agents MUST use `ulimit -v 2000000` when running any self-compiled binary.
+**Critical:** Always use `ulimit -v 2000000` when running any self-compiled binary.
 
 ### Phase 5 — Verify the Fix
 
-After both agents complete:
+After both compilers are fixed:
 
 1. Re-run the Phase 2 reproduction `.vow` file to confirm the bug is fixed:
    ```bash
@@ -96,21 +97,54 @@ After both agents complete:
    ```bash
    cargo test --all
    ```
-3. Run the full self-hosted test suite:
+3. Run clippy and check formatting:
+   ```bash
+   cargo clippy --all -- -D warnings
+   cargo fmt --all --check
+   ```
+4. Run the full self-hosted test suite:
    ```bash
    ulimit -v 2000000; scripts/full_test.sh
    ```
-4. If either fails, iterate on the fix.
+5. If any step fails, iterate on the fix.
 
-### Phase 6 — Commit and Push
+### Phase 6 — Codex Review
 
-1. Stage all changed files (both Rust and `compiler/*.vow` changes).
+After verifying the fix, request a Codex review of the changes by running `/codex:review`.
+
+Address all issues raised by the review before proceeding. Iterate until the review passes
+cleanly — re-run verification (Phase 5) after any changes made in response to review feedback.
+
+### Phase 7 — Add Regression Test
+
+Every bug fix **must** include a regression test. Move the reproduction `.vow` file from
+Phase 2 into the appropriate test category:
+
+| Test Category | Directory | When to Use |
+|---|---|---|
+| Runtime tests | `tests/run/` | Bug produced wrong runtime output or crash |
+| Error tests | `tests/error/` | Bug was a missing or wrong compile-time error |
+| Verify tests | `tests/verify/` | Bug caused verification to incorrectly fail |
+| Verify-fail tests | `tests/verify-fail/` | Bug caused verification to incorrectly pass |
+| Debug tests | `tests/debug/` | Bug related to `--mode debug` behavior |
+| Multi-module tests | `tests/multi/` | Bug related to multi-module compilation |
+
+Name the test file descriptively (e.g., `tests/run/vec_index_oob.vow`).
+
+After adding the test, re-run the full test suite to confirm it's picked up:
+```bash
+ulimit -v 2000000; scripts/full_test.sh
+```
+
+### Phase 8 — Commit and Push
+
+1. Stage all changed files (Rust sources, `compiler/*.vow`, and the new test file).
 2. Create a single commit with message format: `fix: <concise description> (#$ARGUMENTS)`
    - Follow the existing commit style (see `git log --oneline`).
    - Never mention Claude or AI in the commit message.
 3. Push to the current branch.
 
-### Phase 7 — Comment on the Issue
+### Phase 9 — Comment on the Issue
 
 Post a comment on the issue using:
 
@@ -121,9 +155,9 @@ gh issue comment $ARGUMENTS --body "<summary>"
 The comment must include:
 - **Root cause**: What caused the bug and where in the codebase.
 - **Fix**: What was changed in both compilers and why.
-- **Testing**: What tests were run to validate the fix.
+- **Testing**: What regression test was added and what test suites passed.
 
-### Phase 8 — Close the Issue
+### Phase 10 — Close the Issue
 
 After confirming the fix is pushed and the comment is posted, close the issue:
 
@@ -135,10 +169,13 @@ If the fix is partial or needs further review, skip this step and inform the use
 
 ## Key Project Rules
 
-- **Dual-compiler rule**: Every change to the Rust compiler must have a corresponding change in the self-hosted compiler (`compiler/*.vow`).
+- **Dual-compiler rule**: Every change to the Rust compiler must have a corresponding change in the self-hosted compiler (`compiler/*.vow`), except for `vow-runtime` which has no self-hosted equivalent.
 - **Memory safety**: Always use `ulimit -v 2000000` when running `build/vowc` or any binary it produces.
 - **Task tracking**: Convert plans to task lists (TaskCreate) before execution.
-- **Bootstrap rebuild**: After changing `compiler/*.vow`, rebuild with `scripts/bootstrap.sh --no-verify --skip-cargo`.
+- **Bootstrap rebuild**: After changing `compiler/*.vow`, rebuild with `scripts/bootstrap.sh --skip-cargo`.
+- **Sequential workflow**: Fix Rust compiler first, then self-hosted. Do not use parallel sub-agents.
+- **Codex review**: Run `/codex:review` after implementation, address all feedback before committing.
+- **Regression tests**: Every bug fix must add a test to the appropriate `tests/` category.
 
 ## Crate-to-Module Mapping
 
@@ -153,5 +190,7 @@ Use this to find the self-hosted equivalent of a Rust crate:
 | vow-ir | compiler/ir.vow, ir_printer.vow |
 | vow-ir (lowering) | compiler/lower.vow |
 | vow-codegen | compiler/clif.vow |
-| vow (CLI driver) | compiler/main.vow |
+| vow-clif-shim | (FFI shims consumed by compiler/clif.vow) |
+| vow-runtime | (linked runtime; no self-hosted equivalent) |
 | vow-diag | (integrated in main.vow/checker.vow) |
+| vow (CLI driver) | compiler/main.vow |
