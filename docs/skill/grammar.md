@@ -474,8 +474,8 @@ m.contains_key(k)
 | `.len()`       | `() -> i64`                      |
 | `.clear()`     | `() -> ()` — frees buffer, resets to empty |
 | `.truncate(n)` | `(i64) -> ()` — shrinks to n elements, frees excess memory |
-| `v[i]`         | Index access (panics if out of bounds) |
-| `v[i] = val`   | Index assignment                 |
+| `v[i]`         | Index read — copies slot value; aliases heap types (panics if out of bounds) |
+| `v[i] = val`   | Index write — copies value into slot |
 
 ### String Methods
 
@@ -519,6 +519,19 @@ The `?` operator on `Option<T>` or `Result<T, E>` propagates `None`/`Err` to the
 let val: i64 = v[0];
 v[i] = new_val;
 ```
+
+Indexing uses **copy semantics**: `v[i]` copies the 8-byte slot value and `v[i] = val` copies a value into the slot. The base container is not consumed.
+
+For primitive types (`i64`, `bool`), this is a genuine value copy — the result is independent of the container. For heap types (`Vec<T>`, `String`, structs, enums), the 8-byte slot holds a pointer, so indexing copies the pointer, creating an **alias**. Both the container slot and the local variable point to the same heap data:
+
+```vow
+let buckets: Vec<Vec<i64>> = Vec::new();
+buckets.push(Vec::new());
+let b: Vec<i64> = buckets[0];  // b aliases buckets[0]
+b.push(42);                     // visible through buckets[0]
+```
+
+This aliasing is the intended behavior for arena and hash-table patterns where bucket contents are read and mutated repeatedly through index access.
 
 ## Extern Blocks
 
