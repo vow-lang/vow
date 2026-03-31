@@ -11,3 +11,5 @@ compiler/*.vow.c
 /lcov.info
 bench/results/
 __pycache__/
+
+.claude/settings.local.json
