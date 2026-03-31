@@ -3213,12 +3213,13 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>, file_path: String) -> IrModul
             let ename_sid: i64 = edef_name_sid(a, iid);
             let ename: String = arena_str(a, ename_sid);
             let variants_lid: i64 = edef_variants_lid(a, iid);
-            let nv: i64 = list_len(a, variants_lid);
+            let n_pairs: i64 = list_len(a, variants_lid);
+            let nv: i64 = n_pairs / 2;
             let vnames: Vec<String> = Vec::new();
             let ir_variants: Vec<IrVariantLayout> = Vec::new();
             let mut vi: i64 = 0;
             while vi < nv {
-                let vname_sid: i64 = list_get(a, variants_lid, vi);
+                let vname_sid: i64 = list_get(a, variants_lid, vi * 2);
                 let vname: String = arena_str(a, vname_sid);
                 vnames.push(vname);
                 let payload: Vec<IrFieldLayout> = Vec::new();
