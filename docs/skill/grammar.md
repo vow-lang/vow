@@ -593,22 +593,99 @@ Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they 
 
 ### Builtin Function Signatures
 
+#### Print / IO
+
 | Function         | Signature                                  | Effects    |
 |------------------|--------------------------------------------|------------|
 | `print_str`      | `fn(s: String) -> ()`                      | `[io]`     |
 | `print_i64`      | `fn(v: i64) -> ()`                         | `[io]`     |
 | `print_u64`      | `fn(v: u64) -> ()`                         | `[io]`     |
 | `eprintln_str`   | `fn(s: String) -> ()`                      | `[io]`     |
+
+#### Filesystem
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
 | `fs_read`        | `fn(path: String) -> String`               | `[read]`   |
-| `fs_write`       | `fn(path: String, data: String) -> ()`     | `[write]`  |
+| `fs_write`       | `fn(path: String, data: String) -> i64`    | `[write]`  |
+| `fs_exists`      | `fn(path: String) -> i64`                  | `[read]`   |
+| `fs_mkdir`       | `fn(path: String) -> i64`                  | `[io]`     |
+| `fs_listdir`     | `fn(path: String) -> Vec<String>`          | `[read]`   |
+| `fs_remove`      | `fn(path: String) -> i64`                  | `[io]`     |
+| `fs_remove_dir`  | `fn(path: String) -> i64`                  | `[io]`     |
+| `fs_is_dir`      | `fn(path: String) -> i64`                  | `[read]`   |
+| `fs_rename`      | `fn(old: String, new: String) -> i64`      | `[io]`     |
+
+#### String Operations
+
+| Function              | Signature                                        | Effects |
+|-----------------------|--------------------------------------------------|---------|
+| `string_substr`       | `fn(s: String, start: i64, len: i64) -> String`  | `[]`    |
+| `string_split`        | `fn(s: String, delim: String) -> Vec<String>`    | `[]`    |
+| `string_starts_with`  | `fn(s: String, prefix: String) -> i64`           | `[]`    |
+| `string_ends_with`    | `fn(s: String, suffix: String) -> i64`           | `[]`    |
+| `string_trim`         | `fn(s: String) -> String`                        | `[]`    |
+| `string_to_upper`     | `fn(s: String) -> String`                        | `[]`    |
+| `string_to_lower`     | `fn(s: String) -> String`                        | `[]`    |
+| `string_replace`      | `fn(s: String, from: String, to: String) -> String` | `[]` |
+| `string_join`         | `fn(parts: Vec<String>, sep: String) -> String`  | `[]`    |
+
+#### Conversion
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `parse_i64`      | `fn(s: String) -> i64`                     | `[]`       |
+| `i64_to_string`  | `fn(v: i64) -> String`                     | `[]`       |
+
+#### Collections
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `vec_sort`       | `fn(v: Vec<i64>) -> Vec<i64>`              | `[]`       |
+
+#### Time
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `time_unix`      | `fn() -> i64`                              | `[io]`     |
+
+#### Encoding
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `hex_encode`     | `fn(data: Vec<u8>) -> String`              | `[]`       |
+| `hex_decode`     | `fn(s: String) -> Vec<u8>`                 | `[]`       |
+
+#### Input
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
 | `args`           | `fn() -> Vec<String>`                      | `[read]`   |
 | `stdin_read`     | `fn() -> String`                           | `[read]`   |
 | `stdin_read_line`| `fn() -> String`                           | `[read]`   |
-| `process_exit`   | `fn(code: i64) -> ()`                      | `[io]`     |
+
+#### Process Management
+
+| Function              | Signature                                        | Effects |
+|-----------------------|--------------------------------------------------|---------|
+| `process_exit`        | `fn(code: i64) -> Never`                         | `[io]`  |
+| `process_run`         | `fn(cmd: String, args: Vec<String>) -> i64`      | `[io]`  |
+| `process_get_stdout`  | `fn() -> String`                                 | `[io]`  |
+| `process_get_stderr`  | `fn() -> String`                                 | `[io]`  |
+| `process_start`       | `fn(cmd: String, args: Vec<String>) -> i64`      | `[io]`  |
+| `process_wait`        | `fn(pid: i64) -> i64`                            | `[io]`  |
+| `process_stdout_for`  | `fn(pid: i64) -> String`                         | `[io]`  |
+| `process_stderr_for`  | `fn(pid: i64) -> String`                         | `[io]`  |
 
 **`args` semantics:** `args()` returns all process arguments including the program name at index 0 (matching C `argv` and Rust `std::env::args()` conventions). For `./my_program foo bar`, `args()` returns `["./my_program", "foo", "bar"]`. Use `args[1]` onward for user-supplied arguments. The Vec is empty only if the OS provides no arguments (unusual). Returns an empty String element if an argument is empty (`""`). Non-UTF-8 arguments are included as-is (byte content preserved).
 
 **`fs_read` semantics:** `fs_read(path)` opens the file at `path`, reads its entire contents, and returns a String. Returns `""` (empty String) on any error (file not found, permission denied, I/O error, non-UTF-8 path). Does not block on regular files. Callers should check `result.len() == 0` to detect failure.
+
+**Filesystem return values:** `fs_write`, `fs_exists`, `fs_mkdir`, `fs_remove`, `fs_remove_dir`, `fs_is_dir`, and `fs_rename` return `i64`: 0 on success (or "false" for predicates), non-zero on failure (or "true" for `fs_exists`/`fs_is_dir`).
+
+**`string_starts_with` / `string_ends_with` return values:** Return `i64`: 1 if true, 0 if false.
+
+**`process_run` vs `process_start`:** `process_run(cmd, args)` runs a subprocess synchronously and returns its exit code. After it returns, `process_get_stdout()` and `process_get_stderr()` retrieve the captured output of the most recent `process_run` call. `process_start(cmd, args)` launches a subprocess asynchronously and returns a process ID. Use `process_wait(pid)` to wait for completion and get the exit code, and `process_stdout_for(pid)` / `process_stderr_for(pid)` to retrieve output.
 
 **`stdin_read` vs `stdin_read_line`:** `stdin_read()` reads the entire stdin stream into a single String (unbounded memory). `stdin_read_line()` reads one line at a time, including the trailing newline. Returns `""` (empty string) at EOF. Use `stdin_read_line` for line-at-a-time processing with bounded memory:
 

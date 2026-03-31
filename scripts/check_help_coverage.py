@@ -14,13 +14,22 @@ import sys
 
 def extract_table_column(text: str, heading: str, col: int = 0) -> list[str]:
     """Extract backtick-quoted values from column `col` of a markdown table
-    that follows a heading matching `heading`."""
+    that follows a heading matching `heading`.
+    Collects rows from all sub-tables in the section."""
     in_section = False
     in_table = False
+    section_level = 0
     items = []
     for line in text.splitlines():
         if re.match(r"^#{1,4}\s+" + re.escape(heading), line):
             in_section = True
+            in_table = False
+            section_level = len(line) - len(line.lstrip("#"))
+            continue
+        if in_section and line.startswith("#"):
+            level = len(line) - len(line.lstrip("#"))
+            if level <= section_level:
+                break
             in_table = False
             continue
         if in_section and line.startswith("|") and "---" in line:
@@ -28,7 +37,6 @@ def extract_table_column(text: str, heading: str, col: int = 0) -> list[str]:
             continue
         if in_section and in_table:
             if not line.startswith("|"):
-                in_section = False
                 in_table = False
                 continue
             cells = [c.strip() for c in line.split("|")]
