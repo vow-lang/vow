@@ -169,7 +169,7 @@ If the fix is partial or needs further review, skip this step and inform the use
 
 ## Key Project Rules
 
-- **Dual-compiler rule**: Every change to the Rust compiler must have a corresponding change in the self-hosted compiler (`compiler/*.vow`).
+- **Dual-compiler rule**: Every change to the Rust compiler must have a corresponding change in the self-hosted compiler (`compiler/*.vow`), except for `vow-runtime` which has no self-hosted equivalent.
 - **Memory safety**: Always use `ulimit -v 2000000` when running `build/vowc` or any binary it produces.
 - **Task tracking**: Convert plans to task lists (TaskCreate) before execution.
 - **Bootstrap rebuild**: After changing `compiler/*.vow`, rebuild with `scripts/bootstrap.sh --skip-cargo`.
