@@ -1,3 +1,4 @@
+// TEST: stdout "3070"
 module DeallocPhiStruct
 
 struct Pair {

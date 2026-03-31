@@ -1,3 +1,4 @@
+// TEST: stdout "52\n32\n420\n4\n2\n18446744073709551615\nx > y\n42\n42\n"
 module U64Basic
 
 fn main() -> i32 [io] {

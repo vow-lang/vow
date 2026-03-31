@@ -1,3 +1,4 @@
+// TEST: stdout "60"
 module ForEach
 
 fn sum_vec(v: Vec<i64>) -> i64 {

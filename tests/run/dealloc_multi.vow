@@ -1,3 +1,4 @@
+// TEST: stdout "36300"
 module DeallocMulti
 
 struct Point {

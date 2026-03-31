@@ -1,3 +1,4 @@
+// TEST: stdout "1"
 module StringEmpty
 
 fn push_one() -> String vow {

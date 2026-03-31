@@ -1,3 +1,4 @@
+// TEST: stdout "Hello, world23"
 module DeallocString
 
 fn build_greeting(name: String) -> String {

@@ -1,3 +1,4 @@
+// TEST: stdout "first 10 20 30 40 40\n"
 module VecStructField
 
 pub enum Kind {

@@ -1,3 +1,4 @@
+// TEST: stdout "60"
 module ForEach
 
 fn main() -> i32 [io] {
