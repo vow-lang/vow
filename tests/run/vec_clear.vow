@@ -1,0 +1,33 @@
+// TEST: stdout "init:123clear:len0:push_after:45clear_empty:len0:done"
+module vec_clear
+
+fn main() -> i32 [io] {
+    let v: Vec<i64> = Vec::new();
+    v.push(1);
+    v.push(2);
+    v.push(3);
+
+    print_str("init:");
+    print_i64(v[0]);
+    print_i64(v[1]);
+    print_i64(v[2]);
+
+    // clear non-empty vec
+    v.clear();
+    print_str("clear:len0:");
+
+    // push after clear
+    v.push(4);
+    v.push(5);
+    print_str("push_after:");
+    print_i64(v[0]);
+    print_i64(v[1]);
+
+    // clear empty vec (no-op)
+    v.clear();
+    v.clear();
+    print_str("clear_empty:len0:");
+
+    print_str("done");
+    0
+}
