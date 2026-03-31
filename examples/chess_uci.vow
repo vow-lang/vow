@@ -1,0 +1,1389 @@
+module ChessUci
+
+const EMPTY: i64 = 0;
+const WHITE: i64 = 1;
+const BLACK: i64 = -1;
+
+const PAWN: i64 = 1;
+const KNIGHT: i64 = 2;
+const BISHOP: i64 = 3;
+const ROOK: i64 = 4;
+const QUEEN: i64 = 5;
+const KING: i64 = 6;
+
+const INF: i64 = 100000000;
+const MATE: i64 = 1000000;
+
+struct ChessMove {
+    from: i64,
+    to: i64,
+    promote: i64,
+    en_passant: i64,
+    castle: i64,
+}
+
+struct Board {
+    // a1 = 0, b1 = 1, ..., h8 = 63
+    squares: Vec<i64>,
+    side: i64,
+    ep: i64,
+    wk: i64,
+    wq: i64,
+    bk: i64,
+    bq: i64,
+}
+
+fn abs_i64(x: i64) -> i64 {
+    if x < 0 {
+        -x
+    } else {
+        x
+    }
+}
+
+fn max_i64(a: i64, b: i64) -> i64 {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}
+
+fn min_i64(a: i64, b: i64) -> i64 {
+    if a < b {
+        a
+    } else {
+        b
+    }
+}
+
+fn file_of(sq: i64) -> i64 {
+    sq % 8
+}
+
+fn rank_of(sq: i64) -> i64 {
+    sq / 8
+}
+
+fn make_sq(file: i64, rank: i64) -> i64 {
+    rank * 8 + file
+}
+
+fn on_board(file: i64, rank: i64) -> bool {
+    file >= 0 && file < 8 && rank >= 0 && rank < 8
+}
+
+fn piece_color(piece: i64) -> i64 {
+    if piece > 0 {
+        WHITE
+    } else {
+        if piece < 0 {
+            BLACK
+        } else {
+            0
+        }
+    }
+}
+
+fn piece_kind(piece: i64) -> i64 {
+    abs_i64(piece)
+}
+
+fn piece_value(kind: i64) -> i64 {
+    if kind == 1 {
+        return 100;
+    }
+    if kind == 2 {
+        return 320;
+    }
+    if kind == 3 {
+        return 330;
+    }
+    if kind == 4 {
+        return 500;
+    }
+    if kind == 5 {
+        return 900;
+    }
+    0
+}
+
+fn clone_vec_i64(v: Vec<i64>) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < v.len() {
+        out.push(v[i]);
+        i = i + 1;
+    }
+    out
+}
+
+fn clone_board(b: Board) -> Board {
+    Board {
+        squares: clone_vec_i64(b.squares),
+        side: b.side,
+        ep: b.ep,
+        wk: b.wk,
+        wq: b.wq,
+        bk: b.bk,
+        bq: b.bq,
+    }
+}
+
+fn null_move() -> ChessMove {
+    ChessMove { from: -1, to: -1, promote: 0, en_passant: 0, castle: 0 }
+}
+
+fn is_null_move(mv: ChessMove) -> bool {
+    mv.from < 0
+}
+
+fn add_move(moves: Vec<ChessMove>, from: i64, to: i64, promote: i64, en_passant: i64, castle: i64) {
+    let mv: ChessMove = ChessMove {
+        from: from,
+        to: to,
+        promote: promote,
+        en_passant: en_passant,
+        castle: castle,
+    };
+    moves.push(mv);
+}
+
+fn add_promotions(moves: Vec<ChessMove>, from: i64, to: i64, en_passant: i64) {
+    add_move(moves, from, to, QUEEN, en_passant, 0);
+    add_move(moves, from, to, ROOK, en_passant, 0);
+    add_move(moves, from, to, BISHOP, en_passant, 0);
+    add_move(moves, from, to, KNIGHT, en_passant, 0);
+}
+
+fn start_board() -> Board {
+    let b: Board = Board {
+        squares: Vec::new(),
+        side: WHITE,
+        ep: -1,
+        wk: 1,
+        wq: 1,
+        bk: 1,
+        bq: 1,
+    };
+    let sqs: Vec<i64> = b.squares;
+    let mut i: i64 = 0;
+    while i < 64 {
+        sqs.push(EMPTY);
+        i = i + 1;
+    }
+
+    sqs[0] = ROOK;
+    sqs[1] = KNIGHT;
+    sqs[2] = BISHOP;
+    sqs[3] = QUEEN;
+    sqs[4] = KING;
+    sqs[5] = BISHOP;
+    sqs[6] = KNIGHT;
+    sqs[7] = ROOK;
+
+    sqs[8] = PAWN;
+    sqs[9] = PAWN;
+    sqs[10] = PAWN;
+    sqs[11] = PAWN;
+    sqs[12] = PAWN;
+    sqs[13] = PAWN;
+    sqs[14] = PAWN;
+    sqs[15] = PAWN;
+
+    sqs[48] = -PAWN;
+    sqs[49] = -PAWN;
+    sqs[50] = -PAWN;
+    sqs[51] = -PAWN;
+    sqs[52] = -PAWN;
+    sqs[53] = -PAWN;
+    sqs[54] = -PAWN;
+    sqs[55] = -PAWN;
+
+    sqs[56] = -ROOK;
+    sqs[57] = -KNIGHT;
+    sqs[58] = -BISHOP;
+    sqs[59] = -QUEEN;
+    sqs[60] = -KING;
+    sqs[61] = -BISHOP;
+    sqs[62] = -KNIGHT;
+    sqs[63] = -ROOK;
+    b
+}
+
+fn find_king(b: Board, color: i64) -> i64 {
+    let target: i64 = color * KING;
+    let sqs: Vec<i64> = b.squares;
+    let mut sq: i64 = 0;
+    while sq < 64 {
+        if sqs[sq] == target {
+            return sq;
+        }
+        sq = sq + 1;
+    }
+    -1
+}
+
+fn square_attacked(b: Board, sq: i64, by_color: i64) -> bool {
+    let sqs: Vec<i64> = b.squares;
+    let file: i64 = file_of(sq);
+    let rank: i64 = rank_of(sq);
+    let knight_piece: i64 = by_color * KNIGHT;
+    let bishop_piece: i64 = by_color * BISHOP;
+    let rook_piece: i64 = by_color * ROOK;
+    let queen_piece: i64 = by_color * QUEEN;
+    let king_piece: i64 = by_color * KING;
+
+    if by_color == 1 {
+        if file > 0 && rank > 0 && sqs[sq - 9] == 1 {
+            return true;
+        }
+        if file < 7 && rank > 0 && sqs[sq - 7] == 1 {
+            return true;
+        }
+    } else {
+        if file > 0 && rank < 7 && sqs[sq + 7] == -1 {
+            return true;
+        }
+        if file < 7 && rank < 7 && sqs[sq + 9] == -1 {
+            return true;
+        }
+    }
+
+    let n1f: i64 = file + 1;
+    let n1r: i64 = rank + 2;
+    if on_board(n1f, n1r) && sqs[make_sq(n1f, n1r)] == knight_piece {
+        return true;
+    }
+    let n2f: i64 = file + 2;
+    let n2r: i64 = rank + 1;
+    if on_board(n2f, n2r) && sqs[make_sq(n2f, n2r)] == knight_piece {
+        return true;
+    }
+    let n3f: i64 = file - 1;
+    let n3r: i64 = rank + 2;
+    if on_board(n3f, n3r) && sqs[make_sq(n3f, n3r)] == knight_piece {
+        return true;
+    }
+    let n4f: i64 = file - 2;
+    let n4r: i64 = rank + 1;
+    if on_board(n4f, n4r) && sqs[make_sq(n4f, n4r)] == knight_piece {
+        return true;
+    }
+    let n5f: i64 = file + 1;
+    let n5r: i64 = rank - 2;
+    if on_board(n5f, n5r) && sqs[make_sq(n5f, n5r)] == knight_piece {
+        return true;
+    }
+    let n6f: i64 = file + 2;
+    let n6r: i64 = rank - 1;
+    if on_board(n6f, n6r) && sqs[make_sq(n6f, n6r)] == knight_piece {
+        return true;
+    }
+    let n7f: i64 = file - 1;
+    let n7r: i64 = rank - 2;
+    if on_board(n7f, n7r) && sqs[make_sq(n7f, n7r)] == knight_piece {
+        return true;
+    }
+    let n8f: i64 = file - 2;
+    let n8r: i64 = rank - 1;
+    if on_board(n8f, n8r) && sqs[make_sq(n8f, n8r)] == knight_piece {
+        return true;
+    }
+
+    let mut df: i64 = 1;
+    let mut dr: i64 = 1;
+    let mut f: i64 = file + df;
+    let mut r: i64 = rank + dr;
+    while on_board(f, r) {
+        let piece: i64 = sqs[make_sq(f, r)];
+        if piece != 0 {
+            if piece == bishop_piece || piece == queen_piece {
+                return true;
+            }
+            break;
+        }
+        f = f + df;
+        r = r + dr;
+    }
+
+    df = -1;
+    dr = 1;
+    f = file + df;
+    r = rank + dr;
+    while on_board(f, r) {
+        let piece2: i64 = sqs[make_sq(f, r)];
+        if piece2 != 0 {
+            if piece2 == bishop_piece || piece2 == queen_piece {
+                return true;
+            }
+            break;
+        }
+        f = f + df;
+        r = r + dr;
+    }
+
+    df = 1;
+    dr = -1;
+    f = file + df;
+    r = rank + dr;
+    while on_board(f, r) {
+        let piece3: i64 = sqs[make_sq(f, r)];
+        if piece3 != 0 {
+            if piece3 == bishop_piece || piece3 == queen_piece {
+                return true;
+            }
+            break;
+        }
+        f = f + df;
+        r = r + dr;
+    }
+
+    df = -1;
+    dr = -1;
+    f = file + df;
+    r = rank + dr;
+    while on_board(f, r) {
+        let piece4: i64 = sqs[make_sq(f, r)];
+        if piece4 != 0 {
+            if piece4 == bishop_piece || piece4 == queen_piece {
+                return true;
+            }
+            break;
+        }
+        f = f + df;
+        r = r + dr;
+    }
+
+    df = 1;
+    dr = 0;
+    f = file + df;
+    r = rank + dr;
+    while on_board(f, r) {
+        let piece5: i64 = sqs[make_sq(f, r)];
+        if piece5 != 0 {
+            if piece5 == rook_piece || piece5 == queen_piece {
+                return true;
+            }
+            break;
+        }
+        f = f + df;
+        r = r + dr;
+    }
+
+    df = -1;
+    dr = 0;
+    f = file + df;
+    r = rank + dr;
+    while on_board(f, r) {
+        let piece6: i64 = sqs[make_sq(f, r)];
+        if piece6 != 0 {
+            if piece6 == rook_piece || piece6 == queen_piece {
+                return true;
+            }
+            break;
+        }
+        f = f + df;
+        r = r + dr;
+    }
+
+    df = 0;
+    dr = 1;
+    f = file + df;
+    r = rank + dr;
+    while on_board(f, r) {
+        let piece7: i64 = sqs[make_sq(f, r)];
+        if piece7 != 0 {
+            if piece7 == rook_piece || piece7 == queen_piece {
+                return true;
+            }
+            break;
+        }
+        f = f + df;
+        r = r + dr;
+    }
+
+    df = 0;
+    dr = -1;
+    f = file + df;
+    r = rank + dr;
+    while on_board(f, r) {
+        let piece8: i64 = sqs[make_sq(f, r)];
+        if piece8 != 0 {
+            if piece8 == rook_piece || piece8 == queen_piece {
+                return true;
+            }
+            break;
+        }
+        f = f + df;
+        r = r + dr;
+    }
+
+    let k1f: i64 = file - 1;
+    let k1r: i64 = rank - 1;
+    if on_board(k1f, k1r) && sqs[make_sq(k1f, k1r)] == king_piece {
+        return true;
+    }
+    let k2f: i64 = file;
+    let k2r: i64 = rank - 1;
+    if on_board(k2f, k2r) && sqs[make_sq(k2f, k2r)] == king_piece {
+        return true;
+    }
+    let k3f: i64 = file + 1;
+    let k3r: i64 = rank - 1;
+    if on_board(k3f, k3r) && sqs[make_sq(k3f, k3r)] == king_piece {
+        return true;
+    }
+    let k4f: i64 = file - 1;
+    let k4r: i64 = rank;
+    if on_board(k4f, k4r) && sqs[make_sq(k4f, k4r)] == king_piece {
+        return true;
+    }
+    let k5f: i64 = file + 1;
+    let k5r: i64 = rank;
+    if on_board(k5f, k5r) && sqs[make_sq(k5f, k5r)] == king_piece {
+        return true;
+    }
+    let k6f: i64 = file - 1;
+    let k6r: i64 = rank + 1;
+    if on_board(k6f, k6r) && sqs[make_sq(k6f, k6r)] == king_piece {
+        return true;
+    }
+    let k7f: i64 = file;
+    let k7r: i64 = rank + 1;
+    if on_board(k7f, k7r) && sqs[make_sq(k7f, k7r)] == king_piece {
+        return true;
+    }
+    let k8f: i64 = file + 1;
+    let k8r: i64 = rank + 1;
+    if on_board(k8f, k8r) && sqs[make_sq(k8f, k8r)] == king_piece {
+        return true;
+    }
+
+    false
+}
+
+fn in_check(b: Board, color: i64) -> bool {
+    let king_sq: i64 = find_king(b, color);
+    if king_sq < 0 {
+        true
+    } else {
+        square_attacked(b, king_sq, -color)
+    }
+}
+
+fn gen_slider_dir(moves: Vec<ChessMove>, b: Board, sq: i64, df: i64, dr: i64) {
+    let sqs: Vec<i64> = b.squares;
+    let mut file: i64 = file_of(sq) + df;
+    let mut rank: i64 = rank_of(sq) + dr;
+    while on_board(file, rank) {
+        let to: i64 = make_sq(file, rank);
+        let target: i64 = sqs[to];
+        if target == 0 {
+            add_move(moves, sq, to, 0, 0, 0);
+        } else {
+            if piece_color(target) != b.side {
+                add_move(moves, sq, to, 0, 0, 0);
+            }
+            return;
+        }
+        file = file + df;
+        rank = rank + dr;
+    }
+}
+
+fn gen_jump(moves: Vec<ChessMove>, b: Board, sq: i64, df: i64, dr: i64) {
+    let sqs: Vec<i64> = b.squares;
+    let file: i64 = file_of(sq) + df;
+    let rank: i64 = rank_of(sq) + dr;
+    if on_board(file, rank) {
+        let to: i64 = make_sq(file, rank);
+        let target: i64 = sqs[to];
+        if piece_color(target) != b.side {
+            add_move(moves, sq, to, 0, 0, 0);
+        }
+    }
+}
+
+fn gen_pawn_moves(moves: Vec<ChessMove>, b: Board, sq: i64) {
+    let sqs: Vec<i64> = b.squares;
+    let file: i64 = file_of(sq);
+    let rank: i64 = rank_of(sq);
+    let piece: i64 = sqs[sq];
+
+    if piece == 1 {
+        if rank < 7 {
+            let one: i64 = sq + 8;
+            if sqs[one] == 0 {
+                if rank == 6 {
+                    add_promotions(moves, sq, one, 0);
+                } else {
+                    add_move(moves, sq, one, 0, 0, 0);
+                    if rank == 1 {
+                        let two: i64 = sq + 16;
+                        if sqs[two] == 0 {
+                            add_move(moves, sq, two, 0, 0, 0);
+                        }
+                    }
+                }
+            }
+
+            if file > 0 {
+                let left: i64 = sq + 7;
+                let target: i64 = sqs[left];
+                if piece_color(target) == -1 {
+                    if rank == 6 {
+                        add_promotions(moves, sq, left, 0);
+                    } else {
+                        add_move(moves, sq, left, 0, 0, 0);
+                    }
+                } else {
+                    if b.ep == left {
+                        add_move(moves, sq, left, 0, 1, 0);
+                    }
+                }
+            }
+
+            if file < 7 {
+                let right: i64 = sq + 9;
+                let target2: i64 = sqs[right];
+                if piece_color(target2) == -1 {
+                    if rank == 6 {
+                        add_promotions(moves, sq, right, 0);
+                    } else {
+                        add_move(moves, sq, right, 0, 0, 0);
+                    }
+                } else {
+                    if b.ep == right {
+                        add_move(moves, sq, right, 0, 1, 0);
+                    }
+                }
+            }
+        }
+    } else {
+        if rank > 0 {
+            let one2: i64 = sq - 8;
+            if sqs[one2] == 0 {
+                if rank == 1 {
+                    add_promotions(moves, sq, one2, 0);
+                } else {
+                    add_move(moves, sq, one2, 0, 0, 0);
+                    if rank == 6 {
+                        let two2: i64 = sq - 16;
+                        if sqs[two2] == 0 {
+                            add_move(moves, sq, two2, 0, 0, 0);
+                        }
+                    }
+                }
+            }
+
+            if file > 0 {
+                let left2: i64 = sq - 9;
+                let target3: i64 = sqs[left2];
+                if piece_color(target3) == 1 {
+                    if rank == 1 {
+                        add_promotions(moves, sq, left2, 0);
+                    } else {
+                        add_move(moves, sq, left2, 0, 0, 0);
+                    }
+                } else {
+                    if b.ep == left2 {
+                        add_move(moves, sq, left2, 0, 1, 0);
+                    }
+                }
+            }
+
+            if file < 7 {
+                let right2: i64 = sq - 7;
+                let target4: i64 = sqs[right2];
+                if piece_color(target4) == 1 {
+                    if rank == 1 {
+                        add_promotions(moves, sq, right2, 0);
+                    } else {
+                        add_move(moves, sq, right2, 0, 0, 0);
+                    }
+                } else {
+                    if b.ep == right2 {
+                        add_move(moves, sq, right2, 0, 1, 0);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn gen_knight_moves(moves: Vec<ChessMove>, b: Board, sq: i64) {
+    gen_jump(moves, b, sq, 1, 2);
+    gen_jump(moves, b, sq, 2, 1);
+    gen_jump(moves, b, sq, -1, 2);
+    gen_jump(moves, b, sq, -2, 1);
+    gen_jump(moves, b, sq, 1, -2);
+    gen_jump(moves, b, sq, 2, -1);
+    gen_jump(moves, b, sq, -1, -2);
+    gen_jump(moves, b, sq, -2, -1);
+}
+
+fn gen_bishop_moves(moves: Vec<ChessMove>, b: Board, sq: i64) {
+    gen_slider_dir(moves, b, sq, 1, 1);
+    gen_slider_dir(moves, b, sq, -1, 1);
+    gen_slider_dir(moves, b, sq, 1, -1);
+    gen_slider_dir(moves, b, sq, -1, -1);
+}
+
+fn gen_rook_moves(moves: Vec<ChessMove>, b: Board, sq: i64) {
+    gen_slider_dir(moves, b, sq, 1, 0);
+    gen_slider_dir(moves, b, sq, -1, 0);
+    gen_slider_dir(moves, b, sq, 0, 1);
+    gen_slider_dir(moves, b, sq, 0, -1);
+}
+
+fn gen_king_moves(moves: Vec<ChessMove>, b: Board, sq: i64) {
+    let sqs: Vec<i64> = b.squares;
+
+    gen_jump(moves, b, sq, -1, -1);
+    gen_jump(moves, b, sq, 0, -1);
+    gen_jump(moves, b, sq, 1, -1);
+    gen_jump(moves, b, sq, -1, 0);
+    gen_jump(moves, b, sq, 1, 0);
+    gen_jump(moves, b, sq, -1, 1);
+    gen_jump(moves, b, sq, 0, 1);
+    gen_jump(moves, b, sq, 1, 1);
+
+    if b.side == 1 && sq == 4 {
+        if b.wk == 1 && sqs[5] == 0 && sqs[6] == 0 && sqs[7] == 4 {
+            if !square_attacked(b, 4, BLACK) && !square_attacked(b, 5, BLACK) && !square_attacked(b, 6, BLACK) {
+                add_move(moves, 4, 6, 0, 0, 1);
+            }
+        }
+        if b.wq == 1 && sqs[0] == 4 && sqs[1] == 0 && sqs[2] == 0 && sqs[3] == 0 {
+            if !square_attacked(b, 4, BLACK) && !square_attacked(b, 3, BLACK) && !square_attacked(b, 2, BLACK) {
+                add_move(moves, 4, 2, 0, 0, 2);
+            }
+        }
+    }
+
+    if b.side == -1 && sq == 60 {
+        if b.bk == 1 && sqs[61] == 0 && sqs[62] == 0 && sqs[63] == -4 {
+            if !square_attacked(b, 60, WHITE) && !square_attacked(b, 61, WHITE) && !square_attacked(b, 62, WHITE) {
+                add_move(moves, 60, 62, 0, 0, 1);
+            }
+        }
+        if b.bq == 1 && sqs[56] == -4 && sqs[57] == 0 && sqs[58] == 0 && sqs[59] == 0 {
+            if !square_attacked(b, 60, WHITE) && !square_attacked(b, 59, WHITE) && !square_attacked(b, 58, WHITE) {
+                add_move(moves, 60, 58, 0, 0, 2);
+            }
+        }
+    }
+}
+
+fn generate_pseudo_moves(b: Board) -> Vec<ChessMove> {
+    let moves: Vec<ChessMove> = Vec::new();
+    let sqs: Vec<i64> = b.squares;
+    let mut sq: i64 = 0;
+    while sq < 64 {
+        let piece: i64 = sqs[sq];
+        if piece != 0 && piece_color(piece) == b.side {
+            let kind: i64 = piece_kind(piece);
+            if kind == 1 {
+                gen_pawn_moves(moves, b, sq);
+            } else {
+                if kind == 2 {
+                    gen_knight_moves(moves, b, sq);
+                } else {
+                    if kind == 3 {
+                        gen_bishop_moves(moves, b, sq);
+                    } else {
+                        if kind == 4 {
+                            gen_rook_moves(moves, b, sq);
+                        } else {
+                            if kind == 5 {
+                                gen_bishop_moves(moves, b, sq);
+                                gen_rook_moves(moves, b, sq);
+                            } else {
+                                if kind == 6 {
+                                    gen_king_moves(moves, b, sq);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        sq = sq + 1;
+    }
+    moves
+}
+
+fn apply_move(b: Board, mv: ChessMove) -> Board {
+    let nb: Board = clone_board(b);
+    let sqs: Vec<i64> = nb.squares;
+    let moving: i64 = sqs[mv.from];
+    let captured: i64 = sqs[mv.to];
+
+    nb.ep = -1;
+    sqs[mv.from] = EMPTY;
+
+    if mv.en_passant == 1 {
+        if moving > 0 {
+            sqs[mv.to - 8] = EMPTY;
+        } else {
+            sqs[mv.to + 8] = EMPTY;
+        }
+    }
+
+    if mv.castle == 1 {
+        if moving > 0 {
+            sqs[7] = EMPTY;
+            sqs[5] = ROOK;
+        } else {
+            sqs[63] = EMPTY;
+            sqs[61] = -ROOK;
+        }
+    }
+    if mv.castle == 2 {
+        if moving > 0 {
+            sqs[0] = EMPTY;
+            sqs[3] = ROOK;
+        } else {
+            sqs[56] = EMPTY;
+            sqs[59] = -ROOK;
+        }
+    }
+
+    let mut placed: i64 = moving;
+    if mv.promote != 0 {
+        if moving > 0 {
+            placed = mv.promote;
+        } else {
+            placed = -mv.promote;
+        }
+    }
+    sqs[mv.to] = placed;
+
+    if moving == 6 {
+        nb.wk = 0;
+        nb.wq = 0;
+    }
+    if moving == -6 {
+        nb.bk = 0;
+        nb.bq = 0;
+    }
+
+    if moving == 4 && mv.from == 0 {
+        nb.wq = 0;
+    }
+    if moving == 4 && mv.from == 7 {
+        nb.wk = 0;
+    }
+    if moving == -4 && mv.from == 56 {
+        nb.bq = 0;
+    }
+    if moving == -4 && mv.from == 63 {
+        nb.bk = 0;
+    }
+
+    if captured == 4 && mv.to == 0 {
+        nb.wq = 0;
+    }
+    if captured == 4 && mv.to == 7 {
+        nb.wk = 0;
+    }
+    if captured == -4 && mv.to == 56 {
+        nb.bq = 0;
+    }
+    if captured == -4 && mv.to == 63 {
+        nb.bk = 0;
+    }
+
+    if moving == 1 && mv.to - mv.from == 16 {
+        nb.ep = mv.from + 8;
+    }
+    if moving == -1 && mv.from - mv.to == 16 {
+        nb.ep = mv.from - 8;
+    }
+
+    nb.side = -b.side;
+    nb
+}
+
+fn generate_legal_moves(b: Board) -> Vec<ChessMove> {
+    let pseudo: Vec<ChessMove> = generate_pseudo_moves(b);
+    let legal: Vec<ChessMove> = Vec::new();
+    let mover: i64 = b.side;
+    let mut i: i64 = 0;
+    while i < pseudo.len() {
+        let mv: ChessMove = pseudo[i];
+        let child: Board = apply_move(b, mv);
+        if !in_check(child, mover) {
+            legal.push(mv);
+        }
+        i = i + 1;
+    }
+    legal
+}
+
+fn center_distance(file: i64, rank: i64) -> i64 {
+    let file_dist: i64 = min_i64(abs_i64(file - 3), abs_i64(file - 4));
+    let rank_dist: i64 = min_i64(abs_i64(rank - 3), abs_i64(rank - 4));
+    file_dist + rank_dist
+}
+
+fn center_bonus(file: i64, rank: i64) -> i64 {
+    let score: i64 = 6 - 2 * center_distance(file, rank);
+    max_i64(score, 0)
+}
+
+fn piece_eval(piece: i64, sq: i64) -> i64 {
+    let kind: i64 = piece_kind(piece);
+    let file: i64 = file_of(sq);
+    let rank: i64 = rank_of(sq);
+    let advance: i64 = if piece > 0 { rank } else { 7 - rank };
+    let center: i64 = center_bonus(file, rank);
+    let mut score: i64 = piece_value(kind);
+
+    if kind == 1 {
+        score = score + advance * 12 + center * 6;
+        if file == 3 || file == 4 {
+            score = score + 14;
+        }
+        if advance >= 4 {
+            score = score + 10;
+        }
+    } else {
+        if kind == 2 {
+            score = score + center * 18 + advance * 4;
+            if file == 0 || file == 7 {
+                score = score - 18;
+            }
+        } else {
+            if kind == 3 {
+                score = score + center * 12 + advance * 3;
+            } else {
+                if kind == 4 {
+                    if advance >= 5 {
+                        score = score + 24;
+                    }
+                } else {
+                    if kind == 5 {
+                        score = score + center * 4;
+                    } else {
+                        score = score - center * 10;
+                    }
+                }
+            }
+        }
+    }
+
+    if piece > 0 {
+        score
+    } else {
+        -score
+    }
+}
+
+fn side_structure_score(b: Board, color: i64) -> i64 {
+    let sqs: Vec<i64> = b.squares;
+    let mut score: i64 = 0;
+    let mut bishops: i64 = 0;
+    let mut sq: i64 = 0;
+    while sq < 64 {
+        let piece: i64 = sqs[sq];
+        if piece_color(piece) == color {
+            if piece_kind(piece) == 3 {
+                bishops = bishops + 1;
+            }
+        }
+        sq = sq + 1;
+    }
+
+    if bishops >= 2 {
+        score = score + 24;
+    }
+
+    if color == 1 {
+        if sqs[1] != 2 {
+            score = score + 18;
+        }
+        if sqs[6] != 2 {
+            score = score + 18;
+        }
+        if sqs[2] != 3 {
+            score = score + 16;
+        }
+        if sqs[5] != 3 {
+            score = score + 16;
+        }
+        if sqs[6] == 6 || sqs[2] == 6 {
+            score = score + 40;
+        }
+    } else {
+        if sqs[57] != -2 {
+            score = score + 18;
+        }
+        if sqs[62] != -2 {
+            score = score + 18;
+        }
+        if sqs[58] != -3 {
+            score = score + 16;
+        }
+        if sqs[61] != -3 {
+            score = score + 16;
+        }
+        if sqs[62] == -6 || sqs[58] == -6 {
+            score = score + 40;
+        }
+    }
+
+    score
+}
+
+fn evaluate_board(b: Board) -> i64 {
+    let sqs: Vec<i64> = b.squares;
+    let mut score: i64 = 0;
+    let mut sq: i64 = 0;
+    while sq < 64 {
+        let piece: i64 = sqs[sq];
+        if piece != 0 {
+            score = score + piece_eval(piece, sq);
+        }
+        sq = sq + 1;
+    }
+    score + side_structure_score(b, 1) - side_structure_score(b, -1)
+}
+
+fn captured_piece_value(b: Board, mv: ChessMove) -> i64 {
+    let sqs: Vec<i64> = b.squares;
+    if mv.en_passant == 1 {
+        return piece_value(1);
+    }
+    let target: i64 = sqs[mv.to];
+    if target == 0 {
+        0
+    } else {
+        piece_value(piece_kind(target))
+    }
+}
+
+fn move_order_score(b: Board, mv: ChessMove) -> i64 {
+    let sqs: Vec<i64> = b.squares;
+    let moving: i64 = sqs[mv.from];
+    let moving_value: i64 = piece_value(piece_kind(moving));
+    let capture_value: i64 = captured_piece_value(b, mv);
+    let mut score: i64 = 4 * center_bonus(file_of(mv.to), rank_of(mv.to));
+
+    if capture_value > 0 {
+        score = score + 5000 + 12 * capture_value - moving_value;
+    }
+    if mv.promote != 0 {
+        score = score + 9000 + piece_value(mv.promote);
+    }
+    if mv.castle != 0 {
+        score = score + 1200;
+    }
+    if piece_kind(moving) == 1 && (file_of(mv.to) == 3 || file_of(mv.to) == 4) {
+        score = score + 80;
+    }
+    if piece_kind(moving) == 2 || piece_kind(moving) == 3 {
+        score = score + 40;
+    }
+    score
+}
+
+fn best_ordered_index(b: Board, moves: Vec<ChessMove>, start: i64) -> i64 {
+    let mut best_idx: i64 = start;
+    let mut best_score: i64 = move_order_score(b, moves[start]);
+    let mut i: i64 = start + 1;
+    while i < moves.len() {
+        let score: i64 = move_order_score(b, moves[i]);
+        if score > best_score {
+            best_score = score;
+            best_idx = i;
+        }
+        i = i + 1;
+    }
+    best_idx
+}
+
+fn swap_moves(moves: Vec<ChessMove>, a: i64, b: i64) {
+    if a != b {
+        let tmp: ChessMove = moves[a];
+        moves[a] = moves[b];
+        moves[b] = tmp;
+    }
+}
+
+fn is_tactical_move(b: Board, mv: ChessMove) -> bool {
+    mv.promote != 0 || captured_piece_value(b, mv) > 0
+}
+
+fn generate_tactical_moves(b: Board) -> Vec<ChessMove> {
+    let legal: Vec<ChessMove> = generate_legal_moves(b);
+    let tactical: Vec<ChessMove> = Vec::new();
+    let mut i: i64 = 0;
+    while i < legal.len() {
+        let mv: ChessMove = legal[i];
+        if is_tactical_move(b, mv) {
+            tactical.push(mv);
+        }
+        i = i + 1;
+    }
+    tactical
+}
+
+fn quiesce(b: Board, alpha_in: i64, beta_in: i64) -> i64 {
+    let mut alpha: i64 = alpha_in;
+    let beta: i64 = beta_in;
+    let mut moves: Vec<ChessMove> = Vec::new();
+
+    if in_check(b, b.side) {
+        moves = generate_legal_moves(b);
+        if moves.len() == 0 {
+            return -MATE;
+        }
+    } else {
+        let stand_pat: i64 = b.side * evaluate_board(b);
+        if stand_pat >= beta {
+            return stand_pat;
+        }
+        if stand_pat > alpha {
+            alpha = stand_pat;
+        }
+        moves = generate_tactical_moves(b);
+        if moves.len() == 0 {
+            return stand_pat;
+        }
+    }
+
+    let mut best: i64 = alpha;
+    let mut i: i64 = 0;
+    while i < moves.len() {
+        let best_idx: i64 = best_ordered_index(b, moves, i);
+        swap_moves(moves, i, best_idx);
+        let mv: ChessMove = moves[i];
+        let child: Board = apply_move(b, mv);
+        let score: i64 = -quiesce(child, -beta, -alpha);
+        if score > best {
+            best = score;
+        }
+        if score > alpha {
+            alpha = score;
+        }
+        if alpha >= beta {
+            return best;
+        }
+        i = i + 1;
+    }
+    best
+}
+
+fn negamax(b: Board, depth: i64, alpha_in: i64, beta_in: i64) -> i64 {
+    let legal: Vec<ChessMove> = generate_legal_moves(b);
+    if legal.len() == 0 {
+        if in_check(b, b.side) {
+            return -MATE + depth;
+        } else {
+            return 0;
+        }
+    }
+
+    if depth <= 0 {
+        return quiesce(b, alpha_in, beta_in);
+    }
+
+    let mut alpha: i64 = alpha_in;
+    let beta: i64 = beta_in;
+    let mut best: i64 = -INF;
+    let mut i: i64 = 0;
+    while i < legal.len() {
+        let best_idx: i64 = best_ordered_index(b, legal, i);
+        swap_moves(legal, i, best_idx);
+        let mv: ChessMove = legal[i];
+        let child: Board = apply_move(b, mv);
+        let score: i64 = -negamax(child, depth - 1, -beta, -alpha);
+        if score > best {
+            best = score;
+        }
+        if score > alpha {
+            alpha = score;
+        }
+        if alpha >= beta {
+            return best;
+        }
+        i = i + 1;
+    }
+    best
+}
+
+fn search_best_move(b: Board, depth_in: i64) -> ChessMove {
+    let legal: Vec<ChessMove> = generate_legal_moves(b);
+    if legal.len() == 0 {
+        return null_move();
+    }
+
+    let mut depth: i64 = depth_in;
+    if depth < 1 {
+        depth = 1;
+    }
+
+    let mut best_mv: ChessMove = legal[0];
+    let mut best_score: i64 = -INF;
+    let mut alpha: i64 = -INF;
+    let beta: i64 = INF;
+    let mut i: i64 = 0;
+    while i < legal.len() {
+        let best_idx: i64 = best_ordered_index(b, legal, i);
+        swap_moves(legal, i, best_idx);
+        let mv: ChessMove = legal[i];
+        let child: Board = apply_move(b, mv);
+        let score: i64 = -negamax(child, depth - 1, -beta, -alpha);
+        if score > best_score {
+            best_score = score;
+            best_mv = mv;
+        }
+        if score > alpha {
+            alpha = score;
+        }
+        i = i + 1;
+    }
+    best_mv
+}
+
+fn append_square(out: String, sq: i64) {
+    out.push_byte(97 + file_of(sq));
+    out.push_byte(49 + rank_of(sq));
+}
+
+fn move_to_uci(mv: ChessMove) -> String {
+    if is_null_move(mv) {
+        return String::from("0000");
+    }
+
+    let out: String = String::from("");
+    append_square(out, mv.from);
+    append_square(out, mv.to);
+    if mv.promote != 0 {
+        if mv.promote == 5 {
+            out.push_byte(113);
+        } else {
+            if mv.promote == 4 {
+                out.push_byte(114);
+            } else {
+                if mv.promote == 3 {
+                    out.push_byte(98);
+                } else {
+                    out.push_byte(110);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn print_line(s: String) [io] {
+    print_str(s);
+    print_str(String::from("\n"));
+}
+
+fn is_space_byte(b: i64) -> bool {
+    b == 32 || b == 9 || b == 10 || b == 13
+}
+
+fn trim_line(s: String) -> String {
+    let mut start: i64 = 0;
+    let mut end: i64 = s.len();
+    while start < end && is_space_byte(s.byte_at(start)) {
+        start = start + 1;
+    }
+    while end > start && is_space_byte(s.byte_at(end - 1)) {
+        end = end - 1;
+    }
+    s.substring(start, end)
+}
+
+fn split_words(s: String) -> Vec<String> {
+    let out: Vec<String> = Vec::new();
+    let mut i: i64 = 0;
+    let n: i64 = s.len();
+    while i < n {
+        while i < n && is_space_byte(s.byte_at(i)) {
+            i = i + 1;
+        }
+        let start: i64 = i;
+        while i < n && !is_space_byte(s.byte_at(i)) {
+            i = i + 1;
+        }
+        if start < i {
+            out.push(s.substring(start, i));
+        }
+    }
+    out
+}
+
+fn parse_i64_or(s: String, fallback: i64) -> i64 {
+    let n: i64 = s.len();
+    if n == 0 {
+        return fallback;
+    }
+
+    let mut i: i64 = 0;
+    let mut sign: i64 = 1;
+    if s.byte_at(0) == 45 {
+        sign = -1;
+        i = 1;
+        if i == n {
+            return fallback;
+        }
+    }
+
+    let mut value: i64 = 0;
+    while i < n {
+        let b: i64 = s.byte_at(i);
+        if b < 48 || b > 57 {
+            return fallback;
+        }
+        value = value * 10 + (b - 48);
+        i = i + 1;
+    }
+    sign * value
+}
+
+fn movetime_to_depth(ms: i64) -> i64 {
+    if ms <= 50 {
+        return 1;
+    }
+    if ms <= 250 {
+        return 2;
+    }
+    3
+}
+
+fn parse_go_depth(tokens: Vec<String>) -> i64 {
+    let mut i: i64 = 1;
+    while i + 1 < tokens.len() {
+        let key: String = tokens[i];
+        if key.eq(String::from("depth")) {
+            let value: String = tokens[i + 1];
+            let depth: i64 = parse_i64_or(value, 1);
+            if depth < 1 {
+                return 1;
+            }
+            return depth;
+        }
+        i = i + 1;
+    }
+
+    i = 1;
+    while i + 1 < tokens.len() {
+        let key2: String = tokens[i];
+        if key2.eq(String::from("movetime")) {
+            let value2: String = tokens[i + 1];
+            let ms: i64 = parse_i64_or(value2, 100);
+            return movetime_to_depth(ms);
+        }
+        i = i + 1;
+    }
+
+    2
+}
+
+fn find_legal_move(b: Board, uci: String) -> ChessMove {
+    let legal: Vec<ChessMove> = generate_legal_moves(b);
+    let mut i: i64 = 0;
+    while i < legal.len() {
+        let mv: ChessMove = legal[i];
+        let text: String = move_to_uci(mv);
+        if text.eq(uci) {
+            return mv;
+        }
+        i = i + 1;
+    }
+    null_move()
+}
+
+fn apply_uci_moves(b: Board, tokens: Vec<String>, start_idx: i64) -> Board {
+    let mut board: Board = b;
+    let mut i: i64 = start_idx;
+    while i < tokens.len() {
+        let text: String = tokens[i];
+        let mv: ChessMove = find_legal_move(board, text);
+        if is_null_move(mv) {
+            return board;
+        }
+        board = apply_move(board, mv);
+        i = i + 1;
+    }
+    board
+}
+
+fn handle_position(tokens: Vec<String>, current: Board) -> Board {
+    if tokens.len() < 2 {
+        return current;
+    }
+
+    let mode: String = tokens[1];
+    if mode.eq(String::from("startpos")) {
+        let board: Board = start_board();
+        if tokens.len() >= 3 {
+            let next: String = tokens[2];
+            if next.eq(String::from("moves")) {
+                return apply_uci_moves(board, tokens, 3);
+            }
+        }
+        return board;
+    }
+
+    current
+}
+
+fn main() [read, io] {
+    let mut board: Board = start_board();
+    let mut running: i64 = 1;
+
+    while running == 1 {
+        let raw: String = stdin_read_line();
+        if raw.len() == 0 {
+            break;
+        }
+
+        let line: String = trim_line(raw);
+        if line.len() > 0 {
+            let tokens: Vec<String> = split_words(line);
+            if tokens.len() > 0 {
+                let cmd: String = tokens[0];
+
+                if cmd.eq(String::from("uci")) {
+                    print_line(String::from("id name Vow Chess UCI"));
+                    print_line(String::from("id author OpenAI"));
+                    print_line(String::from("uciok"));
+                } else {
+                    if cmd.eq(String::from("isready")) {
+                        print_line(String::from("readyok"));
+                    } else {
+                        if cmd.eq(String::from("ucinewgame")) {
+                            board = start_board();
+                        } else {
+                            if cmd.eq(String::from("position")) {
+                                board = handle_position(tokens, board);
+                            } else {
+                                if cmd.eq(String::from("go")) {
+                                    let depth: i64 = parse_go_depth(tokens);
+                                    let best: ChessMove = search_best_move(board, depth);
+                                    let out: String = String::from("bestmove ");
+                                    out.push_str(move_to_uci(best));
+                                    print_line(out);
+                                } else {
+                                    if cmd.eq(String::from("stop")) {
+                                    } else {
+                                        if cmd.eq(String::from("quit")) {
+                                            running = 0;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
