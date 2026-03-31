@@ -1,0 +1,50 @@
+// TEST: stdout "items:1alias_push:2read_back:99name:hellosecond:0done"
+module vec_struct_alias
+
+struct Bucket {
+    name: String,
+    items: Vec<i64>,
+}
+
+fn main() -> i32 [io] {
+    let buckets: Vec<Bucket> = Vec::new();
+    let items1: Vec<i64> = Vec::new();
+    items1.push(42);
+    let b1: Bucket = Bucket { name: String::from("hello"), items: items1 };
+    buckets.push(b1);
+
+    let items2: Vec<i64> = Vec::new();
+    let b2: Bucket = Bucket { name: String::from("world"), items: items2 };
+    buckets.push(b2);
+
+    // index copies the struct pointer — creates alias
+    let alias: Bucket = buckets[0];
+    let av: Vec<i64> = alias.items;
+    print_str("items:");
+    print_i64(av.len());
+
+    // mutate the inner Vec through the alias
+    av.push(99);
+    print_str("alias_push:");
+    let alias2: Bucket = buckets[0];
+    let av2: Vec<i64> = alias2.items;
+    print_i64(av2.len());
+
+    // read back the value pushed through alias
+    print_str("read_back:");
+    print_i64(av2[1]);
+
+    // string field is also aliased
+    print_str("name:");
+    let n: String = alias2.name;
+    print_str(n);
+
+    // second bucket is independent
+    let other: Bucket = buckets[1];
+    let ov: Vec<i64> = other.items;
+    print_str("second:");
+    print_i64(ov.len());
+
+    print_str("done");
+    0
+}
