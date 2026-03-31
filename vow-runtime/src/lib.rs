@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::ffi::{CStr, c_char};
 use std::io::Write as _;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 
 thread_local! {
     static LAST_STDOUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
@@ -311,6 +311,7 @@ pub extern "C" fn __vow_vec_new(elem_size: usize, align: usize) -> *mut u8 {
         (*header_ptr).len = 0;
         (*header_ptr).cap = 0;
     }
+    sanitize_on_vec_new(header_ptr as usize);
     header_ptr as *mut u8
 }
 
@@ -368,18 +369,21 @@ pub unsafe extern "C" fn __vow_vec_len(vec: *const u8) -> usize {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_push_val(vec: *mut u8, value: i64) {
+    sanitize_on_push(vec as usize);
     let bytes = value.to_ne_bytes();
     unsafe { __vow_vec_push(vec, bytes.as_ptr(), 8, 8) };
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_get_val(vec: *const u8, index: usize) -> i64 {
+    sanitize_on_read(vec as usize, index);
     let ptr = unsafe { __vow_vec_get_ptr(vec, index, 8) };
     unsafe { *(ptr as *const i64) }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_pop(vec: *mut u8) {
+    sanitize_on_pop(vec as usize);
     let v = unsafe { &mut *(vec as *mut VowVec) };
     if v.len > 0 {
         v.len -= 1;
@@ -390,6 +394,7 @@ pub unsafe extern "C" fn __vow_vec_pop(vec: *mut u8) {
 /// The Vec header itself remains valid and can be reused with push().
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_clear(vec: *mut u8) {
+    sanitize_on_clear(vec as usize);
     let v = unsafe { &mut *(vec as *mut VowVec) };
     if v.cap > 0 && !v.ptr.is_null() {
         let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(v.cap * 8, 8) };
@@ -408,6 +413,7 @@ pub unsafe extern "C" fn __vow_vec_truncate(vec: *mut u8, new_len: usize) {
     if new_len >= v.len {
         return;
     }
+    sanitize_on_truncate(vec as usize, new_len);
     if new_len == 0 {
         unsafe { __vow_vec_clear(vec) };
         return;
@@ -428,6 +434,7 @@ pub unsafe extern "C" fn __vow_vec_truncate(vec: *mut u8, new_len: usize) {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_set_val(vec: *mut u8, index: usize, value: i64) {
+    sanitize_on_set(vec as usize, index);
     let v = unsafe { &*(vec as *const VowVec) };
     if index >= v.len {
         let json = r#"{"error":"IndexOutOfBounds"}"#;
@@ -445,6 +452,7 @@ pub unsafe extern "C" fn __vow_vec_get_ptr(
     index: usize,
     elem_size: usize,
 ) -> *const u8 {
+    sanitize_on_read(vec as usize, index);
     let v = unsafe { &*(vec as *const VowVec) };
     if index >= v.len {
         let json = r#"{"error":"IndexOutOfBounds"}"#;
@@ -1510,6 +1518,7 @@ pub unsafe extern "C" fn __vow_string_free(s: *mut u8) {
     if s.is_null() {
         return;
     }
+    sanitize_on_free(s as usize);
     let v = unsafe { &*(s as *const VowVec) };
     if v.cap > 0 && !v.ptr.is_null() {
         let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(v.cap, 1) };
@@ -1524,6 +1533,7 @@ pub unsafe extern "C" fn __vow_vec_free_val(v: *mut u8) {
     if v.is_null() {
         return;
     }
+    sanitize_on_free(v as usize);
     let vec = unsafe { &*(v as *const VowVec) };
     if vec.cap > 0 && !vec.ptr.is_null() {
         let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(vec.cap * 8, 8) };
@@ -1546,6 +1556,213 @@ pub unsafe extern "C" fn __vow_map_free(m: *mut u8) {
     }
     let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
     unsafe { std::alloc::dealloc(m, header_layout) };
+}
+
+// ---------------------------------------------------------------------------
+// Sanitize mode — Vec provenance tracking
+// ---------------------------------------------------------------------------
+
+static SANITIZE_ENABLED: AtomicBool = AtomicBool::new(false);
+static SANITIZE_GLOBAL_GEN: AtomicU64 = AtomicU64::new(1);
+
+struct ShadowVec {
+    generations: Vec<u64>,
+    freed: bool,
+}
+
+static SHADOW_TABLE: Mutex<Option<HashMap<usize, ShadowVec>>> = Mutex::new(None);
+
+fn shadow_table_get_or_init(
+    table: &mut Option<HashMap<usize, ShadowVec>>,
+) -> &mut HashMap<usize, ShadowVec> {
+    table.get_or_insert_with(HashMap::new)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_sanitize_init() {
+    SANITIZE_ENABLED.store(true, Ordering::SeqCst);
+    let mut table = SHADOW_TABLE.lock().unwrap();
+    *table = Some(HashMap::new());
+}
+
+fn sanitize_is_enabled() -> bool {
+    SANITIZE_ENABLED.load(Ordering::Relaxed)
+}
+
+fn sanitize_emit_error(error_type: &str, details: &str) {
+    let _ = writeln!(std::io::stderr(), r#"{{"error":"{error_type}",{details}}}"#);
+    let _ = writeln!(std::io::stderr(), "sanitizer: {error_type}: {details}");
+    std::process::exit(1);
+}
+
+fn sanitize_on_vec_new(vec_addr: usize) {
+    if !sanitize_is_enabled() {
+        return;
+    }
+    let mut table = SHADOW_TABLE.lock().unwrap();
+    let map = shadow_table_get_or_init(&mut table);
+    map.insert(
+        vec_addr,
+        ShadowVec {
+            generations: Vec::new(),
+            freed: false,
+        },
+    );
+}
+
+fn sanitize_check_freed(vec_addr: usize, op: &str) {
+    if !sanitize_is_enabled() {
+        return;
+    }
+    let is_freed = {
+        let table = SHADOW_TABLE.lock().unwrap();
+        if let Some(map) = table.as_ref() {
+            if let Some(shadow) = map.get(&vec_addr) {
+                shadow.freed
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    };
+    if is_freed {
+        sanitize_emit_error(
+            "UseAfterFree",
+            &format!("\"op\":\"{op}\",\"vec\":\"0x{vec_addr:x}\""),
+        );
+    }
+}
+
+fn sanitize_on_push(vec_addr: usize) {
+    if !sanitize_is_enabled() {
+        return;
+    }
+    sanitize_check_freed(vec_addr, "push");
+    let generation = SANITIZE_GLOBAL_GEN.fetch_add(1, Ordering::Relaxed);
+    let mut table = SHADOW_TABLE.lock().unwrap();
+    let map = shadow_table_get_or_init(&mut table);
+    if let Some(shadow) = map.get_mut(&vec_addr) {
+        shadow.generations.push(generation);
+    }
+}
+
+fn sanitize_on_set(vec_addr: usize, index: usize) {
+    if !sanitize_is_enabled() {
+        return;
+    }
+    sanitize_check_freed(vec_addr, "set");
+    let generation = SANITIZE_GLOBAL_GEN.fetch_add(1, Ordering::Relaxed);
+    let mut table = SHADOW_TABLE.lock().unwrap();
+    let map = shadow_table_get_or_init(&mut table);
+    if let Some(shadow) = map.get_mut(&vec_addr)
+        && index < shadow.generations.len()
+    {
+        shadow.generations[index] = generation;
+    }
+}
+
+fn sanitize_on_truncate(vec_addr: usize, new_len: usize) {
+    if !sanitize_is_enabled() {
+        return;
+    }
+    sanitize_check_freed(vec_addr, "truncate");
+    let mut table = SHADOW_TABLE.lock().unwrap();
+    let map = shadow_table_get_or_init(&mut table);
+    if let Some(shadow) = map.get_mut(&vec_addr) {
+        shadow.generations.truncate(new_len);
+    }
+}
+
+fn sanitize_on_clear(vec_addr: usize) {
+    if !sanitize_is_enabled() {
+        return;
+    }
+    sanitize_check_freed(vec_addr, "clear");
+    let mut table = SHADOW_TABLE.lock().unwrap();
+    let map = shadow_table_get_or_init(&mut table);
+    if let Some(shadow) = map.get_mut(&vec_addr) {
+        shadow.generations.clear();
+    }
+}
+
+fn sanitize_on_free(vec_addr: usize) {
+    if !sanitize_is_enabled() {
+        return;
+    }
+    let already_freed = {
+        let mut table = SHADOW_TABLE.lock().unwrap();
+        let map = shadow_table_get_or_init(&mut table);
+        if let Some(shadow) = map.get_mut(&vec_addr) {
+            if shadow.freed {
+                true
+            } else {
+                shadow.freed = true;
+                shadow.generations.clear();
+                false
+            }
+        } else {
+            false
+        }
+    };
+    if already_freed {
+        sanitize_emit_error("DoubleFree", &format!("\"vec\":\"0x{vec_addr:x}\""));
+    }
+}
+
+fn sanitize_on_pop(vec_addr: usize) {
+    if !sanitize_is_enabled() {
+        return;
+    }
+    sanitize_check_freed(vec_addr, "pop");
+    let mut table = SHADOW_TABLE.lock().unwrap();
+    let map = shadow_table_get_or_init(&mut table);
+    if let Some(shadow) = map.get_mut(&vec_addr) {
+        shadow.generations.pop();
+    }
+}
+
+fn sanitize_on_read(vec_addr: usize, _index: usize) {
+    if !sanitize_is_enabled() {
+        return;
+    }
+    sanitize_check_freed(vec_addr, "read");
+}
+
+/// Query the generation of a Vec slot. Returns 0 if unknown.
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_sanitize_vec_generation(vec: *const u8, index: usize) -> u64 {
+    if !sanitize_is_enabled() || vec.is_null() {
+        return 0;
+    }
+    let vec_addr = vec as usize;
+    let table = SHADOW_TABLE.lock().unwrap();
+    if let Some(map) = table.as_ref()
+        && let Some(shadow) = map.get(&vec_addr)
+        && index < shadow.generations.len()
+    {
+        return shadow.generations[index];
+    }
+    0
+}
+
+/// Check that a Vec slot's generation matches the expected value.
+/// Aborts with StaleIndex error if it doesn't match.
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_sanitize_check_generation(vec: *const u8, index: usize, expected_gen: u64) {
+    if !sanitize_is_enabled() || vec.is_null() {
+        return;
+    }
+    let actual = __vow_sanitize_vec_generation(vec, index);
+    if actual != expected_gen && expected_gen != 0 {
+        sanitize_emit_error(
+            "StaleIndex",
+            &format!(
+                "\"index\":{index},\"expected_gen\":{expected_gen},\"actual_gen\":{actual},\"vec\":\"0x{:x}\"",
+                vec as usize
+            ),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1705,5 +1922,72 @@ mod tests {
         assert_eq!(unsafe { __vow_vec_get_val(v, 1) }, 1);
         assert_eq!(unsafe { __vow_vec_get_val(v, 2) }, 2);
         unsafe { __vow_vec_free_val(v) };
+    }
+
+    // All sanitize tests consolidated into one test to avoid parallel test races
+    // on the global SANITIZE_ENABLED flag.
+    #[test]
+    fn sanitize_generation_tracking() {
+        __vow_sanitize_init();
+
+        // -- Push generation tracking --
+        let v = __vow_vec_new_val();
+        unsafe { __vow_vec_push_val(v, 10) };
+        unsafe { __vow_vec_push_val(v, 20) };
+        let gen0 = __vow_sanitize_vec_generation(v, 0);
+        let gen1 = __vow_sanitize_vec_generation(v, 1);
+        assert!(gen0 > 0, "generation should be nonzero after push");
+        assert!(gen1 > gen0, "second push should have higher generation");
+
+        // -- Set increments generation --
+        unsafe { __vow_vec_set_val(v, 0, 99) };
+        let gen0_after = __vow_sanitize_vec_generation(v, 0);
+        assert!(gen0_after > gen0, "set should increment generation");
+        assert_eq!(
+            __vow_sanitize_vec_generation(v, 1),
+            gen1,
+            "unmodified slot should keep its generation"
+        );
+
+        // -- Check generation pass --
+        let slot_gen = __vow_sanitize_vec_generation(v, 0);
+        __vow_sanitize_check_generation(v, 0, slot_gen);
+
+        unsafe { __vow_vec_free_val(v) };
+
+        // -- Truncate clears generations --
+        let v2 = __vow_vec_new_val();
+        unsafe { __vow_vec_push_val(v2, 1) };
+        unsafe { __vow_vec_push_val(v2, 2) };
+        unsafe { __vow_vec_push_val(v2, 3) };
+        assert!(
+            __vow_sanitize_vec_generation(v2, 2) > 0,
+            "slot 2 should have generation"
+        );
+        unsafe { __vow_vec_truncate(v2, 1) };
+        assert_eq!(
+            __vow_sanitize_vec_generation(v2, 2),
+            0,
+            "truncated slot should have no generation"
+        );
+        unsafe { __vow_vec_free_val(v2) };
+
+        // -- Pop removes generation --
+        let v3 = __vow_vec_new_val();
+        unsafe { __vow_vec_push_val(v3, 1) };
+        unsafe { __vow_vec_push_val(v3, 2) };
+        assert!(__vow_sanitize_vec_generation(v3, 1) > 0);
+        unsafe { __vow_vec_pop(v3) };
+        assert_eq!(
+            __vow_sanitize_vec_generation(v3, 1),
+            0,
+            "popped slot should have no generation"
+        );
+        unsafe { __vow_vec_free_val(v3) };
+
+        // -- Vec operations work without crash when sanitize enabled --
+        let v4 = __vow_vec_new_val();
+        unsafe { __vow_vec_push_val(v4, 42) };
+        unsafe { __vow_vec_free_val(v4) };
     }
 }

@@ -16,7 +16,7 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
 | `-o, --output`    | `build/<stem>` | Output executable path                  |
-| `--mode <debug\|release\|profile>` | `release` | Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit |
+| `--mode <debug\|release\|profile\|sanitize>` | `release` | Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + Vec provenance tracking |
 | `--no-verify`     | (off)       | Skip ESBMC static verification            |
 | `--dump-ir`       | (off)       | Print IR text to stdout and exit (no JSON output, no codegen) |
 | `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
@@ -333,9 +333,9 @@ total calls: 9998483, unique functions: 12
 
 The report lists the top 20 most-called functions sorted by call count. No vow checks are emitted in profile mode.
 
-## Runtime Error JSON (stderr, debug mode only)
+## Runtime Error JSON (stderr, debug/sanitize mode)
 
-When a compiled program runs in debug mode (`--mode debug`) and violates a vow at runtime, it emits JSON to stderr before aborting.
+When a compiled program runs in debug mode (`--mode debug`) or sanitize mode (`--mode sanitize`) and violates a vow at runtime, it emits JSON to stderr before aborting.
 
 ### VowViolation
 
@@ -368,6 +368,30 @@ Emitted when `.unwrap()` is called on `Option::None`.
 ```
 
 Emitted when a `Vec` index is out of bounds.
+
+### UseAfterFree (sanitize mode only)
+
+```json
+{"error":"UseAfterFree","op":"push","vec":"0x55a1b2c3d4e0"}
+```
+
+Emitted when a Vec operation is attempted on a Vec that has already been freed.
+
+### DoubleFree (sanitize mode only)
+
+```json
+{"error":"DoubleFree","vec":"0x55a1b2c3d4e0"}
+```
+
+Emitted when a Vec is freed twice.
+
+### StaleIndex (sanitize mode only)
+
+```json
+{"error":"StaleIndex","index":5,"expected_gen":3,"actual_gen":7,"vec":"0x55a1b2c3d4e0"}
+```
+
+Emitted when `__vow_sanitize_check_generation` detects that a Vec slot's generation counter does not match the expected value, indicating the slot was overwritten since the index was recorded.
 
 ## Agent Decision Tree
 

@@ -29,6 +29,7 @@ enum ModeArg {
     Debug,
     Release,
     Profile,
+    Sanitize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -212,7 +213,7 @@ fn skill_json() -> String {
   "legacy_usage": "vow [OPTIONS] <source.vow> (equivalent to vow build)",
   "build_options": {
     "-o, --output <path>": "Output executable path (default: source without .vow extension)",
-    "--mode <debug|release|profile>": "Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit (default: release)",
+    "--mode <debug|release|profile|sanitize>": "Build mode: debug inserts runtime vow checks, profile inserts call counters, sanitize adds debug checks + Vec provenance tracking (default: release)",
     "--no-verify": "Skip ESBMC static verification",
     "--dump-ir": "Print IR text to stdout and exit (no JSON output, no codegen)",
     "--debug-trace <off|calls|full>": "Emit JSON trace lines to stderr at runtime (default: off)",
@@ -480,7 +481,7 @@ USAGE
 
 BUILD OPTIONS
   -o, --output <path>     Output executable path (default: source without .vow extension)
-  --mode <debug|release|profile>  Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit (default: release)
+  --mode <debug|release|profile|sanitize>  Build mode (default: release)
   --no-verify             Skip ESBMC static verification
   --dump-ir               Print IR text to stdout and exit (no JSON output, no codegen)
   --debug-trace <off|calls|full>  Emit JSON trace lines to stderr at runtime (default: off)
@@ -4600,6 +4601,7 @@ fn main() {
                 ModeArg::Debug => BuildMode::Debug,
                 ModeArg::Release => BuildMode::Release,
                 ModeArg::Profile => BuildMode::Profile,
+                ModeArg::Sanitize => BuildMode::Sanitize,
             };
             let trace = match b.debug_trace {
                 TraceArg::Off => TraceMode::Off,
@@ -4737,6 +4739,7 @@ fn main() {
                 ModeArg::Debug => BuildMode::Debug,
                 ModeArg::Release => BuildMode::Release,
                 ModeArg::Profile => BuildMode::Profile,
+                ModeArg::Sanitize => BuildMode::Sanitize,
             };
             let trace = match args.debug_trace {
                 TraceArg::Off => TraceMode::Off,
