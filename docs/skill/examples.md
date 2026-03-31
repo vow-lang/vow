@@ -1,6 +1,6 @@
 # Worked Examples
 
-Verification workflow examples. The first three demonstrate Counterexample-Guided Inductive Synthesis (CEGIS) cycles: write spec, build, read JSON, diagnose, fix, verify. The fourth shows break-with-value in loop expressions.
+Verification workflow examples. The first three demonstrate Counterexample-Guided Inductive Synthesis (CEGIS) cycles: write spec, build, read JSON, diagnose, fix, verify. The fourth shows break-with-value in loop expressions. The fifth shows an EOF-safe interactive command loop using `stdin_read_line()`.
 
 ## 1. Safe Division — Requires Pattern
 
@@ -253,3 +253,122 @@ $ vow build examples/search.vow
 - All `break` expressions in a `loop` must produce the same type (`i64` here)
 - `break <value>` is only allowed in `loop`, not in `while` (which always evaluates to `()`)
 - The result is bound with `let result: i64 = loop { ... };`
+
+---
+
+## 5. Command Loop — EOF-Safe `stdin_read_line`
+
+### Goal
+
+Write a line-oriented command interpreter that reads from stdin, dispatches commands, skips empty lines, and exits cleanly on EOF. This is the canonical pattern for CI-safe interactive programs.
+
+### Step 1: Write the program
+
+```vow
+module CmdLoop
+
+fn trim_newline(s: String) -> String {
+    let n: i64 = s.len();
+    if n == 0 { return s; }
+    let last: i64 = s.byte_at(n - 1);
+    if last == 10 {
+        if n >= 2 {
+            let prev: i64 = s.byte_at(n - 2);
+            if prev == 13 {
+                return s.substring(0, n - 2);
+            }
+        }
+        return s.substring(0, n - 1);
+    }
+    s
+}
+
+fn skip_spaces(s: String, start: i64) -> i64 {
+    let mut i: i64 = start;
+    let n: i64 = s.len();
+    while i < n {
+        if s.byte_at(i) != 32 { return i; }
+        i = i + 1;
+    }
+    i
+}
+
+fn main() -> i32 [read, io] {
+    let mut line: String = stdin_read_line();
+    while line.len() > 0 {
+        let cmd: String = trim_newline(line);
+
+        if cmd.len() > 0 {
+            if cmd.eq(String::from("quit")) {
+                return 0;
+            }
+
+            if cmd.eq(String::from("hello")) {
+                print_str(String::from("Hello, world!\n"));
+            } else {
+                if cmd.len() > 5 {
+                    let prefix: String = cmd.substring(0, 5);
+                    if prefix.eq(String::from("echo ")) {
+                        let start: i64 = skip_spaces(cmd, 5);
+                        let text: String = cmd.substring(start, cmd.len());
+                        print_str(text);
+                        print_str(String::from("\n"));
+                    } else {
+                        print_str(String::from("unknown: "));
+                        print_str(cmd);
+                        print_str(String::from("\n"));
+                    }
+                } else {
+                    print_str(String::from("unknown: "));
+                    print_str(cmd);
+                    print_str(String::from("\n"));
+                }
+            }
+        }
+
+        line = stdin_read_line();
+    }
+    0
+}
+```
+
+### Step 2: Build
+
+```
+$ vow build --no-verify examples/cmdloop.vow -o /tmp/cmdloop
+```
+
+```json
+{"status":"Unverified","executable":"/tmp/cmdloop","diagnostics":[],"counterexamples":[]}
+```
+
+No contracts here — this example focuses on the I/O pattern, not verification.
+
+### Step 3: Run with piped input
+
+```
+$ printf 'hello\necho Vow is great\n\nbogus\nquit\n' | /tmp/cmdloop
+Hello, world!
+Vow is great
+unknown: bogus
+```
+
+The `quit` command causes an early `return 0`. Empty lines are silently skipped.
+
+### Step 4: Run with EOF (no quit)
+
+```
+$ printf 'hello\necho test\n' | /tmp/cmdloop
+Hello, world!
+test
+```
+
+When stdin is exhausted, `stdin_read_line()` returns `""` (length 0), the `while` condition fails, and the program exits cleanly with code 0.
+
+### Key points
+
+- **EOF detection:** `stdin_read_line()` returns `""` at EOF. Check `.len() > 0` to exit the loop.
+- **Newline stripping:** `stdin_read_line()` includes the trailing `\n` (or `\r\n`). Strip it with `byte_at` + `substring` before comparing commands.
+- **Empty line handling:** After trimming, `cmd.len() == 0` means the line was blank — skip it.
+- **Effects:** `stdin_read_line()` requires `[read]`; `print_str()` requires `[io]`. The `main` function declares both.
+- **CI-safe:** No blocking reads, no prompts — the program processes whatever stdin provides and exits at EOF. Safe to run in pipelines and test harnesses.

@@ -1,0 +1,90 @@
+module CmdLoop
+
+// Helper: strip trailing newline/carriage-return from a line
+fn trim_newline(s: String) -> String {
+    let n: i64 = s.len();
+    if n == 0 { return s; }
+    let last: i64 = s.byte_at(n - 1);
+    if last == 10 {
+        if n >= 2 {
+            let prev: i64 = s.byte_at(n - 2);
+            if prev == 13 {
+                return s.substring(0, n - 2);
+            }
+        }
+        return s.substring(0, n - 1);
+    }
+    s
+}
+
+// Helper: skip leading spaces (byte 32) and return substring from first non-space
+fn skip_spaces(s: String, start: i64) -> i64 {
+    let mut i: i64 = start;
+    let n: i64 = s.len();
+    while i < n {
+        if s.byte_at(i) != 32 { return i; }
+        i = i + 1;
+    }
+    i
+}
+
+// Helper: find the next space (byte 32) starting at pos, or return len
+fn find_space(s: String, start: i64) -> i64 {
+    let mut i: i64 = start;
+    let n: i64 = s.len();
+    while i < n {
+        if s.byte_at(i) == 32 { return i; }
+        i = i + 1;
+    }
+    n
+}
+
+fn main() -> i32 [read, io] {
+    let mut line: String = stdin_read_line();
+    while line.len() > 0 {
+        let cmd: String = trim_newline(line);
+
+        if cmd.len() > 0 {
+            if cmd.eq(String::from("quit")) {
+                return 0;
+            }
+
+            if cmd.eq(String::from("hello")) {
+                print_str(String::from("Hello, world!\n"));
+            } else {
+                // Check for "echo " prefix (5 bytes)
+                if cmd.len() > 5 {
+                    let prefix: String = cmd.substring(0, 5);
+                    if prefix.eq(String::from("echo ")) {
+                        let start: i64 = skip_spaces(cmd, 5);
+                        let text: String = cmd.substring(start, cmd.len());
+                        print_str(text);
+                        print_str(String::from("\n"));
+                    } else {
+                        print_str(String::from("unknown: "));
+                        print_str(cmd);
+                        print_str(String::from("\n"));
+                    }
+                } else {
+                    if cmd.len() == 4 {
+                        let prefix4: String = cmd.substring(0, 4);
+                        if prefix4.eq(String::from("echo")) {
+                            print_str(String::from("\n"));
+                        } else {
+                            print_str(String::from("unknown: "));
+                            print_str(cmd);
+                            print_str(String::from("\n"));
+                        }
+                    } else {
+                        print_str(String::from("unknown: "));
+                        print_str(cmd);
+                        print_str(String::from("\n"));
+                    }
+                }
+            }
+        }
+
+        line = stdin_read_line();
+    }
+    0
+}
