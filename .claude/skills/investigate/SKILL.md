@@ -77,7 +77,7 @@ sub-agents; work incrementally and directly.
 - Run `cargo clippy --all -- -D warnings` to ensure no lint warnings
 - Run `cargo fmt --all` to ensure formatting is clean
 
-**Step 2 — Self-Hosted Compiler Fix:**
+**Step 2 — Self-Hosted Compiler Fix (if applicable):**
 - Identify the corresponding code in `compiler/*.vow` modules (see Crate-to-Module Mapping below)
 - Implement the equivalent fix
 - Rebuild: `scripts/bootstrap.sh --skip-cargo`
