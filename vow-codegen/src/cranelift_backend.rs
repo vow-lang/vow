@@ -650,7 +650,7 @@ fn lower_inst(
         // Vow checks
         // ------------------------------------------------------------------
         Opcode::VowRequires | Opcode::VowEnsures | Opcode::VowInvariant => {
-            if ctx.mode == BuildMode::Debug
+            if ctx.mode.has_debug_checks()
                 && let Some(&pred_id) = inst.args.first()
                 && let Some(&pred) = ctx.value_map.get(&pred_id)
             {
@@ -1055,6 +1055,7 @@ struct RuntimeIds {
     trace_enter_id: Option<CraneliftFuncId>,
     trace_exit_id: Option<CraneliftFuncId>,
     trace_vow_id: Option<CraneliftFuncId>,
+    sanitize_init_id: Option<CraneliftFuncId>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1134,7 +1135,7 @@ fn compile_ir_function(
     let mut vow_desc_global_values: HashMap<u32, GlobalValue> = HashMap::new();
     let mut vow_file_global_values: HashMap<u32, GlobalValue> = HashMap::new();
     let mut vow_binding_name_gvs: HashMap<(u32, u32), GlobalValue> = HashMap::new();
-    if mode == BuildMode::Debug {
+    if mode.has_debug_checks() {
         for vow_entry in &ir_func.vows {
             let mut bytes = vow_entry.description.as_bytes().to_vec();
             bytes.push(0);
@@ -1230,6 +1231,12 @@ fn compile_ir_function(
         {
             let name_ptr = builder.ins().global_value(types::I64, gv);
             builder.ins().call(enter_ref, &[name_ptr]);
+        }
+        if ir_func.name == "main"
+            && let Some(init_id) = runtime.sanitize_init_id
+        {
+            let init_ref = obj_module.declare_func_in_func(init_id, builder.func);
+            builder.ins().call(init_ref, &[]);
         }
     }
 
@@ -1711,8 +1718,8 @@ impl Backend for CraneliftBackend {
             .declare_function("__vow_arena_free", Linkage::Import, &arena_free_sig)
             .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
 
-        // Declare external runtime functions (debug mode only)
-        let (vow_violation_id, overflow_id) = if mode == BuildMode::Debug {
+        // Declare external runtime functions (debug/sanitize mode only)
+        let (vow_violation_id, overflow_id) = if mode.has_debug_checks() {
             let mut violation_sig = obj_module.make_signature();
             violation_sig.params.push(AbiParam::new(types::I32)); // vow_id
             violation_sig.params.push(AbiParam::new(types::I8)); // blame
@@ -1759,6 +1766,17 @@ impl Backend for CraneliftBackend {
             (None, None, None)
         };
 
+        // Declare sanitize init function (sanitize mode only)
+        let sanitize_init_id = if mode == BuildMode::Sanitize {
+            let sig = obj_module.make_signature();
+            let id = obj_module
+                .declare_function("__vow_sanitize_init", Linkage::Import, &sig)
+                .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+            Some(id)
+        } else {
+            None
+        };
+
         // Compile each function
         let mut builder_ctx = FunctionBuilderContext::new();
         for (ir_func, &(_, cl_id)) in module.functions.iter().zip(ir_to_cl.iter()) {
@@ -1782,6 +1800,7 @@ impl Backend for CraneliftBackend {
                     trace_enter_id,
                     trace_exit_id,
                     trace_vow_id,
+                    sanitize_init_id,
                 },
                 &string_data_ids,
                 &extern_func_ids,

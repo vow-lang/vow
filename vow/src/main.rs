@@ -28,6 +28,7 @@ use cache::{CachedVerifyResult, VerifyCache};
 enum ModeArg {
     Debug,
     Release,
+    Sanitize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -173,6 +174,7 @@ fn skill_json() -> String {
   "build_options": {
     "-o, --output <path>": "Output executable path (default: source without .vow extension)",
     "--mode <debug|release>": "Build mode; debug inserts runtime vow checks (default: release)",
+    "--mode sanitize": "Debug checks + Vec provenance tracking (default: release)",
     "--no-verify": "Skip ESBMC static verification",
     "--dump-ir": "Print IR text to stdout and exit (no JSON output, no codegen)",
     "--debug-trace <off|calls|full>": "Emit JSON trace lines to stderr at runtime (default: off)",
@@ -395,6 +397,7 @@ USAGE
 BUILD OPTIONS
   -o, --output <path>     Output executable path (default: source without .vow extension)
   --mode <debug|release>  Build mode; debug inserts runtime vow checks (default: release)
+  --mode sanitize         Debug checks + Vec provenance tracking (default: release)
   --no-verify             Skip ESBMC static verification
   --dump-ir               Print IR text to stdout and exit (no JSON output, no codegen)
   --debug-trace <off|calls|full>  Emit JSON trace lines to stderr at runtime (default: off)
@@ -1483,11 +1486,7 @@ fn run_verify_only_inner(source: &Path, no_cache: bool) -> BuildOutput {
     };
 
     if find_esbmc().is_none() {
-        return verify_outcome_to_output(
-            VerifyOutcome::ToolNotFound,
-            frontend.diagnostics,
-            None,
-        );
+        return verify_outcome_to_output(VerifyOutcome::ToolNotFound, frontend.diagnostics, None);
     }
 
     let verify_cache = if no_cache { None } else { VerifyCache::new() };
@@ -1920,11 +1919,8 @@ fn run_contracts_command(source: &Path, verify: bool, no_cache: bool) {
 
     if verify {
         if find_esbmc().is_none() {
-            let output = verify_outcome_to_output(
-                VerifyOutcome::ToolNotFound,
-                frontend.diagnostics,
-                None,
-            );
+            let output =
+                verify_outcome_to_output(VerifyOutcome::ToolNotFound, frontend.diagnostics, None);
             output.emit_json();
             std::process::exit(1);
         }
@@ -1964,6 +1960,7 @@ fn main() {
             let mode = match b.mode {
                 ModeArg::Debug => BuildMode::Debug,
                 ModeArg::Release => BuildMode::Release,
+                ModeArg::Sanitize => BuildMode::Sanitize,
             };
             let trace = match b.debug_trace {
                 TraceArg::Off => TraceMode::Off,
@@ -2067,6 +2064,7 @@ fn main() {
             let mode = match args.mode {
                 ModeArg::Debug => BuildMode::Debug,
                 ModeArg::Release => BuildMode::Release,
+                ModeArg::Sanitize => BuildMode::Sanitize,
             };
             let trace = match args.debug_trace {
                 TraceArg::Off => TraceMode::Off,

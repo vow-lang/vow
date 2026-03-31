@@ -237,7 +237,7 @@ struct ModuleContext {
     string_data_ids: Vec<DataId>,
     func_decls: Vec<FuncDecl>,
     extern_func_ids: HashMap<String, CraneliftFuncId>,
-    mode: i64,       // 0=release, 1=debug
+    mode: i64,       // 0=release, 1=debug, 2=sanitize
     trace_mode: i64, // 0=off, 1=calls, 2=full
 }
 
@@ -625,6 +625,18 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
     let trace_vow_ref =
         trace_vow_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
 
+    // Sanitize init (mode==2 only, main function only)
+    let sanitize_init_ref = if ctx.mode == 2 && ctx.func_decls[fi].is_main {
+        let sig = ctx.obj_module.make_signature();
+        let id = ctx
+            .obj_module
+            .declare_function("__vow_sanitize_init", Linkage::Import, &sig)
+            .expect("declare sanitize_init");
+        Some(ctx.obj_module.declare_func_in_func(id, builder.func))
+    } else {
+        None
+    };
+
     // Create function name data section for trace instrumentation
     let fn_name_gv = if ctx.trace_mode != 0 {
         let name = &ctx.func_decls[fi].name;
@@ -777,6 +789,10 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
         if let (Some(gv), Some(enter_ref)) = (fn_name_gv, trace_enter_ref) {
             let name_ptr = builder.ins().global_value(types::I64, gv);
             builder.ins().call(enter_ref, &[name_ptr]);
+        }
+        // Emit sanitize_init at main entry
+        if let Some(init_ref) = sanitize_init_ref {
+            builder.ins().call(init_ref, &[]);
         }
     }
     // Emit blocks

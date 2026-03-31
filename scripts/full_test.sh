@@ -362,6 +362,17 @@ for name in callee_blame clamp hello; do
 done
 echo ""
 
+# ─── Section 5b: Sanitize Mode ────────────────────────────────────
+
+echo -e "${BOLD}--- Section 5b: Sanitize Mode ---${RESET}"
+
+# sanitize_vec.vow: Vec operations with sanitize instrumentation
+$RUST build --mode sanitize --no-verify tests/debug/sanitize_vec.vow -o "$TMPDIR/rust_sanitize_vec" >/dev/null 2>/dev/null
+run_self build --mode sanitize --no-verify tests/debug/sanitize_vec.vow -o "$TMPDIR/self_sanitize_vec" >/dev/null 2>/dev/null
+compare_runtime "sanitize_vec/sanitize" "$TMPDIR/rust_sanitize_vec" "$TMPDIR/self_sanitize_vec"
+
+echo ""
+
 # ─── Section 6: Multi-Module ───────────────────────────────────────
 
 echo -e "${BOLD}--- Section 6: Multi-Module ---${RESET}"
