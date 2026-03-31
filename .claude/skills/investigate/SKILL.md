@@ -59,8 +59,9 @@ Typical tasks:
 6. Implement equivalent fix in `compiler/*.vow`
 7. Rebuild self-hosted compiler and run `ulimit -v 2000000; scripts/full_test.sh`
 8. Verify reproduction case is fixed
-9. Add regression test to appropriate `tests/` category
-10. Commit, push, and comment on issue
+9. Run `/codex:review` and address feedback
+10. Add regression test to appropriate `tests/` category
+11. Commit, push, and comment on issue
 
 Set up dependency relationships between tasks.
 
@@ -107,7 +108,14 @@ After both compilers are fixed:
    ```
 5. If any step fails, iterate on the fix.
 
-### Phase 6 — Add Regression Test
+### Phase 6 — Codex Review
+
+After verifying the fix, request a Codex review of the changes by running `/codex:review`.
+
+Address all issues raised by the review before proceeding. Iterate until the review passes
+cleanly — re-run verification (Phase 5) after any changes made in response to review feedback.
+
+### Phase 7 — Add Regression Test
 
 Every bug fix **must** include a regression test. Move the reproduction `.vow` file from
 Phase 2 into the appropriate test category:
@@ -128,7 +136,7 @@ After adding the test, re-run the full test suite to confirm it's picked up:
 ulimit -v 2000000; scripts/full_test.sh
 ```
 
-### Phase 7 — Commit and Push
+### Phase 8 — Commit and Push
 
 1. Stage all changed files (Rust sources, `compiler/*.vow`, and the new test file).
 2. Create a single commit with message format: `fix: <concise description> (#$ARGUMENTS)`
@@ -136,7 +144,7 @@ ulimit -v 2000000; scripts/full_test.sh
    - Never mention Claude or AI in the commit message.
 3. Push to the current branch.
 
-### Phase 8 — Comment on the Issue
+### Phase 9 — Comment on the Issue
 
 Post a comment on the issue using:
 
@@ -149,7 +157,7 @@ The comment must include:
 - **Fix**: What was changed in both compilers and why.
 - **Testing**: What regression test was added and what test suites passed.
 
-### Phase 9 — Close the Issue
+### Phase 10 — Close the Issue
 
 After confirming the fix is pushed and the comment is posted, close the issue:
 
@@ -166,6 +174,7 @@ If the fix is partial or needs further review, skip this step and inform the use
 - **Task tracking**: Convert plans to task lists (TaskCreate) before execution.
 - **Bootstrap rebuild**: After changing `compiler/*.vow`, rebuild with `scripts/bootstrap.sh --skip-cargo`.
 - **Sequential workflow**: Fix Rust compiler first, then self-hosted. Do not use parallel sub-agents.
+- **Codex review**: Run `/codex:review` after implementation, address all feedback before committing.
 - **Regression tests**: Every bug fix must add a test to the appropriate `tests/` category.
 
 ## Crate-to-Module Mapping
