@@ -1,4 +1,25 @@
 #!/usr/bin/env python3
+"""Play N games between two UCI engines with optional color alternation,
+UCI option passthrough, validator-based evaluation, and match scoring.
+
+Example usage:
+
+  # 10 games, alternating colors, Stockfish limited to ~1350 Elo
+  python scripts/play_uci_match.py \
+      --white ./build/chess_uci \
+      --black stockfish \
+      --black-option "UCI_LimitStrength=true" \
+      --black-option "UCI_Elo=1350" \
+      --games 10 --alternate-colors \
+      --plies 200 \
+      --validator stockfish \
+      --log match.log
+
+  # Quick single game (backwards-compatible with the old interface)
+  python scripts/play_uci_match.py --white ./build/chess_uci --black stockfish
+"""
+from __future__ import annotations
+
 import argparse
 import re
 import select
@@ -9,7 +30,12 @@ from pathlib import Path
 
 
 MOVE_RE = re.compile(r"^[a-h][1-8][a-h][1-8][nbrq]?$")
+SCORE_RE = re.compile(r"score (cp (-?\d+)|mate (-?\d+))")
 
+
+# ---------------------------------------------------------------------------
+# Engine wrapper
+# ---------------------------------------------------------------------------
 
 class Engine:
     def __init__(self, cmd: list[str], cwd: Path):
@@ -38,7 +64,9 @@ class Engine:
         while True:
             line = self.proc.stdout.readline()
             if line == "":
-                raise RuntimeError(f"{self.name}: EOF while waiting for {token!r}; partial={out!r}")
+                raise RuntimeError(
+                    f"{self.name}: EOF while waiting for {token!r}; partial={out!r}"
+                )
             text = line.rstrip("\n")
             out.append(text)
             if text == token:
@@ -51,7 +79,9 @@ class Engine:
         while True:
             line = self.proc.stdout.readline()
             if line == "":
-                raise RuntimeError(f"{self.name}: EOF while waiting for bestmove; partial={out!r}")
+                raise RuntimeError(
+                    f"{self.name}: EOF while waiting for bestmove; partial={out!r}"
+                )
             text = line.rstrip("\n")
             out.append(text)
             if text.startswith("bestmove "):
@@ -84,12 +114,24 @@ class Engine:
             self.proc.wait(timeout=3)
 
 
-def init_engine(engine: Engine) -> None:
+# ---------------------------------------------------------------------------
+# Engine lifecycle helpers
+# ---------------------------------------------------------------------------
+
+def init_engine(engine: Engine, options: list[str] | None = None) -> None:
     engine.send("uci")
     engine.read_until("uciok")
+    if options:
+        for opt in options:
+            engine.send(f"setoption {opt}")
     engine.send("isready")
     engine.read_until("readyok")
+
+
+def new_game(engine: Engine) -> None:
     engine.send("ucinewgame")
+    engine.send("isready")
+    engine.read_until("readyok")
 
 
 def position_command(moves: list[str]) -> str:
@@ -97,6 +139,10 @@ def position_command(moves: list[str]) -> str:
         return "position startpos"
     return "position startpos moves " + " ".join(moves)
 
+
+# ---------------------------------------------------------------------------
+# Validator helpers
+# ---------------------------------------------------------------------------
 
 def fen_for_moves(engine: Engine, moves: list[str], timeout: float = 5.0) -> str:
     engine.send(position_command(moves))
@@ -112,88 +158,320 @@ def fen_for_moves(engine: Engine, moves: list[str], timeout: float = 5.0) -> str
             return text[5:]
 
 
+def eval_position(engine: Engine, moves: list[str], movetime: int = 200) -> float:
+    """Use the validator to evaluate a position. Returns score in pawns from
+    white's perspective. Mate scores are mapped to +/-100."""
+    engine.send(position_command(moves))
+    engine.send(f"go movetime {movetime}")
+    _, lines = engine.read_bestmove()
+    cp = 0.0
+    for line in reversed(lines):
+        m = SCORE_RE.search(line)
+        if m:
+            if m.group(2) is not None:
+                cp = int(m.group(2)) / 100.0
+            elif m.group(3) is not None:
+                mate_in = int(m.group(3))
+                cp = 100.0 if mate_in > 0 else -100.0
+            break
+    return cp
+
+
+# ---------------------------------------------------------------------------
+# Game result
+# ---------------------------------------------------------------------------
+
+class GameResult:
+    def __init__(
+        self,
+        game_num: int,
+        white_name: str,
+        black_name: str,
+        moves: list[str],
+        outcome: str,
+        eval_score: float | None,
+        final_fen: str | None,
+    ):
+        self.game_num = game_num
+        self.white_name = white_name
+        self.black_name = black_name
+        self.moves = moves
+        self.outcome = outcome  # "1-0", "0-1", "1/2-1/2", "unfinished"
+        self.eval_score = eval_score
+        self.final_fen = final_fen
+
+    def white_score(self) -> float:
+        if self.outcome == "1-0":
+            return 1.0
+        if self.outcome == "0-1":
+            return 0.0
+        if self.outcome == "1/2-1/2":
+            return 0.5
+        # Unfinished: use eval if available
+        if self.eval_score is not None:
+            if self.eval_score > 1.0:
+                return 1.0
+            if self.eval_score < -1.0:
+                return 0.0
+            return 0.5
+        return 0.5
+
+
+# ---------------------------------------------------------------------------
+# Play one game
+# ---------------------------------------------------------------------------
+
+def play_game(
+    game_num: int,
+    white: Engine,
+    black: Engine,
+    white_go: str,
+    black_go: str,
+    max_plies: int,
+    validator: Engine | None,
+) -> GameResult:
+    new_game(white)
+    new_game(black)
+    if validator is not None:
+        new_game(validator)
+
+    moves: list[str] = []
+    prev_fen = fen_for_moves(validator, moves) if validator is not None else ""
+    outcome = "unfinished"
+
+    for ply in range(max_plies):
+        if ply % 2 == 0:
+            engine = white
+            go_cmd = white_go
+        else:
+            engine = black
+            go_cmd = black_go
+
+        engine.send(position_command(moves))
+        engine.send(go_cmd)
+        move, _ = engine.read_bestmove()
+
+        if move in {"(none)", "0000"}:
+            # No legal move — the side to move lost (checkmate) or it's stalemate.
+            # Heuristic: treat as loss for the side with no move.
+            outcome = "0-1" if ply % 2 == 0 else "1-0"
+            break
+        if MOVE_RE.match(move) is None:
+            raise RuntimeError(
+                f"game {game_num}: malformed bestmove {move!r} at ply {ply + 1}"
+            )
+
+        next_moves = moves + [move]
+        if validator is not None:
+            next_fen = fen_for_moves(validator, next_moves)
+            if next_fen == prev_fen:
+                raise RuntimeError(
+                    f"game {game_num}: move {move!r} did not change position at ply {ply + 1}"
+                )
+            prev_fen = next_fen
+
+        moves = next_moves
+
+    eval_score = None
+    final_fen = None
+    if validator is not None:
+        final_fen = fen_for_moves(validator, moves)
+        if outcome == "unfinished":
+            eval_score = eval_position(validator, moves)
+
+    return GameResult(
+        game_num=game_num,
+        white_name=white.name,
+        black_name=black.name,
+        moves=moves,
+        outcome=outcome,
+        eval_score=eval_score,
+        final_fen=final_fen,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Printing
+# ---------------------------------------------------------------------------
+
+def print_game_summary(result: GameResult) -> None:
+    plies = len(result.moves)
+    score_str = result.outcome
+    if result.outcome == "unfinished" and result.eval_score is not None:
+        score_str = f"unfinished (eval {result.eval_score:+.2f})"
+    print(f"  game {result.game_num:3d}: {result.white_name} vs {result.black_name}"
+          f"  {score_str}  ({plies} plies)")
+
+
+def print_match_summary(
+    results: list[GameResult],
+    engine_a_name: str,
+    engine_b_name: str,
+) -> None:
+    a_score = 0.0
+    b_score = 0.0
+    wins_a = draws = wins_b = 0
+
+    for r in results:
+        ws = r.white_score()
+        if r.white_name == engine_a_name:
+            a_score += ws
+            b_score += (1.0 - ws)
+        else:
+            b_score += ws
+            a_score += (1.0 - ws)
+
+        if ws == 1.0:
+            if r.white_name == engine_a_name:
+                wins_a += 1
+            else:
+                wins_b += 1
+        elif ws == 0.0:
+            if r.white_name == engine_a_name:
+                wins_b += 1
+            else:
+                wins_a += 1
+        else:
+            draws += 1
+
+    total = len(results)
+    print()
+    print("=" * 60)
+    print(f"Match result: {engine_a_name} vs {engine_b_name}")
+    print(f"  Games:  {total}")
+    print(f"  Score:  {engine_a_name} {a_score:.1f} - {b_score:.1f} {engine_b_name}")
+    print(f"  W/D/L:  +{wins_a} ={draws} -{wins_b} (from {engine_a_name}'s perspective)")
+    if total > 0:
+        pct = (a_score / total) * 100
+        print(f"  Win %%:  {pct:.1f}%")
+    print("=" * 60)
+
+
+def write_log(path: Path, results: list[GameResult]) -> None:
+    with open(path, "w") as f:
+        for r in results:
+            f.write(f"[Game {r.game_num}]\n")
+            f.write(f"White: {r.white_name}\n")
+            f.write(f"Black: {r.black_name}\n")
+            f.write(f"Result: {r.outcome}\n")
+            if r.eval_score is not None:
+                f.write(f"Eval: {r.eval_score:+.2f}\n")
+            if r.final_fen is not None:
+                f.write(f"FinalFEN: {r.final_fen}\n")
+            f.write(f"Moves: {' '.join(r.moves)}\n")
+            f.write("\n")
+
+
+# ---------------------------------------------------------------------------
+# CLI helpers
+# ---------------------------------------------------------------------------
+
 def split_cmd(text: str) -> list[str]:
     return shlex.split(text)
 
 
+def parse_options(raw: list[str] | None) -> list[str]:
+    """Convert ['UCI_LimitStrength=true', 'UCI_Elo=1350'] to
+    ['name UCI_LimitStrength value true', 'name UCI_Elo value 1350']."""
+    if not raw:
+        return []
+    result = []
+    for item in raw:
+        if "=" in item:
+            name, value = item.split("=", 1)
+            result.append(f"name {name} value {value}")
+        else:
+            result.append(f"name {item}")
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Play a short game between two UCI engines.")
+    parser = argparse.ArgumentParser(
+        description="Play N games between two UCI engines and report match results.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
     parser.add_argument("--white", required=True, help="White engine command")
     parser.add_argument("--black", required=True, help="Black engine command")
     parser.add_argument(
         "--validator",
-        help="Optional validator engine command (must support the Stockfish-specific 'd' command) used to confirm that each move changes the position",
+        help="Optional validator engine command (must support the Stockfish-specific 'd' command; confirms moves change position, evaluates unfinished games)",
     )
-    parser.add_argument("--white-go", default="go movetime 100", help="UCI go command for White")
-    parser.add_argument("--black-go", default="go movetime 100", help="UCI go command for Black")
-    parser.add_argument("--plies", type=int, default=20, help="Maximum plies to play")
-    parser.add_argument(
-        "--cwd",
-        default=".",
-        help="Working directory used to launch engine binaries",
-    )
+    parser.add_argument("--white-go", default="go movetime 100",
+                        help="UCI go command for White (default: go movetime 100)")
+    parser.add_argument("--black-go", default="go movetime 100",
+                        help="UCI go command for Black (default: go movetime 100)")
+    parser.add_argument("--plies", type=int, default=200,
+                        help="Maximum plies per game (default: 200)")
+    parser.add_argument("--games", type=int, default=1,
+                        help="Number of games to play (default: 1)")
+    parser.add_argument("--alternate-colors", action="store_true",
+                        help="Swap engine colors each game")
+    parser.add_argument("--white-option", action="append", dest="white_options",
+                        help="UCI option for White engine (e.g. UCI_Elo=1350). Repeatable.")
+    parser.add_argument("--black-option", action="append", dest="black_options",
+                        help="UCI option for Black engine (e.g. UCI_LimitStrength=true). Repeatable.")
+    parser.add_argument("--validator-option", action="append", dest="validator_options",
+                        help="UCI option for validator engine. Repeatable.")
+    parser.add_argument("--log", type=Path,
+                        help="Write per-game move log to this file")
+    parser.add_argument("--cwd", default=".",
+                        help="Working directory for launching engine binaries")
     args = parser.parse_args()
 
     cwd = Path(args.cwd).resolve()
-    white: Engine | None = None
-    black: Engine | None = None
-    validator: Engine | None = None
+    white_opts = parse_options(args.white_options)
+    black_opts = parse_options(args.black_options)
+    validator_opts = parse_options(args.validator_options)
+
+    # Launch engines once; reuse across games.
+    engine_a = Engine(split_cmd(args.white), cwd)
+    engine_b = Engine(split_cmd(args.black), cwd)
+    validator = Engine(split_cmd(args.validator), cwd) if args.validator else None
+
+    engine_a_name = engine_a.name
+    engine_b_name = engine_b.name
 
     try:
-        white = Engine(split_cmd(args.white), cwd)
-        black = Engine(split_cmd(args.black), cwd)
-        if args.validator:
-            validator = Engine(split_cmd(args.validator), cwd)
-
-        init_engine(white)
-        init_engine(black)
+        init_engine(engine_a, white_opts)
+        init_engine(engine_b, black_opts)
         if validator is not None:
-            init_engine(validator)
+            init_engine(validator, validator_opts)
 
-        moves: list[str] = []
-        prev_fen = fen_for_moves(validator, moves) if validator is not None else ""
-
-        for ply in range(args.plies):
-            if ply % 2 == 0:
-                side = "white"
-                engine = white
-                go_cmd = args.white_go
+        results: list[GameResult] = []
+        for g in range(args.games):
+            swap = args.alternate_colors and g % 2 == 1
+            if swap:
+                white, black = engine_b, engine_a
             else:
-                side = "black"
-                engine = black
-                go_cmd = args.black_go
+                white, black = engine_a, engine_b
 
-            engine.send(position_command(moves))
-            engine.send(go_cmd)
-            move, _ = engine.read_bestmove()
+            result = play_game(
+                game_num=g + 1,
+                white=white,
+                black=black,
+                white_go=args.white_go,
+                black_go=args.black_go,
+                max_plies=args.plies,
+                validator=validator,
+            )
+            results.append(result)
+            print_game_summary(result)
 
-            if move in {"(none)", "0000"}:
-                print(f"{side} has no move after {' '.join(moves)}")
-                break
-            if MOVE_RE.match(move) is None:
-                raise RuntimeError(f"{side}: malformed bestmove {move!r}")
+        print_match_summary(results, engine_a_name, engine_b_name)
 
-            next_moves = moves + [move]
-            if validator is not None:
-                next_fen = fen_for_moves(validator, next_moves)
-                if next_fen == prev_fen:
-                    raise RuntimeError(
-                        f"{side}: move {move!r} did not change validator position after {' '.join(moves)!r}"
-                    )
-                prev_fen = next_fen
+        if args.log:
+            write_log(args.log, results)
+            print(f"\nGame log written to {args.log}")
 
-            print(f"{ply + 1:02d}. {side} {move}")
-            moves = next_moves
-
-        if validator is not None:
-            print(f"final_fen {prev_fen}")
-        print("moves", " ".join(moves))
         return 0
     finally:
-        if white is not None:
-            white.quit()
-        if black is not None:
-            black.quit()
+        engine_a.quit()
+        engine_b.quit()
         if validator is not None:
             validator.quit()
 
