@@ -362,6 +362,46 @@ for name in callee_blame clamp hello; do
 done
 echo ""
 
+# ─── Section 5b: Profile Mode ─────────────────────────────────────
+
+echo -e "${BOLD}--- Section 5b: Profile Mode ---${RESET}"
+
+# Build profile_mode.vow with both compilers
+$RUST build --mode profile --no-verify tests/run/profile_mode.vow -o "$TMPDIR/rust_profile_mode" >/dev/null 2>/dev/null
+run_self build --mode profile --no-verify tests/run/profile_mode.vow -o "$TMPDIR/self_profile_mode" >/dev/null 2>/dev/null
+
+# Run and capture stderr (profile report) and stdout (program output)
+rust_prof_out=$("$TMPDIR/rust_profile_mode" 2>"$TMPDIR/rust_prof_err") || true
+self_prof_out=$(run_self_bin "$TMPDIR/self_profile_mode" 2>"$TMPDIR/self_prof_err") || true
+
+errors=()
+# Verify stdout matches expected output
+if [ "$rust_prof_out" != "5" ]; then errors+=("rust stdout='$rust_prof_out', expected '5'"); fi
+if [ "$self_prof_out" != "5" ]; then errors+=("self stdout='$self_prof_out', expected '5'"); fi
+# Verify profile report structure in stderr
+for compiler in rust self; do
+    errfile="$TMPDIR/${compiler}_prof_err"
+    if ! grep -q "vow profile report" "$errfile"; then errors+=("${compiler} stderr missing 'vow profile report'"); fi
+    if ! grep -q "total calls: 5" "$errfile"; then errors+=("${compiler} stderr missing 'total calls: 5'"); fi
+    if ! grep -q "unique functions: 2" "$errfile"; then errors+=("${compiler} stderr missing 'unique functions: 2'"); fi
+    # helper called 4 times (4/5 = 80.0%)
+    if ! grep -qE "helper\s+4\s" "$errfile"; then errors+=("${compiler} stderr: helper not called 4 times"); fi
+    # main called 1 time
+    if ! grep -qE "main\s+1\s" "$errfile"; then errors+=("${compiler} stderr: main not called 1 time"); fi
+    # helper should appear before main (sorted by count descending)
+    helper_line=$(grep -n "helper" "$errfile" | head -1 | cut -d: -f1)
+    main_line=$(grep -n "main" "$errfile" | grep -v "vow_main" | tail -1 | cut -d: -f1)
+    if [ -n "$helper_line" ] && [ -n "$main_line" ] && [ "$helper_line" -gt "$main_line" ]; then
+        errors+=("${compiler} stderr: helper should appear before main (sorted by count)")
+    fi
+done
+if [ ${#errors[@]} -eq 0 ]; then
+    pass "profile_mode/profile"
+else
+    fail "profile_mode/profile" "$(IFS='; '; echo "${errors[*]}")"
+fi
+echo ""
+
 # ─── Section 6: Multi-Module ───────────────────────────────────────
 
 echo -e "${BOLD}--- Section 6: Multi-Module ---${RESET}"
