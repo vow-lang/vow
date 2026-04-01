@@ -15,7 +15,7 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
-| `-o, --output`    | source stem | Output executable path                     |
+| `-o, --output`    | `build/<stem>` | Output executable path                  |
 | `--mode debug`    | `release`   | Insert runtime vow checks                 |
 | `--mode release`  | (default)   | Omit all vow checks for performance       |
 | `--no-verify`     | (off)       | Skip ESBMC static verification            |

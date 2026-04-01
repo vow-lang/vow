@@ -1588,9 +1588,10 @@ fn run_pipeline_inner(
         )
     });
 
-    let output_path = output
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| source.with_extension(""));
+    let output_path = output.map(|p| p.to_path_buf()).unwrap_or_else(|| {
+        let stem = source.file_stem().unwrap_or_default();
+        Path::new("build").join(stem)
+    });
     let obj_path = output_path.with_extension("o");
 
     // Cache lookup
@@ -1630,6 +1631,10 @@ fn run_pipeline_inner(
             };
         }
     };
+
+    if let Some(parent) = output_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
 
     if let Err(e) = compiled.write_to_file(&obj_path) {
         let _ = verify_handle.join();

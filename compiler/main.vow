@@ -84,24 +84,36 @@ fn get_source_path_sub(argv: Vec<String>) -> String {
     String::from("")
 }
 
-fn strip_vow_ext(path: String) -> String {
+fn default_output(path: String) -> String {
     let n: i64 = path.len();
-    if n > 4 {
+    // Find last '/' to extract basename
+    let mut last_slash: i64 = -1;
+    let mut i: i64 = 0;
+    while i < n {
+        if path.byte_at(i) == 47 {
+            last_slash = i;
+        };
+        i = i + 1;
+    };
+    let start: i64 = last_slash + 1;
+    // Strip .vow extension if present
+    let mut end: i64 = n;
+    if n - start > 4 {
         let d: i64 = path.byte_at(n - 4);
         let v: i64 = path.byte_at(n - 3);
         let o: i64 = path.byte_at(n - 2);
         let w: i64 = path.byte_at(n - 1);
         if d == 46 && v == 118 && o == 111 && w == 119 {
-            let r: String = String::from("");
-            let mut i: i64 = 0;
-            while i < n - 4 {
-                r.push_byte(path.byte_at(i));
-                i = i + 1;
-            }
-            return r;
+            end = n - 4;
         }
-    }
-    path
+    };
+    let r: String = String::from("build/");
+    i = start;
+    while i < end {
+        r.push_byte(path.byte_at(i));
+        i = i + 1;
+    };
+    r
 }
 
 fn get_dir_path(path: String) -> String {
@@ -394,7 +406,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         if has_flag(argv, String::from("-o")) {
             get_flag_arg(argv, String::from("-o"))
         } else {
-            strip_vow_ext(path)
+            default_output(path)
         }
     };
     let mode_str: String = get_flag_arg(argv, String::from("--mode"));
