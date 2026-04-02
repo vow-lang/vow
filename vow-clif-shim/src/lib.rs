@@ -248,10 +248,19 @@ struct ModuleContext {
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_clif_create(mode: i64, trace_mode: i64) -> i64 {
     let mut flag_builder = settings::builder();
-    let _ = flag_builder.set("use_colocated_libcalls", "false");
-    let _ = flag_builder.set("is_pic", "true");
-    if mode == 0 {
-        let _ = flag_builder.set("opt_level", "speed");
+    if let Err(e) = flag_builder.set("use_colocated_libcalls", "false") {
+        eprintln!("clif_shim: error setting use_colocated_libcalls: {e}");
+        return 0;
+    }
+    if let Err(e) = flag_builder.set("is_pic", "true") {
+        eprintln!("clif_shim: error setting is_pic: {e}");
+        return 0;
+    }
+    if mode == 0
+        && let Err(e) = flag_builder.set("opt_level", "speed")
+    {
+        eprintln!("clif_shim: error setting opt_level: {e}");
+        return 0;
     }
     let flags = settings::Flags::new(flag_builder);
     let isa = match cranelift_native::builder() {
