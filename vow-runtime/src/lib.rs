@@ -212,14 +212,17 @@ pub extern "C" fn __vow_profile_init() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
         extern "C" fn report() {
-            let guard = PROFILE_COUNTERS.lock().unwrap();
+            let guard = PROFILE_COUNTERS.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(counters) = guard.as_ref() {
                 if counters.is_empty() {
                     return;
                 }
-                let mut entries: Vec<(&&str, &u64)> = counters.iter().collect();
-                entries.sort_by(|a, b| b.1.cmp(a.1));
-                let total: u64 = entries.iter().map(|(_, c)| **c).sum();
+                let mut entries: Vec<_> = counters
+                    .iter()
+                    .map(|(name, count)| (*name, *count))
+                    .collect();
+                entries.sort_by_key(|k| std::cmp::Reverse(k.1));
+                let total: u64 = entries.iter().map(|item| item.1).sum();
                 let _ = writeln!(std::io::stderr(), "\n--- vow profile report ---");
                 let _ = writeln!(
                     std::io::stderr(),
@@ -230,7 +233,7 @@ pub extern "C" fn __vow_profile_init() {
                 );
                 let _ = writeln!(std::io::stderr(), "{}", "-".repeat(61));
                 let limit = entries.len().min(20);
-                for &(name, count) in &entries[..limit] {
+                for (name, count) in &entries[..limit] {
                     let pct = (*count as f64 / total as f64) * 100.0;
                     let _ = writeln!(
                         std::io::stderr(),
