@@ -237,7 +237,7 @@ struct ModuleContext {
     string_data_ids: Vec<DataId>,
     func_decls: Vec<FuncDecl>,
     extern_func_ids: HashMap<String, CraneliftFuncId>,
-    mode: i64,       // 0=release, 1=debug
+    mode: i64,       // 0=release, 1=debug, 2=profile
     trace_mode: i64, // 0=off, 1=calls, 2=full
 }
 
@@ -256,7 +256,7 @@ pub extern "C" fn __vow_clif_create(mode: i64, trace_mode: i64) -> i64 {
         eprintln!("clif_shim: error setting is_pic: {e}");
         return 0;
     }
-    if mode == 0
+    if (mode == 0 || mode == 2)
         && let Err(e) = flag_builder.set("opt_level", "speed")
     {
         eprintln!("clif_shim: error setting opt_level: {e}");
@@ -502,7 +502,7 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
         .expect("declare arena_free");
 
     // Debug-only runtime functions
-    let vow_violation_id = if ctx.mode != 0 {
+    let vow_violation_id = if ctx.mode == 1 {
         let mut sig = ctx.obj_module.make_signature();
         sig.params.push(AbiParam::new(types::I32)); // vow_id
         sig.params.push(AbiParam::new(types::I8)); // blame
@@ -519,7 +519,7 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
     } else {
         None
     };
-    let overflow_id = if ctx.mode != 0 {
+    let overflow_id = if ctx.mode == 1 {
         let sig = ctx.obj_module.make_signature();
         Some(
             ctx.obj_module
@@ -553,7 +553,7 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
     } else {
         None
     };
-    let trace_vow_id = if ctx.trace_mode >= 2 && ctx.mode != 0 {
+    let trace_vow_id = if ctx.trace_mode >= 2 && ctx.mode == 1 {
         let mut sig = ctx.obj_module.make_signature();
         sig.params.push(AbiParam::new(types::I64));
         sig.params.push(AbiParam::new(types::I64));
@@ -562,6 +562,29 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
             ctx.obj_module
                 .declare_function("__vow_trace_vow", Linkage::Import, &sig)
                 .expect("declare trace_vow"),
+        )
+    } else {
+        None
+    };
+
+    // Profile runtime functions (mode=2)
+    let profile_enter_id = if ctx.mode == 2 {
+        let mut sig = ctx.obj_module.make_signature();
+        sig.params.push(AbiParam::new(types::I64));
+        Some(
+            ctx.obj_module
+                .declare_function("__vow_profile_enter", Linkage::Import, &sig)
+                .expect("declare profile_enter"),
+        )
+    } else {
+        None
+    };
+    let profile_init_id = if ctx.mode == 2 {
+        let sig = ctx.obj_module.make_signature();
+        Some(
+            ctx.obj_module
+                .declare_function("__vow_profile_init", Linkage::Import, &sig)
+                .expect("declare profile_init"),
         )
     } else {
         None
@@ -634,9 +657,13 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
         trace_exit_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
     let trace_vow_ref =
         trace_vow_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
+    let profile_enter_ref =
+        profile_enter_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
+    let profile_init_ref =
+        profile_init_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
 
-    // Create function name data section for trace instrumentation
-    let fn_name_gv = if ctx.trace_mode != 0 {
+    // Create function name data section for trace/profile instrumentation
+    let fn_name_gv = if ctx.trace_mode != 0 || ctx.mode == 2 {
         let name = &ctx.func_decls[fi].name;
         let mut name_bytes = name.as_bytes().to_vec();
         name_bytes.push(0);
@@ -663,7 +690,7 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
     // Create vow description data sections (debug mode only)
     let mut vow_desc_gvs: HashMap<i64, GlobalValue> = HashMap::new();
     // We don't have file info from the self-hosted IR, so skip file/offset vow metadata
-    if ctx.mode != 0 {
+    if ctx.mode == 1 {
         for (vi, &vow_id) in vow_ids.iter().enumerate() {
             let desc_str = unsafe { read_vow_string(vow_desc_ptrs[vi]) };
             let mut bytes = desc_str.as_bytes().to_vec();
@@ -688,7 +715,7 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
         inst_id: i64,
     }
     let mut vow_bindings: HashMap<i64, Vec<VowBindingInfo>> = HashMap::new();
-    if ctx.mode != 0 {
+    if ctx.mode == 1 {
         let mut bind_offset = 0usize;
         for (vi, &vow_id) in vow_ids.iter().enumerate() {
             let bc = binding_counts[vi] as usize;
@@ -787,6 +814,16 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
         if let (Some(gv), Some(enter_ref)) = (fn_name_gv, trace_enter_ref) {
             let name_ptr = builder.ins().global_value(types::I64, gv);
             builder.ins().call(enter_ref, &[name_ptr]);
+        }
+        // Emit profile_init in main, profile_enter at all function entries
+        if ctx.func_decls[fi].is_main
+            && let Some(init_ref) = profile_init_ref
+        {
+            builder.ins().call(init_ref, &[]);
+        }
+        if let (Some(gv), Some(prof_ref)) = (fn_name_gv, profile_enter_ref) {
+            let name_ptr = builder.ins().global_value(types::I64, gv);
+            builder.ins().call(prof_ref, &[name_ptr]);
         }
     }
     // Emit blocks
@@ -1262,7 +1299,7 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
 
                 // Vow checks
                 IOP_VOW_REQ | IOP_VOW_ENS | IOP_VOW_INV => {
-                    if ctx.mode != 0 && alen > 0 {
+                    if ctx.mode == 1 && alen > 0 {
                         let pred_id = all_args[aoff];
                         if let Some(&pred) = value_map.get(&pred_id) {
                             let vow_id = if dk == IDATA_VOW_ID { dv } else { 0 };
@@ -2020,6 +2057,10 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
         }
+        "__vow_profile_enter" => {
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        "__vow_profile_init" => {}
         "__vow_clif_create" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));

@@ -148,7 +148,7 @@ fn make_isa(mode: BuildMode) -> Result<Arc<dyn TargetIsa>, CodegenError> {
     flag_builder
         .set("is_pic", "true")
         .map_err(|e| CodegenError::IsaBuild(e.to_string()))?;
-    if mode == BuildMode::Release {
+    if mode == BuildMode::Release || mode == BuildMode::Profile {
         flag_builder
             .set("opt_level", "speed")
             .map_err(|e| CodegenError::IsaBuild(e.to_string()))?;
@@ -1058,6 +1058,8 @@ struct RuntimeIds {
     trace_enter_id: Option<CraneliftFuncId>,
     trace_exit_id: Option<CraneliftFuncId>,
     trace_vow_id: Option<CraneliftFuncId>,
+    profile_enter_id: Option<CraneliftFuncId>,
+    profile_init_id: Option<CraneliftFuncId>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1199,7 +1201,14 @@ fn compile_ir_function(
     let trace_vow_ref = runtime
         .trace_vow_id
         .map(|id| obj_module.declare_func_in_func(id, builder.func));
-    let fn_name_gv = if trace != TraceMode::Off {
+    let profile_enter_ref = runtime
+        .profile_enter_id
+        .map(|id| obj_module.declare_func_in_func(id, builder.func));
+    let profile_init_ref = runtime
+        .profile_init_id
+        .map(|id| obj_module.declare_func_in_func(id, builder.func));
+    let needs_fn_name = trace != TraceMode::Off || mode == BuildMode::Profile;
+    let fn_name_gv = if needs_fn_name {
         let mut name_bytes = ir_func.name.as_bytes().to_vec();
         name_bytes.push(0);
         let mut desc = DataDescription::new();
@@ -1233,6 +1242,15 @@ fn compile_ir_function(
         {
             let name_ptr = builder.ins().global_value(types::I64, gv);
             builder.ins().call(enter_ref, &[name_ptr]);
+        }
+        if ir_func.name == "main"
+            && let Some(init_ref) = profile_init_ref
+        {
+            builder.ins().call(init_ref, &[]);
+        }
+        if let (Some(prof_ref), Some(gv)) = (profile_enter_ref, fn_name_gv) {
+            let name_ptr = builder.ins().global_value(types::I64, gv);
+            builder.ins().call(prof_ref, &[name_ptr]);
         }
     }
 
@@ -1619,6 +1637,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // vow_id
             sig.params.push(AbiParam::new(types::I64)); // passed (0 or 1)
         }
+        // Profile instrumentation
+        "__vow_profile_enter" => {
+            sig.params.push(AbiParam::new(types::I64)); // fn_name C-string ptr
+        }
+        "__vow_profile_init" => {}
         _ => {}
     }
     sig
@@ -1762,6 +1785,21 @@ impl Backend for CraneliftBackend {
             (None, None, None)
         };
 
+        // Declare profile runtime functions
+        let (profile_enter_id, profile_init_id) = if mode == BuildMode::Profile {
+            let enter_sig = make_extern_sig("__vow_profile_enter", &obj_module);
+            let enter_id = obj_module
+                .declare_function("__vow_profile_enter", Linkage::Import, &enter_sig)
+                .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+            let init_sig = make_extern_sig("__vow_profile_init", &obj_module);
+            let init_id = obj_module
+                .declare_function("__vow_profile_init", Linkage::Import, &init_sig)
+                .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+            (Some(enter_id), Some(init_id))
+        } else {
+            (None, None)
+        };
+
         // Compile each function
         let mut builder_ctx = FunctionBuilderContext::new();
         for (ir_func, &(_, cl_id)) in module.functions.iter().zip(ir_to_cl.iter()) {
@@ -1785,6 +1823,8 @@ impl Backend for CraneliftBackend {
                     trace_enter_id,
                     trace_exit_id,
                     trace_vow_id,
+                    profile_enter_id,
+                    profile_init_id,
                 },
                 &string_data_ids,
                 &extern_func_ids,

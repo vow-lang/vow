@@ -179,6 +179,91 @@ pub unsafe extern "C" fn __vow_trace_vow(fn_name_ptr: *const i8, vow_id: i64, pa
     );
 }
 
+// ---------------------------------------------------------------------------
+// Profile instrumentation
+// ---------------------------------------------------------------------------
+
+static PROFILE_COUNTERS: Mutex<Option<HashMap<&'static str, u64>>> = Mutex::new(None);
+
+fn profile_counters_init<'a>(
+    map: &'a mut Option<HashMap<&'static str, u64>>,
+) -> &'a mut HashMap<&'static str, u64> {
+    map.get_or_insert_with(HashMap::new)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_profile_enter(fn_name_ptr: *const i8) {
+    if fn_name_ptr.is_null() {
+        return;
+    }
+    // SAFETY: fn_name_ptr is a static C-string literal embedded in the binary.
+    // It lives for the duration of the program, so we can treat it as 'static.
+    let name: &'static str = unsafe { CStr::from_ptr(fn_name_ptr) }
+        .to_str()
+        .unwrap_or("?");
+    let mut guard = PROFILE_COUNTERS.lock().unwrap();
+    let counters = profile_counters_init(&mut guard);
+    *counters.entry(name).or_insert(0) += 1;
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_profile_init() {
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        extern "C" fn report() {
+            let guard = PROFILE_COUNTERS.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(counters) = guard.as_ref() {
+                if counters.is_empty() {
+                    return;
+                }
+                let mut entries: Vec<_> = counters
+                    .iter()
+                    .map(|(name, count)| (*name, *count))
+                    .collect();
+                entries.sort_by_key(|k| std::cmp::Reverse(k.1));
+                let total: u64 = entries.iter().map(|item| item.1).sum();
+                let _ = writeln!(std::io::stderr(), "\n--- vow profile report ---");
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "{:<40} {:>12} {:>7}",
+                    "function",
+                    "calls",
+                    "%"
+                );
+                let _ = writeln!(std::io::stderr(), "{}", "-".repeat(61));
+                let limit = entries.len().min(20);
+                for (name, count) in &entries[..limit] {
+                    let pct = (*count as f64 / total as f64) * 100.0;
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "{:<40} {:>12} {:>6.1}%",
+                        name,
+                        count,
+                        pct
+                    );
+                }
+                if entries.len() > limit {
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "  ... and {} more functions",
+                        entries.len() - limit
+                    );
+                }
+                let _ = writeln!(std::io::stderr(), "{}", "-".repeat(61));
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "total calls: {total}, unique functions: {}",
+                    entries.len()
+                );
+            }
+        }
+        unsafe {
+            libc::atexit(report);
+        }
+    });
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_arena_alloc(size: usize, align: usize) -> *mut u8 {
     if size == 0 {
