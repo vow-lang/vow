@@ -1,4 +1,4 @@
-// TEST: stdout "init:12345trunc3:123trunc3_noop:123trunc5_noop:123trunc0:empty:push_after:67done"
+// TEST: stdout "init:12345trunc3:len3:123trunc3_noop:len3:123trunc5_noop:len3:123trunc0:len0:push_after:67done"
 module vec_truncate
 
 fn main() -> i32 [io] {
@@ -16,32 +16,37 @@ fn main() -> i32 [io] {
     print_i64(v[3]);
     print_i64(v[4]);
 
-    // truncate to smaller size
     v.truncate(3);
-    print_str("trunc3:");
+    print_str("trunc3:len");
+    print_i64(v.len());
+    print_str(":");
     print_i64(v[0]);
     print_i64(v[1]);
     print_i64(v[2]);
 
-    // truncate to same size (no-op)
+    // no-op: same size
     v.truncate(3);
-    print_str("trunc3_noop:");
+    print_str("trunc3_noop:len");
+    print_i64(v.len());
+    print_str(":");
     print_i64(v[0]);
     print_i64(v[1]);
     print_i64(v[2]);
 
-    // truncate to larger size (no-op)
+    // no-op: larger than current size
     v.truncate(5);
-    print_str("trunc5_noop:");
+    print_str("trunc5_noop:len");
+    print_i64(v.len());
+    print_str(":");
     print_i64(v[0]);
     print_i64(v[1]);
     print_i64(v[2]);
 
-    // truncate to 0
     v.truncate(0);
-    print_str("trunc0:empty:");
+    print_str("trunc0:len");
+    print_i64(v.len());
+    print_str(":");
 
-    // push after truncate
     v.push(6);
     v.push(7);
     print_str("push_after:");
