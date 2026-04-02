@@ -249,6 +249,7 @@ struct ModuleContext {
 pub extern "C" fn __vow_clif_create(mode: i64, trace_mode: i64) -> i64 {
     let mut flag_builder = settings::builder();
     let _ = flag_builder.set("use_colocated_libcalls", "false");
+    let _ = flag_builder.set("is_pic", "true");
     if mode == 0 {
         let _ = flag_builder.set("opt_level", "speed");
     }
