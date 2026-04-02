@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        required: true
+        type: choice
+        options:
+          - rev
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+env:
+  ESBMC_VERSION: "8.1"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache ESBMC
+        id: cache-esbmc
+        uses: actions/cache@v4
+        with:
+          path: ~/esbmc
+          key: esbmc-${{ env.ESBMC_VERSION }}-ubuntu-24.04
+
+      - name: Install ESBMC
+        if: steps.cache-esbmc.outputs.cache-hit != 'true'
+        run: |
+          curl -sL -o /tmp/esbmc.zip "https://github.com/esbmc/esbmc/releases/download/v$ESBMC_VERSION/release-ubuntu-24.04--b.RelWithDebInfo.-e.OFF.zip"
+          unzip -q /tmp/esbmc.zip -d ~/esbmc
+          rm /tmp/esbmc.zip
+
+      - run: echo "$HOME/esbmc/bin" >> "$GITHUB_PATH"
+
+      - name: Bump version
+        id: bump
+        run: |
+          NEW_VERSION=$(scripts/bump-version.sh "${{ inputs.bump }}")
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$NEW_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A '*.toml'
+          git commit -m "Release v${{ steps.bump.outputs.version }}"
+          git tag "v${{ steps.bump.outputs.version }}"
+          git push origin HEAD:main --tags
+
+      - name: Bootstrap compiler
+        run: scripts/bootstrap.sh
+
+      - name: Package release artifacts
+        run: |
+          mkdir -p release
+          cp build/vowc release/vowc-linux-x86_64
+          sha256sum release/vowc-linux-x86_64 > release/vowc-linux-x86_64.sha256
+          echo "${{ steps.bump.outputs.version }}" > release/VERSION
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.bump.outputs.tag }}" \
+            --title "Vow ${{ steps.bump.outputs.version }}" \
+            --generate-notes \
+            release/vowc-linux-x86_64 \
+            release/vowc-linux-x86_64.sha256
