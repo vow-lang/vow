@@ -242,10 +242,7 @@ impl LowerCtx {
     /// `live_out` contains InstIds that flow out of this scope (e.g. via Upsilon)
     /// and must not be freed.
     pub(super) fn pop_alloc_scope_frees(&mut self, live_out: &[InstId], span: Span) {
-        let scope = self
-            .alloc_scopes
-            .pop()
-            .expect("alloc_scopes underflow");
+        let scope = self.alloc_scopes.pop().expect("alloc_scopes underflow");
         for (id, tag) in &scope {
             if self.escaped_allocs.contains(id) || live_out.contains(id) {
                 continue;
@@ -2365,7 +2362,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ),
                 (_, "truncate") => {
                     let len_id = args.first().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
-                        ctx.emit(Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0), span)
+                        ctx.emit(
+                            Opcode::ConstI64,
+                            Ty::I64,
+                            vec![],
+                            InstData::ConstI64(0),
+                            span,
+                        )
                     });
                     ctx.emit(
                         Opcode::Call,
