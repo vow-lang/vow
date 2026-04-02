@@ -145,6 +145,9 @@ fn make_isa(mode: BuildMode) -> Result<Arc<dyn TargetIsa>, CodegenError> {
     flag_builder
         .set("use_colocated_libcalls", "false")
         .map_err(|e| CodegenError::IsaBuild(e.to_string()))?;
+    flag_builder
+        .set("is_pic", "true")
+        .map_err(|e| CodegenError::IsaBuild(e.to_string()))?;
     if mode == BuildMode::Release {
         flag_builder
             .set("opt_level", "speed")
