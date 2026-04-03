@@ -124,8 +124,8 @@ compare_runtime() {
     fi
 
     local rust_out="" self_out="" rust_exit=0 self_exit=0
-    rust_out=$("$rust_bin" 2>/dev/null) || rust_exit=$?
-    self_out=$(run_self_bin "$self_bin" 2>/dev/null) || self_exit=$?
+    rust_out=$("$rust_bin" </dev/null 2>/dev/null) || rust_exit=$?
+    self_out=$(run_self_bin "$self_bin" </dev/null 2>/dev/null) || self_exit=$?
 
     local errors=()
     if [ "$rust_exit" != "$self_exit" ]; then
@@ -303,7 +303,7 @@ for vow_file in tests/run/*.vow; do
     # Validate against // TEST: stdout directive if present
     expected=$(sed -n 's|^// TEST: stdout "\(.*\)"$|\1|p' "$vow_file" | head -1)
     if [ -n "$expected" ]; then
-        actual=$("$TMPDIR/test_rust_${name}" 2>/dev/null) || true
+        actual=$("$TMPDIR/test_rust_${name}" </dev/null 2>/dev/null) || true
         # Interpret \n escapes in expected string
         expected_decoded=$(printf '%b' "$expected")
         if [ "$actual" = "$expected_decoded" ]; then
@@ -317,7 +317,7 @@ for vow_file in tests/run/*.vow; do
     expected_exit=$(sed -n 's|^// TEST: exit \([0-9]*\)$|\1|p' "$vow_file" | head -1)
     if [ -n "$expected_exit" ]; then
         actual_exit=0
-        "$TMPDIR/test_rust_${name}" >/dev/null 2>/dev/null || actual_exit=$?
+        "$TMPDIR/test_rust_${name}" </dev/null >/dev/null 2>/dev/null || actual_exit=$?
         if [ "$actual_exit" = "$expected_exit" ]; then
             pass "${name}/test-exit"
         else
@@ -336,8 +336,8 @@ $RUST build --mode debug --no-verify examples/divide.vow -o "$TMPDIR/rust_divide
 run_self build --mode debug --no-verify examples/divide.vow -o "$TMPDIR/self_divide_debug" >/dev/null 2>/dev/null
 
 rust_exit=0 self_exit=0
-"$TMPDIR/rust_divide_debug" >"$TMPDIR/rust_dbg_out" 2>"$TMPDIR/rust_dbg_err" || rust_exit=$?
-run_self_bin "$TMPDIR/self_divide_debug" >"$TMPDIR/self_dbg_out" 2>"$TMPDIR/self_dbg_err" || self_exit=$?
+"$TMPDIR/rust_divide_debug" </dev/null >"$TMPDIR/rust_dbg_out" 2>"$TMPDIR/rust_dbg_err" || rust_exit=$?
+run_self_bin "$TMPDIR/self_divide_debug" </dev/null >"$TMPDIR/self_dbg_out" 2>"$TMPDIR/self_dbg_err" || self_exit=$?
 rust_err=$(cat "$TMPDIR/rust_dbg_err")
 self_err=$(cat "$TMPDIR/self_dbg_err")
 
@@ -371,8 +371,8 @@ $RUST build --mode profile --no-verify tests/run/profile_mode.vow -o "$TMPDIR/ru
 run_self build --mode profile --no-verify tests/run/profile_mode.vow -o "$TMPDIR/self_profile_mode" >/dev/null 2>/dev/null
 
 # Run and capture stderr (profile report) and stdout (program output)
-rust_prof_out=$("$TMPDIR/rust_profile_mode" 2>"$TMPDIR/rust_prof_err") || true
-self_prof_out=$(run_self_bin "$TMPDIR/self_profile_mode" 2>"$TMPDIR/self_prof_err") || true
+rust_prof_out=$("$TMPDIR/rust_profile_mode" </dev/null 2>"$TMPDIR/rust_prof_err") || true
+self_prof_out=$(run_self_bin "$TMPDIR/self_profile_mode" </dev/null 2>"$TMPDIR/self_prof_err") || true
 
 errors=()
 # Verify stdout matches expected output
