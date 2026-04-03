@@ -84,24 +84,36 @@ fn get_source_path_sub(argv: Vec<String>) -> String {
     String::from("")
 }
 
-fn strip_vow_ext(path: String) -> String {
+fn default_output(path: String) -> String {
     let n: i64 = path.len();
-    if n > 4 {
+    // Find last '/' to extract basename
+    let mut last_slash: i64 = -1;
+    let mut i: i64 = 0;
+    while i < n {
+        if path.byte_at(i) == 47 {
+            last_slash = i;
+        };
+        i = i + 1;
+    };
+    let start: i64 = last_slash + 1;
+    // Strip .vow extension if present
+    let mut end: i64 = n;
+    if n - start > 4 {
         let d: i64 = path.byte_at(n - 4);
         let v: i64 = path.byte_at(n - 3);
         let o: i64 = path.byte_at(n - 2);
         let w: i64 = path.byte_at(n - 1);
         if d == 46 && v == 118 && o == 111 && w == 119 {
-            let r: String = String::from("");
-            let mut i: i64 = 0;
-            while i < n - 4 {
-                r.push_byte(path.byte_at(i));
-                i = i + 1;
-            }
-            return r;
+            end = n - 4;
         }
-    }
-    path
+    };
+    let r: String = String::from("build/");
+    i = start;
+    while i < end {
+        r.push_byte(path.byte_at(i));
+        i = i + 1;
+    };
+    r
 }
 
 fn get_dir_path(path: String) -> String {
@@ -394,16 +406,14 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         if has_flag(argv, String::from("-o")) {
             get_flag_arg(argv, String::from("-o"))
         } else {
-            strip_vow_ext(path)
+            default_output(path)
         }
     };
     let mode_str: String = get_flag_arg(argv, String::from("--mode"));
     let mode: i64 = {
-        if mode_str == String::from("debug") {
-            1
-        } else {
-            0
-        }
+        if mode_str == String::from("debug") { 1 }
+        else if mode_str == String::from("profile") { 2 }
+        else { 0 }
     };
     let trace_str: String = get_flag_arg(argv, String::from("--debug-trace"));
     let trace: i64 = {
@@ -634,11 +644,9 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
             let out: String = get_flag_arg(argv, String::from("-o"));
             let mode_str: String = get_flag_arg(argv, String::from("--mode"));
             let mode: i64 = {
-                if mode_str == String::from("debug") {
-                    1
-                } else {
-                    0
-                }
+                if mode_str == String::from("debug") { 1 }
+                else if mode_str == String::from("profile") { 2 }
+                else { 0 }
             };
             let trace_str: String = get_flag_arg(argv, String::from("--debug-trace"));
             let trace: i64 = {
@@ -685,7 +693,7 @@ fn skill_json() -> String {
     r.push_str(String::from("  \"legacy_usage\": \"vow [OPTIONS] <source.vow> (equivalent to vow build)\",\n"));
     r.push_str(String::from("  \"build_options\": {\n"));
     r.push_str(String::from("    \"-o, --output <path>\": \"Output executable path (default: source without .vow extension)\",\n"));
-    r.push_str(String::from("    \"--mode <debug|release>\": \"Build mode; debug inserts runtime vow checks (default: release)\",\n"));
+    r.push_str(String::from("    \"--mode <debug|release|profile>\": \"Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit (default: release)\",\n"));
     r.push_str(String::from("    \"--no-verify\": \"Skip ESBMC static verification\",\n"));
     r.push_str(String::from("    \"--dump-ir\": \"Print IR text to stdout and exit (no JSON output, no codegen)\",\n"));
     r.push_str(String::from("    \"--debug-trace <off|calls|full>\": \"Emit JSON trace lines to stderr at runtime (default: off)\",\n"));
@@ -907,7 +915,7 @@ fn skill_human() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("BUILD OPTIONS\n"));
     r.push_str(String::from("  -o, --output <path>     Output executable path (default: source without .vow extension)\n"));
-    r.push_str(String::from("  --mode <debug|release>  Build mode; debug inserts runtime vow checks (default: release)\n"));
+    r.push_str(String::from("  --mode <debug|release|profile>  Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit (default: release)\n"));
     r.push_str(String::from("  --no-verify             Skip ESBMC static verification\n"));
     r.push_str(String::from("  --dump-ir               Print IR text to stdout and exit (no JSON output, no codegen)\n"));
     r.push_str(String::from("  --debug-trace <off|calls|full>  Emit JSON trace lines to stderr at runtime (default: off)\n"));

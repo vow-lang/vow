@@ -124,8 +124,8 @@ compare_runtime() {
     fi
 
     local rust_out="" self_out="" rust_exit=0 self_exit=0
-    rust_out=$("$rust_bin" 2>/dev/null) || rust_exit=$?
-    self_out=$(run_self_bin "$self_bin" 2>/dev/null) || self_exit=$?
+    rust_out=$("$rust_bin" </dev/null 2>/dev/null) || rust_exit=$?
+    self_out=$(run_self_bin "$self_bin" </dev/null 2>/dev/null) || self_exit=$?
 
     local errors=()
     if [ "$rust_exit" != "$self_exit" ]; then
@@ -303,7 +303,7 @@ for vow_file in tests/run/*.vow; do
     # Validate against // TEST: stdout directive if present
     expected=$(sed -n 's|^// TEST: stdout "\(.*\)"$|\1|p' "$vow_file" | head -1)
     if [ -n "$expected" ]; then
-        actual=$("$TMPDIR/test_rust_${name}" 2>/dev/null) || true
+        actual=$("$TMPDIR/test_rust_${name}" </dev/null 2>/dev/null) || true
         # Interpret \n escapes in expected string
         expected_decoded=$(printf '%b' "$expected")
         if [ "$actual" = "$expected_decoded" ]; then
@@ -317,7 +317,7 @@ for vow_file in tests/run/*.vow; do
     expected_exit=$(sed -n 's|^// TEST: exit \([0-9]*\)$|\1|p' "$vow_file" | head -1)
     if [ -n "$expected_exit" ]; then
         actual_exit=0
-        "$TMPDIR/test_rust_${name}" >/dev/null 2>/dev/null || actual_exit=$?
+        "$TMPDIR/test_rust_${name}" </dev/null >/dev/null 2>/dev/null || actual_exit=$?
         if [ "$actual_exit" = "$expected_exit" ]; then
             pass "${name}/test-exit"
         else
@@ -336,8 +336,8 @@ $RUST build --mode debug --no-verify examples/divide.vow -o "$TMPDIR/rust_divide
 run_self build --mode debug --no-verify examples/divide.vow -o "$TMPDIR/self_divide_debug" >/dev/null 2>/dev/null
 
 rust_exit=0 self_exit=0
-"$TMPDIR/rust_divide_debug" >"$TMPDIR/rust_dbg_out" 2>"$TMPDIR/rust_dbg_err" || rust_exit=$?
-run_self_bin "$TMPDIR/self_divide_debug" >"$TMPDIR/self_dbg_out" 2>"$TMPDIR/self_dbg_err" || self_exit=$?
+"$TMPDIR/rust_divide_debug" </dev/null >"$TMPDIR/rust_dbg_out" 2>"$TMPDIR/rust_dbg_err" || rust_exit=$?
+run_self_bin "$TMPDIR/self_divide_debug" </dev/null >"$TMPDIR/self_dbg_out" 2>"$TMPDIR/self_dbg_err" || self_exit=$?
 rust_err=$(cat "$TMPDIR/rust_dbg_err")
 self_err=$(cat "$TMPDIR/self_dbg_err")
 
@@ -360,6 +360,46 @@ for name in callee_blame clamp hello; do
     run_self build --mode debug --no-verify "examples/${name}.vow" -o "$TMPDIR/self_${name}_debug" >/dev/null 2>/dev/null
     compare_runtime "${name}/debug" "$TMPDIR/rust_${name}_debug" "$TMPDIR/self_${name}_debug"
 done
+echo ""
+
+# ─── Section 5b: Profile Mode ─────────────────────────────────────
+
+echo -e "${BOLD}--- Section 5b: Profile Mode ---${RESET}"
+
+# Build profile_mode.vow with both compilers
+$RUST build --mode profile --no-verify tests/run/profile_mode.vow -o "$TMPDIR/rust_profile_mode" >/dev/null 2>/dev/null
+run_self build --mode profile --no-verify tests/run/profile_mode.vow -o "$TMPDIR/self_profile_mode" >/dev/null 2>/dev/null
+
+# Run and capture stderr (profile report) and stdout (program output)
+rust_prof_out=$("$TMPDIR/rust_profile_mode" </dev/null 2>"$TMPDIR/rust_prof_err") || true
+self_prof_out=$(run_self_bin "$TMPDIR/self_profile_mode" </dev/null 2>"$TMPDIR/self_prof_err") || true
+
+errors=()
+# Verify stdout matches expected output
+if [ "$rust_prof_out" != "5" ]; then errors+=("rust stdout='$rust_prof_out', expected '5'"); fi
+if [ "$self_prof_out" != "5" ]; then errors+=("self stdout='$self_prof_out', expected '5'"); fi
+# Verify profile report structure in stderr
+for compiler in rust self; do
+    errfile="$TMPDIR/${compiler}_prof_err"
+    if ! grep -q "vow profile report" "$errfile"; then errors+=("${compiler} stderr missing 'vow profile report'"); fi
+    if ! grep -q "total calls: 5" "$errfile"; then errors+=("${compiler} stderr missing 'total calls: 5'"); fi
+    if ! grep -q "unique functions: 2" "$errfile"; then errors+=("${compiler} stderr missing 'unique functions: 2'"); fi
+    # helper called 4 times (4/5 = 80.0%)
+    if ! grep -qE "helper\s+4\s" "$errfile"; then errors+=("${compiler} stderr: helper not called 4 times"); fi
+    # main called 1 time
+    if ! grep -qE "main\s+1\s" "$errfile"; then errors+=("${compiler} stderr: main not called 1 time"); fi
+    # helper should appear before main (sorted by count descending)
+    helper_line=$(grep -n "helper" "$errfile" | head -1 | cut -d: -f1)
+    main_line=$(grep -n "main" "$errfile" | grep -v "vow_main" | tail -1 | cut -d: -f1)
+    if [ -n "$helper_line" ] && [ -n "$main_line" ] && [ "$helper_line" -gt "$main_line" ]; then
+        errors+=("${compiler} stderr: helper should appear before main (sorted by count)")
+    fi
+done
+if [ ${#errors[@]} -eq 0 ]; then
+    pass "profile_mode/profile"
+else
+    fail "profile_mode/profile" "$(IFS='; '; echo "${errors[*]}")"
+fi
 echo ""
 
 # ─── Section 6: Multi-Module ───────────────────────────────────────

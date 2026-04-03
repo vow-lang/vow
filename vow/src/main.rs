@@ -28,6 +28,7 @@ use cache::{CachedVerifyResult, VerifyCache};
 enum ModeArg {
     Debug,
     Release,
+    Profile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -172,7 +173,7 @@ fn skill_json() -> String {
   "legacy_usage": "vow [OPTIONS] <source.vow> (equivalent to vow build)",
   "build_options": {
     "-o, --output <path>": "Output executable path (default: source without .vow extension)",
-    "--mode <debug|release>": "Build mode; debug inserts runtime vow checks (default: release)",
+    "--mode <debug|release|profile>": "Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit (default: release)",
     "--no-verify": "Skip ESBMC static verification",
     "--dump-ir": "Print IR text to stdout and exit (no JSON output, no codegen)",
     "--debug-trace <off|calls|full>": "Emit JSON trace lines to stderr at runtime (default: off)",
@@ -394,7 +395,7 @@ USAGE
 
 BUILD OPTIONS
   -o, --output <path>     Output executable path (default: source without .vow extension)
-  --mode <debug|release>  Build mode; debug inserts runtime vow checks (default: release)
+  --mode <debug|release|profile>  Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit (default: release)
   --no-verify             Skip ESBMC static verification
   --dump-ir               Print IR text to stdout and exit (no JSON output, no codegen)
   --debug-trace <off|calls|full>  Emit JSON trace lines to stderr at runtime (default: off)
@@ -1483,11 +1484,7 @@ fn run_verify_only_inner(source: &Path, no_cache: bool) -> BuildOutput {
     };
 
     if find_esbmc().is_none() {
-        return verify_outcome_to_output(
-            VerifyOutcome::ToolNotFound,
-            frontend.diagnostics,
-            None,
-        );
+        return verify_outcome_to_output(VerifyOutcome::ToolNotFound, frontend.diagnostics, None);
     }
 
     let verify_cache = if no_cache { None } else { VerifyCache::new() };
@@ -1592,9 +1589,10 @@ fn run_pipeline_inner(
         )
     });
 
-    let output_path = output
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| source.with_extension(""));
+    let output_path = output.map(|p| p.to_path_buf()).unwrap_or_else(|| {
+        let stem = source.file_stem().unwrap_or_default();
+        Path::new("build").join(stem)
+    });
     let obj_path = output_path.with_extension("o");
 
     // Cache lookup
@@ -1634,6 +1632,10 @@ fn run_pipeline_inner(
             };
         }
     };
+
+    if let Some(parent) = output_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
 
     if let Err(e) = compiled.write_to_file(&obj_path) {
         let _ = verify_handle.join();
@@ -1920,11 +1922,8 @@ fn run_contracts_command(source: &Path, verify: bool, no_cache: bool) {
 
     if verify {
         if find_esbmc().is_none() {
-            let output = verify_outcome_to_output(
-                VerifyOutcome::ToolNotFound,
-                frontend.diagnostics,
-                None,
-            );
+            let output =
+                verify_outcome_to_output(VerifyOutcome::ToolNotFound, frontend.diagnostics, None);
             output.emit_json();
             std::process::exit(1);
         }
@@ -1964,6 +1963,7 @@ fn main() {
             let mode = match b.mode {
                 ModeArg::Debug => BuildMode::Debug,
                 ModeArg::Release => BuildMode::Release,
+                ModeArg::Profile => BuildMode::Profile,
             };
             let trace = match b.debug_trace {
                 TraceArg::Off => TraceMode::Off,
@@ -2067,6 +2067,7 @@ fn main() {
             let mode = match args.mode {
                 ModeArg::Debug => BuildMode::Debug,
                 ModeArg::Release => BuildMode::Release,
+                ModeArg::Profile => BuildMode::Profile,
             };
             let trace = match args.debug_trace {
                 TraceArg::Off => TraceMode::Off,

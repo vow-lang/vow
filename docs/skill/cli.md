@@ -15,9 +15,8 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
-| `-o, --output`    | source stem | Output executable path                     |
-| `--mode debug`    | `release`   | Insert runtime vow checks                 |
-| `--mode release`  | (default)   | Omit all vow checks for performance       |
+| `-o, --output`    | `build/<stem>` | Output executable path                  |
+| `--mode <debug\|release\|profile>` | `release` | Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit |
 | `--no-verify`     | (off)       | Skip ESBMC static verification            |
 | `--dump-ir`       | (off)       | Print IR text to stdout and exit (no JSON output, no codegen) |
 | `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
@@ -246,6 +245,24 @@ When `--debug-trace=calls` or `--debug-trace=full` is used, the compiled binary 
 {"event":"vow","fn":"divide","vow_id":0,"passed":true}
 {"event":"exit","fn":"divide"}
 ```
+
+## Profile Output (stderr, profile mode)
+
+When `--mode profile` is used, the compiled binary prints a call-count report to stderr on normal exit (via `atexit`). The report is not printed if the program is killed by a signal or calls `abort()`.
+
+```
+--- vow profile report ---
+function                                        calls       %
+-------------------------------------------------------------
+infer                                         4812399   48.2%
+is_def_eq_core                                3201882   32.1%
+whnf                                           984201    9.9%
+main                                                1    0.0%
+-------------------------------------------------------------
+total calls: 9998483, unique functions: 12
+```
+
+The report lists the top 20 most-called functions sorted by call count. No vow checks are emitted in profile mode.
 
 ## Runtime Error JSON (stderr, debug mode only)
 

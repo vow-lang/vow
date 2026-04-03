@@ -7,6 +7,7 @@ use vow_ir::Module;
 pub enum BuildMode {
     Debug,
     Release,
+    Profile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
