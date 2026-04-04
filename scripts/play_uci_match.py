@@ -145,8 +145,14 @@ def position_command(moves: list[str]) -> str:
 # ---------------------------------------------------------------------------
 
 def fen_for_moves(engine: Engine, moves: list[str], timeout: float = 5.0) -> str:
+    """Extract the FEN for a position using the Stockfish ``d`` command.
+
+    The ``d`` (display) command is a Stockfish extension -- it is **not** part
+    of the UCI standard.  The ``--validator`` engine must therefore be Stockfish
+    or another engine that implements ``d``."""
     engine.send(position_command(moves))
     engine.send("d")
+    fen: str | None = None
     while True:
         text = engine.read_line_timeout(timeout)
         if text is None:
@@ -155,7 +161,13 @@ def fen_for_moves(engine: Engine, moves: list[str], timeout: float = 5.0) -> str
                 f"(does this engine support the Stockfish-specific 'd' command?)"
             )
         if text.startswith("Fen: "):
-            return text[5:]
+            fen = text[5:]
+            break
+    # Drain remaining ``d`` output via the standard UCI sync barrier.
+    engine.send("isready")
+    engine.read_until("readyok")
+    assert fen is not None
+    return fen
 
 
 def eval_position(engine: Engine, moves: list[str], movetime: int = 200) -> float:
@@ -174,6 +186,9 @@ def eval_position(engine: Engine, moves: list[str], movetime: int = 200) -> floa
                 mate_in = int(m.group(3))
                 cp = 100.0 if mate_in > 0 else -100.0
             break
+    # UCI scores are relative to the side to move; negate for Black's turn.
+    if len(moves) % 2 == 1:
+        cp = -cp
     return cp
 
 
@@ -252,9 +267,18 @@ def play_game(
         move, _ = engine.read_bestmove()
 
         if move in {"(none)", "0000"}:
-            # No legal move — the side to move lost (checkmate) or it's stalemate.
-            # Heuristic: treat as loss for the side with no move.
-            outcome = "0-1" if ply % 2 == 0 else "1-0"
+            # No legal move: checkmate (loss) or stalemate (draw).
+            # When a validator is available, use its eval to distinguish:
+            # a large score means likely checkmate; near-zero means stalemate.
+            if validator is not None:
+                ev = eval_position(validator, moves)
+                if abs(ev) < 2.0:
+                    outcome = "1/2-1/2"
+                else:
+                    outcome = "0-1" if ply % 2 == 0 else "1-0"
+            else:
+                # Without a validator we cannot distinguish; default to loss.
+                outcome = "0-1" if ply % 2 == 0 else "1-0"
             break
         if MOVE_RE.match(move) is None:
             raise RuntimeError(
@@ -399,7 +423,7 @@ def main() -> int:
     parser.add_argument("--black", required=True, help="Black engine command")
     parser.add_argument(
         "--validator",
-        help="Optional validator engine command (must support the Stockfish-specific 'd' command; confirms moves change position, evaluates unfinished games)",
+        help="Optional Stockfish-compatible validator (must support the 'd' command; confirms moves change position, evaluates unfinished games)",
     )
     parser.add_argument("--white-go", default="go movetime 100",
                         help="UCI go command for White (default: go movetime 100)")
