@@ -54,6 +54,20 @@ vow contracts [OPTIONS] <source.vow>
 | `--no-cache`      | (off)       | Disable verification result caching        |
 | `--unwind <N>`    | `10`        | ESBMC loop unwind bound                   |
 
+### `vow skill`
+
+Generate or install the Claude Code skill document for the current compiler version. The skill is embedded in the compiler binary, ensuring the documentation always matches the installed toolchain.
+
+```
+vow skill              # print skill document to stdout (default: print)
+vow skill print        # same as above
+vow skill install      # install to .claude/commands/vow-toolchain.md
+```
+
+`print` writes the complete skill markdown (with YAML frontmatter) to stdout. Pipe to a file or use `install` to place it directly.
+
+`install` creates `.claude/commands/` in the current directory if needed and writes the skill document there. Claude Code discovers it automatically.
+
 ### `vow test`
 
 Discover, compile, run, and report on Vow test files. Tests are normal `.vow` programs with `main() -> i32` — no test-specific syntax.

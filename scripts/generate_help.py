@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate --help JSON and human-readable output from skill docs.
 
-Reads docs/skill/grammar.md and docs/skill/cli.md (the canonical specs),
+Reads docs/spec/grammar.md and docs/spec/cli.md (the canonical specs),
 builds the help JSON structure, and writes it into:
   - vow/src/main.rs  (skill_json raw string literal, skill_human string literal)
   - compiler/main.vow (skill_json push_str calls, skill_human push_str calls)
@@ -19,9 +19,14 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-GRAMMAR = REPO / "docs" / "skill" / "grammar.md"
-CLI = REPO / "docs" / "skill" / "cli.md"
-CONTRACTS = REPO / "docs" / "skill" / "contracts.md"
+SPEC_DIR = REPO / "docs" / "spec"
+GRAMMAR = SPEC_DIR / "grammar.md"
+CLI = SPEC_DIR / "cli.md"
+CONTRACTS = SPEC_DIR / "contracts.md"
+INDEX = SPEC_DIR / "index.md"
+ERRORS = SPEC_DIR / "errors.md"
+EXAMPLES = SPEC_DIR / "examples.md"
+SCHEMAS_DIR = SPEC_DIR / "schemas"
 MAIN_RS = REPO / "vow" / "src" / "main.rs"
 MAIN_VOW = REPO / "compiler" / "main.vow"
 
@@ -202,6 +207,7 @@ def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
             "test": "Run tests: discover, compile, execute test_*.vow files with JSON results",
             "decl": "Emit declaration file (.vow.d) with type signatures only",
             "contracts": "List all contracts with optional verification status",
+            "skill": "Generate or install the Claude Code skill document for this compiler version",
         },
         "legacy_usage": "vow [OPTIONS] <source.vow> (equivalent to vow build)",
         "build_options": build_options,
@@ -308,6 +314,7 @@ def build_help_human(data: dict) -> str:
     lines.append("  vow test [OPTIONS] [<path>]          Run tests (test_*.vow / *_test.vow)")
     lines.append("  vow contracts [OPTIONS] <source.vow> List all contracts")
     lines.append("  vow decl [OPTIONS] <source.vow>    Emit declaration file (.vow.d)")
+    lines.append("  vow skill [print|install]           Generate or install Claude Code skill")
     lines.append("  vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)")
     lines.append("")
 
@@ -494,6 +501,92 @@ def inject_vow(main_vow: Path, json_str: str, human_str: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Build full skill markdown from spec files
+# ---------------------------------------------------------------------------
+
+SKILL_FRONTMATTER = """\
+---
+name: vow-toolchain
+description: >-
+  Write, compile, debug, and verify Vow programs (.vow files). Covers the
+  CEGIS workflow (counterexample-guided inductive synthesis), contract
+  authoring (requires, ensures, invariant), fixing VerifyFailed
+  counterexamples, resolving CompileFailed diagnostics, loop invariants,
+  the Vow effect system, and running vow build / vow verify. Use when the
+  user says "write a Vow program", "fix this counterexample", "add
+  contracts", "why did verification fail", "ESBMC", or "vow build".
+globs: "**/*.vow"
+---"""
+
+
+def build_skill_markdown() -> str:
+    """Assemble the full skill document from spec files.
+
+    Produces a single self-contained markdown file with YAML frontmatter,
+    suitable for installation as a Claude Code skill/command.
+    """
+    parts: list[str] = [SKILL_FRONTMATTER, ""]
+
+    # Index/overview (without the reference table which has relative links)
+    index_text = INDEX.read_text()
+    # Strip the reference table at the end (starts with "## Reference Files")
+    ref_idx = index_text.find("## Reference Files")
+    if ref_idx != -1:
+        index_text = index_text[:ref_idx].rstrip()
+    parts.append(index_text)
+    parts.append("")
+
+    # Append each spec file
+    for spec_file in [GRAMMAR, CLI, CONTRACTS, ERRORS, EXAMPLES]:
+        parts.append("---")
+        parts.append("")
+        parts.append(spec_file.read_text().rstrip())
+        parts.append("")
+
+    # Inline JSON schemas
+    schema_files = sorted(SCHEMAS_DIR.glob("*.json"))
+    if schema_files:
+        parts.append("---")
+        parts.append("")
+        parts.append("# JSON Schemas")
+        parts.append("")
+        for sf in schema_files:
+            stem = sf.stem.replace(".schema", "")
+            parts.append(f"## {stem}")
+            parts.append("")
+            parts.append("```json")
+            parts.append(sf.read_text().rstrip())
+            parts.append("```")
+            parts.append("")
+
+    return "\n".join(parts)
+
+
+def inject_skill_rust(content: str, skill_md: str) -> str:
+    """Inject skill_full_markdown() into Rust main.rs."""
+    fn_marker = "fn skill_full_markdown() -> String {"
+    idx = content.find(fn_marker)
+    if idx == -1:
+        raise ValueError("Cannot find skill_full_markdown() in main.rs")
+    end_marker = ".to_string()\n}"
+    end_idx = content.index(end_marker, idx) + len(end_marker)
+    replacement = f'{fn_marker}\n    r#"{skill_md}"#\n    .to_string()\n}}'
+    return content[:idx] + replacement + content[end_idx:]
+
+
+def inject_skill_vow(content: str, skill_md: str) -> str:
+    """Inject skill_full() into self-hosted main.vow."""
+    start_marker = "fn skill_full() -> String {\n    let r: String = String::from("
+    start_idx = content.index(start_marker)
+    end_marker = "    r\n}\n\nfn run_skill"
+    end_idx = content.index(end_marker, start_idx) + len("    r\n}")
+
+    first, rest = _vow_pushstr_body(skill_md)
+    fn_body = f'fn skill_full() -> String {{\n    let r: String = String::from("{first}\\n");\n{rest}\n    r\n}}'
+    return content[:start_idx] + fn_body + content[end_idx:]
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -511,6 +604,8 @@ def main() -> None:
     # Validate the generated JSON is parseable
     json.loads(json_str)
 
+    skill_md = build_skill_markdown()
+
     if check_only:
         print("Generated JSON is valid.")
         print(f"  types: {len(data['language']['types'])}")
@@ -518,15 +613,18 @@ def main() -> None:
         print(f"  builtins: {len(data['language']['builtins'])}")
         print(f"  build_options: {len(data['build_options'])}")
         print(f"  verify_options: {len(data['verify_options'])}")
+        print(f"  skill_markdown: {len(skill_md)} bytes")
         return
 
     # Inject into Rust
     new_rs = inject_rust(MAIN_RS, json_str, human_str)
+    new_rs = inject_skill_rust(new_rs, skill_md)
     MAIN_RS.write_text(new_rs)
     print(f"Updated {MAIN_RS}")
 
     # Inject into self-hosted
     new_vow = inject_vow(MAIN_VOW, json_str, human_str)
+    new_vow = inject_skill_vow(new_vow, skill_md)
     MAIN_VOW.write_text(new_vow)
     print(f"Updated {MAIN_VOW}")
 

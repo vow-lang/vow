@@ -748,7 +748,7 @@ The features documented:
 - **Suffixed integer literals** (`42u64`, `100i32`) — all unsuffixed integer literals are `i64`; suffixed literals coerce to the specified type.
 - **Type aliases** (`type Foo = i64;`) — parsed and resolved in the type checker. Not user-defined generics: aliases are concrete type synonyms.
 - **Verification caching** — content-hash-based ESBMC result cache. Avoids re-verifying unchanged functions (23s → 0.001s on cache hit).
-- **76 runtime builtins** — filesystem, string, vec, hashmap, hex encoding, time. See `docs/skill/grammar.md` for the full list.
+- **76 runtime builtins** — filesystem, string, vec, hashmap, hex encoding, time. See `docs/spec/grammar.md` for the full list.
 - **String comparison deallocation** — temporary strings created for `==`/`!=` comparisons are freed after use to prevent memory leaks.
 
 ---

@@ -71,20 +71,26 @@ This builds `./target/release/vow` (stage 0), then uses it to compile and verify
 
 ## Canonical Source of Truth
 
-`docs/skill/` contains the authoritative specification for the Vow language and CLI:
+`docs/spec/` contains the authoritative specification for the Vow language and CLI:
 
-- **`SKILL.md`** — Claude Code skill entry point (frontmatter + overview + reference table)
+- **`index.md`** — overview and reference table
 - **`grammar.md`** — complete grammar: types, operators, control flow, structs, enums, match, modules, methods, effects, builtins
 - **`cli.md`** — CLI commands, flags, output JSON schema, exit codes, trace/error formats
 - **`contracts.md`** — vow blocks, requires/ensures/invariant, blame semantics
 - **`errors.md`** — diagnostic error codes and their meanings
 - **`examples.md`** — worked examples
 
-**Any change to Vow syntax, semantics, types, builtins, operators, effects, or CLI flags MUST include a corresponding update to the relevant `docs/skill/*.md` file.** The skill files are the spec — compiler code implements them, not the other way around. If you add a type, update `grammar.md`. If you change a builtin signature, update `grammar.md`. If you add a CLI flag, update `cli.md`. If you change contract semantics, update `contracts.md`.
+**Any change to Vow syntax, semantics, types, builtins, operators, effects, or CLI flags MUST include a corresponding update to the relevant `docs/spec/*.md` file.** The spec files are the spec — compiler code implements them, not the other way around. If you add a type, update `grammar.md`. If you change a builtin signature, update `grammar.md`. If you add a CLI flag, update `cli.md`. If you change contract semantics, update `contracts.md`.
 
-After updating a skill file, regenerate `--help` and rebuild:
+The Claude Code skill document is embedded in the compiler and generated on demand:
 ```bash
-uv run python scripts/generate_help.py          # regenerate --help in both compilers
+build/vowc skill print                            # print skill to stdout
+build/vowc skill install                          # install to .claude/commands/vow-toolchain.md
+```
+
+After updating a spec file, regenerate `--help` / embedded skill and rebuild:
+```bash
+uv run python scripts/generate_help.py          # regenerate --help and skill in both compilers
 cargo build --release -p vow                     # rebuild Rust compiler
 scripts/bootstrap.sh --skip-cargo                 # rebuild build/vowc
 ```

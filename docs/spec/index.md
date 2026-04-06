@@ -1,17 +1,4 @@
----
-name: vow-toolchain
-description: >-
-  Write, compile, debug, and verify Vow programs (.vow files). Covers the
-  CEGIS workflow (counterexample-guided inductive synthesis), contract
-  authoring (requires, ensures, invariant), fixing VerifyFailed
-  counterexamples, resolving CompileFailed diagnostics, loop invariants,
-  the Vow effect system, and running vow build / vow verify. Use when the
-  user says "write a Vow program", "fix this counterexample", "add
-  contracts", "why did verification fail", "ESBMC", or "vow build".
-globs: "**/*.vow"
----
-
-# Vow Language Skill Document
+# Vow Language Reference
 
 Vow is a systems programming language with built-in contracts (preconditions, postconditions, loop invariants) that are statically verified by ESBMC bounded model checking. Programs compile to native executables via Cranelift. The compiler emits structured JSON for machine consumption.
 
