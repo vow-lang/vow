@@ -1,0 +1,621 @@
+module Bignum
+
+// Arbitrary-precision integer arithmetic.
+//
+// Representation: sign-magnitude with base 10^9 limbs.
+// - digits: Vec<i64>, least-significant limb first, at least one element.
+// - sign: 1 for non-negative, -1 for negative.
+// - Zero is represented as sign=1, digits=[0].
+// - Non-zero values have no leading zero limbs (digits[len-1] != 0).
+
+struct BigNum {
+    digits: Vec<i64>,
+    sign: i64,
+}
+
+fn bignum_base() -> i64 {
+    1000000000
+}
+
+fn bignum_base_digits() -> i64 {
+    9
+}
+
+fn bignum_zero() -> BigNum {
+    let d: Vec<i64> = Vec::new();
+    d.push(0);
+    BigNum { digits: d, sign: 1 }
+}
+
+fn bignum_from_i64(val: i64) -> BigNum {
+    if val == 0 {
+        bignum_zero()
+    } else {
+        let s: i64 = if val < 0 { -1 } else { 1 };
+        let mut v: i64 = val;
+        if v < 0 {
+            v = 0 - v;
+        }
+        if v < 0 {
+            // i64::MIN wraps on negation; hard-code its base-10^9 limbs.
+            let d: Vec<i64> = Vec::new();
+            d.push(854775808);
+            d.push(223372036);
+            d.push(9);
+            BigNum { digits: d, sign: -1 }
+        } else {
+            let d: Vec<i64> = Vec::new();
+            let base: i64 = bignum_base();
+            while v > 0 {
+                d.push(v - (v / base) * base);
+                v = v / base;
+            }
+            BigNum { digits: d, sign: s }
+        }
+    }
+}
+
+fn bignum_from_string(s: String) -> BigNum {
+    let slen: i64 = s.len();
+    if slen == 0 {
+        bignum_zero()
+    } else {
+        let mut start: i64 = 0;
+        let mut sign: i64 = 1;
+        let first_byte: i64 = s.byte_at(0);
+        if first_byte == 45 {
+            sign = -1;
+            start = 1;
+        } else {
+            if first_byte == 43 {
+                start = 1;
+            }
+        }
+        let mut nz: i64 = start;
+        while nz < slen {
+            if s.byte_at(nz) != 48 {
+                break;
+            }
+            nz = nz + 1;
+        }
+        if nz == slen {
+            bignum_zero()
+        } else {
+            let d: Vec<i64> = Vec::new();
+            let base_digits: i64 = bignum_base_digits();
+            let mut pos: i64 = slen;
+            while pos > nz {
+                let chunk_start: i64 = pos - base_digits;
+                let actual_start: i64 = if chunk_start > nz { chunk_start } else { nz };
+                let mut limb: i64 = 0;
+                let mut k: i64 = actual_start;
+                while k < pos {
+                    limb = limb * 10 + (s.byte_at(k) - 48);
+                    k = k + 1;
+                }
+                d.push(limb);
+                pos = actual_start;
+            }
+            bignum_strip_zeros(BigNum { digits: d, sign: sign })
+        }
+    }
+}
+
+fn bignum_to_string(b: BigNum) -> String {
+    let d: Vec<i64> = b.digits;
+    let dlen: i64 = d.len();
+    if dlen == 1 {
+        if d[0] == 0 {
+            String::from("0")
+        } else {
+            let s: String = String::new();
+            if b.sign < 0 {
+                s.push_byte(45);
+            }
+            s.push_str(i64_to_decimal(d[0]));
+            s
+        }
+    } else {
+        let s: String = String::new();
+        if b.sign < 0 {
+            s.push_byte(45);
+        }
+        let top: i64 = d[dlen - 1];
+        s.push_str(i64_to_decimal(top));
+        let mut i: i64 = dlen - 2;
+        while i >= 0 {
+            s.push_str(i64_to_decimal_padded(d[i], bignum_base_digits()));
+            i = i - 1;
+        }
+        s
+    }
+}
+
+fn bignum_is_zero(b: BigNum) -> bool {
+    let d: Vec<i64> = b.digits;
+    d.len() == 1 && d[0] == 0
+}
+
+fn bignum_is_negative(b: BigNum) -> bool {
+    b.sign < 0 && !bignum_is_zero(b)
+}
+
+fn bignum_is_positive(b: BigNum) -> bool {
+    b.sign > 0 && !bignum_is_zero(b)
+}
+
+fn bignum_negate(b: BigNum) -> BigNum {
+    if bignum_is_zero(b) {
+        b
+    } else {
+        BigNum { digits: b.digits, sign: 0 - b.sign }
+    }
+}
+
+fn bignum_abs(b: BigNum) -> BigNum {
+    BigNum { digits: b.digits, sign: 1 }
+}
+
+// Returns -1, 0, or 1.
+fn bignum_cmp(a: BigNum, b: BigNum) -> i64 {
+    let az: bool = bignum_is_zero(a);
+    let bz: bool = bignum_is_zero(b);
+    if az && bz {
+        0
+    } else {
+        if a.sign > 0 && b.sign < 0 {
+            1
+        } else {
+            if a.sign < 0 && b.sign > 0 {
+                -1
+            } else {
+                if a.sign > 0 {
+                    bignum_cmp_abs(a, b)
+                } else {
+                    bignum_cmp_abs(b, a)
+                }
+            }
+        }
+    }
+}
+
+fn bignum_cmp_abs(a: BigNum, b: BigNum) -> i64 {
+    let ad: Vec<i64> = a.digits;
+    let bd: Vec<i64> = b.digits;
+    let alen: i64 = ad.len();
+    let blen: i64 = bd.len();
+    if alen > blen {
+        1
+    } else {
+        if alen < blen {
+            -1
+        } else {
+            let mut i: i64 = alen - 1;
+            while i >= 0 {
+                if ad[i] > bd[i] {
+                    return 1;
+                }
+                if ad[i] < bd[i] {
+                    return -1;
+                }
+                i = i - 1;
+            }
+            0
+        }
+    }
+}
+
+fn bignum_eq(a: BigNum, b: BigNum) -> bool {
+    bignum_cmp(a, b) == 0
+}
+
+fn bignum_lt(a: BigNum, b: BigNum) -> bool {
+    bignum_cmp(a, b) < 0
+}
+
+fn bignum_gt(a: BigNum, b: BigNum) -> bool {
+    bignum_cmp(a, b) > 0
+}
+
+fn bignum_le(a: BigNum, b: BigNum) -> bool {
+    bignum_cmp(a, b) <= 0
+}
+
+fn bignum_ge(a: BigNum, b: BigNum) -> bool {
+    bignum_cmp(a, b) >= 0
+}
+
+fn bignum_add(a: BigNum, b: BigNum) -> BigNum {
+    if a.sign == b.sign {
+        let r: BigNum = bignum_add_abs(a, b);
+        BigNum { digits: r.digits, sign: a.sign }
+    } else {
+        let c: i64 = bignum_cmp_abs(a, b);
+        if c == 0 {
+            bignum_zero()
+        } else {
+            if c > 0 {
+                let r: BigNum = bignum_sub_abs(a, b);
+                BigNum { digits: r.digits, sign: a.sign }
+            } else {
+                let r: BigNum = bignum_sub_abs(b, a);
+                BigNum { digits: r.digits, sign: b.sign }
+            }
+        }
+    }
+}
+
+fn bignum_add_abs(a: BigNum, b: BigNum) -> BigNum {
+    let ad: Vec<i64> = a.digits;
+    let bd: Vec<i64> = b.digits;
+    let alen: i64 = ad.len();
+    let blen: i64 = bd.len();
+    let maxlen: i64 = if alen > blen { alen } else { blen };
+    let base: i64 = bignum_base();
+    let result: Vec<i64> = Vec::new();
+    let mut carry: i64 = 0;
+    let mut i: i64 = 0;
+    while i < maxlen {
+        let av: i64 = if i < alen { ad[i] } else { 0 };
+        let bv: i64 = if i < blen { bd[i] } else { 0 };
+        let sum: i64 = av + bv + carry;
+        result.push(sum - (sum / base) * base);
+        carry = sum / base;
+        i = i + 1;
+    }
+    if carry > 0 {
+        result.push(carry);
+    }
+    BigNum { digits: result, sign: 1 }
+}
+
+fn bignum_sub(a: BigNum, b: BigNum) -> BigNum {
+    bignum_add(a, bignum_negate(b))
+}
+
+fn bignum_sub_abs(a: BigNum, b: BigNum) -> BigNum vow {
+    requires: bignum_cmp_abs(a, b) >= 0
+} {
+    let ad: Vec<i64> = a.digits;
+    let bd: Vec<i64> = b.digits;
+    let alen: i64 = ad.len();
+    let blen: i64 = bd.len();
+    let base: i64 = bignum_base();
+    let result: Vec<i64> = Vec::new();
+    let mut borrow: i64 = 0;
+    let mut i: i64 = 0;
+    while i < alen {
+        let av: i64 = ad[i];
+        let bv: i64 = if i < blen { bd[i] } else { 0 };
+        let diff: i64 = av - bv - borrow;
+        if diff < 0 {
+            result.push(diff + base);
+            borrow = 1;
+        } else {
+            result.push(diff);
+            borrow = 0;
+        }
+        i = i + 1;
+    }
+    bignum_strip_zeros(BigNum { digits: result, sign: 1 })
+}
+
+fn bignum_mul(a: BigNum, b: BigNum) -> BigNum {
+    if bignum_is_zero(a) || bignum_is_zero(b) {
+        bignum_zero()
+    } else {
+        let ad: Vec<i64> = a.digits;
+        let bd: Vec<i64> = b.digits;
+        let alen: i64 = ad.len();
+        let blen: i64 = bd.len();
+        let rlen: i64 = alen + blen;
+        let base: i64 = bignum_base();
+        let result: Vec<i64> = Vec::new();
+        let mut k: i64 = 0;
+        while k < rlen {
+            result.push(0);
+            k = k + 1;
+        }
+        let mut i: i64 = 0;
+        while i < alen {
+            let mut carry: i64 = 0;
+            let mut j: i64 = 0;
+            while j < blen {
+                let idx: i64 = i + j;
+                let cur: i64 = result[idx];
+                let prod: i64 = ad[i] * bd[j] + cur + carry;
+                result[idx] = prod - (prod / base) * base;
+                carry = prod / base;
+                j = j + 1;
+            }
+            if carry > 0 {
+                let cidx: i64 = i + blen;
+                let cur2: i64 = result[cidx];
+                result[cidx] = cur2 + carry;
+            }
+            i = i + 1;
+        }
+        let sign: i64 = a.sign * b.sign;
+        bignum_strip_zeros(BigNum { digits: result, sign: sign })
+    }
+}
+
+fn bignum_mul_single(a: BigNum, v: i64) -> BigNum {
+    if v == 0 || bignum_is_zero(a) {
+        bignum_zero()
+    } else {
+        let ad: Vec<i64> = a.digits;
+        let alen: i64 = ad.len();
+        let base: i64 = bignum_base();
+        let result: Vec<i64> = Vec::new();
+        let mut carry: i64 = 0;
+        let mut i: i64 = 0;
+        while i < alen {
+            let prod: i64 = ad[i] * v + carry;
+            result.push(prod - (prod / base) * base);
+            carry = prod / base;
+            i = i + 1;
+        }
+        if carry > 0 {
+            result.push(carry);
+        }
+        BigNum { digits: result, sign: a.sign }
+    }
+}
+
+struct DivResult {
+    quotient: BigNum,
+    remainder: BigNum,
+}
+
+// Integer division with remainder. Truncates toward zero.
+fn bignum_divmod(a: BigNum, b: BigNum) -> DivResult vow {
+    requires: !bignum_is_zero(b)
+} {
+    if bignum_is_zero(a) {
+        DivResult { quotient: bignum_zero(), remainder: bignum_zero() }
+    } else {
+        let cmp: i64 = bignum_cmp_abs(a, b);
+        if cmp < 0 {
+            DivResult { quotient: bignum_zero(), remainder: a }
+        } else {
+            if cmp == 0 {
+                let sign: i64 = a.sign * b.sign;
+                DivResult { quotient: BigNum { digits: bignum_one_digits(), sign: sign }, remainder: bignum_zero() }
+            } else {
+                let dr: DivResult = bignum_divmod_abs(a, b);
+                let qsign: i64 = a.sign * b.sign;
+                let q: BigNum = dr.quotient;
+                let r: BigNum = dr.remainder;
+                DivResult {
+                    quotient: if bignum_is_zero(q) { bignum_zero() } else { BigNum { digits: q.digits, sign: qsign } },
+                    remainder: if bignum_is_zero(r) { bignum_zero() } else { BigNum { digits: r.digits, sign: a.sign } },
+                }
+            }
+        }
+    }
+}
+
+fn bignum_div(a: BigNum, b: BigNum) -> BigNum vow {
+    requires: !bignum_is_zero(b)
+} {
+    let dr: DivResult = bignum_divmod(a, b);
+    dr.quotient
+}
+
+fn bignum_mod(a: BigNum, b: BigNum) -> BigNum vow {
+    requires: !bignum_is_zero(b)
+} {
+    let dr: DivResult = bignum_divmod(a, b);
+    dr.remainder
+}
+
+fn bignum_divmod_abs(a: BigNum, b: BigNum) -> DivResult {
+    let bd: Vec<i64> = b.digits;
+    let blen: i64 = bd.len();
+    if blen == 1 {
+        bignum_divmod_single(a, bd[0])
+    } else {
+        bignum_divmod_long(a, b)
+    }
+}
+
+fn bignum_divmod_single(a: BigNum, d: i64) -> DivResult {
+    let ad: Vec<i64> = a.digits;
+    let alen: i64 = ad.len();
+    let base: i64 = bignum_base();
+    let q: Vec<i64> = Vec::new();
+    let mut k: i64 = 0;
+    while k < alen {
+        q.push(0);
+        k = k + 1;
+    }
+    let mut rem: i64 = 0;
+    let mut i: i64 = alen - 1;
+    while i >= 0 {
+        let cur: i64 = rem * base + ad[i];
+        q[i] = cur / d;
+        rem = cur - (cur / d) * d;
+        i = i - 1;
+    }
+    let quotient: BigNum = bignum_strip_zeros(BigNum { digits: q, sign: 1 });
+    let remainder: BigNum = bignum_from_i64(rem);
+    DivResult { quotient: quotient, remainder: remainder }
+}
+
+// Long division for multi-limb divisor using binary search for each quotient digit.
+fn bignum_divmod_long(a: BigNum, b: BigNum) -> DivResult {
+    let ad: Vec<i64> = a.digits;
+    let bd: Vec<i64> = b.digits;
+    let alen: i64 = ad.len();
+    let blen: i64 = bd.len();
+    let base: i64 = bignum_base();
+
+    let qlen: i64 = alen - blen + 1;
+    let q: Vec<i64> = Vec::new();
+    let mut k: i64 = 0;
+    while k < qlen {
+        q.push(0);
+        k = k + 1;
+    }
+
+    let mut remainder: BigNum = bignum_abs(a);
+    let divisor: BigNum = bignum_abs(b);
+
+    let mut i: i64 = qlen - 1;
+    while i >= 0 {
+        let shifted_divisor: BigNum = bignum_shift_limbs(divisor, i);
+        let mut lo: i64 = 0;
+        let mut hi: i64 = base - 1;
+        while lo < hi {
+            let mid: i64 = (lo + hi + 1) / 2;
+            let trial: BigNum = bignum_mul_single(shifted_divisor, mid);
+            if bignum_cmp_abs(trial, remainder) <= 0 {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        q[i] = lo;
+        if lo > 0 {
+            let sub_val: BigNum = bignum_mul_single(shifted_divisor, lo);
+            remainder = bignum_sub_abs(remainder, sub_val);
+        }
+        i = i - 1;
+    }
+    DivResult {
+        quotient: bignum_strip_zeros(BigNum { digits: q, sign: 1 }),
+        remainder: bignum_strip_zeros(remainder),
+    }
+}
+
+fn bignum_pow(base_val: BigNum, exp: i64) -> BigNum vow {
+    requires: exp >= 0
+} {
+    if exp == 0 {
+        bignum_from_i64(1)
+    } else {
+        let mut result: BigNum = bignum_from_i64(1);
+        let mut b: BigNum = base_val;
+        let mut e: i64 = exp;
+        while e > 0 {
+            if e - (e / 2) * 2 == 1 {
+                result = bignum_mul(result, b);
+            }
+            b = bignum_mul(b, b);
+            e = e / 2;
+        }
+        result
+    }
+}
+
+fn bignum_gcd(a: BigNum, b: BigNum) -> BigNum {
+    let mut x: BigNum = bignum_abs(a);
+    let mut y: BigNum = bignum_abs(b);
+    while !bignum_is_zero(y) {
+        let t: BigNum = bignum_mod(x, y);
+        x = y;
+        y = t;
+    }
+    x
+}
+
+fn bignum_factorial(n: i64) -> BigNum vow {
+    requires: n >= 0
+} {
+    let mut result: BigNum = bignum_from_i64(1);
+    let mut i: i64 = 2;
+    while i <= n {
+        result = bignum_mul(result, bignum_from_i64(i));
+        i = i + 1;
+    }
+    result
+}
+
+fn bignum_one_digits() -> Vec<i64> {
+    let d: Vec<i64> = Vec::new();
+    d.push(1);
+    d
+}
+
+// Remove leading zero limbs, preserving at least one digit.
+fn bignum_strip_zeros(b: BigNum) -> BigNum {
+    let d: Vec<i64> = b.digits;
+    let mut dlen: i64 = d.len();
+    while dlen > 1 && d[dlen - 1] == 0 {
+        d.pop();
+        dlen = dlen - 1;
+    }
+    let s: i64 = if dlen == 1 && d[0] == 0 { 1 } else { b.sign };
+    BigNum { digits: d, sign: s }
+}
+
+// Shift left by n limbs (multiply by base^n).
+fn bignum_shift_limbs(b: BigNum, n: i64) -> BigNum {
+    if n == 0 {
+        b
+    } else {
+        if bignum_is_zero(b) {
+            b
+        } else {
+            let d: Vec<i64> = Vec::new();
+            let mut k: i64 = 0;
+            while k < n {
+                d.push(0);
+                k = k + 1;
+            }
+            let bd: Vec<i64> = b.digits;
+            let blen: i64 = bd.len();
+            let mut j: i64 = 0;
+            while j < blen {
+                d.push(bd[j]);
+                j = j + 1;
+            }
+            BigNum { digits: d, sign: b.sign }
+        }
+    }
+}
+
+fn i64_to_decimal(v: i64) -> String {
+    if v == 0 {
+        String::from("0")
+    } else {
+        let buf: Vec<i64> = Vec::new();
+        let mut n: i64 = v;
+        while n > 0 {
+            buf.push(48 + n - (n / 10) * 10);
+            n = n / 10;
+        }
+        let s: String = String::new();
+        let blen: i64 = buf.len();
+        let mut i: i64 = blen - 1;
+        while i >= 0 {
+            s.push_byte(buf[i]);
+            i = i - 1;
+        }
+        s
+    }
+}
+
+fn i64_to_decimal_padded(v: i64, w: i64) -> String {
+    let raw: String = i64_to_decimal(v);
+    let rlen: i64 = raw.len();
+    if rlen >= w {
+        raw
+    } else {
+        let s: String = String::new();
+        let pad: i64 = w - rlen;
+        let mut k: i64 = 0;
+        while k < pad {
+            s.push_byte(48);
+            k = k + 1;
+        }
+        s.push_str(raw);
+        s
+    }
+}
+
+fn bignum_num_digits(b: BigNum) -> i64 {
+    let d: Vec<i64> = b.digits;
+    d.len()
+}

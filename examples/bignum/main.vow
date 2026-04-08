@@ -1,0 +1,260 @@
+module Main
+use bignum
+
+fn assert_eq_str(label: String, got: String, expected: String) [io] {
+    if got.eq(expected) {
+        print_str(String::from("PASS "));
+        print_str(label);
+        print_str(String::from("\n"));
+    } else {
+        print_str(String::from("FAIL "));
+        print_str(label);
+        print_str(String::from(" got="));
+        print_str(got);
+        print_str(String::from(" expected="));
+        print_str(expected);
+        print_str(String::from("\n"));
+    }
+}
+
+fn assert_eq_i64(label: String, got: i64, expected: i64) [io] {
+    if got == expected {
+        print_str(String::from("PASS "));
+        print_str(label);
+        print_str(String::from("\n"));
+    } else {
+        print_str(String::from("FAIL "));
+        print_str(label);
+        print_str(String::from(" got="));
+        print_i64(got);
+        print_str(String::from(" expected="));
+        print_i64(expected);
+        print_str(String::from("\n"));
+    }
+}
+
+fn assert_true(label: String, val: bool) [io] {
+    if val {
+        print_str(String::from("PASS "));
+        print_str(label);
+        print_str(String::from("\n"));
+    } else {
+        print_str(String::from("FAIL "));
+        print_str(label);
+        print_str(String::from("\n"));
+    }
+}
+
+fn bn_str(b: BigNum) -> String {
+    bignum_to_string(b)
+}
+
+fn main() -> i32 [io] {
+    test_construction();
+    test_comparison();
+    test_addition();
+    test_subtraction();
+    test_multiplication();
+    test_division();
+    test_pow();
+    test_gcd();
+    test_factorial();
+    test_large_numbers();
+    0
+}
+
+fn test_construction() [io] {
+    assert_eq_str(String::from("zero"), bn_str(bignum_zero()), String::from("0"));
+    assert_eq_str(String::from("from_i64(0)"), bn_str(bignum_from_i64(0)), String::from("0"));
+    assert_eq_str(String::from("from_i64(1)"), bn_str(bignum_from_i64(1)), String::from("1"));
+    assert_eq_str(String::from("from_i64(-1)"), bn_str(bignum_from_i64(-1)), String::from("-1"));
+    assert_eq_str(String::from("from_i64(42)"), bn_str(bignum_from_i64(42)), String::from("42"));
+    assert_eq_str(String::from("from_i64(-999)"), bn_str(bignum_from_i64(-999)), String::from("-999"));
+    assert_eq_str(String::from("from_i64(1000000000)"), bn_str(bignum_from_i64(1000000000)), String::from("1000000000"));
+    assert_eq_str(String::from("from_i64(1234567890)"), bn_str(bignum_from_i64(1234567890)), String::from("1234567890"));
+    assert_eq_str(String::from("from_i64(9999999999)"), bn_str(bignum_from_i64(9999999999)), String::from("9999999999"));
+
+    assert_eq_str(String::from("from_string(42)"), bn_str(bignum_from_string(String::from("42"))), String::from("42"));
+    assert_eq_str(String::from("from_string(-123)"), bn_str(bignum_from_string(String::from("-123"))), String::from("-123"));
+    assert_eq_str(String::from("from_string(0)"), bn_str(bignum_from_string(String::from("0"))), String::from("0"));
+    assert_eq_str(String::from("from_string(00042)"), bn_str(bignum_from_string(String::from("00042"))), String::from("42"));
+    assert_eq_str(
+        String::from("from_string(large)"),
+        bn_str(bignum_from_string(String::from("123456789012345678901234567890"))),
+        String::from("123456789012345678901234567890")
+    );
+}
+
+fn test_comparison() [io] {
+    let a: BigNum = bignum_from_i64(100);
+    let b: BigNum = bignum_from_i64(200);
+    let c: BigNum = bignum_from_i64(100);
+    let d: BigNum = bignum_from_i64(-50);
+
+    assert_true(String::from("100 == 100"), bignum_eq(a, c));
+    assert_true(String::from("100 < 200"), bignum_lt(a, b));
+    assert_true(String::from("200 > 100"), bignum_gt(b, a));
+    assert_true(String::from("100 <= 100"), bignum_le(a, c));
+    assert_true(String::from("100 >= 100"), bignum_ge(a, c));
+    assert_true(String::from("-50 < 100"), bignum_lt(d, a));
+    assert_true(String::from("100 > -50"), bignum_gt(a, d));
+    assert_eq_i64(String::from("cmp(100,200)"), bignum_cmp(a, b), -1);
+    assert_eq_i64(String::from("cmp(200,100)"), bignum_cmp(b, a), 1);
+    assert_eq_i64(String::from("cmp(100,100)"), bignum_cmp(a, c), 0);
+    assert_true(String::from("is_zero(0)"), bignum_is_zero(bignum_zero()));
+    assert_true(String::from("!is_zero(1)"), !bignum_is_zero(bignum_from_i64(1)));
+    assert_true(String::from("is_negative(-50)"), bignum_is_negative(d));
+    assert_true(String::from("is_positive(100)"), bignum_is_positive(a));
+}
+
+fn test_addition() [io] {
+    assert_eq_str(String::from("0+0"), bn_str(bignum_add(bignum_from_i64(0), bignum_from_i64(0))), String::from("0"));
+    assert_eq_str(String::from("1+2"), bn_str(bignum_add(bignum_from_i64(1), bignum_from_i64(2))), String::from("3"));
+    assert_eq_str(String::from("100+200"), bn_str(bignum_add(bignum_from_i64(100), bignum_from_i64(200))), String::from("300"));
+    assert_eq_str(String::from("-5+5"), bn_str(bignum_add(bignum_from_i64(-5), bignum_from_i64(5))), String::from("0"));
+    assert_eq_str(String::from("-3+-7"), bn_str(bignum_add(bignum_from_i64(-3), bignum_from_i64(-7))), String::from("-10"));
+    assert_eq_str(String::from("10+-3"), bn_str(bignum_add(bignum_from_i64(10), bignum_from_i64(-3))), String::from("7"));
+
+    assert_eq_str(
+        String::from("999999999+1"),
+        bn_str(bignum_add(bignum_from_i64(999999999), bignum_from_i64(1))),
+        String::from("1000000000")
+    );
+
+    let big_a: BigNum = bignum_from_string(String::from("999999999999999999"));
+    let big_b: BigNum = bignum_from_string(String::from("1"));
+    assert_eq_str(
+        String::from("18-digit carry"),
+        bn_str(bignum_add(big_a, big_b)),
+        String::from("1000000000000000000")
+    );
+}
+
+fn test_subtraction() [io] {
+    assert_eq_str(String::from("5-3"), bn_str(bignum_sub(bignum_from_i64(5), bignum_from_i64(3))), String::from("2"));
+    assert_eq_str(String::from("3-5"), bn_str(bignum_sub(bignum_from_i64(3), bignum_from_i64(5))), String::from("-2"));
+    assert_eq_str(String::from("0-0"), bn_str(bignum_sub(bignum_from_i64(0), bignum_from_i64(0))), String::from("0"));
+    assert_eq_str(String::from("100-100"), bn_str(bignum_sub(bignum_from_i64(100), bignum_from_i64(100))), String::from("0"));
+    assert_eq_str(String::from("-3-(-7)"), bn_str(bignum_sub(bignum_from_i64(-3), bignum_from_i64(-7))), String::from("4"));
+
+    assert_eq_str(
+        String::from("1000000000-1"),
+        bn_str(bignum_sub(bignum_from_i64(1000000000), bignum_from_i64(1))),
+        String::from("999999999")
+    );
+}
+
+fn test_multiplication() [io] {
+    assert_eq_str(String::from("0*5"), bn_str(bignum_mul(bignum_from_i64(0), bignum_from_i64(5))), String::from("0"));
+    assert_eq_str(String::from("1*1"), bn_str(bignum_mul(bignum_from_i64(1), bignum_from_i64(1))), String::from("1"));
+    assert_eq_str(String::from("6*7"), bn_str(bignum_mul(bignum_from_i64(6), bignum_from_i64(7))), String::from("42"));
+    assert_eq_str(String::from("(-3)*4"), bn_str(bignum_mul(bignum_from_i64(-3), bignum_from_i64(4))), String::from("-12"));
+    assert_eq_str(String::from("(-3)*(-4)"), bn_str(bignum_mul(bignum_from_i64(-3), bignum_from_i64(-4))), String::from("12"));
+
+    assert_eq_str(
+        String::from("1000000000*1000000000"),
+        bn_str(bignum_mul(bignum_from_i64(1000000000), bignum_from_i64(1000000000))),
+        String::from("1000000000000000000")
+    );
+
+    let x: BigNum = bignum_from_string(String::from("123456789"));
+    let y: BigNum = bignum_from_string(String::from("987654321"));
+    assert_eq_str(
+        String::from("123456789*987654321"),
+        bn_str(bignum_mul(x, y)),
+        String::from("121932631112635269")
+    );
+}
+
+fn test_division() [io] {
+    assert_eq_str(String::from("10/3"), bn_str(bignum_div(bignum_from_i64(10), bignum_from_i64(3))), String::from("3"));
+    assert_eq_str(String::from("10%3"), bn_str(bignum_mod(bignum_from_i64(10), bignum_from_i64(3))), String::from("1"));
+    assert_eq_str(String::from("42/6"), bn_str(bignum_div(bignum_from_i64(42), bignum_from_i64(6))), String::from("7"));
+    assert_eq_str(String::from("42%6"), bn_str(bignum_mod(bignum_from_i64(42), bignum_from_i64(6))), String::from("0"));
+    assert_eq_str(String::from("0/5"), bn_str(bignum_div(bignum_from_i64(0), bignum_from_i64(5))), String::from("0"));
+    assert_eq_str(String::from("(-10)/3"), bn_str(bignum_div(bignum_from_i64(-10), bignum_from_i64(3))), String::from("-3"));
+    assert_eq_str(String::from("(-10)%3"), bn_str(bignum_mod(bignum_from_i64(-10), bignum_from_i64(3))), String::from("-1"));
+    assert_eq_str(String::from("7/1"), bn_str(bignum_div(bignum_from_i64(7), bignum_from_i64(1))), String::from("7"));
+
+    let big: BigNum = bignum_from_string(String::from("1000000000000000000"));
+    let div: BigNum = bignum_from_string(String::from("1000000000"));
+    assert_eq_str(
+        String::from("10^18/10^9"),
+        bn_str(bignum_div(big, div)),
+        String::from("1000000000")
+    );
+
+    let a: BigNum = bignum_from_string(String::from("123456789012345678"));
+    let b: BigNum = bignum_from_string(String::from("123456789"));
+    assert_eq_str(
+        String::from("large/medium q"),
+        bn_str(bignum_div(a, b)),
+        String::from("1000000000")
+    );
+    assert_eq_str(
+        String::from("large/medium r"),
+        bn_str(bignum_mod(a, b)),
+        String::from("12345678")
+    );
+}
+
+fn test_pow() [io] {
+    assert_eq_str(String::from("2^0"), bn_str(bignum_pow(bignum_from_i64(2), 0)), String::from("1"));
+    assert_eq_str(String::from("2^1"), bn_str(bignum_pow(bignum_from_i64(2), 1)), String::from("2"));
+    assert_eq_str(String::from("2^10"), bn_str(bignum_pow(bignum_from_i64(2), 10)), String::from("1024"));
+    assert_eq_str(String::from("2^32"), bn_str(bignum_pow(bignum_from_i64(2), 32)), String::from("4294967296"));
+    assert_eq_str(String::from("10^18"), bn_str(bignum_pow(bignum_from_i64(10), 18)), String::from("1000000000000000000"));
+    assert_eq_str(String::from("(-2)^3"), bn_str(bignum_pow(bignum_from_i64(-2), 3)), String::from("-8"));
+    assert_eq_str(String::from("(-2)^4"), bn_str(bignum_pow(bignum_from_i64(-2), 4)), String::from("16"));
+}
+
+fn test_gcd() [io] {
+    assert_eq_str(String::from("gcd(12,8)"), bn_str(bignum_gcd(bignum_from_i64(12), bignum_from_i64(8))), String::from("4"));
+    assert_eq_str(String::from("gcd(100,75)"), bn_str(bignum_gcd(bignum_from_i64(100), bignum_from_i64(75))), String::from("25"));
+    assert_eq_str(String::from("gcd(17,13)"), bn_str(bignum_gcd(bignum_from_i64(17), bignum_from_i64(13))), String::from("1"));
+    assert_eq_str(String::from("gcd(0,5)"), bn_str(bignum_gcd(bignum_from_i64(0), bignum_from_i64(5))), String::from("5"));
+    assert_eq_str(String::from("gcd(-12,8)"), bn_str(bignum_gcd(bignum_from_i64(-12), bignum_from_i64(8))), String::from("4"));
+}
+
+fn test_factorial() [io] {
+    assert_eq_str(String::from("0!"), bn_str(bignum_factorial(0)), String::from("1"));
+    assert_eq_str(String::from("1!"), bn_str(bignum_factorial(1)), String::from("1"));
+    assert_eq_str(String::from("5!"), bn_str(bignum_factorial(5)), String::from("120"));
+    assert_eq_str(String::from("10!"), bn_str(bignum_factorial(10)), String::from("3628800"));
+    assert_eq_str(String::from("20!"), bn_str(bignum_factorial(20)), String::from("2432902008176640000"));
+    assert_eq_str(String::from("25!"), bn_str(bignum_factorial(25)), String::from("15511210043330985984000000"));
+}
+
+fn test_large_numbers() [io] {
+    let two_64: BigNum = bignum_pow(bignum_from_i64(2), 64);
+    assert_eq_str(String::from("2^64"), bn_str(two_64), String::from("18446744073709551616"));
+
+    let two_128: BigNum = bignum_pow(bignum_from_i64(2), 128);
+    assert_eq_str(
+        String::from("2^128"),
+        bn_str(two_128),
+        String::from("340282366920938463463374607431768211456")
+    );
+
+    let a: BigNum = bignum_from_string(String::from("99999999999999999999999999999"));
+    let b: BigNum = bignum_from_string(String::from("1"));
+    assert_eq_str(
+        String::from("29-digit + 1"),
+        bn_str(bignum_add(a, b)),
+        String::from("100000000000000000000000000000")
+    );
+
+    let c: BigNum = bignum_from_string(String::from("12345678901234567890"));
+    let d: BigNum = bignum_from_string(String::from("98765432109876543210"));
+    assert_eq_str(
+        String::from("20-digit * 20-digit"),
+        bn_str(bignum_mul(c, d)),
+        String::from("1219326311370217952237463801111263526900")
+    );
+
+    let e: BigNum = bignum_from_string(String::from("123456789012345"));
+    let f: BigNum = bignum_from_string(String::from("987654321"));
+    let product: BigNum = bignum_mul(e, f);
+    let back: BigNum = bignum_div(product, e);
+    assert_eq_str(String::from("(a*b)/a == b"), bn_str(back), String::from("987654321"));
+}

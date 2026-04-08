@@ -406,7 +406,7 @@ echo ""
 
 echo -e "${BOLD}--- Section 6: Multi-Module ---${RESET}"
 
-for multi in stack geometry; do
+for multi in stack geometry bignum; do
     main_file="examples/${multi}/main.vow"
     printf "${BOLD}%s${RESET}\n" "$multi"
 
