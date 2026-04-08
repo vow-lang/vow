@@ -5,14 +5,152 @@ description: >-
   "investigate #<number>", "fix issue #<number>", "fix bug #<number>",
   "debug issue", "look into issue #<number>", "triage issue",
   "reproduce and fix GitHub issue", "close issue #<number>",
-  or invokes /investigate <number>. Runs the full end-to-end bug
-  investigation workflow: reproduce, fix both Rust and self-hosted
-  compilers, test, commit, push, and comment on the GitHub issue.
-args: issue_number
+  "investigate PR #<number>", "review PR #<number>", "check PR #<number>",
+  or invokes /investigate <number>. For issues: runs the full end-to-end bug
+  investigation workflow (reproduce, fix, test, commit, close). For PRs:
+  checks CI, triages review comments, runs code reviews, and posts an
+  Investigation Report.
+args: number
 user_invocable: true
 ---
 
-# Investigate GitHub Issue
+# Investigate GitHub Issue or Pull Request
+
+This skill handles both GitHub issues and pull requests. The argument is a number —
+the skill detects whether it refers to an issue or a PR and follows the appropriate workflow.
+
+## Detection
+
+Run `gh pr view $ARGUMENTS --json number 2>/dev/null` to check if the number is a PR.
+- If it succeeds → follow the **PR Workflow** below.
+- If it fails → follow the **Issue Workflow** below.
+
+---
+
+# PR Workflow
+
+End-to-end review workflow for an open pull request. Checks CI, triages review comments,
+runs independent code reviews, and posts a consolidated Investigation Report.
+
+## PR Phase 1 — Fetch the PR
+
+Fetch PR details with:
+```bash
+gh pr view $ARGUMENTS --json title,body,headRefName,baseRefName,state,labels,reviewRequests,reviews,statusCheckRollup,files
+```
+
+Extract:
+- PR title and description
+- Source and target branches
+- Changed files list
+- Current CI status
+- Existing reviews and their verdicts
+
+Check out the PR branch locally:
+```bash
+gh pr checkout $ARGUMENTS
+```
+
+## PR Phase 2 — Check CI
+
+Examine the CI status from the PR data fetched in Phase 1.
+
+If checks are still running, poll with:
+```bash
+gh pr checks $ARGUMENTS --watch
+```
+
+- If CI **passes**: note this and proceed.
+- If CI **fails**: fetch the failing check logs with `gh run view <run-id> --log-failed`,
+  identify the failure, and include it prominently in the Investigation Report.
+  Still proceed with the remaining phases — CI failure does not short-circuit the review.
+
+## PR Phase 3 — Triage Review Comments
+
+Fetch all review comments:
+```bash
+gh api repos/{owner}/{repo}/pulls/$ARGUMENTS/comments --paginate
+gh api repos/{owner}/{repo}/pulls/$ARGUMENTS/reviews --paginate
+```
+
+For each review comment:
+1. **Clearly actionable** (bug report, correctness issue, missing test, style violation
+   with project rule citation) → mark as **actionable**.
+2. **Clearly non-actionable** (praise, acknowledgement, "nit" with no substance,
+   already-addressed feedback) → mark as **skip**.
+3. **Ambiguous** (subjective suggestion, debatable design choice, unclear scope) →
+   run `/codex-2nd-opinion` with the comment text and surrounding code context to get
+   an independent judgment. Use the Codex verdict to classify as actionable or skip.
+
+Produce a summary table of all comments with their classification and rationale.
+
+## PR Phase 4 — Code Review
+
+Run the code-review skill on the PR's changes:
+
+```
+/code-review:code-review
+```
+
+This reviews the diff against project guidelines (CLAUDE.md) and coding standards.
+Capture the full output for inclusion in the Investigation Report.
+
+## PR Phase 5 — Codex Review
+
+Run the Codex review skill scoped to the PR branch:
+
+```
+/codex:review --background --scope branch
+```
+
+This provides an independent review from Codex. Capture the full output for inclusion
+in the Investigation Report.
+
+## PR Phase 6 — Investigation Report
+
+Merge all findings from Phases 2–5 into a single consolidated comment on the PR.
+
+Post the comment with:
+```bash
+gh pr comment $ARGUMENTS --body "<report>"
+```
+
+The comment must follow this structure:
+
+```markdown
+## Investigation Report
+
+### CI Status
+<pass/fail summary; if failed, include the failure reason and affected check>
+
+### Review Comment Triage
+<table of existing review comments: comment excerpt | classification | rationale>
+<count of actionable vs skipped comments>
+
+### Code Review Findings
+<summary of findings from /code-review:code-review>
+
+### Codex Review Findings
+<summary of findings from /codex:review>
+
+### Consolidated Action Items
+<numbered list of all actionable items from all sources, deduplicated>
+```
+
+## PR Phase 7 — Plan Mode Prompt
+
+After posting the Investigation Report, present the consolidated action items to the user
+and ask:
+
+> "Investigation Report posted. There are N action items. Would you like to enter plan mode
+> to address them?"
+
+If the user agrees, enter plan mode with the action items as the starting context.
+Do **not** start fixing anything automatically — wait for the user's decision.
+
+---
+
+# Issue Workflow
 
 End-to-end workflow for reproducing, fixing, testing, and closing a Vow compiler bug
 reported as a GitHub issue. This workflow modifies **both** the Rust compiler and the
