@@ -41,7 +41,7 @@ fn main() -> i32 [read, io] {
             if cmd.eq(String::from("hello")) {
                 print_str(String::from("Hello, world!\n"));
             } else {
-                if cmd.len() > 5 {
+                if cmd.len() >= 5 {
                     let prefix: String = cmd.substring(0, 5);
                     if prefix.eq(String::from("echo ")) {
                         let start: i64 = skip_spaces(cmd, 5);

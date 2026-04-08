@@ -98,6 +98,7 @@ parse_annotations() {
   TEST_CX_BLAME=""
   TEST_SKIP=""
   TEST_STDIN=""
+  TEST_STDIN_FILE=""
 
   while IFS= read -r line; do
     if [[ "$line" =~ ^//\ TEST:\ exit\ ([0-9]+) ]]; then
@@ -119,9 +120,7 @@ parse_annotations() {
     elif [[ "$line" =~ ^//\ TEST:\ stdin\ \"(.*)\" ]]; then
       TEST_STDIN="${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ stdin-file\ (.+) ]]; then
-      local stdin_file
-      stdin_file="$(dirname "$file")/${BASH_REMATCH[1]}"
-      TEST_STDIN="$(cat "$stdin_file")"
+      TEST_STDIN_FILE="$(dirname "$file")/${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ skip\ \"(.+)\" ]]; then
       TEST_SKIP="${BASH_REMATCH[1]}"
     elif [[ ! "$line" =~ ^// ]]; then
@@ -211,8 +210,10 @@ for f in "$SCRIPT_DIR"/run/*.vow; do
 
   # Run (pipe stdin if TEST_STDIN is set)
   set +e
-  if [[ -n "$TEST_STDIN" ]]; then
-    actual_stdout="$(echo -e "$TEST_STDIN" | run_bin "$out" 2>/dev/null)"
+  if [[ -n "$TEST_STDIN_FILE" ]]; then
+    actual_stdout="$(run_bin "$out" < "$TEST_STDIN_FILE" 2>/dev/null)"
+  elif [[ -n "$TEST_STDIN" ]]; then
+    actual_stdout="$(printf '%b' "$TEST_STDIN" | run_bin "$out" 2>/dev/null)"
   else
     actual_stdout="$(run_bin "$out" 2>/dev/null)"
   fi

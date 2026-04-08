@@ -1,6 +1,5 @@
 module CmdLoop
 
-// Helper: strip trailing newline/carriage-return from a line
 fn trim_newline(s: String) -> String {
     let n: i64 = s.len();
     if n == 0 { return s; }
@@ -17,7 +16,6 @@ fn trim_newline(s: String) -> String {
     s
 }
 
-// Helper: skip leading spaces (byte 32) and return substring from first non-space
 fn skip_spaces(s: String, start: i64) -> i64 {
     let mut i: i64 = start;
     let n: i64 = s.len();
@@ -26,17 +24,6 @@ fn skip_spaces(s: String, start: i64) -> i64 {
         i = i + 1;
     }
     i
-}
-
-// Helper: find the next space (byte 32) starting at pos, or return len
-fn find_space(s: String, start: i64) -> i64 {
-    let mut i: i64 = start;
-    let n: i64 = s.len();
-    while i < n {
-        if s.byte_at(i) == 32 { return i; }
-        i = i + 1;
-    }
-    n
 }
 
 fn main() -> i32 [read, io] {
@@ -52,8 +39,7 @@ fn main() -> i32 [read, io] {
             if cmd.eq(String::from("hello")) {
                 print_str(String::from("Hello, world!\n"));
             } else {
-                // Check for "echo " prefix (5 bytes)
-                if cmd.len() > 5 {
+                if cmd.len() >= 5 {
                     let prefix: String = cmd.substring(0, 5);
                     if prefix.eq(String::from("echo ")) {
                         let start: i64 = skip_spaces(cmd, 5);
@@ -66,20 +52,9 @@ fn main() -> i32 [read, io] {
                         print_str(String::from("\n"));
                     }
                 } else {
-                    if cmd.len() == 4 {
-                        let prefix4: String = cmd.substring(0, 4);
-                        if prefix4.eq(String::from("echo")) {
-                            print_str(String::from("\n"));
-                        } else {
-                            print_str(String::from("unknown: "));
-                            print_str(cmd);
-                            print_str(String::from("\n"));
-                        }
-                    } else {
-                        print_str(String::from("unknown: "));
-                        print_str(cmd);
-                        print_str(String::from("\n"));
-                    }
+                    print_str(String::from("unknown: "));
+                    print_str(cmd);
+                    print_str(String::from("\n"));
                 }
             }
         }
