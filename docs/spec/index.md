@@ -40,6 +40,7 @@ $ ulimit -v 2000000; ./hello
 Hello, world!
 ```
 
+<!-- OMIT-FROM-SKILL-START -->
 ## Reference Files
 
 | File                                              | Description                                        |
@@ -53,3 +54,4 @@ Hello, world!
 | [schemas/diagnostic.schema.json](schemas/diagnostic.schema.json)         | Diagnostic JSON schema              |
 | [schemas/counterexample.schema.json](schemas/counterexample.schema.json) | Counterexample JSON schema          |
 | [schemas/vow-violation.schema.json](schemas/vow-violation.schema.json)   | Runtime violation JSON schema       |
+<!-- OMIT-FROM-SKILL-END -->

@@ -975,6 +975,7 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
     0
 }
 
+// GENERATE:SKILL_JSON:START
 fn skill_json() -> String {
     let r: String = String::from("{\n");
     r.push_str(String::from("  \"tool\": \"vow\",\n"));
@@ -1242,7 +1243,9 @@ fn skill_json() -> String {
     r.push_str(String::from("}\n"));
     r
 }
+// GENERATE:SKILL_JSON:END
 
+// GENERATE:SKILL_HUMAN:START
 fn skill_human() -> String {
     let r: String = String::from("vow -- Vow compiler\n");
     r.push_str(String::from("\n"));
@@ -1336,7 +1339,9 @@ fn skill_human() -> String {
     r.push_str(String::from("  HashMap<K, V> : 64 max capacity\n"));
     r
 }
+// GENERATE:SKILL_HUMAN:END
 
+// GENERATE:SKILL_FULL:START
 fn skill_full() -> String {
     let r: String = String::from("---\n");
     r.push_str(String::from("name: vow-toolchain\n"));
@@ -3475,6 +3480,7 @@ fn skill_full() -> String {
     r.push_str(String::from("\n"));
     r
 }
+// GENERATE:SKILL_FULL:END
 
 fn run_skill(argv: Vec<String>) -> i32 [io, write] {
     let do_install: bool = false;
@@ -3485,7 +3491,18 @@ fn run_skill(argv: Vec<String>) -> i32 [io, write] {
         }
     }
     if do_install {
-        fs_write(String::from(".claude/commands/vow-toolchain.md"), skill_full());
+        let dir: String = String::from(".claude/commands");
+        let mk: i64 = fs_mkdir(dir);
+        if mk < 0 {
+            eprintln_str("vow skill install: cannot create .claude/commands/");
+            return 1;
+        }
+        let path: String = String::from(".claude/commands/vow-toolchain.md");
+        let wr: i32 = fs_write(path, skill_full());
+        if wr < 0 {
+            eprintln_str("vow skill install: cannot write .claude/commands/vow-toolchain.md");
+            return 1;
+        }
         eprintln_str("installed skill to .claude/commands/vow-toolchain.md");
         return 0;
     }

@@ -191,6 +191,7 @@ enum SkillAction {
 // --help skill output
 // ---------------------------------------------------------------------------
 
+// GENERATE:SKILL_JSON:START
 fn skill_json() -> String {
     r#"{
   "tool": "vow",
@@ -458,7 +459,9 @@ fn skill_json() -> String {
 }"#
     .to_string()
 }
+// GENERATE:SKILL_JSON:END
 
+// GENERATE:SKILL_HUMAN:START
 fn skill_human() -> String {
     r#"vow — Vow compiler
 
@@ -552,7 +555,9 @@ VERIFICATION LIMITS
   HashMap<K, V> : 64 max capacity"#
         .to_string()
 }
+// GENERATE:SKILL_HUMAN:END
 
+// GENERATE:SKILL_FULL:START
 fn skill_full_markdown() -> String {
     r#"---
 name: vow-toolchain
@@ -2691,6 +2696,7 @@ $ vow build examples/search.vow
 "#
     .to_string()
 }
+// GENERATE:SKILL_FULL:END
 
 fn run_skill_install() {
     let dir = Path::new(".claude/commands");
@@ -4687,16 +4693,14 @@ fn main() {
             };
             run_contracts_command(&source, c.verify, c.no_cache);
         }
-        Some(Command::Skill(s)) => {
-            match s.action {
-                Some(SkillAction::Install) => {
-                    run_skill_install();
-                }
-                Some(SkillAction::Print) | None => {
-                    println!("{}", skill_full_markdown());
-                }
+        Some(Command::Skill(s)) => match s.action {
+            Some(SkillAction::Install) => {
+                run_skill_install();
             }
-        }
+            Some(SkillAction::Print) | None => {
+                println!("{}", skill_full_markdown());
+            }
+        },
         None => {
             if args.help {
                 if args.human {

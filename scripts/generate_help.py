@@ -435,22 +435,34 @@ def build_help_human(data: dict) -> str:
 # Inject into Rust main.rs
 # ---------------------------------------------------------------------------
 
+def _replace_between_markers(content: str, start_marker: str, end_marker: str, replacement: str) -> str:
+    """Replace content between start/end marker lines (inclusive)."""
+    start_idx = content.find(start_marker)
+    if start_idx == -1:
+        raise ValueError(f"Cannot find marker: {start_marker}")
+    end_idx = content.find(end_marker, start_idx)
+    if end_idx == -1:
+        raise ValueError(f"Cannot find marker: {end_marker}")
+    end_idx += len(end_marker)
+    return content[:start_idx] + replacement + content[end_idx:]
+
+
 def inject_rust(main_rs: Path, json_str: str, human_str: str) -> str:
     content = main_rs.read_text()
 
-    # Replace skill_json body using marker-based find/replace
-    json_fn_marker = 'fn skill_json() -> String {'
-    json_start = content.index(json_fn_marker)
-    json_end = content.index('.to_string()\n}', json_start) + len('.to_string()\n}')
-    json_replacement = f'fn skill_json() -> String {{\n    r#"{json_str}"#\n    .to_string()\n}}'
-    content = content[:json_start] + json_replacement + content[json_end:]
+    content = _replace_between_markers(
+        content,
+        "// GENERATE:SKILL_JSON:START",
+        "// GENERATE:SKILL_JSON:END",
+        f'// GENERATE:SKILL_JSON:START\nfn skill_json() -> String {{\n    r#"{json_str}"#\n    .to_string()\n}}\n// GENERATE:SKILL_JSON:END',
+    )
 
-    # Replace skill_human body — use a raw string to avoid escape issues
-    human_fn_marker = 'fn skill_human() -> String {'
-    human_start = content.index(human_fn_marker)
-    human_end = content.index('.to_string()\n}', human_start) + len('.to_string()\n}')
-    human_replacement = f'fn skill_human() -> String {{\n    r#"{human_str}"#\n        .to_string()\n}}'
-    content = content[:human_start] + human_replacement + content[human_end:]
+    content = _replace_between_markers(
+        content,
+        "// GENERATE:SKILL_HUMAN:START",
+        "// GENERATE:SKILL_HUMAN:END",
+        f'// GENERATE:SKILL_HUMAN:START\nfn skill_human() -> String {{\n    r#"{human_str}"#\n        .to_string()\n}}\n// GENERATE:SKILL_HUMAN:END',
+    )
 
     return content
 
@@ -475,27 +487,17 @@ def _vow_pushstr_body(text: str) -> tuple[str, str]:
 def inject_vow(main_vow: Path, json_str: str, human_str: str) -> str:
     content = main_vow.read_text()
 
-    # Replace skill_json function body using marker-based find/replace
-    json_start_marker = "fn skill_json() -> String {\n    let r: String = String::from("
-    json_start = content.index(json_start_marker)
-    json_end_marker = "    r\n}\n\nfn skill_human"
-    json_end = content.index(json_end_marker, json_start) + len("    r\n}")
-
     first_json, rest_json = _vow_pushstr_body(json_str)
-    json_fn = f'fn skill_json() -> String {{\n    let r: String = String::from("{first_json}\\n");\n{rest_json}\n    r\n}}'
-    content = content[:json_start] + json_fn + content[json_end:]
-
-    # Replace skill_human function body
-    human_start_marker = "fn skill_human() -> String {\n    let r: String = String::from("
-    human_start = content.index(human_start_marker)
-    # Find the closing "    r\n}\n" that ends this function
-    # Search for the pattern "    r\n}\n\n" after skill_human start
-    human_end_marker = "    r\n}\n\n"
-    human_end = content.index(human_end_marker, human_start) + len("    r\n}")
+    json_fn = f'// GENERATE:SKILL_JSON:START\nfn skill_json() -> String {{\n    let r: String = String::from("{first_json}\\n");\n{rest_json}\n    r\n}}\n// GENERATE:SKILL_JSON:END'
+    content = _replace_between_markers(
+        content, "// GENERATE:SKILL_JSON:START", "// GENERATE:SKILL_JSON:END", json_fn,
+    )
 
     first_human, rest_human = _vow_pushstr_body(human_str)
-    human_fn = f'fn skill_human() -> String {{\n    let r: String = String::from("{first_human}\\n");\n{rest_human}\n    r\n}}'
-    content = content[:human_start] + human_fn + content[human_end:]
+    human_fn = f'// GENERATE:SKILL_HUMAN:START\nfn skill_human() -> String {{\n    let r: String = String::from("{first_human}\\n");\n{rest_human}\n    r\n}}\n// GENERATE:SKILL_HUMAN:END'
+    content = _replace_between_markers(
+        content, "// GENERATE:SKILL_HUMAN:START", "// GENERATE:SKILL_HUMAN:END", human_fn,
+    )
 
     return content
 
@@ -527,13 +529,17 @@ def build_skill_markdown() -> str:
     """
     parts: list[str] = [SKILL_FRONTMATTER, ""]
 
-    # Index/overview (without the reference table which has relative links)
+    # Index/overview (strip sections between OMIT-FROM-SKILL markers)
     index_text = INDEX.read_text()
-    # Strip the reference table at the end (starts with "## Reference Files")
-    ref_idx = index_text.find("## Reference Files")
-    if ref_idx != -1:
-        index_text = index_text[:ref_idx].rstrip()
-    parts.append(index_text)
+    omit_start = "<!-- OMIT-FROM-SKILL-START -->"
+    omit_end = "<!-- OMIT-FROM-SKILL-END -->"
+    start_idx = index_text.find(omit_start)
+    if start_idx != -1:
+        end_idx = index_text.find(omit_end, start_idx)
+        if end_idx != -1:
+            index_text = (index_text[:start_idx].rstrip() +
+                          index_text[end_idx + len(omit_end):])
+    parts.append(index_text.rstrip())
     parts.append("")
 
     # Append each spec file
@@ -564,26 +570,19 @@ def build_skill_markdown() -> str:
 
 def inject_skill_rust(content: str, skill_md: str) -> str:
     """Inject skill_full_markdown() into Rust main.rs."""
-    fn_marker = "fn skill_full_markdown() -> String {"
-    idx = content.find(fn_marker)
-    if idx == -1:
-        raise ValueError("Cannot find skill_full_markdown() in main.rs")
-    end_marker = ".to_string()\n}"
-    end_idx = content.index(end_marker, idx) + len(end_marker)
-    replacement = f'{fn_marker}\n    r#"{skill_md}"#\n    .to_string()\n}}'
-    return content[:idx] + replacement + content[end_idx:]
+    replacement = f'// GENERATE:SKILL_FULL:START\nfn skill_full_markdown() -> String {{\n    r#"{skill_md}"#\n    .to_string()\n}}\n// GENERATE:SKILL_FULL:END'
+    return _replace_between_markers(
+        content, "// GENERATE:SKILL_FULL:START", "// GENERATE:SKILL_FULL:END", replacement,
+    )
 
 
 def inject_skill_vow(content: str, skill_md: str) -> str:
     """Inject skill_full() into self-hosted main.vow."""
-    start_marker = "fn skill_full() -> String {\n    let r: String = String::from("
-    start_idx = content.index(start_marker)
-    end_marker = "    r\n}\n\nfn run_skill"
-    end_idx = content.index(end_marker, start_idx) + len("    r\n}")
-
     first, rest = _vow_pushstr_body(skill_md)
-    fn_body = f'fn skill_full() -> String {{\n    let r: String = String::from("{first}\\n");\n{rest}\n    r\n}}'
-    return content[:start_idx] + fn_body + content[end_idx:]
+    fn_body = f'// GENERATE:SKILL_FULL:START\nfn skill_full() -> String {{\n    let r: String = String::from("{first}\\n");\n{rest}\n    r\n}}\n// GENERATE:SKILL_FULL:END'
+    return _replace_between_markers(
+        content, "// GENERATE:SKILL_FULL:START", "// GENERATE:SKILL_FULL:END", fn_body,
+    )
 
 
 # ---------------------------------------------------------------------------
