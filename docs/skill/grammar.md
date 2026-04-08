@@ -405,6 +405,31 @@ let p: Point = Point { x: 1, y: 2 };
 p.x
 ```
 
+### Field Assignment
+
+```vow
+p.x = 10;
+```
+
+### Passing Semantics
+
+Structs are heap-allocated. A struct value is a pointer to a heap region, so passing a struct to a function passes the pointer — the function operates on the same heap data, not a copy. Field assignments inside the called function are visible to the caller:
+
+```vow
+fn shift_right(p: Point, dx: i64) {
+    p.x = p.x + dx;
+}
+
+fn main() -> i32 [io] {
+    let p: Point = Point { x: 0, y: 0 };
+    shift_right(p, 5);
+    print_i64(p.x);  // 5 — mutation visible to caller
+    0
+}
+```
+
+This enables in-place mutation patterns (e.g., make/unmake in search trees) without cloning. The same aliasing semantics apply when structs are stored in containers — see [Indexing](#indexing).
+
 ## Enum Definitions
 
 ```vow
