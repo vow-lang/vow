@@ -119,6 +119,7 @@ pub fn api_function(x: i64) -> i64 {
 | `f64`  | 64-bit float (limited support — avoid in contracts) |
 | `bool` | Boolean                  |
 | `()`   | Unit type                |
+| `!`    | Never type (diverges)    |
 
 ### Built-in Parameterized Types
 
