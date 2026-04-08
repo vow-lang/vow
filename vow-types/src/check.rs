@@ -941,10 +941,7 @@ impl<'e> Checker<'e> {
                     self.env.pop_scope();
                     if i == 0 {
                         result_ty = arm_ty.clone();
-                    } else if arm_ty != result_ty
-                        && arm_ty != Ty::Never
-                        && result_ty != Ty::Never
-                    {
+                    } else if arm_ty != result_ty && arm_ty != Ty::Never && result_ty != Ty::Never {
                         let coercible = (arm_ty == Ty::I32 && result_ty.is_integer())
                             || (result_ty == Ty::I32 && arm_ty.is_integer());
                         if coercible {
