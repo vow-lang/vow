@@ -1,0 +1,83 @@
+module Main
+use arithmetic
+use number_theory
+use vec_math
+
+fn main() -> i32 [io] {
+    // Arithmetic
+    print_i64(abs(-5));
+    print_str(String::from(" "));
+    print_i64(min(3, 7));
+    print_str(String::from(" "));
+    print_i64(max(3, 7));
+    print_str(String::from(" "));
+    print_i64(clamp(15, 0, 10));
+    print_str(String::from(" "));
+    print_i64(sign(-42));
+    print_str(String::from(" "));
+    print_i64(safe_add(3, 4));
+    print_str(String::from(" "));
+    print_i64(safe_sub(10, 3));
+    print_str(String::from(" "));
+    print_i64(safe_mul(6, 7));
+    print_str(String::from(" "));
+    print_i64(safe_div(20, 3));
+    print_str(String::from(" "));
+    print_i64(safe_mod(20, 3));
+    print_str(String::from(" "));
+    print_i64(pow(2, 10));
+    print_str(String::from(" "));
+    print_i64(midpoint(10, 20));
+    print_str(String::from(" "));
+    print_i64(diff(3, 8));
+    print_str(String::from("\n"));
+
+    // Number theory
+    print_i64(gcd(48, 18));
+    print_str(String::from(" "));
+    print_i64(lcm(4, 6));
+    print_str(String::from(" "));
+    print_i64(factorial(5));
+    print_str(String::from(" "));
+    print_i64(fibonacci(10));
+    print_str(String::from(" "));
+    print_i64(isqrt(49));
+    print_str(String::from(" "));
+    print_i64(largest_divisor(12));
+    print_str(String::from(" "));
+    print_i64(count_divisors(12));
+    print_str(String::from(" "));
+    print_i64(power_mod(2, 10, 1000));
+    print_str(String::from("\n"));
+
+    // Vec math
+    let v: Vec<i64> = Vec::new();
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    v.push(4);
+    v.push(5);
+    print_i64(vec_sum(v));
+    print_str(String::from(" "));
+    print_i64(vec_min(v));
+    print_str(String::from(" "));
+    print_i64(vec_max(v));
+    print_str(String::from(" "));
+    print_i64(vec_mean(v));
+    print_str(String::from(" "));
+    print_i64(vec_count(v, 3));
+    print_str(String::from("\n"));
+
+    let a: Vec<i64> = Vec::new();
+    a.push(1);
+    a.push(2);
+    a.push(3);
+    let b: Vec<i64> = Vec::new();
+    b.push(4);
+    b.push(5);
+    b.push(6);
+    print_i64(vec_dot(a, b));
+    print_str(String::from("\n"));
+
+    0
+}
