@@ -1,0 +1,103 @@
+// TEST: stdout "PASS alloc\nPASS read\nPASS write\nPASS collect_frees_unreachable\nPASS roots_survive\nPASS ref_traversal\nPASS slot_reuse\nPASS count_tracking"
+module Main
+use gc
+
+fn assert_true(label: String, val: bool) [io] {
+    if val {
+        print_str(String::from("PASS "));
+        print_str(label);
+        print_str(String::from("\n"));
+    } else {
+        print_str(String::from("FAIL "));
+        print_str(label);
+        print_str(String::from("\n"));
+    }
+}
+
+fn main() -> i32 [io] {
+    test_alloc();
+    test_read();
+    test_write();
+    test_collect_frees_unreachable();
+    test_roots_survive();
+    test_ref_traversal();
+    test_slot_reuse();
+    test_count_tracking();
+    0
+}
+
+fn test_alloc() [io] {
+    let h: GcHeap = gc_new();
+    let s0: i64 = gc_alloc(h, 100);
+    let s1: i64 = gc_alloc(h, 200);
+    assert_true(String::from("alloc"), s0 == 0 && s1 == 1);
+}
+
+fn test_read() [io] {
+    let h: GcHeap = gc_new();
+    let s0: i64 = gc_alloc(h, 42);
+    let val: i64 = gc_read(h, s0);
+    assert_true(String::from("read"), val == 42);
+}
+
+fn test_write() [io] {
+    let h: GcHeap = gc_new();
+    let s0: i64 = gc_alloc(h, 10);
+    gc_write(h, s0, 99);
+    let val: i64 = gc_read(h, s0);
+    assert_true(String::from("write"), val == 99);
+}
+
+fn test_collect_frees_unreachable() [io] {
+    let h: GcHeap = gc_new();
+    let s0: i64 = gc_alloc(h, 100);
+    let s1: i64 = gc_alloc(h, 200);
+    // Neither is rooted, so both should be freed
+    let freed: i64 = gc_collect(h);
+    assert_true(String::from("collect_frees_unreachable"), freed == 2 && !gc_is_alive(h, s0) && !gc_is_alive(h, s1));
+}
+
+fn test_roots_survive() [io] {
+    let h: GcHeap = gc_new();
+    let s0: i64 = gc_alloc(h, 100);
+    let s1: i64 = gc_alloc(h, 200);
+    gc_add_root(h, s0);
+    let freed: i64 = gc_collect(h);
+    // s0 is rooted so survives; s1 is unreachable
+    assert_true(String::from("roots_survive"), freed == 1 && gc_is_alive(h, s0) && !gc_is_alive(h, s1) && gc_read(h, s0) == 100);
+}
+
+fn test_ref_traversal() [io] {
+    let h: GcHeap = gc_new();
+    let s0: i64 = gc_alloc(h, 10);
+    let s1: i64 = gc_alloc(h, 20);
+    let s2: i64 = gc_alloc(h, 30);
+    // Root s0, s0 -> s1, s1 -> s2 (chain keeps all alive)
+    gc_add_root(h, s0);
+    gc_add_ref(h, s0, s1);
+    gc_add_ref(h, s1, s2);
+    let freed: i64 = gc_collect(h);
+    assert_true(String::from("ref_traversal"), freed == 0 && gc_is_alive(h, s0) && gc_is_alive(h, s1) && gc_is_alive(h, s2));
+}
+
+fn test_slot_reuse() [io] {
+    let h: GcHeap = gc_new();
+    let s0: i64 = gc_alloc(h, 100);
+    let s1: i64 = gc_alloc(h, 200);
+    gc_add_root(h, s1);
+    gc_collect(h);
+    // s0 was freed, slot 0 should be reused
+    let s2: i64 = gc_alloc(h, 300);
+    assert_true(String::from("slot_reuse"), s2 == s0 && gc_read(h, s2) == 300);
+}
+
+fn test_count_tracking() [io] {
+    let h: GcHeap = gc_new();
+    gc_alloc(h, 1);
+    gc_alloc(h, 2);
+    gc_alloc(h, 3);
+    let c1: i64 = gc_count(h);
+    gc_collect(h);
+    let c2: i64 = gc_count(h);
+    assert_true(String::from("count_tracking"), c1 == 3 && c2 == 0);
+}
