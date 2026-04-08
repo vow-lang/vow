@@ -1338,6 +1338,136 @@ fn apply_uci_moves(b: Board, tokens: Vec<String>, start_idx: i64) -> Board [io] 
     b
 }
 
+fn fen_char_to_piece(ch: i64) -> i64 {
+    if ch == 80 { return PAWN; }
+    if ch == 78 { return KNIGHT; }
+    if ch == 66 { return BISHOP; }
+    if ch == 82 { return ROOK; }
+    if ch == 81 { return QUEEN; }
+    if ch == 75 { return KING; }
+    if ch == 112 { return -PAWN; }
+    if ch == 110 { return -KNIGHT; }
+    if ch == 98 { return -BISHOP; }
+    if ch == 114 { return -ROOK; }
+    if ch == 113 { return -QUEEN; }
+    if ch == 107 { return -KING; }
+    0
+}
+
+fn parse_fen_board(placement: String) -> Vec<i64> {
+    let sqs: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < 64 {
+        sqs.push(EMPTY);
+        i = i + 1;
+    }
+
+    let mut rank: i64 = 7;
+    let mut file: i64 = 0;
+    let mut idx: i64 = 0;
+    let n: i64 = placement.len();
+    while idx < n {
+        let ch: i64 = placement.byte_at(idx);
+        if ch == 47 {
+            rank = rank - 1;
+            file = 0;
+        } else {
+            if ch >= 49 && ch <= 56 {
+                file = file + (ch - 48);
+            } else {
+                let piece: i64 = fen_char_to_piece(ch);
+                if piece != 0 && file < 8 && rank >= 0 {
+                    sqs[rank * 8 + file] = piece;
+                }
+                file = file + 1;
+            }
+        }
+        idx = idx + 1;
+    }
+    sqs
+}
+
+fn parse_fen_castling(s: String) -> Vec<i64> {
+    let rights: Vec<i64> = Vec::new();
+    let mut wk: i64 = 0;
+    let mut wq: i64 = 0;
+    let mut bk: i64 = 0;
+    let mut bq: i64 = 0;
+    let mut i: i64 = 0;
+    while i < s.len() {
+        let ch: i64 = s.byte_at(i);
+        if ch == 75 { wk = 1; }
+        if ch == 81 { wq = 1; }
+        if ch == 107 { bk = 1; }
+        if ch == 113 { bq = 1; }
+        i = i + 1;
+    }
+    rights.push(wk);
+    rights.push(wq);
+    rights.push(bk);
+    rights.push(bq);
+    rights
+}
+
+fn parse_fen_ep(s: String) -> i64 {
+    if s.len() < 2 {
+        return -1;
+    }
+    let file_ch: i64 = s.byte_at(0);
+    let rank_ch: i64 = s.byte_at(1);
+    if file_ch < 97 || file_ch > 104 {
+        return -1;
+    }
+    if rank_ch < 49 || rank_ch > 56 {
+        return -1;
+    }
+    let file: i64 = file_ch - 97;
+    let rank: i64 = rank_ch - 49;
+    rank * 8 + file
+}
+
+fn parse_fen(tokens: Vec<String>, start_idx: i64) -> Board {
+    let placement: String = tokens[start_idx];
+    let sqs: Vec<i64> = parse_fen_board(placement);
+
+    let mut side: i64 = WHITE;
+    if start_idx + 1 < tokens.len() {
+        let color_str: String = tokens[start_idx + 1];
+        if color_str.eq(String::from("b")) {
+            side = BLACK;
+        }
+    }
+
+    let mut wk: i64 = 0;
+    let mut wq: i64 = 0;
+    let mut bk: i64 = 0;
+    let mut bq: i64 = 0;
+    if start_idx + 2 < tokens.len() {
+        let castle_str: String = tokens[start_idx + 2];
+        let rights: Vec<i64> = parse_fen_castling(castle_str);
+        wk = rights[0];
+        wq = rights[1];
+        bk = rights[2];
+        bq = rights[3];
+    }
+
+    let mut ep: i64 = -1;
+    if start_idx + 3 < tokens.len() {
+        let ep_str: String = tokens[start_idx + 3];
+        ep = parse_fen_ep(ep_str);
+    }
+
+    Board {
+        squares: sqs,
+        side: side,
+        ep: ep,
+        wk: wk,
+        wq: wq,
+        bk: bk,
+        bq: bq,
+    }
+}
+
 fn handle_position(tokens: Vec<String>, current: Board) -> Board [io] {
     if tokens.len() < 2 {
         return current;
@@ -1351,6 +1481,22 @@ fn handle_position(tokens: Vec<String>, current: Board) -> Board [io] {
             if next.eq(String::from("moves")) {
                 return apply_uci_moves(board, tokens, 3);
             }
+        }
+        return board;
+    }
+
+    if mode.eq(String::from("fen")) {
+        if tokens.len() < 3 {
+            return current;
+        }
+        let board: Board = parse_fen(tokens, 2);
+        let mut moves_idx: i64 = 2;
+        while moves_idx < tokens.len() {
+            let tok: String = tokens[moves_idx];
+            if tok.eq(String::from("moves")) {
+                return apply_uci_moves(board, tokens, moves_idx + 1);
+            }
+            moves_idx = moves_idx + 1;
         }
         return board;
     }
@@ -1394,8 +1540,11 @@ fn dispatch_command(us: UciState, line: String) [io, read] {
                     } else {
                         if cmd.eq(String::from("stop")) {
                         } else {
-                            if cmd.eq(String::from("quit")) {
-                                us.running = 0;
+                            if cmd.eq(String::from("setoption")) {
+                            } else {
+                                if cmd.eq(String::from("quit")) {
+                                    us.running = 0;
+                                }
                             }
                         }
                     }
