@@ -46,7 +46,7 @@
         "name": { "type": "string", "description": "Test name (file stem)" },
         "status": {
           "type": "string",
-          "enum": ["passed", "failed", "skipped", "compile_error", "verify_failed"],
+          "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed"],
           "description": "Per-test outcome"
         },
         "exit_code": {

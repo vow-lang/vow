@@ -111,7 +111,7 @@ Test discovery: files matching `test_*.vow` or `*_test.vow` in the given directo
 | `TestsPassed`  | All tests passed                                  |
 | `TestsFailed`  | One or more tests failed                          |
 
-Per-test status: `passed`, `failed`, `compile_error`, `verify_failed`, `skipped`.
+Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `skipped`.
 
 ### `vow --help`
 

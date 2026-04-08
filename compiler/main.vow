@@ -593,22 +593,6 @@ fn is_test_file(name: String) -> bool {
     false
 }
 
-fn str_contains(haystack: String, needle: String) -> bool {
-    let hl: i64 = haystack.len();
-    let nl: i64 = needle.len();
-    if nl == 0 { return true; }
-    if nl > hl { return false; }
-    let mut i: i64 = 0;
-    while i <= hl - nl {
-        let sub: String = string_substr(haystack, i, nl);
-        if sub == needle {
-            return true;
-        }
-        i = i + 1;
-    }
-    false
-}
-
 fn test_json_escape(s: String) -> String {
     diag_json_escape_str(s)
 }
@@ -672,7 +656,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
         while ei < entries.len() {
             let entry: String = entries[ei];
             if is_test_file(entry) {
-                if filter.len() == 0 || str_contains(entry, filter) {
+                if filter.len() == 0 || entry.contains(filter) {
                     let full: String = str3(path, String::from("/"), entry);
                     test_files.push(full);
                 }
@@ -797,6 +781,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                     let duration: i64 = time_unix_ms() - start_time;
                     let status: String = {
                         if exit_code == 0 { String::from("passed") }
+                        else if exit_code == -2 { String::from("timeout") }
                         else { String::from("failed") }
                     };
                     if exit_code == 0 {

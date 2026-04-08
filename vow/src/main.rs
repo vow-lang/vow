@@ -1917,10 +1917,11 @@ fn run_test_command(
         total_density.functions_total += density.functions_total;
         total_density.functions_with_vows += density.functions_with_vows;
 
+        let tmp_out = std::env::temp_dir().join(format!("vow_test_{name}"));
         let result = run_pipeline_from_frontend(
             frontend,
             test_file,
-            None,
+            Some(&tmp_out),
             mode,
             !verify,
             false,
@@ -2056,7 +2057,7 @@ fn run_test_command(
         let status = match exit_code {
             Some(0) => "passed",
             Some(_) => "failed",
-            None => "failed", // timeout
+            None => "timeout",
         };
 
         entries.push(TestEntry {
