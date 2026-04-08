@@ -224,16 +224,52 @@ fn find_king(b: Board, color: i64) -> i64 {
     -1
 }
 
+// Check if a slider piece (piece1 or piece2) attacks along any direction in dirs.
+// dirs is a flat Vec of (df, dr) pairs: [df0, dr0, df1, dr1, ...].
+fn slider_attacks_from(sqs: Vec<i64>, file: i64, rank: i64, dirs: Vec<i64>, piece1: i64, piece2: i64) -> bool {
+    let mut d: i64 = 0;
+    while d < dirs.len() {
+        let df: i64 = dirs[d];
+        let dr: i64 = dirs[d + 1];
+        let mut f: i64 = file + df;
+        let mut r: i64 = rank + dr;
+        while on_board(f, r) {
+            let p: i64 = sqs[make_sq(f, r)];
+            if p != 0 {
+                if p == piece1 || p == piece2 {
+                    return true;
+                }
+                break;
+            }
+            f = f + df;
+            r = r + dr;
+        }
+        d = d + 2;
+    }
+    false
+}
+
+// Check if target piece is at any of the step offsets from (file, rank).
+// offsets is a flat Vec of (df, dr) pairs.
+fn step_attacks_from(sqs: Vec<i64>, file: i64, rank: i64, offsets: Vec<i64>, target: i64) -> bool {
+    let mut d: i64 = 0;
+    while d < offsets.len() {
+        let f: i64 = file + offsets[d];
+        let r: i64 = rank + offsets[d + 1];
+        if on_board(f, r) && sqs[make_sq(f, r)] == target {
+            return true;
+        }
+        d = d + 2;
+    }
+    false
+}
+
 fn square_attacked(b: Board, sq: i64, by_color: i64) -> bool {
     let sqs: Vec<i64> = b.squares;
     let file: i64 = file_of(sq);
     let rank: i64 = rank_of(sq);
-    let knight_piece: i64 = by_color * KNIGHT;
-    let bishop_piece: i64 = by_color * BISHOP;
-    let rook_piece: i64 = by_color * ROOK;
-    let queen_piece: i64 = by_color * QUEEN;
-    let king_piece: i64 = by_color * KING;
 
+    // Pawn attacks (color-asymmetric, kept inline)
     if by_color == 1 {
         if file > 0 && rank > 0 && sqs[sq - 9] == 1 {
             return true;
@@ -250,217 +286,38 @@ fn square_attacked(b: Board, sq: i64, by_color: i64) -> bool {
         }
     }
 
-    let n1f: i64 = file + 1;
-    let n1r: i64 = rank + 2;
-    if on_board(n1f, n1r) && sqs[make_sq(n1f, n1r)] == knight_piece {
-        return true;
-    }
-    let n2f: i64 = file + 2;
-    let n2r: i64 = rank + 1;
-    if on_board(n2f, n2r) && sqs[make_sq(n2f, n2r)] == knight_piece {
-        return true;
-    }
-    let n3f: i64 = file - 1;
-    let n3r: i64 = rank + 2;
-    if on_board(n3f, n3r) && sqs[make_sq(n3f, n3r)] == knight_piece {
-        return true;
-    }
-    let n4f: i64 = file - 2;
-    let n4r: i64 = rank + 1;
-    if on_board(n4f, n4r) && sqs[make_sq(n4f, n4r)] == knight_piece {
-        return true;
-    }
-    let n5f: i64 = file + 1;
-    let n5r: i64 = rank - 2;
-    if on_board(n5f, n5r) && sqs[make_sq(n5f, n5r)] == knight_piece {
-        return true;
-    }
-    let n6f: i64 = file + 2;
-    let n6r: i64 = rank - 1;
-    if on_board(n6f, n6r) && sqs[make_sq(n6f, n6r)] == knight_piece {
-        return true;
-    }
-    let n7f: i64 = file - 1;
-    let n7r: i64 = rank - 2;
-    if on_board(n7f, n7r) && sqs[make_sq(n7f, n7r)] == knight_piece {
-        return true;
-    }
-    let n8f: i64 = file - 2;
-    let n8r: i64 = rank - 1;
-    if on_board(n8f, n8r) && sqs[make_sq(n8f, n8r)] == knight_piece {
+    // Knight
+    let nk: Vec<i64> = Vec::new();
+    nk.push(1);  nk.push(2);   nk.push(2);  nk.push(1);
+    nk.push(-1); nk.push(2);   nk.push(-2); nk.push(1);
+    nk.push(1);  nk.push(-2);  nk.push(2);  nk.push(-1);
+    nk.push(-1); nk.push(-2);  nk.push(-2); nk.push(-1);
+    if step_attacks_from(sqs, file, rank, nk, by_color * KNIGHT) {
         return true;
     }
 
-    let mut df: i64 = 1;
-    let mut dr: i64 = 1;
-    let mut f: i64 = file + df;
-    let mut r: i64 = rank + dr;
-    while on_board(f, r) {
-        let piece: i64 = sqs[make_sq(f, r)];
-        if piece != 0 {
-            if piece == bishop_piece || piece == queen_piece {
-                return true;
-            }
-            break;
-        }
-        f = f + df;
-        r = r + dr;
-    }
-
-    df = -1;
-    dr = 1;
-    f = file + df;
-    r = rank + dr;
-    while on_board(f, r) {
-        let piece2: i64 = sqs[make_sq(f, r)];
-        if piece2 != 0 {
-            if piece2 == bishop_piece || piece2 == queen_piece {
-                return true;
-            }
-            break;
-        }
-        f = f + df;
-        r = r + dr;
-    }
-
-    df = 1;
-    dr = -1;
-    f = file + df;
-    r = rank + dr;
-    while on_board(f, r) {
-        let piece3: i64 = sqs[make_sq(f, r)];
-        if piece3 != 0 {
-            if piece3 == bishop_piece || piece3 == queen_piece {
-                return true;
-            }
-            break;
-        }
-        f = f + df;
-        r = r + dr;
-    }
-
-    df = -1;
-    dr = -1;
-    f = file + df;
-    r = rank + dr;
-    while on_board(f, r) {
-        let piece4: i64 = sqs[make_sq(f, r)];
-        if piece4 != 0 {
-            if piece4 == bishop_piece || piece4 == queen_piece {
-                return true;
-            }
-            break;
-        }
-        f = f + df;
-        r = r + dr;
-    }
-
-    df = 1;
-    dr = 0;
-    f = file + df;
-    r = rank + dr;
-    while on_board(f, r) {
-        let piece5: i64 = sqs[make_sq(f, r)];
-        if piece5 != 0 {
-            if piece5 == rook_piece || piece5 == queen_piece {
-                return true;
-            }
-            break;
-        }
-        f = f + df;
-        r = r + dr;
-    }
-
-    df = -1;
-    dr = 0;
-    f = file + df;
-    r = rank + dr;
-    while on_board(f, r) {
-        let piece6: i64 = sqs[make_sq(f, r)];
-        if piece6 != 0 {
-            if piece6 == rook_piece || piece6 == queen_piece {
-                return true;
-            }
-            break;
-        }
-        f = f + df;
-        r = r + dr;
-    }
-
-    df = 0;
-    dr = 1;
-    f = file + df;
-    r = rank + dr;
-    while on_board(f, r) {
-        let piece7: i64 = sqs[make_sq(f, r)];
-        if piece7 != 0 {
-            if piece7 == rook_piece || piece7 == queen_piece {
-                return true;
-            }
-            break;
-        }
-        f = f + df;
-        r = r + dr;
-    }
-
-    df = 0;
-    dr = -1;
-    f = file + df;
-    r = rank + dr;
-    while on_board(f, r) {
-        let piece8: i64 = sqs[make_sq(f, r)];
-        if piece8 != 0 {
-            if piece8 == rook_piece || piece8 == queen_piece {
-                return true;
-            }
-            break;
-        }
-        f = f + df;
-        r = r + dr;
-    }
-
-    let k1f: i64 = file - 1;
-    let k1r: i64 = rank - 1;
-    if on_board(k1f, k1r) && sqs[make_sq(k1f, k1r)] == king_piece {
-        return true;
-    }
-    let k2f: i64 = file;
-    let k2r: i64 = rank - 1;
-    if on_board(k2f, k2r) && sqs[make_sq(k2f, k2r)] == king_piece {
-        return true;
-    }
-    let k3f: i64 = file + 1;
-    let k3r: i64 = rank - 1;
-    if on_board(k3f, k3r) && sqs[make_sq(k3f, k3r)] == king_piece {
-        return true;
-    }
-    let k4f: i64 = file - 1;
-    let k4r: i64 = rank;
-    if on_board(k4f, k4r) && sqs[make_sq(k4f, k4r)] == king_piece {
-        return true;
-    }
-    let k5f: i64 = file + 1;
-    let k5r: i64 = rank;
-    if on_board(k5f, k5r) && sqs[make_sq(k5f, k5r)] == king_piece {
-        return true;
-    }
-    let k6f: i64 = file - 1;
-    let k6r: i64 = rank + 1;
-    if on_board(k6f, k6r) && sqs[make_sq(k6f, k6r)] == king_piece {
-        return true;
-    }
-    let k7f: i64 = file;
-    let k7r: i64 = rank + 1;
-    if on_board(k7f, k7r) && sqs[make_sq(k7f, k7r)] == king_piece {
-        return true;
-    }
-    let k8f: i64 = file + 1;
-    let k8r: i64 = rank + 1;
-    if on_board(k8f, k8r) && sqs[make_sq(k8f, k8r)] == king_piece {
+    // Bishop/Queen (diagonals)
+    let diag: Vec<i64> = Vec::new();
+    diag.push(1);  diag.push(1);   diag.push(-1); diag.push(1);
+    diag.push(1);  diag.push(-1);  diag.push(-1); diag.push(-1);
+    if slider_attacks_from(sqs, file, rank, diag, by_color * BISHOP, by_color * QUEEN) {
         return true;
     }
 
-    false
+    // Rook/Queen (straights)
+    let straight: Vec<i64> = Vec::new();
+    straight.push(1);  straight.push(0);   straight.push(-1); straight.push(0);
+    straight.push(0);  straight.push(1);   straight.push(0);  straight.push(-1);
+    if slider_attacks_from(sqs, file, rank, straight, by_color * ROOK, by_color * QUEEN) {
+        return true;
+    }
+
+    // King
+    let kg: Vec<i64> = Vec::new();
+    kg.push(-1); kg.push(-1);  kg.push(0); kg.push(-1);  kg.push(1); kg.push(-1);
+    kg.push(-1); kg.push(0);   kg.push(1); kg.push(0);
+    kg.push(-1); kg.push(1);   kg.push(0); kg.push(1);   kg.push(1); kg.push(1);
+    step_attacks_from(sqs, file, rank, kg, by_color * KING)
 }
 
 fn in_check(b: Board, color: i64) -> bool {
@@ -1035,6 +892,10 @@ fn quiesce(b: Board, alpha_in: i64, beta_in: i64) -> i64 {
     let beta: i64 = beta_in;
     let mut moves: Vec<ChessMove> = Vec::new();
 
+    // Generate all legal moves when in check (not just evasions). A dedicated
+    // evasion generator would be faster but adds ~100 lines of complexity
+    // (checker detection, single/double check, block/capture filtering) for
+    // minimal gain — this path is hit relatively rarely in quiescence.
     if in_check(b, b.side) {
         moves = generate_legal_moves(b);
         if moves.len() == 0 {
@@ -1114,36 +975,60 @@ fn negamax(b: Board, depth: i64, alpha_in: i64, beta_in: i64) -> i64 {
     best
 }
 
+fn moves_equal(a: ChessMove, b: ChessMove) -> bool {
+    a.from == b.from && a.to == b.to && a.promote == b.promote
+}
+
+// Iterative deepening: search depth 1, 2, ..., max_depth. The best move from
+// each iteration is tried first in the next (PV move ordering).
 fn search_best_move(b: Board, depth_in: i64) -> ChessMove {
     let legal: Vec<ChessMove> = generate_legal_moves(b);
     if legal.len() == 0 {
         return null_move();
     }
 
-    let mut depth: i64 = depth_in;
-    if depth < 1 {
-        depth = 1;
+    let mut max_depth: i64 = depth_in;
+    if max_depth < 1 {
+        max_depth = 1;
     }
 
     let mut best_mv: ChessMove = legal[0];
-    let mut best_score: i64 = -INF;
-    let mut alpha: i64 = -INF;
-    let beta: i64 = INF;
-    let mut i: i64 = 0;
-    while i < legal.len() {
-        let best_idx: i64 = best_ordered_index(b, legal, i);
-        swap_moves(legal, i, best_idx);
-        let mv: ChessMove = legal[i];
-        let child: Board = apply_move(b, mv);
-        let score: i64 = -negamax(child, depth - 1, -beta, -alpha);
-        if score > best_score {
-            best_score = score;
-            best_mv = mv;
+    let mut d: i64 = 1;
+    while d <= max_depth {
+        let mut best_score: i64 = -INF;
+        let mut alpha: i64 = -INF;
+        let beta: i64 = INF;
+
+        if d > 1 {
+            let mut j: i64 = 0;
+            while j < legal.len() {
+                if moves_equal(legal[j], best_mv) {
+                    swap_moves(legal, 0, j);
+                    break;
+                }
+                j = j + 1;
+            }
         }
-        if score > alpha {
-            alpha = score;
+
+        let mut i: i64 = 0;
+        while i < legal.len() {
+            if d <= 1 || i > 0 {
+                let best_idx: i64 = best_ordered_index(b, legal, i);
+                swap_moves(legal, i, best_idx);
+            }
+            let mv: ChessMove = legal[i];
+            let child: Board = apply_move(b, mv);
+            let score: i64 = -negamax(child, d - 1, -beta, -alpha);
+            if score > best_score {
+                best_score = score;
+                best_mv = mv;
+            }
+            if score > alpha {
+                alpha = score;
+            }
+            i = i + 1;
         }
-        i = i + 1;
+        d = d + 1;
     }
     best_mv
 }

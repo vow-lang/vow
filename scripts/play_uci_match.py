@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import re
+import select
 import shlex
 import subprocess
 import sys
@@ -59,6 +60,18 @@ class Engine:
                     raise RuntimeError(f"{self.name}: malformed bestmove line {text!r}")
                 return parts[1], out
 
+    def read_line_timeout(self, timeout: float = 5.0) -> str | None:
+        """Read a single line with a timeout. Returns None on timeout."""
+        if self.proc.stdout is None:
+            raise RuntimeError(f"{self.name}: stdout unavailable")
+        ready, _, _ = select.select([self.proc.stdout], [], [], timeout)
+        if not ready:
+            return None
+        line = self.proc.stdout.readline()
+        if line == "":
+            return None
+        return line.rstrip("\n")
+
     def quit(self) -> None:
         try:
             self.send("quit")
@@ -85,16 +98,16 @@ def position_command(moves: list[str]) -> str:
     return "position startpos moves " + " ".join(moves)
 
 
-def fen_for_moves(engine: Engine, moves: list[str]) -> str:
+def fen_for_moves(engine: Engine, moves: list[str], timeout: float = 5.0) -> str:
     engine.send(position_command(moves))
     engine.send("d")
-    if engine.proc.stdout is None:
-        raise RuntimeError(f"{engine.name}: stdout unavailable")
     while True:
-        line = engine.proc.stdout.readline()
-        if line == "":
-            raise RuntimeError(f"{engine.name}: EOF while waiting for Fen line")
-        text = line.rstrip("\n")
+        text = engine.read_line_timeout(timeout)
+        if text is None:
+            raise RuntimeError(
+                f"{engine.name}: timed out after {timeout}s waiting for 'Fen:' line "
+                f"(does this engine support the Stockfish-specific 'd' command?)"
+            )
         if text.startswith("Fen: "):
             return text[5:]
 
