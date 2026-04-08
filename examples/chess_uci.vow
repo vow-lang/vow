@@ -50,6 +50,11 @@ struct UndoInfo {
     placed: i64,
 }
 
+struct SearchState {
+    stopped: i64,
+    nodes: i64,
+}
+
 fn abs_i64(x: i64) -> i64 {
     if x < 0 {
         -x
@@ -950,7 +955,20 @@ fn generate_tactical_moves(b: Board) -> Vec<ChessMove> {
     tactical
 }
 
-fn quiesce(b: Board, alpha_in: i64, beta_in: i64) -> i64 {
+fn check_stop(ss: SearchState) [read] {
+    ss.nodes = ss.nodes + 1;
+    if ss.stopped == 0 && ss.nodes % 1024 == 0 {
+        if stdin_ready() {
+            let line: String = stdin_read_line();
+            let trimmed: String = trim_line(line);
+            if trimmed.eq(String::from("stop")) {
+                ss.stopped = 1;
+            }
+        }
+    }
+}
+
+fn quiesce(b: Board, alpha_in: i64, beta_in: i64, ss: SearchState) -> i64 [read] {
     let mut alpha: i64 = alpha_in;
     let beta: i64 = beta_in;
     let mut moves: Vec<ChessMove> = Vec::new();
@@ -981,11 +999,15 @@ fn quiesce(b: Board, alpha_in: i64, beta_in: i64) -> i64 {
     let mut best: i64 = alpha;
     let mut i: i64 = 0;
     while i < moves.len() {
+        check_stop(ss);
+        if ss.stopped == 1 {
+            break;
+        }
         let best_idx: i64 = best_ordered_index(b, moves, i);
         swap_moves(moves, i, best_idx);
         let mv: ChessMove = moves[i];
         let undo: UndoInfo = make_move(b, mv);
-        let score: i64 = -quiesce(b, -beta, -alpha);
+        let score: i64 = -quiesce(b, -beta, -alpha, ss);
         unmake_move(b, mv, undo);
         if score > best {
             best = score;
@@ -1001,7 +1023,7 @@ fn quiesce(b: Board, alpha_in: i64, beta_in: i64) -> i64 {
     best
 }
 
-fn negamax(b: Board, depth: i64, alpha_in: i64, beta_in: i64) -> i64 {
+fn negamax(b: Board, depth: i64, alpha_in: i64, beta_in: i64, ss: SearchState) -> i64 [read] {
     let legal: Vec<ChessMove> = generate_legal_moves(b);
     if legal.len() == 0 {
         if in_check(b, b.side) {
@@ -1012,7 +1034,7 @@ fn negamax(b: Board, depth: i64, alpha_in: i64, beta_in: i64) -> i64 {
     }
 
     if depth <= 0 {
-        return quiesce(b, alpha_in, beta_in);
+        return quiesce(b, alpha_in, beta_in, ss);
     }
 
     let mut alpha: i64 = alpha_in;
@@ -1020,11 +1042,15 @@ fn negamax(b: Board, depth: i64, alpha_in: i64, beta_in: i64) -> i64 {
     let mut best: i64 = -INF;
     let mut i: i64 = 0;
     while i < legal.len() {
+        check_stop(ss);
+        if ss.stopped == 1 {
+            break;
+        }
         let best_idx: i64 = best_ordered_index(b, legal, i);
         swap_moves(legal, i, best_idx);
         let mv: ChessMove = legal[i];
         let undo: UndoInfo = make_move(b, mv);
-        let score: i64 = -negamax(b, depth - 1, -beta, -alpha);
+        let score: i64 = -negamax(b, depth - 1, -beta, -alpha, ss);
         unmake_move(b, mv, undo);
         if score > best {
             best = score;
@@ -1046,7 +1072,7 @@ fn moves_equal(a: ChessMove, b: ChessMove) -> bool {
 
 // Iterative deepening: search depth 1, 2, ..., max_depth. The best move from
 // each iteration is tried first in the next (PV move ordering).
-fn search_best_move(b: Board, depth_in: i64) -> ChessMove {
+fn search_best_move(b: Board, depth_in: i64) -> ChessMove [read] {
     let legal: Vec<ChessMove> = generate_legal_moves(b);
     if legal.len() == 0 {
         return null_move();
@@ -1057,9 +1083,13 @@ fn search_best_move(b: Board, depth_in: i64) -> ChessMove {
         max_depth = 1;
     }
 
+    let ss: SearchState = SearchState { stopped: 0, nodes: 0 };
     let mut best_mv: ChessMove = legal[0];
     let mut d: i64 = 1;
     while d <= max_depth {
+        if ss.stopped == 1 {
+            break;
+        }
         let mut best_score: i64 = -INF;
         let mut alpha: i64 = -INF;
         let beta: i64 = INF;
@@ -1077,13 +1107,17 @@ fn search_best_move(b: Board, depth_in: i64) -> ChessMove {
 
         let mut i: i64 = 0;
         while i < legal.len() {
+            check_stop(ss);
+            if ss.stopped == 1 {
+                break;
+            }
             if d <= 1 || i > 0 {
                 let best_idx: i64 = best_ordered_index(b, legal, i);
                 swap_moves(legal, i, best_idx);
             }
             let mv: ChessMove = legal[i];
             let undo: UndoInfo = make_move(b, mv);
-            let score: i64 = -negamax(b, d - 1, -beta, -alpha);
+            let score: i64 = -negamax(b, d - 1, -beta, -alpha, ss);
             unmake_move(b, mv, undo);
             if score > best_score {
                 best_score = score;
