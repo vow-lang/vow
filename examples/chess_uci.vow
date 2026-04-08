@@ -33,6 +33,23 @@ struct Board {
     bq: i64,
 }
 
+struct UndoInfo {
+    from_sq: i64,
+    to_sq: i64,
+    ep_capture_sq: i64,
+    ep_capture_piece: i64,
+    old_ep: i64,
+    old_side: i64,
+    old_wk: i64,
+    old_wq: i64,
+    old_bk: i64,
+    old_bq: i64,
+    castle_rook_from: i64,
+    castle_rook_to: i64,
+    castle_rook_piece: i64,
+    placed: i64,
+}
+
 fn abs_i64(x: i64) -> i64 {
     if x < 0 {
         -x
@@ -106,28 +123,6 @@ fn piece_value(kind: i64) -> i64 {
         return 900;
     }
     0
-}
-
-fn clone_vec_i64(v: Vec<i64>) -> Vec<i64> {
-    let out: Vec<i64> = Vec::new();
-    let mut i: i64 = 0;
-    while i < v.len() {
-        out.push(v[i]);
-        i = i + 1;
-    }
-    out
-}
-
-fn clone_board(b: Board) -> Board {
-    Board {
-        squares: clone_vec_i64(b.squares),
-        side: b.side,
-        ep: b.ep,
-        wk: b.wk,
-        wq: b.wq,
-        bk: b.bk,
-        bq: b.bq,
-    }
 }
 
 fn null_move() -> ChessMove {
@@ -571,37 +566,64 @@ fn generate_pseudo_moves(b: Board) -> Vec<ChessMove> {
     moves
 }
 
-fn apply_move(b: Board, mv: ChessMove) -> Board {
-    let nb: Board = clone_board(b);
-    let sqs: Vec<i64> = nb.squares;
+fn make_move(b: Board, mv: ChessMove) -> UndoInfo {
+    let sqs: Vec<i64> = b.squares;
     let moving: i64 = sqs[mv.from];
     let captured: i64 = sqs[mv.to];
 
-    nb.ep = -1;
+    let old_ep: i64 = b.ep;
+    let old_side: i64 = b.side;
+    let old_wk: i64 = b.wk;
+    let old_wq: i64 = b.wq;
+    let old_bk: i64 = b.bk;
+    let old_bq: i64 = b.bq;
+
+    let mut ep_capture_sq: i64 = -1;
+    let mut ep_capture_piece: i64 = 0;
+
+    b.ep = -1;
     sqs[mv.from] = EMPTY;
 
     if mv.en_passant == 1 {
         if moving > 0 {
-            sqs[mv.to - 8] = EMPTY;
+            ep_capture_sq = mv.to - 8;
         } else {
-            sqs[mv.to + 8] = EMPTY;
+            ep_capture_sq = mv.to + 8;
         }
+        ep_capture_piece = sqs[ep_capture_sq];
+        sqs[ep_capture_sq] = EMPTY;
     }
+
+    let mut castle_rook_from: i64 = -1;
+    let mut castle_rook_to: i64 = -1;
+    let mut castle_rook_piece: i64 = 0;
 
     if mv.castle == 1 {
         if moving > 0 {
+            castle_rook_from = 7;
+            castle_rook_to = 5;
+            castle_rook_piece = sqs[7];
             sqs[7] = EMPTY;
             sqs[5] = ROOK;
         } else {
+            castle_rook_from = 63;
+            castle_rook_to = 61;
+            castle_rook_piece = sqs[63];
             sqs[63] = EMPTY;
             sqs[61] = -ROOK;
         }
     }
     if mv.castle == 2 {
         if moving > 0 {
+            castle_rook_from = 0;
+            castle_rook_to = 3;
+            castle_rook_piece = sqs[0];
             sqs[0] = EMPTY;
             sqs[3] = ROOK;
         } else {
+            castle_rook_from = 56;
+            castle_rook_to = 59;
+            castle_rook_piece = sqs[56];
             sqs[56] = EMPTY;
             sqs[59] = -ROOK;
         }
@@ -618,49 +640,88 @@ fn apply_move(b: Board, mv: ChessMove) -> Board {
     sqs[mv.to] = placed;
 
     if moving == 6 {
-        nb.wk = 0;
-        nb.wq = 0;
+        b.wk = 0;
+        b.wq = 0;
     }
     if moving == -6 {
-        nb.bk = 0;
-        nb.bq = 0;
+        b.bk = 0;
+        b.bq = 0;
     }
 
     if moving == 4 && mv.from == 0 {
-        nb.wq = 0;
+        b.wq = 0;
     }
     if moving == 4 && mv.from == 7 {
-        nb.wk = 0;
+        b.wk = 0;
     }
     if moving == -4 && mv.from == 56 {
-        nb.bq = 0;
+        b.bq = 0;
     }
     if moving == -4 && mv.from == 63 {
-        nb.bk = 0;
+        b.bk = 0;
     }
 
     if captured == 4 && mv.to == 0 {
-        nb.wq = 0;
+        b.wq = 0;
     }
     if captured == 4 && mv.to == 7 {
-        nb.wk = 0;
+        b.wk = 0;
     }
     if captured == -4 && mv.to == 56 {
-        nb.bq = 0;
+        b.bq = 0;
     }
     if captured == -4 && mv.to == 63 {
-        nb.bk = 0;
+        b.bk = 0;
     }
 
     if moving == 1 && mv.to - mv.from == 16 {
-        nb.ep = mv.from + 8;
+        b.ep = mv.from + 8;
     }
     if moving == -1 && mv.from - mv.to == 16 {
-        nb.ep = mv.from - 8;
+        b.ep = mv.from - 8;
     }
 
-    nb.side = -b.side;
-    nb
+    b.side = -old_side;
+
+    UndoInfo {
+        from_sq: moving,
+        to_sq: captured,
+        ep_capture_sq: ep_capture_sq,
+        ep_capture_piece: ep_capture_piece,
+        old_ep: old_ep,
+        old_side: old_side,
+        old_wk: old_wk,
+        old_wq: old_wq,
+        old_bk: old_bk,
+        old_bq: old_bq,
+        castle_rook_from: castle_rook_from,
+        castle_rook_to: castle_rook_to,
+        castle_rook_piece: castle_rook_piece,
+        placed: placed,
+    }
+}
+
+fn unmake_move(b: Board, mv: ChessMove, u: UndoInfo) {
+    let sqs: Vec<i64> = b.squares;
+
+    sqs[mv.to] = u.to_sq;
+    sqs[mv.from] = u.from_sq;
+
+    if u.ep_capture_sq >= 0 {
+        sqs[u.ep_capture_sq] = u.ep_capture_piece;
+    }
+
+    if u.castle_rook_from >= 0 {
+        sqs[u.castle_rook_to] = EMPTY;
+        sqs[u.castle_rook_from] = u.castle_rook_piece;
+    }
+
+    b.ep = u.old_ep;
+    b.side = u.old_side;
+    b.wk = u.old_wk;
+    b.wq = u.old_wq;
+    b.bk = u.old_bk;
+    b.bq = u.old_bq;
 }
 
 fn generate_legal_moves(b: Board) -> Vec<ChessMove> {
@@ -670,8 +731,10 @@ fn generate_legal_moves(b: Board) -> Vec<ChessMove> {
     let mut i: i64 = 0;
     while i < pseudo.len() {
         let mv: ChessMove = pseudo[i];
-        let child: Board = apply_move(b, mv);
-        if !in_check(child, mover) {
+        let undo: UndoInfo = make_move(b, mv);
+        let check: bool = in_check(b, mover);
+        unmake_move(b, mv, undo);
+        if !check {
             legal.push(mv);
         }
         i = i + 1;
@@ -921,8 +984,9 @@ fn quiesce(b: Board, alpha_in: i64, beta_in: i64) -> i64 {
         let best_idx: i64 = best_ordered_index(b, moves, i);
         swap_moves(moves, i, best_idx);
         let mv: ChessMove = moves[i];
-        let child: Board = apply_move(b, mv);
-        let score: i64 = -quiesce(child, -beta, -alpha);
+        let undo: UndoInfo = make_move(b, mv);
+        let score: i64 = -quiesce(b, -beta, -alpha);
+        unmake_move(b, mv, undo);
         if score > best {
             best = score;
         }
@@ -959,8 +1023,9 @@ fn negamax(b: Board, depth: i64, alpha_in: i64, beta_in: i64) -> i64 {
         let best_idx: i64 = best_ordered_index(b, legal, i);
         swap_moves(legal, i, best_idx);
         let mv: ChessMove = legal[i];
-        let child: Board = apply_move(b, mv);
-        let score: i64 = -negamax(child, depth - 1, -beta, -alpha);
+        let undo: UndoInfo = make_move(b, mv);
+        let score: i64 = -negamax(b, depth - 1, -beta, -alpha);
+        unmake_move(b, mv, undo);
         if score > best {
             best = score;
         }
@@ -1017,8 +1082,9 @@ fn search_best_move(b: Board, depth_in: i64) -> ChessMove {
                 swap_moves(legal, i, best_idx);
             }
             let mv: ChessMove = legal[i];
-            let child: Board = apply_move(b, mv);
-            let score: i64 = -negamax(child, d - 1, -beta, -alpha);
+            let undo: UndoInfo = make_move(b, mv);
+            let score: i64 = -negamax(b, d - 1, -beta, -alpha);
+            unmake_move(b, mv, undo);
             if score > best_score {
                 best_score = score;
                 best_mv = mv;
@@ -1192,18 +1258,17 @@ fn find_legal_move(b: Board, uci: String) -> ChessMove {
 }
 
 fn apply_uci_moves(b: Board, tokens: Vec<String>, start_idx: i64) -> Board {
-    let mut board: Board = b;
     let mut i: i64 = start_idx;
     while i < tokens.len() {
         let text: String = tokens[i];
-        let mv: ChessMove = find_legal_move(board, text);
+        let mv: ChessMove = find_legal_move(b, text);
         if is_null_move(mv) {
-            return board;
+            return b;
         }
-        board = apply_move(board, mv);
+        make_move(b, mv);
         i = i + 1;
     }
-    board
+    b
 }
 
 fn handle_position(tokens: Vec<String>, current: Board) -> Board {
