@@ -221,18 +221,7 @@ struct FrontendResult {
     n_errors: i64,
 }
 
-fn run_frontend(argv: Vec<String>, sub: bool) -> FrontendResult [io] {
-    let path: String = {
-        if sub {
-            get_source_path_sub(argv)
-        } else {
-            get_source_path(argv)
-        }
-    };
-    if path.len() == 0 {
-        eprintln_str("usage: vowc <command> [options] <file.vow>");
-        process_exit(1);
-    }
+fn run_frontend_for_path(path: String) -> FrontendResult [io] {
     let dctx: DiagCtx = diag_ctx_new();
     let src: String = fs_read(path);
     diag_ctx_add_source(dctx, path, src);
@@ -270,6 +259,21 @@ fn run_frontend(argv: Vec<String>, sub: bool) -> FrontendResult [io] {
         n_items: n_items,
         n_errors: n_errors,
     }
+}
+
+fn run_frontend(argv: Vec<String>, sub: bool) -> FrontendResult [io] {
+    let path: String = {
+        if sub {
+            get_source_path_sub(argv)
+        } else {
+            get_source_path(argv)
+        }
+    };
+    if path.len() == 0 {
+        eprintln_str("usage: vowc <command> [options] <file.vow>");
+        process_exit(1);
+    }
+    run_frontend_for_path(path)
 }
 
 fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, unwind: String, use_cache: bool) -> i64 [io] {
@@ -550,46 +554,6 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         return 1;
     }
     0
-}
-
-fn run_frontend_for_path(path: String) -> FrontendResult [io] {
-    let dctx: DiagCtx = diag_ctx_new();
-    let src: String = fs_read(path);
-    diag_ctx_add_source(dctx, path, src);
-    let tokens: Vec<Token> = lex(src);
-    let arena: AstArena = arena_new();
-    let m: Module = parse_module_into(tokens, arena, dctx, path);
-    let root_dir: String = get_dir_path(path);
-    let all_items: Vec<i64> = Vec::new();
-    let visited: Vec<String> = Vec::new();
-    visited.push(path);
-    load_deps(root_dir, m, arena, all_items, visited, dctx);
-    let root_items: Vec<i64> = m.items;
-    let n_root: i64 = root_items.len();
-    let mut ri: i64 = 0;
-    while ri < n_root {
-        all_items.push(root_items[ri]);
-        ri = ri + 1;
-    }
-    let merged: Module = Module {
-        name_sid: 0,
-        uses: Vec::new(),
-        items: all_items,
-        arena: arena,
-    };
-    let n_items: i64 = all_items.len();
-    let e: CheckEnv = env_new(dctx, path);
-    check_module(e, merged);
-    let n_errors: i64 = dctx.error_count;
-    let str_eids: Vec<i64> = e.expr_str_eids;
-    FrontendResult {
-        path: path,
-        dctx: dctx,
-        merged: merged,
-        str_eids: str_eids,
-        n_items: n_items,
-        n_errors: n_errors,
-    }
 }
 
 fn is_test_file(name: String) -> bool {

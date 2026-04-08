@@ -1646,6 +1646,19 @@ fn run_pipeline_inner(
         Err(output) => return *output,
     };
 
+    run_pipeline_from_frontend(frontend, source, output, mode, no_verify, dump_ir, trace, no_cache)
+}
+
+fn run_pipeline_from_frontend(
+    frontend: FrontendResult,
+    source: &Path,
+    output: Option<&Path>,
+    mode: BuildMode,
+    no_verify: bool,
+    dump_ir: bool,
+    trace: TraceMode,
+    no_cache: bool,
+) -> BuildOutput {
     let all_diagnostics = frontend.diagnostics;
     let ir_module = frontend.ir_module;
 
@@ -1800,18 +1813,21 @@ fn count_contract_density(ir_module: &vow_ir::Module) -> ContractDensity {
             with_vows += 1;
         }
     }
-    let pct = if total > 0 {
-        (with_vows as f64 / total as f64) * 100.0
+    // Integer math matching self-hosted: (n * 1000) / total gives tenths of a percent
+    let tenths = if total > 0 {
+        (with_vows * 1000) / total
     } else {
-        0.0
+        0
     };
     ContractDensity {
         functions_total: total,
         functions_with_vows: with_vows,
-        density_pct: (pct * 10.0).round() / 10.0,
+        density_pct: (tenths / 10) as f64 + (tenths % 10) as f64 / 10.0,
     }
 }
 
+// TODO: --unwind is accepted but not threaded to ESBMC (hardcoded to 10 in vow-verify).
+// This affects build/verify/test equally — fix in vow-verify when adding unwind passthrough.
 fn run_test_command(
     path: &Path,
     verify: bool,
@@ -1848,8 +1864,36 @@ fn run_test_command(
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
 
-        // Compile
-        let result = run_pipeline_inner(
+        // Compile frontend once — extract density before codegen
+        let frontend = match compile_frontend(test_file) {
+            Ok(f) => f,
+            Err(output) => {
+                let diagnostics: Vec<DiagnosticJson> = output
+                    .diagnostics
+                    .iter()
+                    .map(DiagnosticJson::from_diagnostic)
+                    .collect();
+                entries.push(TestEntry {
+                    file: file_str,
+                    name,
+                    status: "compile_error".to_string(),
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    diagnostics,
+                    counterexamples: vec![],
+                });
+                continue;
+            }
+        };
+
+        let density = count_contract_density(&frontend.ir_module);
+        total_density.functions_total += density.functions_total;
+        total_density.functions_with_vows += density.functions_with_vows;
+
+        let result = run_pipeline_from_frontend(
+            frontend,
             test_file,
             None,
             mode,
@@ -1900,13 +1944,6 @@ fn run_test_command(
                 continue;
             }
             _ => {}
-        }
-
-        // Accumulate contract density from compiled modules
-        if let Ok(frontend) = compile_frontend(test_file) {
-            let density = count_contract_density(&frontend.ir_module);
-            total_density.functions_total += density.functions_total;
-            total_density.functions_with_vows += density.functions_with_vows;
         }
 
         let exe_path = match &result.executable {
@@ -1991,12 +2028,10 @@ fn run_test_command(
         });
     }
 
-    // Compute final density
+    // Compute final density (integer math matching self-hosted compiler)
     if total_density.functions_total > 0 {
-        let pct = (total_density.functions_with_vows as f64
-            / total_density.functions_total as f64)
-            * 100.0;
-        total_density.density_pct = (pct * 10.0).round() / 10.0;
+        let tenths = (total_density.functions_with_vows * 1000) / total_density.functions_total;
+        total_density.density_pct = (tenths / 10) as f64 + (tenths % 10) as f64 / 10.0;
     }
 
     let passed = entries.iter().filter(|e| e.status == "passed").count();
