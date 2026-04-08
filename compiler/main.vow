@@ -70,7 +70,7 @@ fn get_source_path_sub(argv: Vec<String>) -> String {
         if first_byte != 45 {
             if i > 2 {
                 let prev: String = argv[i - 1];
-                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--unwind") || prev == String::from("--debug-trace") {
+                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--unwind") || prev == String::from("--debug-trace") || prev == String::from("--filter") || prev == String::from("--timeout") {
                     i = i - 1;
                 } else {
                     return a;
@@ -82,6 +82,26 @@ fn get_source_path_sub(argv: Vec<String>) -> String {
         i = i - 1;
     }
     String::from("")
+}
+
+fn strip_vow_ext(path: String) -> String {
+    let n: i64 = path.len();
+    if n > 4 {
+        let d: i64 = path.byte_at(n - 4);
+        let v: i64 = path.byte_at(n - 3);
+        let o: i64 = path.byte_at(n - 2);
+        let w: i64 = path.byte_at(n - 1);
+        if d == 46 && v == 118 && o == 111 && w == 119 {
+            let r: String = String::new();
+            let mut i: i64 = 0;
+            while i < n - 4 {
+                r.push_byte(path.byte_at(i));
+                i = i + 1;
+            };
+            return r;
+        }
+    };
+    path
 }
 
 fn default_output(path: String) -> String {
@@ -593,7 +613,7 @@ fn test_json_escape(s: String) -> String {
     diag_json_escape_str(s)
 }
 
-fn emit_test_entry_json(file: String, name: String, status: String, exit_code: i64, stdout: String, stderr: String, duration_ms: i64) -> String {
+fn emit_test_entry_json(file: String, name: String, status: String, exit_code: i64, stdout: String, stderr: String, duration_ms: i64, diagnostics_json: String) -> String {
     let r: String = String::from("{\"file\":\"");
     r.push_str(test_json_escape(file));
     r.push_str(String::from("\",\"name\":\""));
@@ -613,7 +633,9 @@ fn emit_test_entry_json(file: String, name: String, status: String, exit_code: i
     r.push_str(test_json_escape(stderr));
     r.push_str(String::from("\",\"duration_ms\":"));
     r.push_str(i64_to_str(duration_ms));
-    r.push_str(String::from(",\"diagnostics\":[],\"counterexamples\":[]}"));
+    r.push_str(String::from(",\"diagnostics\":"));
+    r.push_str(diagnostics_json);
+    r.push_str(String::from(",\"counterexamples\":[]}"));
     r
 }
 
@@ -634,6 +656,13 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
         else { 30000 }
     };
     let do_verify: bool = has_flag(argv, String::from("--verify"));
+
+    // Validate path exists
+    if fs_exists(path) == 0 {
+        print_str(String::from("{\"status\":\"CompileFailed\",\"total\":0,\"passed\":0,\"failed\":0,\"skipped\":0,\"tests\":[],\"contract_density\":{\"functions_total\":0,\"functions_with_vows\":0,\"density_pct\":0.0}}"));
+        print_str(String::from("\n"));
+        return 1;
+    }
 
     // Discover test files
     let test_files: Vec<String> = Vec::new();
@@ -672,18 +701,19 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                 test_name
             }
         };
-        let start_time: i64 = time_unix();
+        let start_time: i64 = time_unix_ms();
 
         // Compile
         let fr: FrontendResult = run_frontend_for_path(test_path);
         if fr.n_errors > 0 {
-            let duration: i64 = time_unix() - start_time;
-            let entry: String = emit_test_entry_json(test_path, short_name, String::from("compile_error"), -1, String::from(""), String::from(""), duration);
+            let duration: i64 = time_unix_ms() - start_time;
+            let diag_json: String = String::from("[{\"error_code\":\"CompileError\",\"message\":\"compilation failed\",\"severity\":\"error\"}]");
+            let entry: String = emit_test_entry_json(test_path, short_name, String::from("compile_error"), -1, String::from(""), String::from(""), duration, diag_json);
             entries_json.push(entry);
             failed = failed + 1;
             ti = ti + 1;
         } else {
-            let ir_mod: IrModule = lower_module_vow(fr.merged, fr.str_eids);
+            let ir_mod: IrModule = lower_module_vow(fr.merged, fr.str_eids, test_path);
 
             // Count contract density
             let fns2: Vec<IrFunction> = ir_mod.functions;
@@ -700,53 +730,85 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                 fi = fi + 1;
             }
 
-            // Compile to binary
-            let tmp_out: String = str2(String::from("/tmp/vow_test_"), short_name);
-            let result: i64 = clif_emit_module(ir_mod, tmp_out, mode, 0);
-            if result == -1 {
-                let duration: i64 = time_unix() - start_time;
-                let entry: String = emit_test_entry_json(test_path, short_name, String::from("compile_error"), -1, String::from(""), String::from(""), duration);
-                entries_json.push(entry);
-                failed = failed + 1;
-                ti = ti + 1;
-            } else {
-                // Execute with ulimit wrapper
-                let sh_cmd: String = str3(String::from("ulimit -v 2000000; "), tmp_out, String::from(""));
-                let sh_args: Vec<String> = Vec::new();
-                sh_args.push(String::from("-c"));
-                sh_args.push(sh_cmd);
-                let handle: i64 = process_start(String::from("sh"), sh_args);
-                let exit_code: i64 = process_wait_timeout(handle, timeout_ms);
-                let stdout: String = {
-                    if exit_code == -2 {
-                        process_kill(handle);
-                        String::from("")
-                    } else {
-                        process_stdout_for(handle)
+            // Verify if requested
+            let mut skip_exec: bool = false;
+            if do_verify {
+                let vfns: Vec<IrFunction> = ir_mod.functions;
+                let mut vfi: i64 = 0;
+                let mut verify_failed: bool = false;
+                while vfi < vfns.len() {
+                    let vf: IrFunction = vfns[vfi];
+                    let vows: Vec<IrVowEntry> = vf.vows;
+                    if vows.len() > 0 {
+                        let vh: i64 = verify_start(vf, ir_mod, String::from("10"), vfi, false);
+                        if vh != -1 && vh != -2 {
+                            let vr: VerifyResult = verify_collect(vh, vf);
+                            if vr.status == VERIFY_FAILED() {
+                                verify_failed = true;
+                            }
+                        }
                     }
-                };
-                let stderr: String = {
-                    if exit_code == -2 {
-                        String::from("timeout")
-                    } else {
-                        process_stderr_for(handle)
-                    }
-                };
-                fs_remove(tmp_out);
-                let duration: i64 = time_unix() - start_time;
-                let status: String = {
-                    if exit_code == 0 { String::from("passed") }
-                    else { String::from("failed") }
-                };
-                if exit_code == 0 {
-                    passed = passed + 1;
-                } else {
-                    failed = failed + 1;
+                    vfi = vfi + 1;
                 }
-                let entry: String = emit_test_entry_json(test_path, short_name, status, exit_code, stdout, stderr, duration);
-                entries_json.push(entry);
-                ti = ti + 1;
+                if verify_failed {
+                    let duration: i64 = time_unix_ms() - start_time;
+                    let diag_vf: String = String::from("[{\"error_code\":\"VerifyFailed\",\"message\":\"contract verification failed\",\"severity\":\"error\"}]");
+                    let entry: String = emit_test_entry_json(test_path, short_name, String::from("verify_failed"), -1, String::from(""), String::from(""), duration, diag_vf);
+                    entries_json.push(entry);
+                    failed = failed + 1;
+                    skip_exec = true;
+                }
             }
+
+            if !skip_exec {
+                // Compile to binary
+                let tmp_out: String = str2(String::from("/tmp/vow_test_"), short_name);
+                let result: i64 = clif_emit_module(ir_mod, tmp_out, mode, 0);
+                if result == -1 {
+                    let duration: i64 = time_unix_ms() - start_time;
+                    let diag_json2: String = String::from("[{\"error_code\":\"CompileError\",\"message\":\"codegen failed\",\"severity\":\"error\"}]");
+                    let entry: String = emit_test_entry_json(test_path, short_name, String::from("compile_error"), -1, String::from(""), String::from(""), duration, diag_json2);
+                    entries_json.push(entry);
+                    failed = failed + 1;
+                } else {
+                    // Execute with ulimit wrapper
+                    let sh_args: Vec<String> = Vec::new();
+                    sh_args.push(String::from("-c"));
+                    sh_args.push(String::from("ulimit -v 2000000; \"$0\""));
+                    sh_args.push(tmp_out);
+                    let handle: i64 = process_start(String::from("sh"), sh_args);
+                    let exit_code: i64 = process_wait_timeout(handle, timeout_ms);
+                    let stdout: String = {
+                        if exit_code == -2 {
+                            process_kill(handle);
+                            String::from("")
+                        } else {
+                            process_stdout_for(handle)
+                        }
+                    };
+                    let stderr: String = {
+                        if exit_code == -2 {
+                            String::from("timeout")
+                        } else {
+                            process_stderr_for(handle)
+                        }
+                    };
+                    fs_remove(tmp_out);
+                    let duration: i64 = time_unix_ms() - start_time;
+                    let status: String = {
+                        if exit_code == 0 { String::from("passed") }
+                        else { String::from("failed") }
+                    };
+                    if exit_code == 0 {
+                        passed = passed + 1;
+                    } else {
+                        failed = failed + 1;
+                    }
+                    let entry: String = emit_test_entry_json(test_path, short_name, status, exit_code, stdout, stderr, duration, String::from("[]"));
+                    entries_json.push(entry);
+                }
+            }
+            ti = ti + 1;
         }
     }
 
@@ -1034,6 +1096,7 @@ fn skill_json() -> String {
     r.push_str(String::from("      \"i64_to_string\": \"fn(v: i64) -> String []\",\n"));
     r.push_str(String::from("      \"vec_sort\": \"fn(v: Vec<i64>) -> Vec<i64> []\",\n"));
     r.push_str(String::from("      \"time_unix\": \"fn() -> i64 [io]\",\n"));
+    r.push_str(String::from("      \"time_unix_ms\": \"fn() -> i64 [io]\",\n"));
     r.push_str(String::from("      \"hex_encode\": \"fn(data: Vec<u8>) -> String []\",\n"));
     r.push_str(String::from("      \"hex_decode\": \"fn(s: String) -> Vec<u8> []\",\n"));
     r.push_str(String::from("      \"args\": \"fn() -> Vec<String> [read]\",\n"));
@@ -1045,6 +1108,8 @@ fn skill_json() -> String {
     r.push_str(String::from("      \"process_get_stderr\": \"fn() -> String [io]\",\n"));
     r.push_str(String::from("      \"process_start\": \"fn(cmd: String, args: Vec<String>) -> i64 [io]\",\n"));
     r.push_str(String::from("      \"process_wait\": \"fn(pid: i64) -> i64 [io]\",\n"));
+    r.push_str(String::from("      \"process_wait_timeout\": \"fn(pid: i64, timeout_ms: i64) -> i64 [io]\",\n"));
+    r.push_str(String::from("      \"process_kill\": \"fn(pid: i64) -> i64 [io]\",\n"));
     r.push_str(String::from("      \"process_stdout_for\": \"fn(pid: i64) -> String [io]\",\n"));
     r.push_str(String::from("      \"process_stderr_for\": \"fn(pid: i64) -> String [io]\"\n"));
     r.push_str(String::from("    },\n"));
@@ -1265,7 +1330,7 @@ fn skill_human() -> String {
     r.push_str(String::from("TYPES     : i32  i64  u8  u64  f32  f64  bool  ()  !  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>\n"));
     r.push_str(String::from("EFFECTS   : io  read  write  panic  unsafe\n"));
     r.push_str(String::from("BUILTINS  : print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [io]   print_u64: fn(v: u64) -> () [io]\n"));
-    r.push_str(String::from("            eprintln_str: fn(s: String) -> () [io]   fs_read: fn(path: String) -> String [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   parse_i64: fn(s: String) -> i64 []   i64_to_string: fn(v: i64) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]\n"));
+    r.push_str(String::from("            eprintln_str: fn(s: String) -> () [io]   fs_read: fn(path: String) -> String [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   parse_i64: fn(s: String) -> i64 []   i64_to_string: fn(v: i64) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]\n"));
     r.push_str(String::from("METHODS   : Vec: Vec::new/push/pop/len/clear/truncate/v[i]/v[i] = val   String: String::from/String::new/len/byte_at/push_byte/push_str/clear/contains/eq/substring/parse_i64/parse_u64\n"));
     r.push_str(String::from("            HashMap: HashMap::new/insert/get/contains_key/remove/len   Option: unwrap\n"));
     r.push_str(String::from("OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   - ! & ?\n"));

@@ -1968,6 +1968,9 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_time_unix" => {
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_time_unix_ms" => {
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_hex_encode" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));

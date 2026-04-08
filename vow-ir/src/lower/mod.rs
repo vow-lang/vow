@@ -67,6 +67,7 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "i64_to_string" => Some(("__vow_string_from_i64", Ty::Ptr)),
         "vec_sort" => Some(("__vow_vec_sort", Ty::Ptr)),
         "time_unix" => Some(("__vow_time_unix", Ty::I64)),
+        "time_unix_ms" => Some(("__vow_time_unix_ms", Ty::I64)),
         "hex_encode" => Some(("__vow_hex_encode", Ty::Ptr)),
         "hex_decode" => Some(("__vow_hex_decode", Ty::Ptr)),
         "args" => Some(("__vow_args", Ty::Ptr)),

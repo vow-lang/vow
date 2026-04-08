@@ -650,6 +650,7 @@ Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they 
 | Function         | Signature                                  | Effects    |
 |------------------|--------------------------------------------|------------|
 | `time_unix`      | `fn() -> i64`                              | `[io]`     |
+| `time_unix_ms`   | `fn() -> i64`                              | `[io]`     |
 
 #### Encoding
 
@@ -676,6 +677,8 @@ Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they 
 | `process_get_stderr`  | `fn() -> String`                                 | `[io]`  |
 | `process_start`       | `fn(cmd: String, args: Vec<String>) -> i64`      | `[io]`  |
 | `process_wait`        | `fn(pid: i64) -> i64`                            | `[io]`  |
+| `process_wait_timeout`| `fn(pid: i64, timeout_ms: i64) -> i64`           | `[io]`  |
+| `process_kill`        | `fn(pid: i64) -> i64`                             | `[io]`  |
 | `process_stdout_for`  | `fn(pid: i64) -> String`                         | `[io]`  |
 | `process_stderr_for`  | `fn(pid: i64) -> String`                         | `[io]`  |
 
@@ -688,6 +691,10 @@ Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they 
 **`string_starts_with` / `string_ends_with` return values:** Return `i64`: 1 if true, 0 if false.
 
 **`process_run` vs `process_start`:** `process_run(cmd, args)` runs a subprocess synchronously and returns its exit code. After it returns, `process_get_stdout()` and `process_get_stderr()` retrieve the captured output of the most recent `process_run` call. `process_start(cmd, args)` launches a subprocess asynchronously and returns a process ID. Use `process_wait(pid)` to wait for completion and get the exit code, and `process_stdout_for(pid)` / `process_stderr_for(pid)` to retrieve output.
+
+**`process_wait_timeout`:** `process_wait_timeout(pid, timeout_ms)` polls a process started with `process_start` until it exits or the timeout (in milliseconds) elapses. Returns the exit code on completion, `-1` on error, or `-2` on timeout. After a timeout, the process is still running; use `process_kill(pid)` to terminate it.
+
+**`process_kill`:** `process_kill(pid)` sends a kill signal to a running process and waits for it to exit. Returns 0 on success, -1 on error. No-op (returns 0) if the process has already completed.
 
 **`stdin_read` vs `stdin_read_line`:** `stdin_read()` reads the entire stdin stream into a single String (unbounded memory). `stdin_read_line()` reads one line at a time, including the trailing newline. Returns `""` (empty string) at EOF. Use `stdin_read_line` for line-at-a-time processing with bounded memory:
 

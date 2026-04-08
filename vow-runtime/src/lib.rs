@@ -844,6 +844,14 @@ pub extern "C" fn __vow_time_unix() -> i64 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn __vow_time_unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_hex_encode(vec: *const u8) -> *mut u8 {
     if vec.is_null() {
         return __vow_vec_new(1, 1);
@@ -1265,41 +1273,63 @@ pub extern "C" fn __vow_process_wait_timeout(handle: i64, timeout_ms: i64) -> i6
     };
     match state {
         ProcessState::Running(mut child) => {
+            // Take stdout/stderr handles and spawn reader threads to prevent
+            // pipe buffer deadlock when the child writes >64KB before exiting.
+            use std::io::Read;
+            let stdout_handle = child.stdout.take();
+            let stderr_handle = child.stderr.take();
+            let stdout_thread = std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                if let Some(mut r) = stdout_handle {
+                    let _ = r.read_to_end(&mut buf);
+                }
+                buf
+            });
+            let stderr_thread = std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                if let Some(mut r) = stderr_handle {
+                    let _ = r.read_to_end(&mut buf);
+                }
+                buf
+            });
+
+            // Drop the lock during polling so other process operations aren't blocked.
+            drop(guard);
+
             let timeout = std::time::Duration::from_millis(timeout_ms.max(0) as u64);
             let start = std::time::Instant::now();
-            loop {
+            let result = loop {
                 match child.try_wait() {
                     Ok(Some(status)) => {
-                        let output_result = {
-                            use std::io::Read;
-                            let mut stdout = Vec::new();
-                            let mut stderr = Vec::new();
-                            if let Some(mut so) = child.stdout.take() {
-                                let _ = so.read_to_end(&mut stdout);
-                            }
-                            if let Some(mut se) = child.stderr.take() {
-                                let _ = se.read_to_end(&mut stderr);
-                            }
-                            (stdout, stderr)
-                        };
-                        let exit_code = status.code().unwrap_or(-1) as i64;
-                        map.insert(
-                            handle,
-                            ProcessState::Completed {
-                                stdout: output_result.0,
-                                stderr: output_result.1,
-                            },
-                        );
-                        return exit_code;
+                        break Ok(status.code().unwrap_or(-1) as i64);
                     }
                     Ok(None) => {
                         if start.elapsed() >= timeout {
-                            map.insert(handle, ProcessState::Running(child));
-                            return -2; // timeout
+                            break Err(-2i64); // timeout
                         }
                         std::thread::sleep(std::time::Duration::from_millis(10));
                     }
-                    Err(_) => return -1,
+                    Err(_) => {
+                        break Err(-1i64); // error
+                    }
+                }
+            };
+
+            // Re-acquire the lock to update state.
+            let mut guard = PROCESS_MAP.lock().unwrap();
+            let map = process_map_init(&mut guard);
+
+            match result {
+                Ok(exit_code) => {
+                    let stdout = stdout_thread.join().unwrap_or_default();
+                    let stderr = stderr_thread.join().unwrap_or_default();
+                    map.insert(handle, ProcessState::Completed { stdout, stderr });
+                    exit_code
+                }
+                Err(code) => {
+                    // On timeout or error, reinsert as Running.
+                    map.insert(handle, ProcessState::Running(child));
+                    code
                 }
             }
         }
