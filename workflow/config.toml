@@ -1,0 +1,25 @@
+# Multi-agent workflow orchestrator configuration.
+# API keys are read from environment variables:
+#   ANTHROPIC_API_KEY for Claude models
+#   OPENAI_API_KEY for OpenAI models
+
+[defaults]
+max_rounds = 5
+compile_fix_attempts = 3
+verify_timeout = 120        # seconds
+memory_limit = 2000000      # ulimit -v value (KB)
+
+[agents.coder]
+model = "claude-sonnet-4-20250514"
+max_tokens = 8192
+temperature = 0.0
+
+[agents.analyst]
+model = "claude-sonnet-4-20250514"
+max_tokens = 4096
+temperature = 0.0
+
+[agents.reviewer]
+model = "claude-sonnet-4-20250514"
+max_tokens = 4096
+temperature = 0.0
