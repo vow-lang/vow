@@ -215,11 +215,13 @@ fn skill_json() -> String {
     "types": [
       "i32",
       "i64",
+      "u8",
       "u64",
       "f32",
       "f64",
       "bool",
       "()",
+      "!",
       "Vec<T>",
       "Option<T>",
       "Result<T, E>",
@@ -239,11 +241,40 @@ fn skill_json() -> String {
       "print_u64": "fn(v: u64) -> () [io]",
       "eprintln_str": "fn(s: String) -> () [io]",
       "fs_read": "fn(path: String) -> String [read]",
-      "fs_write": "fn(path: String, data: String) -> () [write]",
+      "fs_write": "fn(path: String, data: String) -> i64 [write]",
+      "fs_exists": "fn(path: String) -> i64 [read]",
+      "fs_mkdir": "fn(path: String) -> i64 [io]",
+      "fs_listdir": "fn(path: String) -> Vec<String> [read]",
+      "fs_remove": "fn(path: String) -> i64 [io]",
+      "fs_remove_dir": "fn(path: String) -> i64 [io]",
+      "fs_is_dir": "fn(path: String) -> i64 [read]",
+      "fs_rename": "fn(old: String, new: String) -> i64 [io]",
+      "string_substr": "fn(s: String, start: i64, len: i64) -> String []",
+      "string_split": "fn(s: String, delim: String) -> Vec<String> []",
+      "string_starts_with": "fn(s: String, prefix: String) -> i64 []",
+      "string_ends_with": "fn(s: String, suffix: String) -> i64 []",
+      "string_trim": "fn(s: String) -> String []",
+      "string_to_upper": "fn(s: String) -> String []",
+      "string_to_lower": "fn(s: String) -> String []",
+      "string_replace": "fn(s: String, from: String, to: String) -> String []",
+      "string_join": "fn(parts: Vec<String>, sep: String) -> String []",
+      "parse_i64": "fn(s: String) -> i64 []",
+      "i64_to_string": "fn(v: i64) -> String []",
+      "vec_sort": "fn(v: Vec<i64>) -> Vec<i64> []",
+      "time_unix": "fn() -> i64 [io]",
+      "hex_encode": "fn(data: Vec<u8>) -> String []",
+      "hex_decode": "fn(s: String) -> Vec<u8> []",
       "args": "fn() -> Vec<String> [read]",
       "stdin_read": "fn() -> String [read]",
       "stdin_read_line": "fn() -> String [read]",
-      "process_exit": "fn(code: i64) -> () [io]"
+      "process_exit": "fn(code: i64) -> ! [io]",
+      "process_run": "fn(cmd: String, args: Vec<String>) -> i64 [io]",
+      "process_get_stdout": "fn() -> String [io]",
+      "process_get_stderr": "fn() -> String [io]",
+      "process_start": "fn(cmd: String, args: Vec<String>) -> i64 [io]",
+      "process_wait": "fn(pid: i64) -> i64 [io]",
+      "process_stdout_for": "fn(pid: i64) -> String [io]",
+      "process_stderr_for": "fn(pid: i64) -> String [io]"
     },
     "operators": {
       "arithmetic": [
@@ -451,10 +482,10 @@ LANGUAGE SUMMARY
     0
   }
 
-TYPES     : i32  i64  u64  f32  f64  bool  ()  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>
+TYPES     : i32  i64  u8  u64  f32  f64  bool  ()  !  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>
 EFFECTS   : io  read  write  panic  unsafe
 BUILTINS  : print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [io]   print_u64: fn(v: u64) -> () [io]
-            eprintln_str: fn(s: String) -> () [io]   fs_read: fn(path: String) -> String [read]   fs_write: fn(path: String, data: String) -> () [write]   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   process_exit: fn(code: i64) -> () [io]
+            eprintln_str: fn(s: String) -> () [io]   fs_read: fn(path: String) -> String [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   parse_i64: fn(s: String) -> i64 []   i64_to_string: fn(v: i64) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
 METHODS   : Vec: Vec::new/push/pop/len/clear/truncate/v[i]/v[i] = val   String: String::from/String::new/len/byte_at/push_byte/push_str/clear/contains/eq/substring/parse_i64/parse_u64
             HashMap: HashMap::new/insert/get/contains_key/remove/len   Option: unwrap
 OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   - ! & ?

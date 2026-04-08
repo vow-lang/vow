@@ -41,7 +41,8 @@ def _split_table_row(line: str) -> list[str]:
 
 def extract_table(text: str, heading: str, *, heading_level: int = 3) -> list[list[str]]:
     """Extract rows from a markdown table under a heading.
-    Returns list of rows, each row is a list of cell strings (backticks stripped)."""
+    Returns list of rows, each row is a list of cell strings (backticks stripped).
+    Collects rows from all tables in the section, including sub-sections."""
     prefix = "#" * heading_level + " "
     in_section = False
     in_table = False
@@ -52,13 +53,18 @@ def extract_table(text: str, heading: str, *, heading_level: int = 3) -> list[li
             in_table = False
             continue
         if in_section and line.startswith("#"):
-            break
+            level = len(line) - len(line.lstrip("#"))
+            if level <= heading_level:
+                break
+            in_table = False
+            continue
         if in_section and line.startswith("|") and "---" in line:
             in_table = True
             continue
         if in_section and in_table:
             if not line.startswith("|"):
-                break
+                in_table = False
+                continue
             cells = _split_table_row(line)
             cells = [re.sub(r"`([^`]*)`", r"\1", c) for c in cells]
             rows.append(cells)
