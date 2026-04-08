@@ -1483,11 +1483,7 @@ fn run_verify_only_inner(source: &Path, no_cache: bool) -> BuildOutput {
     };
 
     if find_esbmc().is_none() {
-        return verify_outcome_to_output(
-            VerifyOutcome::ToolNotFound,
-            frontend.diagnostics,
-            None,
-        );
+        return verify_outcome_to_output(VerifyOutcome::ToolNotFound, frontend.diagnostics, None);
     }
 
     let verify_cache = if no_cache { None } else { VerifyCache::new() };
@@ -1920,11 +1916,8 @@ fn run_contracts_command(source: &Path, verify: bool, no_cache: bool) {
 
     if verify {
         if find_esbmc().is_none() {
-            let output = verify_outcome_to_output(
-                VerifyOutcome::ToolNotFound,
-                frontend.diagnostics,
-                None,
-            );
+            let output =
+                verify_outcome_to_output(VerifyOutcome::ToolNotFound, frontend.diagnostics, None);
             output.emit_json();
             std::process::exit(1);
         }
