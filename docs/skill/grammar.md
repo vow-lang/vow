@@ -683,7 +683,7 @@ Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they 
 
 **`fs_read` semantics:** `fs_read(path)` opens the file at `path`, reads its entire contents, and returns a String. Returns `""` (empty String) on any error (file not found, permission denied, I/O error, non-UTF-8 path). Does not block on regular files. Callers should check `result.len() == 0` to detect failure.
 
-**Filesystem return values:** `fs_write`, `fs_exists`, `fs_mkdir`, `fs_remove`, `fs_remove_dir`, `fs_is_dir`, and `fs_rename` return `i64`: 0 on success (or "false" for predicates), non-zero on failure (or "true" for `fs_exists`/`fs_is_dir`).
+**Filesystem return values:** `fs_write`, `fs_mkdir`, `fs_remove`, `fs_remove_dir`, and `fs_rename` return `i64`: 0 on success, non-zero on failure. `fs_exists` and `fs_is_dir` are predicates: they return 1 for true, 0 for false. Errors (null pointer, invalid UTF-8) also return 0, so callers cannot distinguish "false" from "error".
 
 **`string_starts_with` / `string_ends_with` return values:** Return `i64`: 1 if true, 0 if false.
 
