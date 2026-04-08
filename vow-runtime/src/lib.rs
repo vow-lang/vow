@@ -1372,12 +1372,13 @@ pub extern "C" fn __vow_process_kill(handle: i64) -> i64 {
                 let _ = child.wait();
                 0
             }
-            Err(_) => -1,
+            Err(_) => {
+                // Kill failed — process likely already exited. Reap it.
+                let _ = child.wait();
+                0
+            }
         },
-        ProcessState::Completed { stdout, stderr } => {
-            map.insert(handle, ProcessState::Completed { stdout, stderr });
-            0
-        }
+        ProcessState::Completed { .. } => 0,
     }
 }
 
