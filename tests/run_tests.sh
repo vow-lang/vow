@@ -209,11 +209,13 @@ for f in "$SCRIPT_DIR"/run/*.vow; do
   fi
 
   # Run (pipe stdin if TEST_STDIN is set)
+  # Disable pipefail in the stdin subshell so we capture the binary's exit
+  # code, not printf's SIGPIPE (141) when the binary exits early.
   set +e
   if [[ -n "$TEST_STDIN_FILE" ]]; then
     actual_stdout="$(run_bin "$out" < "$TEST_STDIN_FILE" 2>/dev/null)"
   elif [[ -n "$TEST_STDIN" ]]; then
-    actual_stdout="$(printf '%b' "$TEST_STDIN" | run_bin "$out" 2>/dev/null)"
+    actual_stdout="$(set +o pipefail; printf '%b' "$TEST_STDIN" | run_bin "$out" 2>/dev/null)"
   else
     actual_stdout="$(run_bin "$out" 2>/dev/null)"
   fi
