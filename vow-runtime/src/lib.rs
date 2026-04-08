@@ -278,6 +278,7 @@ pub unsafe extern "C" fn __vow_vec_push(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_len(vec: *const u8) -> usize {
+    sanitize_on_read(vec as usize, 0);
     let v = unsafe { &*(vec as *const VowVec) };
     v.len
 }
@@ -291,7 +292,6 @@ pub unsafe extern "C" fn __vow_vec_push_val(vec: *mut u8, value: i64) {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_get_val(vec: *const u8, index: usize) -> i64 {
-    sanitize_on_read(vec as usize, index);
     let ptr = unsafe { __vow_vec_get_ptr(vec, index, 8) };
     unsafe { *(ptr as *const i64) }
 }
@@ -425,6 +425,8 @@ pub unsafe extern "C" fn __vow_string_clear(s: *mut u8) {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_eq(a: *const u8, b: *const u8) -> i64 {
+    sanitize_on_read(a as usize, 0);
+    sanitize_on_read(b as usize, 0);
     let va = unsafe { &*(a as *const VowVec) };
     let vb = unsafe { &*(b as *const VowVec) };
     if va.len != vb.len {
@@ -1388,39 +1390,20 @@ fn sanitize_on_vec_new(vec_addr: usize) {
     );
 }
 
-fn sanitize_check_freed(vec_addr: usize, op: &str) {
-    if !sanitize_is_enabled() {
-        return;
-    }
-    let is_freed = {
-        let table = SHADOW_TABLE.lock().unwrap();
-        if let Some(map) = table.as_ref() {
-            if let Some(shadow) = map.get(&vec_addr) {
-                shadow.freed
-            } else {
-                false
-            }
-        } else {
-            false
-        }
-    };
-    if is_freed {
-        sanitize_emit_error(
-            "UseAfterFree",
-            &format!("\"op\":\"{op}\",\"vec\":\"0x{vec_addr:x}\""),
-        );
-    }
-}
-
 fn sanitize_on_push(vec_addr: usize) {
     if !sanitize_is_enabled() {
         return;
     }
-    sanitize_check_freed(vec_addr, "push");
     let generation = SANITIZE_GLOBAL_GEN.fetch_add(1, Ordering::Relaxed);
     let mut table = SHADOW_TABLE.lock().unwrap();
     let map = shadow_table_get_or_init(&mut table);
     if let Some(shadow) = map.get_mut(&vec_addr) {
+        if shadow.freed {
+            sanitize_emit_error(
+                "UseAfterFree",
+                &format!("\"op\":\"push\",\"vec\":\"0x{vec_addr:x}\""),
+            );
+        }
         shadow.generations.push(generation);
     }
 }
@@ -1429,14 +1412,19 @@ fn sanitize_on_set(vec_addr: usize, index: usize) {
     if !sanitize_is_enabled() {
         return;
     }
-    sanitize_check_freed(vec_addr, "set");
     let generation = SANITIZE_GLOBAL_GEN.fetch_add(1, Ordering::Relaxed);
     let mut table = SHADOW_TABLE.lock().unwrap();
     let map = shadow_table_get_or_init(&mut table);
-    if let Some(shadow) = map.get_mut(&vec_addr)
-        && index < shadow.generations.len()
-    {
-        shadow.generations[index] = generation;
+    if let Some(shadow) = map.get_mut(&vec_addr) {
+        if shadow.freed {
+            sanitize_emit_error(
+                "UseAfterFree",
+                &format!("\"op\":\"set\",\"vec\":\"0x{vec_addr:x}\""),
+            );
+        }
+        if index < shadow.generations.len() {
+            shadow.generations[index] = generation;
+        }
     }
 }
 
@@ -1444,10 +1432,15 @@ fn sanitize_on_truncate(vec_addr: usize, new_len: usize) {
     if !sanitize_is_enabled() {
         return;
     }
-    sanitize_check_freed(vec_addr, "truncate");
     let mut table = SHADOW_TABLE.lock().unwrap();
     let map = shadow_table_get_or_init(&mut table);
     if let Some(shadow) = map.get_mut(&vec_addr) {
+        if shadow.freed {
+            sanitize_emit_error(
+                "UseAfterFree",
+                &format!("\"op\":\"truncate\",\"vec\":\"0x{vec_addr:x}\""),
+            );
+        }
         shadow.generations.truncate(new_len);
     }
 }
@@ -1456,10 +1449,15 @@ fn sanitize_on_clear(vec_addr: usize) {
     if !sanitize_is_enabled() {
         return;
     }
-    sanitize_check_freed(vec_addr, "clear");
     let mut table = SHADOW_TABLE.lock().unwrap();
     let map = shadow_table_get_or_init(&mut table);
     if let Some(shadow) = map.get_mut(&vec_addr) {
+        if shadow.freed {
+            sanitize_emit_error(
+                "UseAfterFree",
+                &format!("\"op\":\"clear\",\"vec\":\"0x{vec_addr:x}\""),
+            );
+        }
         shadow.generations.clear();
     }
 }
@@ -1492,10 +1490,15 @@ fn sanitize_on_pop(vec_addr: usize) {
     if !sanitize_is_enabled() {
         return;
     }
-    sanitize_check_freed(vec_addr, "pop");
     let mut table = SHADOW_TABLE.lock().unwrap();
     let map = shadow_table_get_or_init(&mut table);
     if let Some(shadow) = map.get_mut(&vec_addr) {
+        if shadow.freed {
+            sanitize_emit_error(
+                "UseAfterFree",
+                &format!("\"op\":\"pop\",\"vec\":\"0x{vec_addr:x}\""),
+            );
+        }
         shadow.generations.pop();
     }
 }
@@ -1504,7 +1507,16 @@ fn sanitize_on_read(vec_addr: usize, _index: usize) {
     if !sanitize_is_enabled() {
         return;
     }
-    sanitize_check_freed(vec_addr, "read");
+    let table = SHADOW_TABLE.lock().unwrap();
+    if let Some(map) = table.as_ref()
+        && let Some(shadow) = map.get(&vec_addr)
+        && shadow.freed
+    {
+        sanitize_emit_error(
+            "UseAfterFree",
+            &format!("\"op\":\"read\",\"vec\":\"0x{vec_addr:x}\""),
+        );
+    }
 }
 
 /// Query the generation of a Vec slot. Returns 0 if unknown.
