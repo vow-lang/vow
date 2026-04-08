@@ -113,13 +113,31 @@ Test discovery: files matching `test_*.vow` or `*_test.vow` in the given directo
 
 Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `skipped`.
 
-### `vow --help`
+### `vow decl`
+
+Emit declaration file output only.
 
 ```
-vow --help               # JSON capability description (for agents)
-vow --help --human       # human-readable text
+vow decl [OPTIONS] <source.vow>
+```
+
+**Options:**
+
+| Flag              | Default     | Description                                |
+|-------------------|-------------|--------------------------------------------|
+| `-o, --output`    | `<source>.vow.d` | Output declaration file path          |
+
+### `vow --help`
+
+`vow --help` is agent-first. It emits versioned JSON capability data for the tool, command set,
+language surface, result schemas, and implementation status. `--help --human` exists only as a
+legacy compatibility mode and is not the canonical interface.
+
+```
+vow --help               # versioned JSON tool-help protocol
+vow --help --human       # legacy compatibility text
 vow build --help         # same JSON (works on all subcommands)
-vow verify --help --human  # same human text (works on all subcommands)
+vow verify --help --human  # same legacy text (works on all subcommands)
 ```
 
 ## Exit Codes
@@ -142,7 +160,7 @@ vow verify --help --human  # same human text (works on all subcommands)
 | `Verified`      | Compiled + all contracts proved by ESBMC     |
 | `Unverified`    | Compiled with `--no-verify` (ESBMC skipped)  |
 | `CompileFailed` | Parse error, type error, module load error, or link failure |
-| `VerifyFailed`  | ESBMC found a counterexample, or ESBMC not found |
+| `VerifyFailed`  | ESBMC found a counterexample, timed out, errored, or was not found |
 
 ### Verified Example
 
@@ -214,8 +232,8 @@ vow verify --help --human  # same human text (works on all subcommands)
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
 | `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
-| `verify_status`    | string              | On timeout/error  | "timeout" or "error"                      |
-| `verify_message`   | string              | On error          | ESBMC error message                       |
+| `verify_status`    | string              | On backend failure | `"timeout"`, `"error"`, or `"tool_not_found"` |
+| `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
 
 ## Contracts Output JSON
 

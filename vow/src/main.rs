@@ -15,7 +15,7 @@ use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{CollectingEmitter, Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
     Counterexample, VerificationResult, detect_constant_functions, emit_verify_c_source,
-    find_esbmc, run_esbmc, verify_function_with_module_and_const_fns,
+    find_esbmc, run_esbmc_with_unwind, verify_function_with_module_and_const_fns_with_unwind,
 };
 
 use cache::{CachedVerifyResult, VerifyCache};
@@ -62,6 +62,8 @@ struct Args {
     debug_trace: TraceArg,
     #[arg(long)]
     no_cache: bool,
+    #[arg(long, default_value_t = 10)]
+    unwind: u32,
     #[arg(long)]
     help: bool,
     #[arg(long)]
@@ -98,6 +100,8 @@ struct BuildArgs {
     debug_trace: TraceArg,
     #[arg(long)]
     no_cache: bool,
+    #[arg(long, default_value_t = 10)]
+    unwind: u32,
     #[arg(long)]
     help: bool,
     #[arg(long)]
@@ -114,6 +118,8 @@ struct VerifyArgs {
     human: bool,
     #[arg(long)]
     no_cache: bool,
+    #[arg(long, default_value_t = 10)]
+    unwind: u32,
 }
 
 #[derive(clap::Args, Debug)]
@@ -176,9 +182,38 @@ struct ContractsArgs {
 
 fn skill_json() -> String {
     r#"{
+  "schema_version": "2",
+  "kind": "tool_help",
   "tool": "vow",
+  "audience": "agent",
+  "default_format": "json",
   "description": "Vow compiler: compiles Vow source to native executables with contract verification",
   "usage": "vow <command> [OPTIONS] <source.vow>",
+  "legacy_usage": "vow [OPTIONS] <source.vow> (equivalent to vow build)",
+  "references": {
+    "grammar": "docs/skill/grammar.md",
+    "cli": "docs/skill/cli.md",
+    "errors": "docs/skill/errors.md",
+    "examples": "docs/skill/examples.md",
+    "schemas": {
+      "build_result": "docs/skill/schemas/build-result.schema.json",
+      "contracts_result": "docs/skill/schemas/contracts-result.schema.json",
+      "diagnostic": "docs/skill/schemas/diagnostic.schema.json",
+      "counterexample": "docs/skill/schemas/counterexample.schema.json",
+      "vow_violation": "docs/skill/schemas/vow-violation.schema.json"
+    }
+  },
+  "invocation": {
+    "canonical": "vow <command> [OPTIONS] <source.vow>",
+    "default_command": "build",
+    "legacy_equivalent": "vow [OPTIONS] <source.vow>",
+    "source_argument": {
+      "name": "source",
+      "kind": "path",
+      "required": true,
+      "suffix": ".vow"
+    }
+  },
   "commands": {
     "build": "Compile source to native executable (verifies by default; use --no-verify to skip)",
     "verify": "Verify contracts without producing an executable (use --no-cache to skip cache)",
@@ -186,7 +221,276 @@ fn skill_json() -> String {
     "decl": "Emit declaration file (.vow.d) with type signatures only",
     "contracts": "List all contracts with optional verification status"
   },
-  "legacy_usage": "vow [OPTIONS] <source.vow> (equivalent to vow build)",
+  "command_details": {
+    "build": {
+      "status": "implemented",
+      "usage": "vow build [OPTIONS] <source.vow>",
+      "default_when_command_omitted": true,
+      "arguments": [
+        {
+          "name": "source",
+          "kind": "path",
+          "required": true,
+          "suffix": ".vow"
+        }
+      ],
+      "options": [
+        {
+          "form": "-o, --output <path>",
+          "description": "Output executable path (default: source without .vow extension)",
+          "short": "-o",
+          "long": "--output",
+          "value_name": "path",
+          "value_kind": "path",
+          "default": "source without .vow extension"
+        },
+        {
+          "form": "--mode <debug|release>",
+          "description": "Build mode; debug inserts runtime vow checks (default: release)",
+          "long": "--mode",
+          "value_name": "mode",
+          "value_kind": "enum",
+          "values": [
+            "debug",
+            "release"
+          ],
+          "default": "release"
+        },
+        {
+          "form": "--no-verify",
+          "description": "Skip ESBMC static verification",
+          "long": "--no-verify",
+          "value_kind": "flag"
+        },
+        {
+          "form": "--dump-ir",
+          "description": "Print IR text to stdout and exit (no JSON output, no codegen)",
+          "long": "--dump-ir",
+          "value_kind": "flag"
+        },
+        {
+          "form": "--debug-trace <off|calls|full>",
+          "description": "Emit JSON trace lines to stderr at runtime (default: off)",
+          "long": "--debug-trace",
+          "value_name": "trace",
+          "value_kind": "enum",
+          "values": [
+            "off",
+            "calls",
+            "full"
+          ],
+          "default": "off"
+        },
+        {
+          "form": "--no-cache",
+          "description": "Disable compile and verify caching",
+          "long": "--no-cache",
+          "value_kind": "flag"
+        },
+        {
+          "form": "--unwind <N>",
+          "description": "ESBMC loop unwind bound (default: 10)",
+          "long": "--unwind",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 10
+        }
+      ],
+      "stdout": {
+        "format": "json",
+        "schema_ref": "docs/skill/schemas/build-result.schema.json",
+        "suppressed_by": [
+          "--dump-ir"
+        ]
+      },
+      "stderr": {
+        "channels": [
+          "diagnostic stream",
+          "debug trace"
+        ],
+        "debug_trace_flag": "--debug-trace <off|calls|full>"
+      },
+      "notes": [
+        "verification is enabled by default",
+        "debug mode inserts runtime vow checks"
+      ]
+    },
+    "verify": {
+      "status": "implemented",
+      "usage": "vow verify [OPTIONS] <source.vow>",
+      "arguments": [
+        {
+          "name": "source",
+          "kind": "path",
+          "required": true,
+          "suffix": ".vow"
+        }
+      ],
+      "options": [
+        {
+          "form": "--no-cache",
+          "description": "Disable verification result caching",
+          "long": "--no-cache",
+          "value_kind": "flag"
+        },
+        {
+          "form": "--unwind <N>",
+          "description": "ESBMC loop unwind bound (default: 10)",
+          "long": "--unwind",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 10
+        }
+      ],
+      "stdout": {
+        "format": "json",
+        "schema_ref": "docs/skill/schemas/build-result.schema.json",
+        "fixed_fields": {
+          "executable": null
+        }
+      },
+      "notes": [
+        "runs verification only and never emits a binary"
+      ]
+    },
+    "test": {
+      "status": "implemented",
+      "usage": "vow test [OPTIONS] [<path>]",
+      "arguments": [
+        {
+          "name": "path",
+          "kind": "path",
+          "required": false,
+          "default": "."
+        }
+      ],
+      "options": [
+        {
+          "form": "--verify",
+          "description": "Run ESBMC verification on test files",
+          "long": "--verify",
+          "value_kind": "flag"
+        },
+        {
+          "form": "--filter <pat>",
+          "description": "Only run tests whose name contains pat",
+          "long": "--filter",
+          "value_name": "pat",
+          "value_kind": "string"
+        },
+        {
+          "form": "--mode <debug|release>",
+          "description": "Build mode; debug inserts runtime vow checks (default: debug)",
+          "long": "--mode",
+          "value_name": "mode",
+          "value_kind": "enum",
+          "values": [
+            "debug",
+            "release"
+          ],
+          "default": "debug"
+        },
+        {
+          "form": "--timeout <ms>",
+          "description": "Per-test execution timeout in milliseconds (default: 30000)",
+          "long": "--timeout",
+          "value_name": "ms",
+          "value_kind": "integer",
+          "default": 30000
+        },
+        {
+          "form": "--unwind <N>",
+          "description": "ESBMC loop unwind bound (with --verify) (default: 10)",
+          "long": "--unwind",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 10
+        }
+      ],
+      "stdout": {
+        "format": "json",
+        "schema_ref": "docs/skill/schemas/test-result.schema.json"
+      },
+      "notes": [
+        "discovers test_*.vow and *_test.vow files",
+        "each test must contain main() -> i32 returning 0 on success"
+      ]
+    },
+    "decl": {
+      "status": "implemented",
+      "usage": "vow decl [OPTIONS] <source.vow>",
+      "arguments": [
+        {
+          "name": "source",
+          "kind": "path",
+          "required": true,
+          "suffix": ".vow"
+        }
+      ],
+      "options": [
+        {
+          "form": "-o, --output <path>",
+          "description": "Output declaration file path (default: <source>.vow.d)",
+          "short": "-o",
+          "long": "--output",
+          "value_name": "path",
+          "value_kind": "path",
+          "default": "<source>.vow.d"
+        }
+      ],
+      "stdout": {
+        "format": "none"
+      },
+      "side_effects": [
+        {
+          "kind": "write_file",
+          "default_path": "<source>.vow.d"
+        }
+      ]
+    },
+    "contracts": {
+      "status": "implemented",
+      "usage": "vow contracts [OPTIONS] <source.vow>",
+      "arguments": [
+        {
+          "name": "source",
+          "kind": "path",
+          "required": true,
+          "suffix": ".vow"
+        }
+      ],
+      "options": [
+        {
+          "form": "--verify",
+          "description": "Run ESBMC verification and report per-contract status",
+          "long": "--verify",
+          "value_kind": "flag"
+        },
+        {
+          "form": "--no-cache",
+          "description": "Disable verification result caching",
+          "long": "--no-cache",
+          "value_kind": "flag"
+        },
+        {
+          "form": "--unwind <N>",
+          "description": "ESBMC loop unwind bound (default: 10)",
+          "long": "--unwind",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 10
+        }
+      ],
+      "stdout": {
+        "format": "json",
+        "schema_ref": "docs/skill/schemas/contracts-result.schema.json"
+      },
+      "notes": [
+        "runs frontend only by default",
+        "use --verify for per-contract ESBMC status"
+      ]
+    }
+  },
   "build_options": {
     "-o, --output <path>": "Output executable path (default: source without .vow extension)",
     "--mode <debug|release|profile>": "Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit (default: release)",
@@ -198,7 +502,10 @@ fn skill_json() -> String {
   },
   "verify_options": {
     "--no-cache": "Disable verification result caching",
-    "--unwind <N>": "ESBMC loop unwind bound"
+    "--unwind <N>": "ESBMC loop unwind bound (default: 10)"
+  },
+  "decl_options": {
+    "-o, --output <path>": "Output declaration file path (default: <source>.vow.d)"
   },
   "test_options": {
     "<path>": "Directory to scan or single .vow file (default: .)",
@@ -211,11 +518,49 @@ fn skill_json() -> String {
   "contracts_options": {
     "--verify": "Run ESBMC verification and report per-contract status",
     "--no-cache": "Disable verification result caching",
-    "--unwind <N>": "ESBMC loop unwind bound"
+    "--unwind <N>": "ESBMC loop unwind bound (default: 10)"
   },
   "global_options": {
-    "--help": "Print this JSON capability description",
-    "--help --human": "Print human-readable capability description"
+    "--help": "Emit versioned JSON tool-help data",
+    "--help --human": "Emit legacy human-readable help (compatibility mode)"
+  },
+  "outputs": {
+    "build_result": {
+      "schema_ref": "docs/skill/schemas/build-result.schema.json",
+      "emitted_by": [
+        "build",
+        "verify"
+      ],
+      "status_values": [
+        "Verified",
+        "Unverified",
+        "CompileFailed",
+        "VerifyFailed"
+      ],
+      "legacy_fields": [
+        "counterexample"
+      ]
+    },
+    "contracts_result": {
+      "schema_ref": "docs/skill/schemas/contracts-result.schema.json",
+      "emitted_by": [
+        "contracts"
+      ]
+    },
+    "diagnostic": {
+      "schema_ref": "docs/skill/schemas/diagnostic.schema.json",
+      "embedded_in": "build_result.diagnostics"
+    },
+    "runtime_vow_violation": {
+      "schema_ref": "docs/skill/schemas/vow-violation.schema.json",
+      "emitted_on": "stderr",
+      "requires_mode": "debug"
+    },
+    "runtime_trace": {
+      "emitted_on": "stderr",
+      "enabled_by": "--debug-trace <off|calls|full>",
+      "format": "jsonl"
+    }
   },
   "output_json": {
     "status": "Verified | Unverified | CompileFailed | VerifyFailed",
@@ -225,6 +570,17 @@ fn skill_json() -> String {
     "function": "function name (VerifyFailed)",
     "counterexample": "ESBMC counterexample description (VerifyFailed)"
   },
+  "diagnostics": {
+    "schema_ref": "docs/skill/schemas/diagnostic.schema.json",
+    "fields": [
+      "error_code",
+      "message",
+      "severity",
+      "span.file",
+      "span.offset",
+      "span.length"
+    ]
+  },
   "exit_codes": {
     "0": "success (Verified or Unverified)",
     "1": "failure (CompileFailed or VerifyFailed)"
@@ -232,10 +588,20 @@ fn skill_json() -> String {
   "language": {
     "module": "module <Name>",
     "use_declaration": "use foo.bar",
+    "const_declaration": "const NAME: i64 = 1024",
+    "comments": "// line comments only; block comments unsupported",
+    "let_binding": "let name: Type = expr; or let mut name: Type = expr;",
     "function": "fn <name>(<params>) -> <RetTy> [<effects>] { <body> }",
     "public_function": "pub fn <name>(<params>) -> <RetTy> [<effects>] { <body> }",
     "vow_function": "fn <name>(<params>) -> <RetTy> vow { requires: <expr>; ensures: <expr> } { <body> }",
     "while_with_invariant": "while <cond> vow { invariant: <expr> } { <body> }",
+    "literals": {
+      "integer": "42 | -1 | 42u64 (unsuffixed integers default to i64)",
+      "float": "3.14 | -0.5",
+      "bool": "true | false",
+      "string": "\"text\" with escapes \\n \\t \\r \\\\ \\\" \\0"
+    },
+    "casts": "x as u64 or y as i64",
     "types": [
       "i32",
       "i64",
@@ -425,9 +791,33 @@ fn skill_json() -> String {
         "? operator"
       ]
     },
+    "error_propagation": "? on Option<T> or Result<T, E> propagates None/Err to the caller",
     "indexing": {
       "read": "v[i] \u2014 Vec index access",
       "write": "v[i] = val \u2014 Vec index assignment"
+    },
+    "feature_status": {
+      "implemented": {
+        "function_vow_blocks": "requires / ensures / invariant",
+        "where_clauses": "parameter-level refinement sugar",
+        "loop_invariants": "simple invariant predicates"
+      },
+      "partial": {
+        "refinement_type_predicates": "parsed but semantically erased; use where clauses or function vows for verification",
+        "effect_tracking": "user-defined effect propagation is enforced; some builtin panic/unsafe effects are not yet modeled"
+      },
+      "target": {
+        "module_level_vow_blocks": "specified in docs but not parsed or represented in the AST",
+        "quantifiers": "forall / exists are not yet in the lexer or parser"
+      },
+      "unsupported": [
+        "user-defined generics",
+        "traits",
+        "closures",
+        "operator overloading",
+        "macros",
+        "assert / assume statements"
+      ]
     }
   },
   "verification_limits": {
@@ -462,7 +852,7 @@ BUILD OPTIONS
 
 VERIFY OPTIONS
   --no-cache              Disable verification result caching
-  --unwind <N>            ESBMC loop unwind bound
+  --unwind <N>            ESBMC loop unwind bound (default: 10)
 
 TEST OPTIONS
   <path>                  Directory to scan or single .vow file (default: .)
@@ -475,11 +865,14 @@ TEST OPTIONS
 CONTRACTS OPTIONS
   --verify                Run ESBMC verification and report per-contract status
   --no-cache              Disable verification result caching
-  --unwind <N>            ESBMC loop unwind bound
+  --unwind <N>            ESBMC loop unwind bound (default: 10)
+
+DECL OPTIONS
+  -o, --output <path>     Output declaration file path (default: <source>.vow.d)
 
 GLOBAL OPTIONS
-  --help                Print JSON capability description (agent-friendly)
-  --help --human        Print this text
+  --help                Emit versioned JSON tool-help data
+  --help --human        Emit legacy text help
 
 OUTPUT (JSON on stdout)
   status      : Verified | Unverified | CompileFailed | VerifyFailed
@@ -1339,6 +1732,7 @@ fn run_verification_sync(
     file: &str,
     call_site_index: &std::collections::HashMap<String, Vec<CallSiteInfo>>,
     verify_cache: Option<&VerifyCache>,
+    unwind: u32,
 ) -> VerifyOutcome {
     let const_fns = detect_constant_functions(ir_module);
     for func in &ir_module.functions {
@@ -1348,7 +1742,7 @@ fn run_verification_sync(
 
         let result = if let Some(vc) = verify_cache {
             let c_src = emit_verify_c_source(func, ir_module, &const_fns);
-            let key = VerifyCache::cache_key(&c_src, 10);
+            let key = VerifyCache::cache_key(&c_src, unwind);
 
             if let Some(cached) = vc.lookup(&key) {
                 match cached {
@@ -1362,7 +1756,7 @@ fn run_verification_sync(
                     Some(p) => p,
                     None => return VerifyOutcome::ToolNotFound,
                 };
-                let res = run_esbmc(&esbmc, &c_src);
+                let res = run_esbmc_with_unwind(&esbmc, &c_src, unwind);
                 match &res {
                     VerificationResult::Proven => {
                         vc.store(&key, &CachedVerifyResult::Proven);
@@ -1384,7 +1778,9 @@ fn run_verification_sync(
                 res
             }
         } else {
-            verify_function_with_module_and_const_fns(func, ir_module, &const_fns)
+            verify_function_with_module_and_const_fns_with_unwind(
+                func, ir_module, &const_fns, unwind,
+            )
         };
 
         match result {
@@ -1575,10 +1971,10 @@ fn verify_outcome_to_output(
 // ---------------------------------------------------------------------------
 
 pub fn run_verify_only(source: &Path) -> BuildOutput {
-    run_verify_only_inner(source, false)
+    run_verify_only_inner(source, false, 10)
 }
 
-fn run_verify_only_inner(source: &Path, no_cache: bool) -> BuildOutput {
+fn run_verify_only_inner(source: &Path, no_cache: bool, unwind: u32) -> BuildOutput {
     let frontend = match compile_frontend(source) {
         Ok(f) => f,
         Err(output) => return *output,
@@ -1596,6 +1992,7 @@ fn run_verify_only_inner(source: &Path, no_cache: bool) -> BuildOutput {
         &file,
         &call_site_index,
         verify_cache.as_ref(),
+        unwind,
     );
     verify_outcome_to_output(outcome, frontend.diagnostics, None)
 }
@@ -1632,9 +2029,10 @@ pub fn run_pipeline(
     dump_ir: bool,
     trace: TraceMode,
 ) -> BuildOutput {
-    run_pipeline_inner(source, output, mode, no_verify, dump_ir, trace, false)
+    run_pipeline_inner(source, output, mode, no_verify, dump_ir, trace, false, 10)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_pipeline_inner(
     source: &Path,
     output: Option<&Path>,
@@ -1643,6 +2041,7 @@ fn run_pipeline_inner(
     dump_ir: bool,
     trace: TraceMode,
     no_cache: bool,
+    unwind: u32,
 ) -> BuildOutput {
     let frontend = match compile_frontend(source) {
         Ok(f) => f,
@@ -1650,7 +2049,7 @@ fn run_pipeline_inner(
     };
 
     run_pipeline_from_frontend(
-        frontend, source, output, mode, no_verify, dump_ir, trace, no_cache,
+        frontend, source, output, mode, no_verify, dump_ir, trace, no_cache, unwind,
     )
 }
 
@@ -1664,6 +2063,7 @@ fn run_pipeline_from_frontend(
     dump_ir: bool,
     trace: TraceMode,
     no_cache: bool,
+    unwind: u32,
 ) -> BuildOutput {
     let all_diagnostics = frontend.diagnostics;
     let ir_module = frontend.ir_module;
@@ -1703,6 +2103,7 @@ fn run_pipeline_from_frontend(
             &file_for_verify,
             &call_site_index,
             verify_cache.as_ref(),
+            unwind,
         )
     });
 
@@ -1840,7 +2241,7 @@ fn run_test_command(
     filter: Option<&str>,
     mode: BuildMode,
     timeout_ms: u64,
-    _unwind: u32,
+    unwind: u32,
 ) {
     if !path.exists() {
         let result = TestResult {
@@ -1927,6 +2328,7 @@ fn run_test_command(
             false,
             TraceMode::Off,
             true,
+            unwind,
         );
 
         let diagnostics: Vec<DiagnosticJson> = result
@@ -2119,6 +2521,7 @@ fn run_test_command(
 // Entry point
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn run_build_command(
     source: &Path,
     output: Option<&Path>,
@@ -2127,8 +2530,11 @@ fn run_build_command(
     dump_ir: bool,
     trace: TraceMode,
     no_cache: bool,
+    unwind: u32,
 ) {
-    let result = run_pipeline_inner(source, output, mode, no_verify, dump_ir, trace, no_cache);
+    let result = run_pipeline_inner(
+        source, output, mode, no_verify, dump_ir, trace, no_cache, unwind,
+    );
     if !dump_ir {
         result.emit_json();
     }
@@ -2206,8 +2612,8 @@ fn run_decl_command(source: &Path, output: Option<&Path>) {
     eprintln!("wrote {}", out_path.display());
 }
 
-fn run_verify_command(source: &Path, no_cache: bool) {
-    let result = run_verify_only_inner(source, no_cache);
+fn run_verify_command(source: &Path, no_cache: bool, unwind: u32) {
+    let result = run_verify_only_inner(source, no_cache, unwind);
     result.emit_json();
     if matches!(
         &result.status,
@@ -2260,6 +2666,7 @@ fn update_contract_statuses(
     entries: &mut [ContractEntryJson],
     ir_module: &vow_ir::Module,
     verify_cache: Option<&VerifyCache>,
+    unwind: u32,
 ) {
     let const_fns = detect_constant_functions(ir_module);
     for func in &ir_module.functions {
@@ -2269,7 +2676,7 @@ fn update_contract_statuses(
 
         let result = if let Some(vc) = verify_cache {
             let c_src = emit_verify_c_source(func, ir_module, &const_fns);
-            let key = VerifyCache::cache_key(&c_src, 10);
+            let key = VerifyCache::cache_key(&c_src, unwind);
 
             if let Some(cached) = vc.lookup(&key) {
                 match cached {
@@ -2290,7 +2697,7 @@ fn update_contract_statuses(
                         continue;
                     }
                 };
-                let res = run_esbmc(&esbmc, &c_src);
+                let res = run_esbmc_with_unwind(&esbmc, &c_src, unwind);
                 match &res {
                     VerificationResult::Proven => {
                         vc.store(&key, &CachedVerifyResult::Proven);
@@ -2312,7 +2719,9 @@ fn update_contract_statuses(
                 res
             }
         } else {
-            verify_function_with_module_and_const_fns(func, ir_module, &const_fns)
+            verify_function_with_module_and_const_fns_with_unwind(
+                func, ir_module, &const_fns, unwind,
+            )
         };
 
         for entry in entries.iter_mut() {
@@ -2340,7 +2749,7 @@ fn update_contract_statuses(
     }
 }
 
-fn run_contracts_command(source: &Path, verify: bool, no_cache: bool) {
+fn run_contracts_command(source: &Path, verify: bool, no_cache: bool, unwind: u32) {
     let frontend = match compile_frontend(source) {
         Ok(f) => f,
         Err(output) => {
@@ -2381,7 +2790,12 @@ fn run_contracts_command(source: &Path, verify: bool, no_cache: bool) {
             std::process::exit(1);
         }
         let verify_cache = if no_cache { None } else { VerifyCache::new() };
-        update_contract_statuses(&mut entries, &frontend.ir_module, verify_cache.as_ref());
+        update_contract_statuses(
+            &mut entries,
+            &frontend.ir_module,
+            verify_cache.as_ref(),
+            unwind,
+        );
     }
 
     let summary = build_contracts_summary(&entries);
@@ -2431,6 +2845,7 @@ fn main() {
                 b.dump_ir,
                 trace,
                 b.no_cache,
+                b.unwind,
             );
         }
         Some(Command::Verify(v)) => {
@@ -2449,7 +2864,7 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            run_verify_command(&source, v.no_cache);
+            run_verify_command(&source, v.no_cache, v.unwind);
         }
         Some(Command::Test(t)) => {
             if t.help {
@@ -2512,7 +2927,7 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            run_contracts_command(&source, c.verify, c.no_cache);
+            run_contracts_command(&source, c.verify, c.no_cache, c.unwind.unwrap_or(10));
         }
         None => {
             if args.help {
@@ -2551,6 +2966,7 @@ fn main() {
                 args.dump_ir,
                 trace,
                 args.no_cache,
+                args.unwind,
             );
         }
     }
@@ -2838,22 +3254,15 @@ fn main() -> i32 [io] {
     #[test]
     fn help_flag_emits_json_with_tool_key() {
         let out = skill_json();
-        assert!(out.contains("\"tool\""), "expected JSON with 'tool' key");
-        assert!(out.contains("\"vow\""), "expected tool name in output");
-        assert!(
-            out.contains("language"),
-            "expected language section in output"
-        );
-        assert!(out.contains("builtins"), "expected builtins in output");
-        assert!(
-            out.contains("\"commands\""),
-            "expected commands section in JSON"
-        );
-        assert!(out.contains("\"build\""), "expected build command in JSON");
-        assert!(
-            out.contains("\"verify\""),
-            "expected verify command in JSON"
-        );
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["schema_version"], "2");
+        assert_eq!(parsed["kind"], "tool_help");
+        assert_eq!(parsed["tool"], "vow");
+        assert_eq!(parsed["audience"], "agent");
+        assert!(parsed["language"].is_object(), "expected language section");
+        assert!(parsed["commands"]["build"].is_string());
+        assert!(parsed["command_details"]["build"]["options"].is_array());
+        assert!(parsed["outputs"]["build_result"].is_object());
     }
 
     #[test]
@@ -2871,65 +3280,45 @@ fn main() -> i32 [io] {
     fn agent_capability_test_skill_json_is_parseable_and_complete() {
         // Verify the --help JSON contains enough information for an LLM agent
         // to write correct Vow code without additional context.
-        let json = skill_json();
+        let parsed: serde_json::Value = serde_json::from_str(&skill_json()).unwrap();
 
-        // Must be valid JSON structure (key fields present)
-        assert!(json.contains("\"tool\""), "missing tool key");
-        assert!(json.contains("\"usage\""), "missing usage key");
-        assert!(json.contains("\"output_json\""), "missing output_json key");
-        assert!(json.contains("\"language\""), "missing language key");
-        assert!(json.contains("\"builtins\""), "missing builtins key");
-        assert!(json.contains("\"vow_clauses\""), "missing vow_clauses key");
+        assert_eq!(parsed["schema_version"], "2");
+        assert_eq!(parsed["kind"], "tool_help");
+        assert_eq!(parsed["tool"], "vow");
+        assert_eq!(parsed["default_format"], "json");
+        assert!(parsed["references"]["grammar"].is_string());
+        assert!(parsed["references"]["schemas"]["build_result"].is_string());
+        assert!(parsed["command_details"]["build"]["options"].is_array());
+        assert!(parsed["command_details"]["verify"]["options"].is_array());
+        assert!(parsed["command_details"]["decl"]["options"].is_array());
+        assert!(parsed["outputs"]["contracts_result"].is_object());
 
-        // Must describe the key Vow constructs
-        assert!(
-            json.contains("requires"),
-            "missing requires clause description"
+        let lang = &parsed["language"];
+        assert!(lang["builtins"]["print_i64"].is_string());
+        assert!(lang["builtins"]["print_str"].is_string());
+        assert!(lang["types"].to_string().contains("String"));
+        assert!(lang["types"].to_string().contains("Vec<T>"));
+        assert!(lang["types"].to_string().contains("Option<T>"));
+        assert!(lang["types"].to_string().contains("Result<T, E>"));
+        assert!(lang["types"].to_string().contains("HashMap<K, V>"));
+        assert!(lang["structs"].is_object());
+        assert!(lang["enums"].is_object());
+        assert!(lang["methods"].is_object());
+        assert!(lang["match_expression"].is_object());
+        assert!(lang["where_clauses"].is_string());
+        assert!(lang["modules"].is_object());
+        assert_eq!(
+            lang["feature_status"]["target"]["module_level_vow_blocks"],
+            "specified in docs but not parsed or represented in the AST"
         );
-        assert!(
-            json.contains("ensures"),
-            "missing ensures clause description"
+        assert_eq!(
+            lang["feature_status"]["target"]["quantifiers"],
+            "forall / exists are not yet in the lexer or parser"
         );
-        assert!(
-            json.contains("invariant"),
-            "missing invariant clause description"
+        assert_eq!(
+            lang["feature_status"]["partial"]["refinement_type_predicates"],
+            "parsed but semantically erased; use where clauses or function vows for verification"
         );
-        assert!(json.contains("print_i64"), "missing print_i64 builtin");
-        assert!(json.contains("print_str"), "missing print_str builtin");
-
-        // Must describe types added in Phases 7-8
-        assert!(json.contains("String"), "missing String type");
-        assert!(json.contains("Vec<T>"), "missing Vec<T> type");
-        assert!(json.contains("Option<T>"), "missing Option<T> type");
-        assert!(json.contains("Result<T, E>"), "missing Result<T, E> type");
-        assert!(json.contains("HashMap<K, V>"), "missing HashMap<K, V> type");
-
-        // Must describe builtins added in Phase 8
-        assert!(json.contains("fs_read"), "missing fs_read builtin");
-        assert!(json.contains("fs_write"), "missing fs_write builtin");
-        assert!(json.contains("args"), "missing args builtin");
-        assert!(
-            json.contains("eprintln_str"),
-            "missing eprintln_str builtin"
-        );
-        assert!(
-            json.contains("process_exit"),
-            "missing process_exit builtin"
-        );
-
-        // Must describe structural language features
-        assert!(json.contains("\"structs\""), "missing structs section");
-        assert!(json.contains("\"enums\""), "missing enums section");
-        assert!(json.contains("\"methods\""), "missing methods section");
-        assert!(
-            json.contains("\"match_expression\""),
-            "missing match_expression section"
-        );
-        assert!(
-            json.contains("\"where_clauses\""),
-            "missing where_clauses section"
-        );
-        assert!(json.contains("\"modules\""), "missing modules section");
 
         // Now verify that a program an LLM would write from this description compiles and runs.
         // The LLM reads: function with requires/ensures, print_i64 builtin, [io] effect.
@@ -2981,6 +3370,24 @@ fn main() -> i32 [io] {
             stdout.contains("42"),
             "expected double(21)==42 in stdout, got: {stdout:?}"
         );
+    }
+
+    #[test]
+    fn build_args_accept_unwind_flag() {
+        let args = Args::try_parse_from(["vow", "build", "--unwind", "5", "main.vow"]).unwrap();
+        match args.command {
+            Some(Command::Build(build)) => assert_eq!(build.unwind, 5),
+            other => panic!("expected build command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_args_accept_unwind_flag() {
+        let args = Args::try_parse_from(["vow", "verify", "--unwind", "7", "main.vow"]).unwrap();
+        match args.command {
+            Some(Command::Verify(verify)) => assert_eq!(verify.unwind, 7),
+            other => panic!("expected verify command, got {other:?}"),
+        }
     }
 
     #[test]

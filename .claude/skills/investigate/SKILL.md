@@ -75,9 +75,9 @@ sub-agents; work incrementally and directly.
 - Implement the fix
 - Iterate: run `cargo test --all` until all tests pass
 - Run `cargo clippy --all -- -D warnings` to ensure no lint warnings
-- Run `cargo fmt --all` to ensure formatting is clean
+- Run `cargo fmt --all --check` to ensure formatting is clean
 
-**Step 2 — Self-Hosted Compiler Fix (if applicable):**
+**Step 2 — Self-Hosted Compiler Fix:**
 - Identify the corresponding code in `compiler/*.vow` modules (see Crate-to-Module Mapping below)
 - Implement the equivalent fix
 - Rebuild: `scripts/bootstrap.sh --skip-cargo`
@@ -169,7 +169,7 @@ If the fix is partial or needs further review, skip this step and inform the use
 
 ## Key Project Rules
 
-- **Dual-compiler rule**: Every change to the Rust compiler must have a corresponding change in the self-hosted compiler (`compiler/*.vow`), except for `vow-runtime` which has no self-hosted equivalent.
+- **Dual-compiler rule**: Every change to the Rust compiler must have a corresponding change in the self-hosted compiler (`compiler/*.vow`).
 - **Memory safety**: Always use `ulimit -v 2000000` when running `build/vowc` or any binary it produces.
 - **Task tracking**: Convert plans to task lists (TaskCreate) before execution.
 - **Bootstrap rebuild**: After changing `compiler/*.vow`, rebuild with `scripts/bootstrap.sh --skip-cargo`.
