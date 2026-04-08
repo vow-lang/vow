@@ -274,6 +274,14 @@ impl TypeEnv {
             },
         );
         env.define_fn(
+            "time_unix_ms",
+            FnSig {
+                params: vec![],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
             "hex_encode",
             FnSig {
                 params: vec![Ty::Applied(
@@ -374,6 +382,22 @@ impl TypeEnv {
         );
         env.define_fn(
             "process_wait",
+            FnSig {
+                params: vec![Ty::I64],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "process_wait_timeout",
+            FnSig {
+                params: vec![Ty::I64, Ty::I64],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "process_kill",
             FnSig {
                 params: vec![Ty::I64],
                 return_ty: Ty::I64,

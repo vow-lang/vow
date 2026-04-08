@@ -680,6 +680,7 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("i64_to_string") { return String::from("__vow_string_from_i64"); }
     if name == String::from("vec_sort") { return String::from("__vow_vec_sort"); }
     if name == String::from("time_unix") { return String::from("__vow_time_unix"); }
+    if name == String::from("time_unix_ms") { return String::from("__vow_time_unix_ms"); }
     if name == String::from("hex_encode") { return String::from("__vow_hex_encode"); }
     if name == String::from("hex_decode") { return String::from("__vow_hex_decode"); }
     if name == String::from("args") { return String::from("__vow_args"); }
@@ -691,6 +692,8 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("process_get_stderr") { return String::from("__vow_process_get_stderr"); }
     if name == String::from("process_start") { return String::from("__vow_process_start"); }
     if name == String::from("process_wait") { return String::from("__vow_process_wait"); }
+    if name == String::from("process_wait_timeout") { return String::from("__vow_process_wait_timeout"); }
+    if name == String::from("process_kill") { return String::from("__vow_process_kill"); }
     if name == String::from("process_stdout_for") { return String::from("__vow_process_stdout_for"); }
     if name == String::from("process_stderr_for") { return String::from("__vow_process_stderr_for"); }
     String::from("")
@@ -723,6 +726,7 @@ fn builtin_ret_ty(name: String) -> i64 {
     if name == String::from("i64_to_string") { return ITY_PTR(); }
     if name == String::from("vec_sort") { return ITY_PTR(); }
     if name == String::from("time_unix") { return ITY_I64(); }
+    if name == String::from("time_unix_ms") { return ITY_I64(); }
     if name == String::from("hex_encode") { return ITY_PTR(); }
     if name == String::from("hex_decode") { return ITY_PTR(); }
     if name == String::from("args") { return ITY_PTR(); }
@@ -734,6 +738,8 @@ fn builtin_ret_ty(name: String) -> i64 {
     if name == String::from("process_get_stderr") { return ITY_PTR(); }
     if name == String::from("process_start") { return ITY_I64(); }
     if name == String::from("process_wait") { return ITY_I64(); }
+    if name == String::from("process_wait_timeout") { return ITY_I64(); }
+    if name == String::from("process_kill") { return ITY_I64(); }
     if name == String::from("process_stdout_for") { return ITY_PTR(); }
     if name == String::from("process_stderr_for") { return ITY_PTR(); }
     ITY_UNIT()

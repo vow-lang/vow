@@ -119,7 +119,23 @@ struct VerifyArgs {
 #[derive(clap::Args, Debug)]
 #[command(disable_help_flag = true)]
 struct TestArgs {
-    source: Option<PathBuf>,
+    /// Directory to scan for test files, or a single .vow file
+    path: Option<PathBuf>,
+    /// Run ESBMC verification on test files (off by default)
+    #[arg(long)]
+    verify: bool,
+    /// Only run tests whose name contains this substring
+    #[arg(long)]
+    filter: Option<String>,
+    /// Build mode (debug enables runtime vow checks)
+    #[arg(long, value_enum, default_value = "debug")]
+    mode: ModeArg,
+    /// Per-test execution timeout in milliseconds
+    #[arg(long, default_value = "30000")]
+    timeout: u64,
+    /// ESBMC loop unwind bound (only with --verify)
+    #[arg(long, default_value = "10")]
+    unwind: u32,
     #[arg(long)]
     help: bool,
     #[arg(long)]
@@ -166,7 +182,7 @@ fn skill_json() -> String {
   "commands": {
     "build": "Compile source to native executable (verifies by default; use --no-verify to skip)",
     "verify": "Verify contracts without producing an executable (use --no-cache to skip cache)",
-    "test": "Run tests (not yet implemented)",
+    "test": "Run tests: discover, compile, execute test_*.vow files with JSON results",
     "decl": "Emit declaration file (.vow.d) with type signatures only",
     "contracts": "List all contracts with optional verification status"
   },
@@ -183,6 +199,14 @@ fn skill_json() -> String {
   "verify_options": {
     "--no-cache": "Disable verification result caching",
     "--unwind <N>": "ESBMC loop unwind bound"
+  },
+  "test_options": {
+    "<path>": "Directory to scan or single .vow file (default: .)",
+    "--verify": "Run ESBMC verification on test files",
+    "--filter <pat>": "Only run tests whose name contains pat",
+    "--mode <debug|release>": "Build mode; debug inserts runtime vow checks (default: (default))",
+    "--timeout <ms>": "Per-test execution timeout in milliseconds (default: 30000)",
+    "--unwind <N>": "ESBMC loop unwind bound (with --verify)"
   },
   "contracts_options": {
     "--verify": "Run ESBMC verification and report per-contract status",
@@ -262,6 +286,7 @@ fn skill_json() -> String {
       "i64_to_string": "fn(v: i64) -> String []",
       "vec_sort": "fn(v: Vec<i64>) -> Vec<i64> []",
       "time_unix": "fn() -> i64 [io]",
+      "time_unix_ms": "fn() -> i64 [io]",
       "hex_encode": "fn(data: Vec<u8>) -> String []",
       "hex_decode": "fn(s: String) -> Vec<u8> []",
       "args": "fn() -> Vec<String> [read]",
@@ -273,6 +298,8 @@ fn skill_json() -> String {
       "process_get_stderr": "fn() -> String [io]",
       "process_start": "fn(cmd: String, args: Vec<String>) -> i64 [io]",
       "process_wait": "fn(pid: i64) -> i64 [io]",
+      "process_wait_timeout": "fn(pid: i64, timeout_ms: i64) -> i64 [io]",
+      "process_kill": "fn(pid: i64) -> i64 [io]",
       "process_stdout_for": "fn(pid: i64) -> String [io]",
       "process_stderr_for": "fn(pid: i64) -> String [io]"
     },
@@ -419,7 +446,7 @@ fn skill_human() -> String {
 USAGE
   vow build [OPTIONS] <source.vow>    Compile to native executable
   vow verify [OPTIONS] <source.vow>    Verify contracts only (no executable)
-  vow test [<source.vow>]             Run tests (not yet implemented)
+  vow test [OPTIONS] [<path>]          Run tests (test_*.vow / *_test.vow)
   vow contracts [OPTIONS] <source.vow> List all contracts
   vow decl [OPTIONS] <source.vow>    Emit declaration file (.vow.d)
   vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)
@@ -436,6 +463,14 @@ BUILD OPTIONS
 VERIFY OPTIONS
   --no-cache              Disable verification result caching
   --unwind <N>            ESBMC loop unwind bound
+
+TEST OPTIONS
+  <path>                  Directory to scan or single .vow file (default: .)
+  --verify                Run ESBMC verification on test files
+  --filter <pat>          Only run tests whose name contains pat
+  --mode <debug|release>  Build mode; debug inserts runtime vow checks (default: (default))
+  --timeout <ms>          Per-test execution timeout in milliseconds (default: 30000)
+  --unwind <N>            ESBMC loop unwind bound (with --verify)
 
 CONTRACTS OPTIONS
   --verify                Run ESBMC verification and report per-contract status
@@ -485,7 +520,7 @@ LANGUAGE SUMMARY
 TYPES     : i32  i64  u8  u64  f32  f64  bool  ()  !  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>
 EFFECTS   : io  read  write  panic  unsafe
 BUILTINS  : print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [io]   print_u64: fn(v: u64) -> () [io]
-            eprintln_str: fn(s: String) -> () [io]   fs_read: fn(path: String) -> String [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   parse_i64: fn(s: String) -> i64 []   i64_to_string: fn(v: i64) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
+            eprintln_str: fn(s: String) -> () [io]   fs_read: fn(path: String) -> String [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   parse_i64: fn(s: String) -> i64 []   i64_to_string: fn(v: i64) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
 METHODS   : Vec: Vec::new/push/pop/len/clear/truncate/v[i]/v[i] = val   String: String::from/String::new/len/byte_at/push_byte/push_str/clear/contains/eq/substring/parse_i64/parse_u64
             HashMap: HashMap::new/insert/get/contains_key/remove/len   Option: unwrap
 OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   - ! & ?
@@ -719,6 +754,41 @@ pub struct ContractsResultJson {
     pub summary: ContractsSummaryJson,
 }
 
+// ---------------------------------------------------------------------------
+// Test output types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TestResult {
+    pub status: String,
+    pub total: usize,
+    pub passed: usize,
+    pub failed: usize,
+    pub skipped: usize,
+    pub tests: Vec<TestEntry>,
+    pub contract_density: ContractDensity,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TestEntry {
+    pub file: String,
+    pub name: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    pub duration_ms: u64,
+    pub diagnostics: Vec<DiagnosticJson>,
+    pub counterexamples: Vec<CounterexampleJson>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContractDensity {
+    pub functions_total: usize,
+    pub functions_with_vows: usize,
+    pub density_pct: f64,
+}
 impl DiagnosticJson {
     fn from_diagnostic(d: &Diagnostic) -> Self {
         let blame = match d.blame {
@@ -1579,6 +1649,22 @@ fn run_pipeline_inner(
         Err(output) => return *output,
     };
 
+    run_pipeline_from_frontend(
+        frontend, source, output, mode, no_verify, dump_ir, trace, no_cache,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_pipeline_from_frontend(
+    frontend: FrontendResult,
+    source: &Path,
+    output: Option<&Path>,
+    mode: BuildMode,
+    no_verify: bool,
+    dump_ir: bool,
+    trace: TraceMode,
+    no_cache: bool,
+) -> BuildOutput {
     let all_diagnostics = frontend.diagnostics;
     let ir_module = frontend.ir_module;
 
@@ -1691,6 +1777,342 @@ fn run_pipeline_inner(
 
     let verify_outcome = verify_handle.join().unwrap_or(VerifyOutcome::Skipped);
     verify_outcome_to_output(verify_outcome, all_diagnostics, exe_path)
+}
+
+// ---------------------------------------------------------------------------
+// Test pipeline (vow test)
+// ---------------------------------------------------------------------------
+
+fn discover_test_files(path: &Path) -> Vec<PathBuf> {
+    if path.is_file() {
+        return vec![path.to_path_buf()];
+    }
+    let mut files: Vec<PathBuf> = match std::fs::read_dir(path) {
+        Ok(entries) => entries
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if name.ends_with(".vow")
+                    && (name.starts_with("test_") || name.ends_with("_test.vow"))
+                {
+                    Some(e.path())
+                } else {
+                    None
+                }
+            })
+            .collect(),
+        Err(_) => vec![],
+    };
+    files.sort();
+    files
+}
+
+fn count_contract_density(ir_module: &vow_ir::Module) -> ContractDensity {
+    let mut total = 0usize;
+    let mut with_vows = 0usize;
+    for func in &ir_module.functions {
+        if func.name == "main" {
+            continue;
+        }
+        total += 1;
+        if !func.vows.is_empty() {
+            with_vows += 1;
+        }
+    }
+    // Integer math matching self-hosted: (n * 1000) / total gives tenths of a percent
+    let tenths = if total > 0 {
+        (with_vows * 1000) / total
+    } else {
+        0
+    };
+    ContractDensity {
+        functions_total: total,
+        functions_with_vows: with_vows,
+        density_pct: (tenths / 10) as f64 + (tenths % 10) as f64 / 10.0,
+    }
+}
+
+// TODO: --unwind is accepted but not threaded to ESBMC (hardcoded to 10 in vow-verify).
+// This affects build/verify/test equally — fix in vow-verify when adding unwind passthrough.
+fn run_test_command(
+    path: &Path,
+    verify: bool,
+    filter: Option<&str>,
+    mode: BuildMode,
+    timeout_ms: u64,
+    _unwind: u32,
+) {
+    if !path.exists() {
+        let result = TestResult {
+            status: "CompileFailed".to_string(),
+            total: 0,
+            passed: 0,
+            failed: 0,
+            skipped: 0,
+            tests: vec![],
+            contract_density: ContractDensity {
+                functions_total: 0,
+                functions_with_vows: 0,
+                density_pct: 0.0,
+            },
+        };
+        println!("{}", serde_json::to_string(&result).unwrap());
+        eprintln!("error: test path '{}' does not exist", path.display());
+        std::process::exit(1);
+    }
+
+    let test_files = discover_test_files(path);
+    let test_files: Vec<PathBuf> = match filter {
+        Some(pat) => test_files
+            .into_iter()
+            .filter(|f| {
+                f.file_stem()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|name| name.contains(pat))
+            })
+            .collect(),
+        None => test_files,
+    };
+
+    let mut entries = Vec::new();
+    let mut total_density = ContractDensity {
+        functions_total: 0,
+        functions_with_vows: 0,
+        density_pct: 0.0,
+    };
+
+    for test_file in &test_files {
+        let start = std::time::Instant::now();
+        let file_str = test_file.to_string_lossy().to_string();
+        let name = test_file
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        // Compile frontend once — extract density before codegen
+        let frontend = match compile_frontend(test_file) {
+            Ok(f) => f,
+            Err(output) => {
+                let diagnostics: Vec<DiagnosticJson> = output
+                    .diagnostics
+                    .iter()
+                    .map(DiagnosticJson::from_diagnostic)
+                    .collect();
+                entries.push(TestEntry {
+                    file: file_str,
+                    name,
+                    status: "compile_error".to_string(),
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    diagnostics,
+                    counterexamples: vec![],
+                });
+                continue;
+            }
+        };
+
+        let density = count_contract_density(&frontend.ir_module);
+        total_density.functions_total += density.functions_total;
+        total_density.functions_with_vows += density.functions_with_vows;
+
+        let tmp_out = std::env::temp_dir().join(format!("vow_test_{name}_{}", std::process::id()));
+        let result = run_pipeline_from_frontend(
+            frontend,
+            test_file,
+            Some(&tmp_out),
+            mode,
+            !verify,
+            false,
+            TraceMode::Off,
+            true,
+        );
+
+        let diagnostics: Vec<DiagnosticJson> = result
+            .diagnostics
+            .iter()
+            .map(DiagnosticJson::from_diagnostic)
+            .collect();
+        let counterexamples: Vec<CounterexampleJson> = result
+            .counterexamples
+            .iter()
+            .map(CounterexampleJson::from_structured)
+            .collect();
+
+        match &result.status {
+            BuildStatus::CompileFailed { .. } => {
+                entries.push(TestEntry {
+                    file: file_str,
+                    name,
+                    status: "compile_error".to_string(),
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    diagnostics,
+                    counterexamples,
+                });
+                continue;
+            }
+            BuildStatus::VerifyFailed { .. } => {
+                entries.push(TestEntry {
+                    file: file_str,
+                    name,
+                    status: "verify_failed".to_string(),
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    diagnostics,
+                    counterexamples,
+                });
+                continue;
+            }
+            _ => {}
+        }
+
+        let exe_path = match &result.executable {
+            Some(p) => p.clone(),
+            None => {
+                entries.push(TestEntry {
+                    file: file_str,
+                    name,
+                    status: "compile_error".to_string(),
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    diagnostics,
+                    counterexamples,
+                });
+                continue;
+            }
+        };
+
+        // Execute with ulimit wrapper and timeout
+        let exe_abs = std::fs::canonicalize(&exe_path).unwrap_or(exe_path.clone());
+        let child = std::process::Command::new("sh")
+            .args([
+                "-c",
+                "ulimit -v 2000000; \"$0\"",
+                &exe_abs.display().to_string(),
+            ])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn();
+
+        let (exit_code, stdout_str, stderr_str) = match child {
+            Ok(mut child) => {
+                // Take stdout/stderr handles and drain in background threads to
+                // prevent pipe buffer deadlock when tests produce >64KB output.
+                use std::io::Read;
+                let stdout_handle = child.stdout.take();
+                let stderr_handle = child.stderr.take();
+                let stdout_thread = std::thread::spawn(move || {
+                    let mut buf = String::new();
+                    if let Some(mut r) = stdout_handle {
+                        let _ = r.read_to_string(&mut buf);
+                    }
+                    buf
+                });
+                let stderr_thread = std::thread::spawn(move || {
+                    let mut buf = String::new();
+                    if let Some(mut r) = stderr_handle {
+                        let _ = r.read_to_string(&mut buf);
+                    }
+                    buf
+                });
+
+                let timeout = std::time::Duration::from_millis(timeout_ms);
+                let deadline = std::time::Instant::now() + timeout;
+                let exit = loop {
+                    match child.try_wait() {
+                        Ok(Some(status)) => break Some(status.code()),
+                        Ok(None) => {
+                            if std::time::Instant::now() >= deadline {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                                break None;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        Err(_) => break Some(Some(-1)),
+                    }
+                };
+
+                let stdout = stdout_thread.join().unwrap_or_default();
+                let stderr = stderr_thread.join().unwrap_or_default();
+                match exit {
+                    Some(code) => (code, stdout, stderr),
+                    None => (None, String::new(), "timeout".to_string()),
+                }
+            }
+            Err(e) => (Some(-1), String::new(), e.to_string()),
+        };
+
+        // Clean up the produced binary
+        let _ = std::fs::remove_file(&exe_path);
+
+        let status = match exit_code {
+            Some(0) => "passed",
+            Some(_) => "failed",
+            None => "timeout",
+        };
+
+        entries.push(TestEntry {
+            file: file_str,
+            name,
+            status: status.to_string(),
+            exit_code,
+            stdout: stdout_str,
+            stderr: stderr_str,
+            duration_ms: start.elapsed().as_millis() as u64,
+            diagnostics,
+            counterexamples,
+        });
+    }
+
+    // Compute final density (integer math matching self-hosted compiler)
+    if total_density.functions_total > 0 {
+        let tenths = (total_density.functions_with_vows * 1000) / total_density.functions_total;
+        total_density.density_pct = (tenths / 10) as f64 + (tenths % 10) as f64 / 10.0;
+    }
+
+    let passed = entries.iter().filter(|e| e.status == "passed").count();
+    let failed = entries
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.status.as_str(),
+                "failed" | "compile_error" | "verify_failed"
+            )
+        })
+        .count();
+    let skipped = entries.iter().filter(|e| e.status == "skipped").count();
+
+    let status = if failed > 0 {
+        "TestsFailed"
+    } else {
+        "TestsPassed"
+    };
+
+    let test_result = TestResult {
+        status: status.to_string(),
+        total: entries.len(),
+        passed,
+        failed,
+        skipped,
+        tests: entries,
+        contract_density: total_density,
+    };
+
+    let json = serde_json::to_string(&test_result).expect("TestResult must be serializable");
+    println!("{json}");
+
+    if failed > 0 {
+        std::process::exit(1);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2038,8 +2460,23 @@ fn main() {
                 }
                 return;
             }
-            eprintln!("vow test: not yet implemented");
-            std::process::exit(1);
+            let path = t.path.unwrap_or_else(|| PathBuf::from("."));
+            let mode = match t.mode {
+                ModeArg::Debug => BuildMode::Debug,
+                ModeArg::Release => BuildMode::Release,
+                ModeArg::Profile => {
+                    eprintln!("Error: --mode profile is not supported for test subcommand");
+                    std::process::exit(1);
+                }
+            };
+            run_test_command(
+                &path,
+                t.verify,
+                t.filter.as_deref(),
+                mode,
+                t.timeout,
+                t.unwind,
+            );
         }
         Some(Command::Decl(d)) => {
             if d.help {

@@ -844,6 +844,14 @@ pub extern "C" fn __vow_time_unix() -> i64 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn __vow_time_unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_hex_encode(vec: *const u8) -> *mut u8 {
     if vec.is_null() {
         return __vow_vec_new(1, 1);
@@ -974,9 +982,12 @@ pub unsafe extern "C" fn __vow_fs_listdir(path_ptr: *const u8) -> *mut u8 {
         Ok(e) => e,
         Err(_) => return result_vec,
     };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
+    let mut names: Vec<String> = entries
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    for name_str in &names {
         let str_vec =
             unsafe { __vow_string_new(name_str.as_ptr() as *const i8, name_str.len()) } as i64;
         unsafe { __vow_vec_push_val(result_vec, str_vec) };
@@ -1247,6 +1258,115 @@ pub extern "C" fn __vow_process_stderr_for(handle: i64) -> *mut u8 {
         unsafe { __vow_string_new(stderr.as_ptr() as *const i8, stderr.len()) }
     } else {
         unsafe { __vow_string_new(std::ptr::null(), 0) }
+    }
+}
+
+/// Wait for a process with a timeout in milliseconds.
+/// Returns exit code on success, -2 on timeout, -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_process_wait_timeout(handle: i64, timeout_ms: i64) -> i64 {
+    let mut guard = PROCESS_MAP.lock().unwrap();
+    let map = process_map_init(&mut guard);
+    let state = match map.remove(&handle) {
+        Some(s) => s,
+        None => return -1,
+    };
+    match state {
+        ProcessState::Running(mut child) => {
+            // Take stdout/stderr handles and spawn reader threads to prevent
+            // pipe buffer deadlock when the child writes >64KB before exiting.
+            use std::io::Read;
+            let stdout_handle = child.stdout.take();
+            let stderr_handle = child.stderr.take();
+            let stdout_thread = std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                if let Some(mut r) = stdout_handle {
+                    let _ = r.read_to_end(&mut buf);
+                }
+                buf
+            });
+            let stderr_thread = std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                if let Some(mut r) = stderr_handle {
+                    let _ = r.read_to_end(&mut buf);
+                }
+                buf
+            });
+
+            // Drop the lock during polling so other process operations aren't blocked.
+            drop(guard);
+
+            let timeout = std::time::Duration::from_millis(timeout_ms.max(0) as u64);
+            let start = std::time::Instant::now();
+            let result = loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        break Ok(status.code().unwrap_or(-1) as i64);
+                    }
+                    Ok(None) => {
+                        if start.elapsed() >= timeout {
+                            break Err(-2i64); // timeout
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Err(_) => {
+                        break Err(-1i64); // error
+                    }
+                }
+            };
+
+            // Re-acquire the lock to update state.
+            let mut guard = PROCESS_MAP.lock().unwrap();
+            let map = process_map_init(&mut guard);
+
+            match result {
+                Ok(exit_code) => {
+                    let stdout = stdout_thread.join().unwrap_or_default();
+                    let stderr = stderr_thread.join().unwrap_or_default();
+                    map.insert(handle, ProcessState::Completed { stdout, stderr });
+                    exit_code
+                }
+                Err(code) => {
+                    // On timeout or error, kill the child so pipes close,
+                    // then join reader threads to reclaim their buffers.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let stdout = stdout_thread.join().unwrap_or_default();
+                    let stderr = stderr_thread.join().unwrap_or_default();
+                    map.insert(handle, ProcessState::Completed { stdout, stderr });
+                    code
+                }
+            }
+        }
+        ProcessState::Completed { stdout, stderr } => {
+            map.insert(handle, ProcessState::Completed { stdout, stderr });
+            0
+        }
+    }
+}
+
+/// Kill a running process. Returns 0 on success, -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_process_kill(handle: i64) -> i64 {
+    let mut guard = PROCESS_MAP.lock().unwrap();
+    let map = process_map_init(&mut guard);
+    let state = match map.remove(&handle) {
+        Some(s) => s,
+        None => return -1,
+    };
+    match state {
+        ProcessState::Running(mut child) => match child.kill() {
+            Ok(_) => {
+                let _ = child.wait();
+                0
+            }
+            Err(_) => {
+                // Kill failed — process likely already exited. Reap it.
+                let _ = child.wait();
+                0
+            }
+        },
+        ProcessState::Completed { .. } => 0,
     }
 }
 

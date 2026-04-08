@@ -56,7 +56,62 @@ vow contracts [OPTIONS] <source.vow>
 
 ### `vow test`
 
-Not yet implemented.
+Discover, compile, run, and report on Vow test files. Tests are normal `.vow` programs with `main() -> i32` — no test-specific syntax.
+
+```
+vow test [OPTIONS] [<path>]
+```
+
+**Options:**
+
+| Flag              | Default     | Description                                |
+|-------------------|-------------|--------------------------------------------|
+| `<path>`          | `.`         | Directory to scan or single `.vow` file    |
+| `--verify`        | (off)       | Run ESBMC verification on test files       |
+| `--filter <pat>`  | (none)      | Only run tests whose name contains pat     |
+| `--mode debug`    | (default)   | Insert runtime vow checks                 |
+| `--mode release`  | `debug`     | Omit all vow checks for performance       |
+| `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
+| `--unwind <N>`    | `10`        | ESBMC loop unwind bound (with --verify)    |
+
+Test discovery: files matching `test_*.vow` or `*_test.vow` in the given directory, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
+
+**Test Output JSON:**
+
+```json
+{
+  "status": "TestsPassed",
+  "total": 3,
+  "passed": 3,
+  "failed": 0,
+  "skipped": 0,
+  "tests": [
+    {
+      "file": "compiler/test_arith.vow",
+      "name": "test_arith",
+      "status": "passed",
+      "exit_code": 0,
+      "stdout": "7",
+      "stderr": "",
+      "duration_ms": 72,
+      "diagnostics": [],
+      "counterexamples": []
+    }
+  ],
+  "contract_density": {
+    "functions_total": 1,
+    "functions_with_vows": 0,
+    "density_pct": 0.0
+  }
+}
+```
+
+| Status Field   | Meaning                                           |
+|----------------|---------------------------------------------------|
+| `TestsPassed`  | All tests passed                                  |
+| `TestsFailed`  | One or more tests failed                          |
+
+Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `skipped`.
 
 ### `vow --help`
 
