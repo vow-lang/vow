@@ -177,6 +177,10 @@ struct ContractsArgs {
 struct SkillArgs {
     #[command(subcommand)]
     action: Option<SkillAction>,
+    #[arg(long)]
+    help: bool,
+    #[arg(long)]
+    human: bool,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -4693,14 +4697,24 @@ fn main() {
             };
             run_contracts_command(&source, c.verify, c.no_cache);
         }
-        Some(Command::Skill(s)) => match s.action {
-            Some(SkillAction::Install) => {
-                run_skill_install();
+        Some(Command::Skill(s)) => {
+            if s.help {
+                if s.human {
+                    println!("{}", skill_human());
+                } else {
+                    println!("{}", skill_json());
+                }
+                return;
             }
-            Some(SkillAction::Print) | None => {
-                println!("{}", skill_full_markdown());
+            match s.action {
+                Some(SkillAction::Install) => {
+                    run_skill_install();
+                }
+                Some(SkillAction::Print) | None => {
+                    println!("{}", skill_full_markdown());
+                }
             }
-        },
+        }
         None => {
             if args.help {
                 if args.human {
