@@ -3213,15 +3213,26 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>, file_path: String) -> IrModul
             let ename_sid: i64 = edef_name_sid(a, iid);
             let ename: String = arena_str(a, ename_sid);
             let variants_lid: i64 = edef_variants_lid(a, iid);
-            let nv: i64 = list_len(a, variants_lid);
+            let n_pairs: i64 = list_len(a, variants_lid);
+            let nv: i64 = n_pairs / 2;
             let vnames: Vec<String> = Vec::new();
             let ir_variants: Vec<IrVariantLayout> = Vec::new();
             let mut vi: i64 = 0;
             while vi < nv {
-                let vname_sid: i64 = list_get(a, variants_lid, vi);
+                let vname_sid: i64 = list_get(a, variants_lid, vi * 2);
                 let vname: String = arena_str(a, vname_sid);
                 vnames.push(vname);
+                let payload_lid: i64 = list_get(a, variants_lid, vi * 2 + 1);
+                let n_payload: i64 = list_len(a, payload_lid);
                 let payload: Vec<IrFieldLayout> = Vec::new();
+                let mut pi: i64 = 0;
+                while pi < n_payload {
+                    let p_ast_tid: i64 = list_get(a, payload_lid, pi);
+                    let p_ir_ty: i64 = lower_ast_ty(a, p_ast_tid);
+                    let fl: IrFieldLayout = IrFieldLayout { name: String::from(""), ty: p_ir_ty };
+                    payload.push(fl);
+                    pi = pi + 1;
+                }
                 let vl: IrVariantLayout = IrVariantLayout { name: vname, tag: vi, payload: payload };
                 ir_variants.push(vl);
                 vi = vi + 1;
