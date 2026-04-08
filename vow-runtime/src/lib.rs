@@ -2,10 +2,10 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::ffi::{c_char, CStr};
+use std::ffi::{CStr, c_char};
 use std::io::Write as _;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 thread_local! {
     static LAST_STDOUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
@@ -509,11 +509,7 @@ pub unsafe extern "C" fn __vow_string_eq(a: *const u8, b: *const u8) -> i64 {
     }
     let sa = unsafe { std::slice::from_raw_parts(va.ptr, va.len) };
     let sb = unsafe { std::slice::from_raw_parts(vb.ptr, vb.len) };
-    if sa == sb {
-        1
-    } else {
-        0
-    }
+    if sa == sb { 1 } else { 0 }
 }
 
 #[unsafe(no_mangle)]
@@ -652,11 +648,7 @@ pub unsafe extern "C" fn __vow_string_starts_with(s: *const u8, prefix: *const u
     let vp = unsafe { &*(prefix as *const VowVec) };
     let ss = unsafe { std::slice::from_raw_parts(vs.ptr, vs.len) };
     let sp = unsafe { std::slice::from_raw_parts(vp.ptr, vp.len) };
-    if ss.starts_with(sp) {
-        1
-    } else {
-        0
-    }
+    if ss.starts_with(sp) { 1 } else { 0 }
 }
 
 #[unsafe(no_mangle)]
@@ -668,11 +660,7 @@ pub unsafe extern "C" fn __vow_string_ends_with(s: *const u8, suffix: *const u8)
     let vp = unsafe { &*(suffix as *const VowVec) };
     let ss = unsafe { std::slice::from_raw_parts(vs.ptr, vs.len) };
     let sp = unsafe { std::slice::from_raw_parts(vp.ptr, vp.len) };
-    if ss.ends_with(sp) {
-        1
-    } else {
-        0
-    }
+    if ss.ends_with(sp) { 1 } else { 0 }
 }
 
 #[unsafe(no_mangle)]
@@ -1111,6 +1099,23 @@ pub extern "C" fn __vow_stdin_read_line() -> *mut u8 {
         unsafe { __vow_string_new(std::ptr::null(), 0) }
     } else {
         unsafe { __vow_string_new(line.as_ptr() as *const i8, line.len()) }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_stdin_ready() -> i64 {
+    use std::os::unix::io::AsRawFd;
+    let fd = std::io::stdin().as_raw_fd();
+    let mut pollfd = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let ret = unsafe { libc::poll(&mut pollfd, 1, 0) };
+    if ret > 0 && (pollfd.revents & libc::POLLIN) != 0 {
+        1
+    } else {
+        0
     }
 }
 
