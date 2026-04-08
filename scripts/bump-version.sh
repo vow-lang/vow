@@ -44,7 +44,8 @@ for toml in \
     vow-runtime/Cargo.toml \
     vow-clif-shim/Cargo.toml
 do
-    sed -i "s/^version = \"$CURRENT\"/version = \"$NEW_VERSION\"/" "$toml"
+    ESCAPED_CURRENT="${CURRENT//./\\.}"
+    sed -i "s/^version = \"$ESCAPED_CURRENT\"/version = \"$NEW_VERSION\"/" "$toml"
 done
 
 echo "$NEW_VERSION"

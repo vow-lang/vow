@@ -22,7 +22,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -52,15 +52,6 @@ jobs:
           echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$NEW_VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Commit version bump
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A '*.toml'
-          git commit -m "Release v${{ steps.bump.outputs.version }}"
-          git tag "v${{ steps.bump.outputs.version }}"
-          git push origin HEAD:main --tags
-
       - name: Bootstrap compiler
         run: scripts/bootstrap.sh
 
@@ -71,6 +62,15 @@ jobs:
           sha256sum release/vowc-linux-x86_64 > release/vowc-linux-x86_64.sha256
           echo "${{ steps.bump.outputs.version }}" > release/VERSION
 
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A '*.toml'
+          git commit -m "Release v${{ steps.bump.outputs.version }}"
+          git tag "v${{ steps.bump.outputs.version }}"
+          git push origin HEAD:${{ github.ref_name }} --tags
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -79,4 +79,5 @@ jobs:
             --title "Vow ${{ steps.bump.outputs.version }}" \
             --generate-notes \
             release/vowc-linux-x86_64 \
-            release/vowc-linux-x86_64.sha256
+            release/vowc-linux-x86_64.sha256 \
+            release/VERSION
