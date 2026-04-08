@@ -116,11 +116,10 @@ At build time, these clauses are lowered into verification obligations for ESBMC
 Function-level vow blocks are the current core contract mechanism.
 
 ```vow
-fn divide(x: i64, y: i64) -> i64 {
-    vow {
-        requires: y != 0
-        ensures: result == x / y
-    }
+fn divide(x: i64, y: i64) -> i64 vow {
+    requires: y != 0,
+    ensures: result == x / y
+} {
     x / y
 }
 ```
@@ -147,9 +146,9 @@ Key source-form decisions:
 - `/* */` comments are excluded.
 - `if` is an expression.
 - `match` is exhaustive.
-- `while` and `loop` are the only loop forms.
-- `break` and `break value` are supported.
-- `for` loops are excluded because they imply iterator abstractions that Vow does not want in the core language.
+- `while` and `loop` are the primitive loop forms.
+- `for x in vec { ... }` iterates over `Vec<T>`, desugaring to `while` with index arithmetic (zero verification overhead). No iterator traits or closures are involved.
+- `break`, `break value`, and `continue` are supported.
 
 The language intentionally does not rely on formatters, style guides, or human convention to recover meaning. The source form itself is part of the mechanical interface.
 
@@ -250,14 +249,16 @@ Every function has an explicit effect signature. A function with no effect annot
 
 Current effect vocabulary:
 
-- `Pure` (implicit, no annotation)
-- `[Read]`
-- `[Write]`
-- `[IO]` as sugar for `[Read, Write]`
-- `[Panic]`
-- `[Unsafe]`
+- Pure (implicit, no annotation)
+- `[io]` — standard I/O (print, stdin, network)
+- `[read]` — file system reads
+- `[write]` — file system writes
+- `[panic]` — may panic (unwrap, etc.)
+- `[unsafe]` — unsafe operations (FFI, raw memory)
 
-The compiler checks effect propagation: a function that calls a `[Read]` function must itself admit `[Read]`, and so on.
+Each effect is independent — `io` is not a superset of `read` or `write`.
+
+The compiler checks effect propagation: a function that calls an `[io]` function must itself admit `[io]`, and so on.
 
 Expressions inside vow clauses must be pure. Contract checking must not itself perform I/O or hidden state changes.
 
@@ -277,12 +278,12 @@ The design target is arena-per-scope allocation:
 - escaping values are placed in an appropriate caller-visible region,
 - the compiler is responsible for placement and escape analysis.
 
-The language also intends to support linear types for resources that must be consumed exactly once, such as file handles or other external capabilities.
+The language supports linear types for resources that must be consumed exactly once, such as file handles or other external capabilities. `linear struct` values are tracked by the type checker and must be consumed exactly once.
 
 Status:
 
 - Arena-per-scope memory model: `Target`
-- Linear types as a resource discipline: `Target`
+- Linear types as a resource discipline: `Implemented`
 - Current runtime representation relies on explicit allocation rather than the full intended region model: `Partial`
 
 ### 5.7. Arithmetic and numeric model
@@ -297,9 +298,9 @@ Language-level numeric types:
 Integer arithmetic is intentionally split into two explicit operator families:
 
 - `+`, `-`, `*` are wrapping,
-- `+!`, `-!`, `*!` are checked and return `Option<T>`,
+- `+!`, `-!`, `*!` are checked and abort with `ArithmeticOverflow` on overflow,
 - `/` and `%` trap on zero divisor,
-- `/!` and `%!` return `Option<T>` on zero divisor.
+- `/!` and `%!` are checked division and remainder (abort on zero divisor or overflow).
 
 There is no undefined behavior and no mode-dependent arithmetic semantics. Saturating arithmetic is considered a library concern, not a language concern.
 
@@ -462,7 +463,7 @@ This section records the current maturity of major design areas without changing
 | Effect propagation for user-defined functions | Implemented | Core effect checking works |
 | Builtin panic/unsafe effect coverage | Partial | Not all builtins are yet modeled precisely |
 | Arena-per-scope memory model | Target | Intended design direction |
-| Linear resource types | Target | Part of the intended resource story |
+| Linear resource types | Implemented | `linear struct` with single-consumption tracking |
 | Debug mode contract and boundary traces | Partial | Available but not yet a full execution trace facility |
 | Mandatory contracts on extern declarations | Target | FFI design boundary not yet fully enforced |
 
