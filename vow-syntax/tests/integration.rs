@@ -530,3 +530,26 @@ fn clamp(x: i64 where x >= 0, max: i64 where max > 0) -> i64 {
     }
 }
 ";
+
+#[test]
+fn enum_path_not_struct_literal_roundtrip() {
+    roundtrip(ENUM_PATH_NOT_STRUCT_LITERAL_SOURCE);
+}
+
+const ENUM_PATH_NOT_STRUCT_LITERAL_SOURCE: &str = "\
+module EnumPathTest
+
+enum Shape {
+    Circle,
+    Square,
+}
+
+pub fn check(s: Shape) -> i32 {
+    let c = Shape::Circle;
+    if c == Shape::Circle {
+        1
+    } else {
+        0
+    }
+}
+";
