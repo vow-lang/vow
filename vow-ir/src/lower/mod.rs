@@ -73,6 +73,7 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "args" => Some(("__vow_args", Ty::Ptr)),
         "stdin_read" => Some(("__vow_stdin_read", Ty::Ptr)),
         "stdin_read_line" => Some(("__vow_stdin_read_line", Ty::Ptr)),
+        "stdin_ready" => Some(("__vow_stdin_ready", Ty::Bool)),
         "process_exit" => Some(("__vow_process_exit", Ty::Unit)),
         "process_run" => Some(("__vow_process_run", Ty::I64)),
         "process_get_stdout" => Some(("__vow_process_get_stdout", Ty::Ptr)),

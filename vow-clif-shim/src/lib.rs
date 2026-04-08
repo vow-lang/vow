@@ -1991,6 +1991,9 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_stdin_read_line" => {
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_stdin_ready" => {
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_process_exit" => {
             sig.params.push(AbiParam::new(types::I64));
         }

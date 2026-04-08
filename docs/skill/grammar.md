@@ -693,6 +693,7 @@ Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they 
 | `args`           | `fn() -> Vec<String>`                      | `[read]`   |
 | `stdin_read`     | `fn() -> String`                           | `[read]`   |
 | `stdin_read_line`| `fn() -> String`                           | `[read]`   |
+| `stdin_ready`    | `fn() -> bool`                             | `[read]`   |
 
 #### Process Management
 
@@ -730,6 +731,19 @@ let line: String = stdin_read_line();
 while str_len(line) > 0 {
     // process line (has trailing \n)
     line = stdin_read_line();
+}
+```
+
+**`stdin_ready`:** `stdin_ready()` returns `true` if `stdin_read_line()` would return immediately without blocking, `false` otherwise. Uses a non-blocking poll with zero timeout. Use this in computation loops that must remain responsive to external input:
+
+```vow
+while !stdin_ready() && depth < max_depth {
+    // continue searching
+    depth = depth + 1;
+}
+if stdin_ready() {
+    let cmd: String = stdin_read_line();
+    // handle command
 }
 ```
 

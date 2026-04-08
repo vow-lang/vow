@@ -1103,6 +1103,23 @@ pub extern "C" fn __vow_stdin_read_line() -> *mut u8 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn __vow_stdin_ready() -> i64 {
+    use std::os::unix::io::AsRawFd;
+    let fd = std::io::stdin().as_raw_fd();
+    let mut pollfd = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let ret = unsafe { libc::poll(&mut pollfd, 1, 0) };
+    if ret > 0 && (pollfd.revents & libc::POLLIN) != 0 {
+        1
+    } else {
+        0
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn __vow_args() -> *mut u8 {
     let result_vec = __vow_vec_new(8, 8);
     for arg in std::env::args() {
