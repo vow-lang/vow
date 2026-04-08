@@ -664,7 +664,9 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
             ei = ei + 1;
         }
     } else {
-        test_files.push(path);
+        if filter.len() == 0 || path.contains(filter) {
+            test_files.push(path);
+        }
     }
 
     let entries_json: Vec<String> = Vec::new();
@@ -746,7 +748,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
 
             if !skip_exec {
                 // Compile to binary
-                let tmp_out: String = str2(String::from("/tmp/vow_test_"), short_name);
+                let tmp_out: String = str2(str3(String::from("/tmp/vow_test_"), short_name, String::from("_")), i64_to_string(time_unix_ms()));
                 let result: i64 = clif_emit_module(ir_mod, tmp_out, mode, 0);
                 if result == -1 {
                     let duration: i64 = time_unix_ms() - start_time;
