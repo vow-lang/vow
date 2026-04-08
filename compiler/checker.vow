@@ -411,7 +411,7 @@ fn enum_name_from_tid(ts: TyStore, tid: i64) -> String {
         let name_idx: i64 = ty_a(ts, tid);
         return ts.strs[name_idx];
     }
-    if tag == CTY_APPLIED() {
+    if tag == CTY_APPLIED() || tag == CTY_REF() {
         let base_tid: i64 = ty_a(ts, tid);
         return enum_name_from_tid(ts, base_tid);
     }
@@ -460,7 +460,7 @@ fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
         let n_inner: i64 = list_len(a, inner_lid);
         let n_path: i64 = list_len(a, path_lid);
         let variant_sid: i64 = if n_path >= 2 {
-            list_get(a, path_lid, 1)
+            list_get(a, path_lid, n_path - 1)
         } else if n_path == 1 {
             list_get(a, path_lid, 0)
         } else {
@@ -468,11 +468,12 @@ fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
         };
         let enum_name: String = enum_name_from_tid(e.ts, scrutinee_tid);
         let enum_idx: i64 = env_lookup_enum(e, enum_name);
+        let variant_name: String = if variant_sid != -1 { arena_str(a, variant_sid) } else { String::from("") };
         let mut i: i64 = 0;
         while i < n_inner {
             let ipid: i64 = list_get(a, inner_lid, i);
             let field_tid: i64 = if enum_idx != -1 && variant_sid != -1 {
-                lookup_variant_payload(e, enum_idx, arena_str(a, variant_sid), i)
+                lookup_variant_payload(e, enum_idx, variant_name, i)
             } else {
                 CTY_UNIT()
             };
@@ -887,6 +888,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let scrutinee_eid: i64 = expr_a(a, eid);
         let arms_lid: i64 = expr_b(a, eid);
         let scrutinee_tid: i64 = check_expr(e, m, scrutinee_eid);
+        let ts: TyStore = e.ts;
         let n_pairs: i64 = list_len(a, arms_lid);
         let n_arms: i64 = n_pairs / 2;
         let mut result_tid: i64 = CTY_NEVER();
@@ -900,6 +902,18 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             env_pop_scope(e);
             if is_opaque(result_tid) {
                 result_tid = arm_tid;
+            } else if arm_tid != result_tid && !is_opaque(arm_tid) {
+                let arm_tag: i64 = ty_tag(ts, arm_tid);
+                let res_tag: i64 = ty_tag(ts, result_tid);
+                let coercible: bool = (arm_tag == CTY_I32() && ty_is_integer(ts, result_tid))
+                    || (res_tag == CTY_I32() && ty_is_integer(ts, arm_tid));
+                if coercible {
+                    if res_tag == CTY_I32() && ty_is_integer(ts, arm_tid) {
+                        result_tid = arm_tid;
+                    }
+                } else {
+                    env_emit_error(e, String::from("match arm type mismatch"), expr_span(a, body_eid));
+                }
             }
             i = i + 1;
         }
