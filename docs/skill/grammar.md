@@ -113,6 +113,7 @@ pub fn api_function(x: i64) -> i64 {
 |--------|--------------------------|
 | `i32`  | 32-bit signed integer    |
 | `i64`  | 64-bit signed integer    |
+| `u8`   | 8-bit unsigned integer   |
 | `u64`  | 64-bit unsigned integer  |
 | `f32`  | 32-bit float (limited support — avoid in contracts) |
 | `f64`  | 64-bit float (limited support — avoid in contracts) |
@@ -668,7 +669,7 @@ Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they 
 
 | Function              | Signature                                        | Effects |
 |-----------------------|--------------------------------------------------|---------|
-| `process_exit`        | `fn(code: i64) -> Never`                         | `[io]`  |
+| `process_exit`        | `fn(code: i64) -> !`                             | `[io]`  |
 | `process_run`         | `fn(cmd: String, args: Vec<String>) -> i64`      | `[io]`  |
 | `process_get_stdout`  | `fn() -> String`                                 | `[io]`  |
 | `process_get_stderr`  | `fn() -> String`                                 | `[io]`  |

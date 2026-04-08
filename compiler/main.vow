@@ -735,6 +735,7 @@ fn skill_json() -> String {
     r.push_str(String::from("    \"types\": [\n"));
     r.push_str(String::from("      \"i32\",\n"));
     r.push_str(String::from("      \"i64\",\n"));
+    r.push_str(String::from("      \"u8\",\n"));
     r.push_str(String::from("      \"u64\",\n"));
     r.push_str(String::from("      \"f32\",\n"));
     r.push_str(String::from("      \"f64\",\n"));
@@ -785,7 +786,7 @@ fn skill_json() -> String {
     r.push_str(String::from("      \"args\": \"fn() -> Vec<String> [read]\",\n"));
     r.push_str(String::from("      \"stdin_read\": \"fn() -> String [read]\",\n"));
     r.push_str(String::from("      \"stdin_read_line\": \"fn() -> String [read]\",\n"));
-    r.push_str(String::from("      \"process_exit\": \"fn(code: i64) -> Never [io]\",\n"));
+    r.push_str(String::from("      \"process_exit\": \"fn(code: i64) -> ! [io]\",\n"));
     r.push_str(String::from("      \"process_run\": \"fn(cmd: String, args: Vec<String>) -> i64 [io]\",\n"));
     r.push_str(String::from("      \"process_get_stdout\": \"fn() -> String [io]\",\n"));
     r.push_str(String::from("      \"process_get_stderr\": \"fn() -> String [io]\",\n"));
@@ -1000,10 +1001,10 @@ fn skill_human() -> String {
     r.push_str(String::from("    0\n"));
     r.push_str(String::from("  }\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("TYPES     : i32  i64  u64  f32  f64  bool  ()  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>\n"));
+    r.push_str(String::from("TYPES     : i32  i64  u8  u64  f32  f64  bool  ()  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>\n"));
     r.push_str(String::from("EFFECTS   : io  read  write  panic  unsafe\n"));
     r.push_str(String::from("BUILTINS  : print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [io]   print_u64: fn(v: u64) -> () [io]\n"));
-    r.push_str(String::from("            eprintln_str: fn(s: String) -> () [io]   fs_read: fn(path: String) -> String [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   parse_i64: fn(s: String) -> i64 []   i64_to_string: fn(v: i64) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   process_exit: fn(code: i64) -> Never [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]\n"));
+    r.push_str(String::from("            eprintln_str: fn(s: String) -> () [io]   fs_read: fn(path: String) -> String [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   parse_i64: fn(s: String) -> i64 []   i64_to_string: fn(v: i64) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]\n"));
     r.push_str(String::from("METHODS   : Vec: Vec::new/push/pop/len/clear/truncate/v[i]/v[i] = val   String: String::from/String::new/len/byte_at/push_byte/push_str/clear/contains/eq/substring/parse_i64/parse_u64\n"));
     r.push_str(String::from("            HashMap: HashMap::new/insert/get/contains_key/remove/len   Option: unwrap\n"));
     r.push_str(String::from("OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   - ! & ?\n"));
