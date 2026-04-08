@@ -424,7 +424,8 @@ fn lookup_variant_payload(e: CheckEnv, enum_idx: i64, variant_name: String, fiel
     let mut i: i64 = 0;
     while i < nv {
         let vsid: i64 = ts_arg_get(e.ts, vname_lid, i);
-        let vname: String = e.ts.strs[vsid];
+        let ts: TyStore = e.ts;
+        let vname: String = ts.strs[vsid];
         if vname == variant_name {
             let vpayload_lid: i64 = e.edef_vpayload_lids[enum_idx];
             let fields_lid: i64 = ts_arg_get(e.ts, vpayload_lid, i);
