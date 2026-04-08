@@ -1278,7 +1278,7 @@ fn movetime_to_depth(ms: i64) -> i64 {
     5
 }
 
-fn parse_go_depth(tokens: Vec<String>) -> i64 {
+fn parse_go_depth(tokens: Vec<String>, side: i64) -> i64 {
     let mut i: i64 = 1;
     while i + 1 < tokens.len() {
         let key: String = tokens[i];
@@ -1300,6 +1300,23 @@ fn parse_go_depth(tokens: Vec<String>) -> i64 {
             let value2: String = tokens[i + 1];
             let ms: i64 = parse_i64_or(value2, 100);
             return movetime_to_depth(ms);
+        }
+        i = i + 1;
+    }
+
+    let time_key: String = if side == 1 {
+        String::from("wtime")
+    } else {
+        String::from("btime")
+    };
+    i = 1;
+    while i + 1 < tokens.len() {
+        let key3: String = tokens[i];
+        if key3.eq(time_key) {
+            let remaining: i64 = parse_i64_or(tokens[i + 1], 0);
+            if remaining > 0 {
+                return movetime_to_depth(remaining / 30);
+            }
         }
         i = i + 1;
     }
@@ -1526,7 +1543,7 @@ fn dispatch_command(us: UciState, line: String) [io, read] {
                     us.board = handle_position(tokens, us.board);
                 } else {
                     if cmd.eq(String::from("go")) {
-                        let depth: i64 = parse_go_depth(tokens);
+                        let depth: i64 = parse_go_depth(tokens, us.board.side);
                         let ss: SearchState = SearchState { stopped: 0, nodes: 0, pending: Vec::new() };
                         let best: ChessMove = search_best_move(us.board, depth, ss);
                         let out: String = String::from("bestmove ");

@@ -38,9 +38,10 @@ SCORE_RE = re.compile(r"score (cp (-?\d+)|mate (-?\d+))")
 # ---------------------------------------------------------------------------
 
 class Engine:
-    def __init__(self, cmd: list[str], cwd: Path):
+    def __init__(self, cmd: list[str], cwd: Path, engine_id: str = ""):
         self.cmd = cmd
         self.name = cmd[0]
+        self.engine_id = engine_id
         self.proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -202,6 +203,7 @@ class GameResult:
         game_num: int,
         white_name: str,
         black_name: str,
+        white_is_a: bool,
         moves: list[str],
         outcome: str,
         eval_score: float | None,
@@ -210,6 +212,7 @@ class GameResult:
         self.game_num = game_num
         self.white_name = white_name
         self.black_name = black_name
+        self.white_is_a = white_is_a
         self.moves = moves
         self.outcome = outcome  # "1-0", "0-1", "1/2-1/2", "unfinished"
         self.eval_score = eval_score
@@ -307,6 +310,7 @@ def play_game(
         game_num=game_num,
         white_name=white.name,
         black_name=black.name,
+        white_is_a=white.engine_id == "A",
         moves=moves,
         outcome=outcome,
         eval_score=eval_score,
@@ -338,7 +342,7 @@ def print_match_summary(
 
     for r in results:
         ws = r.white_score()
-        if r.white_name == engine_a_name:
+        if r.white_is_a:
             a_score += ws
             b_score += (1.0 - ws)
         else:
@@ -346,12 +350,12 @@ def print_match_summary(
             a_score += (1.0 - ws)
 
         if ws == 1.0:
-            if r.white_name == engine_a_name:
+            if r.white_is_a:
                 wins_a += 1
             else:
                 wins_b += 1
         elif ws == 0.0:
-            if r.white_name == engine_a_name:
+            if r.white_is_a:
                 wins_b += 1
             else:
                 wins_a += 1
@@ -453,8 +457,8 @@ def main() -> int:
     validator_opts = parse_options(args.validator_options)
 
     # Launch engines once; reuse across games.
-    engine_a = Engine(split_cmd(args.white), cwd)
-    engine_b = Engine(split_cmd(args.black), cwd)
+    engine_a = Engine(split_cmd(args.white), cwd, engine_id="A")
+    engine_b = Engine(split_cmd(args.black), cwd, engine_id="B")
     validator = Engine(split_cmd(args.validator), cwd) if args.validator else None
 
     engine_a_name = engine_a.name
