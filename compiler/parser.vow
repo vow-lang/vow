@@ -39,10 +39,12 @@ fn at(p: Parser, tag: i64) -> bool {
 
 fn peek_offset(p: Parser, offset: i64) -> Token {
     let idx: i64 = p.pos + offset;
-    if idx < p.tokens.len() {
+    if idx >= 0 && idx < p.tokens.len() {
         p.tokens[idx]
-    } else {
+    } else if p.tokens.len() > 0 {
         p.tokens[p.tokens.len() - 1]
+    } else {
+        make_token(tok_eof(), 0, 0, String::from(""), 0, 0)
     }
 }
 
@@ -790,7 +792,7 @@ fn parse_path_expr(p: Parser, first_sid: i64) -> i64 {
             let _rb: bool = expect(p, tok_rbrace());
             let vals_lid: i64 = arena_add_list(p.arena, val_items);
             arena_add_expr(p.arena, EXPR_ECTOR(), path_lid, vals_lid, 0, 0)
-        } else {
+        } else if looks_like_struct_literal(p) {
             let _lb: Token = advance(p);
             let field_items: Vec<i64> = Vec::new();
             while !at(p, tok_rbrace()) && !at_end(p) {
@@ -806,6 +808,8 @@ fn parse_path_expr(p: Parser, first_sid: i64) -> i64 {
             let _rb: bool = expect(p, tok_rbrace());
             let fields_lid: i64 = arena_add_list(p.arena, field_items);
             arena_add_expr(p.arena, EXPR_SLIT(), path_lid, fields_lid, 0, 0)
+        } else {
+            arena_add_expr(p.arena, EXPR_ECTOR(), path_lid, arena_add_list(p.arena, Vec::new()), 0, 0)
         }
     } else if at(p, tok_lparen()) {
         let args_lid: i64 = parse_call_args(p);
