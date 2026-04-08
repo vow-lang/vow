@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -99,7 +100,7 @@ def fen_for_moves(engine: Engine, moves: list[str]) -> str:
 
 
 def split_cmd(text: str) -> list[str]:
-    return [part for part in text.split(" ") if part]
+    return shlex.split(text)
 
 
 def main() -> int:
@@ -108,7 +109,7 @@ def main() -> int:
     parser.add_argument("--black", required=True, help="Black engine command")
     parser.add_argument(
         "--validator",
-        help="Optional validator engine command used to confirm that each move changes the position",
+        help="Optional validator engine command (must support the Stockfish-specific 'd' command) used to confirm that each move changes the position",
     )
     parser.add_argument("--white-go", default="go movetime 100", help="UCI go command for White")
     parser.add_argument("--black-go", default="go movetime 100", help="UCI go command for Black")

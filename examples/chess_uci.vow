@@ -1254,7 +1254,13 @@ fn movetime_to_depth(ms: i64) -> i64 {
     if ms <= 250 {
         return 2;
     }
-    3
+    if ms <= 1000 {
+        return 3;
+    }
+    if ms <= 5000 {
+        return 4;
+    }
+    5
 }
 
 fn parse_go_depth(tokens: Vec<String>) -> i64 {
@@ -1335,7 +1341,7 @@ fn handle_position(tokens: Vec<String>, current: Board) -> Board {
     current
 }
 
-fn main() [read, io] {
+fn main() [io, read] {
     let mut board: Board = start_board();
     let mut running: i64 = 1;
 
@@ -1353,7 +1359,7 @@ fn main() [read, io] {
 
                 if cmd.eq(String::from("uci")) {
                     print_line(String::from("id name Vow Chess UCI"));
-                    print_line(String::from("id author OpenAI"));
+                    print_line(String::from("id author Vow Project"));
                     print_line(String::from("uciok"));
                 } else {
                     if cmd.eq(String::from("isready")) {
