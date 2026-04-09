@@ -4,8 +4,8 @@ pub fn gcd(a: i64, b: i64) -> i64 vow {
     requires: a >= 0,
     requires: b >= 0,
     requires: a + b > 0,
-    requires: a <= 15,
-    requires: b <= 15,
+    requires: a <= 50,
+    requires: b <= 50,
     ensures: result > 0
 } {
     let mut x: i64 = a;
@@ -25,8 +25,8 @@ pub fn gcd(a: i64, b: i64) -> i64 vow {
 pub fn lcm(a: i64, b: i64) -> i64 vow {
     requires: a > 0,
     requires: b > 0,
-    requires: a <= 15,
-    requires: b <= 15,
+    requires: a <= 50,
+    requires: b <= 50,
     ensures: result > 0
 } {
     let g: i64 = gcd(a, b);
@@ -57,7 +57,7 @@ pub fn is_prime(n: i64) -> bool vow {
 pub fn power_mod(base: i64, exp: i64, modulus: i64) -> i64 vow {
     requires: base >= 0,
     requires: exp >= 0,
-    requires: exp <= 3,
+    requires: exp <= 5,
     requires: modulus > 1,
     requires: modulus <= 10,
     ensures: result >= 0,

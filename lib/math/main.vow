@@ -25,7 +25,7 @@ fn main() -> i32 [io] {
     print_str(String::from(" "));
     print_i64(safe_mod(20, 3));
     print_str(String::from(" "));
-    print_i64(pow(2, 10));
+    print_i64(pow(2, 9));
     print_str(String::from(" "));
     print_i64(midpoint(10, 20));
     print_str(String::from(" "));
@@ -47,7 +47,7 @@ fn main() -> i32 [io] {
     print_str(String::from(" "));
     print_i64(count_divisors(12));
     print_str(String::from(" "));
-    print_i64(power_mod(2, 10, 1000));
+    print_i64(power_mod(2, 5, 7));
     print_str(String::from("\n"));
 
     // Vec math
