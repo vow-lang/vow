@@ -224,8 +224,28 @@ fn esbmc_exists() -> bool [io] {
     fs_exists(esbmc_path()) != 0
 }
 
-fn run_esbmc(c_source: String, unwind: String, tmp_path: String) -> i64 [io] {
+fn save_esbmc_debug(c_source: String, tmp_path: String, unwind: String, func_name: String) [io] {
+    fs_mkdir(String::from("/tmp/vow-verify-debug"));
+    let c_path: String = String::from("/tmp/vow-verify-debug/");
+    c_path.push_str(func_name);
+    c_path.push_str(String::from(".c"));
+    fs_write(c_path, c_source);
+    let cmd_path: String = String::from("/tmp/vow-verify-debug/");
+    cmd_path.push_str(func_name);
+    cmd_path.push_str(String::from(".cmd"));
+    let cmd: String = String::from("");
+    cmd.push_str(esbmc_path());
+    cmd.push_str(String::from(" "));
+    cmd.push_str(tmp_path);
+    cmd.push_str(String::from(" --no-bounds-check --no-pointer-check --unwind "));
+    cmd.push_str(unwind);
+    cmd.push_str(String::from(" --64\n"));
+    fs_write(cmd_path, cmd);
+}
+
+fn run_esbmc(c_source: String, unwind: String, tmp_path: String, func_name: String) -> i64 [io] {
     fs_write(tmp_path, c_source);
+    save_esbmc_debug(c_source, tmp_path, unwind, func_name);
     let esbmc_args: Vec<String> = Vec::new();
     esbmc_args.push(tmp_path);
     esbmc_args.push(String::from("--no-bounds-check"));
@@ -237,8 +257,9 @@ fn run_esbmc(c_source: String, unwind: String, tmp_path: String) -> i64 [io] {
     exit_code
 }
 
-fn start_esbmc(c_source: String, unwind: String, tmp_path: String) -> i64 [io] {
+fn start_esbmc(c_source: String, unwind: String, tmp_path: String, func_name: String) -> i64 [io] {
     fs_write(tmp_path, c_source);
+    save_esbmc_debug(c_source, tmp_path, unwind, func_name);
     let esbmc_args: Vec<String> = Vec::new();
     esbmc_args.push(tmp_path);
     esbmc_args.push(String::from("--no-bounds-check"));
@@ -539,7 +560,8 @@ fn verify_function_full(f: IrFunction, m: IrModule, unwind: String, use_cache: b
             };
         }
     }
-    let exit_code: i64 = run_esbmc(c_source, unwind, String::from("/tmp/__vow_verify.c"));
+    let fn_name: String = f.name;
+    let exit_code: i64 = run_esbmc(c_source, unwind, String::from("/tmp/__vow_verify.c"), fn_name);
     if exit_code == -1 {
         return VerifyResult {
             status: VERIFY_NOT_FOUND(),
@@ -609,7 +631,8 @@ fn verify_start(f: IrFunction, m: IrModule, unwind: String, idx: i64, use_cache:
     let tmp_path: String = String::from("/tmp/__vow_verify_");
     tmp_path.push_str(i64_to_str(idx));
     tmp_path.push_str(String::from(".c"));
-    let handle: i64 = start_esbmc(c_source, unwind, tmp_path);
+    let fn_name: String = f.name;
+    let handle: i64 = start_esbmc(c_source, unwind, tmp_path, fn_name);
     handle
 }
 

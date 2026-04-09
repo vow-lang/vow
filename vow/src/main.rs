@@ -3545,7 +3545,7 @@ fn run_verification_sync(
                     Some(p) => p,
                     None => return VerifyOutcome::ToolNotFound,
                 };
-                let res = run_esbmc(&esbmc, &c_src);
+                let res = run_esbmc(&esbmc, &c_src, &func.name);
                 match &res {
                     VerificationResult::Proven => {
                         vc.store(&key, &CachedVerifyResult::Proven);
@@ -4473,7 +4473,7 @@ fn update_contract_statuses(
                         continue;
                     }
                 };
-                let res = run_esbmc(&esbmc, &c_src);
+                let res = run_esbmc(&esbmc, &c_src, &func.name);
                 match &res {
                     VerificationResult::Proven => {
                         vc.store(&key, &CachedVerifyResult::Proven);
