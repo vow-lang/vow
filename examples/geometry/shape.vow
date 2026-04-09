@@ -8,7 +8,6 @@ enum Shape {
 
 fn circle_area(r: i64) -> i64 vow {
     requires: r >= 0
-    requires: r <= 1000000
     ensures: result >= 0
 } {
     r * r * 3
@@ -17,8 +16,6 @@ fn circle_area(r: i64) -> i64 vow {
 fn rect_area(w: i64, h: i64) -> i64 vow {
     requires: w >= 0
     requires: h >= 0
-    requires: w <= 1000000
-    requires: h <= 1000000
     ensures: result >= 0
 } {
     w * h
@@ -26,7 +23,6 @@ fn rect_area(w: i64, h: i64) -> i64 vow {
 
 fn circle_perimeter(r: i64) -> i64 vow {
     requires: r >= 0
-    requires: r <= 1000000
     ensures: result >= 0
 } {
     2 * 3 * r
@@ -35,8 +31,6 @@ fn circle_perimeter(r: i64) -> i64 vow {
 fn rect_perimeter(w: i64, h: i64) -> i64 vow {
     requires: w >= 0
     requires: h >= 0
-    requires: w <= 1000000
-    requires: h <= 1000000
     ensures: result >= 0
 } {
     2 * (w + h)

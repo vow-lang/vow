@@ -4,8 +4,6 @@ pub fn gcd(a: i64, b: i64) -> i64 vow {
     requires: a >= 0,
     requires: b >= 0,
     requires: a + b > 0,
-    requires: a <= 50,
-    requires: b <= 50,
     ensures: result > 0
 } {
     let mut x: i64 = a;
@@ -25,8 +23,6 @@ pub fn gcd(a: i64, b: i64) -> i64 vow {
 pub fn lcm(a: i64, b: i64) -> i64 vow {
     requires: a > 0,
     requires: b > 0,
-    requires: a <= 50,
-    requires: b <= 50,
     ensures: result > 0
 } {
     let g: i64 = gcd(a, b);
@@ -34,8 +30,7 @@ pub fn lcm(a: i64, b: i64) -> i64 vow {
 }
 
 pub fn is_prime(n: i64) -> bool vow {
-    requires: n >= 0,
-    requires: n <= 100
+    requires: n >= 0
 } {
     if n < 2 {
         false
@@ -57,9 +52,7 @@ pub fn is_prime(n: i64) -> bool vow {
 pub fn power_mod(base: i64, exp: i64, modulus: i64) -> i64 vow {
     requires: base >= 0,
     requires: exp >= 0,
-    requires: exp <= 5,
     requires: modulus > 1,
-    requires: modulus <= 10,
     ensures: result >= 0,
     ensures: result < modulus
 } {
@@ -80,7 +73,6 @@ pub fn power_mod(base: i64, exp: i64, modulus: i64) -> i64 vow {
 
 pub fn factorial(n: i64) -> i64 vow {
     requires: n >= 0,
-    requires: n <= 8,
     ensures: result >= 1
 } {
     let mut result: i64 = 1;
@@ -98,7 +90,6 @@ pub fn factorial(n: i64) -> i64 vow {
 
 pub fn fibonacci(n: i64) -> i64 vow {
     requires: n >= 0,
-    requires: n <= 10,
     ensures: result >= 0
 } {
     if n <= 1 {
@@ -124,7 +115,6 @@ pub fn fibonacci(n: i64) -> i64 vow {
 
 pub fn isqrt(n: i64) -> i64 vow {
     requires: n >= 0,
-    requires: n <= 100,
     ensures: result >= 0,
     ensures: result * result <= n
 } {
@@ -146,7 +136,6 @@ pub fn isqrt(n: i64) -> i64 vow {
 
 pub fn largest_divisor(n: i64) -> i64 vow {
     requires: n > 1,
-    requires: n <= 100,
     ensures: result >= 1,
     ensures: result < n
 } {
@@ -164,7 +153,6 @@ pub fn largest_divisor(n: i64) -> i64 vow {
 
 pub fn count_divisors(n: i64) -> i64 vow {
     requires: n > 0,
-    requires: n <= 100,
     ensures: result >= 1
 } {
     let mut count: i64 = 0;

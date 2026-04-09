@@ -50,8 +50,6 @@ pub fn sign(x: i64) -> i64 vow {
 pub fn safe_add(a: i64, b: i64) -> i64 vow {
     requires: a >= 0,
     requires: b >= 0,
-    requires: a <= 4611686018427387903,
-    requires: b <= 4611686018427387903,
     ensures: result >= a,
     ensures: result >= b
 } {
@@ -71,8 +69,6 @@ pub fn safe_sub(a: i64, b: i64) -> i64 vow {
 pub fn safe_mul(a: i64, b: i64) -> i64 vow {
     requires: a >= 0,
     requires: b >= 0,
-    requires: a <= 3037000499,
-    requires: b <= 3037000499,
     ensures: result >= 0
 } {
     a * b
@@ -81,8 +77,6 @@ pub fn safe_mul(a: i64, b: i64) -> i64 vow {
 pub fn safe_div(a: i64, b: i64) -> i64 vow {
     requires: a >= 0,
     requires: b > 0,
-    requires: a <= 1000000,
-    requires: b <= 1000000,
     ensures: result >= 0,
     ensures: result <= a
 } {
@@ -92,8 +86,6 @@ pub fn safe_div(a: i64, b: i64) -> i64 vow {
 pub fn safe_mod(a: i64, b: i64) -> i64 vow {
     requires: a >= 0,
     requires: b > 0,
-    requires: a <= 1000000,
-    requires: b <= 1000000,
     ensures: result >= 0,
     ensures: result < b
 } {
@@ -102,9 +94,7 @@ pub fn safe_mod(a: i64, b: i64) -> i64 vow {
 
 pub fn pow(base: i64, exp: i64) -> i64 vow {
     requires: exp >= 0,
-    requires: exp <= 9,
     requires: base >= 0,
-    requires: base <= 100,
     ensures: result >= 0
 } {
     let mut result: i64 = 1;
@@ -120,20 +110,11 @@ pub fn pow(base: i64, exp: i64) -> i64 vow {
     result
 }
 
-pub fn midpoint(a: i64, b: i64) -> i64 vow {
-    requires: a >= -4611686018427387904,
-    requires: a <= 4611686018427387903,
-    requires: b >= -4611686018427387904,
-    requires: b <= 4611686018427387903
-} {
+pub fn midpoint(a: i64, b: i64) -> i64 {
     a + (b - a) / 2
 }
 
 pub fn diff(a: i64, b: i64) -> i64 vow {
-    requires: a >= -4611686018427387904,
-    requires: a <= 4611686018427387903,
-    requires: b >= -4611686018427387904,
-    requires: b <= 4611686018427387903,
     ensures: result >= 0
 } {
     if a > b { a - b } else { b - a }
@@ -152,4 +133,3 @@ pub fn is_even(x: i64) -> bool {
 pub fn is_odd(x: i64) -> bool {
     x % 2 != 0
 }
-

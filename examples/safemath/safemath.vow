@@ -3,8 +3,6 @@ module Safemath
 fn safe_add(a: i64, b: i64) -> i64 vow {
   requires: a >= 0,
   requires: b >= 0,
-  requires: a <= 4611686018427387903,
-  requires: b <= 4611686018427387903,
   ensures: result >= a,
   ensures: result >= b
 } {

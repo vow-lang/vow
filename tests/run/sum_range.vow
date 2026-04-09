@@ -3,7 +3,6 @@ module SumRange
 
 fn count_steps(n: i64) -> i64 vow {
   requires: n >= 0,
-  requires: n <= 8,
   ensures: result == n
 } {
   let mut i: i64 = 0;
