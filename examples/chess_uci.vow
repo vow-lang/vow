@@ -53,6 +53,12 @@ struct UndoInfo {
 struct SearchState {
     stopped: i64,
     nodes: i64,
+    pending: Vec<String>,
+}
+
+struct UciState {
+    board: Board,
+    running: i64,
 }
 
 fn abs_i64(x: i64) -> i64 {
@@ -963,6 +969,10 @@ fn check_stop(ss: SearchState) [read] {
             let trimmed: String = trim_line(line);
             if trimmed.eq(String::from("stop")) {
                 ss.stopped = 1;
+            } else {
+                if trimmed.len() > 0 {
+                    ss.pending.push(trimmed);
+                }
             }
         }
     }
@@ -1072,7 +1082,7 @@ fn moves_equal(a: ChessMove, b: ChessMove) -> bool {
 
 // Iterative deepening: search depth 1, 2, ..., max_depth. The best move from
 // each iteration is tried first in the next (PV move ordering).
-fn search_best_move(b: Board, depth_in: i64) -> ChessMove [read] {
+fn search_best_move(b: Board, depth_in: i64, ss: SearchState) -> ChessMove [read] {
     let legal: Vec<ChessMove> = generate_legal_moves(b);
     if legal.len() == 0 {
         return null_move();
@@ -1083,7 +1093,8 @@ fn search_best_move(b: Board, depth_in: i64) -> ChessMove [read] {
         max_depth = 1;
     }
 
-    let ss: SearchState = SearchState { stopped: 0, nodes: 0 };
+    ss.stopped = 0;
+    ss.nodes = 0;
     let mut best_mv: ChessMove = legal[0];
     let mut d: i64 = 1;
     while d <= max_depth {
@@ -1325,11 +1336,57 @@ fn handle_position(tokens: Vec<String>, current: Board) -> Board {
     current
 }
 
-fn main() [io, read] {
-    let mut board: Board = start_board();
-    let mut running: i64 = 1;
+fn dispatch_command(us: UciState, line: String) [io, read] {
+    let tokens: Vec<String> = split_words(line);
+    if tokens.len() == 0 {
+        return;
+    }
+    let cmd: String = tokens[0];
 
-    while running == 1 {
+    if cmd.eq(String::from("uci")) {
+        print_line(String::from("id name Vow Chess UCI"));
+        print_line(String::from("id author Vow Project"));
+        print_line(String::from("uciok"));
+    } else {
+        if cmd.eq(String::from("isready")) {
+            print_line(String::from("readyok"));
+        } else {
+            if cmd.eq(String::from("ucinewgame")) {
+                us.board = start_board();
+            } else {
+                if cmd.eq(String::from("position")) {
+                    us.board = handle_position(tokens, us.board);
+                } else {
+                    if cmd.eq(String::from("go")) {
+                        let depth: i64 = parse_go_depth(tokens);
+                        let ss: SearchState = SearchState { stopped: 0, nodes: 0, pending: Vec::new() };
+                        let best: ChessMove = search_best_move(us.board, depth, ss);
+                        let out: String = String::from("bestmove ");
+                        out.push_str(move_to_uci(best));
+                        print_line(out);
+                        let mut pi: i64 = 0;
+                        while pi < ss.pending.len() {
+                            dispatch_command(us, ss.pending[pi]);
+                            pi = pi + 1;
+                        }
+                    } else {
+                        if cmd.eq(String::from("stop")) {
+                        } else {
+                            if cmd.eq(String::from("quit")) {
+                                us.running = 0;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn main() [io, read] {
+    let us: UciState = UciState { board: start_board(), running: 1 };
+
+    while us.running == 1 {
         let raw: String = stdin_read_line();
         if raw.len() == 0 {
             break;
@@ -1337,43 +1394,7 @@ fn main() [io, read] {
 
         let line: String = trim_line(raw);
         if line.len() > 0 {
-            let tokens: Vec<String> = split_words(line);
-            if tokens.len() > 0 {
-                let cmd: String = tokens[0];
-
-                if cmd.eq(String::from("uci")) {
-                    print_line(String::from("id name Vow Chess UCI"));
-                    print_line(String::from("id author Vow Project"));
-                    print_line(String::from("uciok"));
-                } else {
-                    if cmd.eq(String::from("isready")) {
-                        print_line(String::from("readyok"));
-                    } else {
-                        if cmd.eq(String::from("ucinewgame")) {
-                            board = start_board();
-                        } else {
-                            if cmd.eq(String::from("position")) {
-                                board = handle_position(tokens, board);
-                            } else {
-                                if cmd.eq(String::from("go")) {
-                                    let depth: i64 = parse_go_depth(tokens);
-                                    let best: ChessMove = search_best_move(board, depth);
-                                    let out: String = String::from("bestmove ");
-                                    out.push_str(move_to_uci(best));
-                                    print_line(out);
-                                } else {
-                                    if cmd.eq(String::from("stop")) {
-                                    } else {
-                                        if cmd.eq(String::from("quit")) {
-                                            running = 0;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            dispatch_command(us, line);
         }
     }
 }
