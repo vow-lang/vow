@@ -409,11 +409,11 @@ pub unsafe extern "C" fn __vow_vec_clear(vec: *mut u8) {
 /// If `new_len >= len`, this is a no-op. If `new_len == 0`, equivalent to clear().
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_truncate(vec: *mut u8, new_len: usize) {
+    sanitize_on_truncate(vec as usize, new_len);
     let v = unsafe { &mut *(vec as *mut VowVec) };
     if new_len >= v.len {
         return;
     }
-    sanitize_on_truncate(vec as usize, new_len);
     if new_len == 0 {
         unsafe { __vow_vec_clear(vec) };
         return;
