@@ -224,7 +224,10 @@ fn esbmc_exists() -> bool [io] {
     fs_exists(esbmc_path()) != 0
 }
 
-fn save_esbmc_debug(c_source: String, tmp_path: String, unwind: String, func_name: String) [io] {
+fn save_esbmc_debug(c_source: String, tmp_path: String, unwind: String, func_name: String, debug: bool) [io] {
+    if !debug {
+        return;
+    }
     fs_mkdir(String::from("/tmp/vow-verify-debug"));
     let c_path: String = String::from("/tmp/vow-verify-debug/");
     c_path.push_str(func_name);
@@ -245,7 +248,7 @@ fn save_esbmc_debug(c_source: String, tmp_path: String, unwind: String, func_nam
 
 fn run_esbmc(c_source: String, unwind: String, tmp_path: String, func_name: String) -> i64 [io] {
     fs_write(tmp_path, c_source);
-    save_esbmc_debug(c_source, tmp_path, unwind, func_name);
+    save_esbmc_debug(c_source, tmp_path, unwind, func_name, false);
     let esbmc_args: Vec<String> = Vec::new();
     esbmc_args.push(tmp_path);
     esbmc_args.push(String::from("--no-bounds-check"));
@@ -259,7 +262,7 @@ fn run_esbmc(c_source: String, unwind: String, tmp_path: String, func_name: Stri
 
 fn start_esbmc(c_source: String, unwind: String, tmp_path: String, func_name: String) -> i64 [io] {
     fs_write(tmp_path, c_source);
-    save_esbmc_debug(c_source, tmp_path, unwind, func_name);
+    save_esbmc_debug(c_source, tmp_path, unwind, func_name, false);
     let esbmc_args: Vec<String> = Vec::new();
     esbmc_args.push(tmp_path);
     esbmc_args.push(String::from("--no-bounds-check"));

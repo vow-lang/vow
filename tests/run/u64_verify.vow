@@ -2,6 +2,7 @@ module U64Verify
 
 fn safe_add(a: u64, b: u64) -> u64
 vow {
+    requires: a <= 18446744073709551615 as u64 - b
     ensures: result >= a
     ensures: result >= b
 }

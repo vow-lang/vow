@@ -115,6 +115,7 @@ pub fn pow(base: i64, exp: i64) -> i64 vow {
 }
 
 pub fn midpoint(a: i64, b: i64) -> i64 vow {
+    requires: a >= 0,
     requires: a <= b,
     ensures: result >= a,
     ensures: result <= b

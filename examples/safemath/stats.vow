@@ -42,6 +42,7 @@ fn bounded_sum(v: Vec<i64>) -> i64 {
 fn mean_of(a: i64, b: i64) -> i64 vow {
   requires: a >= 0,
   requires: b >= 0,
+  requires: a <= 9223372036854775807 - b,
   ensures: result >= 0
 } {
   (a + b) / 2
