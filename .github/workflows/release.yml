@@ -22,6 +22,13 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      - name: Ensure running on main
+        run: |
+          if [ "${{ github.ref_name }}" != "main" ]; then
+            echo "::error::Release workflow must be run from the main branch (got '${{ github.ref_name }}')"
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -66,7 +73,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A '*.toml'
+          git add -A '*.toml' Cargo.lock
           git commit -m "Release v${{ steps.bump.outputs.version }}"
           git tag "v${{ steps.bump.outputs.version }}"
           git push origin HEAD:${{ github.ref_name }} --tags

@@ -20,8 +20,13 @@ case "$BUMP" in
     *) echo "Error: bump type must be rev, minor, or major (got '$BUMP')" >&2; usage ;;
 esac
 
-# Read current version from the main crate
-CURRENT=$(grep '^version' vow/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+# Read current version from the main crate using toml-compatible extraction
+CURRENT=$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' vow/Cargo.toml | head -1)
+if [ -z "$CURRENT" ]; then
+    echo "Error: could not extract version from vow/Cargo.toml" >&2
+    exit 1
+fi
+
 IFS='.' read -r MAJOR MINOR REV <<< "$CURRENT"
 
 case "$BUMP" in
@@ -32,20 +37,38 @@ esac
 
 NEW_VERSION="${MAJOR}.${MINOR}.${REV}"
 
-# Update all workspace Cargo.toml files
-for toml in \
-    vow/Cargo.toml \
-    vow-syntax/Cargo.toml \
-    vow-types/Cargo.toml \
-    vow-ir/Cargo.toml \
-    vow-codegen/Cargo.toml \
-    vow-verify/Cargo.toml \
-    vow-diag/Cargo.toml \
-    vow-runtime/Cargo.toml \
-    vow-clif-shim/Cargo.toml
-do
-    ESCAPED_CURRENT="${CURRENT//./\\.}"
-    sed -i "s/^version = \"$ESCAPED_CURRENT\"/version = \"$NEW_VERSION\"/" "$toml"
+# Discover workspace member Cargo.toml files dynamically
+TOMLS=$(sed -n '/^\[workspace\]/,/^\[/{ s/^[[:space:]]*"\(.*\)",\{0,1\}/\1\/Cargo.toml/p }' Cargo.toml)
+if [ -z "$TOMLS" ]; then
+    echo "Error: no workspace members found in Cargo.toml" >&2
+    exit 1
+fi
+
+ESCAPED_CURRENT="${CURRENT//./\\.}"
+FAILED=0
+
+for toml in $TOMLS; do
+    if [ ! -f "$toml" ]; then
+        echo "Warning: $toml not found, skipping" >&2
+        continue
+    fi
+
+    # Portable sed: write to temp file then move (works on both GNU and BSD)
+    tmp="${toml}.tmp"
+    sed "s/^version = \"${ESCAPED_CURRENT}\"/version = \"${NEW_VERSION}\"/" "$toml" > "$tmp"
+    mv "$tmp" "$toml"
+
+    # Validate the version was actually updated
+    UPDATED=$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' "$toml" | head -1)
+    if [ "$UPDATED" != "$NEW_VERSION" ]; then
+        echo "Error: $toml version is '$UPDATED', expected '$NEW_VERSION'" >&2
+        FAILED=1
+    fi
 done
+
+if [ "$FAILED" -ne 0 ]; then
+    echo "Error: not all crate versions were updated" >&2
+    exit 1
+fi
 
 echo "$NEW_VERSION"
