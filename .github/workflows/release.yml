@@ -12,6 +12,10 @@ on:
           - minor
           - major
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -20,7 +24,7 @@ env:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Ensure running on main
         run: |
