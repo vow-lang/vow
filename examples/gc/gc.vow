@@ -58,7 +58,8 @@ fn gc_alloc(h: GcHeap, val: i64) -> i64 {
 
 fn gc_add_root(h: GcHeap, slot: i64) vow {
     requires: slot >= 0,
-    requires: slot < h.values.len()
+    requires: slot < h.values.len(),
+    requires: h.alive[slot] == 1
 } {
     let r: Vec<i64> = h.roots;
     r.push(slot);
@@ -83,7 +84,9 @@ fn gc_add_ref(h: GcHeap, from: i64, to: i64) vow {
     requires: from >= 0,
     requires: from < h.values.len(),
     requires: to >= 0,
-    requires: to < h.values.len()
+    requires: to < h.values.len(),
+    requires: h.alive[from] == 1,
+    requires: h.alive[to] == 1
 } {
     let rf: Vec<i64> = h.ref_from;
     let rt: Vec<i64> = h.ref_to;
@@ -93,7 +96,8 @@ fn gc_add_ref(h: GcHeap, from: i64, to: i64) vow {
 
 fn gc_read(h: GcHeap, slot: i64) -> i64 vow {
     requires: slot >= 0,
-    requires: slot < h.values.len()
+    requires: slot < h.values.len(),
+    requires: h.alive[slot] == 1
 } {
     let vals: Vec<i64> = h.values;
     vals[slot]
@@ -101,7 +105,8 @@ fn gc_read(h: GcHeap, slot: i64) -> i64 vow {
 
 fn gc_write(h: GcHeap, slot: i64, val: i64) vow {
     requires: slot >= 0,
-    requires: slot < h.values.len()
+    requires: slot < h.values.len(),
+    requires: h.alive[slot] == 1
 } {
     let vals: Vec<i64> = h.values;
     vals[slot] = val;
