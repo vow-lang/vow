@@ -816,12 +816,16 @@ fn side_structure_score(b: Board, color: i64) -> i64 {
     let sqs: Vec<i64> = b.squares;
     let mut score: i64 = 0;
     let mut bishops: i64 = 0;
+    let mut knights: i64 = 0;
     let mut sq: i64 = 0;
     while sq < 64 {
         let piece: i64 = sqs[sq];
         if piece_color(piece) == color {
             if piece_kind(piece) == 3 {
                 bishops = bishops + 1;
+            }
+            if piece_kind(piece) == 2 {
+                knights = knights + 1;
             }
         }
         sq = sq + 1;
@@ -831,34 +835,45 @@ fn side_structure_score(b: Board, color: i64) -> i64 {
         score = score + 24;
     }
 
+    // Development bonus: only award if the piece type still exists on the
+    // board. Without this guard, captured pieces give a permanent bonus
+    // because the starting square is empty.
     if color == 1 {
-        if sqs[1] != 2 {
-            score = score + 18;
+        if knights > 0 {
+            if sqs[1] != 2 {
+                score = score + 18;
+            }
+            if sqs[6] != 2 {
+                score = score + 18;
+            }
         }
-        if sqs[6] != 2 {
-            score = score + 18;
-        }
-        if sqs[2] != 3 {
-            score = score + 16;
-        }
-        if sqs[5] != 3 {
-            score = score + 16;
+        if bishops > 0 {
+            if sqs[2] != 3 {
+                score = score + 16;
+            }
+            if sqs[5] != 3 {
+                score = score + 16;
+            }
         }
         if sqs[6] == 6 || sqs[2] == 6 {
             score = score + 40;
         }
     } else {
-        if sqs[57] != -2 {
-            score = score + 18;
+        if knights > 0 {
+            if sqs[57] != -2 {
+                score = score + 18;
+            }
+            if sqs[62] != -2 {
+                score = score + 18;
+            }
         }
-        if sqs[62] != -2 {
-            score = score + 18;
-        }
-        if sqs[58] != -3 {
-            score = score + 16;
-        }
-        if sqs[61] != -3 {
-            score = score + 16;
+        if bishops > 0 {
+            if sqs[58] != -3 {
+                score = score + 16;
+            }
+            if sqs[61] != -3 {
+                score = score + 16;
+            }
         }
         if sqs[62] == -6 || sqs[58] == -6 {
             score = score + 40;
@@ -978,16 +993,17 @@ fn check_stop(ss: SearchState) [read] {
     }
 }
 
-fn quiesce(b: Board, alpha_in: i64, beta_in: i64, ss: SearchState) -> i64 [read] {
+fn quiesce(b: Board, alpha_in: i64, beta_in: i64, qdepth: i64, ss: SearchState) -> i64 [read] {
     let mut alpha: i64 = alpha_in;
     let beta: i64 = beta_in;
     let mut moves: Vec<ChessMove> = Vec::new();
+    let mut is_in_check: i64 = 0;
 
-    // Generate all legal moves when in check (not just evasions). A dedicated
-    // evasion generator would be faster but adds ~100 lines of complexity
-    // (checker detection, single/double check, block/capture filtering) for
-    // minimal gain — this path is hit relatively rarely in quiescence.
     if in_check(b, b.side) {
+        is_in_check = 1;
+        if qdepth <= 0 {
+            return alpha_in;
+        }
         moves = generate_legal_moves(b);
         if moves.len() == 0 {
             return -MATE;
@@ -1006,7 +1022,10 @@ fn quiesce(b: Board, alpha_in: i64, beta_in: i64, ss: SearchState) -> i64 [read]
         }
     }
 
-    let mut best: i64 = alpha;
+    let mut best: i64 = -INF;
+    if is_in_check == 0 {
+        best = alpha;
+    }
     let mut i: i64 = 0;
     while i < moves.len() {
         check_stop(ss);
@@ -1017,7 +1036,7 @@ fn quiesce(b: Board, alpha_in: i64, beta_in: i64, ss: SearchState) -> i64 [read]
         swap_moves(moves, i, best_idx);
         let mv: ChessMove = moves[i];
         let undo: UndoInfo = make_move(b, mv);
-        let score: i64 = -quiesce(b, -beta, -alpha, ss);
+        let score: i64 = -quiesce(b, -beta, -alpha, qdepth - 1, ss);
         unmake_move(b, mv, undo);
         if score > best {
             best = score;
@@ -1033,18 +1052,18 @@ fn quiesce(b: Board, alpha_in: i64, beta_in: i64, ss: SearchState) -> i64 [read]
     best
 }
 
-fn negamax(b: Board, depth: i64, alpha_in: i64, beta_in: i64, ss: SearchState) -> i64 [read] {
+fn negamax(b: Board, depth: i64, ply: i64, alpha_in: i64, beta_in: i64, ss: SearchState) -> i64 [read] {
     let legal: Vec<ChessMove> = generate_legal_moves(b);
     if legal.len() == 0 {
         if in_check(b, b.side) {
-            return -MATE + depth;
+            return -MATE + ply;
         } else {
             return 0;
         }
     }
 
     if depth <= 0 {
-        return quiesce(b, alpha_in, beta_in, ss);
+        return quiesce(b, alpha_in, beta_in, 6, ss);
     }
 
     let mut alpha: i64 = alpha_in;
@@ -1060,7 +1079,7 @@ fn negamax(b: Board, depth: i64, alpha_in: i64, beta_in: i64, ss: SearchState) -
         swap_moves(legal, i, best_idx);
         let mv: ChessMove = legal[i];
         let undo: UndoInfo = make_move(b, mv);
-        let score: i64 = -negamax(b, depth - 1, -beta, -alpha, ss);
+        let score: i64 = -negamax(b, depth - 1, ply + 1, -beta, -alpha, ss);
         unmake_move(b, mv, undo);
         if score > best {
             best = score;
@@ -1128,7 +1147,7 @@ fn search_best_move(b: Board, depth_in: i64, ss: SearchState) -> ChessMove [read
             }
             let mv: ChessMove = legal[i];
             let undo: UndoInfo = make_move(b, mv);
-            let score: i64 = -negamax(b, d - 1, -beta, -alpha, ss);
+            let score: i64 = -negamax(b, d - 1, 1, -beta, -alpha, ss);
             unmake_move(b, mv, undo);
             if score > best_score {
                 best_score = score;
@@ -1302,12 +1321,15 @@ fn find_legal_move(b: Board, uci: String) -> ChessMove {
     null_move()
 }
 
-fn apply_uci_moves(b: Board, tokens: Vec<String>, start_idx: i64) -> Board {
+fn apply_uci_moves(b: Board, tokens: Vec<String>, start_idx: i64) -> Board [io] {
     let mut i: i64 = start_idx;
     while i < tokens.len() {
         let text: String = tokens[i];
         let mv: ChessMove = find_legal_move(b, text);
         if is_null_move(mv) {
+            let msg: String = String::from("info string invalid move: ");
+            msg.push_str(text);
+            print_line(msg);
             return b;
         }
         make_move(b, mv);
@@ -1316,7 +1338,7 @@ fn apply_uci_moves(b: Board, tokens: Vec<String>, start_idx: i64) -> Board {
     b
 }
 
-fn handle_position(tokens: Vec<String>, current: Board) -> Board {
+fn handle_position(tokens: Vec<String>, current: Board) -> Board [io] {
     if tokens.len() < 2 {
         return current;
     }

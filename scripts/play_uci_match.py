@@ -19,7 +19,7 @@ class Engine:
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
             text=True,
             bufsize=1,
             cwd=str(cwd),
@@ -135,11 +135,16 @@ def main() -> int:
     args = parser.parse_args()
 
     cwd = Path(args.cwd).resolve()
-    white = Engine(split_cmd(args.white), cwd)
-    black = Engine(split_cmd(args.black), cwd)
-    validator = Engine(split_cmd(args.validator), cwd) if args.validator else None
+    white: Engine | None = None
+    black: Engine | None = None
+    validator: Engine | None = None
 
     try:
+        white = Engine(split_cmd(args.white), cwd)
+        black = Engine(split_cmd(args.black), cwd)
+        if args.validator:
+            validator = Engine(split_cmd(args.validator), cwd)
+
         init_engine(white)
         init_engine(black)
         if validator is not None:
@@ -185,8 +190,10 @@ def main() -> int:
         print("moves", " ".join(moves))
         return 0
     finally:
-        white.quit()
-        black.quit()
+        if white is not None:
+            white.quit()
+        if black is not None:
+            black.quit()
         if validator is not None:
             validator.quit()
 
