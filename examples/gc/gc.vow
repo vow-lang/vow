@@ -65,7 +65,10 @@ fn gc_add_root(h: GcHeap, slot: i64) vow {
     r.push(slot);
 }
 
-fn gc_remove_root(h: GcHeap, slot: i64) {
+fn gc_remove_root(h: GcHeap, slot: i64) vow {
+    requires: slot >= 0,
+    requires: slot < h.values.len()
+} {
     let r: Vec<i64> = h.roots;
     let len: i64 = r.len();
     let mut i: i64 = 0;
