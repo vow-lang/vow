@@ -236,7 +236,7 @@ fn save_esbmc_debug(c_source: String, tmp_path: String, unwind: String, func_nam
     let cmd: String = String::from("");
     cmd.push_str(esbmc_path());
     cmd.push_str(String::from(" "));
-    cmd.push_str(tmp_path);
+    cmd.push_str(c_path);
     cmd.push_str(String::from(" --no-bounds-check --no-pointer-check --unwind "));
     cmd.push_str(unwind);
     cmd.push_str(String::from(" --64\n"));

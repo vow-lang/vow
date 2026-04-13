@@ -37,7 +37,7 @@ pub fn is_prime(n: i64) -> bool vow {
     } else {
         let mut i: i64 = 2;
         let mut prime: bool = true;
-        while i * i <= n vow {
+        while i * i <= n && prime vow {
             invariant: i >= 2
         } {
             if n % i == 0 {
@@ -53,6 +53,7 @@ pub fn power_mod(base: i64, exp: i64, modulus: i64) -> i64 vow {
     requires: base >= 0,
     requires: exp >= 0,
     requires: modulus > 1,
+    requires: modulus <= 3037000499,
     ensures: result >= 0,
     ensures: result < modulus
 } {
@@ -122,7 +123,7 @@ pub fn isqrt(n: i64) -> i64 vow {
         0
     } else {
         let mut x: i64 = n;
-        let mut y: i64 = (x + 1) / 2;
+        let mut y: i64 = x / 2 + 1;
         while y < x vow {
             invariant: x >= 1,
             invariant: y >= 0

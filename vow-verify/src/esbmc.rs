@@ -187,10 +187,13 @@ fn parse_assignment_line(line: &str) -> Option<(String, String)> {
 
 fn save_esbmc_debug(
     esbmc: &std::path::Path,
-    _c_path: &std::path::Path,
     c_src: &str,
     func_name: &str,
 ) {
+    if std::env::var("VOW_VERIFY_DEBUG").is_err() {
+        return;
+    }
+
     let debug_dir = std::path::Path::new("/tmp/vow-verify-debug");
     let _ = std::fs::create_dir_all(debug_dir);
 
@@ -287,7 +290,7 @@ pub fn run_esbmc(esbmc: &std::path::Path, c_src: &str, func_name: &str) -> Verif
         return VerificationResult::ToolError(e.to_string());
     }
 
-    save_esbmc_debug(esbmc, tmp.path(), c_src, func_name);
+    save_esbmc_debug(esbmc, c_src, func_name);
 
     let output = match Command::new(esbmc)
         .arg(tmp.path())

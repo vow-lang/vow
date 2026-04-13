@@ -50,6 +50,8 @@ pub fn sign(x: i64) -> i64 vow {
 pub fn safe_add(a: i64, b: i64) -> i64 vow {
     requires: a >= 0,
     requires: b >= 0,
+    requires: a <= 9223372036854775807 - b,
+    ensures: result == a + b,
     ensures: result >= a,
     ensures: result >= b
 } {
@@ -69,6 +71,8 @@ pub fn safe_sub(a: i64, b: i64) -> i64 vow {
 pub fn safe_mul(a: i64, b: i64) -> i64 vow {
     requires: a >= 0,
     requires: b >= 0,
+    requires: b == 0 || a <= 9223372036854775807 / b,
+    ensures: result == a * b,
     ensures: result >= 0
 } {
     a * b
@@ -110,11 +114,17 @@ pub fn pow(base: i64, exp: i64) -> i64 vow {
     result
 }
 
-pub fn midpoint(a: i64, b: i64) -> i64 {
+pub fn midpoint(a: i64, b: i64) -> i64 vow {
+    requires: a <= b,
+    ensures: result >= a,
+    ensures: result <= b
+} {
     a + (b - a) / 2
 }
 
 pub fn diff(a: i64, b: i64) -> i64 vow {
+    requires: a >= 0,
+    requires: b >= 0,
     ensures: result >= 0
 } {
     if a > b { a - b } else { b - a }

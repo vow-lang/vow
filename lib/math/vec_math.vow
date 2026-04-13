@@ -17,7 +17,10 @@ pub fn vec_min(v: Vec<i64>) -> i64 vow {
     let mut m: i64 = v[0];
     let mut i: i64 = 1;
     let n: i64 = v.len();
-    while i < n {
+    while i < n vow {
+        invariant: i >= 1,
+        invariant: i <= n
+    } {
         if v[i] < m {
             m = v[i];
         }
@@ -32,7 +35,10 @@ pub fn vec_max(v: Vec<i64>) -> i64 vow {
     let mut m: i64 = v[0];
     let mut i: i64 = 1;
     let n: i64 = v.len();
-    while i < n {
+    while i < n vow {
+        invariant: i >= 1,
+        invariant: i <= n
+    } {
         if v[i] > m {
             m = v[i];
         }
@@ -47,7 +53,10 @@ pub fn vec_mean(v: Vec<i64>) -> i64 vow {
     let mut total: i64 = 0;
     let mut i: i64 = 0;
     let n: i64 = v.len();
-    while i < n {
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
         total = total + v[i];
         i = i + 1;
     }
@@ -60,7 +69,10 @@ pub fn vec_dot(a: Vec<i64>, b: Vec<i64>) -> i64 vow {
     let mut total: i64 = 0;
     let mut i: i64 = 0;
     let n: i64 = a.len();
-    while i < n {
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
         total = total + a[i] * b[i];
         i = i + 1;
     }
@@ -93,7 +105,10 @@ pub fn vec_all_in_range(v: Vec<i64>, lo: i64, hi: i64) -> bool vow {
 } {
     let mut i: i64 = 0;
     let n: i64 = v.len();
-    while i < n {
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
         if v[i] < lo {
             return false;
         }
@@ -112,7 +127,10 @@ pub fn vec_is_sorted(v: Vec<i64>) -> bool {
         let mut i: i64 = 1;
         let n: i64 = v.len();
         let mut sorted: bool = true;
-        while i < n {
+        while i < n vow {
+            invariant: i >= 1,
+            invariant: i <= n
+        } {
             if v[i] < v[i - 1] {
                 sorted = false;
             }
