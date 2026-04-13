@@ -66,6 +66,9 @@ jobs:
       - name: Bootstrap compiler
         run: scripts/bootstrap.sh
 
+      - name: Verify compiler binary
+        run: build/vowc --help > /dev/null
+
       - name: Package release artifacts
         run: |
           mkdir -p release
@@ -77,7 +80,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A '*.toml' Cargo.lock
+          git add */Cargo.toml Cargo.lock
           git commit -m "Release v${{ steps.bump.outputs.version }}"
           git tag "v${{ steps.bump.outputs.version }}"
           git push origin HEAD:${{ github.ref_name }} "refs/tags/v${{ steps.bump.outputs.version }}"
@@ -86,7 +89,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ steps.bump.outputs.tag }}" \
+          TAG="${{ steps.bump.outputs.tag }}"
+          if gh release view "$TAG" &>/dev/null; then
+            echo "Release $TAG already exists, deleting stale release"
+            gh release delete "$TAG" --yes
+          fi
+          gh release create "$TAG" \
             --title "Vow ${{ steps.bump.outputs.version }}" \
             --generate-notes \
             release/vowc-linux-x86_64 \

@@ -39,8 +39,8 @@ NEW_VERSION="${MAJOR}.${MINOR}.${REV}"
 
 # Discover workspace member Cargo.toml files dynamically.
 # Assumes multi-line members array (one per line), which cargo fmt enforces.
-TOMLS=$(sed -n '/^\[workspace\]/,/^\[/{ s/^[[:space:]]*"\(.*\)",\{0,1\}/\1\/Cargo.toml/p }' Cargo.toml)
-if [ -z "$TOMLS" ]; then
+mapfile -t TOMLS < <(sed -n '/^\[workspace\]/,/^\[/{ s/^[[:space:]]*"\(.*\)",\{0,1\}/\1\/Cargo.toml/p }' Cargo.toml)
+if [ ${#TOMLS[@]} -eq 0 ]; then
     echo "Error: no workspace members found in Cargo.toml" >&2
     exit 1
 fi
@@ -48,7 +48,7 @@ fi
 ESCAPED_CURRENT="${CURRENT//./\\.}"
 FAILED=0
 
-for toml in $TOMLS; do
+for toml in "${TOMLS[@]}"; do
     if [ ! -f "$toml" ]; then
         echo "Warning: $toml not found, skipping" >&2
         continue
