@@ -37,7 +37,8 @@ esac
 
 NEW_VERSION="${MAJOR}.${MINOR}.${REV}"
 
-# Discover workspace member Cargo.toml files dynamically
+# Discover workspace member Cargo.toml files dynamically.
+# Assumes multi-line members array (one per line), which cargo fmt enforces.
 TOMLS=$(sed -n '/^\[workspace\]/,/^\[/{ s/^[[:space:]]*"\(.*\)",\{0,1\}/\1\/Cargo.toml/p }' Cargo.toml)
 if [ -z "$TOMLS" ]; then
     echo "Error: no workspace members found in Cargo.toml" >&2

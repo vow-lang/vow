@@ -76,7 +76,7 @@ jobs:
           git add -A '*.toml' Cargo.lock
           git commit -m "Release v${{ steps.bump.outputs.version }}"
           git tag "v${{ steps.bump.outputs.version }}"
-          git push origin HEAD:${{ github.ref_name }} --tags
+          git push origin HEAD:${{ github.ref_name }} "refs/tags/v${{ steps.bump.outputs.version }}"
 
       - name: Create GitHub release
         env:
