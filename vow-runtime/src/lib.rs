@@ -354,6 +354,7 @@ pub unsafe extern "C" fn __vow_vec_push(
     elem_size: usize,
     elem_align: usize,
 ) {
+    sanitize_on_push(vec as usize);
     unsafe { __vow_vec_reserve(vec, 1, elem_size, elem_align) };
     let v = unsafe { &mut *(vec as *mut VowVec) };
     let dest = unsafe { v.ptr.add(v.len * elem_size) };
@@ -370,7 +371,6 @@ pub unsafe extern "C" fn __vow_vec_len(vec: *const u8) -> usize {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_push_val(vec: *mut u8, value: i64) {
-    sanitize_on_push(vec as usize);
     let bytes = value.to_ne_bytes();
     unsafe { __vow_vec_push(vec, bytes.as_ptr(), 8, 8) };
 }
