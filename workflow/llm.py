@@ -126,6 +126,7 @@ def _chat_anthropic(
         temperature=config.temperature,
         system=system,
         messages=messages,
+        timeout=300.0,
     )
     content = resp.content[0].text if resp.content else ""
     return LLMResponse(

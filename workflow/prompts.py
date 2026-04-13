@@ -196,6 +196,10 @@ def format_verify_feedback(parsed: dict) -> str:
             lines.append(f"- [{code}] {msg}")
             for h in hints:
                 lines.append(f"  Hint: {h}")
+        if not diagnostics:
+            stderr = parsed.get("stderr", "")
+            raw = parsed.get("raw_stdout", "")
+            lines.append(stderr or raw or "(no details)")
         return "\n".join(lines)
 
     if status == "VerifyFailed":

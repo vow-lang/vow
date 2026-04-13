@@ -86,7 +86,7 @@ def extract_vow_code(response: str) -> str | None:
         if line.strip().startswith("module "):
             return "\n".join(lines[i:]).strip()
 
-    if "fn " in response and ("module " in response or "vow {" in response):
+    if "fn " in response and "module " in response:
         return response.strip()
 
     return None
