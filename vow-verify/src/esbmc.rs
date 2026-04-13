@@ -185,11 +185,7 @@ fn parse_assignment_line(line: &str) -> Option<(String, String)> {
 // Debug: save C source and command for ESBMC debugging
 // ---------------------------------------------------------------------------
 
-fn save_esbmc_debug(
-    esbmc: &std::path::Path,
-    c_src: &str,
-    func_name: &str,
-) {
+fn save_esbmc_debug(esbmc: &std::path::Path, c_src: &str, func_name: &str) {
     if std::env::var("VOW_VERIFY_DEBUG").is_err() {
         return;
     }
