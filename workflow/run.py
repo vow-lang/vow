@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 import tomllib
 from dataclasses import asdict
 from pathlib import Path
@@ -127,7 +128,6 @@ def cmd_run(args: argparse.Namespace) -> None:
         output_path = Path(args.output)
     else:
         results_dir = Path(__file__).resolve().parent / "results"
-        import time
         run_id = time.strftime("%Y-%m-%dT%H:%M:%S")
         output_path = results_dir / f"{run_id}.json"
 

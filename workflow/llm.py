@@ -90,12 +90,36 @@ def _chat(
         raise ValueError(f"Unknown provider: {config.provider}")
 
 
+_anthropic_client: anthropic.Anthropic | None = None
+_openai_client: openai.OpenAI | None = None
+
+
+def _get_anthropic_client() -> anthropic.Anthropic:
+    global _anthropic_client
+    if _anthropic_client is None:
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY environment variable is not set")
+        _anthropic_client = anthropic.Anthropic(api_key=api_key)
+    return _anthropic_client
+
+
+def _get_openai_client() -> openai.OpenAI:
+    global _openai_client
+    if _openai_client is None:
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY environment variable is not set")
+        _openai_client = openai.OpenAI(api_key=api_key)
+    return _openai_client
+
+
 def _chat_anthropic(
     config: ModelConfig,
     system: str,
     messages: list[dict[str, str]],
 ) -> LLMResponse:
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    client = _get_anthropic_client()
     resp = client.messages.create(
         model=config.model_id,
         max_tokens=config.max_tokens,
@@ -116,7 +140,7 @@ def _chat_openai(
     system: str,
     messages: list[dict[str, str]],
 ) -> LLMResponse:
-    client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    client = _get_openai_client()
     oai_messages = [{"role": "system", "content": system}] + messages
     resp = client.chat.completions.create(
         model=config.model_id,

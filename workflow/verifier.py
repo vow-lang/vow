@@ -9,9 +9,6 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-SELF_HOSTED_MEM_LIMIT = 2_000_000 * 1024  # ulimit -v 2000000 in bytes
-
-
 @dataclass
 class CompileResult:
     success: bool
@@ -32,7 +29,7 @@ class VerifyResult:
 
 def _write_temp(source: str) -> str:
     with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".vow", delete=False, dir="/tmp"
+        mode="w", suffix=".vow", delete=False
     ) as f:
         f.write(source)
         return f.name
@@ -56,9 +53,10 @@ def run_compile(
 ) -> CompileResult:
     """Run syntax and type checking only (no verification, no codegen)."""
     tmp_path = _write_temp(vow_source)
+    out_path = tmp_path + ".out"
     try:
         result = subprocess.run(
-            [str(vow_binary), "build", "--no-verify", tmp_path],
+            [str(vow_binary), "build", "--no-verify", "-o", out_path, tmp_path],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -88,6 +86,8 @@ def run_compile(
         )
     finally:
         Path(tmp_path).unlink(missing_ok=True)
+        Path(out_path).unlink(missing_ok=True)
+        Path(out_path + ".o").unlink(missing_ok=True)
 
 
 def run_verify(

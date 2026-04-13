@@ -38,7 +38,7 @@ def parse_structured_response(text: str) -> ParsedResponse:
         verdict = m.group(1).upper()
 
     # Extract SUGGESTIONS section
-    m = re.search(r"SUGGESTIONS:\s*\n(.*?)(?=\n[A-Z]+:|$)", text, re.DOTALL)
+    m = re.search(r"SUGGESTIONS:\s*\n(.*?)(?=\n[A-Z]+:|$)", text, re.DOTALL | re.IGNORECASE)
     if m:
         for line in m.group(1).strip().split("\n"):
             line = line.strip()
@@ -46,7 +46,7 @@ def parse_structured_response(text: str) -> ParsedResponse:
                 suggestions.append(line[1:].strip())
 
     # Extract ISSUES section
-    m = re.search(r"ISSUES:\s*\n(.*?)(?=\n[A-Z]+:|$)", text, re.DOTALL)
+    m = re.search(r"ISSUES:\s*\n(.*?)(?=\n[A-Z]+:|$)", text, re.DOTALL | re.IGNORECASE)
     if m:
         for line in m.group(1).strip().split("\n"):
             line = line.strip()
@@ -55,7 +55,7 @@ def parse_structured_response(text: str) -> ParsedResponse:
 
     # Extract REASONING or SUMMARY
     for header in ("REASONING", "SUMMARY"):
-        m = re.search(rf"{header}:\s*\n(.*?)(?=\n[A-Z]+:|$)", text, re.DOTALL)
+        m = re.search(rf"{header}:\s*\n(.*?)(?=\n[A-Z]+:|$)", text, re.DOTALL | re.IGNORECASE)
         if m:
             reasoning = m.group(1).strip()
             break
@@ -74,7 +74,7 @@ def extract_vow_code(response: str) -> str | None:
     if not response.strip():
         return None
 
-    fence_pattern = re.compile(r"```(?:vow)?\s*\n(.*?)```", re.DOTALL)
+    fence_pattern = re.compile(r"```(?:vow)?\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
     matches = fence_pattern.findall(response)
     if matches:
         code = max(matches, key=len).strip()

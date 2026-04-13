@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 SKILL_FILES = [
-    "index.md",
+    "SKILL.md",
     "grammar.md",
     "contracts.md",
     "cli.md",
@@ -204,13 +204,15 @@ def format_verify_feedback(parsed: dict) -> str:
         lines = [f"**Verification failed** on function `{func}`.\n"]
         for i, ce in enumerate(counterexamples):
             violation = ce.get("violation", "unknown")
-            blame = ce.get("blame", "unknown")
-            values = ce.get("values", {})
+            inputs = ce.get("inputs", {})
             vow_id = ce.get("vow_id", "?")
-            val_str = ", ".join(f"{k}={v}" for k, v in values.items()) if values else "none"
+            source = ce.get("source", {})
+            val_str = ", ".join(f"{k}={v}" for k, v in inputs.items()) if inputs else "none"
             lines.append(f"Counterexample {i + 1}:")
-            lines.append(f"  Violation: {violation} (vow_id={vow_id}, blame={blame})")
-            lines.append(f"  Values: {val_str}")
+            lines.append(f"  Violation: {violation} (vow_id={vow_id})")
+            lines.append(f"  Inputs: {val_str}")
+            if source:
+                lines.append(f"  Source: {source.get('file', '?')}:{source.get('offset', '?')}")
         return "\n".join(lines)
 
     return f"Verification returned unexpected status: {status}"
