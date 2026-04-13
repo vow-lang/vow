@@ -1,4 +1,4 @@
-// TEST: stdout "PASS alloc\nPASS read\nPASS write\nPASS collect_frees_unreachable\nPASS roots_survive\nPASS ref_traversal\nPASS slot_reuse\nPASS count_tracking"
+// TEST: stdout "PASS alloc\nPASS read\nPASS write\nPASS collect_frees_unreachable\nPASS roots_survive\nPASS ref_traversal\nPASS slot_reuse\nPASS count_tracking\nPASS remove_root"
 module Main
 use gc
 
@@ -23,6 +23,7 @@ fn main() -> i32 [io] {
     test_ref_traversal();
     test_slot_reuse();
     test_count_tracking();
+    test_remove_root();
     0
 }
 
@@ -89,6 +90,17 @@ fn test_slot_reuse() [io] {
     // s0 was freed, slot 0 should be reused
     let s2: i64 = gc_alloc(h, 300);
     assert_true(String::from("slot_reuse"), s2 == s0 && gc_read(h, s2) == 300);
+}
+
+fn test_remove_root() [io] {
+    let h: GcHeap = gc_new();
+    let s0: i64 = gc_alloc(h, 10);
+    let s1: i64 = gc_alloc(h, 20);
+    gc_add_root(h, s0);
+    gc_add_root(h, s1);
+    gc_remove_root(h, s0);
+    let freed: i64 = gc_collect(h);
+    assert_true(String::from("remove_root"), freed == 1 && !gc_is_alive(h, s0) && gc_is_alive(h, s1));
 }
 
 fn test_count_tracking() [io] {
