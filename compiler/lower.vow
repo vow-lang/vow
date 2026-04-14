@@ -1572,6 +1572,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_exit_blocks.pop();
 
         // Free loop-body temporaries before back-edge.
+        // Include transitive sources so Phi/Upsilon aliases aren't freed.
         if !lctx_is_terminated(ctx) {
             let loop_live_out2: Vec<i64> = Vec::new();
             let mut lli: i64 = 0;
@@ -1579,11 +1580,16 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let vname: String = assigned[lli];
                 let cur: i64 = lctx_lookup(ctx, vname);
                 loop_live_out2.push(cur);
+                let sources: Vec<i64> = lctx_collect_return_sources(ctx, cur);
+                let mut si: i64 = 0;
+                while si < sources.len() {
+                    loop_live_out2.push(sources[si]);
+                    si = si + 1;
+                }
                 lli = lli + 1;
             }
             lctx_pop_alloc_scope_frees(ctx, loop_live_out2);
         } else {
-            // Loop body terminated (by break/return) — break already freed.
             lctx_discard_alloc_scope(ctx);
         }
 
@@ -2680,6 +2686,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let nphis: i64 = phi_names.len();
 
             // Free loop body allocations before jumping back to header.
+            // Include transitive sources so Phi/Upsilon aliases aren't freed.
             let nlasd: i64 = ctx.loop_alloc_scope_depths.len();
             if nlasd > 0 {
                 let depth: i64 = ctx.loop_alloc_scope_depths[nlasd - 1];
@@ -2687,7 +2694,14 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let mut cli: i64 = 0;
                 while cli < nphis {
                     let vname: String = phi_names[cli];
-                    cont_live_out.push(lctx_lookup(ctx, vname));
+                    let cval: i64 = lctx_lookup(ctx, vname);
+                    cont_live_out.push(cval);
+                    let csources: Vec<i64> = lctx_collect_return_sources(ctx, cval);
+                    let mut csi: i64 = 0;
+                    while csi < csources.len() {
+                        cont_live_out.push(csources[csi]);
+                        csi = csi + 1;
+                    }
                     cli = cli + 1;
                 }
                 lctx_emit_alloc_frees_to_depth(ctx, depth, cont_live_out);
