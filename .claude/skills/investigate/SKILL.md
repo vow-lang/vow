@@ -21,13 +21,32 @@ the skill detects whether it refers to an issue or a PR and follows the appropri
 
 ## Detection
 
-Run `gh pr view $ARGUMENTS --json number 2>/dev/null` to check if the number is a PR.
-- If it succeeds → follow the **PR Workflow** below.
-- If it fails → follow the **Issue Workflow** below.
+Determine whether the argument refers to a PR or an issue:
+
+```bash
+NUM="$ARGUMENTS"
+if gh pr view "$NUM" --json number >/dev/null 2>&1; then
+  # → follow the PR Workflow below
+elif gh issue view "$NUM" --json number >/dev/null 2>&1; then
+  # → follow the Issue Workflow below
+else
+  echo "Error: #$NUM is neither a PR nor an issue in this repo" >&2
+  exit 1
+fi
+```
+
+- If `gh pr view` succeeds → follow the **PR Workflow** below.
+- If `gh pr view` fails but `gh issue view` succeeds → follow the **Issue Workflow** below.
+- If both fail → stop and report the error (do not silently fall through).
 
 ---
 
 # PR Workflow
+
+Set the PR number from the argument at the start:
+```bash
+PR="$ARGUMENTS"
+```
 
 End-to-end review workflow for an open pull request. Checks CI, triages review comments,
 runs independent code reviews, and posts a consolidated Investigation Report.
@@ -36,7 +55,7 @@ runs independent code reviews, and posts a consolidated Investigation Report.
 
 Fetch PR details with:
 ```bash
-gh pr view $ARGUMENTS --json title,body,headRefName,baseRefName,state,labels,reviewRequests,reviews,statusCheckRollup,files
+gh pr view "$PR" --json title,body,headRefName,baseRefName,state,labels,reviewRequests,reviews,statusCheckRollup,files
 ```
 
 Extract:
@@ -48,7 +67,7 @@ Extract:
 
 Check out the PR branch locally:
 ```bash
-gh pr checkout $ARGUMENTS
+gh pr checkout "$PR"
 ```
 
 ## PR Phase 2 — Check CI
@@ -57,7 +76,7 @@ Examine the CI status from the PR data fetched in Phase 1.
 
 If checks are still running, poll with:
 ```bash
-gh pr checks $ARGUMENTS --watch
+gh pr checks "$PR" --watch
 ```
 
 - If CI **passes**: note this and proceed.
@@ -65,12 +84,17 @@ gh pr checks $ARGUMENTS --watch
   identify the failure, and include it prominently in the Investigation Report.
   Still proceed with the remaining phases — CI failure does not short-circuit the review.
 
+  **Finding the run ID:** In the `statusCheckRollup` array from Phase 1, find entries with
+  `conclusion: "FAILURE"`. The `detailsUrl` contains the run ID — e.g.,
+  `https://github.com/.../actions/runs/12345/job/...` → run ID is `12345`.
+  Alternatively: `gh run list --branch <headRefName> --status failure --limit 5 --json databaseId,name,conclusion`.
+
 ## PR Phase 3 — Triage Review Comments
 
-Fetch all review comments:
+Fetch all review comments (repo-relative paths — `gh api` infers the current repo):
 ```bash
-gh api repos/{owner}/{repo}/pulls/$ARGUMENTS/comments --paginate
-gh api repos/{owner}/{repo}/pulls/$ARGUMENTS/reviews --paginate
+gh api "pulls/$PR/comments" --paginate
+gh api "pulls/$PR/reviews" --paginate
 ```
 
 For each review comment:
@@ -81,6 +105,11 @@ For each review comment:
 3. **Ambiguous** (subjective suggestion, debatable design choice, unclear scope) →
    run `/codex-2nd-opinion` with the comment text and surrounding code context to get
    an independent judgment. Use the Codex verdict to classify as actionable or skip.
+
+**Getting code context for comments:** Each review comment from the API includes `path`
+(file), `line`/`original_line` (position), `start_line` (for multi-line comments), and
+`diff_hunk` (the surrounding diff context). Use `path` and line numbers to read the
+relevant source with the Read tool, and include `diff_hunk` as additional context.
 
 Produce a summary table of all comments with their classification and rationale.
 
@@ -112,7 +141,7 @@ Merge all findings from Phases 2–5 into a single consolidated comment on the P
 
 Post the comment with:
 ```bash
-gh pr comment $ARGUMENTS --body "<report>"
+gh pr comment "$PR" --body "<report>"
 ```
 
 The comment must follow this structure:
@@ -152,6 +181,11 @@ Do **not** start fixing anything automatically — wait for the user's decision.
 
 # Issue Workflow
 
+Set the issue number from the argument at the start:
+```bash
+ISSUE="$ARGUMENTS"
+```
+
 End-to-end workflow for reproducing, fixing, testing, and closing a Vow compiler bug
 reported as a GitHub issue. This workflow modifies **both** the Rust compiler and the
 self-hosted compiler, as required by the dual-compiler rule in CLAUDE.md.
@@ -160,7 +194,7 @@ self-hosted compiler, as required by the dual-compiler rule in CLAUDE.md.
 
 ### Phase 1 — Understand the Issue
 
-Fetch the issue with `gh issue view $ARGUMENTS --json title,body,labels,comments`.
+Fetch the issue with `gh issue view "$ISSUE" --json title,body,labels,comments`.
 
 Extract:
 - Reported bug behavior and symptoms
@@ -277,7 +311,7 @@ ulimit -v 2000000; scripts/full_test.sh
 ### Phase 8 — Commit and Push
 
 1. Stage all changed files (Rust sources, `compiler/*.vow`, and the new test file).
-2. Create a single commit with message format: `fix: <concise description> (#$ARGUMENTS)`
+2. Create a single commit with message format: `fix: <concise description> (#$ISSUE)`
    - Follow the existing commit style (see `git log --oneline`).
    - Never mention Claude or AI in the commit message.
 3. Push to the current branch.
@@ -287,7 +321,7 @@ ulimit -v 2000000; scripts/full_test.sh
 Post a comment on the issue using:
 
 ```bash
-gh issue comment $ARGUMENTS --body "<summary>"
+gh issue comment "$ISSUE" --body "<summary>"
 ```
 
 The comment must include:
@@ -300,7 +334,7 @@ The comment must include:
 After confirming the fix is pushed and the comment is posted, close the issue:
 
 ```bash
-gh issue close $ARGUMENTS
+gh issue close "$ISSUE"
 ```
 
 If the fix is partial or needs further review, skip this step and inform the user.
