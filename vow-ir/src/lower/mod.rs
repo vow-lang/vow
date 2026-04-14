@@ -1726,8 +1726,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             };
 
             // Free loop body allocations before jumping to exit.
+            // Use collect_return_sources to trace through Phi/Upsilon chains —
+            // break_val may alias multiple heap allocations (e.g., from if-else).
             if let Some(&depth) = ctx.loop_alloc_scope_depth.last() {
-                let live_out: Vec<InstId> = break_val.into_iter().collect();
+                let live_out: Vec<InstId> = if let Some(bv) = break_val {
+                    ctx.collect_return_sources(bv).into_iter().collect()
+                } else {
+                    vec![]
+                };
                 ctx.emit_alloc_frees_to_depth(depth, &live_out, span);
             }
 

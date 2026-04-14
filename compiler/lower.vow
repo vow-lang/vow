@@ -2648,9 +2648,19 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 }
             }
             // Free loop body allocations before jumping to exit.
+            // Trace transitive sources of break value through Phi/Upsilon chains.
             let nlasd: i64 = ctx.loop_alloc_scope_depths.len();
             if nlasd > 0 {
                 let depth: i64 = ctx.loop_alloc_scope_depths[nlasd - 1];
+                if break_live_out.len() > 0 {
+                    let bv: i64 = break_live_out[0];
+                    let sources: Vec<i64> = lctx_collect_return_sources(ctx, bv);
+                    let mut si: i64 = 0;
+                    while si < sources.len() {
+                        break_live_out.push(sources[si]);
+                        si = si + 1;
+                    }
+                }
                 lctx_emit_alloc_frees_to_depth(ctx, depth, break_live_out);
             }
             let jmp_args: Vec<i64> = Vec::new();
