@@ -271,6 +271,9 @@ pub extern "C" fn __vow_profile_init() {
 
 static STACK_DEPTH: AtomicI64 = AtomicI64::new(0);
 static STACK_FN_NAME: AtomicU64 = AtomicU64::new(0);
+// Stack boundary saved at init time (on the main stack, before any signal).
+static STACK_BOTTOM: AtomicU64 = AtomicU64::new(0);
+static STACK_TOP: AtomicU64 = AtomicU64::new(0);
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_stack_enter(fn_name_ptr: *const i8) {
@@ -288,13 +291,30 @@ pub extern "C" fn __vow_init_stack_guard() {
     use std::sync::Once;
     static INIT: Once = Once::new();
     INIT.call_once(|| {
+        // Record the main stack boundaries while we're on the main stack.
+        // Use address of a local variable as a portable SP approximation.
+        let local = 0u8;
+        let sp_approx = &local as *const u8 as usize;
+        let mut rl: libc::rlimit = unsafe { std::mem::zeroed() };
+        if unsafe { libc::getrlimit(libc::RLIMIT_STACK, &mut rl) } == 0
+            && rl.rlim_cur != libc::RLIM_INFINITY
+        {
+            let stack_size = rl.rlim_cur as usize;
+            // Stack grows downward: bottom = SP - size, top = SP + guard margin.
+            STACK_BOTTOM.store(
+                sp_approx.saturating_sub(stack_size) as u64,
+                Ordering::Relaxed,
+            );
+            STACK_TOP.store(sp_approx.saturating_add(4096) as u64, Ordering::Relaxed);
+        }
+
         unsafe {
             // Allocate an alternate signal stack so the SIGSEGV handler can run
             // even when the main stack is exhausted.
-            let stack_size = libc::SIGSTKSZ * 2;
+            let alt_stack_size = libc::SIGSTKSZ * 2;
             let stack_mem = libc::mmap(
                 std::ptr::null_mut(),
-                stack_size,
+                alt_stack_size,
                 libc::PROT_READ | libc::PROT_WRITE,
                 libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
                 -1,
@@ -306,7 +326,7 @@ pub extern "C" fn __vow_init_stack_guard() {
             let ss = libc::stack_t {
                 ss_sp: stack_mem,
                 ss_flags: 0,
-                ss_size: stack_size,
+                ss_size: alt_stack_size,
             };
             if libc::sigaltstack(&ss, std::ptr::null_mut()) != 0 {
                 return;
@@ -328,30 +348,18 @@ unsafe extern "C" fn stack_overflow_handler(
     _ctx: *mut libc::c_void,
 ) {
     // Distinguish stack overflow from other SIGSEGVs by checking whether the
-    // fault address is near the stack limit. If not, re-raise as default SIGSEGV
-    // so the OS produces a core dump for null-pointer or other segfaults.
-    if !info.is_null() {
-        let fault_addr = unsafe { (*info).si_addr() } as usize;
-        let mut rl: libc::rlimit = unsafe { std::mem::zeroed() };
-        if unsafe { libc::getrlimit(libc::RLIMIT_STACK, &mut rl) } == 0 {
-            let stack_size = rl.rlim_cur as usize;
-            // Use the current stack pointer as a reference. If the fault address
-            // is more than one stack size away, it's likely not a stack overflow.
-            let sp: usize;
+    // fault address falls within the main stack region (saved at init time).
+    // If boundaries were recorded and the fault is outside the stack region,
+    // restore the default handler so the OS produces a core dump.
+    let bottom = STACK_BOTTOM.load(Ordering::Relaxed);
+    let top = STACK_TOP.load(Ordering::Relaxed);
+    if bottom != 0 && top != 0 && !info.is_null() {
+        let fault_addr = unsafe { (*info).si_addr() } as u64;
+        if fault_addr < bottom || fault_addr > top {
             unsafe {
-                std::arch::asm!("mov {}, rsp", out(reg) sp, options(nomem, nostack));
+                libc::signal(libc::SIGSEGV, libc::SIG_DFL);
             }
-            let stack_bottom = sp.saturating_sub(stack_size);
-            let stack_top = sp.saturating_add(stack_size);
-            if fault_addr < stack_bottom || fault_addr > stack_top {
-                // Not a stack overflow — restore default handler and re-raise.
-                let mut sa: libc::sigaction = unsafe { std::mem::zeroed() };
-                sa.sa_sigaction = libc::SIG_DFL;
-                unsafe {
-                    libc::sigaction(libc::SIGSEGV, &sa, std::ptr::null_mut());
-                }
-                return;
-            }
+            return;
         }
     }
 
