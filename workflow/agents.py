@@ -74,21 +74,21 @@ def extract_vow_code(response: str) -> str | None:
     if not response.strip():
         return None
 
-    # Prefer vow-tagged fences over untagged ones
+    # Prefer vow-tagged fences over untagged ones (longest valid match first)
     vow_pattern = re.compile(r"```vow\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
     vow_matches = vow_pattern.findall(response)
-    if vow_matches:
-        code = max(vow_matches, key=len).strip()
-        if "module " in code or "fn " in code:
-            return code
+    for candidate in sorted(vow_matches, key=len, reverse=True):
+        candidate = candidate.strip()
+        if "module " in candidate or "fn " in candidate:
+            return candidate
 
-    # Fall back to any fenced block
+    # Fall back to any fenced block (longest valid match first)
     fence_pattern = re.compile(r"```\s*\n(.*?)```", re.DOTALL)
     matches = fence_pattern.findall(response)
-    if matches:
-        code = max(matches, key=len).strip()
-        if "module " in code or "fn " in code:
-            return code
+    for candidate in sorted(matches, key=len, reverse=True):
+        candidate = candidate.strip()
+        if "module " in candidate or "fn " in candidate:
+            return candidate
 
     lines = response.split("\n")
     for i, line in enumerate(lines):
