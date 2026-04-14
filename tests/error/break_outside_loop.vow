@@ -1,0 +1,7 @@
+// TEST: stderr "outside of a loop"
+module BreakOutsideLoop
+
+fn main() -> i32 {
+    break;
+    0
+}
