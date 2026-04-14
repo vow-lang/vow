@@ -406,9 +406,7 @@ impl<'e> Checker<'e> {
             if ty != Ty::Bool && ty != Ty::Never {
                 self.emit_error_with_hints(
                     ErrorCode::ContractTypeMismatch,
-                    format!(
-                        "`{kind}` clause has type `{ty}` but must be `bool`"
-                    ),
+                    format!("`{kind}` clause has type `{ty}` but must be `bool`"),
                     span,
                     vec![format!(
                         "{context} `{kind}` clauses must evaluate to `bool`"
@@ -1076,7 +1074,9 @@ impl<'e> Checker<'e> {
                 }
             }
             ExprKind::While {
-                condition, vow, body,
+                condition,
+                vow,
+                body,
             } => {
                 self.check_expr(condition);
                 if let Some(vow) = vow {
