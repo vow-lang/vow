@@ -142,6 +142,8 @@ pub enum Opcode {
 
     FieldGet,
     FieldSet,
+
+    DebugCall,
 }
 
 impl Opcode {

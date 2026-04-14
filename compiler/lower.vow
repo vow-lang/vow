@@ -653,6 +653,13 @@ fn binop_result_ty(op: i64, operand_ty: i64) -> i64 vow {
     ITY_I64()
 }
 
+fn debug_builtin_to_extern(name: String) -> String {
+    if name == String::from("debug_str") { return String::from("__vow_debug_str"); }
+    if name == String::from("debug_i64") { return String::from("__vow_debug_i64"); }
+    if name == String::from("debug_u64") { return String::from("__vow_debug_u64"); }
+    String::from("")
+}
+
 fn builtin_to_extern(name: String) -> String {
     if name == String::from("print_str") { return String::from("__vow_string_print"); }
     if name == String::from("print_i64") { return String::from("__vow_print_i64"); }
@@ -698,6 +705,13 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("process_stdout_for") { return String::from("__vow_process_stdout_for"); }
     if name == String::from("process_stderr_for") { return String::from("__vow_process_stderr_for"); }
     String::from("")
+}
+
+fn debug_builtin_ret_ty(name: String) -> i64 {
+    if name == String::from("debug_str") { return ITY_UNIT(); }
+    if name == String::from("debug_i64") { return ITY_UNIT(); }
+    if name == String::from("debug_u64") { return ITY_UNIT(); }
+    -1
 }
 
 fn builtin_ret_ty(name: String) -> i64 {
@@ -1045,6 +1059,21 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         if callee_tag == EXPR_IDENT() {
             let name_sid: i64 = expr_a(a, callee_eid);
             fn_name = arena_str(a, name_sid);
+        }
+        let debug_ext: String = debug_builtin_to_extern(fn_name);
+        if debug_ext != String::from("") {
+            let ret_ty: i64 = debug_builtin_ret_ty(fn_name);
+            let call_args: Vec<i64> = Vec::new();
+            let nargs: i64 = list_len(a, args_lid);
+            let mut ai: i64 = 0;
+            while ai < nargs {
+                let arg_eid: i64 = list_get(a, args_lid, ai);
+                let arg_id: i64 = lower_expr(ctx, arg_eid);
+                lctx_mark_escaped(ctx, arg_id);
+                call_args.push(arg_id);
+                ai = ai + 1;
+            }
+            return lctx_emit(ctx, IOP_DEBUG_CALL(), ret_ty, call_args, IDATA_CALL_EXTERN(), 0, 0, debug_ext);
         }
         let ext: String = builtin_to_extern(fn_name);
         if ext != String::from("") {

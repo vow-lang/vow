@@ -130,6 +130,27 @@ pub extern "C" fn __vow_print_u64(v: u64) {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_debug_str(s: *const u8) {
+    sanitize_on_read(s as usize, 0);
+    let v = unsafe { &*(s as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let _ = std::io::stderr().write_all(bytes);
+    let _ = std::io::stderr().flush();
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_debug_i64(v: i64) {
+    let _ = write!(std::io::stderr(), "{v}");
+    let _ = std::io::stderr().flush();
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_debug_u64(v: u64) {
+    let _ = write!(std::io::stderr(), "{v}");
+    let _ = std::io::stderr().flush();
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn __vow_arithmetic_overflow() {
     let json = r#"{"error":"ArithmeticOverflow"}"#;
     let _ = writeln!(std::io::stderr(), "{json}");

@@ -194,6 +194,7 @@ const IOP_XOR_U64: i64 = 101;
 const IOP_CONST_U64: i64 = 102;
 const IOP_CAST_I64_TO_U64: i64 = 103;
 const IOP_CAST_U64_TO_I64: i64 = 104;
+const IOP_DEBUG_CALL: i64 = 105;
 
 // InstData kind constants (match compiler/ir.vow IDATA_*)
 #[allow(dead_code)]
@@ -1416,6 +1417,45 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
                     }
                 }
 
+                // Debug calls (only emitted in debug/sanitize mode)
+                IOP_DEBUG_CALL => {
+                    if (ctx.mode == 1 || ctx.mode == 3) && dk == IDATA_CALL_EXTERN {
+                        let sym = unsafe { read_vow_string(inst_ds_ptrs[ii]) };
+                        if let Some(&fr) = extern_func_refs.get(sym) {
+                            let sig_ref = builder.func.dfg.ext_funcs[fr].signature;
+                            let expected_types: Vec<types::Type> = builder.func.dfg.signatures
+                                [sig_ref]
+                                .params
+                                .iter()
+                                .map(|p| p.value_type)
+                                .collect();
+                            let call_args: Vec<Value> = (0..alen)
+                                .map(|i| {
+                                    let arg_id = all_args[aoff + i];
+                                    let v = *value_map.get(&arg_id).unwrap_or_else(|| {
+                                        panic!(
+                                            "clif shim: IOP_DEBUG_CALL value_map miss: inst_id={iid} arg_id={arg_id}"
+                                        )
+                                    });
+                                    if let Some(&expected_ty) = expected_types.get(i) {
+                                        let actual_ty = builder.func.dfg.value_type(v);
+                                        if actual_ty == types::I32 && expected_ty == types::I64 {
+                                            return builder.ins().sextend(types::I64, v);
+                                        }
+                                        if actual_ty == types::I8 && expected_ty == types::I64 {
+                                            return builder.ins().uextend(types::I64, v);
+                                        }
+                                    }
+                                    v
+                                })
+                                .collect();
+                            builder.ins().call(fr, &call_args);
+                        }
+                    }
+                    let unit = builder.ins().iconst(types::I32, 0);
+                    set_val!(iid, unit);
+                }
+
                 // Region / linear
                 IOP_REGION_ALLOC => {
                     let (size, align) = if dk == IDATA_ALLOC_SIZE {
@@ -1996,6 +2036,12 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_eprintln_str" => {
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        "__vow_debug_str" => {
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        "__vow_debug_i64" | "__vow_debug_u64" => {
             sig.params.push(AbiParam::new(types::I64));
         }
         "__vow_args" => {
