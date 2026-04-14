@@ -265,6 +265,173 @@ pub extern "C" fn __vow_profile_init() {
     });
 }
 
+// ---------------------------------------------------------------------------
+// Stack overflow detection
+// ---------------------------------------------------------------------------
+
+static STACK_DEPTH: AtomicI64 = AtomicI64::new(0);
+static STACK_FN_NAME: AtomicU64 = AtomicU64::new(0);
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_stack_enter(fn_name_ptr: *const i8) {
+    STACK_DEPTH.fetch_add(1, Ordering::Relaxed);
+    STACK_FN_NAME.store(fn_name_ptr as u64, Ordering::Relaxed);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_stack_exit() {
+    STACK_DEPTH.fetch_sub(1, Ordering::Relaxed);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_init_stack_guard() {
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        unsafe {
+            // Allocate an alternate signal stack so the SIGSEGV handler can run
+            // even when the main stack is exhausted.
+            let stack_size = libc::SIGSTKSZ * 2;
+            let stack_mem = libc::mmap(
+                std::ptr::null_mut(),
+                stack_size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            );
+            if stack_mem == libc::MAP_FAILED {
+                return;
+            }
+            let ss = libc::stack_t {
+                ss_sp: stack_mem,
+                ss_flags: 0,
+                ss_size: stack_size,
+            };
+            if libc::sigaltstack(&ss, std::ptr::null_mut()) != 0 {
+                return;
+            }
+
+            // Install SIGSEGV handler on the alternate stack.
+            let mut sa: libc::sigaction = std::mem::zeroed();
+            sa.sa_flags = libc::SA_ONSTACK | libc::SA_SIGINFO;
+            libc::sigemptyset(&mut sa.sa_mask);
+            sa.sa_sigaction = stack_overflow_handler as *const () as usize;
+            libc::sigaction(libc::SIGSEGV, &sa, std::ptr::null_mut());
+        }
+    });
+}
+
+unsafe extern "C" fn stack_overflow_handler(
+    _sig: libc::c_int,
+    _info: *mut libc::siginfo_t,
+    _ctx: *mut libc::c_void,
+) {
+    // Read depth and function name (best-effort in signal context)
+    let depth = STACK_DEPTH.load(Ordering::Relaxed);
+    let fn_ptr = STACK_FN_NAME.load(Ordering::Relaxed) as *const i8;
+
+    let mut buf = [0u8; 512];
+    let mut pos = 0;
+
+    macro_rules! write_bytes {
+        ($bytes:expr) => {
+            let src = $bytes;
+            let n = src.len().min(buf.len() - pos);
+            buf[pos..pos + n].copy_from_slice(&src[..n]);
+            pos += n;
+        };
+    }
+
+    write_bytes!(b"{\"error\":\"StackOverflow\"");
+
+    if depth > 0 {
+        write_bytes!(b",\"depth\":");
+        let mut num_buf = [0u8; 20];
+        let num_str = format_i64_to_buf(depth, &mut num_buf);
+        write_bytes!(num_str);
+    }
+
+    if !fn_ptr.is_null() {
+        write_bytes!(b",\"function\":\"");
+        let name = unsafe { CStr::from_ptr(fn_ptr) };
+        let name_bytes = name.to_bytes();
+        let n = name_bytes.len().min(buf.len() - pos - 3);
+        buf[pos..pos + n].copy_from_slice(&name_bytes[..n]);
+        pos += n;
+        write_bytes!(b"\"");
+    }
+
+    write_bytes!(b"}\n");
+
+    unsafe {
+        libc::write(2, buf.as_ptr() as *const libc::c_void, pos);
+    }
+
+    // Also write human-readable line
+    let mut hbuf = [0u8; 512];
+    let mut hpos = 0;
+
+    macro_rules! hwrite {
+        ($bytes:expr) => {
+            let src = $bytes;
+            let n = src.len().min(hbuf.len() - hpos);
+            hbuf[hpos..hpos + n].copy_from_slice(&src[..n]);
+            hpos += n;
+        };
+    }
+
+    hwrite!(b"stack overflow");
+
+    if depth > 0 {
+        hwrite!(b" at depth ");
+        let mut num_buf = [0u8; 20];
+        let num_str = format_i64_to_buf(depth, &mut num_buf);
+        hwrite!(num_str);
+    }
+
+    if !fn_ptr.is_null() {
+        hwrite!(b" in ");
+        let name = unsafe { CStr::from_ptr(fn_ptr) };
+        let name_bytes = name.to_bytes();
+        let n = name_bytes.len().min(hbuf.len() - hpos - 1);
+        hbuf[hpos..hpos + n].copy_from_slice(&name_bytes[..n]);
+        hpos += n;
+    }
+
+    hwrite!(b"\n");
+
+    unsafe {
+        libc::write(2, hbuf.as_ptr() as *const libc::c_void, hpos);
+    }
+
+    unsafe {
+        libc::_exit(134);
+    }
+}
+
+fn format_i64_to_buf(mut val: i64, buf: &mut [u8; 20]) -> &[u8] {
+    if val == 0 {
+        buf[0] = b'0';
+        return &buf[..1];
+    }
+    let negative = val < 0;
+    if negative {
+        val = val.wrapping_neg();
+    }
+    let mut pos = 20;
+    while val > 0 {
+        pos -= 1;
+        buf[pos] = b'0' + (val % 10) as u8;
+        val /= 10;
+    }
+    if negative {
+        pos -= 1;
+        buf[pos] = b'-';
+    }
+    &buf[pos..]
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_arena_alloc(size: usize, align: usize) -> *mut u8 {
     if size == 0 {

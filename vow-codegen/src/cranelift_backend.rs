@@ -223,6 +223,7 @@ struct LowerCtx<'a> {
     trace_exit_ref: Option<FuncRef>,
     trace_vow_ref: Option<FuncRef>,
     fn_name_gv: Option<GlobalValue>,
+    stack_exit_ref: Option<FuncRef>,
 }
 
 fn lower_inst(
@@ -621,6 +622,9 @@ fn lower_inst(
             {
                 let name_ptr = builder.ins().global_value(types::I64, gv);
                 builder.ins().call(exit_ref, &[name_ptr]);
+            }
+            if let Some(se_ref) = ctx.stack_exit_ref {
+                builder.ins().call(se_ref, &[]);
             }
             if ctx.return_ty == IrTy::Unit {
                 builder.ins().return_(&[]);
@@ -1061,6 +1065,9 @@ struct RuntimeIds {
     profile_enter_id: Option<CraneliftFuncId>,
     profile_init_id: Option<CraneliftFuncId>,
     sanitize_init_id: Option<CraneliftFuncId>,
+    stack_guard_init_id: CraneliftFuncId,
+    stack_enter_id: Option<CraneliftFuncId>,
+    stack_exit_id: Option<CraneliftFuncId>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1208,7 +1215,14 @@ fn compile_ir_function(
     let profile_init_ref = runtime
         .profile_init_id
         .map(|id| obj_module.declare_func_in_func(id, builder.func));
-    let needs_fn_name = trace != TraceMode::Off || mode == BuildMode::Profile;
+    let stack_enter_ref = runtime
+        .stack_enter_id
+        .map(|id| obj_module.declare_func_in_func(id, builder.func));
+    let stack_exit_ref = runtime
+        .stack_exit_id
+        .map(|id| obj_module.declare_func_in_func(id, builder.func));
+    let needs_fn_name =
+        trace != TraceMode::Off || mode == BuildMode::Profile || mode.has_debug_checks();
     let fn_name_gv = if needs_fn_name {
         let mut name_bytes = ir_func.name.as_bytes().to_vec();
         name_bytes.push(0);
@@ -1238,6 +1252,11 @@ fn compile_ir_function(
                 cl_idx += 1;
             }
         }
+        if ir_func.name == "main" {
+            let guard_ref =
+                obj_module.declare_func_in_func(runtime.stack_guard_init_id, builder.func);
+            builder.ins().call(guard_ref, &[]);
+        }
         if trace != TraceMode::Off
             && let (Some(enter_ref), Some(gv)) = (trace_enter_ref, fn_name_gv)
         {
@@ -1252,6 +1271,10 @@ fn compile_ir_function(
         if let (Some(prof_ref), Some(gv)) = (profile_enter_ref, fn_name_gv) {
             let name_ptr = builder.ins().global_value(types::I64, gv);
             builder.ins().call(prof_ref, &[name_ptr]);
+        }
+        if let (Some(se_ref), Some(gv)) = (stack_enter_ref, fn_name_gv) {
+            let name_ptr = builder.ins().global_value(types::I64, gv);
+            builder.ins().call(se_ref, &[name_ptr]);
         }
         if ir_func.name == "main"
             && let Some(init_id) = runtime.sanitize_init_id
@@ -1306,6 +1329,7 @@ fn compile_ir_function(
             trace_exit_ref,
             trace_vow_ref,
             fn_name_gv,
+            stack_exit_ref,
         };
 
         for inst in &ir_block.insts {
@@ -1663,7 +1687,10 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_profile_enter" => {
             sig.params.push(AbiParam::new(types::I64)); // fn_name C-string ptr
         }
-        "__vow_profile_init" => {}
+        "__vow_profile_init" | "__vow_init_stack_guard" | "__vow_stack_exit" => {}
+        "__vow_stack_enter" => {
+            sig.params.push(AbiParam::new(types::I64)); // fn_name C-string ptr
+        }
         _ => {}
     }
     sig
@@ -1833,6 +1860,29 @@ impl Backend for CraneliftBackend {
             None
         };
 
+        // Declare stack guard init (always — signal handler works in all modes)
+        let stack_guard_init_id = {
+            let sig = make_extern_sig("__vow_init_stack_guard", &obj_module);
+            obj_module
+                .declare_function("__vow_init_stack_guard", Linkage::Import, &sig)
+                .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?
+        };
+
+        // Declare stack depth tracking (debug/sanitize mode only)
+        let (stack_enter_id, stack_exit_id) = if mode.has_debug_checks() {
+            let enter_sig = make_extern_sig("__vow_stack_enter", &obj_module);
+            let enter_id = obj_module
+                .declare_function("__vow_stack_enter", Linkage::Import, &enter_sig)
+                .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+            let exit_sig = make_extern_sig("__vow_stack_exit", &obj_module);
+            let exit_id = obj_module
+                .declare_function("__vow_stack_exit", Linkage::Import, &exit_sig)
+                .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+            (Some(enter_id), Some(exit_id))
+        } else {
+            (None, None)
+        };
+
         // Compile each function
         let mut builder_ctx = FunctionBuilderContext::new();
         for (ir_func, &(_, cl_id)) in module.functions.iter().zip(ir_to_cl.iter()) {
@@ -1859,6 +1909,9 @@ impl Backend for CraneliftBackend {
                     profile_enter_id,
                     profile_init_id,
                     sanitize_init_id,
+                    stack_guard_init_id,
+                    stack_enter_id,
+                    stack_exit_id,
                 },
                 &string_data_ids,
                 &extern_func_ids,

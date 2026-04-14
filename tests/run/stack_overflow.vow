@@ -1,0 +1,11 @@
+// TEST: exit 134
+module StackOverflow
+
+fn recurse(n: i64) -> i64 {
+    recurse(n + 1)
+}
+
+fn main() -> i32 {
+    recurse(0);
+    0
+}

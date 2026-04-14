@@ -674,8 +674,43 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
         None
     };
 
-    // Create function name data section for trace/profile instrumentation
-    let fn_name_gv = if ctx.trace_mode != 0 || ctx.mode == 2 {
+    // Stack guard init (always, main function only)
+    let stack_guard_init_ref = if ctx.func_decls[fi].is_main {
+        let sig = ctx.obj_module.make_signature();
+        let id = ctx
+            .obj_module
+            .declare_function("__vow_init_stack_guard", Linkage::Import, &sig)
+            .expect("declare stack_guard_init");
+        Some(ctx.obj_module.declare_func_in_func(id, builder.func))
+    } else {
+        None
+    };
+
+    // Stack depth tracking (debug/sanitize mode only)
+    let stack_enter_ref = if ctx.mode == 1 || ctx.mode == 3 {
+        let mut sig = ctx.obj_module.make_signature();
+        sig.params.push(AbiParam::new(types::I64));
+        let id = ctx
+            .obj_module
+            .declare_function("__vow_stack_enter", Linkage::Import, &sig)
+            .expect("declare stack_enter");
+        Some(ctx.obj_module.declare_func_in_func(id, builder.func))
+    } else {
+        None
+    };
+    let stack_exit_ref = if ctx.mode == 1 || ctx.mode == 3 {
+        let sig = ctx.obj_module.make_signature();
+        let id = ctx
+            .obj_module
+            .declare_function("__vow_stack_exit", Linkage::Import, &sig)
+            .expect("declare stack_exit");
+        Some(ctx.obj_module.declare_func_in_func(id, builder.func))
+    } else {
+        None
+    };
+
+    // Create function name data section for trace/profile/stack instrumentation
+    let fn_name_gv = if ctx.trace_mode != 0 || ctx.mode == 2 || ctx.mode == 1 || ctx.mode == 3 {
         let name = &ctx.func_decls[fi].name;
         let mut name_bytes = name.as_bytes().to_vec();
         name_bytes.push(0);
@@ -822,6 +857,10 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
         for &slot in slot_map.values() {
             builder.ins().stack_store(zero, slot, 0);
         }
+        // Emit stack_guard_init at main entry (all modes)
+        if let Some(init_ref) = stack_guard_init_ref {
+            builder.ins().call(init_ref, &[]);
+        }
         // Emit trace_enter at function entry
         if let (Some(gv), Some(enter_ref)) = (fn_name_gv, trace_enter_ref) {
             let name_ptr = builder.ins().global_value(types::I64, gv);
@@ -836,6 +875,11 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
         if let (Some(gv), Some(prof_ref)) = (fn_name_gv, profile_enter_ref) {
             let name_ptr = builder.ins().global_value(types::I64, gv);
             builder.ins().call(prof_ref, &[name_ptr]);
+        }
+        // Emit stack_enter at function entry (debug/sanitize mode)
+        if let (Some(gv), Some(se_ref)) = (fn_name_gv, stack_enter_ref) {
+            let name_ptr = builder.ins().global_value(types::I64, gv);
+            builder.ins().call(se_ref, &[name_ptr]);
         }
         // Emit sanitize_init at main entry
         if let Some(init_ref) = sanitize_init_ref {
@@ -1272,6 +1316,9 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
                     if let (Some(gv), Some(exit_ref)) = (fn_name_gv, trace_exit_ref) {
                         let name_ptr = builder.ins().global_value(types::I64, gv);
                         builder.ins().call(exit_ref, &[name_ptr]);
+                    }
+                    if let Some(se_ref) = stack_exit_ref {
+                        builder.ins().call(se_ref, &[]);
                     }
                     if ret_ty == ITY_UNIT {
                         builder.ins().return_(&[]);
@@ -2091,7 +2138,10 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_profile_enter" => {
             sig.params.push(AbiParam::new(types::I64));
         }
-        "__vow_profile_init" => {}
+        "__vow_profile_init" | "__vow_init_stack_guard" | "__vow_stack_exit" => {}
+        "__vow_stack_enter" => {
+            sig.params.push(AbiParam::new(types::I64));
+        }
         "__vow_clif_create" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
