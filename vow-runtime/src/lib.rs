@@ -322,6 +322,7 @@ pub extern "C" fn __vow_init_stack_guard() {
             // Allocate an alternate signal stack so the SIGSEGV handler can run
             // even when the main stack is exhausted.
             let alt_stack_size = libc::SIGSTKSZ * 2;
+            // Allocated once at process startup; owned for process lifetime (freed by OS on exit).
             let stack_mem = libc::mmap(
                 std::ptr::null_mut(),
                 alt_stack_size,
@@ -396,7 +397,7 @@ unsafe extern "C" fn stack_overflow_handler(
     macro_rules! write_bytes {
         ($bytes:expr) => {
             let src = $bytes;
-            let n = src.len().min(buf.len() - pos);
+            let n = src.len().min(buf.len().saturating_sub(pos));
             buf[pos..pos + n].copy_from_slice(&src[..n]);
             pos += n;
         };
@@ -438,7 +439,7 @@ unsafe extern "C" fn stack_overflow_handler(
     macro_rules! hwrite {
         ($bytes:expr) => {
             let src = $bytes;
-            let n = src.len().min(hbuf.len() - hpos);
+            let n = src.len().min(hbuf.len().saturating_sub(hpos));
             hbuf[hpos..hpos + n].copy_from_slice(&src[..n]);
             hpos += n;
         };
