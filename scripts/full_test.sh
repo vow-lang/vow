@@ -406,8 +406,11 @@ echo ""
 
 echo -e "${BOLD}--- Section 6: Multi-Module ---${RESET}"
 
-for multi in stack geometry bignum gc; do
-    main_file="examples/${multi}/main.vow"
+for multi in stack geometry bignum gc math; do
+    case "$multi" in
+        math) main_file="lib/math/main.vow" ;;
+        *)    main_file="examples/${multi}/main.vow" ;;
+    esac
     printf "${BOLD}%s${RESET}\n" "$multi"
 
     # build --no-verify
