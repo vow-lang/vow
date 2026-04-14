@@ -639,7 +639,7 @@ Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they 
 | `debug_i64`      | `fn(v: i64) -> ()`                         | `[]`       |
 | `debug_u64`      | `fn(v: u64) -> ()`                         | `[]`       |
 
-**Debug print semantics:** Debug prints are effect-free and callable from pure functions. In debug and sanitize modes (`--mode debug`, `--mode sanitize`), they write to stderr. In release and profile modes, they are no-ops — zero runtime cost, no code emitted. They are also no-ops during verification. Use them to trace values inside pure kernel code without restructuring the effect hierarchy.
+**Debug print semantics:** Debug prints are effect-free and callable from pure functions. In debug and sanitize modes (`--mode debug`, `--mode sanitize`), they write to stderr. In release and profile modes, the debug call itself is not emitted — no function call occurs. However, argument expressions are still evaluated (e.g., `String::from("label")` still allocates). They are also no-ops during verification. Use them to trace values inside pure kernel code without restructuring the effect hierarchy.
 
 #### Filesystem
 
