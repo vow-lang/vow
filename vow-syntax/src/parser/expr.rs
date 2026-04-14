@@ -4,52 +4,63 @@ use crate::token::TokenKind;
 
 use super::Parser;
 
-fn infix_binding_power(kind: &TokenKind) -> Option<(u8, u8)> {
-    match kind {
-        TokenKind::PipePipe => Some((1, 2)),
-        TokenKind::Caret => Some((3, 4)),
-        TokenKind::AmpAmp => Some((5, 6)),
-        TokenKind::EqEq
-        | TokenKind::BangEq
-        | TokenKind::Lt
-        | TokenKind::LtEq
-        | TokenKind::Gt
-        | TokenKind::GtEq => Some((7, 8)),
-        TokenKind::Plus | TokenKind::Minus | TokenKind::PlusChecked | TokenKind::MinusChecked => {
-            Some((9, 10))
-        }
-        TokenKind::Star
-        | TokenKind::Slash
-        | TokenKind::Percent
-        | TokenKind::StarChecked
-        | TokenKind::SlashChecked
-        | TokenKind::PercentChecked => Some((11, 12)),
-        _ => None,
+const PREFIX_BINDING_POWER: u8 = 19;
+
+fn infix_binding_power(op: BinOp) -> (u8, u8) {
+    match op {
+        BinOp::Or => (1, 2),
+        BinOp::And => (3, 4),
+        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => (5, 6),
+        BinOp::BitOr => (7, 8),
+        BinOp::BitXor => (9, 10),
+        BinOp::BitAnd => (11, 12),
+        BinOp::Shl | BinOp::Shr => (13, 14),
+        BinOp::Add | BinOp::Sub | BinOp::AddChecked | BinOp::SubChecked => (15, 16),
+        BinOp::Mul
+        | BinOp::Div
+        | BinOp::Rem
+        | BinOp::MulChecked
+        | BinOp::DivChecked
+        | BinOp::RemChecked => (17, 18),
     }
 }
 
 fn token_to_binop(kind: &TokenKind) -> Option<BinOp> {
-    match kind {
-        TokenKind::Plus => Some(BinOp::Add),
-        TokenKind::Minus => Some(BinOp::Sub),
-        TokenKind::Star => Some(BinOp::Mul),
-        TokenKind::Slash => Some(BinOp::Div),
-        TokenKind::Percent => Some(BinOp::Rem),
-        TokenKind::PlusChecked => Some(BinOp::AddChecked),
-        TokenKind::MinusChecked => Some(BinOp::SubChecked),
-        TokenKind::StarChecked => Some(BinOp::MulChecked),
-        TokenKind::SlashChecked => Some(BinOp::DivChecked),
-        TokenKind::PercentChecked => Some(BinOp::RemChecked),
-        TokenKind::EqEq => Some(BinOp::Eq),
-        TokenKind::BangEq => Some(BinOp::Ne),
-        TokenKind::Lt => Some(BinOp::Lt),
-        TokenKind::LtEq => Some(BinOp::Le),
-        TokenKind::Gt => Some(BinOp::Gt),
-        TokenKind::GtEq => Some(BinOp::Ge),
-        TokenKind::AmpAmp => Some(BinOp::And),
-        TokenKind::PipePipe => Some(BinOp::Or),
-        TokenKind::Caret => Some(BinOp::BitXor),
-        _ => None,
+    Some(match kind {
+        TokenKind::Plus => BinOp::Add,
+        TokenKind::Minus => BinOp::Sub,
+        TokenKind::Star => BinOp::Mul,
+        TokenKind::Slash => BinOp::Div,
+        TokenKind::Percent => BinOp::Rem,
+        TokenKind::PlusChecked => BinOp::AddChecked,
+        TokenKind::MinusChecked => BinOp::SubChecked,
+        TokenKind::StarChecked => BinOp::MulChecked,
+        TokenKind::SlashChecked => BinOp::DivChecked,
+        TokenKind::PercentChecked => BinOp::RemChecked,
+        TokenKind::EqEq => BinOp::Eq,
+        TokenKind::BangEq => BinOp::Ne,
+        TokenKind::Lt => BinOp::Lt,
+        TokenKind::LtEq => BinOp::Le,
+        TokenKind::Gt => BinOp::Gt,
+        TokenKind::GtEq => BinOp::Ge,
+        TokenKind::AmpAmp => BinOp::And,
+        TokenKind::PipePipe => BinOp::Or,
+        TokenKind::Amp => BinOp::BitAnd,
+        TokenKind::Pipe => BinOp::BitOr,
+        TokenKind::Caret => BinOp::BitXor,
+        _ => return None,
+    })
+}
+
+fn peek_infix_op(parser: &Parser) -> Option<(BinOp, usize)> {
+    match parser.peek_kind() {
+        TokenKind::Lt if matches!(parser.peek_n_kind(1), Some(TokenKind::Lt)) => {
+            Some((BinOp::Shl, 2))
+        }
+        TokenKind::Gt if matches!(parser.peek_n_kind(1), Some(TokenKind::Gt)) => {
+            Some((BinOp::Shr, 2))
+        }
+        kind => token_to_binop(kind).map(|op| (op, 1)),
     }
 }
 
@@ -117,24 +128,26 @@ impl Parser {
                 continue;
             }
 
-            if let Some((lbp, rbp)) = infix_binding_power(&kind) {
+            if let Some((op, width)) = peek_infix_op(self) {
+                let (lbp, rbp) = infix_binding_power(op);
                 if lbp < min_bp {
                     break;
                 }
-                let op_span = self.current_span();
-                self.advance();
-                if let Some(op) = token_to_binop(&kind) {
-                    let rhs = self.parse_expr_inner(rbp);
-                    let span = lhs.span.merge(rhs.span).merge(op_span);
-                    lhs = Expr {
-                        kind: ExprKind::BinaryOp {
-                            op,
-                            lhs: Box::new(lhs),
-                            rhs: Box::new(rhs),
-                        },
-                        span,
-                    };
+                let op_start = self.current_span();
+                let mut op_end = op_start;
+                for _ in 0..width {
+                    op_end = self.advance().span;
                 }
+                let rhs = self.parse_expr_inner(rbp);
+                let span = lhs.span.merge(rhs.span).merge(op_start.merge(op_end));
+                lhs = Expr {
+                    kind: ExprKind::BinaryOp {
+                        op,
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                    },
+                    span,
+                };
                 continue;
             }
 
@@ -214,7 +227,7 @@ impl Parser {
             }
             TokenKind::Bang => {
                 self.advance();
-                let operand = self.parse_expr_inner(13);
+                let operand = self.parse_expr_inner(PREFIX_BINDING_POWER);
                 let span = start.merge(operand.span);
                 Expr {
                     kind: ExprKind::UnaryOp {
@@ -226,7 +239,7 @@ impl Parser {
             }
             TokenKind::Minus => {
                 self.advance();
-                let operand = self.parse_expr_inner(13);
+                let operand = self.parse_expr_inner(PREFIX_BINDING_POWER);
                 let span = start.merge(operand.span);
                 Expr {
                     kind: ExprKind::UnaryOp {
@@ -238,7 +251,7 @@ impl Parser {
             }
             TokenKind::Amp => {
                 self.advance();
-                let operand = self.parse_expr_inner(13);
+                let operand = self.parse_expr_inner(PREFIX_BINDING_POWER);
                 let span = start.merge(operand.span);
                 Expr {
                     kind: ExprKind::Borrow {
@@ -949,6 +962,118 @@ mod tests {
                 ));
             }
             _ => panic!("expected Or at top"),
+        }
+    }
+
+    #[test]
+    fn bitwise_precedence_chain() {
+        let expr = parse_no_errors("a | b ^ c & d");
+        match &expr.kind {
+            ExprKind::BinaryOp {
+                op: BinOp::BitOr,
+                rhs,
+                ..
+            } => match &rhs.kind {
+                ExprKind::BinaryOp {
+                    op: BinOp::BitXor,
+                    rhs,
+                    ..
+                } => {
+                    assert!(matches!(
+                        &rhs.kind,
+                        ExprKind::BinaryOp {
+                            op: BinOp::BitAnd,
+                            ..
+                        }
+                    ));
+                }
+                _ => panic!("expected BitXor in rhs"),
+            },
+            _ => panic!("expected BitOr at top"),
+        }
+    }
+
+    #[test]
+    fn bitwise_binds_tighter_than_comparison() {
+        let expr = parse_no_errors("a & b == c");
+        match &expr.kind {
+            ExprKind::BinaryOp {
+                op: BinOp::Eq,
+                lhs,
+                ..
+            } => {
+                assert!(matches!(
+                    &lhs.kind,
+                    ExprKind::BinaryOp {
+                        op: BinOp::BitAnd,
+                        ..
+                    }
+                ));
+            }
+            _ => panic!("expected Eq at top"),
+        }
+    }
+
+    #[test]
+    fn bitwise_binds_tighter_than_logical_and() {
+        let expr = parse_no_errors("a | b && c");
+        match &expr.kind {
+            ExprKind::BinaryOp {
+                op: BinOp::And,
+                lhs,
+                ..
+            } => {
+                assert!(matches!(
+                    &lhs.kind,
+                    ExprKind::BinaryOp {
+                        op: BinOp::BitOr,
+                        ..
+                    }
+                ));
+            }
+            _ => panic!("expected And at top"),
+        }
+    }
+
+    #[test]
+    fn shift_binds_looser_than_addition() {
+        let expr = parse_no_errors("a << b + c");
+        match &expr.kind {
+            ExprKind::BinaryOp {
+                op: BinOp::Shl,
+                rhs,
+                ..
+            } => {
+                assert!(matches!(
+                    &rhs.kind,
+                    ExprKind::BinaryOp {
+                        op: BinOp::Add,
+                        ..
+                    }
+                ));
+            }
+            _ => panic!("expected Shl at top"),
+        }
+    }
+
+    #[test]
+    fn shift_binds_tighter_than_comparison() {
+        let expr = parse_no_errors("a < b << c");
+        match &expr.kind {
+            ExprKind::BinaryOp {
+                op: BinOp::Lt,
+                rhs,
+                ..
+            } => {
+                assert!(matches!(
+                    &rhs.kind,
+                    ExprKind::BinaryOp {
+                        op: BinOp::Shl,
+                        ..
+                    }
+                ));
+            }
+            _ => panic!("expected Lt at top"),
         }
     }
 

@@ -435,16 +435,19 @@ pub fn print_type(ty: &Type) -> String {
 fn binop_precedence(op: BinOp) -> u8 {
     match op {
         BinOp::Or => 1,
-        BinOp::BitXor => 2,
-        BinOp::And => 3,
-        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => 4,
-        BinOp::Add | BinOp::Sub | BinOp::AddChecked | BinOp::SubChecked => 5,
+        BinOp::And => 2,
+        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => 3,
+        BinOp::BitOr => 4,
+        BinOp::BitXor => 5,
+        BinOp::BitAnd => 6,
+        BinOp::Shl | BinOp::Shr => 7,
+        BinOp::Add | BinOp::Sub | BinOp::AddChecked | BinOp::SubChecked => 8,
         BinOp::Mul
         | BinOp::Div
         | BinOp::Rem
         | BinOp::MulChecked
         | BinOp::DivChecked
-        | BinOp::RemChecked => 6,
+        | BinOp::RemChecked => 9,
     }
 }
 
@@ -468,14 +471,18 @@ fn binop_str(op: BinOp) -> &'static str {
         BinOp::Ge => ">=",
         BinOp::And => "&&",
         BinOp::Or => "||",
+        BinOp::BitAnd => "&",
+        BinOp::BitOr => "|",
         BinOp::BitXor => "^",
+        BinOp::Shl => "<<",
+        BinOp::Shr => ">>",
     }
 }
 
 fn expr_precedence(expr: &Expr) -> u8 {
     match &expr.kind {
         ExprKind::BinaryOp { op, .. } => binop_precedence(*op),
-        ExprKind::UnaryOp { .. } => 6,
+        ExprKind::UnaryOp { .. } => 10,
         _ => 255,
     }
 }

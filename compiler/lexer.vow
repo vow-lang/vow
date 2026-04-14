@@ -354,6 +354,8 @@ fn lex(src: String) -> Vec<Token> {
                 tokens.push(tok);
             } else {
                 pos = pos + 1;
+                let tok: Token = make_token(tok_pipe(), 0, 0, empty_str(), start, 1);
+                tokens.push(tok);
             }
         } else if b == 58 {
             let b1: i64 = src.byte_at(pos + 1);

@@ -486,6 +486,19 @@ mod tests {
     }
 
     #[test]
+    fn type_double_close_angle_generic() {
+        let ty = parse_type("Vec<Vec<i64>>");
+        match ty {
+            Type::Generic { name, args, .. } => {
+                assert_eq!(name, "Vec");
+                assert_eq!(args.len(), 1);
+                assert!(matches!(args[0], Type::Generic { .. }));
+            }
+            _ => panic!("expected nested Generic"),
+        }
+    }
+
+    #[test]
     fn pat_wildcard() {
         let pat = parse_pat("_");
         assert!(matches!(pat.kind, PatKind::Wildcard));

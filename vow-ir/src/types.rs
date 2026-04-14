@@ -91,8 +91,12 @@ pub enum Opcode {
     And,
     Or,
 
+    BitAndI64,
+    BitOrI64,
     XorI32,
     XorI64,
+    ShlI64,
+    ShrI64,
 
     WrappingAddU64,
     WrappingSubU64,
@@ -110,7 +114,11 @@ pub enum Opcode {
     LeU64,
     GtU64,
     GeU64,
+    BitAndU64,
+    BitOrU64,
     XorU64,
+    ShlU64,
+    ShrU64,
 
     ConstU64,
 

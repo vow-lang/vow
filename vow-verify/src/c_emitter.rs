@@ -279,8 +279,12 @@ pub fn is_modelable(
                 | Opcode::Not
                 | Opcode::And
                 | Opcode::Or
+                | Opcode::BitAndI64
+                | Opcode::BitOrI64
                 | Opcode::XorI32
                 | Opcode::XorI64
+                | Opcode::ShlI64
+                | Opcode::ShrI64
                 | Opcode::WrappingAddU64
                 | Opcode::WrappingSubU64
                 | Opcode::WrappingMulU64
@@ -297,7 +301,11 @@ pub fn is_modelable(
                 | Opcode::LeU64
                 | Opcode::GtU64
                 | Opcode::GeU64
+                | Opcode::BitAndU64
+                | Opcode::BitOrU64
                 | Opcode::XorU64
+                | Opcode::ShlU64
+                | Opcode::ShrU64
                 | Opcode::ConstU64
                 | Opcode::CastI64ToU64
                 | Opcode::CastU64ToI64
@@ -559,9 +567,25 @@ fn emit_inst(
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = (v{} || v{});\n", id, a, b));
         }
+        Opcode::BitAndI64 | Opcode::BitAndU64 => {
+            let (a, b) = (inst.args[0].0, inst.args[1].0);
+            out.push_str(&format!("  v{} = (v{} & v{});\n", id, a, b));
+        }
+        Opcode::BitOrI64 | Opcode::BitOrU64 => {
+            let (a, b) = (inst.args[0].0, inst.args[1].0);
+            out.push_str(&format!("  v{} = (v{} | v{});\n", id, a, b));
+        }
         Opcode::XorI32 | Opcode::XorI64 | Opcode::XorU64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = (v{} ^ v{});\n", id, a, b));
+        }
+        Opcode::ShlI64 | Opcode::ShlU64 => {
+            let (a, b) = (inst.args[0].0, inst.args[1].0);
+            out.push_str(&format!("  v{} = (v{} << v{});\n", id, a, b));
+        }
+        Opcode::ShrI64 | Opcode::ShrU64 => {
+            let (a, b) = (inst.args[0].0, inst.args[1].0);
+            out.push_str(&format!("  v{} = (v{} >> v{});\n", id, a, b));
         }
 
         Opcode::ConstU64 => {
@@ -1689,6 +1713,31 @@ mod tests {
         assert!(c.contains("!v0"), "not: {c}");
         assert!(c.contains("v0 && v1"), "and: {c}");
         assert!(c.contains("v0 || v1"), "or: {c}");
+    }
+
+    #[test]
+    fn emit_integer_bitwise_ops() {
+        let func = make_func(
+            "bits",
+            vec![Ty::I64, Ty::I64],
+            Ty::I64,
+            vec![
+                inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
+                inst(2, Opcode::BitAndI64, Ty::I64, vec![0, 1], InstData::None),
+                inst(3, Opcode::BitOrI64, Ty::I64, vec![0, 1], InstData::None),
+                inst(4, Opcode::XorI64, Ty::I64, vec![0, 1], InstData::None),
+                inst(5, Opcode::ShlI64, Ty::I64, vec![0, 1], InstData::None),
+                inst(6, Opcode::ShrI64, Ty::I64, vec![0, 1], InstData::None),
+                inst(7, Opcode::Return, Ty::Unit, vec![6], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new());
+        assert!(c.contains("v0 & v1"), "bitand: {c}");
+        assert!(c.contains("v0 | v1"), "bitor: {c}");
+        assert!(c.contains("v0 ^ v1"), "xor: {c}");
+        assert!(c.contains("v0 << v1"), "shl: {c}");
+        assert!(c.contains("v0 >> v1"), "shr: {c}");
     }
 
     #[test]

@@ -147,8 +147,12 @@ fn opcode_name(op: i64) -> String {
     if op == IOP_NOT() { return String::from("Not"); }
     if op == IOP_AND() { return String::from("And"); }
     if op == IOP_OR() { return String::from("Or"); }
+    if op == IOP_BITAND_I64() { return String::from("BitAndI64"); }
+    if op == IOP_BITOR_I64() { return String::from("BitOrI64"); }
     if op == IOP_XOR_I32() { return String::from("XorI32"); }
     if op == IOP_XOR_I64() { return String::from("XorI64"); }
+    if op == IOP_SHL_I64() { return String::from("ShlI64"); }
+    if op == IOP_SHR_I64() { return String::from("ShrI64"); }
     if op == IOP_LOAD() { return String::from("Load"); }
     if op == IOP_STORE() { return String::from("Store"); }
     if op == IOP_BRANCH() { return String::from("Branch"); }
@@ -184,6 +188,10 @@ fn opcode_name(op: i64) -> String {
     if op == IOP_GT_U64() { return String::from("GtU64"); }
     if op == IOP_GE_U64() { return String::from("GeU64"); }
     if op == IOP_XOR_U64() { return String::from("XorU64"); }
+    if op == IOP_BITAND_U64() { return String::from("BitAndU64"); }
+    if op == IOP_BITOR_U64() { return String::from("BitOrU64"); }
+    if op == IOP_SHL_U64() { return String::from("ShlU64"); }
+    if op == IOP_SHR_U64() { return String::from("ShrU64"); }
     if op == IOP_CONST_U64() { return String::from("ConstU64"); }
     if op == IOP_CAST_I64_TO_U64() { return String::from("CastI64ToU64"); }
     if op == IOP_CAST_U64_TO_I64() { return String::from("CastU64ToI64"); }

@@ -51,6 +51,10 @@ fn BINOP_GE() -> i64 vow { ensures: result >= 0 } { 15 }
 fn BINOP_AND() -> i64 vow { ensures: result >= 0 } { 16 }
 fn BINOP_OR() -> i64 vow { ensures: result >= 0 } { 17 }
 fn BINOP_XOR() -> i64 vow { ensures: result >= 0 } { 18 }
+fn BINOP_BITAND() -> i64 vow { ensures: result >= 0 } { 19 }
+fn BINOP_BITOR() -> i64 vow { ensures: result >= 0 } { 20 }
+fn BINOP_SHL() -> i64 vow { ensures: result >= 0 } { 21 }
+fn BINOP_SHR() -> i64 vow { ensures: result >= 0 } { 22 }
 
 fn UNOP_NEG() -> i64 vow { ensures: result >= 0 } { 0 }
 fn UNOP_NOT() -> i64 vow { ensures: result >= 0 } { 1 }

@@ -553,12 +553,26 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let lhs_eid: i64 = expr_b(a, eid);
         let rhs_eid: i64 = expr_c(a, eid);
         let lhs_tid: i64 = check_expr(e, m, lhs_eid);
-        let _rhs_tid: i64 = check_expr(e, m, rhs_eid);
+        let rhs_tid: i64 = check_expr(e, m, rhs_eid);
         if op == BINOP_AND() || op == BINOP_OR() {
             return CTY_BOOL();
         }
         if op == BINOP_EQ() || op == BINOP_NE() || op == BINOP_LT() || op == BINOP_LE() || op == BINOP_GT() || op == BINOP_GE() {
             return CTY_BOOL();
+        }
+        if op == BINOP_BITAND() || op == BINOP_BITOR() || op == BINOP_XOR() || op == BINOP_SHL() || op == BINOP_SHR() {
+            if !ty_is_integer(e.ts, lhs_tid) {
+                env_emit_error(e, String::from("bitwise operator requires integer operands"), expr_span(a, eid));
+                return CTY_I64();
+            }
+            if !ty_is_integer(e.ts, rhs_tid) {
+                env_emit_error(e, String::from("bitwise operator requires integer operands"), expr_span(a, eid));
+                return lhs_tid;
+            }
+            if lhs_tid != rhs_tid {
+                env_emit_error(e, String::from("bitwise operator requires matching integer types"), expr_span(a, eid));
+            }
+            return lhs_tid;
         }
         if ty_is_numeric(e.ts, lhs_tid) {
             return lhs_tid;

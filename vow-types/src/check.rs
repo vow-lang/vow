@@ -592,7 +592,9 @@ impl<'e> Checker<'e> {
                         }
                         Ty::Bool
                     }
-                    BinOp::BitXor => self.check_same_numeric(lhs_ty, rhs_ty, expr.span),
+                    BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
+                        self.check_same_integer(lhs_ty, rhs_ty, expr.span)
+                    }
                     BinOp::And | BinOp::Or => {
                         if lhs_ty != Ty::Bool && lhs_ty != Ty::Never {
                             self.emit_error_with_hints(
@@ -1438,6 +1440,41 @@ impl<'e> Checker<'e> {
         lhs
     }
 
+    fn check_same_integer(&mut self, lhs: Ty, rhs: Ty, op_span: Span) -> Ty {
+        if lhs == Ty::Never {
+            return rhs;
+        }
+        if rhs == Ty::Never {
+            return lhs;
+        }
+        let (lhs, rhs) = if lhs == Ty::I32 && rhs.is_integer() {
+            (rhs.clone(), rhs)
+        } else if rhs == Ty::I32 && lhs.is_integer() {
+            (lhs.clone(), lhs)
+        } else {
+            (lhs, rhs)
+        };
+        if !lhs.is_integer() {
+            self.emit_error_with_hints(
+                ErrorCode::TypeMismatch,
+                format!("bitwise operator requires an integer type, found `{lhs}`"),
+                op_span,
+                vec!["bitwise operators require integer operands".to_string()],
+            );
+            return Ty::Unit;
+        }
+        if lhs != rhs {
+            self.emit_error_with_hints(
+                ErrorCode::TypeMismatch,
+                format!("bitwise operands have different types: `{lhs}` and `{rhs}`"),
+                op_span,
+                vec!["operator requires matching integer types".to_string()],
+            );
+            return Ty::Unit;
+        }
+        lhs
+    }
+
     fn bind_arm_pattern(&mut self, pat: &Pat, scrutinee_ty: &Ty) {
         match &pat.kind {
             PatKind::Ident { name, .. } => {
@@ -1832,6 +1869,44 @@ mod tests {
             rhs: Box::new(bool_lit()),
         }));
         assert!(checker.has_errors());
+    }
+
+    #[test]
+    fn bitwise_and_integer_ok() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let ty = checker.check_expr(&make_expr(ExprKind::BinaryOp {
+            op: BinOp::BitAnd,
+            lhs: Box::new(int_lit()),
+            rhs: Box::new(int_lit()),
+        }));
+        assert_eq!(ty, Ty::I32);
+        assert!(!checker.has_errors());
+    }
+
+    #[test]
+    fn bitwise_or_float_error() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        checker.check_expr(&make_expr(ExprKind::BinaryOp {
+            op: BinOp::BitOr,
+            lhs: Box::new(float_lit()),
+            rhs: Box::new(float_lit()),
+        }));
+        assert!(checker.has_errors());
+    }
+
+    #[test]
+    fn shift_returns_integer_type() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let ty = checker.check_expr(&make_expr(ExprKind::BinaryOp {
+            op: BinOp::Shl,
+            lhs: Box::new(int_lit()),
+            rhs: Box::new(int_lit()),
+        }));
+        assert_eq!(ty, Ty::I32);
+        assert!(!checker.has_errors());
     }
 
     // --- Checked arithmetic ---

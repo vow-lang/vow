@@ -122,6 +122,14 @@ fn IOP_CONST_U64() -> i64 vow { ensures: result >= 0 } { 102 }
 fn IOP_CAST_I64_TO_U64() -> i64 vow { ensures: result >= 0 } { 103 }
 fn IOP_CAST_U64_TO_I64() -> i64 vow { ensures: result >= 0 } { 104 }
 fn IOP_DEBUG_CALL() -> i64 vow { ensures: result >= 0 } { 105 }
+fn IOP_BITAND_I64() -> i64 vow { ensures: result >= 0 } { 106 }
+fn IOP_BITOR_I64() -> i64 vow { ensures: result >= 0 } { 107 }
+fn IOP_SHL_I64() -> i64 vow { ensures: result >= 0 } { 108 }
+fn IOP_SHR_I64() -> i64 vow { ensures: result >= 0 } { 109 }
+fn IOP_BITAND_U64() -> i64 vow { ensures: result >= 0 } { 110 }
+fn IOP_BITOR_U64() -> i64 vow { ensures: result >= 0 } { 111 }
+fn IOP_SHL_U64() -> i64 vow { ensures: result >= 0 } { 112 }
+fn IOP_SHR_U64() -> i64 vow { ensures: result >= 0 } { 113 }
 
 fn iop_is_terminal(op: i64) -> bool vow {
     requires: op >= 0
