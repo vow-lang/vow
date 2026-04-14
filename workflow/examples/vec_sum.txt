@@ -1,0 +1,7 @@
+Write a Vow function `vec_sum` that takes a Vec of i64 values and returns their sum.
+
+Requirements:
+- The function should use checked arithmetic (+!) to prevent overflow.
+- Add a loop invariant that tracks the partial sum.
+- The result should equal the sum of all elements in the vector.
+- Use the `mem` effect since Vec operations require heap access.
