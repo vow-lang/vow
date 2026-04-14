@@ -516,14 +516,14 @@ else
 fi
 
 # help/coverage-rust: cross-reference grammar.md → Rust --help
-if uv run python scripts/check_help_coverage.py docs/skill/grammar.md "$rust_help" 2>/dev/null; then
+if uv run python scripts/check_help_coverage.py docs/spec/grammar.md "$rust_help" 2>/dev/null; then
     pass "help/coverage-rust"
 else
     fail "help/coverage-rust" "Rust --help missing grammar.md features"
 fi
 
 # help/coverage-self: cross-reference grammar.md → self-hosted --help
-if uv run python scripts/check_help_coverage.py docs/skill/grammar.md "$self_help" 2>/dev/null; then
+if uv run python scripts/check_help_coverage.py docs/spec/grammar.md "$self_help" 2>/dev/null; then
     pass "help/coverage-self"
 else
     fail "help/coverage-self" "self-hosted --help missing grammar.md features"
