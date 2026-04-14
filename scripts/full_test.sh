@@ -327,6 +327,44 @@ for vow_file in tests/run/*.vow; do
 done
 echo ""
 
+# ─── Section 4b: Verify Tests (tests/verify/) ─────────────────────
+
+echo -e "${BOLD}--- Section 4b: Verify Tests ---${RESET}"
+for vow_file in tests/verify/*.vow; do
+    name=$(basename "$vow_file" .vow)
+
+    rust_json="" self_json="" rust_exit=0 self_exit=0
+    rust_json=$($RUST verify "$vow_file" 2>/dev/null) || rust_exit=$?
+    self_json=$(run_self verify "$vow_file" 2>/dev/null) || self_exit=$?
+
+    if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
+        skip "${name}/verify-test" "empty output (rust=$rust_exit, self=$self_exit)"
+        continue
+    fi
+
+    compare_json "${name}/verify-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+done
+echo ""
+
+# ─── Section 4c: Verify-Fail Tests (tests/verify-fail/) ───────────
+
+echo -e "${BOLD}--- Section 4c: Verify-Fail Tests ---${RESET}"
+for vow_file in tests/verify-fail/*.vow; do
+    name=$(basename "$vow_file" .vow)
+
+    rust_json="" self_json="" rust_exit=0 self_exit=0
+    rust_json=$($RUST verify "$vow_file" 2>/dev/null) || rust_exit=$?
+    self_json=$(run_self verify "$vow_file" 2>/dev/null) || self_exit=$?
+
+    if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
+        skip "${name}/verify-fail-test" "empty output (rust=$rust_exit, self=$self_exit)"
+        continue
+    fi
+
+    compare_json "${name}/verify-fail-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+done
+echo ""
+
 # ─── Section 5: Debug Mode ─────────────────────────────────────────
 
 echo -e "${BOLD}--- Section 5: Debug Mode ---${RESET}"
