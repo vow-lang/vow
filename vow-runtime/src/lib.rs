@@ -413,6 +413,8 @@ unsafe extern "C" fn stack_overflow_handler(
 
     if !fn_ptr.is_null() {
         write_bytes!(b",\"function\":\"");
+        // SAFETY: fn_ptr points into .rodata (codegen-emitted function name
+        // global), so CStr::from_ptr is safe even in signal context.
         let name = unsafe { CStr::from_ptr(fn_ptr) };
         let name_bytes = name.to_bytes();
         let n = name_bytes
@@ -453,6 +455,7 @@ unsafe extern "C" fn stack_overflow_handler(
 
     if !fn_ptr.is_null() {
         hwrite!(b" in ");
+        // SAFETY: fn_ptr points into .rodata (see JSON branch above).
         let name = unsafe { CStr::from_ptr(fn_ptr) };
         let name_bytes = name.to_bytes();
         let n = name_bytes
