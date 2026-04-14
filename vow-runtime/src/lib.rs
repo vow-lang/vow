@@ -349,13 +349,18 @@ unsafe extern "C" fn stack_overflow_handler(
 ) {
     // Distinguish stack overflow from other SIGSEGVs by checking whether the
     // fault address falls within the main stack region (saved at init time).
-    // If boundaries were recorded and the fault is outside the stack region,
-    // restore the default handler so the OS produces a core dump.
     let bottom = STACK_BOTTOM.load(Ordering::Relaxed);
     let top = STACK_TOP.load(Ordering::Relaxed);
-    if bottom != 0 && top != 0 && !info.is_null() {
+    if !info.is_null() {
         let fault_addr = unsafe { (*info).si_addr() } as u64;
-        if fault_addr < bottom || fault_addr > top {
+        let is_stack_overflow = if bottom != 0 && top != 0 {
+            fault_addr >= bottom && fault_addr <= top
+        } else {
+            // Bounds unknown (e.g. RLIM_INFINITY or getrlimit failed).
+            // Cannot distinguish stack overflow from other SIGSEGVs.
+            false
+        };
+        if !is_stack_overflow {
             unsafe {
                 libc::signal(libc::SIGSEGV, libc::SIG_DFL);
             }
