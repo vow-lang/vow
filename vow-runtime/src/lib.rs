@@ -110,6 +110,7 @@ pub unsafe extern "C" fn __vow_violation(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_print_str(s: *const u8) {
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let _ = std::io::stdout().write_all(bytes);
@@ -498,6 +499,7 @@ pub unsafe extern "C" fn __vow_string_len(s: *const u8) -> usize {
 /// The String header remains valid and can be reused with push_byte/push_str.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_clear(s: *mut u8) {
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &mut *(s as *mut VowVec) };
     if v.cap > 0 && !v.ptr.is_null() {
         let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(v.cap, 1) };
@@ -524,6 +526,8 @@ pub unsafe extern "C" fn __vow_string_eq(a: *const u8, b: *const u8) -> i64 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_contains(haystack: *const u8, needle: *const u8) -> i64 {
+    sanitize_on_read(haystack as usize, 0);
+    sanitize_on_read(needle as usize, 0);
     let vh = unsafe { &*(haystack as *const VowVec) };
     let vn = unsafe { &*(needle as *const VowVec) };
     let sh = unsafe { std::slice::from_raw_parts(vh.ptr, vh.len) };
@@ -544,6 +548,8 @@ pub unsafe extern "C" fn __vow_string_contains(haystack: *const u8, needle: *con
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_push_str(dest: *mut u8, src: *const u8) {
+    sanitize_on_read(dest as usize, 0);
+    sanitize_on_read(src as usize, 0);
     let vs = unsafe { &*(src as *const VowVec) };
     if vs.len == 0 {
         return;
@@ -562,6 +568,7 @@ pub unsafe extern "C" fn __vow_string_from_i64(v: i64) -> *mut u8 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_print(s: *const u8) {
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let _ = std::io::stdout().write_all(bytes);
@@ -570,6 +577,7 @@ pub unsafe extern "C" fn __vow_string_print(s: *const u8) {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_byte_at(s: *const u8, idx: i64) -> i64 {
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     if idx < 0 || idx as usize >= v.len {
         return -1;
@@ -593,6 +601,7 @@ pub unsafe extern "C" fn __vow_string_substr(s: *const u8, start: i64, len: i64)
     if s.is_null() {
         return __vow_vec_new(1, 1);
     }
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let slen = v.len as i64;
     let clamped_start = start.clamp(0, slen) as usize;
@@ -606,6 +615,7 @@ pub unsafe extern "C" fn __vow_string_substring(s: *const u8, start: i64, end: i
     if s.is_null() {
         return __vow_vec_new(1, 1);
     }
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let slen = v.len as i64;
     let clamped_start = start.clamp(0, slen) as usize;
@@ -621,6 +631,8 @@ pub unsafe extern "C" fn __vow_string_split(haystack: *const u8, separator: *con
     if haystack.is_null() || separator.is_null() {
         return result_vec;
     }
+    sanitize_on_read(haystack as usize, 0);
+    sanitize_on_read(separator as usize, 0);
     let vh = unsafe { &*(haystack as *const VowVec) };
     let vs = unsafe { &*(separator as *const VowVec) };
     let h = unsafe { std::slice::from_raw_parts(vh.ptr, vh.len) };
@@ -654,6 +666,8 @@ pub unsafe extern "C" fn __vow_string_starts_with(s: *const u8, prefix: *const u
     if s.is_null() || prefix.is_null() {
         return 0;
     }
+    sanitize_on_read(s as usize, 0);
+    sanitize_on_read(prefix as usize, 0);
     let vs = unsafe { &*(s as *const VowVec) };
     let vp = unsafe { &*(prefix as *const VowVec) };
     let ss = unsafe { std::slice::from_raw_parts(vs.ptr, vs.len) };
@@ -666,6 +680,8 @@ pub unsafe extern "C" fn __vow_string_ends_with(s: *const u8, suffix: *const u8)
     if s.is_null() || suffix.is_null() {
         return 0;
     }
+    sanitize_on_read(s as usize, 0);
+    sanitize_on_read(suffix as usize, 0);
     let vs = unsafe { &*(s as *const VowVec) };
     let vp = unsafe { &*(suffix as *const VowVec) };
     let ss = unsafe { std::slice::from_raw_parts(vs.ptr, vs.len) };
@@ -678,6 +694,7 @@ pub unsafe extern "C" fn __vow_string_trim(s: *const u8) -> *mut u8 {
     if s.is_null() {
         return __vow_vec_new(1, 1);
     }
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let trimmed = match std::str::from_utf8(bytes) {
@@ -692,6 +709,7 @@ pub unsafe extern "C" fn __vow_string_to_upper(s: *const u8) -> *mut u8 {
     if s.is_null() {
         return __vow_vec_new(1, 1);
     }
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let upper = match std::str::from_utf8(bytes) {
@@ -706,6 +724,7 @@ pub unsafe extern "C" fn __vow_string_to_lower(s: *const u8) -> *mut u8 {
     if s.is_null() {
         return __vow_vec_new(1, 1);
     }
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let lower = match std::str::from_utf8(bytes) {
@@ -724,6 +743,9 @@ pub unsafe extern "C" fn __vow_string_replace(
     if s.is_null() || from.is_null() || to.is_null() {
         return __vow_vec_new(1, 1);
     }
+    sanitize_on_read(s as usize, 0);
+    sanitize_on_read(from as usize, 0);
+    sanitize_on_read(to as usize, 0);
     let vs = unsafe { &*(s as *const VowVec) };
     let vf = unsafe { &*(from as *const VowVec) };
     let vt = unsafe { &*(to as *const VowVec) };
@@ -747,6 +769,8 @@ pub unsafe extern "C" fn __vow_string_join(vec_ptr: *const u8, sep: *const u8) -
     if vec_ptr.is_null() || sep.is_null() {
         return __vow_vec_new(1, 1);
     }
+    sanitize_on_read(vec_ptr as usize, 0);
+    sanitize_on_read(sep as usize, 0);
     let v = unsafe { &*(vec_ptr as *const VowVec) };
     let ptrs = unsafe { std::slice::from_raw_parts(v.ptr as *const i64, v.len) };
 
@@ -767,6 +791,7 @@ pub unsafe extern "C" fn __vow_string_parse_i64_opt(s: *const u8) -> *mut u8 {
         unsafe { *ptr = 0 };
         return ptr as *mut u8;
     }
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     match std::str::from_utf8(bytes) {
@@ -793,6 +818,7 @@ pub unsafe extern "C" fn __vow_string_parse_u64_opt(s: *const u8) -> *mut u8 {
         unsafe { *ptr = 0 };
         return ptr as *mut u8;
     }
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     match std::str::from_utf8(bytes) {
@@ -817,6 +843,7 @@ pub unsafe extern "C" fn __vow_parse_i64(s: *const u8) -> i64 {
     if s.is_null() {
         return 0;
     }
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     match std::str::from_utf8(bytes) {
@@ -835,6 +862,7 @@ pub unsafe extern "C" fn __vow_vec_sort(vec: *const u8) -> *mut u8 {
     if vec.is_null() {
         return result;
     }
+    sanitize_on_read(vec as usize, 0);
     let v = unsafe { &*(vec as *const VowVec) };
     let src = unsafe { std::slice::from_raw_parts(v.ptr as *const i64, v.len) };
     let mut sorted: Vec<i64> = src.to_vec();
@@ -866,6 +894,7 @@ pub unsafe extern "C" fn __vow_hex_encode(vec: *const u8) -> *mut u8 {
     if vec.is_null() {
         return __vow_vec_new(1, 1);
     }
+    sanitize_on_read(vec as usize, 0);
     let v = unsafe { &*(vec as *const VowVec) };
     let vals = unsafe { std::slice::from_raw_parts(v.ptr as *const i64, v.len) };
     let mut hex = String::new();
@@ -881,6 +910,7 @@ pub unsafe extern "C" fn __vow_hex_decode(s: *const u8) -> *mut u8 {
     if s.is_null() {
         return result;
     }
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let hex_str = match std::str::from_utf8(bytes) {
@@ -910,6 +940,7 @@ pub unsafe extern "C" fn __vow_fs_read(path_ptr: *const u8) -> *mut u8 {
     if path_ptr.is_null() {
         return __vow_vec_new(1, 1);
     }
+    sanitize_on_read(path_ptr as usize, 0);
     let v = unsafe { &*(path_ptr as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let path = match std::str::from_utf8(bytes) {
@@ -927,6 +958,8 @@ pub unsafe extern "C" fn __vow_fs_write(path_ptr: *const u8, data_ptr: *const u8
     if path_ptr.is_null() || data_ptr.is_null() {
         return -1;
     }
+    sanitize_on_read(path_ptr as usize, 0);
+    sanitize_on_read(data_ptr as usize, 0);
     let vp = unsafe { &*(path_ptr as *const VowVec) };
     let path_bytes = unsafe { std::slice::from_raw_parts(vp.ptr, vp.len) };
     let path = match std::str::from_utf8(path_bytes) {
@@ -946,6 +979,7 @@ pub unsafe extern "C" fn __vow_fs_exists(path_ptr: *const u8) -> i64 {
     if path_ptr.is_null() {
         return 0;
     }
+    sanitize_on_read(path_ptr as usize, 0);
     let v = unsafe { &*(path_ptr as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let path = match std::str::from_utf8(bytes) {
@@ -964,6 +998,7 @@ pub unsafe extern "C" fn __vow_fs_mkdir(path_ptr: *const u8) -> i64 {
     if path_ptr.is_null() {
         return -1;
     }
+    sanitize_on_read(path_ptr as usize, 0);
     let v = unsafe { &*(path_ptr as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let path = match std::str::from_utf8(bytes) {
@@ -982,6 +1017,7 @@ pub unsafe extern "C" fn __vow_fs_listdir(path_ptr: *const u8) -> *mut u8 {
     if path_ptr.is_null() {
         return result_vec;
     }
+    sanitize_on_read(path_ptr as usize, 0);
     let v = unsafe { &*(path_ptr as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let path = match std::str::from_utf8(bytes) {
@@ -1010,6 +1046,7 @@ pub unsafe extern "C" fn __vow_fs_remove(path_ptr: *const u8) -> i64 {
     if path_ptr.is_null() {
         return -1;
     }
+    sanitize_on_read(path_ptr as usize, 0);
     let v = unsafe { &*(path_ptr as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let path = match std::str::from_utf8(bytes) {
@@ -1027,6 +1064,7 @@ pub unsafe extern "C" fn __vow_fs_remove_dir(path_ptr: *const u8) -> i64 {
     if path_ptr.is_null() {
         return -1;
     }
+    sanitize_on_read(path_ptr as usize, 0);
     let v = unsafe { &*(path_ptr as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let path = match std::str::from_utf8(bytes) {
@@ -1044,6 +1082,7 @@ pub unsafe extern "C" fn __vow_fs_is_dir(path_ptr: *const u8) -> i64 {
     if path_ptr.is_null() {
         return 0;
     }
+    sanitize_on_read(path_ptr as usize, 0);
     let v = unsafe { &*(path_ptr as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let path = match std::str::from_utf8(bytes) {
@@ -1062,6 +1101,8 @@ pub unsafe extern "C" fn __vow_fs_rename(old_ptr: *const u8, new_ptr: *const u8)
     if old_ptr.is_null() || new_ptr.is_null() {
         return -1;
     }
+    sanitize_on_read(old_ptr as usize, 0);
+    sanitize_on_read(new_ptr as usize, 0);
     let vo = unsafe { &*(old_ptr as *const VowVec) };
     let old_bytes = unsafe { std::slice::from_raw_parts(vo.ptr, vo.len) };
     let old_path = match std::str::from_utf8(old_bytes) {
@@ -1083,6 +1124,7 @@ pub unsafe extern "C" fn __vow_fs_rename(old_ptr: *const u8, new_ptr: *const u8)
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_eprintln_str(s: *const u8) {
     if !s.is_null() {
+        sanitize_on_read(s as usize, 0);
         let v = unsafe { &*(s as *const VowVec) };
         let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
         let _ = std::io::stderr().write_all(bytes);
@@ -1146,6 +1188,8 @@ pub extern "C" fn __vow_process_exit(code: i64) {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_process_run(cmd_ptr: i64, args_ptr: i64) -> i64 {
+    sanitize_on_read(cmd_ptr as usize, 0);
+    sanitize_on_read(args_ptr as usize, 0);
     let cmd_vec = unsafe { &*(cmd_ptr as *const VowVec) };
     let cmd_bytes = unsafe { std::slice::from_raw_parts(cmd_vec.ptr, cmd_vec.len) };
     let cmd_str = match std::str::from_utf8(cmd_bytes) {
@@ -1197,6 +1241,8 @@ pub extern "C" fn __vow_process_get_stderr() -> *mut u8 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_process_start(cmd_ptr: i64, args_ptr: i64) -> i64 {
+    sanitize_on_read(cmd_ptr as usize, 0);
+    sanitize_on_read(args_ptr as usize, 0);
     let cmd_vec = unsafe { &*(cmd_ptr as *const VowVec) };
     let cmd_bytes = unsafe { std::slice::from_raw_parts(cmd_vec.ptr, cmd_vec.len) };
     let cmd_str = match std::str::from_utf8(cmd_bytes) {
