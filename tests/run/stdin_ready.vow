@@ -1,0 +1,11 @@
+// TEST: stdout "ready\n"
+module StdinReady
+
+fn main() -> i64 [io, read] {
+    if stdin_ready() {
+        print_str("ready\n");
+    } else {
+        print_str("not ready\n");
+    }
+    0
+}

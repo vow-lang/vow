@@ -1,0 +1,175 @@
+module NumberTheory
+
+pub fn gcd(a: i64, b: i64) -> i64 vow {
+    requires: a >= 0,
+    requires: b >= 0,
+    requires: a > 0 || b > 0,
+    ensures: result > 0
+} {
+    let mut x: i64 = a;
+    let mut y: i64 = b;
+    while y != 0 vow {
+        invariant: x >= 0,
+        invariant: y >= 0
+    } {
+        let old_y: i64 = y;
+        let rem: i64 = x % y;
+        x = old_y;
+        y = rem;
+    }
+    x
+}
+
+pub fn lcm(a: i64, b: i64) -> i64 vow {
+    requires: a > 0,
+    requires: b > 0,
+    ensures: result > 0
+} {
+    let g: i64 = gcd(a, b);
+    (a / g) * b
+}
+
+pub fn is_prime(n: i64) -> bool vow {
+    requires: n >= 0
+} {
+    if n < 2 {
+        false
+    } else {
+        let mut i: i64 = 2;
+        let mut prime: bool = true;
+        while i * i <= n && prime vow {
+            invariant: i >= 2
+        } {
+            if n % i == 0 {
+                prime = false;
+            }
+            i = i + 1;
+        }
+        prime
+    }
+}
+
+pub fn power_mod(base: i64, exp: i64, modulus: i64) -> i64 vow {
+    requires: base >= 0,
+    requires: exp >= 0,
+    requires: modulus > 1,
+    requires: modulus <= 3037000499,
+    ensures: result >= 0,
+    ensures: result < modulus
+} {
+    let mut result: i64 = 1;
+    let b: i64 = base % modulus;
+    let mut i: i64 = 0;
+    while i < exp vow {
+        invariant: i >= 0,
+        invariant: i <= exp,
+        invariant: result >= 0,
+        invariant: result < modulus
+    } {
+        result = (result * b) % modulus;
+        i = i + 1;
+    }
+    result
+}
+
+pub fn factorial(n: i64) -> i64 vow {
+    requires: n >= 0,
+    ensures: result >= 1
+} {
+    let mut result: i64 = 1;
+    let mut i: i64 = 1;
+    while i <= n vow {
+        invariant: i >= 1,
+        invariant: i <= n + 1,
+        invariant: result >= 1
+    } {
+        result = result * i;
+        i = i + 1;
+    }
+    result
+}
+
+pub fn fibonacci(n: i64) -> i64 vow {
+    requires: n >= 0,
+    ensures: result >= 0
+} {
+    if n <= 1 {
+        n
+    } else {
+        let mut a: i64 = 0;
+        let mut b: i64 = 1;
+        let mut i: i64 = 2;
+        while i <= n vow {
+            invariant: i >= 2,
+            invariant: i <= n + 1,
+            invariant: a >= 0,
+            invariant: b >= 0
+        } {
+            let t: i64 = a + b;
+            a = b;
+            b = t;
+            i = i + 1;
+        }
+        b
+    }
+}
+
+pub fn isqrt(n: i64) -> i64 vow {
+    requires: n >= 0,
+    ensures: result >= 0,
+    ensures: result * result <= n
+} {
+    if n == 0 {
+        0
+    } else {
+        let mut x: i64 = n;
+        let mut y: i64 = x / 2 + 1;
+        while y < x vow {
+            invariant: x >= 1,
+            invariant: y >= 0
+        } {
+            x = y;
+            y = (x + n / x) / 2;
+        }
+        x
+    }
+}
+
+pub fn largest_divisor(n: i64) -> i64 vow {
+    requires: n > 1,
+    ensures: result >= 1,
+    ensures: result < n
+} {
+    let mut i: i64 = 2;
+    while i * i <= n vow {
+        invariant: i >= 2
+    } {
+        if n % i == 0 {
+            return n / i;
+        }
+        i = i + 1;
+    }
+    1
+}
+
+pub fn count_divisors(n: i64) -> i64 vow {
+    requires: n > 0,
+    ensures: result >= 1
+} {
+    let mut count: i64 = 0;
+    let mut i: i64 = 1;
+    while i * i <= n vow {
+        invariant: i >= 1,
+        invariant: count >= 0
+    } {
+        if n % i == 0 {
+            if i * i == n {
+                count = count + 1;
+            } else {
+                count = count + 2;
+            }
+        }
+        i = i + 1;
+    }
+    count
+}

@@ -53,18 +53,22 @@ fn divide(x: i64, y: i64) -> i64 vow {
 
 ### Range Bounds
 
+Use range bounds only when they reflect genuine semantic constraints (e.g., overflow prevention), not to appease the verifier:
+
 ```vow
 fn safe_add(a: i64, b: i64) -> i64 vow {
     requires: a >= 0,
-    requires: a <= 100,
     requires: b >= 0,
-    requires: b <= 100,
-    ensures: result >= 0,
-    ensures: result <= 200
+    requires: a <= 4611686018427387903,
+    requires: b <= 4611686018427387903,
+    ensures: result >= a,
+    ensures: result >= b
 } {
     a + b
 }
 ```
+
+The bounds here prevent `a + b` from overflowing `i64` — a legitimate semantic concern, not a verifier limitation.
 
 ### Equality Postcondition
 
@@ -172,10 +176,10 @@ Where clauses on parameters become refinement types (additional `requires` for v
 
 ```vow
 fn bounded_add(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {
-    requires: a <= 100,
-    requires: b <= 100,
-    ensures: result >= 0,
-    ensures: result <= 200
+    requires: a <= 4611686018427387903,
+    requires: b <= 4611686018427387903,
+    ensures: result >= a,
+    ensures: result >= b
 } {
     a + b
 }
@@ -240,7 +244,35 @@ fn fill(n: i64) -> Vec<i64> vow {
 } { ... }
 ```
 
-**Fix:** Add `requires: n <= 8` (or another value below the unwind bound).
+ESBMC will only verify this for small `n` values. **Do not** add `requires: n <= 8` to the contract — that would distort the semantic specification. The contract is correct as-is; ESBMC's bounded verification provides partial assurance.
+
+### Verification-Driven Bounds (Anti-Pattern)
+
+**Never** add artificial bounds to contracts solely to help ESBMC verify them:
+
+```vow
+// WRONG: bounds exist only to appease the verifier
+fn gcd(a: i64, b: i64) -> i64 vow {
+    requires: a >= 0,
+    requires: b >= 0,
+    requires: a + b > 0,
+    requires: a <= 15,   // <-- verifier artifact, not semantic
+    requires: b <= 15,   // <-- verifier artifact, not semantic
+    ensures: result > 0
+} { ... }
+```
+
+```vow
+// CORRECT: only genuine semantic constraints
+fn gcd(a: i64, b: i64) -> i64 vow {
+    requires: a >= 0,
+    requires: b >= 0,
+    requires: a + b > 0,
+    ensures: result > 0
+} { ... }
+```
+
+Contracts express what is mathematically required for correctness. ESBMC verifies within its capabilities (bounded loops, bounded arithmetic) — if it cannot fully prove a correct contract, that is acceptable. Partial verification is better than a distorted specification.
 
 ## Interpreting Counterexamples
 

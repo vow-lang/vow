@@ -1,0 +1,19 @@
+// TEST: exit 0
+// TEST: stdout "10"
+// TEST: stdout "20"
+// TEST: stdout "30"
+// TEST: mode sanitize
+module SanitizeVec
+
+fn main() -> i32 [io] {
+  let v: Vec<i64> = Vec::new();
+  v.push(10);
+  v.push(20);
+  v.push(30);
+  let mut i: i64 = 0;
+  while i < v.len() {
+    print_i64(v[i]);
+    i = i + 1;
+  };
+  0
+}

@@ -182,6 +182,31 @@ fn parse_assignment_line(line: &str) -> Option<(String, String)> {
 }
 
 // ---------------------------------------------------------------------------
+// Debug: save C source and command for ESBMC debugging
+// ---------------------------------------------------------------------------
+
+fn save_esbmc_debug(esbmc: &std::path::Path, c_src: &str, func_name: &str) {
+    if std::env::var("VOW_VERIFY_DEBUG").is_err() {
+        return;
+    }
+
+    let debug_dir = std::path::Path::new("/tmp/vow-verify-debug");
+    let _ = std::fs::create_dir_all(debug_dir);
+
+    let c_name = format!("{func_name}.c");
+    let cmd_name = format!("{func_name}.cmd");
+
+    let _ = std::fs::write(debug_dir.join(&c_name), c_src);
+
+    let cmd = format!(
+        "{} /tmp/vow-verify-debug/{} --no-bounds-check --no-pointer-check --unwind 10 --64\n",
+        esbmc.display(),
+        c_name,
+    );
+    let _ = std::fs::write(debug_dir.join(&cmd_name), cmd);
+}
+
+// ---------------------------------------------------------------------------
 // Verification entry point
 // ---------------------------------------------------------------------------
 
@@ -242,7 +267,7 @@ pub fn verify_function_with_module_and_const_fns_with_unwind(
     };
 
     let c_src = emit_verify_c_source(func, module, const_fns);
-    run_esbmc_with_unwind(&esbmc, &c_src, unwind)
+    run_esbmc_with_unwind(&esbmc, &c_src, unwind, &func.name)
 }
 
 fn verify_function_inner(
@@ -257,17 +282,18 @@ fn verify_function_inner(
     let mut c_src = emit_c_module(&[func], const_fns);
     c_src.push_str(&emit_harness(func));
 
-    run_esbmc(&esbmc, &c_src)
+    run_esbmc(&esbmc, &c_src, &func.name)
 }
 
-pub fn run_esbmc(esbmc: &std::path::Path, c_src: &str) -> VerificationResult {
-    run_esbmc_with_unwind(esbmc, c_src, DEFAULT_UNWIND)
+pub fn run_esbmc(esbmc: &std::path::Path, c_src: &str, func_name: &str) -> VerificationResult {
+    run_esbmc_with_unwind(esbmc, c_src, DEFAULT_UNWIND, func_name)
 }
 
 pub fn run_esbmc_with_unwind(
     esbmc: &std::path::Path,
     c_src: &str,
     unwind: u32,
+    func_name: &str,
 ) -> VerificationResult {
     let mut tmp = match tempfile::Builder::new().suffix(".c").tempfile() {
         Ok(f) => f,
@@ -279,6 +305,8 @@ pub fn run_esbmc_with_unwind(
     if let Err(e) = tmp.flush() {
         return VerificationResult::ToolError(e.to_string());
     }
+
+    save_esbmc_debug(esbmc, c_src, func_name);
 
     let output = match Command::new(esbmc)
         .arg(tmp.path())

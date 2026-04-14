@@ -237,7 +237,7 @@ struct ModuleContext {
     string_data_ids: Vec<DataId>,
     func_decls: Vec<FuncDecl>,
     extern_func_ids: HashMap<String, CraneliftFuncId>,
-    mode: i64,       // 0=release, 1=debug, 2=profile
+    mode: i64,       // 0=release, 1=debug, 2=profile, 3=sanitize
     trace_mode: i64, // 0=off, 1=calls, 2=full
 }
 
@@ -501,8 +501,8 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
         .declare_function("__vow_arena_free", Linkage::Import, &arena_free_sig)
         .expect("declare arena_free");
 
-    // Debug-only runtime functions
-    let vow_violation_id = if ctx.mode == 1 {
+    // Debug-only runtime functions (debug=1 or sanitize=3)
+    let vow_violation_id = if ctx.mode == 1 || ctx.mode == 3 {
         let mut sig = ctx.obj_module.make_signature();
         sig.params.push(AbiParam::new(types::I32)); // vow_id
         sig.params.push(AbiParam::new(types::I8)); // blame
@@ -519,7 +519,7 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
     } else {
         None
     };
-    let overflow_id = if ctx.mode == 1 {
+    let overflow_id = if ctx.mode == 1 || ctx.mode == 3 {
         let sig = ctx.obj_module.make_signature();
         Some(
             ctx.obj_module
@@ -553,7 +553,7 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
     } else {
         None
     };
-    let trace_vow_id = if ctx.trace_mode >= 2 && ctx.mode == 1 {
+    let trace_vow_id = if ctx.trace_mode >= 2 && (ctx.mode == 1 || ctx.mode == 3) {
         let mut sig = ctx.obj_module.make_signature();
         sig.params.push(AbiParam::new(types::I64));
         sig.params.push(AbiParam::new(types::I64));
@@ -662,6 +662,18 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
     let profile_init_ref =
         profile_init_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
 
+    // Sanitize init (mode==3 only, main function only)
+    let sanitize_init_ref = if ctx.mode == 3 && ctx.func_decls[fi].is_main {
+        let sig = ctx.obj_module.make_signature();
+        let id = ctx
+            .obj_module
+            .declare_function("__vow_sanitize_init", Linkage::Import, &sig)
+            .expect("declare sanitize_init");
+        Some(ctx.obj_module.declare_func_in_func(id, builder.func))
+    } else {
+        None
+    };
+
     // Create function name data section for trace/profile instrumentation
     let fn_name_gv = if ctx.trace_mode != 0 || ctx.mode == 2 {
         let name = &ctx.func_decls[fi].name;
@@ -687,10 +699,10 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
         inst_ty_map.insert(inst_ids[ii], inst_tys[ii]);
     }
 
-    // Create vow description data sections (debug mode only)
+    // Create vow description data sections (debug/sanitize mode)
     let mut vow_desc_gvs: HashMap<i64, GlobalValue> = HashMap::new();
     // We don't have file info from the self-hosted IR, so skip file/offset vow metadata
-    if ctx.mode == 1 {
+    if ctx.mode == 1 || ctx.mode == 3 {
         for (vi, &vow_id) in vow_ids.iter().enumerate() {
             let desc_str = unsafe { read_vow_string(vow_desc_ptrs[vi]) };
             let mut bytes = desc_str.as_bytes().to_vec();
@@ -715,7 +727,7 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
         inst_id: i64,
     }
     let mut vow_bindings: HashMap<i64, Vec<VowBindingInfo>> = HashMap::new();
-    if ctx.mode == 1 {
+    if ctx.mode == 1 || ctx.mode == 3 {
         let mut bind_offset = 0usize;
         for (vi, &vow_id) in vow_ids.iter().enumerate() {
             let bc = binding_counts[vi] as usize;
@@ -824,6 +836,10 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
         if let (Some(gv), Some(prof_ref)) = (fn_name_gv, profile_enter_ref) {
             let name_ptr = builder.ins().global_value(types::I64, gv);
             builder.ins().call(prof_ref, &[name_ptr]);
+        }
+        // Emit sanitize_init at main entry
+        if let Some(init_ref) = sanitize_init_ref {
+            builder.ins().call(init_ref, &[]);
         }
     }
     // Emit blocks
@@ -1299,7 +1315,7 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
 
                 // Vow checks
                 IOP_VOW_REQ | IOP_VOW_ENS | IOP_VOW_INV => {
-                    if ctx.mode == 1 && alen > 0 {
+                    if (ctx.mode == 1 || ctx.mode == 3) && alen > 0 {
                         let pred_id = all_args[aoff];
                         if let Some(&pred) = value_map.get(&pred_id) {
                             let vow_id = if dk == IDATA_VOW_ID { dv } else { 0 };
@@ -1989,6 +2005,9 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_stdin_read_line" => {
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_stdin_ready" => {
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_process_exit" => {

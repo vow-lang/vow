@@ -405,6 +405,33 @@ let p: Point = Point { x: 1, y: 2 };
 p.x
 ```
 
+### Field Assignment
+
+```vow
+p.x = 10;
+```
+
+### Passing Semantics
+
+Structs are heap-allocated. A struct value is a pointer to a heap region, so passing a struct to a function passes the pointer — the function operates on the same heap data, not a copy. Field assignments inside the called function are visible to the caller:
+
+```vow
+fn shift_right(p: Point, dx: i64) {
+    p.x = p.x + dx;
+}
+
+fn main() -> i32 [io] {
+    let p: Point = Point { x: 0, y: 0 };
+    shift_right(p, 5);
+    print_i64(p.x);  // 5 — mutation visible to caller
+    0
+}
+```
+
+This enables in-place mutation patterns (e.g., make/unmake in search trees) without cloning. The same aliasing semantics apply when structs are stored in containers — see [Indexing](#indexing). To avoid aliasing, construct a fresh struct literal with the desired field values.
+
+**Note:** For `linear struct` types, passing the value to a function consumes it — the caller cannot access it afterward. To observe mutations to a linear struct, return the updated value from the function.
+
 ## Enum Definitions
 
 ```vow
@@ -666,6 +693,7 @@ Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they 
 | `args`           | `fn() -> Vec<String>`                      | `[read]`   |
 | `stdin_read`     | `fn() -> String`                           | `[read]`   |
 | `stdin_read_line`| `fn() -> String`                           | `[read]`   |
+| `stdin_ready`    | `fn() -> bool`                             | `[read]`   |
 
 #### Process Management
 
@@ -703,6 +731,19 @@ let line: String = stdin_read_line();
 while str_len(line) > 0 {
     // process line (has trailing \n)
     line = stdin_read_line();
+}
+```
+
+**`stdin_ready`:** `stdin_ready()` returns `true` if `stdin_read_line()` would return immediately without blocking, `false` otherwise. Uses a non-blocking poll with zero timeout. Use this in computation loops that must remain responsive to external input:
+
+```vow
+while !stdin_ready() && depth < max_depth {
+    // continue searching
+    depth = depth + 1;
+}
+if stdin_ready() {
+    let cmd: String = stdin_read_line();
+    // handle command
 }
 ```
 

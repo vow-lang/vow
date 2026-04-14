@@ -72,8 +72,8 @@ jobs:
             - New builtin in `vow-types/src/check.rs` but not in `compiler/checker.vow`
             - New CLI flag in `vow/src/main.rs` but not in `compiler/main.vow`
 
-            ### Spec Sync (docs/skill/*.md)
-            `docs/skill/` is the canonical specification:
+            ### Spec Sync (docs/spec/*.md)
+            `docs/spec/` is the canonical specification:
             - `grammar.md` — types, operators, effects, builtins, control flow, structs,
               enums, match, methods, modules
             - `cli.md` — CLI commands, flags, JSON output schemas

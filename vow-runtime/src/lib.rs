@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::ffi::{CStr, c_char};
 use std::io::Write as _;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 
 thread_local! {
     static LAST_STDOUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
@@ -110,6 +110,7 @@ pub unsafe extern "C" fn __vow_violation(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_print_str(s: *const u8) {
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let _ = std::io::stdout().write_all(bytes);
@@ -311,6 +312,7 @@ pub extern "C" fn __vow_vec_new(elem_size: usize, align: usize) -> *mut u8 {
         (*header_ptr).len = 0;
         (*header_ptr).cap = 0;
     }
+    sanitize_on_vec_new(header_ptr as usize);
     header_ptr as *mut u8
 }
 
@@ -353,6 +355,7 @@ pub unsafe extern "C" fn __vow_vec_push(
     elem_size: usize,
     elem_align: usize,
 ) {
+    sanitize_on_push(vec as usize);
     unsafe { __vow_vec_reserve(vec, 1, elem_size, elem_align) };
     let v = unsafe { &mut *(vec as *mut VowVec) };
     let dest = unsafe { v.ptr.add(v.len * elem_size) };
@@ -362,6 +365,7 @@ pub unsafe extern "C" fn __vow_vec_push(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_len(vec: *const u8) -> usize {
+    sanitize_on_read(vec as usize, 0);
     let v = unsafe { &*(vec as *const VowVec) };
     v.len
 }
@@ -380,6 +384,7 @@ pub unsafe extern "C" fn __vow_vec_get_val(vec: *const u8, index: usize) -> i64 
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_pop(vec: *mut u8) {
+    sanitize_on_pop(vec as usize);
     let v = unsafe { &mut *(vec as *mut VowVec) };
     if v.len > 0 {
         v.len -= 1;
@@ -390,6 +395,7 @@ pub unsafe extern "C" fn __vow_vec_pop(vec: *mut u8) {
 /// The Vec header itself remains valid and can be reused with push().
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_clear(vec: *mut u8) {
+    sanitize_on_clear(vec as usize);
     let v = unsafe { &mut *(vec as *mut VowVec) };
     if v.cap > 0 && !v.ptr.is_null() {
         let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(v.cap * 8, 8) };
@@ -404,6 +410,7 @@ pub unsafe extern "C" fn __vow_vec_clear(vec: *mut u8) {
 /// If `new_len >= len`, this is a no-op. If `new_len == 0`, equivalent to clear().
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_truncate(vec: *mut u8, new_len: usize) {
+    sanitize_on_truncate(vec as usize, new_len);
     let v = unsafe { &mut *(vec as *mut VowVec) };
     if new_len >= v.len {
         return;
@@ -428,6 +435,7 @@ pub unsafe extern "C" fn __vow_vec_truncate(vec: *mut u8, new_len: usize) {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_set_val(vec: *mut u8, index: usize, value: i64) {
+    sanitize_on_set(vec as usize, index);
     let v = unsafe { &*(vec as *const VowVec) };
     if index >= v.len {
         let json = r#"{"error":"IndexOutOfBounds"}"#;
@@ -445,6 +453,7 @@ pub unsafe extern "C" fn __vow_vec_get_ptr(
     index: usize,
     elem_size: usize,
 ) -> *const u8 {
+    sanitize_on_read(vec as usize, index);
     let v = unsafe { &*(vec as *const VowVec) };
     if index >= v.len {
         let json = r#"{"error":"IndexOutOfBounds"}"#;
@@ -490,6 +499,7 @@ pub unsafe extern "C" fn __vow_string_len(s: *const u8) -> usize {
 /// The String header remains valid and can be reused with push_byte/push_str.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_clear(s: *mut u8) {
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &mut *(s as *mut VowVec) };
     if v.cap > 0 && !v.ptr.is_null() {
         let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(v.cap, 1) };
@@ -502,6 +512,8 @@ pub unsafe extern "C" fn __vow_string_clear(s: *mut u8) {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_eq(a: *const u8, b: *const u8) -> i64 {
+    sanitize_on_read(a as usize, 0);
+    sanitize_on_read(b as usize, 0);
     let va = unsafe { &*(a as *const VowVec) };
     let vb = unsafe { &*(b as *const VowVec) };
     if va.len != vb.len {
@@ -514,6 +526,8 @@ pub unsafe extern "C" fn __vow_string_eq(a: *const u8, b: *const u8) -> i64 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_contains(haystack: *const u8, needle: *const u8) -> i64 {
+    sanitize_on_read(haystack as usize, 0);
+    sanitize_on_read(needle as usize, 0);
     let vh = unsafe { &*(haystack as *const VowVec) };
     let vn = unsafe { &*(needle as *const VowVec) };
     let sh = unsafe { std::slice::from_raw_parts(vh.ptr, vh.len) };
@@ -534,6 +548,8 @@ pub unsafe extern "C" fn __vow_string_contains(haystack: *const u8, needle: *con
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_push_str(dest: *mut u8, src: *const u8) {
+    sanitize_on_read(dest as usize, 0);
+    sanitize_on_read(src as usize, 0);
     let vs = unsafe { &*(src as *const VowVec) };
     if vs.len == 0 {
         return;
@@ -552,6 +568,7 @@ pub unsafe extern "C" fn __vow_string_from_i64(v: i64) -> *mut u8 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_print(s: *const u8) {
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let _ = std::io::stdout().write_all(bytes);
@@ -560,6 +577,7 @@ pub unsafe extern "C" fn __vow_string_print(s: *const u8) {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_byte_at(s: *const u8, idx: i64) -> i64 {
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     if idx < 0 || idx as usize >= v.len {
         return -1;
@@ -583,6 +601,7 @@ pub unsafe extern "C" fn __vow_string_substr(s: *const u8, start: i64, len: i64)
     if s.is_null() {
         return __vow_vec_new(1, 1);
     }
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let slen = v.len as i64;
     let clamped_start = start.clamp(0, slen) as usize;
@@ -596,6 +615,7 @@ pub unsafe extern "C" fn __vow_string_substring(s: *const u8, start: i64, end: i
     if s.is_null() {
         return __vow_vec_new(1, 1);
     }
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let slen = v.len as i64;
     let clamped_start = start.clamp(0, slen) as usize;
@@ -611,6 +631,8 @@ pub unsafe extern "C" fn __vow_string_split(haystack: *const u8, separator: *con
     if haystack.is_null() || separator.is_null() {
         return result_vec;
     }
+    sanitize_on_read(haystack as usize, 0);
+    sanitize_on_read(separator as usize, 0);
     let vh = unsafe { &*(haystack as *const VowVec) };
     let vs = unsafe { &*(separator as *const VowVec) };
     let h = unsafe { std::slice::from_raw_parts(vh.ptr, vh.len) };
@@ -644,6 +666,8 @@ pub unsafe extern "C" fn __vow_string_starts_with(s: *const u8, prefix: *const u
     if s.is_null() || prefix.is_null() {
         return 0;
     }
+    sanitize_on_read(s as usize, 0);
+    sanitize_on_read(prefix as usize, 0);
     let vs = unsafe { &*(s as *const VowVec) };
     let vp = unsafe { &*(prefix as *const VowVec) };
     let ss = unsafe { std::slice::from_raw_parts(vs.ptr, vs.len) };
@@ -656,6 +680,8 @@ pub unsafe extern "C" fn __vow_string_ends_with(s: *const u8, suffix: *const u8)
     if s.is_null() || suffix.is_null() {
         return 0;
     }
+    sanitize_on_read(s as usize, 0);
+    sanitize_on_read(suffix as usize, 0);
     let vs = unsafe { &*(s as *const VowVec) };
     let vp = unsafe { &*(suffix as *const VowVec) };
     let ss = unsafe { std::slice::from_raw_parts(vs.ptr, vs.len) };
@@ -668,6 +694,7 @@ pub unsafe extern "C" fn __vow_string_trim(s: *const u8) -> *mut u8 {
     if s.is_null() {
         return __vow_vec_new(1, 1);
     }
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let trimmed = match std::str::from_utf8(bytes) {
@@ -682,6 +709,7 @@ pub unsafe extern "C" fn __vow_string_to_upper(s: *const u8) -> *mut u8 {
     if s.is_null() {
         return __vow_vec_new(1, 1);
     }
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let upper = match std::str::from_utf8(bytes) {
@@ -696,6 +724,7 @@ pub unsafe extern "C" fn __vow_string_to_lower(s: *const u8) -> *mut u8 {
     if s.is_null() {
         return __vow_vec_new(1, 1);
     }
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let lower = match std::str::from_utf8(bytes) {
@@ -714,6 +743,9 @@ pub unsafe extern "C" fn __vow_string_replace(
     if s.is_null() || from.is_null() || to.is_null() {
         return __vow_vec_new(1, 1);
     }
+    sanitize_on_read(s as usize, 0);
+    sanitize_on_read(from as usize, 0);
+    sanitize_on_read(to as usize, 0);
     let vs = unsafe { &*(s as *const VowVec) };
     let vf = unsafe { &*(from as *const VowVec) };
     let vt = unsafe { &*(to as *const VowVec) };
@@ -737,6 +769,8 @@ pub unsafe extern "C" fn __vow_string_join(vec_ptr: *const u8, sep: *const u8) -
     if vec_ptr.is_null() || sep.is_null() {
         return __vow_vec_new(1, 1);
     }
+    sanitize_on_read(vec_ptr as usize, 0);
+    sanitize_on_read(sep as usize, 0);
     let v = unsafe { &*(vec_ptr as *const VowVec) };
     let ptrs = unsafe { std::slice::from_raw_parts(v.ptr as *const i64, v.len) };
 
@@ -757,6 +791,7 @@ pub unsafe extern "C" fn __vow_string_parse_i64_opt(s: *const u8) -> *mut u8 {
         unsafe { *ptr = 0 };
         return ptr as *mut u8;
     }
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     match std::str::from_utf8(bytes) {
@@ -783,6 +818,7 @@ pub unsafe extern "C" fn __vow_string_parse_u64_opt(s: *const u8) -> *mut u8 {
         unsafe { *ptr = 0 };
         return ptr as *mut u8;
     }
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     match std::str::from_utf8(bytes) {
@@ -807,6 +843,7 @@ pub unsafe extern "C" fn __vow_parse_i64(s: *const u8) -> i64 {
     if s.is_null() {
         return 0;
     }
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     match std::str::from_utf8(bytes) {
@@ -825,6 +862,7 @@ pub unsafe extern "C" fn __vow_vec_sort(vec: *const u8) -> *mut u8 {
     if vec.is_null() {
         return result;
     }
+    sanitize_on_read(vec as usize, 0);
     let v = unsafe { &*(vec as *const VowVec) };
     let src = unsafe { std::slice::from_raw_parts(v.ptr as *const i64, v.len) };
     let mut sorted: Vec<i64> = src.to_vec();
@@ -856,6 +894,7 @@ pub unsafe extern "C" fn __vow_hex_encode(vec: *const u8) -> *mut u8 {
     if vec.is_null() {
         return __vow_vec_new(1, 1);
     }
+    sanitize_on_read(vec as usize, 0);
     let v = unsafe { &*(vec as *const VowVec) };
     let vals = unsafe { std::slice::from_raw_parts(v.ptr as *const i64, v.len) };
     let mut hex = String::new();
@@ -871,6 +910,7 @@ pub unsafe extern "C" fn __vow_hex_decode(s: *const u8) -> *mut u8 {
     if s.is_null() {
         return result;
     }
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let hex_str = match std::str::from_utf8(bytes) {
@@ -900,6 +940,7 @@ pub unsafe extern "C" fn __vow_fs_read(path_ptr: *const u8) -> *mut u8 {
     if path_ptr.is_null() {
         return __vow_vec_new(1, 1);
     }
+    sanitize_on_read(path_ptr as usize, 0);
     let v = unsafe { &*(path_ptr as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let path = match std::str::from_utf8(bytes) {
@@ -917,6 +958,8 @@ pub unsafe extern "C" fn __vow_fs_write(path_ptr: *const u8, data_ptr: *const u8
     if path_ptr.is_null() || data_ptr.is_null() {
         return -1;
     }
+    sanitize_on_read(path_ptr as usize, 0);
+    sanitize_on_read(data_ptr as usize, 0);
     let vp = unsafe { &*(path_ptr as *const VowVec) };
     let path_bytes = unsafe { std::slice::from_raw_parts(vp.ptr, vp.len) };
     let path = match std::str::from_utf8(path_bytes) {
@@ -936,6 +979,7 @@ pub unsafe extern "C" fn __vow_fs_exists(path_ptr: *const u8) -> i64 {
     if path_ptr.is_null() {
         return 0;
     }
+    sanitize_on_read(path_ptr as usize, 0);
     let v = unsafe { &*(path_ptr as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let path = match std::str::from_utf8(bytes) {
@@ -954,6 +998,7 @@ pub unsafe extern "C" fn __vow_fs_mkdir(path_ptr: *const u8) -> i64 {
     if path_ptr.is_null() {
         return -1;
     }
+    sanitize_on_read(path_ptr as usize, 0);
     let v = unsafe { &*(path_ptr as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let path = match std::str::from_utf8(bytes) {
@@ -972,6 +1017,7 @@ pub unsafe extern "C" fn __vow_fs_listdir(path_ptr: *const u8) -> *mut u8 {
     if path_ptr.is_null() {
         return result_vec;
     }
+    sanitize_on_read(path_ptr as usize, 0);
     let v = unsafe { &*(path_ptr as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let path = match std::str::from_utf8(bytes) {
@@ -1000,6 +1046,7 @@ pub unsafe extern "C" fn __vow_fs_remove(path_ptr: *const u8) -> i64 {
     if path_ptr.is_null() {
         return -1;
     }
+    sanitize_on_read(path_ptr as usize, 0);
     let v = unsafe { &*(path_ptr as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let path = match std::str::from_utf8(bytes) {
@@ -1017,6 +1064,7 @@ pub unsafe extern "C" fn __vow_fs_remove_dir(path_ptr: *const u8) -> i64 {
     if path_ptr.is_null() {
         return -1;
     }
+    sanitize_on_read(path_ptr as usize, 0);
     let v = unsafe { &*(path_ptr as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let path = match std::str::from_utf8(bytes) {
@@ -1034,6 +1082,7 @@ pub unsafe extern "C" fn __vow_fs_is_dir(path_ptr: *const u8) -> i64 {
     if path_ptr.is_null() {
         return 0;
     }
+    sanitize_on_read(path_ptr as usize, 0);
     let v = unsafe { &*(path_ptr as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let path = match std::str::from_utf8(bytes) {
@@ -1052,6 +1101,8 @@ pub unsafe extern "C" fn __vow_fs_rename(old_ptr: *const u8, new_ptr: *const u8)
     if old_ptr.is_null() || new_ptr.is_null() {
         return -1;
     }
+    sanitize_on_read(old_ptr as usize, 0);
+    sanitize_on_read(new_ptr as usize, 0);
     let vo = unsafe { &*(old_ptr as *const VowVec) };
     let old_bytes = unsafe { std::slice::from_raw_parts(vo.ptr, vo.len) };
     let old_path = match std::str::from_utf8(old_bytes) {
@@ -1073,6 +1124,7 @@ pub unsafe extern "C" fn __vow_fs_rename(old_ptr: *const u8, new_ptr: *const u8)
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_eprintln_str(s: *const u8) {
     if !s.is_null() {
+        sanitize_on_read(s as usize, 0);
         let v = unsafe { &*(s as *const VowVec) };
         let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
         let _ = std::io::stderr().write_all(bytes);
@@ -1103,6 +1155,23 @@ pub extern "C" fn __vow_stdin_read_line() -> *mut u8 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn __vow_stdin_ready() -> i64 {
+    use std::os::unix::io::AsRawFd;
+    let fd = std::io::stdin().as_raw_fd();
+    let mut pollfd = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let ret = unsafe { libc::poll(&mut pollfd, 1, 0) };
+    if ret > 0 && (pollfd.revents & libc::POLLIN) != 0 {
+        1
+    } else {
+        0
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn __vow_args() -> *mut u8 {
     let result_vec = __vow_vec_new(8, 8);
     for arg in std::env::args() {
@@ -1119,6 +1188,8 @@ pub extern "C" fn __vow_process_exit(code: i64) {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_process_run(cmd_ptr: i64, args_ptr: i64) -> i64 {
+    sanitize_on_read(cmd_ptr as usize, 0);
+    sanitize_on_read(args_ptr as usize, 0);
     let cmd_vec = unsafe { &*(cmd_ptr as *const VowVec) };
     let cmd_bytes = unsafe { std::slice::from_raw_parts(cmd_vec.ptr, cmd_vec.len) };
     let cmd_str = match std::str::from_utf8(cmd_bytes) {
@@ -1170,6 +1241,8 @@ pub extern "C" fn __vow_process_get_stderr() -> *mut u8 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_process_start(cmd_ptr: i64, args_ptr: i64) -> i64 {
+    sanitize_on_read(cmd_ptr as usize, 0);
+    sanitize_on_read(args_ptr as usize, 0);
     let cmd_vec = unsafe { &*(cmd_ptr as *const VowVec) };
     let cmd_bytes = unsafe { std::slice::from_raw_parts(cmd_vec.ptr, cmd_vec.len) };
     let cmd_str = match std::str::from_utf8(cmd_bytes) {
@@ -1493,6 +1566,7 @@ pub unsafe extern "C" fn __vow_string_free(s: *mut u8) {
     if s.is_null() {
         return;
     }
+    sanitize_on_free(s as usize);
     let v = unsafe { &*(s as *const VowVec) };
     if v.cap > 0 && !v.ptr.is_null() {
         let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(v.cap, 1) };
@@ -1507,6 +1581,7 @@ pub unsafe extern "C" fn __vow_vec_free_val(v: *mut u8) {
     if v.is_null() {
         return;
     }
+    sanitize_on_free(v as usize);
     let vec = unsafe { &*(v as *const VowVec) };
     if vec.cap > 0 && !vec.ptr.is_null() {
         let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(vec.cap * 8, 8) };
@@ -1529,6 +1604,223 @@ pub unsafe extern "C" fn __vow_map_free(m: *mut u8) {
     }
     let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
     unsafe { std::alloc::dealloc(m, header_layout) };
+}
+
+// ---------------------------------------------------------------------------
+// Sanitize mode — Vec provenance tracking
+// ---------------------------------------------------------------------------
+
+static SANITIZE_ENABLED: AtomicBool = AtomicBool::new(false);
+static SANITIZE_GLOBAL_GEN: AtomicU64 = AtomicU64::new(1);
+
+struct ShadowVec {
+    generations: Vec<u64>,
+    freed: bool,
+}
+
+static SHADOW_TABLE: Mutex<Option<HashMap<usize, ShadowVec>>> = Mutex::new(None);
+
+fn shadow_table_get_or_init(
+    table: &mut Option<HashMap<usize, ShadowVec>>,
+) -> &mut HashMap<usize, ShadowVec> {
+    table.get_or_insert_with(HashMap::new)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_sanitize_init() {
+    SANITIZE_ENABLED.store(true, Ordering::SeqCst);
+    let mut table = SHADOW_TABLE.lock().unwrap();
+    *table = Some(HashMap::new());
+}
+
+fn sanitize_is_enabled() -> bool {
+    SANITIZE_ENABLED.load(Ordering::Relaxed)
+}
+
+fn sanitize_emit_error(error_type: &str, details: &str) {
+    let _ = writeln!(std::io::stderr(), r#"{{"error":"{error_type}",{details}}}"#);
+    let _ = writeln!(std::io::stderr(), "sanitizer: {error_type}: {details}");
+    std::process::exit(1);
+}
+
+fn sanitize_on_vec_new(vec_addr: usize) {
+    if !sanitize_is_enabled() {
+        return;
+    }
+    let mut table = SHADOW_TABLE.lock().unwrap();
+    let map = shadow_table_get_or_init(&mut table);
+    map.insert(
+        vec_addr,
+        ShadowVec {
+            generations: Vec::new(),
+            freed: false,
+        },
+    );
+}
+
+fn sanitize_on_push(vec_addr: usize) {
+    if !sanitize_is_enabled() {
+        return;
+    }
+    let generation = SANITIZE_GLOBAL_GEN.fetch_add(1, Ordering::Relaxed);
+    let mut table = SHADOW_TABLE.lock().unwrap();
+    let map = shadow_table_get_or_init(&mut table);
+    if let Some(shadow) = map.get_mut(&vec_addr) {
+        if shadow.freed {
+            sanitize_emit_error(
+                "UseAfterFree",
+                &format!("\"op\":\"push\",\"vec\":\"0x{vec_addr:x}\""),
+            );
+        }
+        shadow.generations.push(generation);
+    }
+}
+
+fn sanitize_on_set(vec_addr: usize, index: usize) {
+    if !sanitize_is_enabled() {
+        return;
+    }
+    let generation = SANITIZE_GLOBAL_GEN.fetch_add(1, Ordering::Relaxed);
+    let mut table = SHADOW_TABLE.lock().unwrap();
+    let map = shadow_table_get_or_init(&mut table);
+    if let Some(shadow) = map.get_mut(&vec_addr) {
+        if shadow.freed {
+            sanitize_emit_error(
+                "UseAfterFree",
+                &format!("\"op\":\"set\",\"vec\":\"0x{vec_addr:x}\""),
+            );
+        }
+        if index < shadow.generations.len() {
+            shadow.generations[index] = generation;
+        }
+    }
+}
+
+fn sanitize_on_truncate(vec_addr: usize, new_len: usize) {
+    if !sanitize_is_enabled() {
+        return;
+    }
+    let mut table = SHADOW_TABLE.lock().unwrap();
+    let map = shadow_table_get_or_init(&mut table);
+    if let Some(shadow) = map.get_mut(&vec_addr) {
+        if shadow.freed {
+            sanitize_emit_error(
+                "UseAfterFree",
+                &format!("\"op\":\"truncate\",\"vec\":\"0x{vec_addr:x}\""),
+            );
+        }
+        shadow.generations.truncate(new_len);
+    }
+}
+
+fn sanitize_on_clear(vec_addr: usize) {
+    if !sanitize_is_enabled() {
+        return;
+    }
+    let mut table = SHADOW_TABLE.lock().unwrap();
+    let map = shadow_table_get_or_init(&mut table);
+    if let Some(shadow) = map.get_mut(&vec_addr) {
+        if shadow.freed {
+            sanitize_emit_error(
+                "UseAfterFree",
+                &format!("\"op\":\"clear\",\"vec\":\"0x{vec_addr:x}\""),
+            );
+        }
+        shadow.generations.clear();
+    }
+}
+
+fn sanitize_on_free(vec_addr: usize) {
+    if !sanitize_is_enabled() {
+        return;
+    }
+    let already_freed = {
+        let mut table = SHADOW_TABLE.lock().unwrap();
+        let map = shadow_table_get_or_init(&mut table);
+        if let Some(shadow) = map.get_mut(&vec_addr) {
+            if shadow.freed {
+                true
+            } else {
+                shadow.freed = true;
+                shadow.generations.clear();
+                false
+            }
+        } else {
+            false
+        }
+    };
+    if already_freed {
+        sanitize_emit_error("DoubleFree", &format!("\"vec\":\"0x{vec_addr:x}\""));
+    }
+}
+
+fn sanitize_on_pop(vec_addr: usize) {
+    if !sanitize_is_enabled() {
+        return;
+    }
+    let mut table = SHADOW_TABLE.lock().unwrap();
+    let map = shadow_table_get_or_init(&mut table);
+    if let Some(shadow) = map.get_mut(&vec_addr) {
+        if shadow.freed {
+            sanitize_emit_error(
+                "UseAfterFree",
+                &format!("\"op\":\"pop\",\"vec\":\"0x{vec_addr:x}\""),
+            );
+        }
+        shadow.generations.pop();
+    }
+}
+
+fn sanitize_on_read(vec_addr: usize, _index: usize) {
+    if !sanitize_is_enabled() {
+        return;
+    }
+    let table = SHADOW_TABLE.lock().unwrap();
+    if let Some(map) = table.as_ref()
+        && let Some(shadow) = map.get(&vec_addr)
+        && shadow.freed
+    {
+        sanitize_emit_error(
+            "UseAfterFree",
+            &format!("\"op\":\"read\",\"vec\":\"0x{vec_addr:x}\""),
+        );
+    }
+}
+
+/// Query the generation of a Vec slot. Returns 0 if unknown.
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_sanitize_vec_generation(vec: *const u8, index: usize) -> u64 {
+    if !sanitize_is_enabled() || vec.is_null() {
+        return 0;
+    }
+    let vec_addr = vec as usize;
+    let table = SHADOW_TABLE.lock().unwrap();
+    if let Some(map) = table.as_ref()
+        && let Some(shadow) = map.get(&vec_addr)
+        && index < shadow.generations.len()
+    {
+        return shadow.generations[index];
+    }
+    0
+}
+
+/// Check that a Vec slot's generation matches the expected value.
+/// Aborts with StaleIndex error if it doesn't match.
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_sanitize_check_generation(vec: *const u8, index: usize, expected_gen: u64) {
+    if !sanitize_is_enabled() || vec.is_null() {
+        return;
+    }
+    let actual = __vow_sanitize_vec_generation(vec, index);
+    if actual != expected_gen && expected_gen != 0 {
+        sanitize_emit_error(
+            "StaleIndex",
+            &format!(
+                "\"index\":{index},\"expected_gen\":{expected_gen},\"actual_gen\":{actual},\"vec\":\"0x{:x}\"",
+                vec as usize
+            ),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1688,5 +1980,72 @@ mod tests {
         assert_eq!(unsafe { __vow_vec_get_val(v, 1) }, 1);
         assert_eq!(unsafe { __vow_vec_get_val(v, 2) }, 2);
         unsafe { __vow_vec_free_val(v) };
+    }
+
+    // All sanitize tests consolidated into one test to avoid parallel test races
+    // on the global SANITIZE_ENABLED flag.
+    #[test]
+    fn sanitize_generation_tracking() {
+        __vow_sanitize_init();
+
+        // -- Push generation tracking --
+        let v = __vow_vec_new_val();
+        unsafe { __vow_vec_push_val(v, 10) };
+        unsafe { __vow_vec_push_val(v, 20) };
+        let gen0 = __vow_sanitize_vec_generation(v, 0);
+        let gen1 = __vow_sanitize_vec_generation(v, 1);
+        assert!(gen0 > 0, "generation should be nonzero after push");
+        assert!(gen1 > gen0, "second push should have higher generation");
+
+        // -- Set increments generation --
+        unsafe { __vow_vec_set_val(v, 0, 99) };
+        let gen0_after = __vow_sanitize_vec_generation(v, 0);
+        assert!(gen0_after > gen0, "set should increment generation");
+        assert_eq!(
+            __vow_sanitize_vec_generation(v, 1),
+            gen1,
+            "unmodified slot should keep its generation"
+        );
+
+        // -- Check generation pass --
+        let slot_gen = __vow_sanitize_vec_generation(v, 0);
+        __vow_sanitize_check_generation(v, 0, slot_gen);
+
+        unsafe { __vow_vec_free_val(v) };
+
+        // -- Truncate clears generations --
+        let v2 = __vow_vec_new_val();
+        unsafe { __vow_vec_push_val(v2, 1) };
+        unsafe { __vow_vec_push_val(v2, 2) };
+        unsafe { __vow_vec_push_val(v2, 3) };
+        assert!(
+            __vow_sanitize_vec_generation(v2, 2) > 0,
+            "slot 2 should have generation"
+        );
+        unsafe { __vow_vec_truncate(v2, 1) };
+        assert_eq!(
+            __vow_sanitize_vec_generation(v2, 2),
+            0,
+            "truncated slot should have no generation"
+        );
+        unsafe { __vow_vec_free_val(v2) };
+
+        // -- Pop removes generation --
+        let v3 = __vow_vec_new_val();
+        unsafe { __vow_vec_push_val(v3, 1) };
+        unsafe { __vow_vec_push_val(v3, 2) };
+        assert!(__vow_sanitize_vec_generation(v3, 1) > 0);
+        unsafe { __vow_vec_pop(v3) };
+        assert_eq!(
+            __vow_sanitize_vec_generation(v3, 1),
+            0,
+            "popped slot should have no generation"
+        );
+        unsafe { __vow_vec_free_val(v3) };
+
+        // -- Vec operations work without crash when sanitize enabled --
+        let v4 = __vow_vec_new_val();
+        unsafe { __vow_vec_push_val(v4, 42) };
+        unsafe { __vow_vec_free_val(v4) };
     }
 }

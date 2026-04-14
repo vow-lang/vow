@@ -8,6 +8,14 @@ pub enum BuildMode {
     Debug,
     Release,
     Profile,
+    Sanitize,
+}
+
+impl BuildMode {
+    /// Returns true if runtime vow checks should be emitted (Debug or Sanitize).
+    pub fn has_debug_checks(self) -> bool {
+        matches!(self, BuildMode::Debug | BuildMode::Sanitize)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

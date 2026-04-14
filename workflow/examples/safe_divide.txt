@@ -1,0 +1,7 @@
+Write a Vow function `safe_divide` that divides two i64 values and returns the result.
+
+Requirements:
+- The divisor must not be zero (requires contract).
+- The result should satisfy: result * y <= x (ensures contract for integer division).
+- Handle the edge case where x is i64::MIN and y is -1 (would overflow).
+- Use checked arithmetic where appropriate.

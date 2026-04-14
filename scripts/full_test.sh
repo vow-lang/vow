@@ -402,12 +402,25 @@ else
 fi
 echo ""
 
+# ─── Section 5c: Sanitize Mode ────────────────────────────────────
+
+echo -e "${BOLD}--- Section 5c: Sanitize Mode ---${RESET}"
+
+# sanitize_vec.vow: Vec operations with sanitize instrumentation
+$RUST build --mode sanitize --no-verify tests/debug/sanitize_vec.vow -o "$TMPDIR/rust_sanitize_vec" >/dev/null 2>/dev/null
+run_self build --mode sanitize --no-verify tests/debug/sanitize_vec.vow -o "$TMPDIR/self_sanitize_vec" >/dev/null 2>/dev/null
+compare_runtime "sanitize_vec/sanitize" "$TMPDIR/rust_sanitize_vec" "$TMPDIR/self_sanitize_vec"
+
+echo ""
 # ─── Section 6: Multi-Module ───────────────────────────────────────
 
 echo -e "${BOLD}--- Section 6: Multi-Module ---${RESET}"
 
-for multi in stack geometry bignum; do
-    main_file="examples/${multi}/main.vow"
+for multi in stack geometry bignum gc math; do
+    case "$multi" in
+        math) main_file="lib/math/main.vow" ;;
+        *)    main_file="examples/${multi}/main.vow" ;;
+    esac
     printf "${BOLD}%s${RESET}\n" "$multi"
 
     # build --no-verify
@@ -516,14 +529,14 @@ else
 fi
 
 # help/coverage-rust: cross-reference grammar.md → Rust --help
-if uv run python scripts/check_help_coverage.py docs/skill/grammar.md "$rust_help" 2>/dev/null; then
+if uv run python scripts/check_help_coverage.py docs/spec/grammar.md "$rust_help" 2>/dev/null; then
     pass "help/coverage-rust"
 else
     fail "help/coverage-rust" "Rust --help missing grammar.md features"
 fi
 
 # help/coverage-self: cross-reference grammar.md → self-hosted --help
-if uv run python scripts/check_help_coverage.py docs/skill/grammar.md "$self_help" 2>/dev/null; then
+if uv run python scripts/check_help_coverage.py docs/spec/grammar.md "$self_help" 2>/dev/null; then
     pass "help/coverage-self"
 else
     fail "help/coverage-self" "self-hosted --help missing grammar.md features"
