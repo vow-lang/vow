@@ -5575,7 +5575,12 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            run_contracts_command(&source, c.verify, c.no_cache, c.unwind.unwrap_or(DEFAULT_UNWIND));
+            run_contracts_command(
+                &source,
+                c.verify,
+                c.no_cache,
+                c.unwind.unwrap_or(DEFAULT_UNWIND),
+            );
         }
         Some(Command::Skill(s)) => {
             if s.help {
