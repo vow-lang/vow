@@ -275,6 +275,11 @@ static STACK_FN_NAME: AtomicU64 = AtomicU64::new(0);
 static STACK_BOTTOM: AtomicU64 = AtomicU64::new(0);
 static STACK_TOP: AtomicU64 = AtomicU64::new(0);
 
+// STACK_FN_NAME tracks the most recently entered function, not the full call
+// chain. After a callee returns, the name may be stale (pointing to the callee
+// rather than the caller). This is intentional: the diagnostic reports the
+// "last known function" at overflow time, which is the deepest frame — exactly
+// the function whose entry pushed the stack past the limit.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_stack_enter(fn_name_ptr: *const i8) {
     STACK_DEPTH.fetch_add(1, Ordering::Relaxed);
@@ -300,7 +305,12 @@ pub extern "C" fn __vow_init_stack_guard() {
             && rl.rlim_cur != libc::RLIM_INFINITY
         {
             let stack_size = rl.rlim_cur as usize;
-            // Stack grows downward: bottom = SP - size, top = SP + guard margin.
+            // Stack grows downward. The guard page sits just below
+            // `initial_SP - stack_size`. sp_approx is already `delta` bytes
+            // below initial_SP (startup frames), so computed STACK_BOTTOM =
+            // sp_approx - stack_size is `delta` below the actual bottom.
+            // The guard page fault address lands inside [BOTTOM, TOP] as long
+            // as delta >= PAGE_SIZE (~4KB), which holds on any realistic binary.
             STACK_BOTTOM.store(
                 sp_approx.saturating_sub(stack_size) as u64,
                 Ordering::Relaxed,
@@ -349,23 +359,31 @@ unsafe extern "C" fn stack_overflow_handler(
 ) {
     // Distinguish stack overflow from other SIGSEGVs by checking whether the
     // fault address falls within the main stack region (saved at init time).
+    // If not a stack overflow, restore default handler and re-raise so the OS
+    // produces a core dump.
     let bottom = STACK_BOTTOM.load(Ordering::Relaxed);
     let top = STACK_TOP.load(Ordering::Relaxed);
-    if !info.is_null() {
-        let fault_addr = unsafe { (*info).si_addr() } as u64;
-        let is_stack_overflow = if bottom != 0 && top != 0 {
-            fault_addr >= bottom && fault_addr <= top
-        } else {
-            // Bounds unknown (e.g. RLIM_INFINITY or getrlimit failed).
-            // Cannot distinguish stack overflow from other SIGSEGVs.
-            false
-        };
-        if !is_stack_overflow {
-            unsafe {
-                libc::signal(libc::SIGSEGV, libc::SIG_DFL);
-            }
-            return;
+    if info.is_null() {
+        // SA_SIGINFO guarantees non-null on Linux, but handle defensively.
+        unsafe {
+            libc::signal(libc::SIGSEGV, libc::SIG_DFL);
+            libc::raise(libc::SIGSEGV);
         }
+        return;
+    }
+    let fault_addr = unsafe { (*info).si_addr() } as u64;
+    let is_stack_overflow = if bottom != 0 && top != 0 {
+        fault_addr >= bottom && fault_addr <= top
+    } else {
+        // Bounds unknown (e.g. RLIM_INFINITY or getrlimit failed).
+        false
+    };
+    if !is_stack_overflow {
+        unsafe {
+            libc::signal(libc::SIGSEGV, libc::SIG_DFL);
+            libc::raise(libc::SIGSEGV);
+        }
+        return;
     }
 
     // Read depth and function name (best-effort in signal context)

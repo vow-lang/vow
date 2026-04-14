@@ -1,4 +1,7 @@
 // TEST: exit 134
+// NOTE: On systems with `ulimit -s unlimited` (RLIM_INFINITY), stack bounds
+// cannot be determined and the handler falls back to SIG_DFL (exit 139).
+// CI enforces a finite stack limit so exit 134 is expected there.
 module StackOverflow
 
 fn recurse(n: i64) -> i64 {
