@@ -1069,7 +1069,6 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             while ai < nargs {
                 let arg_eid: i64 = list_get(a, args_lid, ai);
                 let arg_id: i64 = lower_expr(ctx, arg_eid);
-                lctx_mark_escaped(ctx, arg_id);
                 call_args.push(arg_id);
                 ai = ai + 1;
             }

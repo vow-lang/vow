@@ -844,9 +844,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 )
             } else if let Some((sym, ret_ty)) = vow_debug_builtin_to_runtime(&callee_name) {
-                for &aid in &arg_ids {
-                    ctx.mark_escaped(aid);
-                }
                 ctx.emit(
                     Opcode::DebugCall,
                     ret_ty,
