@@ -343,6 +343,10 @@ for vow_file in tests/verify/*.vow; do
     fi
 
     compare_json "${name}/verify-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+    actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$rust_json" 2>/dev/null) || actual_status=""
+    if [ -n "$actual_status" ] && [ "$actual_status" != "Verified" ]; then
+        fail "${name}/verify-expected-pass" "expected Verified, got $actual_status"
+    fi
 done
 echo ""
 
@@ -362,6 +366,10 @@ for vow_file in tests/verify-fail/*.vow; do
     fi
 
     compare_json "${name}/verify-fail-test" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+    actual_status=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('status',''))" "$rust_json" 2>/dev/null) || actual_status=""
+    if [ -n "$actual_status" ] && [ "$actual_status" != "VerifyFailed" ]; then
+        fail "${name}/verify-expected-fail" "expected VerifyFailed, got $actual_status"
+    fi
 done
 echo ""
 
