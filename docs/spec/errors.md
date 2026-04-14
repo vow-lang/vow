@@ -235,6 +235,24 @@ The `blame` field indicates who is at fault:
 
 **Fix:** Add a bounds check before indexing, or add contracts: `requires: i >= 0, requires: i < v.len()`.
 
+### StackOverflow
+
+**When:** The native call stack is exhausted, typically due to unbounded recursion.
+
+```json
+{"error":"StackOverflow"}
+```
+
+In debug or sanitize mode, the diagnostic includes call depth and the function that was executing when the overflow occurred:
+
+```json
+{"error":"StackOverflow","depth":10693,"function":"recurse"}
+```
+
+The signal handler is installed in **all** build modes. The `depth` and `function` fields are only available in debug/sanitize mode where call-depth instrumentation is emitted.
+
+**Fix:** Add a base case to recursive functions, or restructure the algorithm to use iteration instead of recursion.
+
 ## Warnings
 
 ### LoweringWarning

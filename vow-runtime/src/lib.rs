@@ -324,9 +324,37 @@ pub extern "C" fn __vow_init_stack_guard() {
 
 unsafe extern "C" fn stack_overflow_handler(
     _sig: libc::c_int,
-    _info: *mut libc::siginfo_t,
+    info: *mut libc::siginfo_t,
     _ctx: *mut libc::c_void,
 ) {
+    // Distinguish stack overflow from other SIGSEGVs by checking whether the
+    // fault address is near the stack limit. If not, re-raise as default SIGSEGV
+    // so the OS produces a core dump for null-pointer or other segfaults.
+    if !info.is_null() {
+        let fault_addr = unsafe { (*info).si_addr() } as usize;
+        let mut rl: libc::rlimit = unsafe { std::mem::zeroed() };
+        if unsafe { libc::getrlimit(libc::RLIMIT_STACK, &mut rl) } == 0 {
+            let stack_size = rl.rlim_cur as usize;
+            // Use the current stack pointer as a reference. If the fault address
+            // is more than one stack size away, it's likely not a stack overflow.
+            let sp: usize;
+            unsafe {
+                std::arch::asm!("mov {}, rsp", out(reg) sp, options(nomem, nostack));
+            }
+            let stack_bottom = sp.saturating_sub(stack_size);
+            let stack_top = sp.saturating_add(stack_size);
+            if fault_addr < stack_bottom || fault_addr > stack_top {
+                // Not a stack overflow — restore default handler and re-raise.
+                let mut sa: libc::sigaction = unsafe { std::mem::zeroed() };
+                sa.sa_sigaction = libc::SIG_DFL;
+                unsafe {
+                    libc::sigaction(libc::SIGSEGV, &sa, std::ptr::null_mut());
+                }
+                return;
+            }
+        }
+    }
+
     // Read depth and function name (best-effort in signal context)
     let depth = STACK_DEPTH.load(Ordering::Relaxed);
     let fn_ptr = STACK_FN_NAME.load(Ordering::Relaxed) as *const i8;
@@ -356,7 +384,9 @@ unsafe extern "C" fn stack_overflow_handler(
         write_bytes!(b",\"function\":\"");
         let name = unsafe { CStr::from_ptr(fn_ptr) };
         let name_bytes = name.to_bytes();
-        let n = name_bytes.len().min(buf.len() - pos - 3);
+        let n = name_bytes
+            .len()
+            .min(buf.len().saturating_sub(pos).saturating_sub(3));
         buf[pos..pos + n].copy_from_slice(&name_bytes[..n]);
         pos += n;
         write_bytes!(b"\"");
@@ -394,7 +424,9 @@ unsafe extern "C" fn stack_overflow_handler(
         hwrite!(b" in ");
         let name = unsafe { CStr::from_ptr(fn_ptr) };
         let name_bytes = name.to_bytes();
-        let n = name_bytes.len().min(hbuf.len() - hpos - 1);
+        let n = name_bytes
+            .len()
+            .min(hbuf.len().saturating_sub(hpos).saturating_sub(1));
         hbuf[hpos..hpos + n].copy_from_slice(&name_bytes[..n]);
         hpos += n;
     }
@@ -417,7 +449,7 @@ fn format_i64_to_buf(mut val: i64, buf: &mut [u8; 20]) -> &[u8] {
     }
     let negative = val < 0;
     if negative {
-        val = val.wrapping_neg();
+        val = val.checked_neg().unwrap_or(i64::MAX);
     }
     let mut pos = 20;
     while val > 0 {
