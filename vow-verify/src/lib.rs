@@ -2,7 +2,7 @@ pub mod c_emitter;
 pub mod esbmc;
 pub mod solver_strategy;
 
-pub use c_emitter::detect_constant_functions;
+pub use c_emitter::{VerifyLimits, detect_constant_functions};
 pub use esbmc::{
     Counterexample, DEFAULT_MAX_K_STEP, VerificationResult, emit_verify_c_source, find_esbmc,
     parse_esbmc_output, run_esbmc_k_induction, run_esbmc_with_max_k_step, verify_function,

@@ -293,10 +293,13 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
         contracts_options[key] = value
         contracts_option_entries.append(option)
 
-    # --- Verification defaults from contracts.md ---
+    # --- Verification defaults (configurable via CLI flags) ---
     verification_defaults: dict[str, str | int] = {
         "strategy": "k-induction-parallel",
         "max_k_step": DEFAULT_MAX_K_STEP,
+        "vec_max": 128,
+        "string_max": 256,
+        "hashmap_max": 64,
     }
 
     return {
@@ -727,10 +730,12 @@ def build_help_human(data: dict) -> str:
 
     vdefaults = data.get("verification_defaults", {})
     if vdefaults:
-        lines.append("VERIFICATION")
-        lines.append(f"  Strategy      : {vdefaults.get('strategy', 'k-induction-parallel')} (incremental BMC + k-induction)")
-        lines.append(f"  Max k step    : {vdefaults.get('max_k_step', DEFAULT_MAX_K_STEP)} (default; override with --max-k-step)")
-        lines.append("  Containers    : unbounded (no artificial capacity limits)")
+        lines.append("VERIFICATION DEFAULTS (configurable via --max-k-step, --vec-max, --string-max, --hashmap-max)")
+        lines.append(f"  Strategy        : {vdefaults.get('strategy', 'k-induction-parallel')} (incremental BMC + k-induction)")
+        lines.append(f"  Max k step      : {vdefaults.get('max_k_step', DEFAULT_MAX_K_STEP)} max iterations (--max-k-step)")
+        lines.append(f"  Vec<T>          : {vdefaults.get('vec_max', 128)} max capacity")
+        lines.append(f"  String          : {vdefaults.get('string_max', 256)} max capacity")
+        lines.append(f"  HashMap<K, V>   : {vdefaults.get('hashmap_max', 64)} max capacity")
 
     return "\n".join(lines)
 

@@ -10,8 +10,8 @@ use vow_ir::{FuncId, Function, Module, Ty};
 use crate::solver_strategy::SolverConfig;
 
 use crate::c_emitter::{
-    ConstantValue, collect_modelable_callees, detect_constant_functions, emit_c_module,
-    emit_c_module_with_callees,
+    ConstantValue, VerifyLimits, collect_modelable_callees, detect_constant_functions,
+    emit_c_module, emit_c_module_with_callees,
 };
 
 // ---------------------------------------------------------------------------
@@ -204,7 +204,7 @@ fn save_esbmc_debug(esbmc: &std::path::Path, c_src: &str, func_name: &str, max_k
     let _ = std::fs::write(debug_dir.join(&c_name), c_src);
 
     let cmd = format!(
-        "{} /tmp/vow-verify-debug/{} --no-bounds-check --no-pointer-check --k-induction-parallel --max-k-step {} --64\n",
+        "{} /tmp/vow-verify-debug/{} --no-bounds-check --no-pointer-check --incremental-bmc --max-k-step {} --64\n",
         esbmc.display(),
         c_name,
         max_k_step,
@@ -216,36 +216,42 @@ fn save_esbmc_debug(esbmc: &std::path::Path, c_src: &str, func_name: &str, max_k
 // Verification entry point
 // ---------------------------------------------------------------------------
 
-pub fn verify_function(func: &Function) -> VerificationResult {
+pub fn verify_function(func: &Function, limits: &VerifyLimits) -> VerificationResult {
     let empty: HashMap<FuncId, ConstantValue> = HashMap::new();
-    verify_function_inner(func, &empty)
+    verify_function_inner(func, &empty, limits)
 }
 
-pub fn verify_function_with_module(func: &Function, module: &Module) -> VerificationResult {
+pub fn verify_function_with_module(
+    func: &Function,
+    module: &Module,
+    limits: &VerifyLimits,
+) -> VerificationResult {
     let const_fns = detect_constant_functions(module);
-    verify_function_with_module_and_const_fns(func, module, &const_fns)
+    verify_function_with_module_and_const_fns(func, module, &const_fns, limits)
 }
 
 pub fn verify_function_with_const_fns(
     func: &Function,
     const_fns: &HashMap<FuncId, ConstantValue>,
+    limits: &VerifyLimits,
 ) -> VerificationResult {
-    verify_function_inner(func, const_fns)
+    verify_function_inner(func, const_fns, limits)
 }
 
 pub fn emit_verify_c_source(
     func: &Function,
     module: &Module,
     const_fns: &HashMap<FuncId, ConstantValue>,
+    limits: &VerifyLimits,
 ) -> String {
     let mut modelable_cache = HashMap::new();
     let callee_ids = collect_modelable_callees(func, module, const_fns, &mut modelable_cache);
 
     let mut c_src = if callee_ids.is_empty() {
-        emit_c_module(&[func], const_fns)
+        emit_c_module(&[func], const_fns, limits)
     } else {
         let modelable_fns: std::collections::HashSet<FuncId> = callee_ids.iter().copied().collect();
-        emit_c_module_with_callees(func, module, const_fns, &callee_ids, &modelable_fns)
+        emit_c_module_with_callees(func, module, const_fns, &callee_ids, &modelable_fns, limits)
     };
     c_src.push_str(&emit_harness(func));
     c_src
@@ -257,12 +263,14 @@ pub fn verify_function_with_module_and_const_fns(
     func: &Function,
     module: &Module,
     const_fns: &HashMap<FuncId, ConstantValue>,
+    limits: &VerifyLimits,
 ) -> VerificationResult {
     verify_function_with_module_and_const_fns_with_max_k_step(
         func,
         module,
         const_fns,
-        DEFAULT_MAX_K_STEP,
+        limits.max_k_step,
+        limits,
     )
 }
 
@@ -271,10 +279,11 @@ pub fn verify_function_with_module_and_const_fns_with_max_k_step(
     module: &Module,
     const_fns: &HashMap<FuncId, ConstantValue>,
     max_k_step: u32,
+    limits: &VerifyLimits,
 ) -> VerificationResult {
     let config = SolverConfig::default_config();
     verify_function_with_module_and_const_fns_configured(
-        func, module, const_fns, max_k_step, &config,
+        func, module, const_fns, max_k_step, &config, limits,
     )
 }
 
@@ -284,26 +293,28 @@ pub fn verify_function_with_module_and_const_fns_configured(
     const_fns: &HashMap<FuncId, ConstantValue>,
     max_k_step: u32,
     config: &SolverConfig,
+    limits: &VerifyLimits,
 ) -> VerificationResult {
     let esbmc = match find_esbmc() {
         Some(p) => p,
         None => return VerificationResult::ToolNotFound,
     };
 
-    let c_src = emit_verify_c_source(func, module, const_fns);
+    let c_src = emit_verify_c_source(func, module, const_fns, limits);
     run_esbmc_with_max_k_step(&esbmc, &c_src, max_k_step, &func.name, config)
 }
 
 fn verify_function_inner(
     func: &Function,
     const_fns: &HashMap<FuncId, ConstantValue>,
+    limits: &VerifyLimits,
 ) -> VerificationResult {
     let esbmc = match find_esbmc() {
         Some(p) => p,
         None => return VerificationResult::ToolNotFound,
     };
 
-    let mut c_src = emit_c_module(&[func], const_fns);
+    let mut c_src = emit_c_module(&[func], const_fns, limits);
     c_src.push_str(&emit_harness(func));
 
     run_esbmc_k_induction(&esbmc, &c_src, &func.name)
@@ -347,7 +358,7 @@ pub fn run_esbmc_with_max_k_step(
     cmd.arg(tmp.path())
         .arg("--no-bounds-check")
         .arg("--no-pointer-check")
-        .arg("--k-induction-parallel")
+        .arg("--incremental-bmc")
         .arg("--max-k-step")
         .arg(max_k_step.to_string())
         .arg("--64");
@@ -588,7 +599,7 @@ mod tests {
     #[test]
     fn verify_trivially_true_ensures() {
         let func = trivially_true_func();
-        match verify_function(&func) {
+        match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Proven => {}
             VerificationResult::ToolNotFound => {
                 eprintln!("SKIP: esbmc not found");
@@ -600,7 +611,7 @@ mod tests {
     #[test]
     fn verify_trivially_false_ensures() {
         let func = trivially_false_func();
-        match verify_function(&func) {
+        match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Failed(_) => {}
             VerificationResult::ToolNotFound => {
                 eprintln!("SKIP: esbmc not found");
@@ -653,7 +664,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
         };
-        match verify_function(&func) {
+        match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Proven | VerificationResult::ToolNotFound => {}
             other => panic!("expected Proven or ToolNotFound, got {other:?}"),
         }
@@ -662,7 +673,7 @@ mod tests {
     #[test]
     fn verify_trivially_false_has_structured_counterexample() {
         let func = trivially_false_func();
-        match verify_function(&func) {
+        match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Failed(ce) => {
                 assert_eq!(ce.vow_id, Some(0), "vow_id should be 0");
                 assert!(!ce.raw_output.is_empty(), "raw_output should be non-empty");
@@ -965,7 +976,7 @@ VERIFICATION FAILED";
     #[test]
     fn verify_vec_push_ensures_len() {
         let func = vec_push_one_ensures_len_1();
-        match verify_function(&func) {
+        match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Proven => {}
             VerificationResult::ToolNotFound => {
                 eprintln!("SKIP: esbmc not found");
@@ -977,7 +988,7 @@ VERIFICATION FAILED";
     #[test]
     fn verify_vec_violated_len_contract() {
         let func = vec_empty_ensures_len_1_violated();
-        match verify_function(&func) {
+        match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Failed(ce) => {
                 assert_eq!(ce.vow_id, Some(0), "vow_id should be 0");
             }
@@ -1125,7 +1136,7 @@ VERIFICATION FAILED";
     #[test]
     fn verify_string_push_byte_ensures_len() {
         let func = string_push_byte_ensures_len_gt_0();
-        match verify_function(&func) {
+        match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Proven => {}
             VerificationResult::ToolNotFound => {
                 eprintln!("SKIP: esbmc not found");
@@ -1137,7 +1148,7 @@ VERIFICATION FAILED";
     #[test]
     fn verify_string_violated_len_contract() {
         let func = string_empty_ensures_len_gt_0_violated();
-        match verify_function(&func) {
+        match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Failed(ce) => {
                 assert_eq!(ce.vow_id, Some(0), "vow_id should be 0");
             }
@@ -1373,7 +1384,7 @@ VERIFICATION FAILED";
     #[test]
     fn verify_hashmap_insert_ensures_contains() {
         let func = hashmap_insert_ensures_contains();
-        match verify_function(&func) {
+        match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Proven => {}
             VerificationResult::ToolNotFound => {
                 eprintln!("SKIP: esbmc not found");
@@ -1385,7 +1396,7 @@ VERIFICATION FAILED";
     #[test]
     fn verify_hashmap_insert_ensures_len() {
         let func = hashmap_insert_ensures_len_1();
-        match verify_function(&func) {
+        match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Proven => {}
             VerificationResult::ToolNotFound => {
                 eprintln!("SKIP: esbmc not found");
@@ -1397,7 +1408,7 @@ VERIFICATION FAILED";
     #[test]
     fn verify_hashmap_violated_len_contract() {
         let func = hashmap_empty_ensures_len_1_violated();
-        match verify_function(&func) {
+        match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Failed(ce) => {
                 assert_eq!(ce.vow_id, Some(0), "vow_id should be 0");
             }

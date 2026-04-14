@@ -48,6 +48,29 @@ pub fn detect_constant_functions(module: &Module) -> HashMap<FuncId, ConstantVal
 }
 
 // ---------------------------------------------------------------------------
+// Verification limits for bounded model checking
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy)]
+pub struct VerifyLimits {
+    pub max_k_step: u32,
+    pub vec_max: usize,
+    pub string_max: usize,
+    pub hashmap_max: usize,
+}
+
+impl Default for VerifyLimits {
+    fn default() -> Self {
+        Self {
+            max_k_step: 50,
+            vec_max: 128,
+            string_max: 256,
+            hashmap_max: 64,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Type mapping
 // ---------------------------------------------------------------------------
 
@@ -417,6 +440,7 @@ fn emit_inst(
     const_fns: &HashMap<FuncId, ConstantValue>,
     modelable_fns: &HashSet<FuncId>,
     module: &Module,
+    limits: &VerifyLimits,
 ) {
     let id = inst.id.0;
     match inst.opcode {
@@ -680,9 +704,10 @@ fn emit_inst(
                     "__vow_vec_push_val" => {
                         let vec = inst.args[0].0;
                         let val = inst.args[1].0;
+                        let vec_max = limits.vec_max;
                         out.push_str(&format!(
-                            "  v{vec}.data = (int64_t*)realloc(v{vec}.data, sizeof(int64_t) * (size_t)(v{vec}.len + 1));\n\
-                             \x20 v{vec}.data[v{vec}.len] = v{val};\n  v{vec}.len++;\n"
+                            "  __ESBMC_assert(v{vec}.len < {vec_max}, \"vec capacity\");\n\
+                             \x20 v{vec}.data[v{vec}.len] = v{val};\n  v{vec}.len++;\n",
                         ));
                     }
                     "__vow_vec_get_val" => {
@@ -722,10 +747,10 @@ fn emit_inst(
             if let InstData::CallExtern(ref name) = inst.data {
                 match name.as_str() {
                     "__vow_string_from_cstr" => {
+                        let string_max = limits.string_max;
                         out.push_str(&format!(
                             "  v{id}.len = __VERIFIER_nondet_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < INT64_MAX);\n\
-                             \x20 v{id}.data = (v{id}.len > 0) ? (int8_t*)malloc((size_t)v{id}.len) : (int8_t*)0;\n"
+                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < {string_max});\n",
                         ));
                     }
                     "__vow_string_len" => {
@@ -740,9 +765,10 @@ fn emit_inst(
                     "__vow_string_push_byte" => {
                         let s = inst.args[0].0;
                         let byte = inst.args[1].0;
+                        let string_max = limits.string_max;
                         out.push_str(&format!(
-                            "  v{s}.data = (int8_t*)realloc(v{s}.data, (size_t)(v{s}.len + 1));\n\
-                             \x20 v{s}.data[v{s}.len] = (int8_t)v{byte};\n  v{s}.len++;\n"
+                            "  __ESBMC_assert(v{s}.len < {string_max}, \"string capacity\");\n\
+                             \x20 v{s}.data[v{s}.len] = (int8_t)v{byte};\n  v{s}.len++;\n",
                         ));
                     }
                     "__vow_string_byte_at" => {
@@ -787,14 +813,14 @@ fn emit_inst(
                         let s = inst.args[0].0;
                         let start = inst.args[1].0;
                         let end = inst.args[2].0;
+                        let string_max = limits.string_max;
                         out.push_str(&format!(
                             "  __ESBMC_assert(v{start} >= 0 && v{start} <= v{s}.len, \"substring start\");\n\
                              \x20 __ESBMC_assert(v{end} >= v{start} && v{end} <= v{s}.len, \"substring end\");\n\
                              \x20 v{id}.len = v{end} - v{start};\n\
-                             \x20 v{id}.data = (int8_t*)realloc((int8_t*)0, (size_t)(v{id}.len + 1));\n\
-                             \x20 for (int64_t __i = 0; __i < v{id}.len; __i++) {{\n\
+                             \x20 for (int64_t __i = 0; __i < v{id}.len && __i < {string_max}; __i++) {{\n\
                              \x20   v{id}.data[__i] = v{s}.data[v{start} + __i];\n\
-                             \x20 }}\n"
+                             \x20 }}\n",
                         ));
                     }
                     "__vow_string_parse_i64_opt" | "__vow_string_parse_u64_opt" => {
@@ -831,6 +857,7 @@ fn emit_inst(
                         let m = inst.args[0].0;
                         let k = inst.args[1].0;
                         let v = inst.args[2].0;
+                        let hashmap_max = limits.hashmap_max;
                         out.push_str(&format!(
                             "  {{\n\
                              \x20   _Bool __found = 0;\n\
@@ -838,8 +865,7 @@ fn emit_inst(
                              \x20     if (v{m}.keys[__i] == v{k}) {{ v{m}.vals[__i] = v{v}; __found = 1; break; }}\n\
                              \x20   }}\n\
                              \x20   if (!__found) {{\n\
-                             \x20     v{m}.keys = (int64_t*)realloc(v{m}.keys, sizeof(int64_t) * (size_t)(v{m}.len + 1));\n\
-                             \x20     v{m}.vals = (int64_t*)realloc(v{m}.vals, sizeof(int64_t) * (size_t)(v{m}.len + 1));\n\
+                             \x20     __ESBMC_assert(v{m}.len < {hashmap_max}, \"hashmap capacity\");\n\
                              \x20     v{m}.keys[v{m}.len] = v{k}; v{m}.vals[v{m}.len] = v{v}; v{m}.len++;\n\
                              \x20   }}\n\
                              \x20 }}\n"
@@ -1004,7 +1030,11 @@ fn c_nondet_suffix(ty: Ty) -> &'static str {
 // Function emission
 // ---------------------------------------------------------------------------
 
-pub fn emit_c_function(func: &Function, const_fns: &HashMap<FuncId, ConstantValue>) -> String {
+pub fn emit_c_function(
+    func: &Function,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+    limits: &VerifyLimits,
+) -> String {
     emit_c_function_full(
         func,
         const_fns,
@@ -1017,6 +1047,7 @@ pub fn emit_c_function(func: &Function, const_fns: &HashMap<FuncId, ConstantValu
             enum_layouts: vec![],
             warnings: vec![],
         },
+        limits,
     )
 }
 
@@ -1025,6 +1056,7 @@ pub fn emit_c_function_full(
     const_fns: &HashMap<FuncId, ConstantValue>,
     modelable_fns: &HashSet<FuncId>,
     module: &Module,
+    limits: &VerifyLimits,
 ) -> String {
     let mut out = String::new();
     let vec_vars = collect_typed_vars(func, "__vow_vec_new", "__vow_vec_");
@@ -1221,6 +1253,7 @@ pub fn emit_c_function_full(
                 const_fns,
                 modelable_fns,
                 module,
+                limits,
             );
         }
         // Emit Upsilons: read all sources first, then write all targets.
@@ -1243,6 +1276,7 @@ pub fn emit_c_function_full(
                 const_fns,
                 modelable_fns,
                 module,
+                limits,
             );
         }
     }
@@ -1277,7 +1311,7 @@ fn scan_shift_needs(funcs: &[&Function]) -> ShiftNeeds {
     needs
 }
 
-fn emit_c_preamble(out: &mut String, shifts: &ShiftNeeds) {
+fn emit_c_preamble(out: &mut String, shifts: &ShiftNeeds, limits: &VerifyLimits) {
     out.push_str("#include <stdint.h>\n");
     out.push_str("#include <stdlib.h>\n");
     out.push_str("#include <stdbool.h>\n");
@@ -1288,11 +1322,18 @@ fn emit_c_preamble(out: &mut String, shifts: &ShiftNeeds) {
     out.push_str("extern float __VERIFIER_nondet_float(void);\n");
     out.push_str("extern double __VERIFIER_nondet_double(void);\n");
     out.push_str("extern _Bool __VERIFIER_nondet_bool(void);\n\n");
-    out.push_str("typedef struct { int64_t len; int64_t* data; } __vow_vec_t;\n");
-    out.push_str("typedef struct { int64_t len; int8_t* data; } __vow_string_t;\n");
-    out.push_str(
-        "typedef struct { int64_t len; int64_t* keys; int64_t* vals; } __vow_hashmap_t;\n",
-    );
+    let vec_max = limits.vec_max;
+    let string_max = limits.string_max;
+    let hashmap_max = limits.hashmap_max;
+    out.push_str(&format!(
+        "typedef struct {{ int64_t len; int64_t data[{vec_max}]; }} __vow_vec_t;\n",
+    ));
+    out.push_str(&format!(
+        "typedef struct {{ int64_t len; int8_t data[{string_max}]; }} __vow_string_t;\n",
+    ));
+    out.push_str(&format!(
+        "typedef struct {{ int64_t len; int64_t keys[{hashmap_max}]; int64_t vals[{hashmap_max}]; }} __vow_hashmap_t;\n",
+    ));
     out.push_str("typedef struct { int64_t tag; int64_t payload; } __vow_option_t;\n");
     if shifts.shl_i64 {
         out.push_str(
@@ -1359,12 +1400,16 @@ fn emit_forward_declaration(func: &Function, out: &mut String) {
     out.push_str(&format!("{} {}({});\n", ret_c, func.name, param_str));
 }
 
-pub fn emit_c_module(funcs: &[&Function], const_fns: &HashMap<FuncId, ConstantValue>) -> String {
+pub fn emit_c_module(
+    funcs: &[&Function],
+    const_fns: &HashMap<FuncId, ConstantValue>,
+    limits: &VerifyLimits,
+) -> String {
     let mut out = String::new();
     let shifts = scan_shift_needs(funcs);
-    emit_c_preamble(&mut out, &shifts);
+    emit_c_preamble(&mut out, &shifts, limits);
     for func in funcs {
-        out.push_str(&emit_c_function(func, const_fns));
+        out.push_str(&emit_c_function(func, const_fns, limits));
         out.push('\n');
     }
     out
@@ -1378,6 +1423,7 @@ pub fn emit_c_module_with_callees(
     const_fns: &HashMap<FuncId, ConstantValue>,
     callee_ids: &[FuncId],
     modelable_fns: &HashSet<FuncId>,
+    limits: &VerifyLimits,
 ) -> String {
     let mut out = String::new();
 
@@ -1389,7 +1435,7 @@ pub fn emit_c_module_with_callees(
         }
     }
     let shifts = scan_shift_needs(&all_funcs);
-    emit_c_preamble(&mut out, &shifts);
+    emit_c_preamble(&mut out, &shifts, limits);
 
     // Forward declarations for all callees
     for fid in callee_ids {
@@ -1409,6 +1455,7 @@ pub fn emit_c_module_with_callees(
                 const_fns,
                 modelable_fns,
                 module,
+                limits,
             ));
             out.push('\n');
         }
@@ -1420,6 +1467,7 @@ pub fn emit_c_module_with_callees(
         const_fns,
         modelable_fns,
         module,
+        limits,
     ));
     out.push('\n');
     out
@@ -1474,7 +1522,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
         };
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("int64_t add("), "signature: {c}");
         assert!(c.contains("v2 = v0 + v1"), "add: {c}");
         assert!(c.contains("return v2"), "return: {c}");
@@ -1524,7 +1572,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
         };
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("__ESBMC_assume(v3)"), "requires: {c}");
         assert!(!c.contains("__ESBMC_assert"), "no assert for requires: {c}");
     }
@@ -1611,7 +1659,7 @@ mod tests {
                 inst(7, Opcode::Return, Ty::Unit, vec![], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("int32_t v0;"), "ConstI32 decl: {c}");
         assert!(c.contains("v0 = 7;"), "ConstI32 assign: {c}");
         assert!(c.contains("float v1;"), "ConstF32 decl: {c}");
@@ -1703,7 +1751,7 @@ mod tests {
                 inst(11, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("v0 - v1"), "sub: {c}");
         assert!(c.contains("v0 * v1"), "mul: {c}");
         assert!(c.contains("v0 / v1"), "div: {c}");
@@ -1732,7 +1780,7 @@ mod tests {
                 inst(12, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("v0 + v1"), "fadd: {c}");
         assert!(c.contains("v0 - v1"), "fsub: {c}");
         assert!(c.contains("v0 * v1"), "fmul: {c}");
@@ -1765,7 +1813,7 @@ mod tests {
                 inst(14, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("v0 == v1"), "eq: {c}");
         assert!(c.contains("v0 != v1"), "ne: {c}");
         assert!(c.contains("v0 < v1"), "lt: {c}");
@@ -1789,7 +1837,7 @@ mod tests {
                 inst(5, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("!v0"), "not: {c}");
         assert!(c.contains("v0 && v1"), "and: {c}");
         assert!(c.contains("v0 || v1"), "or: {c}");
@@ -1812,7 +1860,7 @@ mod tests {
                 inst(7, Opcode::Return, Ty::Unit, vec![6], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("v0 & v1"), "bitand: {c}");
         assert!(c.contains("v0 | v1"), "bitor: {c}");
         assert!(c.contains("v0 ^ v1"), "xor: {c}");
@@ -1834,7 +1882,7 @@ mod tests {
                 inst(4, Opcode::Return, Ty::Unit, vec![], InstData::None),
             ],
         );
-        let c = emit_c_module(&[&func], &HashMap::new());
+        let c = emit_c_module(&[&func], &HashMap::new(), &VerifyLimits::default());
         assert!(
             c.contains("static inline int64_t __vow_shl_i64"),
             "shl_i64 should be present: {c}"
@@ -1872,7 +1920,7 @@ mod tests {
                 inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
             ],
         );
-        let c = emit_c_module(&[&func], &HashMap::new());
+        let c = emit_c_module(&[&func], &HashMap::new(), &VerifyLimits::default());
         assert!(
             !c.contains("__vow_shl_i64"),
             "no shift helpers should be present: {c}"
@@ -1940,7 +1988,7 @@ mod tests {
             ],
             local_names: std::collections::HashMap::new(),
         };
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
             c.contains("if (v0) goto block1; else goto block2;"),
             "branch: {c}"
@@ -1977,7 +2025,7 @@ mod tests {
                 inst(3, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("int64_t v0;"), "phi declaration: {c}");
         assert!(c.contains("v0 = __ups_1;"), "upsilon assignment: {c}");
     }
@@ -2009,7 +2057,7 @@ mod tests {
                 inst(2, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("not modelled"), "not modelled comment: {c}");
         assert!(c.contains("__VERIFIER_nondet_long"), "nondet for I64: {c}");
     }
@@ -2040,7 +2088,7 @@ mod tests {
                 inst(2, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
             c.contains("__ESBMC_assert(v0, \"vow:2\")"),
             "invariant assert: {c}"
@@ -2055,7 +2103,7 @@ mod tests {
             Ty::Unit,
             vec![inst(0, Opcode::Return, Ty::Unit, vec![], InstData::None)],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("return 0;"), "void return: {c}");
     }
 
@@ -2076,7 +2124,7 @@ mod tests {
                 inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
         );
-        let out = emit_c_module(&[&f1, &f2], &HashMap::new());
+        let out = emit_c_module(&[&f1, &f2], &HashMap::new(), &VerifyLimits::default());
         assert!(out.contains("#include <stdint.h>"), "includes: {out}");
         assert!(out.contains("__ESBMC_assume"), "esbmc assume: {out}");
         assert!(out.contains("void f1(void)"), "f1 signature: {out}");
@@ -2123,7 +2171,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
         };
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("__ESBMC_assert(v0"), "ensures: {c}");
     }
 
@@ -2135,7 +2183,7 @@ mod tests {
             Ty::Unit,
             vec![inst(0, Opcode::Return, Ty::Unit, vec![], InstData::None)],
         );
-        let out = emit_c_module(&[&f], &HashMap::new());
+        let out = emit_c_module(&[&f], &HashMap::new(), &VerifyLimits::default());
         assert!(out.contains("__vow_vec_t"), "vec typedef: {out}");
         assert!(out.contains("int64_t len"), "vec len field: {out}");
         assert!(out.contains("int64_t* data"), "vec data ptr field: {out}");
@@ -2162,7 +2210,7 @@ mod tests {
                 inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("__vow_vec_t v2;"), "vec struct decl: {c}");
         assert!(c.contains("v2.len = 0;"), "vec len init: {c}");
         assert!(
@@ -2201,7 +2249,7 @@ mod tests {
                 inst(5, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
             !c.contains("vec capacity"),
             "push must NOT have capacity assertion: {c}"
@@ -2239,7 +2287,7 @@ mod tests {
                 inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("v3 = v2.len;"), "vec len: {c}");
     }
 
@@ -2273,7 +2321,7 @@ mod tests {
                 inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
             c.contains("__ESBMC_assert(v3 >= 0 && v3 < v2.len"),
             "bounds check: {c}"
@@ -2310,7 +2358,7 @@ mod tests {
                 inst(4, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("v2.len--;"), "pop decrement: {c}");
     }
 
@@ -2345,7 +2393,7 @@ mod tests {
                 inst(6, Opcode::Return, Ty::Unit, vec![], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
             c.contains("__ESBMC_assert(v3 >= 0 && v3 < v2.len"),
             "bounds check: {c}"
@@ -2398,7 +2446,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
         };
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("__vow_vec_t v0;"), "phi uses vec type: {c}");
     }
 
@@ -2421,7 +2469,7 @@ mod tests {
                 inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("not modelled"), "non-vec call still nondet: {c}");
         assert!(
             c.contains("__VERIFIER_nondet_long"),
@@ -2437,7 +2485,7 @@ mod tests {
             Ty::Unit,
             vec![inst(0, Opcode::Return, Ty::Unit, vec![], InstData::None)],
         );
-        let out = emit_c_module(&[&f], &HashMap::new());
+        let out = emit_c_module(&[&f], &HashMap::new(), &VerifyLimits::default());
         assert!(out.contains("__vow_string_t"), "string typedef: {out}");
         assert!(out.contains("int8_t* data"), "string data ptr field: {out}");
     }
@@ -2462,7 +2510,7 @@ mod tests {
                 inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("__vow_string_t v1;"), "string struct decl: {c}");
         assert!(
             c.contains("v1.len = __VERIFIER_nondet_long()"),
@@ -2506,7 +2554,7 @@ mod tests {
                 inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("v2 = v1.len;"), "string len: {c}");
     }
 
@@ -2539,7 +2587,7 @@ mod tests {
                 inst(4, Opcode::Return, Ty::Unit, vec![1], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
             !c.contains("string capacity"),
             "push_byte must NOT have capacity assertion: {c}"
@@ -2588,7 +2636,7 @@ mod tests {
                 inst(5, Opcode::Return, Ty::Unit, vec![1], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("v1.len += v3.len;"), "push_str: {c}");
     }
 
@@ -2621,7 +2669,7 @@ mod tests {
                 inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
             c.contains("__ESBMC_assert(v2 >= 0 && v2 < v1.len"),
             "bounds check: {c}"
@@ -2673,7 +2721,7 @@ mod tests {
                 inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
             c.contains("v4 = (v1.len == v3.len)"),
             "string eq length check: {c}"
@@ -2721,7 +2769,7 @@ mod tests {
                 inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("v4 = 0;"), "contains init: {c}");
         assert!(
             c.contains("v1.data[__i + __j] != v3.data[__j]"),
@@ -2773,7 +2821,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
         };
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
             c.contains("__vow_string_t v0;"),
             "phi uses string type: {c}"
@@ -2808,7 +2856,7 @@ mod tests {
                 inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
             c.contains("string print not modelled"),
             "print not modelled: {c}"
@@ -2836,7 +2884,7 @@ mod tests {
                 inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("__vow_hashmap_t v0;"), "hashmap decl: {c}");
         assert!(c.contains("v0.len = 0;"), "hashmap len init: {c}");
         assert!(
@@ -2872,7 +2920,7 @@ mod tests {
                 inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("v1 = v0.len;"), "hashmap len: {c}");
     }
 
@@ -2905,7 +2953,7 @@ mod tests {
                 inst(4, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("v0.keys[__i] == v1"), "key search: {c}");
         assert!(c.contains("v0.vals[__i] = v2"), "update existing: {c}");
         assert!(
@@ -2945,7 +2993,7 @@ mod tests {
                 inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("v2 = 0;"), "get default: {c}");
         assert!(c.contains("v0.keys[__i] == v1"), "get key search: {c}");
         assert!(c.contains("v2 = v0.vals[__i]"), "get reads value: {c}");
@@ -2979,7 +3027,7 @@ mod tests {
                 inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("v2 = 0;"), "contains default: {c}");
         assert!(c.contains("v0.keys[__i] == v1"), "contains key search: {c}");
         assert!(c.contains("v2 = 1"), "contains sets true: {c}");
@@ -3013,7 +3061,7 @@ mod tests {
                 inst(3, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
         );
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("v0.keys[__i] == v1"), "remove key search: {c}");
         assert!(c.contains("v0.len--"), "remove decrements len: {c}");
     }
@@ -3061,7 +3109,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
         };
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
             c.contains("__vow_hashmap_t v0;"),
             "phi uses hashmap type: {c}"
@@ -3076,7 +3124,7 @@ mod tests {
             Ty::Unit,
             vec![inst(0, Opcode::Return, Ty::Unit, vec![], InstData::None)],
         );
-        let c = emit_c_module(&[&func], &HashMap::new());
+        let c = emit_c_module(&[&func], &HashMap::new(), &VerifyLimits::default());
         assert!(
             c.contains("__vow_hashmap_t"),
             "hashmap typedef in header: {c}"
@@ -3131,7 +3179,7 @@ mod tests {
             ],
             local_names: std::collections::HashMap::new(),
         };
-        let c = emit_c_function(&func, &HashMap::new());
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("int __blk_0 = 0;"), "blk_0 decl: {c}");
         assert!(c.contains("int __blk_1 = 0;"), "blk_1 decl: {c}");
         assert!(c.contains("int __blk_2 = 0;"), "blk_2 decl: {c}");
@@ -3296,6 +3344,7 @@ mod tests {
             &const_fns,
             &HashSet::new(),
             &empty_module,
+            &VerifyLimits::default(),
         );
         assert!(out.contains("v5 = 42LL;"), "inlined constant: {out}");
     }
@@ -3329,6 +3378,7 @@ mod tests {
             &HashMap::new(),
             &HashSet::new(),
             &empty_module,
+            &VerifyLimits::default(),
         );
         assert!(
             out.contains("__VERIFIER_nondet_long()"),
