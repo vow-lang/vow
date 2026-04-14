@@ -1488,14 +1488,14 @@ fn emit_forward_declaration(out: String, f: IrFunction) {
     out.push_str(str5(ret_c, String::from(" "), f.name, String::from("("), str2(param_str, String::from(");\n"))));
 }
 
-fn emit_c_module(m: IrModule) -> String {
+fn emit_c_module(m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64) -> String {
     let fns: Vec<IrFunction> = m.functions;
     let n: i64 = fns.len();
     let need_shl_i64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHL_I64());
     let need_shr_i64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHR_I64());
     let need_shl_u64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHL_U64());
     let need_shr_u64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHR_U64());
-    let out: String = cemit_preamble(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64);
+    let out: String = cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, vec_max, string_max, hashmap_max);
 
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
     let empty_modelable: Vec<i64> = Vec::new();
@@ -1503,7 +1503,7 @@ fn emit_c_module(m: IrModule) -> String {
     let mut fi: i64 = 0;
     while fi < fns.len() {
         let f: IrFunction = fns[fi];
-        emit_c_function(out, f, const_fn_indices, empty_modelable, m, VOW_VEC_MAX(), VOW_STRING_MAX(), VOW_HASHMAP_MAX());
+        emit_c_function(out, f, const_fn_indices, empty_modelable, m, vec_max, string_max, hashmap_max);
         out.push_byte(10);
         fi = fi + 1;
     }

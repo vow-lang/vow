@@ -146,7 +146,7 @@ def normalize_option(
         option["value_kind"] = "enum"
         option["values"] = ["off", "calls", "full"]
         option["default"] = default
-    elif normalized_flag == "--max-k-step <N>":
+    elif normalized_flag in ("--max-k-step <N>", "--vec-max <N>", "--string-max <N>", "--hashmap-max <N>"):
         option["default"] = int(default) if default.isdigit() else default
     elif output_default is not None:
         option["default"] = output_default

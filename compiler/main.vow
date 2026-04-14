@@ -552,6 +552,14 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
         else { 30000 }
     };
     let do_verify: bool = has_flag(argv, String::from("--verify"));
+    let t_mks_str: String = get_flag_arg(argv, String::from("--max-k-step"));
+    let t_max_k_step: String = { if t_mks_str.len() > 0 { t_mks_str } else { String::from("50") } };
+    let t_vm_str: String = get_flag_arg(argv, String::from("--vec-max"));
+    let t_vec_max: i64 = { if t_vm_str.len() > 0 { parse_i64(t_vm_str) } else { 128 } };
+    let t_sm_str: String = get_flag_arg(argv, String::from("--string-max"));
+    let t_string_max: i64 = { if t_sm_str.len() > 0 { parse_i64(t_sm_str) } else { 256 } };
+    let t_hm_str: String = get_flag_arg(argv, String::from("--hashmap-max"));
+    let t_hashmap_max: i64 = { if t_hm_str.len() > 0 { parse_i64(t_hm_str) } else { 64 } };
 
     // Validate path exists
     if fs_exists(path) == 0 {
@@ -639,7 +647,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                     let vf: IrFunction = vfns[vfi];
                     let vows: Vec<IrVowEntry> = vf.vows;
                     if vows.len() > 0 {
-                        let vh: i64 = verify_start(vf, ir_mod, String::from("50"), vfi, false, String::from(""), String::from(""), VOW_VEC_MAX(), VOW_STRING_MAX(), VOW_HASHMAP_MAX());
+                        let vh: i64 = verify_start(vf, ir_mod, t_max_k_step, vfi, false, String::from(""), String::from(""), t_vec_max, t_string_max, t_hashmap_max);
                         if vh != -1 && vh != -2 {
                             let vr: VerifyResult = verify_collect(vh, vf);
                             if vr.status == VERIFY_FAILED() {
@@ -821,7 +829,7 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
             }
         } else if emit_c {
             emit_ir_warnings(ir_mod, dctx);
-            let c_code: String = emit_c_module(ir_mod);
+            let c_code: String = emit_c_module(ir_mod, VOW_VEC_MAX(), VOW_STRING_MAX(), VOW_HASHMAP_MAX());
             print_str(c_code);
         } else if has_output {
             let out: String = get_flag_arg(argv, String::from("-o"));

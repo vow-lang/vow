@@ -1174,9 +1174,9 @@ fn skill_json() -> String {
   "verification_defaults": {
     "strategy": "k-induction-parallel",
     "max_k_step": 50,
-    "Vec<T>": 128,
-    "String": 256,
-    "HashMap<K, V>": 64
+    "vec_max": 128,
+    "string_max": 256,
+    "hashmap_max": 64
   }
 }"##
     .to_string()
@@ -5543,6 +5543,13 @@ fn run_test_command(
 // Entry point
 // ---------------------------------------------------------------------------
 
+fn validate_limits(limits: &VerifyLimits) {
+    if limits.vec_max == 0 || limits.string_max == 0 || limits.hashmap_max == 0 {
+        eprintln!("error: --vec-max, --string-max, and --hashmap-max must be >= 1");
+        std::process::exit(1);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_build_command(
     source: &Path,
@@ -5856,6 +5863,7 @@ fn main() {
                 string_max: b.string_max,
                 hashmap_max: b.hashmap_max,
             };
+            validate_limits(&limits);
             let bconfig = make_solver_config(b.solver, b.encoding, b.timeout);
             run_build_command(
                 &source,
@@ -5891,6 +5899,7 @@ fn main() {
                 string_max: v.string_max,
                 hashmap_max: v.hashmap_max,
             };
+            validate_limits(&limits);
             let config = make_solver_config(v.solver, v.encoding, v.timeout);
             run_verify_command(&source, v.no_cache, &limits, &config);
         }
@@ -5919,6 +5928,7 @@ fn main() {
                 string_max: t.string_max,
                 hashmap_max: t.hashmap_max,
             };
+            validate_limits(&limits);
             run_test_command(
                 &path,
                 t.verify,
@@ -5968,6 +5978,7 @@ fn main() {
                 string_max: c.string_max,
                 hashmap_max: c.hashmap_max,
             };
+            validate_limits(&limits);
             let config = make_solver_config(c.solver, c.encoding, c.timeout);
             run_contracts_command(
                 &source,
@@ -6031,6 +6042,7 @@ fn main() {
                 string_max: args.string_max,
                 hashmap_max: args.hashmap_max,
             };
+            validate_limits(&limits);
             let config = make_solver_config(args.solver, args.encoding, args.timeout);
             run_build_command(
                 &source,
