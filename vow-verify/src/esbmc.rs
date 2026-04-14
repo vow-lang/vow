@@ -245,10 +245,21 @@ pub fn emit_verify_c_source(
     c_src
 }
 
+pub const DEFAULT_UNWIND: u32 = 10;
+
 pub fn verify_function_with_module_and_const_fns(
     func: &Function,
     module: &Module,
     const_fns: &HashMap<FuncId, ConstantValue>,
+) -> VerificationResult {
+    verify_function_with_module_and_const_fns_with_unwind(func, module, const_fns, DEFAULT_UNWIND)
+}
+
+pub fn verify_function_with_module_and_const_fns_with_unwind(
+    func: &Function,
+    module: &Module,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+    unwind: u32,
 ) -> VerificationResult {
     let esbmc = match find_esbmc() {
         Some(p) => p,
@@ -256,7 +267,7 @@ pub fn verify_function_with_module_and_const_fns(
     };
 
     let c_src = emit_verify_c_source(func, module, const_fns);
-    run_esbmc(&esbmc, &c_src, &func.name)
+    run_esbmc_with_unwind(&esbmc, &c_src, unwind, &func.name)
 }
 
 fn verify_function_inner(
@@ -275,6 +286,15 @@ fn verify_function_inner(
 }
 
 pub fn run_esbmc(esbmc: &std::path::Path, c_src: &str, func_name: &str) -> VerificationResult {
+    run_esbmc_with_unwind(esbmc, c_src, DEFAULT_UNWIND, func_name)
+}
+
+pub fn run_esbmc_with_unwind(
+    esbmc: &std::path::Path,
+    c_src: &str,
+    unwind: u32,
+    func_name: &str,
+) -> VerificationResult {
     let mut tmp = match tempfile::Builder::new().suffix(".c").tempfile() {
         Ok(f) => f,
         Err(e) => return VerificationResult::ToolError(e.to_string()),
@@ -293,7 +313,7 @@ pub fn run_esbmc(esbmc: &std::path::Path, c_src: &str, func_name: &str) -> Verif
         .arg("--no-bounds-check")
         .arg("--no-pointer-check")
         .arg("--unwind")
-        .arg("10")
+        .arg(unwind.to_string())
         .arg("--64")
         .output()
     {

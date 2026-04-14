@@ -39,12 +39,12 @@
     },
     "verify_status": {
       "type": "string",
-      "enum": ["timeout", "error"],
-      "description": "Verification sub-status (present only on timeout or tool error)"
+      "enum": ["timeout", "error", "tool_not_found"],
+      "description": "Verification sub-status (present only when the verification backend did not produce a proof or counterexample)"
     },
     "verify_message": {
       "type": "string",
-      "description": "Verification error message (present only when verify_status is error)"
+      "description": "Verification backend error detail (present only when verify_status is set)"
     }
   },
   "allOf": [

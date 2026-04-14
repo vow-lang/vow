@@ -30,6 +30,9 @@ SCHEMAS_DIR = SPEC_DIR / "schemas"
 MAIN_RS = REPO / "vow" / "src" / "main.rs"
 MAIN_VOW = REPO / "compiler" / "main.vow"
 
+SCHEMA_VERSION = "2"
+DEFAULT_UNWIND = 10
+
 
 # ---------------------------------------------------------------------------
 # Markdown table extraction
@@ -46,8 +49,7 @@ def _split_table_row(line: str) -> list[str]:
 
 def extract_table(text: str, heading: str, *, heading_level: int = 3) -> list[list[str]]:
     """Extract rows from a markdown table under a heading.
-    Returns list of rows, each row is a list of cell strings (backticks stripped).
-    Collects rows from all tables in the section, including sub-sections."""
+    Returns list of rows, each row is a list of cell strings (backticks stripped)."""
     prefix = "#" * heading_level + " "
     in_section = False
     in_table = False
@@ -79,6 +81,77 @@ def extract_table(text: str, heading: str, *, heading_level: int = 3) -> list[li
 def extract_table_col(text: str, heading: str, col: int = 0, **kw) -> list[str]:
     """Extract a single column from a markdown table."""
     return [row[col] for row in extract_table(text, heading, **kw) if col < len(row)]
+
+
+def normalize_option(
+    flag: str,
+    default: str,
+    desc: str,
+    *,
+    output_default: str | None = None,
+    merge_mode: bool = False,
+) -> tuple[str, str, dict]:
+    """Normalize an option row for both legacy dict output and structured help."""
+    default = default.strip("`")
+    description = desc
+    normalized_flag = flag
+
+    if merge_mode:
+        normalized_flag = "--mode <debug|release>"
+        description = (
+            f"Build mode; debug inserts runtime vow checks (default: {default})"
+        )
+    elif flag == "-o, --output":
+        normalized_flag = "-o, --output <path>"
+        if output_default is not None:
+            description = f"{desc} (default: {output_default})"
+    elif default not in ("", "(off)", "(default)") and not desc.endswith(")"):
+        description = f"{desc} (default: {default})"
+
+    option: dict[str, object] = {
+        "form": normalized_flag,
+        "description": description,
+    }
+
+    if normalized_flag.startswith("-o, --output"):
+        option["short"] = "-o"
+        option["long"] = "--output"
+        option["value_name"] = "path"
+        option["value_kind"] = "path"
+    else:
+        head, _, tail = normalized_flag.partition(" ")
+        option["long"] = head
+        if tail:
+            value_name = tail.strip()[1:-1]
+            option["value_name"] = value_name
+            if value_name == "N":
+                option["value_kind"] = "integer"
+            elif "|" in value_name:
+                option["value_kind"] = "enum"
+                option["values"] = value_name.split("|")
+            else:
+                option["value_kind"] = "string"
+        else:
+            option["value_kind"] = "flag"
+
+    if normalized_flag == "--mode <debug|release>":
+        option["value_name"] = "mode"
+        option["value_kind"] = "enum"
+        option["values"] = ["debug", "release"]
+        option["default"] = default
+    elif normalized_flag == "--debug-trace <off|calls|full>":
+        option["value_name"] = "trace"
+        option["value_kind"] = "enum"
+        option["values"] = ["off", "calls", "full"]
+        option["default"] = default
+    elif normalized_flag == "--unwind <N>":
+        option["default"] = int(default) if default.isdigit() else default
+    elif output_default is not None:
+        option["default"] = output_default
+    elif default not in ("", "(off)", "(default)"):
+        option["default"] = default
+
+    return normalized_flag, description, option
 
 
 # ---------------------------------------------------------------------------
@@ -128,68 +201,99 @@ def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
             example = row[1]
             patterns.append(f"{kind} ({example})")
 
-    # --- CLI: build options ---
+    # --- CLI: command options ---
     build_opt_rows = extract_table(cli, "vow build", heading_level=3)
     build_options: dict[str, str] = {}
+    build_option_entries: list[dict] = []
     for row in build_opt_rows:
-        if len(row) >= 3:
-            flag, default, desc = row[0], row[1], row[2]
-            # Merge --mode debug / --mode release into a single entry
-            if flag == "--mode debug":
-                build_options["--mode <debug|release>"] = (
-                    f"Build mode; debug inserts runtime vow checks (default: {default})"
-                )
-                continue
-            if flag == "--mode release":
-                continue
-            # Add default to description if meaningful
-            desc_with_default = desc
-            if default not in ("", "(off)") and not desc.endswith(")"):
-                desc_with_default = f"{desc} (default: {default})"
-            # Normalize flag display: -o, --output → -o, --output <path>
-            if flag == "-o, --output":
-                flag = "-o, --output <path>"
-                desc_with_default = f"{desc} (default: source without .vow extension)"
-            build_options[flag] = desc_with_default
+        if len(row) < 3:
+            continue
+        flag, default, desc = row[0], row[1], row[2]
+        if flag == "--mode debug":
+            key, value, option = normalize_option(
+                flag,
+                default,
+                desc,
+                merge_mode=True,
+            )
+            build_options[key] = value
+            build_option_entries.append(option)
+            continue
+        if flag == "--mode release":
+            continue
+        key, value, option = normalize_option(
+            flag,
+            default,
+            desc,
+            output_default="source without .vow extension" if flag == "-o, --output" else None,
+        )
+        build_options[key] = value
+        build_option_entries.append(option)
 
-    # --- CLI: verify options ---
     verify_opt_rows = extract_table(cli, "vow verify", heading_level=3)
-    verify_options = {}
+    verify_options: dict[str, str] = {}
+    verify_option_entries: list[dict] = []
     for row in verify_opt_rows:
-        if len(row) >= 3:
-            flag, _default, desc = row[0], row[1], row[2]
-            verify_options[flag] = desc
+        if len(row) < 3:
+            continue
+        key, value, option = normalize_option(row[0], row[1], row[2])
+        verify_options[key] = value
+        verify_option_entries.append(option)
 
-    # --- CLI: test options ---
+    decl_opt_rows = extract_table(cli, "vow decl", heading_level=3)
+    decl_options: dict[str, str] = {}
+    decl_option_entries: list[dict] = []
+    for row in decl_opt_rows:
+        if len(row) < 3:
+            continue
+        key, value, option = normalize_option(
+            row[0],
+            row[1],
+            row[2],
+            output_default="<source>.vow.d" if row[0] == "-o, --output" else None,
+        )
+        decl_options[key] = value
+        decl_option_entries.append(option)
+
     test_opt_rows = extract_table(cli, "vow test", heading_level=3)
-    test_options = {}
+    test_options: dict[str, str] = {}
+    test_option_entries: list[dict] = []
     for row in test_opt_rows:
-        if len(row) >= 3:
-            flag, default, desc = row[0], row[1], row[2]
-            if flag == "--mode debug":
-                test_options["--mode <debug|release>"] = (
-                    f"Build mode; debug inserts runtime vow checks (default: {default})"
-                )
-                continue
-            if flag == "--mode release":
-                continue
-            desc_with_default = desc
-            if default not in ("", "(off)", "(none)") and not desc.endswith(")"):
-                desc_with_default = f"{desc} (default: {default})"
-            test_options[flag] = desc_with_default
+        if len(row) < 3:
+            continue
+        flag, default, desc = row[0], row[1], row[2]
+        if flag.startswith("<"):
+            continue
+        if flag == "--mode debug":
+            key, value, option = normalize_option(
+                flag,
+                default,
+                desc,
+                merge_mode=True,
+            )
+            test_options[key] = value
+            test_option_entries.append(option)
+            continue
+        if flag == "--mode release":
+            continue
+        key, value, option = normalize_option(flag, default, desc)
+        test_options[key] = value
+        test_option_entries.append(option)
 
-    # --- CLI: contracts options ---
     contracts_opt_rows = extract_table(cli, "vow contracts", heading_level=3)
-    contracts_options = {}
+    contracts_options: dict[str, str] = {}
+    contracts_option_entries: list[dict] = []
     for row in contracts_opt_rows:
-        if len(row) >= 3:
-            flag, _default, desc = row[0], row[1], row[2]
-            contracts_options[flag] = desc
+        if len(row) < 3:
+            continue
+        key, value, option = normalize_option(row[0], row[1], row[2])
+        contracts_options[key] = value
+        contracts_option_entries.append(option)
 
     # --- Verification limits from contracts.md ---
     collection_rows = extract_table(contracts, "Collection Models for Verification")
     verification_limits: dict[str, str | int] = {
-        "loop_unwind": 10,
+        "loop_unwind": DEFAULT_UNWIND,
     }
     for row in collection_rows:
         if len(row) >= 2:
@@ -198,9 +302,38 @@ def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
             verification_limits[type_name] = capacity
 
     return {
+        "schema_version": SCHEMA_VERSION,
+        "kind": "tool_help",
         "tool": "vow",
+        "audience": "agent",
+        "default_format": "json",
         "description": "Vow compiler: compiles Vow source to native executables with contract verification",
         "usage": "vow <command> [OPTIONS] <source.vow>",
+        "legacy_usage": "vow [OPTIONS] <source.vow> (equivalent to vow build)",
+        "references": {
+            "grammar": "docs/skill/grammar.md",
+            "cli": "docs/skill/cli.md",
+            "errors": "docs/skill/errors.md",
+            "examples": "docs/skill/examples.md",
+            "schemas": {
+                "build_result": "docs/skill/schemas/build-result.schema.json",
+                "contracts_result": "docs/skill/schemas/contracts-result.schema.json",
+                "diagnostic": "docs/skill/schemas/diagnostic.schema.json",
+                "counterexample": "docs/skill/schemas/counterexample.schema.json",
+                "vow_violation": "docs/skill/schemas/vow-violation.schema.json",
+            },
+        },
+        "invocation": {
+            "canonical": "vow <command> [OPTIONS] <source.vow>",
+            "default_command": "build",
+            "legacy_equivalent": "vow [OPTIONS] <source.vow>",
+            "source_argument": {
+                "name": "source",
+                "kind": "path",
+                "required": True,
+                "suffix": ".vow",
+            },
+        },
         "commands": {
             "build": "Compile source to native executable (verifies by default; use --no-verify to skip)",
             "verify": "Verify contracts without producing an executable (use --no-cache to skip cache)",
@@ -209,14 +342,133 @@ def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
             "contracts": "List all contracts with optional verification status",
             "skill": "Generate or install the Claude Code skill document for this compiler version",
         },
-        "legacy_usage": "vow [OPTIONS] <source.vow> (equivalent to vow build)",
+        "command_details": {
+            "build": {
+                "status": "implemented",
+                "usage": "vow build [OPTIONS] <source.vow>",
+                "default_when_command_omitted": True,
+                "arguments": [
+                    {"name": "source", "kind": "path", "required": True, "suffix": ".vow"}
+                ],
+                "options": build_option_entries,
+                "stdout": {
+                    "format": "json",
+                    "schema_ref": "docs/skill/schemas/build-result.schema.json",
+                    "suppressed_by": ["--dump-ir"],
+                },
+                "stderr": {
+                    "channels": ["diagnostic stream", "debug trace"],
+                    "debug_trace_flag": "--debug-trace <off|calls|full>",
+                },
+                "notes": [
+                    "verification is enabled by default",
+                    "debug mode inserts runtime vow checks",
+                ],
+            },
+            "verify": {
+                "status": "implemented",
+                "usage": "vow verify [OPTIONS] <source.vow>",
+                "arguments": [
+                    {"name": "source", "kind": "path", "required": True, "suffix": ".vow"}
+                ],
+                "options": verify_option_entries,
+                "stdout": {
+                    "format": "json",
+                    "schema_ref": "docs/skill/schemas/build-result.schema.json",
+                    "fixed_fields": {"executable": None},
+                },
+                "notes": [
+                    "runs verification only and never emits a binary",
+                ],
+            },
+            "test": {
+                "status": "implemented",
+                "usage": "vow test [OPTIONS] [<path>]",
+                "arguments": [
+                    {
+                        "name": "path",
+                        "kind": "path",
+                        "required": False,
+                        "default": ".",
+                        "description": "Directory to scan or single .vow file",
+                    }
+                ],
+                "options": test_option_entries,
+                "stdout": {
+                    "format": "json",
+                },
+                "notes": [
+                    "discovers test_*.vow and *_test.vow files",
+                    "each test must contain main() -> i32 returning 0 on success",
+                    "default mode is debug (runtime vow checks enabled)",
+                ],
+            },
+            "decl": {
+                "status": "implemented",
+                "usage": "vow decl [OPTIONS] <source.vow>",
+                "arguments": [
+                    {"name": "source", "kind": "path", "required": True, "suffix": ".vow"}
+                ],
+                "options": decl_option_entries,
+                "stdout": {"format": "none"},
+                "side_effects": [
+                    {
+                        "kind": "write_file",
+                        "default_path": "<source>.vow.d",
+                    }
+                ],
+            },
+            "contracts": {
+                "status": "implemented",
+                "usage": "vow contracts [OPTIONS] <source.vow>",
+                "arguments": [
+                    {"name": "source", "kind": "path", "required": True, "suffix": ".vow"}
+                ],
+                "options": contracts_option_entries,
+                "stdout": {
+                    "format": "json",
+                    "schema_ref": "docs/skill/schemas/contracts-result.schema.json",
+                },
+                "notes": [
+                    "runs frontend only by default",
+                    "use --verify for per-contract ESBMC status",
+                ],
+            },
+        },
         "build_options": build_options,
         "verify_options": verify_options,
         "test_options": test_options,
+        "decl_options": decl_options,
         "contracts_options": contracts_options,
         "global_options": {
-            "--help": "Print this JSON capability description",
-            "--help --human": "Print human-readable capability description",
+            "--help": "Emit versioned JSON tool-help data",
+            "--help --human": "Emit legacy human-readable help (compatibility mode)",
+        },
+        "outputs": {
+            "build_result": {
+                "schema_ref": "docs/skill/schemas/build-result.schema.json",
+                "emitted_by": ["build", "verify"],
+                "status_values": ["Verified", "Unverified", "CompileFailed", "VerifyFailed"],
+                "legacy_fields": ["counterexample"],
+            },
+            "contracts_result": {
+                "schema_ref": "docs/skill/schemas/contracts-result.schema.json",
+                "emitted_by": ["contracts"],
+            },
+            "diagnostic": {
+                "schema_ref": "docs/skill/schemas/diagnostic.schema.json",
+                "embedded_in": "build_result.diagnostics",
+            },
+            "runtime_vow_violation": {
+                "schema_ref": "docs/skill/schemas/vow-violation.schema.json",
+                "emitted_on": "stderr",
+                "requires_mode": "debug",
+            },
+            "runtime_trace": {
+                "emitted_on": "stderr",
+                "enabled_by": "--debug-trace <off|calls|full>",
+                "format": "jsonl",
+            },
         },
         "output_json": {
             "status": "Verified | Unverified | CompileFailed | VerifyFailed",
@@ -226,6 +478,17 @@ def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
             "function": "function name (VerifyFailed)",
             "counterexample": "ESBMC counterexample description (VerifyFailed)",
         },
+        "diagnostics": {
+            "schema_ref": "docs/skill/schemas/diagnostic.schema.json",
+            "fields": [
+                "error_code",
+                "message",
+                "severity",
+                "span.file",
+                "span.offset",
+                "span.length",
+            ],
+        },
         "exit_codes": {
             "0": "success (Verified or Unverified)",
             "1": "failure (CompileFailed or VerifyFailed)",
@@ -233,10 +496,20 @@ def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
         "language": {
             "module": "module <Name>",
             "use_declaration": "use foo.bar",
+            "const_declaration": "const NAME: i64 = 1024",
+            "comments": "// line comments only; block comments unsupported",
+            "let_binding": "let name: Type = expr; or let mut name: Type = expr;",
             "function": "fn <name>(<params>) -> <RetTy> [<effects>] { <body> }",
             "public_function": "pub fn <name>(<params>) -> <RetTy> [<effects>] { <body> }",
             "vow_function": "fn <name>(<params>) -> <RetTy> vow { requires: <expr>; ensures: <expr> } { <body> }",
             "while_with_invariant": "while <cond> vow { invariant: <expr> } { <body> }",
+            "literals": {
+                "integer": "42 | -1 | 42u64 (unsuffixed integers default to i64)",
+                "float": "3.14 | -0.5",
+                "bool": "true | false",
+                "string": "\"text\" with escapes \\n \\t \\r \\\\ \\\" \\0",
+            },
+            "casts": "x as u64 or y as i64",
             "types": all_types,
             "effects": effects,
             "builtins": builtins,
@@ -291,9 +564,33 @@ def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
                 "HashMap<K,V>": hashmap_methods,
                 "Option<T>": option_methods,
             },
+            "error_propagation": "? on Option<T> or Result<T, E> propagates None/Err to the caller",
             "indexing": {
                 "read": "v[i] \u2014 Vec index access",
                 "write": "v[i] = val \u2014 Vec index assignment",
+            },
+            "feature_status": {
+                "implemented": {
+                    "function_vow_blocks": "requires / ensures / invariant",
+                    "where_clauses": "parameter-level refinement sugar",
+                    "loop_invariants": "simple invariant predicates",
+                },
+                "partial": {
+                    "refinement_type_predicates": "parsed but semantically erased; use where clauses or function vows for verification",
+                    "effect_tracking": "user-defined effect propagation is enforced; some builtin panic/unsafe effects are not yet modeled",
+                },
+                "target": {
+                    "module_level_vow_blocks": "specified in docs but not parsed or represented in the AST",
+                    "quantifiers": "forall / exists are not yet in the lexer or parser",
+                },
+                "unsupported": [
+                    "user-defined generics",
+                    "traits",
+                    "closures",
+                    "operator overloading",
+                    "macros",
+                    "assert / assume statements",
+                ],
             },
         },
         "verification_limits": verification_limits,
@@ -311,7 +608,7 @@ def build_help_human(data: dict) -> str:
     lines.append("USAGE")
     lines.append("  vow build [OPTIONS] <source.vow>    Compile to native executable")
     lines.append("  vow verify [OPTIONS] <source.vow>    Verify contracts only (no executable)")
-    lines.append("  vow test [OPTIONS] [<path>]          Run tests (test_*.vow / *_test.vow)")
+    lines.append("  vow test [OPTIONS] [<path>]          Run tests with JSON results")
     lines.append("  vow contracts [OPTIONS] <source.vow> List all contracts")
     lines.append("  vow decl [OPTIONS] <source.vow>    Emit declaration file (.vow.d)")
     lines.append("  vow skill [print|install]           Generate or install Claude Code skill")
@@ -330,11 +627,12 @@ def build_help_human(data: dict) -> str:
         lines.append(f"  {flag:<{pad}s}{desc}")
     lines.append("")
 
-    lines.append("TEST OPTIONS")
-    for flag, desc in data["test_options"].items():
-        pad = max(24, len(flag) + 2)
-        lines.append(f"  {flag:<{pad}s}{desc}")
-    lines.append("")
+    if data.get("test_options"):
+        lines.append("TEST OPTIONS")
+        for flag, desc in data["test_options"].items():
+            pad = max(24, len(flag) + 2)
+            lines.append(f"  {flag:<{pad}s}{desc}")
+        lines.append("")
 
     lines.append("CONTRACTS OPTIONS")
     for flag, desc in data.get("contracts_options", {}).items():
@@ -342,9 +640,16 @@ def build_help_human(data: dict) -> str:
         lines.append(f"  {flag:<{pad}s}{desc}")
     lines.append("")
 
+    if data.get("decl_options"):
+        lines.append("DECL OPTIONS")
+        for flag, desc in data["decl_options"].items():
+            pad = max(24, len(flag) + 2)
+            lines.append(f"  {flag:<{pad}s}{desc}")
+        lines.append("")
+
     lines.append("GLOBAL OPTIONS")
-    lines.append("  --help                Print JSON capability description (agent-friendly)")
-    lines.append("  --help --human        Print this text")
+    lines.append("  --help                Emit versioned JSON tool-help data")
+    lines.append("  --help --human        Emit legacy text help")
     lines.append("")
 
     lines.append("OUTPUT (JSON on stdout)")
@@ -423,7 +728,7 @@ def build_help_human(data: dict) -> str:
     vlimits = data.get("verification_limits", {})
     if vlimits:
         lines.append("VERIFICATION LIMITS")
-        lines.append(f"  Loop unwind  : {vlimits.get('loop_unwind', 10)} iterations")
+        lines.append(f"  Loop unwind  : {vlimits.get('loop_unwind', DEFAULT_UNWIND)} iterations")
         for key, val in vlimits.items():
             if key != "loop_unwind":
                 lines.append(f"  {key:<14s}: {val} max capacity")
@@ -454,14 +759,14 @@ def inject_rust(main_rs: Path, json_str: str, human_str: str) -> str:
         content,
         "// GENERATE:SKILL_JSON:START",
         "// GENERATE:SKILL_JSON:END",
-        f'// GENERATE:SKILL_JSON:START\nfn skill_json() -> String {{\n    r#"{json_str}"#\n    .to_string()\n}}\n// GENERATE:SKILL_JSON:END',
+        f'// GENERATE:SKILL_JSON:START\nfn skill_json() -> String {{\n    r##"{json_str}"##\n    .to_string()\n}}\n// GENERATE:SKILL_JSON:END',
     )
 
     content = _replace_between_markers(
         content,
         "// GENERATE:SKILL_HUMAN:START",
         "// GENERATE:SKILL_HUMAN:END",
-        f'// GENERATE:SKILL_HUMAN:START\nfn skill_human() -> String {{\n    r#"{human_str}"#\n        .to_string()\n}}\n// GENERATE:SKILL_HUMAN:END',
+        f'// GENERATE:SKILL_HUMAN:START\nfn skill_human() -> String {{\n    r##"{human_str}"##\n        .to_string()\n}}\n// GENERATE:SKILL_HUMAN:END',
     )
 
     return content
@@ -570,7 +875,7 @@ def build_skill_markdown() -> str:
 
 def inject_skill_rust(content: str, skill_md: str) -> str:
     """Inject skill_full_markdown() into Rust main.rs."""
-    replacement = f'// GENERATE:SKILL_FULL:START\nfn skill_full_markdown() -> String {{\n    r#"{skill_md}"#\n    .to_string()\n}}\n// GENERATE:SKILL_FULL:END'
+    replacement = f'// GENERATE:SKILL_FULL:START\nfn skill_full_markdown() -> String {{\n    r##"{skill_md}"##\n    .to_string()\n}}\n// GENERATE:SKILL_FULL:END'
     return _replace_between_markers(
         content, "// GENERATE:SKILL_FULL:START", "// GENERATE:SKILL_FULL:END", replacement,
     )
@@ -611,6 +916,7 @@ def main() -> None:
         print(f"  effects: {len(data['language']['effects'])}")
         print(f"  builtins: {len(data['language']['builtins'])}")
         print(f"  build_options: {len(data['build_options'])}")
+        print(f"  test_options: {len(data['test_options'])}")
         print(f"  verify_options: {len(data['verify_options'])}")
         print(f"  skill_markdown: {len(skill_md)} bytes")
         return

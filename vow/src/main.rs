@@ -14,8 +14,9 @@ use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{CollectingEmitter, Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
-    Counterexample, VerificationResult, detect_constant_functions, emit_verify_c_source,
-    find_esbmc, run_esbmc, verify_function_with_module_and_const_fns,
+    Counterexample, DEFAULT_UNWIND, VerificationResult, detect_constant_functions,
+    emit_verify_c_source, find_esbmc, run_esbmc_with_unwind,
+    verify_function_with_module_and_const_fns_with_unwind,
 };
 
 use cache::{CachedVerifyResult, VerifyCache};
@@ -63,6 +64,8 @@ struct Args {
     debug_trace: TraceArg,
     #[arg(long)]
     no_cache: bool,
+    #[arg(long, default_value_t = DEFAULT_UNWIND)]
+    unwind: u32,
     #[arg(long)]
     help: bool,
     #[arg(long)]
@@ -101,6 +104,8 @@ struct BuildArgs {
     debug_trace: TraceArg,
     #[arg(long)]
     no_cache: bool,
+    #[arg(long, default_value_t = DEFAULT_UNWIND)]
+    unwind: u32,
     #[arg(long)]
     help: bool,
     #[arg(long)]
@@ -117,6 +122,8 @@ struct VerifyArgs {
     human: bool,
     #[arg(long)]
     no_cache: bool,
+    #[arg(long, default_value_t = DEFAULT_UNWIND)]
+    unwind: u32,
 }
 
 #[derive(clap::Args, Debug)]
@@ -198,10 +205,39 @@ enum SkillAction {
 
 // GENERATE:SKILL_JSON:START
 fn skill_json() -> String {
-    r#"{
+    r##"{
+  "schema_version": "2",
+  "kind": "tool_help",
   "tool": "vow",
+  "audience": "agent",
+  "default_format": "json",
   "description": "Vow compiler: compiles Vow source to native executables with contract verification",
   "usage": "vow <command> [OPTIONS] <source.vow>",
+  "legacy_usage": "vow [OPTIONS] <source.vow> (equivalent to vow build)",
+  "references": {
+    "grammar": "docs/skill/grammar.md",
+    "cli": "docs/skill/cli.md",
+    "errors": "docs/skill/errors.md",
+    "examples": "docs/skill/examples.md",
+    "schemas": {
+      "build_result": "docs/skill/schemas/build-result.schema.json",
+      "contracts_result": "docs/skill/schemas/contracts-result.schema.json",
+      "diagnostic": "docs/skill/schemas/diagnostic.schema.json",
+      "counterexample": "docs/skill/schemas/counterexample.schema.json",
+      "vow_violation": "docs/skill/schemas/vow-violation.schema.json"
+    }
+  },
+  "invocation": {
+    "canonical": "vow <command> [OPTIONS] <source.vow>",
+    "default_command": "build",
+    "legacy_equivalent": "vow [OPTIONS] <source.vow>",
+    "source_argument": {
+      "name": "source",
+      "kind": "path",
+      "required": true,
+      "suffix": ".vow"
+    }
+  },
   "commands": {
     "build": "Compile source to native executable (verifies by default; use --no-verify to skip)",
     "verify": "Verify contracts without producing an executable (use --no-cache to skip cache)",
@@ -210,10 +246,283 @@ fn skill_json() -> String {
     "contracts": "List all contracts with optional verification status",
     "skill": "Generate or install the Claude Code skill document for this compiler version"
   },
-  "legacy_usage": "vow [OPTIONS] <source.vow> (equivalent to vow build)",
+  "command_details": {
+    "build": {
+      "status": "implemented",
+      "usage": "vow build [OPTIONS] <source.vow>",
+      "default_when_command_omitted": true,
+      "arguments": [
+        {
+          "name": "source",
+          "kind": "path",
+          "required": true,
+          "suffix": ".vow"
+        }
+      ],
+      "options": [
+        {
+          "form": "-o, --output <path>",
+          "description": "Output executable path (default: source without .vow extension)",
+          "short": "-o",
+          "long": "--output",
+          "value_name": "path",
+          "value_kind": "path",
+          "default": "source without .vow extension"
+        },
+        {
+          "form": "--mode <debug|release|profile|sanitize>",
+          "description": "Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + Vec provenance tracking (default: release)",
+          "long": "--mode",
+          "value_name": "debug|release|profile|sanitize",
+          "value_kind": "enum",
+          "values": [
+            "debug",
+            "release",
+            "profile",
+            "sanitize"
+          ],
+          "default": "release"
+        },
+        {
+          "form": "--no-verify",
+          "description": "Skip ESBMC static verification",
+          "long": "--no-verify",
+          "value_kind": "flag"
+        },
+        {
+          "form": "--dump-ir",
+          "description": "Print IR text to stdout and exit (no JSON output, no codegen)",
+          "long": "--dump-ir",
+          "value_kind": "flag"
+        },
+        {
+          "form": "--debug-trace <off|calls|full>",
+          "description": "Emit JSON trace lines to stderr at runtime (default: off)",
+          "long": "--debug-trace",
+          "value_name": "trace",
+          "value_kind": "enum",
+          "values": [
+            "off",
+            "calls",
+            "full"
+          ],
+          "default": "off"
+        },
+        {
+          "form": "--no-cache",
+          "description": "Disable compile and verify caching",
+          "long": "--no-cache",
+          "value_kind": "flag"
+        },
+        {
+          "form": "--unwind <N>",
+          "description": "ESBMC loop unwind bound (default: 10)",
+          "long": "--unwind",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 10
+        }
+      ],
+      "stdout": {
+        "format": "json",
+        "schema_ref": "docs/skill/schemas/build-result.schema.json",
+        "suppressed_by": [
+          "--dump-ir"
+        ]
+      },
+      "stderr": {
+        "channels": [
+          "diagnostic stream",
+          "debug trace"
+        ],
+        "debug_trace_flag": "--debug-trace <off|calls|full>"
+      },
+      "notes": [
+        "verification is enabled by default",
+        "debug mode inserts runtime vow checks"
+      ]
+    },
+    "verify": {
+      "status": "implemented",
+      "usage": "vow verify [OPTIONS] <source.vow>",
+      "arguments": [
+        {
+          "name": "source",
+          "kind": "path",
+          "required": true,
+          "suffix": ".vow"
+        }
+      ],
+      "options": [
+        {
+          "form": "--no-cache",
+          "description": "Disable verification result caching",
+          "long": "--no-cache",
+          "value_kind": "flag"
+        },
+        {
+          "form": "--unwind <N>",
+          "description": "ESBMC loop unwind bound (default: 10)",
+          "long": "--unwind",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 10
+        }
+      ],
+      "stdout": {
+        "format": "json",
+        "schema_ref": "docs/skill/schemas/build-result.schema.json",
+        "fixed_fields": {
+          "executable": null
+        }
+      },
+      "notes": [
+        "runs verification only and never emits a binary"
+      ]
+    },
+    "test": {
+      "status": "implemented",
+      "usage": "vow test [OPTIONS] [<path>]",
+      "arguments": [
+        {
+          "name": "path",
+          "kind": "path",
+          "required": false,
+          "default": ".",
+          "description": "Directory to scan or single .vow file"
+        }
+      ],
+      "options": [
+        {
+          "form": "--verify",
+          "description": "Run ESBMC verification on test files",
+          "long": "--verify",
+          "value_kind": "flag"
+        },
+        {
+          "form": "--filter <pat>",
+          "description": "Only run tests whose name contains pat (default: (none))",
+          "long": "--filter",
+          "value_name": "pat",
+          "value_kind": "string",
+          "default": "(none)"
+        },
+        {
+          "form": "--mode <debug|release>",
+          "description": "Build mode; debug inserts runtime vow checks (default: (default))",
+          "long": "--mode",
+          "value_name": "mode",
+          "value_kind": "enum",
+          "values": [
+            "debug",
+            "release"
+          ],
+          "default": "(default)"
+        },
+        {
+          "form": "--timeout <ms>",
+          "description": "Per-test execution timeout in milliseconds (default: 30000)",
+          "long": "--timeout",
+          "value_name": "ms",
+          "value_kind": "string",
+          "default": "30000"
+        },
+        {
+          "form": "--unwind <N>",
+          "description": "ESBMC loop unwind bound (with --verify)",
+          "long": "--unwind",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 10
+        }
+      ],
+      "stdout": {
+        "format": "json"
+      },
+      "notes": [
+        "discovers test_*.vow and *_test.vow files",
+        "each test must contain main() -> i32 returning 0 on success",
+        "default mode is debug (runtime vow checks enabled)"
+      ]
+    },
+    "decl": {
+      "status": "implemented",
+      "usage": "vow decl [OPTIONS] <source.vow>",
+      "arguments": [
+        {
+          "name": "source",
+          "kind": "path",
+          "required": true,
+          "suffix": ".vow"
+        }
+      ],
+      "options": [
+        {
+          "form": "-o, --output <path>",
+          "description": "Output declaration file path (default: <source>.vow.d)",
+          "short": "-o",
+          "long": "--output",
+          "value_name": "path",
+          "value_kind": "path",
+          "default": "<source>.vow.d"
+        }
+      ],
+      "stdout": {
+        "format": "none"
+      },
+      "side_effects": [
+        {
+          "kind": "write_file",
+          "default_path": "<source>.vow.d"
+        }
+      ]
+    },
+    "contracts": {
+      "status": "implemented",
+      "usage": "vow contracts [OPTIONS] <source.vow>",
+      "arguments": [
+        {
+          "name": "source",
+          "kind": "path",
+          "required": true,
+          "suffix": ".vow"
+        }
+      ],
+      "options": [
+        {
+          "form": "--verify",
+          "description": "Run ESBMC verification and report per-contract status",
+          "long": "--verify",
+          "value_kind": "flag"
+        },
+        {
+          "form": "--no-cache",
+          "description": "Disable verification result caching",
+          "long": "--no-cache",
+          "value_kind": "flag"
+        },
+        {
+          "form": "--unwind <N>",
+          "description": "ESBMC loop unwind bound (default: 10)",
+          "long": "--unwind",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 10
+        }
+      ],
+      "stdout": {
+        "format": "json",
+        "schema_ref": "docs/skill/schemas/contracts-result.schema.json"
+      },
+      "notes": [
+        "runs frontend only by default",
+        "use --verify for per-contract ESBMC status"
+      ]
+    }
+  },
   "build_options": {
     "-o, --output <path>": "Output executable path (default: source without .vow extension)",
-    "--mode <debug|release|profile|sanitize>": "Build mode: debug inserts runtime vow checks, profile inserts call counters, sanitize adds debug checks + Vec provenance tracking (default: release)",
+    "--mode <debug|release|profile|sanitize>": "Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + Vec provenance tracking (default: release)",
     "--no-verify": "Skip ESBMC static verification",
     "--dump-ir": "Print IR text to stdout and exit (no JSON output, no codegen)",
     "--debug-trace <off|calls|full>": "Emit JSON trace lines to stderr at runtime (default: off)",
@@ -222,24 +531,64 @@ fn skill_json() -> String {
   },
   "verify_options": {
     "--no-cache": "Disable verification result caching",
-    "--unwind <N>": "ESBMC loop unwind bound"
+    "--unwind <N>": "ESBMC loop unwind bound (default: 10)"
   },
   "test_options": {
-    "<path>": "Directory to scan or single .vow file (default: .)",
     "--verify": "Run ESBMC verification on test files",
-    "--filter <pat>": "Only run tests whose name contains pat",
+    "--filter <pat>": "Only run tests whose name contains pat (default: (none))",
     "--mode <debug|release>": "Build mode; debug inserts runtime vow checks (default: (default))",
     "--timeout <ms>": "Per-test execution timeout in milliseconds (default: 30000)",
     "--unwind <N>": "ESBMC loop unwind bound (with --verify)"
   },
+  "decl_options": {
+    "-o, --output <path>": "Output declaration file path (default: <source>.vow.d)"
+  },
   "contracts_options": {
     "--verify": "Run ESBMC verification and report per-contract status",
     "--no-cache": "Disable verification result caching",
-    "--unwind <N>": "ESBMC loop unwind bound"
+    "--unwind <N>": "ESBMC loop unwind bound (default: 10)"
   },
   "global_options": {
-    "--help": "Print this JSON capability description",
-    "--help --human": "Print human-readable capability description"
+    "--help": "Emit versioned JSON tool-help data",
+    "--help --human": "Emit legacy human-readable help (compatibility mode)"
+  },
+  "outputs": {
+    "build_result": {
+      "schema_ref": "docs/skill/schemas/build-result.schema.json",
+      "emitted_by": [
+        "build",
+        "verify"
+      ],
+      "status_values": [
+        "Verified",
+        "Unverified",
+        "CompileFailed",
+        "VerifyFailed"
+      ],
+      "legacy_fields": [
+        "counterexample"
+      ]
+    },
+    "contracts_result": {
+      "schema_ref": "docs/skill/schemas/contracts-result.schema.json",
+      "emitted_by": [
+        "contracts"
+      ]
+    },
+    "diagnostic": {
+      "schema_ref": "docs/skill/schemas/diagnostic.schema.json",
+      "embedded_in": "build_result.diagnostics"
+    },
+    "runtime_vow_violation": {
+      "schema_ref": "docs/skill/schemas/vow-violation.schema.json",
+      "emitted_on": "stderr",
+      "requires_mode": "debug"
+    },
+    "runtime_trace": {
+      "emitted_on": "stderr",
+      "enabled_by": "--debug-trace <off|calls|full>",
+      "format": "jsonl"
+    }
   },
   "output_json": {
     "status": "Verified | Unverified | CompileFailed | VerifyFailed",
@@ -249,6 +598,17 @@ fn skill_json() -> String {
     "function": "function name (VerifyFailed)",
     "counterexample": "ESBMC counterexample description (VerifyFailed)"
   },
+  "diagnostics": {
+    "schema_ref": "docs/skill/schemas/diagnostic.schema.json",
+    "fields": [
+      "error_code",
+      "message",
+      "severity",
+      "span.file",
+      "span.offset",
+      "span.length"
+    ]
+  },
   "exit_codes": {
     "0": "success (Verified or Unverified)",
     "1": "failure (CompileFailed or VerifyFailed)"
@@ -256,10 +616,20 @@ fn skill_json() -> String {
   "language": {
     "module": "module <Name>",
     "use_declaration": "use foo.bar",
+    "const_declaration": "const NAME: i64 = 1024",
+    "comments": "// line comments only; block comments unsupported",
+    "let_binding": "let name: Type = expr; or let mut name: Type = expr;",
     "function": "fn <name>(<params>) -> <RetTy> [<effects>] { <body> }",
     "public_function": "pub fn <name>(<params>) -> <RetTy> [<effects>] { <body> }",
     "vow_function": "fn <name>(<params>) -> <RetTy> vow { requires: <expr>; ensures: <expr> } { <body> }",
     "while_with_invariant": "while <cond> vow { invariant: <expr> } { <body> }",
+    "literals": {
+      "integer": "42 | -1 | 42u64 (unsuffixed integers default to i64)",
+      "float": "3.14 | -0.5",
+      "bool": "true | false",
+      "string": "\"text\" with escapes \\n \\t \\r \\\\ \\\" \\0"
+    },
+    "casts": "x as u64 or y as i64",
     "types": [
       "i32",
       "i64",
@@ -450,9 +820,33 @@ fn skill_json() -> String {
         "? operator"
       ]
     },
+    "error_propagation": "? on Option<T> or Result<T, E> propagates None/Err to the caller",
     "indexing": {
       "read": "v[i] \u2014 Vec index access",
       "write": "v[i] = val \u2014 Vec index assignment"
+    },
+    "feature_status": {
+      "implemented": {
+        "function_vow_blocks": "requires / ensures / invariant",
+        "where_clauses": "parameter-level refinement sugar",
+        "loop_invariants": "simple invariant predicates"
+      },
+      "partial": {
+        "refinement_type_predicates": "parsed but semantically erased; use where clauses or function vows for verification",
+        "effect_tracking": "user-defined effect propagation is enforced; some builtin panic/unsafe effects are not yet modeled"
+      },
+      "target": {
+        "module_level_vow_blocks": "specified in docs but not parsed or represented in the AST",
+        "quantifiers": "forall / exists are not yet in the lexer or parser"
+      },
+      "unsupported": [
+        "user-defined generics",
+        "traits",
+        "closures",
+        "operator overloading",
+        "macros",
+        "assert / assume statements"
+      ]
     }
   },
   "verification_limits": {
@@ -461,19 +855,19 @@ fn skill_json() -> String {
     "String": 256,
     "HashMap<K, V>": 64
   }
-}"#
+}"##
     .to_string()
 }
 // GENERATE:SKILL_JSON:END
 
 // GENERATE:SKILL_HUMAN:START
 fn skill_human() -> String {
-    r#"vow — Vow compiler
+    r##"vow — Vow compiler
 
 USAGE
   vow build [OPTIONS] <source.vow>    Compile to native executable
   vow verify [OPTIONS] <source.vow>    Verify contracts only (no executable)
-  vow test [OPTIONS] [<path>]          Run tests (test_*.vow / *_test.vow)
+  vow test [OPTIONS] [<path>]          Run tests with JSON results
   vow contracts [OPTIONS] <source.vow> List all contracts
   vow decl [OPTIONS] <source.vow>    Emit declaration file (.vow.d)
   vow skill [print|install]           Generate or install Claude Code skill
@@ -481,7 +875,7 @@ USAGE
 
 BUILD OPTIONS
   -o, --output <path>     Output executable path (default: source without .vow extension)
-  --mode <debug|release|profile|sanitize>  Build mode (default: release)
+  --mode <debug|release|profile|sanitize>  Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + Vec provenance tracking (default: release)
   --no-verify             Skip ESBMC static verification
   --dump-ir               Print IR text to stdout and exit (no JSON output, no codegen)
   --debug-trace <off|calls|full>  Emit JSON trace lines to stderr at runtime (default: off)
@@ -490,12 +884,11 @@ BUILD OPTIONS
 
 VERIFY OPTIONS
   --no-cache              Disable verification result caching
-  --unwind <N>            ESBMC loop unwind bound
+  --unwind <N>            ESBMC loop unwind bound (default: 10)
 
 TEST OPTIONS
-  <path>                  Directory to scan or single .vow file (default: .)
   --verify                Run ESBMC verification on test files
-  --filter <pat>          Only run tests whose name contains pat
+  --filter <pat>          Only run tests whose name contains pat (default: (none))
   --mode <debug|release>  Build mode; debug inserts runtime vow checks (default: (default))
   --timeout <ms>          Per-test execution timeout in milliseconds (default: 30000)
   --unwind <N>            ESBMC loop unwind bound (with --verify)
@@ -503,11 +896,14 @@ TEST OPTIONS
 CONTRACTS OPTIONS
   --verify                Run ESBMC verification and report per-contract status
   --no-cache              Disable verification result caching
-  --unwind <N>            ESBMC loop unwind bound
+  --unwind <N>            ESBMC loop unwind bound (default: 10)
+
+DECL OPTIONS
+  -o, --output <path>     Output declaration file path (default: <source>.vow.d)
 
 GLOBAL OPTIONS
-  --help                Print JSON capability description (agent-friendly)
-  --help --human        Print this text
+  --help                Emit versioned JSON tool-help data
+  --help --human        Emit legacy text help
 
 OUTPUT (JSON on stdout)
   status      : Verified | Unverified | CompileFailed | VerifyFailed
@@ -557,14 +953,14 @@ VERIFICATION LIMITS
   Loop unwind  : 10 iterations
   Vec<T>        : 128 max capacity
   String        : 256 max capacity
-  HashMap<K, V> : 64 max capacity"#
+  HashMap<K, V> : 64 max capacity"##
         .to_string()
 }
 // GENERATE:SKILL_HUMAN:END
 
 // GENERATE:SKILL_FULL:START
 fn skill_full_markdown() -> String {
-    r#"---
+    r##"---
 name: vow-toolchain
 description: >-
   Write, compile, debug, and verify Vow programs (.vow files). Covers the
@@ -736,11 +1132,13 @@ pub fn api_function(x: i64) -> i64 {
 |--------|--------------------------|
 | `i32`  | 32-bit signed integer    |
 | `i64`  | 64-bit signed integer    |
+| `u8`   | 8-bit unsigned integer   |
 | `u64`  | 64-bit unsigned integer  |
 | `f32`  | 32-bit float (limited support — avoid in contracts) |
 | `f64`  | 64-bit float (limited support — avoid in contracts) |
 | `bool` | Boolean                  |
 | `()`   | Unit type                |
+| `!`    | Never type (diverges)    |
 
 ### Built-in Parameterized Types
 
@@ -1026,6 +1424,33 @@ let p: Point = Point { x: 1, y: 2 };
 p.x
 ```
 
+### Field Assignment
+
+```vow
+p.x = 10;
+```
+
+### Passing Semantics
+
+Structs are heap-allocated. A struct value is a pointer to a heap region, so passing a struct to a function passes the pointer — the function operates on the same heap data, not a copy. Field assignments inside the called function are visible to the caller:
+
+```vow
+fn shift_right(p: Point, dx: i64) {
+    p.x = p.x + dx;
+}
+
+fn main() -> i32 [io] {
+    let p: Point = Point { x: 0, y: 0 };
+    shift_right(p, 5);
+    print_i64(p.x);  // 5 — mutation visible to caller
+    0
+}
+```
+
+This enables in-place mutation patterns (e.g., make/unmake in search trees) without cloning. The same aliasing semantics apply when structs are stored in containers — see [Indexing](#indexing). To avoid aliasing, construct a fresh struct literal with the desired field values.
+
+**Note:** For `linear struct` types, passing the value to a function consumes it — the caller cannot access it afterward. To observe mutations to a linear struct, return the updated value from the function.
+
 ## Enum Definitions
 
 ```vow
@@ -1216,22 +1641,107 @@ Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they 
 
 ### Builtin Function Signatures
 
+#### Print / IO
+
 | Function         | Signature                                  | Effects    |
 |------------------|--------------------------------------------|------------|
 | `print_str`      | `fn(s: String) -> ()`                      | `[io]`     |
 | `print_i64`      | `fn(v: i64) -> ()`                         | `[io]`     |
 | `print_u64`      | `fn(v: u64) -> ()`                         | `[io]`     |
 | `eprintln_str`   | `fn(s: String) -> ()`                      | `[io]`     |
+
+#### Filesystem
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
 | `fs_read`        | `fn(path: String) -> String`               | `[read]`   |
-| `fs_write`       | `fn(path: String, data: String) -> ()`     | `[write]`  |
+| `fs_write`       | `fn(path: String, data: String) -> i64`    | `[write]`  |
+| `fs_exists`      | `fn(path: String) -> i64`                  | `[read]`   |
+| `fs_mkdir`       | `fn(path: String) -> i64`                  | `[io]`     |
+| `fs_listdir`     | `fn(path: String) -> Vec<String>`          | `[read]`   |
+| `fs_remove`      | `fn(path: String) -> i64`                  | `[io]`     |
+| `fs_remove_dir`  | `fn(path: String) -> i64`                  | `[io]`     |
+| `fs_is_dir`      | `fn(path: String) -> i64`                  | `[read]`   |
+| `fs_rename`      | `fn(old: String, new: String) -> i64`      | `[io]`     |
+
+#### String Operations
+
+| Function              | Signature                                        | Effects |
+|-----------------------|--------------------------------------------------|---------|
+| `string_substr`       | `fn(s: String, start: i64, len: i64) -> String`  | `[]`    |
+| `string_split`        | `fn(s: String, delim: String) -> Vec<String>`    | `[]`    |
+| `string_starts_with`  | `fn(s: String, prefix: String) -> i64`           | `[]`    |
+| `string_ends_with`    | `fn(s: String, suffix: String) -> i64`           | `[]`    |
+| `string_trim`         | `fn(s: String) -> String`                        | `[]`    |
+| `string_to_upper`     | `fn(s: String) -> String`                        | `[]`    |
+| `string_to_lower`     | `fn(s: String) -> String`                        | `[]`    |
+| `string_replace`      | `fn(s: String, from: String, to: String) -> String` | `[]` |
+| `string_join`         | `fn(parts: Vec<String>, sep: String) -> String`  | `[]`    |
+
+#### Conversion
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `parse_i64`      | `fn(s: String) -> i64`                     | `[]`       |
+| `i64_to_string`  | `fn(v: i64) -> String`                     | `[]`       |
+
+#### Collections
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `vec_sort`       | `fn(v: Vec<i64>) -> Vec<i64>`              | `[]`       |
+
+#### Time
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `time_unix`      | `fn() -> i64`                              | `[io]`     |
+| `time_unix_ms`   | `fn() -> i64`                              | `[io]`     |
+
+#### Encoding
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `hex_encode`     | `fn(data: Vec<u8>) -> String`              | `[]`       |
+| `hex_decode`     | `fn(s: String) -> Vec<u8>`                 | `[]`       |
+
+#### Input
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
 | `args`           | `fn() -> Vec<String>`                      | `[read]`   |
 | `stdin_read`     | `fn() -> String`                           | `[read]`   |
 | `stdin_read_line`| `fn() -> String`                           | `[read]`   |
-| `process_exit`   | `fn(code: i64) -> ()`                      | `[io]`     |
+| `stdin_ready`    | `fn() -> bool`                             | `[read]`   |
+
+#### Process Management
+
+| Function              | Signature                                        | Effects |
+|-----------------------|--------------------------------------------------|---------|
+| `process_exit`        | `fn(code: i64) -> !`                             | `[io]`  |
+| `process_run`         | `fn(cmd: String, args: Vec<String>) -> i64`      | `[io]`  |
+| `process_get_stdout`  | `fn() -> String`                                 | `[io]`  |
+| `process_get_stderr`  | `fn() -> String`                                 | `[io]`  |
+| `process_start`       | `fn(cmd: String, args: Vec<String>) -> i64`      | `[io]`  |
+| `process_wait`        | `fn(pid: i64) -> i64`                            | `[io]`  |
+| `process_wait_timeout`| `fn(pid: i64, timeout_ms: i64) -> i64`           | `[io]`  |
+| `process_kill`        | `fn(pid: i64) -> i64`                             | `[io]`  |
+| `process_stdout_for`  | `fn(pid: i64) -> String`                         | `[io]`  |
+| `process_stderr_for`  | `fn(pid: i64) -> String`                         | `[io]`  |
 
 **`args` semantics:** `args()` returns all process arguments including the program name at index 0 (matching C `argv` and Rust `std::env::args()` conventions). For `./my_program foo bar`, `args()` returns `["./my_program", "foo", "bar"]`. Use `args[1]` onward for user-supplied arguments. The Vec is empty only if the OS provides no arguments (unusual). Returns an empty String element if an argument is empty (`""`). Non-UTF-8 arguments are included as-is (byte content preserved).
 
 **`fs_read` semantics:** `fs_read(path)` opens the file at `path`, reads its entire contents, and returns a String. Returns `""` (empty String) on any error (file not found, permission denied, I/O error, non-UTF-8 path). Does not block on regular files. Callers should check `result.len() == 0` to detect failure.
+
+**Filesystem return values:** `fs_write`, `fs_mkdir`, `fs_remove`, `fs_remove_dir`, and `fs_rename` return `i64`: 0 on success, non-zero on failure. `fs_exists` and `fs_is_dir` are predicates: they return 1 for true, 0 for false. Errors (null pointer, invalid UTF-8) also return 0, so callers cannot distinguish "false" from "error".
+
+**`string_starts_with` / `string_ends_with` return values:** Return `i64`: 1 if true, 0 if false.
+
+**`process_run` vs `process_start`:** `process_run(cmd, args)` runs a subprocess synchronously and returns its exit code. After it returns, `process_get_stdout()` and `process_get_stderr()` retrieve the captured output of the most recent `process_run` call. `process_start(cmd, args)` launches a subprocess asynchronously and returns a process ID. Use `process_wait(pid)` to wait for completion and get the exit code, and `process_stdout_for(pid)` / `process_stderr_for(pid)` to retrieve output.
+
+**`process_wait_timeout`:** `process_wait_timeout(pid, timeout_ms)` polls a process started with `process_start` until it exits or the timeout (in milliseconds) elapses. Returns the exit code on completion, `-1` on error, or `-2` on timeout. After a timeout, the process is still running; use `process_kill(pid)` to terminate it.
+
+**`process_kill`:** `process_kill(pid)` sends a kill signal to a running process and waits for it to exit. Returns 0 on success, -1 on error. No-op (returns 0) if the process has already completed.
 
 **`stdin_read` vs `stdin_read_line`:** `stdin_read()` reads the entire stdin stream into a single String (unbounded memory). `stdin_read_line()` reads one line at a time, including the trailing newline. Returns `""` (empty string) at EOF. Use `stdin_read_line` for line-at-a-time processing with bounded memory:
 
@@ -1240,6 +1750,19 @@ let line: String = stdin_read_line();
 while str_len(line) > 0 {
     // process line (has trailing \n)
     line = stdin_read_line();
+}
+```
+
+**`stdin_ready`:** `stdin_ready()` returns `true` if `stdin_read_line()` would return immediately without blocking, `false` otherwise. Uses a non-blocking poll with zero timeout. Use this in computation loops that must remain responsive to external input:
+
+```vow
+while !stdin_ready() && depth < max_depth {
+    // continue searching
+    depth = depth + 1;
+}
+if stdin_ready() {
+    let cmd: String = stdin_read_line();
+    // handle command
 }
 ```
 
@@ -1267,7 +1790,7 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
 | `-o, --output`    | `build/<stem>` | Output executable path                  |
-| `--mode <debug\|release\|profile>` | `release` | Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit |
+| `--mode <debug\|release\|profile\|sanitize>` | `release` | Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + Vec provenance tracking |
 | `--no-verify`     | (off)       | Skip ESBMC static verification            |
 | `--dump-ir`       | (off)       | Print IR text to stdout and exit (no JSON output, no codegen) |
 | `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
@@ -1321,15 +1844,88 @@ vow skill install      # install to .claude/commands/vow-toolchain.md
 
 ### `vow test`
 
-Not yet implemented.
+Discover, compile, run, and report on Vow test files. Tests are normal `.vow` programs with `main() -> i32` — no test-specific syntax.
+
+```
+vow test [OPTIONS] [<path>]
+```
+
+**Options:**
+
+| Flag              | Default     | Description                                |
+|-------------------|-------------|--------------------------------------------|
+| `<path>`          | `.`         | Directory to scan or single `.vow` file    |
+| `--verify`        | (off)       | Run ESBMC verification on test files       |
+| `--filter <pat>`  | (none)      | Only run tests whose name contains pat     |
+| `--mode debug`    | (default)   | Insert runtime vow checks                 |
+| `--mode release`  | `debug`     | Omit all vow checks for performance       |
+| `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
+| `--unwind <N>`    | `10`        | ESBMC loop unwind bound (with --verify)    |
+
+Test discovery: files matching `test_*.vow` or `*_test.vow` in the given directory, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
+
+**Test Output JSON:**
+
+```json
+{
+  "status": "TestsPassed",
+  "total": 3,
+  "passed": 3,
+  "failed": 0,
+  "skipped": 0,
+  "tests": [
+    {
+      "file": "compiler/test_arith.vow",
+      "name": "test_arith",
+      "status": "passed",
+      "exit_code": 0,
+      "stdout": "7",
+      "stderr": "",
+      "duration_ms": 72,
+      "diagnostics": [],
+      "counterexamples": []
+    }
+  ],
+  "contract_density": {
+    "functions_total": 1,
+    "functions_with_vows": 0,
+    "density_pct": 0.0
+  }
+}
+```
+
+| Status Field   | Meaning                                           |
+|----------------|---------------------------------------------------|
+| `TestsPassed`  | All tests passed                                  |
+| `TestsFailed`  | One or more tests failed                          |
+
+Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `skipped`.
+
+### `vow decl`
+
+Emit declaration file output only.
+
+```
+vow decl [OPTIONS] <source.vow>
+```
+
+**Options:**
+
+| Flag              | Default     | Description                                |
+|-------------------|-------------|--------------------------------------------|
+| `-o, --output`    | `<source>.vow.d` | Output declaration file path          |
 
 ### `vow --help`
 
+`vow --help` is agent-first. It emits versioned JSON capability data for the tool, command set,
+language surface, result schemas, and implementation status. `--help --human` exists only as a
+legacy compatibility mode and is not the canonical interface.
+
 ```
-vow --help               # JSON capability description (for agents)
-vow --help --human       # human-readable text
+vow --help               # versioned JSON tool-help protocol
+vow --help --human       # legacy compatibility text
 vow build --help         # same JSON (works on all subcommands)
-vow verify --help --human  # same human text (works on all subcommands)
+vow verify --help --human  # same legacy text (works on all subcommands)
 ```
 
 ## Exit Codes
@@ -1352,7 +1948,7 @@ vow verify --help --human  # same human text (works on all subcommands)
 | `Verified`      | Compiled + all contracts proved by ESBMC     |
 | `Unverified`    | Compiled with `--no-verify` (ESBMC skipped)  |
 | `CompileFailed` | Parse error, type error, module load error, or link failure |
-| `VerifyFailed`  | ESBMC found a counterexample, or ESBMC not found |
+| `VerifyFailed`  | ESBMC found a counterexample, timed out, errored, or was not found |
 
 ### Verified Example
 
@@ -1424,8 +2020,8 @@ vow verify --help --human  # same human text (works on all subcommands)
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
 | `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
-| `verify_status`    | string              | On timeout/error  | "timeout" or "error"                      |
-| `verify_message`   | string              | On error          | ESBMC error message                       |
+| `verify_status`    | string              | On backend failure | `"timeout"`, `"error"`, or `"tool_not_found"` |
+| `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
 
 ## Contracts Output JSON
 
@@ -1529,9 +2125,9 @@ total calls: 9998483, unique functions: 12
 
 The report lists the top 20 most-called functions sorted by call count. No vow checks are emitted in profile mode.
 
-## Runtime Error JSON (stderr, debug mode only)
+## Runtime Error JSON (stderr, debug/sanitize mode)
 
-When a compiled program runs in debug mode (`--mode debug`) and violates a vow at runtime, it emits JSON to stderr before aborting.
+When a compiled program runs in debug mode (`--mode debug`) or sanitize mode (`--mode sanitize`) and violates a vow at runtime, it emits JSON to stderr before aborting.
 
 ### VowViolation
 
@@ -1564,6 +2160,30 @@ Emitted when `.unwrap()` is called on `Option::None`.
 ```
 
 Emitted when a `Vec` index is out of bounds.
+
+### UseAfterFree (sanitize mode only)
+
+```json
+{"error":"UseAfterFree","op":"push","vec":"0x55a1b2c3d4e0"}
+```
+
+Emitted when a Vec operation is attempted on a Vec that has already been freed.
+
+### DoubleFree (sanitize mode only)
+
+```json
+{"error":"DoubleFree","vec":"0x55a1b2c3d4e0"}
+```
+
+Emitted when a Vec is freed twice.
+
+### StaleIndex (sanitize mode only)
+
+```json
+{"error":"StaleIndex","index":5,"expected_gen":3,"actual_gen":7,"vec":"0x55a1b2c3d4e0"}
+```
+
+Emitted when `__vow_sanitize_check_generation` detects that a Vec slot's generation counter does not match the expected value, indicating the slot was overwritten since the index was recorded.
 
 ## Agent Decision Tree
 
@@ -1640,18 +2260,22 @@ fn divide(x: i64, y: i64) -> i64 vow {
 
 ### Range Bounds
 
+Use range bounds only when they reflect genuine semantic constraints (e.g., overflow prevention), not to appease the verifier:
+
 ```vow
 fn safe_add(a: i64, b: i64) -> i64 vow {
     requires: a >= 0,
-    requires: a <= 100,
     requires: b >= 0,
-    requires: b <= 100,
-    ensures: result >= 0,
-    ensures: result <= 200
+    requires: a <= 4611686018427387903,
+    requires: b <= 4611686018427387903,
+    ensures: result >= a,
+    ensures: result >= b
 } {
     a + b
 }
 ```
+
+The bounds here prevent `a + b` from overflowing `i64` — a legitimate semantic concern, not a verifier limitation.
 
 ### Equality Postcondition
 
@@ -1759,10 +2383,10 @@ Where clauses on parameters become refinement types (additional `requires` for v
 
 ```vow
 fn bounded_add(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {
-    requires: a <= 100,
-    requires: b <= 100,
-    ensures: result >= 0,
-    ensures: result <= 200
+    requires: a <= 4611686018427387903,
+    requires: b <= 4611686018427387903,
+    ensures: result >= a,
+    ensures: result >= b
 } {
     a + b
 }
@@ -1827,7 +2451,35 @@ fn fill(n: i64) -> Vec<i64> vow {
 } { ... }
 ```
 
-**Fix:** Add `requires: n <= 8` (or another value below the unwind bound).
+ESBMC will only verify this for small `n` values. **Do not** add `requires: n <= 8` to the contract — that would distort the semantic specification. The contract is correct as-is; ESBMC's bounded verification provides partial assurance.
+
+### Verification-Driven Bounds (Anti-Pattern)
+
+**Never** add artificial bounds to contracts solely to help ESBMC verify them:
+
+```vow
+// WRONG: bounds exist only to appease the verifier
+fn gcd(a: i64, b: i64) -> i64 vow {
+    requires: a >= 0,
+    requires: b >= 0,
+    requires: a + b > 0,
+    requires: a <= 15,   // <-- verifier artifact, not semantic
+    requires: b <= 15,   // <-- verifier artifact, not semantic
+    ensures: result > 0
+} { ... }
+```
+
+```vow
+// CORRECT: only genuine semantic constraints
+fn gcd(a: i64, b: i64) -> i64 vow {
+    requires: a >= 0,
+    requires: b >= 0,
+    requires: a + b > 0,
+    ensures: result > 0
+} { ... }
+```
+
+Contracts express what is mathematically required for correctness. ESBMC verifies within its capabilities (bounded loops, bounded arithmetic) — if it cannot fully prove a correct contract, that is acceptable. Partial verification is better than a distorted specification.
 
 ## Interpreting Counterexamples
 
@@ -2140,7 +2792,7 @@ The `blame` field indicates who is at fault:
 
 # Worked Examples
 
-Verification workflow examples. The first three demonstrate Counterexample-Guided Inductive Synthesis (CEGIS) cycles: write spec, build, read JSON, diagnose, fix, verify. The fourth shows break-with-value in loop expressions.
+Verification workflow examples. The first three demonstrate Counterexample-Guided Inductive Synthesis (CEGIS) cycles: write spec, build, read JSON, diagnose, fix, verify. The fourth shows break-with-value in loop expressions. The fifth shows an EOF-safe interactive command loop using `stdin_read_line()`.
 
 ## 1. Safe Division — Requires Pattern
 
@@ -2396,6 +3048,125 @@ $ vow build examples/search.vow
 
 ---
 
+## 5. Command Loop — EOF-Safe `stdin_read_line`
+
+### Goal
+
+Write a line-oriented command interpreter that reads from stdin, dispatches commands, skips empty lines, and exits cleanly on EOF. This is the canonical pattern for CI-safe interactive programs.
+
+### Step 1: Write the program
+
+```vow
+module CmdLoop
+
+fn trim_newline(s: String) -> String {
+    let n: i64 = s.len();
+    if n == 0 { return s; }
+    let last: i64 = s.byte_at(n - 1);
+    if last == 10 {
+        if n >= 2 {
+            let prev: i64 = s.byte_at(n - 2);
+            if prev == 13 {
+                return s.substring(0, n - 2);
+            }
+        }
+        return s.substring(0, n - 1);
+    }
+    s
+}
+
+fn skip_spaces(s: String, start: i64) -> i64 {
+    let mut i: i64 = start;
+    let n: i64 = s.len();
+    while i < n {
+        if s.byte_at(i) != 32 { return i; }
+        i = i + 1;
+    }
+    i
+}
+
+fn main() -> i32 [read, io] {
+    let mut line: String = stdin_read_line();
+    while line.len() > 0 {
+        let cmd: String = trim_newline(line);
+
+        if cmd.len() > 0 {
+            if cmd.eq(String::from("quit")) {
+                return 0;
+            }
+
+            if cmd.eq(String::from("hello")) {
+                print_str(String::from("Hello, world!\n"));
+            } else {
+                if cmd.len() >= 5 {
+                    let prefix: String = cmd.substring(0, 5);
+                    if prefix.eq(String::from("echo ")) {
+                        let start: i64 = skip_spaces(cmd, 5);
+                        let text: String = cmd.substring(start, cmd.len());
+                        print_str(text);
+                        print_str(String::from("\n"));
+                    } else {
+                        print_str(String::from("unknown: "));
+                        print_str(cmd);
+                        print_str(String::from("\n"));
+                    }
+                } else {
+                    print_str(String::from("unknown: "));
+                    print_str(cmd);
+                    print_str(String::from("\n"));
+                }
+            }
+        }
+
+        line = stdin_read_line();
+    }
+    0
+}
+```
+
+### Step 2: Build
+
+```
+$ vow build --no-verify examples/cmdloop.vow -o /tmp/cmdloop
+```
+
+```json
+{"status":"Unverified","executable":"/tmp/cmdloop","diagnostics":[],"counterexamples":[]}
+```
+
+No contracts here — this example focuses on the I/O pattern, not verification.
+
+### Step 3: Run with piped input
+
+```
+$ printf 'hello\necho Vow is great\n\nbogus\nquit\n' | /tmp/cmdloop
+Hello, world!
+Vow is great
+unknown: bogus
+```
+
+The `quit` command causes an early `return 0`. Empty lines are silently skipped.
+
+### Step 4: Run with EOF (no quit)
+
+```
+$ printf 'hello\necho test\n' | /tmp/cmdloop
+Hello, world!
+test
+```
+
+When stdin is exhausted, `stdin_read_line()` returns `""` (length 0), the `while` condition fails, and the program exits cleanly with code 0.
+
+### Key points
+
+- **EOF detection:** `stdin_read_line()` returns `""` at EOF. Check `.len() > 0` to exit the loop.
+- **Newline stripping:** `stdin_read_line()` includes the trailing `\n` (or `\r\n`). Strip it with `byte_at` + `substring` before comparing commands.
+- **Empty line handling:** After trimming, `cmd.len() == 0` means the line was blank — skip it.
+- **Effects:** `stdin_read_line()` requires `[read]`; `print_str()` requires `[io]`. The `main` function declares both.
+- **CI-safe:** No blocking reads, no prompts — the program processes whatever stdin provides and exits at EOF. Safe to run in pipelines and test harnesses.
+
+---
+
 # JSON Schemas
 
 ## build-result
@@ -2442,12 +3213,12 @@ $ vow build examples/search.vow
     },
     "verify_status": {
       "type": "string",
-      "enum": ["timeout", "error"],
-      "description": "Verification sub-status (present only on timeout or tool error)"
+      "enum": ["timeout", "error", "tool_not_found"],
+      "description": "Verification sub-status (present only when the verification backend did not produce a proof or counterexample)"
     },
     "verify_message": {
       "type": "string",
-      "description": "Verification error message (present only when verify_status is error)"
+      "description": "Verification backend error detail (present only when verify_status is set)"
     }
   },
   "allOf": [
@@ -2648,6 +3419,92 @@ $ vow build examples/search.vow
 }
 ```
 
+## test-result
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vow-lang.dev/schemas/test-result.schema.json",
+  "title": "TestResult",
+  "description": "JSON output from `vow test` on stdout",
+  "type": "object",
+  "required": ["status", "total", "passed", "failed", "skipped", "tests", "contract_density"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["TestsPassed", "TestsFailed"],
+      "description": "Overall test outcome"
+    },
+    "total": {
+      "type": "integer",
+      "description": "Total number of tests discovered"
+    },
+    "passed": {
+      "type": "integer",
+      "description": "Number of tests that passed"
+    },
+    "failed": {
+      "type": "integer",
+      "description": "Number of tests that failed"
+    },
+    "skipped": {
+      "type": "integer",
+      "description": "Number of tests that were skipped"
+    },
+    "tests": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/TestEntry" },
+      "description": "Per-test results"
+    },
+    "contract_density": {
+      "$ref": "#/$defs/ContractDensity",
+      "description": "Contract density across tested modules"
+    }
+  },
+  "$defs": {
+    "TestEntry": {
+      "type": "object",
+      "required": ["file", "name", "status", "stdout", "stderr", "duration_ms", "diagnostics", "counterexamples"],
+      "properties": {
+        "file": { "type": "string", "description": "Path to the test .vow file" },
+        "name": { "type": "string", "description": "Test name (file stem)" },
+        "status": {
+          "type": "string",
+          "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed"],
+          "description": "Per-test outcome"
+        },
+        "exit_code": {
+          "type": ["integer", "null"],
+          "description": "Process exit code, null on compile/verify failure or timeout"
+        },
+        "stdout": { "type": "string", "description": "Captured stdout from test binary" },
+        "stderr": { "type": "string", "description": "Captured stderr from test binary" },
+        "duration_ms": { "type": "integer", "description": "Wall-clock duration in milliseconds" },
+        "diagnostics": {
+          "type": "array",
+          "items": { "$ref": "diagnostic.schema.json" },
+          "description": "Compiler diagnostics (on compile_error)"
+        },
+        "counterexamples": {
+          "type": "array",
+          "items": { "$ref": "counterexample.schema.json" },
+          "description": "ESBMC counterexamples (on verify_failed)"
+        }
+      }
+    },
+    "ContractDensity": {
+      "type": "object",
+      "required": ["functions_total", "functions_with_vows", "density_pct"],
+      "properties": {
+        "functions_total": { "type": "integer", "description": "Total non-main functions across tested modules" },
+        "functions_with_vows": { "type": "integer", "description": "Functions with at least one vow block" },
+        "density_pct": { "type": "number", "description": "Percentage of functions with vow contracts" }
+      }
+    }
+  }
+}
+```
+
 ## vow-violation
 
 ```json
@@ -2698,7 +3555,7 @@ $ vow build examples/search.vow
   "additionalProperties": false
 }
 ```
-"#
+"##
     .to_string()
 }
 // GENERATE:SKILL_FULL:END
@@ -3523,6 +4380,7 @@ fn run_verification_sync(
     file: &str,
     call_site_index: &std::collections::HashMap<String, Vec<CallSiteInfo>>,
     verify_cache: Option<&VerifyCache>,
+    unwind: u32,
 ) -> VerifyOutcome {
     let const_fns = detect_constant_functions(ir_module);
     for func in &ir_module.functions {
@@ -3532,7 +4390,7 @@ fn run_verification_sync(
 
         let result = if let Some(vc) = verify_cache {
             let c_src = emit_verify_c_source(func, ir_module, &const_fns);
-            let key = VerifyCache::cache_key(&c_src, 10);
+            let key = VerifyCache::cache_key(&c_src, unwind);
 
             if let Some(cached) = vc.lookup(&key) {
                 match cached {
@@ -3546,7 +4404,7 @@ fn run_verification_sync(
                     Some(p) => p,
                     None => return VerifyOutcome::ToolNotFound,
                 };
-                let res = run_esbmc(&esbmc, &c_src, &func.name);
+                let res = run_esbmc_with_unwind(&esbmc, &c_src, unwind, &func.name);
                 match &res {
                     VerificationResult::Proven => {
                         vc.store(&key, &CachedVerifyResult::Proven);
@@ -3568,7 +4426,9 @@ fn run_verification_sync(
                 res
             }
         } else {
-            verify_function_with_module_and_const_fns(func, ir_module, &const_fns)
+            verify_function_with_module_and_const_fns_with_unwind(
+                func, ir_module, &const_fns, unwind,
+            )
         };
 
         match result {
@@ -3759,10 +4619,10 @@ fn verify_outcome_to_output(
 // ---------------------------------------------------------------------------
 
 pub fn run_verify_only(source: &Path) -> BuildOutput {
-    run_verify_only_inner(source, false)
+    run_verify_only_inner(source, false, 10)
 }
 
-fn run_verify_only_inner(source: &Path, no_cache: bool) -> BuildOutput {
+fn run_verify_only_inner(source: &Path, no_cache: bool, unwind: u32) -> BuildOutput {
     let frontend = match compile_frontend(source) {
         Ok(f) => f,
         Err(output) => return *output,
@@ -3780,6 +4640,7 @@ fn run_verify_only_inner(source: &Path, no_cache: bool) -> BuildOutput {
         &file,
         &call_site_index,
         verify_cache.as_ref(),
+        unwind,
     );
     verify_outcome_to_output(outcome, frontend.diagnostics, None)
 }
@@ -3816,9 +4677,10 @@ pub fn run_pipeline(
     dump_ir: bool,
     trace: TraceMode,
 ) -> BuildOutput {
-    run_pipeline_inner(source, output, mode, no_verify, dump_ir, trace, false)
+    run_pipeline_inner(source, output, mode, no_verify, dump_ir, trace, false, 10)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_pipeline_inner(
     source: &Path,
     output: Option<&Path>,
@@ -3827,6 +4689,7 @@ fn run_pipeline_inner(
     dump_ir: bool,
     trace: TraceMode,
     no_cache: bool,
+    unwind: u32,
 ) -> BuildOutput {
     let frontend = match compile_frontend(source) {
         Ok(f) => f,
@@ -3834,7 +4697,7 @@ fn run_pipeline_inner(
     };
 
     run_pipeline_from_frontend(
-        frontend, source, output, mode, no_verify, dump_ir, trace, no_cache,
+        frontend, source, output, mode, no_verify, dump_ir, trace, no_cache, unwind,
     )
 }
 
@@ -3848,6 +4711,7 @@ fn run_pipeline_from_frontend(
     dump_ir: bool,
     trace: TraceMode,
     no_cache: bool,
+    unwind: u32,
 ) -> BuildOutput {
     let all_diagnostics = frontend.diagnostics;
     let ir_module = frontend.ir_module;
@@ -3887,6 +4751,7 @@ fn run_pipeline_from_frontend(
             &file_for_verify,
             &call_site_index,
             verify_cache.as_ref(),
+            unwind,
         )
     });
 
@@ -4016,15 +4881,13 @@ fn count_contract_density(ir_module: &vow_ir::Module) -> ContractDensity {
     }
 }
 
-// TODO: --unwind is accepted but not threaded to ESBMC (hardcoded to 10 in vow-verify).
-// This affects build/verify/test equally — fix in vow-verify when adding unwind passthrough.
 fn run_test_command(
     path: &Path,
     verify: bool,
     filter: Option<&str>,
     mode: BuildMode,
     timeout_ms: u64,
-    _unwind: u32,
+    unwind: u32,
 ) {
     if !path.exists() {
         let result = TestResult {
@@ -4111,6 +4974,7 @@ fn run_test_command(
             false,
             TraceMode::Off,
             true,
+            unwind,
         );
 
         let diagnostics: Vec<DiagnosticJson> = result
@@ -4303,6 +5167,7 @@ fn run_test_command(
 // Entry point
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn run_build_command(
     source: &Path,
     output: Option<&Path>,
@@ -4311,8 +5176,11 @@ fn run_build_command(
     dump_ir: bool,
     trace: TraceMode,
     no_cache: bool,
+    unwind: u32,
 ) {
-    let result = run_pipeline_inner(source, output, mode, no_verify, dump_ir, trace, no_cache);
+    let result = run_pipeline_inner(
+        source, output, mode, no_verify, dump_ir, trace, no_cache, unwind,
+    );
     if !dump_ir {
         result.emit_json();
     }
@@ -4390,8 +5258,8 @@ fn run_decl_command(source: &Path, output: Option<&Path>) {
     eprintln!("wrote {}", out_path.display());
 }
 
-fn run_verify_command(source: &Path, no_cache: bool) {
-    let result = run_verify_only_inner(source, no_cache);
+fn run_verify_command(source: &Path, no_cache: bool, unwind: u32) {
+    let result = run_verify_only_inner(source, no_cache, unwind);
     result.emit_json();
     if matches!(
         &result.status,
@@ -4444,6 +5312,7 @@ fn update_contract_statuses(
     entries: &mut [ContractEntryJson],
     ir_module: &vow_ir::Module,
     verify_cache: Option<&VerifyCache>,
+    unwind: u32,
 ) {
     let const_fns = detect_constant_functions(ir_module);
     for func in &ir_module.functions {
@@ -4453,7 +5322,7 @@ fn update_contract_statuses(
 
         let result = if let Some(vc) = verify_cache {
             let c_src = emit_verify_c_source(func, ir_module, &const_fns);
-            let key = VerifyCache::cache_key(&c_src, 10);
+            let key = VerifyCache::cache_key(&c_src, unwind);
 
             if let Some(cached) = vc.lookup(&key) {
                 match cached {
@@ -4474,7 +5343,7 @@ fn update_contract_statuses(
                         continue;
                     }
                 };
-                let res = run_esbmc(&esbmc, &c_src, &func.name);
+                let res = run_esbmc_with_unwind(&esbmc, &c_src, unwind, &func.name);
                 match &res {
                     VerificationResult::Proven => {
                         vc.store(&key, &CachedVerifyResult::Proven);
@@ -4496,7 +5365,9 @@ fn update_contract_statuses(
                 res
             }
         } else {
-            verify_function_with_module_and_const_fns(func, ir_module, &const_fns)
+            verify_function_with_module_and_const_fns_with_unwind(
+                func, ir_module, &const_fns, unwind,
+            )
         };
 
         for entry in entries.iter_mut() {
@@ -4524,7 +5395,7 @@ fn update_contract_statuses(
     }
 }
 
-fn run_contracts_command(source: &Path, verify: bool, no_cache: bool) {
+fn run_contracts_command(source: &Path, verify: bool, no_cache: bool, unwind: u32) {
     let frontend = match compile_frontend(source) {
         Ok(f) => f,
         Err(output) => {
@@ -4565,7 +5436,12 @@ fn run_contracts_command(source: &Path, verify: bool, no_cache: bool) {
             std::process::exit(1);
         }
         let verify_cache = if no_cache { None } else { VerifyCache::new() };
-        update_contract_statuses(&mut entries, &frontend.ir_module, verify_cache.as_ref());
+        update_contract_statuses(
+            &mut entries,
+            &frontend.ir_module,
+            verify_cache.as_ref(),
+            unwind,
+        );
     }
 
     let summary = build_contracts_summary(&entries);
@@ -4616,6 +5492,7 @@ fn main() {
                 b.dump_ir,
                 trace,
                 b.no_cache,
+                b.unwind,
             );
         }
         Some(Command::Verify(v)) => {
@@ -4634,7 +5511,7 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            run_verify_command(&source, v.no_cache);
+            run_verify_command(&source, v.no_cache, v.unwind);
         }
         Some(Command::Test(t)) => {
             if t.help {
@@ -4698,7 +5575,7 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            run_contracts_command(&source, c.verify, c.no_cache);
+            run_contracts_command(&source, c.verify, c.no_cache, c.unwind.unwrap_or(DEFAULT_UNWIND));
         }
         Some(Command::Skill(s)) => {
             if s.help {
@@ -4756,6 +5633,7 @@ fn main() {
                 args.dump_ir,
                 trace,
                 args.no_cache,
+                args.unwind,
             );
         }
     }
@@ -5043,22 +5921,15 @@ fn main() -> i32 [io] {
     #[test]
     fn help_flag_emits_json_with_tool_key() {
         let out = skill_json();
-        assert!(out.contains("\"tool\""), "expected JSON with 'tool' key");
-        assert!(out.contains("\"vow\""), "expected tool name in output");
-        assert!(
-            out.contains("language"),
-            "expected language section in output"
-        );
-        assert!(out.contains("builtins"), "expected builtins in output");
-        assert!(
-            out.contains("\"commands\""),
-            "expected commands section in JSON"
-        );
-        assert!(out.contains("\"build\""), "expected build command in JSON");
-        assert!(
-            out.contains("\"verify\""),
-            "expected verify command in JSON"
-        );
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["schema_version"], "2");
+        assert_eq!(parsed["kind"], "tool_help");
+        assert_eq!(parsed["tool"], "vow");
+        assert_eq!(parsed["audience"], "agent");
+        assert!(parsed["language"].is_object(), "expected language section");
+        assert!(parsed["commands"]["build"].is_string());
+        assert!(parsed["command_details"]["build"]["options"].is_array());
+        assert!(parsed["outputs"]["build_result"].is_object());
     }
 
     #[test]
@@ -5076,65 +5947,45 @@ fn main() -> i32 [io] {
     fn agent_capability_test_skill_json_is_parseable_and_complete() {
         // Verify the --help JSON contains enough information for an LLM agent
         // to write correct Vow code without additional context.
-        let json = skill_json();
+        let parsed: serde_json::Value = serde_json::from_str(&skill_json()).unwrap();
 
-        // Must be valid JSON structure (key fields present)
-        assert!(json.contains("\"tool\""), "missing tool key");
-        assert!(json.contains("\"usage\""), "missing usage key");
-        assert!(json.contains("\"output_json\""), "missing output_json key");
-        assert!(json.contains("\"language\""), "missing language key");
-        assert!(json.contains("\"builtins\""), "missing builtins key");
-        assert!(json.contains("\"vow_clauses\""), "missing vow_clauses key");
+        assert_eq!(parsed["schema_version"], "2");
+        assert_eq!(parsed["kind"], "tool_help");
+        assert_eq!(parsed["tool"], "vow");
+        assert_eq!(parsed["default_format"], "json");
+        assert!(parsed["references"]["grammar"].is_string());
+        assert!(parsed["references"]["schemas"]["build_result"].is_string());
+        assert!(parsed["command_details"]["build"]["options"].is_array());
+        assert!(parsed["command_details"]["verify"]["options"].is_array());
+        assert!(parsed["command_details"]["decl"]["options"].is_array());
+        assert!(parsed["outputs"]["contracts_result"].is_object());
 
-        // Must describe the key Vow constructs
-        assert!(
-            json.contains("requires"),
-            "missing requires clause description"
+        let lang = &parsed["language"];
+        assert!(lang["builtins"]["print_i64"].is_string());
+        assert!(lang["builtins"]["print_str"].is_string());
+        assert!(lang["types"].to_string().contains("String"));
+        assert!(lang["types"].to_string().contains("Vec<T>"));
+        assert!(lang["types"].to_string().contains("Option<T>"));
+        assert!(lang["types"].to_string().contains("Result<T, E>"));
+        assert!(lang["types"].to_string().contains("HashMap<K, V>"));
+        assert!(lang["structs"].is_object());
+        assert!(lang["enums"].is_object());
+        assert!(lang["methods"].is_object());
+        assert!(lang["match_expression"].is_object());
+        assert!(lang["where_clauses"].is_string());
+        assert!(lang["modules"].is_object());
+        assert_eq!(
+            lang["feature_status"]["target"]["module_level_vow_blocks"],
+            "specified in docs but not parsed or represented in the AST"
         );
-        assert!(
-            json.contains("ensures"),
-            "missing ensures clause description"
+        assert_eq!(
+            lang["feature_status"]["target"]["quantifiers"],
+            "forall / exists are not yet in the lexer or parser"
         );
-        assert!(
-            json.contains("invariant"),
-            "missing invariant clause description"
+        assert_eq!(
+            lang["feature_status"]["partial"]["refinement_type_predicates"],
+            "parsed but semantically erased; use where clauses or function vows for verification"
         );
-        assert!(json.contains("print_i64"), "missing print_i64 builtin");
-        assert!(json.contains("print_str"), "missing print_str builtin");
-
-        // Must describe types added in Phases 7-8
-        assert!(json.contains("String"), "missing String type");
-        assert!(json.contains("Vec<T>"), "missing Vec<T> type");
-        assert!(json.contains("Option<T>"), "missing Option<T> type");
-        assert!(json.contains("Result<T, E>"), "missing Result<T, E> type");
-        assert!(json.contains("HashMap<K, V>"), "missing HashMap<K, V> type");
-
-        // Must describe builtins added in Phase 8
-        assert!(json.contains("fs_read"), "missing fs_read builtin");
-        assert!(json.contains("fs_write"), "missing fs_write builtin");
-        assert!(json.contains("args"), "missing args builtin");
-        assert!(
-            json.contains("eprintln_str"),
-            "missing eprintln_str builtin"
-        );
-        assert!(
-            json.contains("process_exit"),
-            "missing process_exit builtin"
-        );
-
-        // Must describe structural language features
-        assert!(json.contains("\"structs\""), "missing structs section");
-        assert!(json.contains("\"enums\""), "missing enums section");
-        assert!(json.contains("\"methods\""), "missing methods section");
-        assert!(
-            json.contains("\"match_expression\""),
-            "missing match_expression section"
-        );
-        assert!(
-            json.contains("\"where_clauses\""),
-            "missing where_clauses section"
-        );
-        assert!(json.contains("\"modules\""), "missing modules section");
 
         // Now verify that a program an LLM would write from this description compiles and runs.
         // The LLM reads: function with requires/ensures, print_i64 builtin, [io] effect.
@@ -5186,6 +6037,24 @@ fn main() -> i32 [io] {
             stdout.contains("42"),
             "expected double(21)==42 in stdout, got: {stdout:?}"
         );
+    }
+
+    #[test]
+    fn build_args_accept_unwind_flag() {
+        let args = Args::try_parse_from(["vow", "build", "--unwind", "5", "main.vow"]).unwrap();
+        match args.command {
+            Some(Command::Build(build)) => assert_eq!(build.unwind, 5),
+            other => panic!("expected build command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_args_accept_unwind_flag() {
+        let args = Args::try_parse_from(["vow", "verify", "--unwind", "7", "main.vow"]).unwrap();
+        match args.command {
+            Some(Command::Verify(verify)) => assert_eq!(verify.unwind, 7),
+            other => panic!("expected verify command, got {other:?}"),
+        }
     }
 
     #[test]
