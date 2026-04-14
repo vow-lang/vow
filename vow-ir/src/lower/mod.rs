@@ -1105,7 +1105,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         .unwrap_or_default();
                     if struct_name.is_empty() {
                         ctx.warn(
-                            format!("FieldSet on untagged instruction %{}, field '{}' -- defaulting to index 0", ptr_id.0, field),
+                            format!("FieldSet on untagged instruction %{}, field '{}' -- ICE: returning sentinel index 0", ptr_id.0, field),
                             span,
                         );
                     }
@@ -1115,7 +1115,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             None => {
                                 if !struct_name.is_empty() {
                                     ctx.warn(
-                                        format!("field '{}' not found in struct '{}' -- defaulting to index 0", field, struct_name),
+                                        format!("field '{}' not found in struct '{}' -- ICE: returning sentinel index 0", field, struct_name),
                                         span,
                                     );
                                 }
@@ -1125,7 +1125,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     } else {
                         if !struct_name.is_empty() {
                             ctx.warn(
-                                format!("struct '{}' not registered -- field lookup defaulting to index 0", struct_name),
+                                format!("struct '{}' not registered -- field lookup ICE: returning sentinel index 0", struct_name),
                                 span,
                             );
                         }
@@ -1723,7 +1723,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             if struct_name.is_empty() {
                 ctx.warn(
                     format!(
-                        "FieldGet on untagged instruction %{}, field '{}' -- defaulting to index 0",
+                        "FieldGet on untagged instruction %{}, field '{}' -- ICE: returning sentinel index 0",
                         ptr_id.0, field
                     ),
                     span,
@@ -1736,7 +1736,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         if !struct_name.is_empty() {
                             ctx.warn(
                                 format!(
-                                    "field '{}' not found in struct '{}' -- defaulting to index 0",
+                                    "field '{}' not found in struct '{}' -- ICE: returning sentinel index 0",
                                     field, struct_name
                                 ),
                                 span,
@@ -1749,7 +1749,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 if !struct_name.is_empty() {
                     ctx.warn(
                         format!(
-                            "struct '{}' not registered -- field lookup defaulting to index 0",
+                            "struct '{}' not registered -- field lookup ICE: returning sentinel index 0",
                             struct_name
                         ),
                         span,
@@ -1785,7 +1785,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             } else {
                 ctx.warn(
                     format!(
-                        "struct '{}' not registered -- field lookup defaulting to index 0",
+                        "struct '{}' not registered -- field lookup ICE: returning sentinel index 0",
                         name
                     ),
                     span,
@@ -1812,7 +1812,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     None => {
                         if !field_names.is_empty() {
                             ctx.warn(
-                                format!("StructLiteral field '{}' not found in struct '{}' -- defaulting to index 0", field_name, name),
+                                format!("StructLiteral field '{}' not found in struct '{}' -- ICE: returning sentinel index 0", field_name, name),
                                 span,
                             );
                         }

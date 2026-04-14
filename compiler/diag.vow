@@ -23,6 +23,9 @@ fn EC_UNKNOWN_METHOD() -> i64 vow { ensures: result >= 0 } { 12 }
 fn EC_UNSUPPORTED_FEATURE() -> i64 vow { ensures: result >= 0 } { 13 }
 fn EC_LOWERING_WARNING() -> i64 vow { ensures: result >= 0 } { 14 }
 fn EC_IO_ERROR() -> i64 vow { ensures: result >= 0 } { 11 }
+fn EC_MISSING_CONTRACT() -> i64 vow { ensures: result >= 0 } { 15 }
+fn EC_CONTRACT_TYPE_MISMATCH() -> i64 vow { ensures: result >= 0 } { 16 }
+fn EC_ESBMC_NOT_FOUND() -> i64 vow { ensures: result >= 0 } { 17 }
 
 struct Diagnostic {
     severity: i64,
@@ -196,8 +199,17 @@ fn ec_name(code: i64) -> String {
     if code == EC_LOWERING_WARNING() {
         String::from("LoweringWarning")
     } else {
+    if code == EC_MISSING_CONTRACT() {
+        String::from("MissingContract")
+    } else {
+    if code == EC_CONTRACT_TYPE_MISMATCH() {
+        String::from("ContractTypeMismatch")
+    } else {
+    if code == EC_ESBMC_NOT_FOUND() {
+        String::from("EsbmcNotFound")
+    } else {
         String::from("IoError")
-    }}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}
 }
 
 fn sev_name_lower(s: i64) -> String {

@@ -58,6 +58,7 @@ pub enum ErrorCode {
     LoweringWarning,
     // Contract errors
     MissingContract,
+    ContractTypeMismatch,
     // Verification tool errors
     EsbmcNotFound,
     // IO errors
