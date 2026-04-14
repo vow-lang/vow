@@ -4,7 +4,7 @@ An agent-first programming language with formal verification.
 
 Vow programs carry machine-checked contracts (preconditions, postconditions, loop invariants) that are statically verified by [ESBMC](https://esbmc.org/) bounded model checking. The compiler emits structured JSON output designed for AI agents to consume, enabling a CEGIS (counterexample-guided inductive synthesis) workflow: write code → compile → verify → read counterexamples → fix → iterate.
 
-For design details, see [docs/vow_design_sketch.md](docs/vow_design_sketch.md).
+For project design details, see [docs/vow_design.md](docs/vow_design.md).
 
 ## Quick Start
 
