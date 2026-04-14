@@ -579,13 +579,21 @@ fn emit_inst(
             let (a, b) = (inst.args[0].0, inst.args[1].0);
             out.push_str(&format!("  v{} = (v{} ^ v{});\n", id, a, b));
         }
-        Opcode::ShlI64 | Opcode::ShlU64 => {
+        Opcode::ShlI64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
-            out.push_str(&format!("  v{} = (v{} << v{});\n", id, a, b));
+            out.push_str(&format!("  v{} = __vow_shl_i64(v{}, v{});\n", id, a, b));
         }
-        Opcode::ShrI64 | Opcode::ShrU64 => {
+        Opcode::ShrI64 => {
             let (a, b) = (inst.args[0].0, inst.args[1].0);
-            out.push_str(&format!("  v{} = (v{} >> v{});\n", id, a, b));
+            out.push_str(&format!("  v{} = __vow_shr_i64(v{}, v{});\n", id, a, b));
+        }
+        Opcode::ShlU64 => {
+            let (a, b) = (inst.args[0].0, inst.args[1].0);
+            out.push_str(&format!("  v{} = __vow_shl_u64(v{}, v{});\n", id, a, b));
+        }
+        Opcode::ShrU64 => {
+            let (a, b) = (inst.args[0].0, inst.args[1].0);
+            out.push_str(&format!("  v{} = __vow_shr_u64(v{}, v{});\n", id, a, b));
         }
 
         Opcode::ConstU64 => {
@@ -1259,7 +1267,32 @@ fn emit_c_preamble(out: &mut String) {
         "typedef struct {{ int64_t len; int64_t keys[{}]; int64_t vals[{}]; }} __vow_hashmap_t;\n",
         VOW_HASHMAP_MAX, VOW_HASHMAP_MAX
     ));
-    out.push_str("typedef struct { int64_t tag; int64_t payload; } __vow_option_t;\n\n");
+    out.push_str("typedef struct { int64_t tag; int64_t payload; } __vow_option_t;\n");
+    out.push_str(
+        "static inline int64_t __vow_shl_i64(int64_t value, int64_t count) {\n\
+         \x20 uint64_t shift = ((uint64_t)count) & 63ULL;\n\
+         \x20 return (int64_t)(((uint64_t)value) << shift);\n\
+         }\n",
+    );
+    out.push_str(
+        "static inline int64_t __vow_shr_i64(int64_t value, int64_t count) {\n\
+         \x20 uint64_t shift = ((uint64_t)count) & 63ULL;\n\
+         \x20 uint64_t bits = (uint64_t)value;\n\
+         \x20 uint64_t logical = bits >> shift;\n\
+         \x20 uint64_t sign_fill = value < 0 ? ~(~0ULL >> shift) : 0ULL;\n\
+         \x20 return (int64_t)(logical | sign_fill);\n\
+         }\n",
+    );
+    out.push_str(
+        "static inline uint64_t __vow_shl_u64(uint64_t value, uint64_t count) {\n\
+         \x20 return value << (count & 63ULL);\n\
+         }\n",
+    );
+    out.push_str(
+        "static inline uint64_t __vow_shr_u64(uint64_t value, uint64_t count) {\n\
+         \x20 return value >> (count & 63ULL);\n\
+         }\n\n",
+    );
 }
 
 fn emit_forward_declaration(func: &Function, out: &mut String) {
@@ -1736,8 +1769,41 @@ mod tests {
         assert!(c.contains("v0 & v1"), "bitand: {c}");
         assert!(c.contains("v0 | v1"), "bitor: {c}");
         assert!(c.contains("v0 ^ v1"), "xor: {c}");
-        assert!(c.contains("v0 << v1"), "shl: {c}");
-        assert!(c.contains("v0 >> v1"), "shr: {c}");
+        assert!(c.contains("__vow_shl_i64(v0, v1)"), "shl: {c}");
+        assert!(c.contains("__vow_shr_i64(v0, v1)"), "shr: {c}");
+    }
+
+    #[test]
+    fn emit_c_module_includes_shift_helpers() {
+        let func = make_func(
+            "bits",
+            vec![Ty::I64, Ty::I64],
+            Ty::I64,
+            vec![
+                inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
+                inst(2, Opcode::ShlI64, Ty::I64, vec![0, 1], InstData::None),
+                inst(3, Opcode::ShrU64, Ty::U64, vec![0, 1], InstData::None),
+                inst(4, Opcode::Return, Ty::Unit, vec![], InstData::None),
+            ],
+        );
+        let c = emit_c_module(&[&func], &HashMap::new());
+        assert!(
+            c.contains("static inline int64_t __vow_shl_i64"),
+            "helpers: {c}"
+        );
+        assert!(
+            c.contains("static inline int64_t __vow_shr_i64"),
+            "helpers: {c}"
+        );
+        assert!(
+            c.contains("static inline uint64_t __vow_shl_u64"),
+            "helpers: {c}"
+        );
+        assert!(
+            c.contains("static inline uint64_t __vow_shr_u64"),
+            "helpers: {c}"
+        );
     }
 
     #[test]

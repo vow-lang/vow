@@ -636,11 +636,35 @@ fn emit_inst(out: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64
         return;
     }
     if op == IOP_SHL_I64() || op == IOP_SHL_U64() {
-        emit_cmp(out, id, iargs[0], iargs[1], String::from("<<"));
+        if op == IOP_SHL_I64() {
+            out.push_str(str7(
+                String::from("  v"), i64_to_str(id), String::from(" = __vow_shl_i64(v"),
+                i64_to_str(iargs[0]), String::from(", v"), i64_to_str(iargs[1]),
+                String::from(");\n")
+            ));
+        } else {
+            out.push_str(str7(
+                String::from("  v"), i64_to_str(id), String::from(" = __vow_shl_u64(v"),
+                i64_to_str(iargs[0]), String::from(", v"), i64_to_str(iargs[1]),
+                String::from(");\n")
+            ));
+        }
         return;
     }
     if op == IOP_SHR_I64() || op == IOP_SHR_U64() {
-        emit_cmp(out, id, iargs[0], iargs[1], String::from(">>"));
+        if op == IOP_SHR_I64() {
+            out.push_str(str7(
+                String::from("  v"), i64_to_str(id), String::from(" = __vow_shr_i64(v"),
+                i64_to_str(iargs[0]), String::from(", v"), i64_to_str(iargs[1]),
+                String::from(");\n")
+            ));
+        } else {
+            out.push_str(str7(
+                String::from("  v"), i64_to_str(id), String::from(" = __vow_shr_u64(v"),
+                i64_to_str(iargs[0]), String::from(", v"), i64_to_str(iargs[1]),
+                String::from(");\n")
+            ));
+        }
         return;
     }
 
@@ -1334,6 +1358,23 @@ fn cemit_preamble() -> String {
         i64_to_str(VOW_HASHMAP_MAX()),
         String::from("]; } __vow_hashmap_t;\n\n")
     ));
+    out.push_str(String::from("static inline int64_t __vow_shl_i64(int64_t value, int64_t count) {\n"));
+    out.push_str(String::from("  uint64_t shift = ((uint64_t)count) & 63ULL;\n"));
+    out.push_str(String::from("  return (int64_t)(((uint64_t)value) << shift);\n"));
+    out.push_str(String::from("}\n"));
+    out.push_str(String::from("static inline int64_t __vow_shr_i64(int64_t value, int64_t count) {\n"));
+    out.push_str(String::from("  uint64_t shift = ((uint64_t)count) & 63ULL;\n"));
+    out.push_str(String::from("  uint64_t bits = (uint64_t)value;\n"));
+    out.push_str(String::from("  uint64_t logical = bits >> shift;\n"));
+    out.push_str(String::from("  uint64_t sign_fill = value < 0 ? ~(~0ULL >> shift) : 0ULL;\n"));
+    out.push_str(String::from("  return (int64_t)(logical | sign_fill);\n"));
+    out.push_str(String::from("}\n"));
+    out.push_str(String::from("static inline uint64_t __vow_shl_u64(uint64_t value, uint64_t count) {\n"));
+    out.push_str(String::from("  return value << (count & 63ULL);\n"));
+    out.push_str(String::from("}\n"));
+    out.push_str(String::from("static inline uint64_t __vow_shr_u64(uint64_t value, uint64_t count) {\n"));
+    out.push_str(String::from("  return value >> (count & 63ULL);\n"));
+    out.push_str(String::from("}\n\n"));
     out
 }
 

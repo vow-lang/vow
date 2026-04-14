@@ -995,9 +995,7 @@ mod tests {
         let expr = parse_no_errors("a & b == c");
         match &expr.kind {
             ExprKind::BinaryOp {
-                op: BinOp::Eq,
-                lhs,
-                ..
+                op: BinOp::Eq, lhs, ..
             } => {
                 assert!(matches!(
                     &lhs.kind,
@@ -1043,10 +1041,7 @@ mod tests {
             } => {
                 assert!(matches!(
                     &rhs.kind,
-                    ExprKind::BinaryOp {
-                        op: BinOp::Add,
-                        ..
-                    }
+                    ExprKind::BinaryOp { op: BinOp::Add, .. }
                 ));
             }
             _ => panic!("expected Shl at top"),
@@ -1058,16 +1053,11 @@ mod tests {
         let expr = parse_no_errors("a < b << c");
         match &expr.kind {
             ExprKind::BinaryOp {
-                op: BinOp::Lt,
-                rhs,
-                ..
+                op: BinOp::Lt, rhs, ..
             } => {
                 assert!(matches!(
                     &rhs.kind,
-                    ExprKind::BinaryOp {
-                        op: BinOp::Shl,
-                        ..
-                    }
+                    ExprKind::BinaryOp { op: BinOp::Shl, .. }
                 ));
             }
             _ => panic!("expected Lt at top"),
@@ -1131,10 +1121,7 @@ mod tests {
             ExprKind::Cast { expr, target_ty } => {
                 assert!(matches!(
                     &expr.kind,
-                    ExprKind::BinaryOp {
-                        op: BinOp::Add,
-                        ..
-                    }
+                    ExprKind::BinaryOp { op: BinOp::Add, .. }
                 ));
                 assert!(matches!(
                     &**target_ty,
