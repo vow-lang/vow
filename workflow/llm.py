@@ -148,6 +148,7 @@ def _chat_openai(
         max_tokens=config.max_tokens,
         temperature=config.temperature,
         messages=oai_messages,
+        timeout=300.0,
     )
     content = resp.choices[0].message.content or ""
     usage = resp.usage

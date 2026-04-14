@@ -219,4 +219,10 @@ def format_verify_feedback(parsed: dict) -> str:
                 lines.append(f"  Source: {source.get('file', '?')}:{source.get('offset', '?')}")
         return "\n".join(lines)
 
+    if status == "Timeout":
+        return (
+            "**Verification timed out.** Simplify the loop invariants or contract predicates "
+            "to reduce the ESBMC state space. Avoid quantified expressions and large integer ranges."
+        )
+
     return f"Verification returned unexpected status: {status}"

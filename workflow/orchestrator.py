@@ -263,7 +263,7 @@ def run_workflow(
 
     # Exhausted rounds
     elapsed = time.time() - start
-    last_compiled = any(r.compile_ok for r in rounds)
+    last_compiled = rounds[-1].compile_ok if rounds else False
     status = "max_rounds" if last_compiled else "compile_failed"
 
     return WorkflowResult(
