@@ -85,28 +85,13 @@ impl Parser {
 
             if matches!(
                 kind,
-                TokenKind::Question | TokenKind::LParen | TokenKind::Dot | TokenKind::LBracket
+                TokenKind::Question
+                    | TokenKind::LParen
+                    | TokenKind::Dot
+                    | TokenKind::LBracket
+                    | TokenKind::KwAs
             ) {
                 lhs = self.parse_postfix(lhs);
-                continue;
-            }
-
-            if kind == TokenKind::KwAs {
-                let lbp = 13;
-                if lbp < min_bp {
-                    break;
-                }
-                let as_span = self.current_span();
-                self.advance();
-                let target_ty = self.parse_type_inner();
-                let span = lhs.span.merge(target_ty.span()).merge(as_span);
-                lhs = Expr {
-                    kind: ExprKind::Cast {
-                        expr: Box::new(lhs),
-                        target_ty: Box::new(target_ty),
-                    },
-                    span,
-                };
                 continue;
             }
 
@@ -426,6 +411,18 @@ impl Parser {
                     span: start.merge(end),
                 }
             }
+            TokenKind::KwAs => {
+                let as_span = self.advance().span;
+                let target_ty = self.parse_type_inner();
+                let target_span = target_ty.span();
+                Expr {
+                    kind: ExprKind::Cast {
+                        expr: Box::new(lhs),
+                        target_ty: Box::new(target_ty),
+                    },
+                    span: start.merge(as_span).merge(target_span),
+                }
+            }
             _ => lhs,
         }
     }
@@ -687,7 +684,7 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{BinOp, Block, ExprKind, Lit, UnOp};
+    use crate::ast::{BinOp, Block, ExprKind, Lit, Type, UnOp};
 
     fn parse_expr_from_source(src: &str) -> Expr {
         let tokens = crate::lexer::Lexer::new(src).tokenize().expect("lex error");
@@ -1074,6 +1071,77 @@ mod tests {
                 ));
             }
             _ => panic!("expected Lt at top"),
+        }
+    }
+
+    #[test]
+    fn cast_binds_tighter_than_addition() {
+        let expr = parse_no_errors("x + y as u64");
+        match &expr.kind {
+            ExprKind::BinaryOp {
+                op: BinOp::Add,
+                lhs,
+                rhs,
+            } => {
+                assert!(matches!(&lhs.kind, ExprKind::Ident(name) if name == "x"));
+                match &rhs.kind {
+                    ExprKind::Cast { expr, target_ty } => {
+                        assert!(matches!(&expr.kind, ExprKind::Ident(name) if name == "y"));
+                        assert!(matches!(
+                            &**target_ty,
+                            Type::Named { name, .. } if name == "u64"
+                        ));
+                    }
+                    _ => panic!("expected cast on rhs"),
+                }
+            }
+            _ => panic!("expected Add at top"),
+        }
+    }
+
+    #[test]
+    fn cast_binds_tighter_than_shift() {
+        let expr = parse_no_errors("x << y as u64");
+        match &expr.kind {
+            ExprKind::BinaryOp {
+                op: BinOp::Shl,
+                lhs,
+                rhs,
+            } => {
+                assert!(matches!(&lhs.kind, ExprKind::Ident(name) if name == "x"));
+                match &rhs.kind {
+                    ExprKind::Cast { expr, target_ty } => {
+                        assert!(matches!(&expr.kind, ExprKind::Ident(name) if name == "y"));
+                        assert!(matches!(
+                            &**target_ty,
+                            Type::Named { name, .. } if name == "u64"
+                        ));
+                    }
+                    _ => panic!("expected cast on rhs"),
+                }
+            }
+            _ => panic!("expected Shl at top"),
+        }
+    }
+
+    #[test]
+    fn parenthesized_binary_can_be_cast() {
+        let expr = parse_no_errors("(x + y) as u64");
+        match &expr.kind {
+            ExprKind::Cast { expr, target_ty } => {
+                assert!(matches!(
+                    &expr.kind,
+                    ExprKind::BinaryOp {
+                        op: BinOp::Add,
+                        ..
+                    }
+                ));
+                assert!(matches!(
+                    &**target_ty,
+                    Type::Named { name, .. } if name == "u64"
+                ));
+            }
+            _ => panic!("expected Cast at top"),
         }
     }
 

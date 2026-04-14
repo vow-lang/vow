@@ -689,7 +689,18 @@ pub fn print_expr(expr: &Expr) -> String {
         ExprKind::Borrow { expr } => format!("&{}", print_expr(expr)),
         ExprKind::Question { expr } => format!("{}?", print_expr(expr)),
         ExprKind::Cast { expr, target_ty } => {
-            format!("{} as {}", print_expr(expr), print_type(target_ty))
+            let inner = match &expr.kind {
+                ExprKind::Lit(_)
+                | ExprKind::Ident(_)
+                | ExprKind::Call { .. }
+                | ExprKind::MethodCall { .. }
+                | ExprKind::FieldAccess { .. }
+                | ExprKind::Index { .. }
+                | ExprKind::Question { .. }
+                | ExprKind::Cast { .. } => print_expr(expr),
+                _ => format!("({})", print_expr(expr)),
+            };
+            format!("{} as {}", inner, print_type(target_ty))
         }
         ExprKind::Assign { lhs, rhs } => {
             format!("{} = {}", print_expr(lhs), print_expr(rhs))
@@ -1138,6 +1149,18 @@ mod tests {
         let or = binop_expr(BinOp::Or, ident_expr("b"), ident_expr("c"));
         let and = binop_expr(BinOp::And, ident_expr("a"), or);
         assert_eq!(print_expr(&and), "a && (b || c)");
+    }
+
+    #[test]
+    fn test_cast_parens_binary_operand() {
+        let expr = Expr {
+            kind: ExprKind::Cast {
+                expr: Box::new(binop_expr(BinOp::Add, ident_expr("a"), ident_expr("b"))),
+                target_ty: Box::new(named_ty("u64")),
+            },
+            span: s(),
+        };
+        assert_eq!(print_expr(&expr), "(a + b) as u64");
     }
 
     #[test]
