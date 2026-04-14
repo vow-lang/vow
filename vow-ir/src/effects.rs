@@ -91,6 +91,11 @@ pub fn inst_effects(opcode: &Opcode) -> Effects {
             e.writes.insert(AbstractHeap::Io);
             e
         }
+        Opcode::DebugCall => {
+            let mut e = Effects::pure();
+            e.writes.insert(AbstractHeap::Io);
+            e
+        }
         Opcode::Branch | Opcode::Jump | Opcode::Return | Opcode::Unreachable => {
             let mut e = Effects::pure();
             e.control = true;

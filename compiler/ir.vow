@@ -121,6 +121,7 @@ fn IOP_XOR_U64() -> i64 vow { ensures: result >= 0 } { 101 }
 fn IOP_CONST_U64() -> i64 vow { ensures: result >= 0 } { 102 }
 fn IOP_CAST_I64_TO_U64() -> i64 vow { ensures: result >= 0 } { 103 }
 fn IOP_CAST_U64_TO_I64() -> i64 vow { ensures: result >= 0 } { 104 }
+fn IOP_DEBUG_CALL() -> i64 vow { ensures: result >= 0 } { 105 }
 
 fn iop_is_terminal(op: i64) -> bool vow {
     requires: op >= 0

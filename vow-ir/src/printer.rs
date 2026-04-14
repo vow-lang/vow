@@ -126,6 +126,7 @@ fn opcode_name(opcode: &Opcode) -> &'static str {
         Opcode::LinearBorrow => "LinearBorrow",
         Opcode::FieldGet => "FieldGet",
         Opcode::FieldSet => "FieldSet",
+        Opcode::DebugCall => "DebugCall",
     }
 }
 
@@ -535,6 +536,7 @@ mod tests {
             (Opcode::ConstU64, "ConstU64"),
             (Opcode::CastI64ToU64, "CastI64ToU64"),
             (Opcode::CastU64ToI64, "CastU64ToI64"),
+            (Opcode::DebugCall, "DebugCall"),
         ];
         for (op, expected) in pairs {
             assert_eq!(opcode_name(&op), expected);

@@ -92,6 +92,30 @@ impl TypeEnv {
             },
         );
         env.define_fn(
+            "debug_str",
+            FnSig {
+                params: vec![Ty::Str],
+                return_ty: Ty::Unit,
+                effects: BTreeSet::new(),
+            },
+        );
+        env.define_fn(
+            "debug_i64",
+            FnSig {
+                params: vec![Ty::I64],
+                return_ty: Ty::Unit,
+                effects: BTreeSet::new(),
+            },
+        );
+        env.define_fn(
+            "debug_u64",
+            FnSig {
+                params: vec![Ty::U64],
+                return_ty: Ty::Unit,
+                effects: BTreeSet::new(),
+            },
+        );
+        env.define_fn(
             "fs_read",
             FnSig {
                 params: vec![Ty::Str],

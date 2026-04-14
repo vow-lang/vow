@@ -1,0 +1,17 @@
+// TEST: exit 0
+// TEST: stdout "42"
+// TEST: stderr "tracing: 21"
+module DebugPrintPure
+
+fn pure_double(x: i64) -> i64 {
+    debug_str(String::from("tracing: "));
+    debug_i64(x);
+    debug_str(String::from("\n"));
+    x * 2
+}
+
+fn main() -> i32 [io] {
+    let v: i64 = pure_double(21);
+    print_i64(v);
+    0
+}

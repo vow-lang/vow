@@ -39,6 +39,15 @@ fn builtin_alloc_tag(sym: &str) -> &'static str {
     }
 }
 
+fn vow_debug_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
+    match name {
+        "debug_str" => Some(("__vow_debug_str", Ty::Unit)),
+        "debug_i64" => Some(("__vow_debug_i64", Ty::Unit)),
+        "debug_u64" => Some(("__vow_debug_u64", Ty::Unit)),
+        _ => None,
+    }
+}
+
 fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
     match name {
         "print_str" => Some(("__vow_string_print", Ty::Unit)),
@@ -832,6 +841,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     ret_ty,
                     arg_ids,
                     InstData::CallTarget(fid),
+                    span,
+                )
+            } else if let Some((sym, ret_ty)) = vow_debug_builtin_to_runtime(&callee_name) {
+                ctx.emit(
+                    Opcode::DebugCall,
+                    ret_ty,
+                    arg_ids,
+                    InstData::CallExtern(sym.to_string()),
                     span,
                 )
             } else if let Some((sym, ret_ty)) = vow_builtin_to_runtime(&callee_name) {

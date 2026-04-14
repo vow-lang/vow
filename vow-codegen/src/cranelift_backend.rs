@@ -700,6 +700,56 @@ fn lower_inst(
         }
 
         // ------------------------------------------------------------------
+        // Debug calls (only emitted in debug/sanitize mode)
+        // ------------------------------------------------------------------
+        Opcode::DebugCall => {
+            if ctx.mode.has_debug_checks() {
+                let InstData::CallExtern(ref sym) = inst.data else {
+                    return Err(CodegenError::UnsupportedOpcode(
+                        "DebugCall without CallExtern data".to_string(),
+                    ));
+                };
+                let Some(&func_ref) = ctx.extern_func_refs.get(sym.as_str()) else {
+                    return Err(CodegenError::UnsupportedOpcode(format!(
+                        "unknown debug extern symbol: {sym}"
+                    )));
+                };
+                let sig_ref = builder.func.dfg.ext_funcs[func_ref].signature;
+                let expected_types: Vec<types::Type> = builder.func.dfg.signatures[sig_ref]
+                    .params
+                    .iter()
+                    .map(|p| p.value_type)
+                    .collect();
+                let call_args: Vec<Value> = inst
+                    .args
+                    .iter()
+                    .enumerate()
+                    .map(|(i, id)| {
+                        let v = *ctx.value_map.get(id).unwrap_or_else(|| {
+                            panic!(
+                                "cranelift backend: DebugCall value_map miss for arg {id:?} in inst {:?}",
+                                inst.id
+                            )
+                        });
+                        if let Some(&expected_ty) = expected_types.get(i) {
+                            let actual_ty = builder.func.dfg.value_type(v);
+                            if actual_ty == types::I32 && expected_ty == types::I64 {
+                                return builder.ins().sextend(types::I64, v);
+                            }
+                            if actual_ty == types::I8 && expected_ty == types::I64 {
+                                return builder.ins().uextend(types::I64, v);
+                            }
+                        }
+                        v
+                    })
+                    .collect();
+                builder.ins().call(func_ref, &call_args);
+            }
+            let unit = builder.ins().iconst(types::I32, 0);
+            ctx.value_map.insert(inst.id, unit);
+        }
+
+        // ------------------------------------------------------------------
         // Function calls
         // ------------------------------------------------------------------
         Opcode::Call => {
@@ -1526,6 +1576,12 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_eprintln_str" => {
             sig.params.push(AbiParam::new(types::I64)); // C-string ptr
         }
+        "__vow_debug_str" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+        }
+        "__vow_debug_i64" | "__vow_debug_u64" => {
+            sig.params.push(AbiParam::new(types::I64)); // value
+        }
         "__vow_args" => {
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<String>
         }
@@ -1713,6 +1769,9 @@ impl Backend for CraneliftBackend {
             for block in &func.blocks {
                 for inst in &block.insts {
                     if let InstData::CallExtern(sym) = &inst.data {
+                        if inst.opcode == Opcode::DebugCall && !mode.has_debug_checks() {
+                            continue;
+                        }
                         extern_syms.insert(sym.clone());
                     }
                 }

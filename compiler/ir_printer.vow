@@ -187,6 +187,7 @@ fn opcode_name(op: i64) -> String {
     if op == IOP_CONST_U64() { return String::from("ConstU64"); }
     if op == IOP_CAST_I64_TO_U64() { return String::from("CastI64ToU64"); }
     if op == IOP_CAST_U64_TO_I64() { return String::from("CastU64ToI64"); }
+    if op == IOP_DEBUG_CALL() { return String::from("DebugCall"); }
     String::from("???")
 }
 

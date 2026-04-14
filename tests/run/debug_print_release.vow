@@ -1,0 +1,16 @@
+// TEST: exit 0
+// TEST: stdout "100"
+module DebugPrintRelease
+
+fn pure_square(x: i64) -> i64 {
+    debug_str(String::from("should not appear\n"));
+    debug_i64(x);
+    debug_u64(42 as u64);
+    x * x
+}
+
+fn main() -> i32 [io] {
+    let v: i64 = pure_square(10);
+    print_i64(v);
+    0
+}

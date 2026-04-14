@@ -9,8 +9,9 @@ fn str2(a: String, b: String) -> String {
     r
 }
 
-fn collect_extern_syms(m: IrModule) -> Vec<String> {
+fn collect_extern_syms(m: IrModule, mode: i64) -> Vec<String> {
     let result: Vec<String> = Vec::new();
+    let has_debug: bool = mode == 1 || mode == 3;
     let fns: Vec<IrFunction> = m.functions;
     let mut fi: i64 = 0;
     while fi < fns.len() {
@@ -23,7 +24,8 @@ fn collect_extern_syms(m: IrModule) -> Vec<String> {
             let mut ii: i64 = 0;
             while ii < insts.len() {
                 let inst: IrInst = insts[ii];
-                if inst.dk == IDATA_CALL_EXTERN() {
+                let skip: bool = inst.op == IOP_DEBUG_CALL() && !has_debug;
+                if inst.dk == IDATA_CALL_EXTERN() && !skip {
                     let sym: String = inst.ds;
                     if !vec_contains_str(result, sym) {
                         result.push(sym);
@@ -148,7 +150,7 @@ fn clif_emit_module(m: IrModule, output_path: String, mode: i64, trace: i64) -> 
         si = si + 1;
     }
 
-    let extern_syms: Vec<String> = collect_extern_syms(m);
+    let extern_syms: Vec<String> = collect_extern_syms(m, mode);
     let mut ei: i64 = 0;
     while ei < extern_syms.len() {
         __vow_clif_declare_extern(ctx, extern_syms[ei]);

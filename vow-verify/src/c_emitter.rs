@@ -339,6 +339,8 @@ pub fn is_modelable(
                 | Opcode::LinearConsume
                 | Opcode::LinearBorrow
                 | Opcode::FieldSet => false,
+
+                Opcode::DebugCall => true,
             };
             if !ok {
                 return false;
@@ -940,6 +942,10 @@ fn emit_inst(
 
         Opcode::RemF32 | Opcode::RemF64 => {
             out.push_str(&format!("  /* float rem not modelled */ v{} = 0;\n", id));
+        }
+
+        Opcode::DebugCall => {
+            // Debug prints are no-ops for verification
         }
     }
 }
