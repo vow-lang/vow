@@ -46,6 +46,7 @@ struct LowerCtx {
     alloc_sizes: Vec<i64>,
     escaped_ids: Vec<i64>,
     alloc_scope_starts: Vec<i64>,
+    loop_alloc_scope_depths: Vec<i64>,
     file: String,
 }
 
@@ -102,6 +103,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         alloc_sizes: Vec::new(),
         escaped_ids: Vec::new(),
         alloc_scope_starts: Vec::new(),
+        loop_alloc_scope_depths: Vec::new(),
         file: String::from(""),
     }
 }
@@ -332,6 +334,49 @@ fn lctx_discard_alloc_scope(ctx: LowerCtx) {
         ctx.alloc_ids.pop();
         ctx.alloc_tags.pop();
         ctx.alloc_sizes.pop();
+    }
+}
+
+fn lctx_emit_alloc_frees_to_depth(ctx: LowerCtx, target_depth: i64, live_out: Vec<i64>) {
+    let n: i64 = ctx.alloc_ids.len();
+    let mut i: i64 = target_depth;
+    while i < n {
+        let id: i64 = ctx.alloc_ids[i];
+        let tag: String = ctx.alloc_tags[i];
+        let mut skip: bool = lctx_is_escaped(ctx, id);
+        if !skip {
+            let mut li: i64 = 0;
+            while li < live_out.len() {
+                if live_out[li] == id {
+                    skip = true;
+                }
+                li = li + 1;
+            }
+        }
+        if !skip {
+            if lower_str_starts_with(tag, String::from("region:")) {
+                let size: i64 = ctx.alloc_sizes[i];
+                let free_args: Vec<i64> = Vec::new();
+                free_args.push(id);
+                lctx_emit(ctx, IOP_REGION_FREE(), ITY_UNIT(), free_args, IDATA_ALLOC_SIZE(), size, 8, String::from(""));
+            }
+            if tag == String::from("String") {
+                let free_args: Vec<i64> = Vec::new();
+                free_args.push(id);
+                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_free"));
+            }
+            if tag == String::from("Vec") {
+                let free_args: Vec<i64> = Vec::new();
+                free_args.push(id);
+                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_free_val"));
+            }
+            if tag == String::from("HashMap") {
+                let free_args: Vec<i64> = Vec::new();
+                free_args.push(id);
+                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_map_free"));
+            }
+        }
+        i = i + 1;
     }
 }
 
@@ -1385,7 +1430,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_is_loop.push(0);
         ctx.loop_break_counts.push(0);
         lctx_push_alloc_scope(ctx);
+        ctx.loop_alloc_scope_depths.push(ctx.alloc_ids.len());
         lower_block(ctx, body_bid);
+        ctx.loop_alloc_scope_depths.pop();
         ctx.loop_break_counts.pop();
         ctx.loop_is_loop.pop();
         ctx.loop_continue_scope_depth.pop();
@@ -1509,7 +1556,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_is_loop.push(1);
         ctx.loop_break_counts.push(0);
         let break_start: i64 = ctx.loop_break_up_ids.len();
+        lctx_push_alloc_scope(ctx);
+        ctx.loop_alloc_scope_depths.push(ctx.alloc_ids.len());
         lower_block(ctx, body_bid);
+        ctx.loop_alloc_scope_depths.pop();
         let break_count_idx: i64 = ctx.loop_break_counts.len() - 1;
         let break_count: i64 = ctx.loop_break_counts[break_count_idx];
         ctx.loop_break_counts.pop();
@@ -1520,6 +1570,22 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_continue_phi_names.pop();
         ctx.loop_header_blocks.pop();
         ctx.loop_exit_blocks.pop();
+
+        // Free loop-body temporaries before back-edge.
+        if !lctx_is_terminated(ctx) {
+            let loop_live_out2: Vec<i64> = Vec::new();
+            let mut lli: i64 = 0;
+            while lli < nassigned {
+                let vname: String = assigned[lli];
+                let cur: i64 = lctx_lookup(ctx, vname);
+                loop_live_out2.push(cur);
+                lli = lli + 1;
+            }
+            lctx_pop_alloc_scope_frees(ctx, loop_live_out2);
+        } else {
+            // Loop body terminated (by break/return) — break already freed.
+            lctx_discard_alloc_scope(ctx);
+        }
 
         if !lctx_is_terminated(ctx) {
             let mut ai3: i64 = 0;
@@ -1683,7 +1749,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_is_loop.push(0);
         ctx.loop_break_counts.push(0);
         lctx_push_alloc_scope(ctx);
+        ctx.loop_alloc_scope_depths.push(ctx.alloc_ids.len());
         lower_block(ctx, body_bid);
+        ctx.loop_alloc_scope_depths.pop();
         ctx.loop_break_counts.pop();
         ctx.loop_is_loop.pop();
         ctx.loop_continue_scope_depth.pop();
@@ -2559,8 +2627,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         if nle > 0 {
             let exit_block: i64 = ctx.loop_exit_blocks[nle - 1];
             let val_eid: i64 = expr_a(a, eid);
+            let break_live_out: Vec<i64> = Vec::new();
             if val_eid != -1 {
                 let val_id: i64 = lower_expr(ctx, val_eid);
+                break_live_out.push(val_id);
                 let is_loop_idx: i64 = ctx.loop_is_loop.len() - 1;
                 let is_loop: i64 = ctx.loop_is_loop[is_loop_idx];
                 if is_loop == 1 {
@@ -2577,6 +2647,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     ctx.loop_break_counts[cnt_idx] = old_cnt + 1;
                 }
             }
+            // Free loop body allocations before jumping to exit.
+            let nlasd: i64 = ctx.loop_alloc_scope_depths.len();
+            if nlasd > 0 {
+                let depth: i64 = ctx.loop_alloc_scope_depths[nlasd - 1];
+                lctx_emit_alloc_frees_to_depth(ctx, depth, break_live_out);
+            }
             let jmp_args: Vec<i64> = Vec::new();
             return lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), exit_block, 0, String::from(""));
         }
@@ -2592,6 +2668,21 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let phi_ids2: Vec<i64> = ctx.loop_continue_phi_ids[nlh - 1];
             let scope_depth: i64 = ctx.loop_continue_scope_depth[nlh - 1];
             let nphis: i64 = phi_names.len();
+
+            // Free loop body allocations before jumping back to header.
+            let nlasd: i64 = ctx.loop_alloc_scope_depths.len();
+            if nlasd > 0 {
+                let depth: i64 = ctx.loop_alloc_scope_depths[nlasd - 1];
+                let cont_live_out: Vec<i64> = Vec::new();
+                let mut cli: i64 = 0;
+                while cli < nphis {
+                    let vname: String = phi_names[cli];
+                    cont_live_out.push(lctx_lookup(ctx, vname));
+                    cli = cli + 1;
+                }
+                lctx_emit_alloc_frees_to_depth(ctx, depth, cont_live_out);
+            }
+
             let mut pi: i64 = 0;
             while pi < nphis {
                 let vname: String = phi_names[pi];
@@ -3065,6 +3156,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     ctx.alloc_sizes = Vec::new();
     ctx.escaped_ids = Vec::new();
     ctx.alloc_scope_starts = Vec::new();
+    ctx.loop_alloc_scope_depths = Vec::new();
 
     if vow_lid != -1 {
         ctx.cur_vow_lid = vow_lid;
