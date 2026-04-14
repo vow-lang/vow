@@ -122,6 +122,8 @@ pub(crate) fn lower_ty(ast_ty: &AstType) -> Ty {
     }
 }
 
+const FIELD_IDX_SENTINEL: usize = u32::MAX as usize;
+
 pub struct LowerCtx {
     pub(super) func: Function,
     pub(super) current_block: BlockId,
@@ -1105,7 +1107,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         .unwrap_or_default();
                     if struct_name.is_empty() {
                         ctx.warn(
-                            format!("FieldSet on untagged instruction %{}, field '{}' -- ICE: returning sentinel index 0", ptr_id.0, field),
+                            format!("FieldSet on untagged instruction %{}, field '{}' -- ICE: returning sentinel index", ptr_id.0, field),
                             span,
                         );
                     }
@@ -1115,21 +1117,21 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             None => {
                                 if !struct_name.is_empty() {
                                     ctx.warn(
-                                        format!("field '{}' not found in struct '{}' -- ICE: returning sentinel index 0", field, struct_name),
+                                        format!("field '{}' not found in struct '{}' -- ICE: returning sentinel index", field, struct_name),
                                         span,
                                     );
                                 }
-                                0
+                                FIELD_IDX_SENTINEL
                             }
                         }
                     } else {
                         if !struct_name.is_empty() {
                             ctx.warn(
-                                format!("struct '{}' not registered -- field lookup ICE: returning sentinel index 0", struct_name),
+                                format!("struct '{}' not registered -- field lookup ICE: returning sentinel index", struct_name),
                                 span,
                             );
                         }
-                        0
+                        FIELD_IDX_SENTINEL
                     } as u32;
                     ctx.mark_escaped(new_val);
                     ctx.emit(
@@ -1723,7 +1725,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             if struct_name.is_empty() {
                 ctx.warn(
                     format!(
-                        "FieldGet on untagged instruction %{}, field '{}' -- ICE: returning sentinel index 0",
+                        "FieldGet on untagged instruction %{}, field '{}' -- ICE: returning sentinel index",
                         ptr_id.0, field
                     ),
                     span,
@@ -1736,26 +1738,26 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         if !struct_name.is_empty() {
                             ctx.warn(
                                 format!(
-                                    "field '{}' not found in struct '{}' -- ICE: returning sentinel index 0",
+                                    "field '{}' not found in struct '{}' -- ICE: returning sentinel index",
                                     field, struct_name
                                 ),
                                 span,
                             );
                         }
-                        0
+                        FIELD_IDX_SENTINEL
                     }
                 }
             } else {
                 if !struct_name.is_empty() {
                     ctx.warn(
                         format!(
-                            "struct '{}' not registered -- field lookup ICE: returning sentinel index 0",
+                            "struct '{}' not registered -- field lookup ICE: returning sentinel index",
                             struct_name
                         ),
                         span,
                     );
                 }
-                0
+                FIELD_IDX_SENTINEL
             } as u32;
             let result_id = ctx.emit(
                 Opcode::FieldGet,
@@ -1785,7 +1787,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             } else {
                 ctx.warn(
                     format!(
-                        "struct '{}' not registered -- field lookup ICE: returning sentinel index 0",
+                        "struct '{}' not registered -- field lookup ICE: returning sentinel index",
                         name
                     ),
                     span,
@@ -1812,11 +1814,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     None => {
                         if !field_names.is_empty() {
                             ctx.warn(
-                                format!("StructLiteral field '{}' not found in struct '{}' -- ICE: returning sentinel index 0", field_name, name),
+                                format!("StructLiteral field '{}' not found in struct '{}' -- ICE: returning sentinel index", field_name, name),
                                 span,
                             );
                         }
-                        0
+                        FIELD_IDX_SENTINEL
                     }
                 } as u32;
                 let val_id = lower_expr(ctx, field_expr);

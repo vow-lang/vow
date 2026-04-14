@@ -570,6 +570,7 @@ fn lctx_struct_field_index(ctx: LowerCtx, struct_name: String, field_name: Strin
 }
 
 fn lctx_struct_field_type(ctx: LowerCtx, struct_name: String, field_idx: i64) -> String {
+    if field_idx == -1 { return String::from(""); }
     let sidx: i64 = lctx_find_struct(ctx, struct_name);
     if sidx == -1 { return String::from(""); }
     let type_names: Vec<String> = ctx.struct_field_type_names[sidx];
@@ -580,6 +581,7 @@ fn lctx_struct_field_type(ctx: LowerCtx, struct_name: String, field_idx: i64) ->
 }
 
 fn lctx_struct_field_vec_elem(ctx: LowerCtx, struct_name: String, field_idx: i64) -> String {
+    if field_idx == -1 { return String::from(""); }
     let sidx: i64 = lctx_find_struct(ctx, struct_name);
     if sidx == -1 { return String::from(""); }
     let vec_elems: Vec<String> = ctx.struct_field_vec_elems[sidx];
