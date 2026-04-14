@@ -4653,6 +4653,7 @@ fn main() {
                     eprintln!("Error: --mode profile is not supported for test subcommand");
                     std::process::exit(1);
                 }
+                ModeArg::Sanitize => BuildMode::Sanitize,
             };
             run_test_command(
                 &path,
