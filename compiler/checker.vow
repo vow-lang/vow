@@ -276,15 +276,27 @@ fn register_enum(e: CheckEnv, m: Module, eid: i64) [io] {
     let name_s: i64 = edef_name_sid(a, eid);
     let name: String = arena_str(a, name_s);
     let variants_lid: i64 = edef_variants_lid(a, eid);
-    let n: i64 = list_len(a, variants_lid);
+    let n_pairs: i64 = list_len(a, variants_lid);
+    let n_variants: i64 = n_pairs / 2;
     let vnames: Vec<String> = Vec::new();
     let vpayloads: Vec<i64> = Vec::new();
     let mut i: i64 = 0;
-    while i < n {
-        let vsid: i64 = list_get(a, variants_lid, i);
+    while i < n_variants {
+        let vsid: i64 = list_get(a, variants_lid, i * 2);
+        let payload_lid: i64 = list_get(a, variants_lid, i * 2 + 1);
         let vname: String = arena_str(a, vsid);
         vnames.push(vname);
-        vpayloads.push(CTY_UNIT());
+        let n_fields: i64 = list_len(a, payload_lid);
+        let resolved_fields: Vec<i64> = Vec::new();
+        let mut fi: i64 = 0;
+        while fi < n_fields {
+            let ast_tid: i64 = list_get(a, payload_lid, fi);
+            let resolved: i64 = resolve_ast_ty(e, m, ast_tid);
+            resolved_fields.push(resolved);
+            fi = fi + 1;
+        }
+        let fields_lid: i64 = ts_add_args(e.ts, resolved_fields);
+        vpayloads.push(fields_lid);
         i = i + 1;
     }
     env_update_enum(e, name, vnames, vpayloads);
@@ -393,6 +405,41 @@ fn bind_pattern(e: CheckEnv, m: Module, pid: i64, tid: i64) [io] {
     }
 }
 
+fn enum_name_from_tid(ts: TyStore, tid: i64) -> String {
+    let tag: i64 = ty_tag(ts, tid);
+    if tag == CTY_ENUM() {
+        let name_idx: i64 = ty_a(ts, tid);
+        return ts.strs[name_idx];
+    }
+    if tag == CTY_APPLIED() || tag == CTY_REF() {
+        let base_tid: i64 = ty_a(ts, tid);
+        return enum_name_from_tid(ts, base_tid);
+    }
+    String::from("")
+}
+
+fn lookup_variant_payload(e: CheckEnv, enum_idx: i64, variant_name: String, field_idx: i64) -> i64 {
+    let vname_lid: i64 = e.edef_vname_lids[enum_idx];
+    let nv: i64 = e.edef_variant_count[enum_idx];
+    let mut i: i64 = 0;
+    while i < nv {
+        let vsid: i64 = ts_arg_get(e.ts, vname_lid, i);
+        let ts: TyStore = e.ts;
+        let vname: String = ts.strs[vsid];
+        if vname == variant_name {
+            let vpayload_lid: i64 = e.edef_vpayload_lids[enum_idx];
+            let fields_lid: i64 = ts_arg_get(e.ts, vpayload_lid, i);
+            let n_fields: i64 = ts_arg_len(e.ts, fields_lid);
+            if field_idx < n_fields {
+                return ts_arg_get(e.ts, fields_lid, field_idx);
+            }
+            return CTY_UNIT();
+        }
+        i = i + 1;
+    }
+    CTY_UNIT()
+}
+
 fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
     let a: AstArena = m.arena;
     let tag: i64 = pat_tag(a, pid);
@@ -409,12 +456,29 @@ fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
         return;
     }
     if tag == PAT_ENUM() {
+        let path_lid: i64 = pat_a(a, pid);
         let inner_lid: i64 = pat_b(a, pid);
         let n_inner: i64 = list_len(a, inner_lid);
+        let n_path: i64 = list_len(a, path_lid);
+        let variant_sid: i64 = if n_path >= 2 {
+            list_get(a, path_lid, n_path - 1)
+        } else if n_path == 1 {
+            list_get(a, path_lid, 0)
+        } else {
+            -1
+        };
+        let enum_name: String = enum_name_from_tid(e.ts, scrutinee_tid);
+        let enum_idx: i64 = env_lookup_enum(e, enum_name);
+        let variant_name: String = if variant_sid != -1 { arena_str(a, variant_sid) } else { String::from("") };
         let mut i: i64 = 0;
         while i < n_inner {
             let ipid: i64 = list_get(a, inner_lid, i);
-            bind_arm_pattern(e, m, ipid, CTY_UNIT());
+            let field_tid: i64 = if enum_idx != -1 && variant_sid != -1 {
+                lookup_variant_payload(e, enum_idx, variant_name, i)
+            } else {
+                CTY_UNIT()
+            };
+            bind_arm_pattern(e, m, ipid, field_tid);
             i = i + 1;
         }
         return;
@@ -825,6 +889,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let scrutinee_eid: i64 = expr_a(a, eid);
         let arms_lid: i64 = expr_b(a, eid);
         let scrutinee_tid: i64 = check_expr(e, m, scrutinee_eid);
+        let ts: TyStore = e.ts;
         let n_pairs: i64 = list_len(a, arms_lid);
         let n_arms: i64 = n_pairs / 2;
         let mut result_tid: i64 = CTY_NEVER();
@@ -838,6 +903,18 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             env_pop_scope(e);
             if is_opaque(result_tid) {
                 result_tid = arm_tid;
+            } else if arm_tid != result_tid && !is_opaque(arm_tid) {
+                let arm_tag: i64 = ty_tag(ts, arm_tid);
+                let res_tag: i64 = ty_tag(ts, result_tid);
+                let coercible: bool = (arm_tag == CTY_I32() && ty_is_integer(ts, result_tid))
+                    || (res_tag == CTY_I32() && ty_is_integer(ts, arm_tid));
+                if coercible {
+                    if res_tag == CTY_I32() && ty_is_integer(ts, arm_tid) {
+                        result_tid = arm_tid;
+                    }
+                } else {
+                    env_emit_error(e, String::from("match arm type mismatch"), expr_span(a, body_eid));
+                }
             }
             i = i + 1;
         }

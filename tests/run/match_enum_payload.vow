@@ -1,0 +1,22 @@
+// TEST: stdout "420"
+module match_enum_payload
+
+enum E {
+    A(i64),
+    B,
+}
+
+fn extract(e: E) -> i64 {
+    match e {
+        E::A(n) => { n },
+        E::B => { 0 },
+    }
+}
+
+fn main() -> i32 [io] {
+    let a: E = E::A(42);
+    let b: E = E::B {};
+    print_i64(extract(a));
+    print_i64(extract(b));
+    0
+}

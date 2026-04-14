@@ -22,6 +22,16 @@ Vow is a serious, production-grade project. All implementation decisions must re
 - **Scalability is a requirement.** Data structures, algorithms, and compiler passes must be chosen for reasonable asymptotic behavior, not just correctness on small inputs.
 - **No "experimental" excuses.** Do not defer correctness, robustness, or resource discipline with the rationale that the project is early-stage or experimental. Treat every change as if it will run in production.
 
+## Contract Authoring
+
+Contracts express **semantic correctness** — what is mathematically required for a function to be correct. They must never be weakened or artificially bounded to satisfy ESBMC's verification limits.
+
+- **Write the true contract.** `gcd(a, b)` requires `a >= 0, b >= 0, a + b > 0`. It does not require `a <= 50` — that is a verifier limitation, not a property of Euclid's algorithm.
+- **ESBMC bounds are not contracts.** Bounds like `n <= 10` (to fit within `--unwind 10`) or `a <= 100` (to help the SMT solver) are verification artifacts. They do not belong in `requires`/`ensures` clauses.
+- **Postconditions should be tight.** `min(a, b)` must ensure `result == a || result == b`, not just `result <= a && result <= b`. A weak postcondition that admits incorrect implementations is a bad contract.
+- **If ESBMC can't prove a correct contract, that's ESBMC's problem.** Mark the function as unverifiable or skip it in the verification pass. Do not distort the contract to accommodate the tool.
+- **Only add bounds that reflect genuine semantic constraints.** Overflow guards (e.g., `requires: x > -9223372036854775807` for `abs`) are legitimate — they prevent undefined behavior in the implementation. Loop iteration caps for ESBMC are not.
+
 ## Vow Compiler
 
 When implementing changes across Vow compilers, always modify BOTH the Rust compiler and the self-hosted compiler in the same session. Run the full test suite (`cargo test` and self-hosted tests) after changes to both.
@@ -71,20 +81,26 @@ This builds `./target/release/vow` (stage 0), then uses it to compile and verify
 
 ## Canonical Source of Truth
 
-`docs/skill/` contains the authoritative specification for the Vow language and CLI:
+`docs/spec/` contains the authoritative specification for the Vow language and CLI:
 
-- **`SKILL.md`** — Claude Code skill entry point (frontmatter + overview + reference table)
+- **`index.md`** — overview and reference table
 - **`grammar.md`** — complete grammar: types, operators, control flow, structs, enums, match, modules, methods, effects, builtins
 - **`cli.md`** — CLI commands, flags, output JSON schema, exit codes, trace/error formats
 - **`contracts.md`** — vow blocks, requires/ensures/invariant, blame semantics
 - **`errors.md`** — diagnostic error codes and their meanings
 - **`examples.md`** — worked examples
 
-**Any change to Vow syntax, semantics, types, builtins, operators, effects, or CLI flags MUST include a corresponding update to the relevant `docs/skill/*.md` file.** The skill files are the spec — compiler code implements them, not the other way around. If you add a type, update `grammar.md`. If you change a builtin signature, update `grammar.md`. If you add a CLI flag, update `cli.md`. If you change contract semantics, update `contracts.md`.
+**Any change to Vow syntax, semantics, types, builtins, operators, effects, or CLI flags MUST include a corresponding update to the relevant `docs/spec/*.md` file.** The spec files are the spec — compiler code implements them, not the other way around. If you add a type, update `grammar.md`. If you change a builtin signature, update `grammar.md`. If you add a CLI flag, update `cli.md`. If you change contract semantics, update `contracts.md`.
 
-After updating a skill file, regenerate `--help` and rebuild:
+The Claude Code skill document is embedded in the compiler and generated on demand:
 ```bash
-uv run python scripts/generate_help.py          # regenerate --help in both compilers
+build/vowc skill print                            # print skill to stdout
+build/vowc skill install                          # install to .claude/commands/vow-toolchain.md
+```
+
+After updating a spec file, regenerate `--help` / embedded skill and rebuild:
+```bash
+uv run python scripts/generate_help.py          # regenerate --help and skill in both compilers
 cargo build --release -p vow                     # rebuild Rust compiler
 scripts/bootstrap.sh --skip-cargo                 # rebuild build/vowc
 ```

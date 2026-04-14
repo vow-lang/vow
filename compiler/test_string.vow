@@ -1,0 +1,13 @@
+module TestString
+
+fn main() -> i32 [io] {
+    let s: String = String::from("hello");
+    if s.len() != 5 { return 1; }
+    let s2: String = String::from("hello");
+    if s != s2 { return 2; }
+    let s3: String = String::from("world");
+    if s == s3 { return 3; }
+    let empty: String = String::from("");
+    if empty.len() != 0 { return 4; }
+    0
+}

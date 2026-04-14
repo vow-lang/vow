@@ -1,0 +1,26 @@
+// TEST: stdout "3350"
+module match_enum_multi_payload
+
+enum Shape {
+    Circle(i64),
+    Rect(i64, i64),
+    Empty,
+}
+
+fn area(s: Shape) -> i64 {
+    match s {
+        Shape::Circle(r) => { r * r * 3 },
+        Shape::Rect(w, h) => { w * h },
+        Shape::Empty => { 0 },
+    }
+}
+
+fn main() -> i32 [io] {
+    let c: Shape = Shape::Circle(1);
+    let r: Shape = Shape::Rect(5, 7);
+    let e: Shape = Shape::Empty {};
+    print_i64(area(c));
+    print_i64(area(r));
+    print_i64(area(e));
+    0
+}

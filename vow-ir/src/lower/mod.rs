@@ -67,17 +67,21 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "i64_to_string" => Some(("__vow_string_from_i64", Ty::Ptr)),
         "vec_sort" => Some(("__vow_vec_sort", Ty::Ptr)),
         "time_unix" => Some(("__vow_time_unix", Ty::I64)),
+        "time_unix_ms" => Some(("__vow_time_unix_ms", Ty::I64)),
         "hex_encode" => Some(("__vow_hex_encode", Ty::Ptr)),
         "hex_decode" => Some(("__vow_hex_decode", Ty::Ptr)),
         "args" => Some(("__vow_args", Ty::Ptr)),
         "stdin_read" => Some(("__vow_stdin_read", Ty::Ptr)),
         "stdin_read_line" => Some(("__vow_stdin_read_line", Ty::Ptr)),
+        "stdin_ready" => Some(("__vow_stdin_ready", Ty::Bool)),
         "process_exit" => Some(("__vow_process_exit", Ty::Unit)),
         "process_run" => Some(("__vow_process_run", Ty::I64)),
         "process_get_stdout" => Some(("__vow_process_get_stdout", Ty::Ptr)),
         "process_get_stderr" => Some(("__vow_process_get_stderr", Ty::Ptr)),
         "process_start" => Some(("__vow_process_start", Ty::I64)),
         "process_wait" => Some(("__vow_process_wait", Ty::I64)),
+        "process_wait_timeout" => Some(("__vow_process_wait_timeout", Ty::I64)),
+        "process_kill" => Some(("__vow_process_kill", Ty::I64)),
         "process_stdout_for" => Some(("__vow_process_stdout_for", Ty::Ptr)),
         "process_stderr_for" => Some(("__vow_process_stderr_for", Ty::Ptr)),
         "__vow_clif_create" => Some(("__vow_clif_create", Ty::I64)),
@@ -242,10 +246,7 @@ impl LowerCtx {
     /// `live_out` contains InstIds that flow out of this scope (e.g. via Upsilon)
     /// and must not be freed.
     pub(super) fn pop_alloc_scope_frees(&mut self, live_out: &[InstId], span: Span) {
-        let scope = self
-            .alloc_scopes
-            .pop()
-            .expect("alloc_scopes underflow");
+        let scope = self.alloc_scopes.pop().expect("alloc_scopes underflow");
         for (id, tag) in &scope {
             if self.escaped_allocs.contains(id) || live_out.contains(id) {
                 continue;
@@ -2365,7 +2366,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ),
                 (_, "truncate") => {
                     let len_id = args.first().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
-                        ctx.emit(Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0), span)
+                        ctx.emit(
+                            Opcode::ConstI64,
+                            Ty::I64,
+                            vec![],
+                            InstData::ConstI64(0),
+                            span,
+                        )
                     });
                     ctx.emit(
                         Opcode::Call,

@@ -1,6 +1,7 @@
+.env
 /target/
 compiler/main
-/build/
+build/
 compiler/*.o
 compiler/*.vow.c
 /.claude/*.local.json
@@ -10,4 +11,7 @@ compiler/*.vow.c
 /codecov
 /lcov.info
 bench/results/
+workflow/results/
 __pycache__/
+
+.claude/settings.local.json

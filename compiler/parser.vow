@@ -37,6 +37,17 @@ fn at(p: Parser, tag: i64) -> bool {
     peek_tag(p) == tag
 }
 
+fn peek_offset(p: Parser, offset: i64) -> Token {
+    let idx: i64 = p.pos + offset;
+    if idx >= 0 && idx < p.tokens.len() {
+        p.tokens[idx]
+    } else if p.tokens.len() > 0 {
+        p.tokens[p.tokens.len() - 1]
+    } else {
+        make_token(tok_eof(), 0, 0, String::from(""), 0, 0)
+    }
+}
+
 fn at_end(p: Parser) -> bool {
     peek_tag(p) == tok_eof()
 }
@@ -250,13 +261,17 @@ fn parse_enum_def(p: Parser) -> i64 {
         variant_items.push(vsid);
         if at(p, tok_lparen()) {
             let _lp: Token = advance(p);
+            let payload_types: Vec<i64> = Vec::new();
             while !at(p, tok_rparen()) && !at_end(p) {
-                let _tid: i64 = parse_type(p);
+                let tid: i64 = parse_type(p);
+                payload_types.push(tid);
                 if at(p, tok_comma()) {
                     let _c: Token = advance(p);
                 }
             }
             let _rp: bool = expect(p, tok_rparen());
+            let payload_lid: i64 = arena_add_list(p.arena, payload_types);
+            variant_items.push(payload_lid);
         } else if at(p, tok_lbrace()) {
             let _lb2: Token = advance(p);
             while !at(p, tok_rbrace()) && !at_end(p) {
@@ -268,6 +283,11 @@ fn parse_enum_def(p: Parser) -> i64 {
                 }
             }
             let _rb2: bool = expect(p, tok_rbrace());
+            let empty_lid: i64 = arena_add_list(p.arena, Vec::new());
+            variant_items.push(empty_lid);
+        } else {
+            let empty_lid: i64 = arena_add_list(p.arena, Vec::new());
+            variant_items.push(empty_lid);
         }
         if at(p, tok_comma()) {
             let _comma: Token = advance(p);
@@ -536,6 +556,18 @@ fn tok_to_binop(tag: i64) -> i64 {
     else { BINOP_OR() }
 }
 
+fn looks_like_struct_literal(p: Parser) -> bool {
+    let t1: Token = peek_offset(p, 1);
+    if t1.tag == tok_rbrace() {
+        return true;
+    }
+    if t1.tag == tok_ident() {
+        let t2: Token = peek_offset(p, 2);
+        return t2.tag == tok_colon();
+    }
+    false
+}
+
 fn is_block_expr(a: AstArena, eid: i64) -> bool {
     let tag: i64 = expr_tag(a, eid);
     tag == EXPR_IF() || tag == EXPR_WHILE() || tag == EXPR_LOOP() || tag == EXPR_FOR() || tag == EXPR_MATCH() || tag == EXPR_BLOCK()
@@ -660,7 +692,7 @@ fn parse_primary(p: Parser) -> i64 {
         let sid: i64 = arena_intern_str(p.arena, name_str);
         if at(p, tok_colon_colon()) {
             parse_path_expr(p, sid)
-        } else if at(p, tok_lbrace()) && first_byte >= 65 && first_byte <= 90 {
+        } else if at(p, tok_lbrace()) && first_byte >= 65 && first_byte <= 90 && looks_like_struct_literal(p) {
             let path_items: Vec<i64> = Vec::new();
             path_items.push(sid);
             let path_lid: i64 = arena_add_list(p.arena, path_items);
@@ -754,7 +786,7 @@ fn parse_path_expr(p: Parser, first_sid: i64) -> i64 {
     let path_lid: i64 = arena_add_list(p.arena, path_items);
     if at(p, tok_lbrace()) {
         let n_segs: i64 = path_items.len();
-        if n_segs > 1 {
+        if n_segs > 1 && looks_like_struct_literal(p) {
             let _lb: Token = advance(p);
             let val_items: Vec<i64> = Vec::new();
             while !at(p, tok_rbrace()) && !at_end(p) {
@@ -769,7 +801,7 @@ fn parse_path_expr(p: Parser, first_sid: i64) -> i64 {
             let _rb: bool = expect(p, tok_rbrace());
             let vals_lid: i64 = arena_add_list(p.arena, val_items);
             arena_add_expr(p.arena, EXPR_ECTOR(), path_lid, vals_lid, 0, 0)
-        } else {
+        } else if looks_like_struct_literal(p) {
             let _lb: Token = advance(p);
             let field_items: Vec<i64> = Vec::new();
             while !at(p, tok_rbrace()) && !at_end(p) {
@@ -785,6 +817,8 @@ fn parse_path_expr(p: Parser, first_sid: i64) -> i64 {
             let _rb: bool = expect(p, tok_rbrace());
             let fields_lid: i64 = arena_add_list(p.arena, field_items);
             arena_add_expr(p.arena, EXPR_SLIT(), path_lid, fields_lid, 0, 0)
+        } else {
+            arena_add_expr(p.arena, EXPR_ECTOR(), path_lid, arena_add_list(p.arena, Vec::new()), 0, 0)
         }
     } else if at(p, tok_lparen()) {
         let args_lid: i64 = parse_call_args(p);

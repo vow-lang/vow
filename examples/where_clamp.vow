@@ -1,10 +1,9 @@
 module WhereClamp
 
 fn bounded_add(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {
-  requires: a <= 100,
-  requires: b <= 100,
-  ensures: result >= 0,
-  ensures: result <= 200
+  requires: a <= 9223372036854775807 - b,
+  ensures: result >= a,
+  ensures: result >= b
 } {
   a + b
 }

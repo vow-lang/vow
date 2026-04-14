@@ -1,0 +1,32 @@
+// TEST: stdout "init:1push_via_alias:2read_back:42second_bucket:0done"
+module vec_nested_alias
+
+fn main() -> i32 [io] {
+    let buckets: Vec<Vec<i64>> = Vec::new();
+    buckets.push(Vec::new());
+    buckets.push(Vec::new());
+
+    // read inner vec via index — creates alias
+    let b: Vec<i64> = buckets[0];
+    b.push(10);
+    print_str("init:");
+    print_i64(b.len());
+
+    // push via alias is visible through original
+    b.push(42);
+    print_str("push_via_alias:");
+    let b2: Vec<i64> = buckets[0];
+    print_i64(b2.len());
+
+    // read back the value pushed through alias
+    print_str("read_back:");
+    print_i64(b2[1]);
+
+    // second bucket is independent
+    let other: Vec<i64> = buckets[1];
+    print_str("second_bucket:");
+    print_i64(other.len());
+
+    print_str("done");
+    0
+}

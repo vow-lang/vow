@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate --help JSON and human-readable output from skill docs.
 
-Reads docs/skill/grammar.md and docs/skill/cli.md (the canonical specs),
+Reads docs/spec/grammar.md and docs/spec/cli.md (the canonical specs),
 builds the help JSON structure, and writes it into:
   - vow/src/main.rs  (skill_json raw string literal, skill_human string literal)
   - compiler/main.vow (skill_json push_str calls, skill_human push_str calls)
@@ -19,9 +19,14 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-GRAMMAR = REPO / "docs" / "skill" / "grammar.md"
-CLI = REPO / "docs" / "skill" / "cli.md"
-CONTRACTS = REPO / "docs" / "skill" / "contracts.md"
+SPEC_DIR = REPO / "docs" / "spec"
+GRAMMAR = SPEC_DIR / "grammar.md"
+CLI = SPEC_DIR / "cli.md"
+CONTRACTS = SPEC_DIR / "contracts.md"
+INDEX = SPEC_DIR / "index.md"
+ERRORS = SPEC_DIR / "errors.md"
+EXAMPLES = SPEC_DIR / "examples.md"
+SCHEMAS_DIR = SPEC_DIR / "schemas"
 MAIN_RS = REPO / "vow" / "src" / "main.rs"
 MAIN_VOW = REPO / "compiler" / "main.vow"
 
@@ -41,7 +46,8 @@ def _split_table_row(line: str) -> list[str]:
 
 def extract_table(text: str, heading: str, *, heading_level: int = 3) -> list[list[str]]:
     """Extract rows from a markdown table under a heading.
-    Returns list of rows, each row is a list of cell strings (backticks stripped)."""
+    Returns list of rows, each row is a list of cell strings (backticks stripped).
+    Collects rows from all tables in the section, including sub-sections."""
     prefix = "#" * heading_level + " "
     in_section = False
     in_table = False
@@ -52,13 +58,18 @@ def extract_table(text: str, heading: str, *, heading_level: int = 3) -> list[li
             in_table = False
             continue
         if in_section and line.startswith("#"):
-            break
+            level = len(line) - len(line.lstrip("#"))
+            if level <= heading_level:
+                break
+            in_table = False
+            continue
         if in_section and line.startswith("|") and "---" in line:
             in_table = True
             continue
         if in_section and in_table:
             if not line.startswith("|"):
-                break
+                in_table = False
+                continue
             cells = _split_table_row(line)
             cells = [re.sub(r"`([^`]*)`", r"\1", c) for c in cells]
             rows.append(cells)
@@ -149,6 +160,24 @@ def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
             flag, _default, desc = row[0], row[1], row[2]
             verify_options[flag] = desc
 
+    # --- CLI: test options ---
+    test_opt_rows = extract_table(cli, "vow test", heading_level=3)
+    test_options = {}
+    for row in test_opt_rows:
+        if len(row) >= 3:
+            flag, default, desc = row[0], row[1], row[2]
+            if flag == "--mode debug":
+                test_options["--mode <debug|release>"] = (
+                    f"Build mode; debug inserts runtime vow checks (default: {default})"
+                )
+                continue
+            if flag == "--mode release":
+                continue
+            desc_with_default = desc
+            if default not in ("", "(off)", "(none)") and not desc.endswith(")"):
+                desc_with_default = f"{desc} (default: {default})"
+            test_options[flag] = desc_with_default
+
     # --- CLI: contracts options ---
     contracts_opt_rows = extract_table(cli, "vow contracts", heading_level=3)
     contracts_options = {}
@@ -175,13 +204,15 @@ def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
         "commands": {
             "build": "Compile source to native executable (verifies by default; use --no-verify to skip)",
             "verify": "Verify contracts without producing an executable (use --no-cache to skip cache)",
-            "test": "Run tests (not yet implemented)",
+            "test": "Run tests: discover, compile, execute test_*.vow files with JSON results",
             "decl": "Emit declaration file (.vow.d) with type signatures only",
             "contracts": "List all contracts with optional verification status",
+            "skill": "Generate or install the Claude Code skill document for this compiler version",
         },
         "legacy_usage": "vow [OPTIONS] <source.vow> (equivalent to vow build)",
         "build_options": build_options,
         "verify_options": verify_options,
+        "test_options": test_options,
         "contracts_options": contracts_options,
         "global_options": {
             "--help": "Print this JSON capability description",
@@ -280,9 +311,10 @@ def build_help_human(data: dict) -> str:
     lines.append("USAGE")
     lines.append("  vow build [OPTIONS] <source.vow>    Compile to native executable")
     lines.append("  vow verify [OPTIONS] <source.vow>    Verify contracts only (no executable)")
-    lines.append("  vow test [<source.vow>]             Run tests (not yet implemented)")
+    lines.append("  vow test [OPTIONS] [<path>]          Run tests (test_*.vow / *_test.vow)")
     lines.append("  vow contracts [OPTIONS] <source.vow> List all contracts")
     lines.append("  vow decl [OPTIONS] <source.vow>    Emit declaration file (.vow.d)")
+    lines.append("  vow skill [print|install]           Generate or install Claude Code skill")
     lines.append("  vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)")
     lines.append("")
 
@@ -294,6 +326,12 @@ def build_help_human(data: dict) -> str:
 
     lines.append("VERIFY OPTIONS")
     for flag, desc in data["verify_options"].items():
+        pad = max(24, len(flag) + 2)
+        lines.append(f"  {flag:<{pad}s}{desc}")
+    lines.append("")
+
+    lines.append("TEST OPTIONS")
+    for flag, desc in data["test_options"].items():
         pad = max(24, len(flag) + 2)
         lines.append(f"  {flag:<{pad}s}{desc}")
     lines.append("")
@@ -397,22 +435,34 @@ def build_help_human(data: dict) -> str:
 # Inject into Rust main.rs
 # ---------------------------------------------------------------------------
 
+def _replace_between_markers(content: str, start_marker: str, end_marker: str, replacement: str) -> str:
+    """Replace content between start/end marker lines (inclusive)."""
+    start_idx = content.find(start_marker)
+    if start_idx == -1:
+        raise ValueError(f"Cannot find marker: {start_marker}")
+    end_idx = content.find(end_marker, start_idx)
+    if end_idx == -1:
+        raise ValueError(f"Cannot find marker: {end_marker}")
+    end_idx += len(end_marker)
+    return content[:start_idx] + replacement + content[end_idx:]
+
+
 def inject_rust(main_rs: Path, json_str: str, human_str: str) -> str:
     content = main_rs.read_text()
 
-    # Replace skill_json body using marker-based find/replace
-    json_fn_marker = 'fn skill_json() -> String {'
-    json_start = content.index(json_fn_marker)
-    json_end = content.index('.to_string()\n}', json_start) + len('.to_string()\n}')
-    json_replacement = f'fn skill_json() -> String {{\n    r#"{json_str}"#\n    .to_string()\n}}'
-    content = content[:json_start] + json_replacement + content[json_end:]
+    content = _replace_between_markers(
+        content,
+        "// GENERATE:SKILL_JSON:START",
+        "// GENERATE:SKILL_JSON:END",
+        f'// GENERATE:SKILL_JSON:START\nfn skill_json() -> String {{\n    r#"{json_str}"#\n    .to_string()\n}}\n// GENERATE:SKILL_JSON:END',
+    )
 
-    # Replace skill_human body — use a raw string to avoid escape issues
-    human_fn_marker = 'fn skill_human() -> String {'
-    human_start = content.index(human_fn_marker)
-    human_end = content.index('.to_string()\n}', human_start) + len('.to_string()\n}')
-    human_replacement = f'fn skill_human() -> String {{\n    r#"{human_str}"#\n        .to_string()\n}}'
-    content = content[:human_start] + human_replacement + content[human_end:]
+    content = _replace_between_markers(
+        content,
+        "// GENERATE:SKILL_HUMAN:START",
+        "// GENERATE:SKILL_HUMAN:END",
+        f'// GENERATE:SKILL_HUMAN:START\nfn skill_human() -> String {{\n    r#"{human_str}"#\n        .to_string()\n}}\n// GENERATE:SKILL_HUMAN:END',
+    )
 
     return content
 
@@ -437,29 +487,102 @@ def _vow_pushstr_body(text: str) -> tuple[str, str]:
 def inject_vow(main_vow: Path, json_str: str, human_str: str) -> str:
     content = main_vow.read_text()
 
-    # Replace skill_json function body using marker-based find/replace
-    json_start_marker = "fn skill_json() -> String {\n    let r: String = String::from("
-    json_start = content.index(json_start_marker)
-    json_end_marker = "    r\n}\n\nfn skill_human"
-    json_end = content.index(json_end_marker, json_start) + len("    r\n}")
-
     first_json, rest_json = _vow_pushstr_body(json_str)
-    json_fn = f'fn skill_json() -> String {{\n    let r: String = String::from("{first_json}\\n");\n{rest_json}\n    r\n}}'
-    content = content[:json_start] + json_fn + content[json_end:]
-
-    # Replace skill_human function body
-    human_start_marker = "fn skill_human() -> String {\n    let r: String = String::from("
-    human_start = content.index(human_start_marker)
-    # Find the closing "    r\n}\n" that ends this function
-    # Search for the pattern "    r\n}\n\n" after skill_human start
-    human_end_marker = "    r\n}\n\n"
-    human_end = content.index(human_end_marker, human_start) + len("    r\n}")
+    json_fn = f'// GENERATE:SKILL_JSON:START\nfn skill_json() -> String {{\n    let r: String = String::from("{first_json}\\n");\n{rest_json}\n    r\n}}\n// GENERATE:SKILL_JSON:END'
+    content = _replace_between_markers(
+        content, "// GENERATE:SKILL_JSON:START", "// GENERATE:SKILL_JSON:END", json_fn,
+    )
 
     first_human, rest_human = _vow_pushstr_body(human_str)
-    human_fn = f'fn skill_human() -> String {{\n    let r: String = String::from("{first_human}\\n");\n{rest_human}\n    r\n}}'
-    content = content[:human_start] + human_fn + content[human_end:]
+    human_fn = f'// GENERATE:SKILL_HUMAN:START\nfn skill_human() -> String {{\n    let r: String = String::from("{first_human}\\n");\n{rest_human}\n    r\n}}\n// GENERATE:SKILL_HUMAN:END'
+    content = _replace_between_markers(
+        content, "// GENERATE:SKILL_HUMAN:START", "// GENERATE:SKILL_HUMAN:END", human_fn,
+    )
 
     return content
+
+
+# ---------------------------------------------------------------------------
+# Build full skill markdown from spec files
+# ---------------------------------------------------------------------------
+
+SKILL_FRONTMATTER = """\
+---
+name: vow-toolchain
+description: >-
+  Write, compile, debug, and verify Vow programs (.vow files). Covers the
+  CEGIS workflow (counterexample-guided inductive synthesis), contract
+  authoring (requires, ensures, invariant), fixing VerifyFailed
+  counterexamples, resolving CompileFailed diagnostics, loop invariants,
+  the Vow effect system, and running vow build / vow verify. Use when the
+  user says "write a Vow program", "fix this counterexample", "add
+  contracts", "why did verification fail", "ESBMC", or "vow build".
+globs: "**/*.vow"
+---"""
+
+
+def build_skill_markdown() -> str:
+    """Assemble the full skill document from spec files.
+
+    Produces a single self-contained markdown file with YAML frontmatter,
+    suitable for installation as a Claude Code skill/command.
+    """
+    parts: list[str] = [SKILL_FRONTMATTER, ""]
+
+    # Index/overview (strip sections between OMIT-FROM-SKILL markers)
+    index_text = INDEX.read_text()
+    omit_start = "<!-- OMIT-FROM-SKILL-START -->"
+    omit_end = "<!-- OMIT-FROM-SKILL-END -->"
+    start_idx = index_text.find(omit_start)
+    if start_idx != -1:
+        end_idx = index_text.find(omit_end, start_idx)
+        if end_idx != -1:
+            index_text = (index_text[:start_idx].rstrip() +
+                          index_text[end_idx + len(omit_end):])
+    parts.append(index_text.rstrip())
+    parts.append("")
+
+    # Append each spec file
+    for spec_file in [GRAMMAR, CLI, CONTRACTS, ERRORS, EXAMPLES]:
+        parts.append("---")
+        parts.append("")
+        parts.append(spec_file.read_text().rstrip())
+        parts.append("")
+
+    # Inline JSON schemas
+    schema_files = sorted(SCHEMAS_DIR.glob("*.json"))
+    if schema_files:
+        parts.append("---")
+        parts.append("")
+        parts.append("# JSON Schemas")
+        parts.append("")
+        for sf in schema_files:
+            stem = sf.stem.replace(".schema", "")
+            parts.append(f"## {stem}")
+            parts.append("")
+            parts.append("```json")
+            parts.append(sf.read_text().rstrip())
+            parts.append("```")
+            parts.append("")
+
+    return "\n".join(parts)
+
+
+def inject_skill_rust(content: str, skill_md: str) -> str:
+    """Inject skill_full_markdown() into Rust main.rs."""
+    replacement = f'// GENERATE:SKILL_FULL:START\nfn skill_full_markdown() -> String {{\n    r#"{skill_md}"#\n    .to_string()\n}}\n// GENERATE:SKILL_FULL:END'
+    return _replace_between_markers(
+        content, "// GENERATE:SKILL_FULL:START", "// GENERATE:SKILL_FULL:END", replacement,
+    )
+
+
+def inject_skill_vow(content: str, skill_md: str) -> str:
+    """Inject skill_full() into self-hosted main.vow."""
+    first, rest = _vow_pushstr_body(skill_md)
+    fn_body = f'// GENERATE:SKILL_FULL:START\nfn skill_full() -> String {{\n    let r: String = String::from("{first}\\n");\n{rest}\n    r\n}}\n// GENERATE:SKILL_FULL:END'
+    return _replace_between_markers(
+        content, "// GENERATE:SKILL_FULL:START", "// GENERATE:SKILL_FULL:END", fn_body,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -480,6 +603,8 @@ def main() -> None:
     # Validate the generated JSON is parseable
     json.loads(json_str)
 
+    skill_md = build_skill_markdown()
+
     if check_only:
         print("Generated JSON is valid.")
         print(f"  types: {len(data['language']['types'])}")
@@ -487,15 +612,18 @@ def main() -> None:
         print(f"  builtins: {len(data['language']['builtins'])}")
         print(f"  build_options: {len(data['build_options'])}")
         print(f"  verify_options: {len(data['verify_options'])}")
+        print(f"  skill_markdown: {len(skill_md)} bytes")
         return
 
     # Inject into Rust
     new_rs = inject_rust(MAIN_RS, json_str, human_str)
+    new_rs = inject_skill_rust(new_rs, skill_md)
     MAIN_RS.write_text(new_rs)
     print(f"Updated {MAIN_RS}")
 
     # Inject into self-hosted
     new_vow = inject_vow(MAIN_VOW, json_str, human_str)
+    new_vow = inject_skill_vow(new_vow, skill_md)
     MAIN_VOW.write_text(new_vow)
     print(f"Updated {MAIN_VOW}")
 

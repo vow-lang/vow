@@ -1,0 +1,176 @@
+module VecMath
+
+pub fn vec_sum(v: Vec<i64>) -> i64 {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    let n: i64 = v.len();
+    while i < n {
+        total = total + v[i];
+        i = i + 1;
+    }
+    total
+}
+
+pub fn vec_min(v: Vec<i64>) -> i64 vow {
+    requires: v.len() > 0
+} {
+    let mut m: i64 = v[0];
+    let mut i: i64 = 1;
+    let n: i64 = v.len();
+    while i < n vow {
+        invariant: i >= 1,
+        invariant: i <= n
+    } {
+        if v[i] < m {
+            m = v[i];
+        }
+        i = i + 1;
+    }
+    m
+}
+
+pub fn vec_max(v: Vec<i64>) -> i64 vow {
+    requires: v.len() > 0
+} {
+    let mut m: i64 = v[0];
+    let mut i: i64 = 1;
+    let n: i64 = v.len();
+    while i < n vow {
+        invariant: i >= 1,
+        invariant: i <= n
+    } {
+        if v[i] > m {
+            m = v[i];
+        }
+        i = i + 1;
+    }
+    m
+}
+
+pub fn vec_mean(v: Vec<i64>) -> i64 vow {
+    requires: v.len() > 0
+} {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    let n: i64 = v.len();
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
+        total = total + v[i];
+        i = i + 1;
+    }
+    total / n
+}
+
+pub fn vec_dot(a: Vec<i64>, b: Vec<i64>) -> i64 vow {
+    requires: a.len() == b.len()
+} {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    let n: i64 = a.len();
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
+        total = total + a[i] * b[i];
+        i = i + 1;
+    }
+    total
+}
+
+pub fn vec_count(v: Vec<i64>, target: i64) -> i64 vow {
+    ensures: result >= 0,
+    ensures: result <= v.len()
+} {
+    let mut count: i64 = 0;
+    let mut i: i64 = 0;
+    let n: i64 = v.len();
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n,
+        invariant: count >= 0,
+        invariant: count <= i
+    } {
+        if v[i] == target {
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    count
+}
+
+pub fn vec_all_in_range(v: Vec<i64>, lo: i64, hi: i64) -> bool vow {
+    requires: lo <= hi
+} {
+    let mut i: i64 = 0;
+    let n: i64 = v.len();
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
+        if v[i] < lo {
+            return false;
+        }
+        if v[i] > hi {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+pub fn vec_is_sorted(v: Vec<i64>) -> bool {
+    if v.len() <= 1 {
+        true
+    } else {
+        let mut i: i64 = 1;
+        let n: i64 = v.len();
+        let mut sorted: bool = true;
+        while i < n vow {
+            invariant: i >= 1,
+            invariant: i <= n
+        } {
+            if v[i] < v[i - 1] {
+                sorted = false;
+            }
+            i = i + 1;
+        }
+        sorted
+    }
+}
+
+pub fn vec_prefix_sum(v: Vec<i64>) -> Vec<i64> vow {
+    ensures: result.len() == v.len()
+} {
+    let out: Vec<i64> = Vec::new();
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    let n: i64 = v.len();
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
+        total = total + v[i];
+        out.push(total);
+        i = i + 1;
+    }
+    out
+}
+
+pub fn vec_reverse(v: Vec<i64>) -> Vec<i64> vow {
+    ensures: result.len() == v.len()
+} {
+    let out: Vec<i64> = Vec::new();
+    let n: i64 = v.len();
+    let mut i: i64 = n - 1;
+    while i >= 0 vow {
+        invariant: i >= -1,
+        invariant: i < n
+    } {
+        out.push(v[i]);
+        i = i - 1;
+    }
+    out
+}
+

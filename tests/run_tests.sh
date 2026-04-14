@@ -97,6 +97,8 @@ parse_annotations() {
   TEST_CX_FN=""
   TEST_CX_BLAME=""
   TEST_SKIP=""
+  TEST_STDIN=""
+  TEST_STDIN_FILE=""
 
   while IFS= read -r line; do
     if [[ "$line" =~ ^//\ TEST:\ exit\ ([0-9]+) ]]; then
@@ -115,6 +117,10 @@ parse_annotations() {
       TEST_CX_FN="${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ counterexample-blame\ (.+) ]]; then
       TEST_CX_BLAME="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^//\ TEST:\ stdin\ \"(.*)\" ]]; then
+      TEST_STDIN="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^//\ TEST:\ stdin-file\ (.+) ]]; then
+      TEST_STDIN_FILE="$(dirname "$file")/${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ skip\ \"(.+)\" ]]; then
       TEST_SKIP="${BASH_REMATCH[1]}"
     elif [[ ! "$line" =~ ^// ]]; then
@@ -202,12 +208,17 @@ for f in "$SCRIPT_DIR"/run/*.vow; do
     continue
   fi
 
-  # Run
-  actual_stdout="$(run_bin "$out" 2>/dev/null)" || true
-  actual_exit=$?
-  # Re-run to capture exit code properly
+  # Run (pipe stdin if TEST_STDIN is set)
+  # Disable pipefail in the stdin subshell so we capture the binary's exit
+  # code, not printf's SIGPIPE (141) when the binary exits early.
   set +e
-  actual_stdout="$(run_bin "$out" 2>/dev/null)"
+  if [[ -n "$TEST_STDIN_FILE" ]]; then
+    actual_stdout="$(run_bin "$out" < "$TEST_STDIN_FILE" 2>/dev/null)"
+  elif [[ -n "$TEST_STDIN" ]]; then
+    actual_stdout="$(set +o pipefail; printf '%b' "$TEST_STDIN" | run_bin "$out" 2>/dev/null)"
+  else
+    actual_stdout="$(run_bin "$out" 2>/dev/null)"
+  fi
   actual_exit=$?
   set -e
 

@@ -940,15 +940,26 @@ impl<'e> Checker<'e> {
                     let arm_ty = self.check_expr(&arm.body);
                     self.env.pop_scope();
                     if i == 0 {
+                        result_ty = arm_ty.clone();
+                    } else if arm_ty != result_ty && arm_ty != Ty::Never && result_ty != Ty::Never {
+                        let coercible = (arm_ty == Ty::I32 && result_ty.is_integer())
+                            || (result_ty == Ty::I32 && arm_ty.is_integer());
+                        if coercible {
+                            if result_ty == Ty::I32 && arm_ty.is_integer() {
+                                result_ty = arm_ty.clone();
+                            }
+                        } else {
+                            self.emit_error(
+                                ErrorCode::TypeMismatch,
+                                format!(
+                                    "match arm has type `{arm_ty}` but previous arms have type `{result_ty}`"
+                                ),
+                                arm.span,
+                            );
+                        }
+                    }
+                    if result_ty == Ty::Never && arm_ty != Ty::Never {
                         result_ty = arm_ty;
-                    } else if arm_ty != result_ty && arm_ty != Ty::Never {
-                        self.emit_error(
-                            ErrorCode::TypeMismatch,
-                            format!(
-                                "match arm has type `{arm_ty}` but previous arms have type `{result_ty}`"
-                            ),
-                            arm.span,
-                        );
                     }
                 }
                 result_ty

@@ -1,0 +1,24 @@
+// TEST: stdout "3070"
+module DeallocPhiStruct
+
+struct Pair {
+    a: i64,
+    b: i64,
+}
+
+fn choose_pair(flag: bool) -> Pair {
+    let p: Pair = Pair { a: 10, b: 20 };
+    if flag {
+        p
+    } else {
+        Pair { a: 30, b: 40 }
+    }
+}
+
+fn main() -> i32 [io] {
+    let p1: Pair = choose_pair(true);
+    print_i64(p1.a + p1.b);
+    let p2: Pair = choose_pair(false);
+    print_i64(p2.a + p2.b);
+    0
+}

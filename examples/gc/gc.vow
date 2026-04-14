@@ -1,0 +1,220 @@
+module Gc
+
+// Mark-and-sweep garbage collector library.
+//
+// GcHeap manages a pool of i64 values with explicit root/reference tracking.
+// Allocation reuses free slots after collection. The mark phase uses an
+// iterative worklist to trace from roots through reference edges. The sweep
+// phase frees unmarked objects and prunes dead references.
+
+struct GcHeap {
+    values: Vec<i64>,
+    alive: Vec<i64>,
+    marks: Vec<i64>,
+    roots: Vec<i64>,
+    ref_from: Vec<i64>,
+    ref_to: Vec<i64>,
+    free_list: Vec<i64>,
+    count: i64,
+}
+
+fn gc_new() -> GcHeap {
+    GcHeap {
+        values: Vec::new(),
+        alive: Vec::new(),
+        marks: Vec::new(),
+        roots: Vec::new(),
+        ref_from: Vec::new(),
+        ref_to: Vec::new(),
+        free_list: Vec::new(),
+        count: 0,
+    }
+}
+
+fn gc_alloc(h: GcHeap, val: i64) -> i64 {
+    let fl: Vec<i64> = h.free_list;
+    if fl.len() > 0 {
+        let idx: i64 = fl.len() - 1;
+        let slot: i64 = fl[idx];
+        fl.pop();
+        let vals: Vec<i64> = h.values;
+        vals[slot] = val;
+        let alv: Vec<i64> = h.alive;
+        alv[slot] = 1;
+        h.count = h.count + 1;
+        slot
+    } else {
+        let vals: Vec<i64> = h.values;
+        let slot: i64 = vals.len();
+        vals.push(val);
+        let alv: Vec<i64> = h.alive;
+        alv.push(1);
+        let mrk: Vec<i64> = h.marks;
+        mrk.push(0);
+        h.count = h.count + 1;
+        slot
+    }
+}
+
+fn gc_add_root(h: GcHeap, slot: i64) vow {
+    requires: slot >= 0,
+    requires: slot < h.values.len(),
+    requires: h.alive[slot] == 1
+} {
+    let r: Vec<i64> = h.roots;
+    r.push(slot);
+}
+
+fn gc_remove_root(h: GcHeap, slot: i64) vow {
+    requires: slot >= 0,
+    requires: slot < h.values.len()
+} {
+    let r: Vec<i64> = h.roots;
+    let len: i64 = r.len();
+    let mut i: i64 = 0;
+    while i < len {
+        if r[i] == slot {
+            let last: i64 = r[len - 1];
+            r[i] = last;
+            r.pop();
+            return;
+        }
+        i = i + 1;
+    }
+}
+
+fn gc_add_ref(h: GcHeap, from: i64, to: i64) vow {
+    requires: from >= 0,
+    requires: from < h.values.len(),
+    requires: to >= 0,
+    requires: to < h.values.len(),
+    requires: h.alive[from] == 1,
+    requires: h.alive[to] == 1
+} {
+    let rf: Vec<i64> = h.ref_from;
+    let rt: Vec<i64> = h.ref_to;
+    rf.push(from);
+    rt.push(to);
+}
+
+fn gc_read(h: GcHeap, slot: i64) -> i64 vow {
+    requires: slot >= 0,
+    requires: slot < h.values.len(),
+    requires: h.alive[slot] == 1
+} {
+    let vals: Vec<i64> = h.values;
+    vals[slot]
+}
+
+fn gc_write(h: GcHeap, slot: i64, val: i64) vow {
+    requires: slot >= 0,
+    requires: slot < h.values.len(),
+    requires: h.alive[slot] == 1
+} {
+    let vals: Vec<i64> = h.values;
+    vals[slot] = val;
+}
+
+fn gc_is_alive(h: GcHeap, slot: i64) -> bool vow {
+    requires: slot >= 0,
+    requires: slot < h.values.len()
+} {
+    let alv: Vec<i64> = h.alive;
+    alv[slot] == 1
+}
+
+fn gc_count(h: GcHeap) -> i64 {
+    h.count
+}
+
+fn gc_collect(h: GcHeap) -> i64 {
+    let mrk: Vec<i64> = h.marks;
+    let alv: Vec<i64> = h.alive;
+    let vals: Vec<i64> = h.values;
+    let total: i64 = vals.len();
+
+    // Clear marks
+    let mut i: i64 = 0;
+    while i < total {
+        mrk[i] = 0;
+        i = i + 1;
+    }
+
+    // Build worklist from roots
+    let wl: Vec<i64> = Vec::new();
+    let r: Vec<i64> = h.roots;
+    let rlen: i64 = r.len();
+    i = 0;
+    while i < rlen {
+        let root: i64 = r[i];
+        if alv[root] == 1 && mrk[root] == 0 {
+            mrk[root] = 1;
+            wl.push(root);
+        }
+        i = i + 1;
+    }
+
+    // Mark phase: iterative worklist
+    let rf: Vec<i64> = h.ref_from;
+    let rt: Vec<i64> = h.ref_to;
+    let elen: i64 = rf.len();
+    while wl.len() > 0 {
+        let last_idx: i64 = wl.len() - 1;
+        let obj: i64 = wl[last_idx];
+        wl.pop();
+
+        let mut j: i64 = 0;
+        while j < elen {
+            if rf[j] == obj {
+                let target: i64 = rt[j];
+                if alv[target] == 1 && mrk[target] == 0 {
+                    mrk[target] = 1;
+                    wl.push(target);
+                }
+            }
+            j = j + 1;
+        }
+    }
+
+    // Sweep phase: free unmarked objects
+    let fl: Vec<i64> = h.free_list;
+    let mut freed: i64 = 0;
+    i = 0;
+    while i < total {
+        if alv[i] == 1 && mrk[i] == 0 {
+            alv[i] = 0;
+            vals[i] = 0;
+            fl.push(i);
+            freed = freed + 1;
+            h.count = h.count - 1;
+        }
+        i = i + 1;
+    }
+
+    // Prune dead references (edges where either endpoint was freed)
+    let new_rf: Vec<i64> = Vec::new();
+    let new_rt: Vec<i64> = Vec::new();
+    i = 0;
+    while i < elen {
+        let from_slot: i64 = rf[i];
+        let to_slot: i64 = rt[i];
+        if alv[from_slot] == 1 && alv[to_slot] == 1 {
+            new_rf.push(from_slot);
+            new_rt.push(to_slot);
+        }
+        i = i + 1;
+    }
+
+    // Replace edge lists
+    rf.clear();
+    rt.clear();
+    i = 0;
+    let new_len: i64 = new_rf.len();
+    while i < new_len {
+        rf.push(new_rf[i]);
+        rt.push(new_rt[i]);
+        i = i + 1;
+    }
+
+    freed
+}

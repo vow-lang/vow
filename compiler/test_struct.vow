@@ -1,0 +1,20 @@
+module TestStruct
+
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+fn make_point(x: i64, y: i64) -> Point {
+    Point { x: x, y: y }
+}
+
+fn main() -> i32 {
+    let p: Point = make_point(3, 4);
+    if p.x != 3 { return 1; }
+    if p.y != 4 { return 2; }
+    let q: Point = Point { x: 10, y: 20 };
+    if q.x != 10 { return 3; }
+    if q.y != 20 { return 4; }
+    0
+}

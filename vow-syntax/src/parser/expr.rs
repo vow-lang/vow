@@ -643,7 +643,8 @@ impl Parser {
             }
             self.expect(TokenKind::RParen);
             args
-        } else if self.at(&TokenKind::LBrace) && path.len() > 1 {
+        } else if self.at(&TokenKind::LBrace) && path.len() > 1 && self.looks_like_struct_literal()
+        {
             self.advance();
             let mut args = Vec::new();
             while !self.at(&TokenKind::RBrace) && !self.at_end() {

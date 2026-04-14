@@ -4,8 +4,20 @@ fn add(a: i64, b: i64) -> i64 {
     a + b
 }
 
-fn main() -> i32 [io] {
-    let result: i64 = add(3, 4);
-    print_i64(result);
+fn sub(a: i64, b: i64) -> i64 {
+    a - b
+}
+
+fn mul(a: i64, b: i64) -> i64 {
+    a * b
+}
+
+fn main() -> i32 {
+    if add(3, 4) != 7 { return 1; }
+    if add(0, 0) != 0 { return 2; }
+    if add(-1, 1) != 0 { return 3; }
+    if sub(10, 3) != 7 { return 4; }
+    if mul(6, 7) != 42 { return 5; }
+    if mul(0, 100) != 0 { return 6; }
     0
 }

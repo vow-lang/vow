@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-SKILL_FILES = [
+SPEC_FILES = [
     "index.md",
     "grammar.md",
     "contracts.md",
@@ -15,10 +15,10 @@ SKILL_FILES = [
 
 
 def build_system_prompt(root: Path) -> str:
-    skill_dir = root / "docs" / "skill"
+    spec_dir = root / "docs" / "spec"
     parts = []
-    for name in SKILL_FILES:
-        path = skill_dir / name
+    for name in SPEC_FILES:
+        path = spec_dir / name
         parts.append(f"# {name}\n\n{path.read_text()}")
     return "\n\n---\n\n".join(parts)
 

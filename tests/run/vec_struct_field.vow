@@ -1,0 +1,60 @@
+// TEST: stdout "first 10 20 30 40 40\n"
+module VecStructField
+
+pub enum Kind {
+    Alpha(i64),
+    Beta(i64),
+}
+
+pub struct Entry {
+    name: String,
+    x: i64,
+    y: i64,
+    tags: Vec<i64>,
+    kind: Kind,
+}
+
+fn read_from_param(v: Vec<Entry>, idx: i64) -> i64 {
+    v[idx].y
+}
+
+fn main() -> i32 [io] {
+    let mut entries: Vec<Entry> = Vec::new();
+    let t1: Vec<i64> = Vec::new();
+    let k1: Kind = Kind::Alpha(0);
+    let e1: Entry = Entry { name: String::from("first"), x: 10, y: 20, tags: t1, kind: k1 };
+    entries.push(e1);
+
+    let t2: Vec<i64> = Vec::new();
+    let k2: Kind = Kind::Beta(1);
+    let e2: Entry = Entry { name: String::from("second"), x: 30, y: 40, tags: t2, kind: k2 };
+    entries.push(e2);
+
+    // Access non-zero field indices through Vec indexing
+    let x1: i64 = entries[0].x;
+    let y1: i64 = entries[0].y;
+    let x2: i64 = entries[1].x;
+    let y2: i64 = entries[1].y;
+
+    // Access String field (index 0)
+    let n1: String = entries[0].name;
+    print_str(n1);
+    print_str(" ");
+
+    // Print integer fields
+    print_i64(x1);
+    print_str(" ");
+    print_i64(y1);
+    print_str(" ");
+    print_i64(x2);
+    print_str(" ");
+    print_i64(y2);
+    print_str(" ");
+
+    // Access via function parameter
+    let y_param: i64 = read_from_param(entries, 1);
+    print_i64(y_param);
+    print_str("\n");
+
+    0
+}

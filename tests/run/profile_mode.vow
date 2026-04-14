@@ -1,0 +1,14 @@
+// TEST: stdout "5"
+module ProfileMode
+
+fn helper(x: i64) -> i64 {
+  x + 1
+}
+
+fn main() -> i32 [io] {
+  let a: i64 = helper(1);
+  let b: i64 = helper(a);
+  let c: i64 = helper(b) + helper(0);
+  print_i64(c);
+  0
+}

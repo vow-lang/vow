@@ -1,0 +1,28 @@
+// TEST: stdout "36300"
+module DeallocMulti
+
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+fn make_and_discard() -> i64 {
+    let p: Point = Point { x: 10, y: 20 };
+    let s: String = String::from("temp");
+    let v: Vec<i64> = Vec::new();
+    v.push(1);
+    v.push(2);
+    p.x + p.y + s.len() + v.len()
+}
+
+fn escaped_to_caller() -> Point {
+    Point { x: 100, y: 200 }
+}
+
+fn main() -> i32 [io] {
+    let r: i64 = make_and_discard();
+    print_i64(r);
+    let p: Point = escaped_to_caller();
+    print_i64(p.x + p.y);
+    0
+}

@@ -1,0 +1,25 @@
+// TEST: stdout "1\n2\n3\n"
+module ConstComparison
+
+const A: i64 = 10;
+const B: i64 = 20;
+
+fn classify(x: i64) -> i64 {
+    if x == A {
+        1
+    } else if x != B {
+        2
+    } else {
+        3
+    }
+}
+
+fn main() -> i64 [io] {
+    print_i64(classify(10));
+    print_str("\n");
+    print_i64(classify(99));
+    print_str("\n");
+    print_i64(classify(20));
+    print_str("\n");
+    0
+}

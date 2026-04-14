@@ -680,17 +680,21 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("i64_to_string") { return String::from("__vow_string_from_i64"); }
     if name == String::from("vec_sort") { return String::from("__vow_vec_sort"); }
     if name == String::from("time_unix") { return String::from("__vow_time_unix"); }
+    if name == String::from("time_unix_ms") { return String::from("__vow_time_unix_ms"); }
     if name == String::from("hex_encode") { return String::from("__vow_hex_encode"); }
     if name == String::from("hex_decode") { return String::from("__vow_hex_decode"); }
     if name == String::from("args") { return String::from("__vow_args"); }
     if name == String::from("stdin_read") { return String::from("__vow_stdin_read"); }
     if name == String::from("stdin_read_line") { return String::from("__vow_stdin_read_line"); }
+    if name == String::from("stdin_ready") { return String::from("__vow_stdin_ready"); }
     if name == String::from("process_exit") { return String::from("__vow_process_exit"); }
     if name == String::from("process_run") { return String::from("__vow_process_run"); }
     if name == String::from("process_get_stdout") { return String::from("__vow_process_get_stdout"); }
     if name == String::from("process_get_stderr") { return String::from("__vow_process_get_stderr"); }
     if name == String::from("process_start") { return String::from("__vow_process_start"); }
     if name == String::from("process_wait") { return String::from("__vow_process_wait"); }
+    if name == String::from("process_wait_timeout") { return String::from("__vow_process_wait_timeout"); }
+    if name == String::from("process_kill") { return String::from("__vow_process_kill"); }
     if name == String::from("process_stdout_for") { return String::from("__vow_process_stdout_for"); }
     if name == String::from("process_stderr_for") { return String::from("__vow_process_stderr_for"); }
     String::from("")
@@ -723,17 +727,21 @@ fn builtin_ret_ty(name: String) -> i64 {
     if name == String::from("i64_to_string") { return ITY_PTR(); }
     if name == String::from("vec_sort") { return ITY_PTR(); }
     if name == String::from("time_unix") { return ITY_I64(); }
+    if name == String::from("time_unix_ms") { return ITY_I64(); }
     if name == String::from("hex_encode") { return ITY_PTR(); }
     if name == String::from("hex_decode") { return ITY_PTR(); }
     if name == String::from("args") { return ITY_PTR(); }
     if name == String::from("stdin_read") { return ITY_PTR(); }
     if name == String::from("stdin_read_line") { return ITY_PTR(); }
+    if name == String::from("stdin_ready") { return ITY_BOOL(); }
     if name == String::from("process_exit") { return ITY_UNIT(); }
     if name == String::from("process_run") { return ITY_I64(); }
     if name == String::from("process_get_stdout") { return ITY_PTR(); }
     if name == String::from("process_get_stderr") { return ITY_PTR(); }
     if name == String::from("process_start") { return ITY_I64(); }
     if name == String::from("process_wait") { return ITY_I64(); }
+    if name == String::from("process_wait_timeout") { return ITY_I64(); }
+    if name == String::from("process_kill") { return ITY_I64(); }
     if name == String::from("process_stdout_for") { return ITY_PTR(); }
     if name == String::from("process_stderr_for") { return ITY_PTR(); }
     ITY_UNIT()
@@ -3213,15 +3221,26 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>, file_path: String) -> IrModul
             let ename_sid: i64 = edef_name_sid(a, iid);
             let ename: String = arena_str(a, ename_sid);
             let variants_lid: i64 = edef_variants_lid(a, iid);
-            let nv: i64 = list_len(a, variants_lid);
+            let n_pairs: i64 = list_len(a, variants_lid);
+            let nv: i64 = n_pairs / 2;
             let vnames: Vec<String> = Vec::new();
             let ir_variants: Vec<IrVariantLayout> = Vec::new();
             let mut vi: i64 = 0;
             while vi < nv {
-                let vname_sid: i64 = list_get(a, variants_lid, vi);
+                let vname_sid: i64 = list_get(a, variants_lid, vi * 2);
                 let vname: String = arena_str(a, vname_sid);
                 vnames.push(vname);
+                let payload_lid: i64 = list_get(a, variants_lid, vi * 2 + 1);
+                let n_payload: i64 = list_len(a, payload_lid);
                 let payload: Vec<IrFieldLayout> = Vec::new();
+                let mut pi: i64 = 0;
+                while pi < n_payload {
+                    let p_ast_tid: i64 = list_get(a, payload_lid, pi);
+                    let p_ir_ty: i64 = lower_ast_ty(a, p_ast_tid);
+                    let fl: IrFieldLayout = IrFieldLayout { name: String::from(""), ty: p_ir_ty };
+                    payload.push(fl);
+                    pi = pi + 1;
+                }
                 let vl: IrVariantLayout = IrVariantLayout { name: vname, tag: vi, payload: payload };
                 ir_variants.push(vl);
                 vi = vi + 1;

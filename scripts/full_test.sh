@@ -124,8 +124,8 @@ compare_runtime() {
     fi
 
     local rust_out="" self_out="" rust_exit=0 self_exit=0
-    rust_out=$("$rust_bin" 2>/dev/null) || rust_exit=$?
-    self_out=$(run_self_bin "$self_bin" 2>/dev/null) || self_exit=$?
+    rust_out=$("$rust_bin" </dev/null 2>/dev/null) || rust_exit=$?
+    self_out=$(run_self_bin "$self_bin" </dev/null 2>/dev/null) || self_exit=$?
 
     local errors=()
     if [ "$rust_exit" != "$self_exit" ]; then
@@ -266,17 +266,78 @@ for vow_file in examples/*.vow; do
 done
 echo ""
 
-# ─── Section 4: Debug Mode ─────────────────────────────────────────
+# ─── Section 4: Run Tests (tests/run/) ────────────────────────────
 
-echo -e "${BOLD}--- Section 4: Debug Mode ---${RESET}"
+echo -e "${BOLD}--- Section 4: Run Tests ---${RESET}"
+for vow_file in tests/run/*.vow; do
+    name=$(basename "$vow_file" .vow)
+
+    # Build with both compilers
+    rust_json="" self_json="" rust_exit=0 self_exit=0
+    rust_json=$($RUST build --no-verify "$vow_file" -o "$TMPDIR/test_rust_${name}" 2>/dev/null) || rust_exit=$?
+    self_json=$(run_self build --no-verify "$vow_file" -o "$TMPDIR/test_self_${name}" 2>/dev/null) || self_exit=$?
+
+    if [ -z "$rust_json" ] || [ -z "$self_json" ]; then
+        skip "${name}/test-build" "empty output (rust=$rust_exit, self=$self_exit)"
+        continue
+    fi
+
+    compare_json "${name}/test-build" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
+
+    # Extract executables
+    rust_exe=$(python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('executable') or '')" <<< "$rust_json" 2>/dev/null) || rust_exe=""
+    self_exe=$(python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('executable') or '')" <<< "$self_json" 2>/dev/null) || self_exe=""
+
+    if [ -z "$rust_exe" ] && [ -z "$self_exe" ]; then
+        skip "${name}/test-run" "no executable"
+        continue
+    fi
+    if [ -z "$rust_exe" ] || [ -z "$self_exe" ]; then
+        fail "${name}/test-run" "executable mismatch: rust='${rust_exe:-null}' self='${self_exe:-null}'"
+        continue
+    fi
+
+    # Compare runtime output between compilers
+    compare_runtime "${name}/test-run" "$TMPDIR/test_rust_${name}" "$TMPDIR/test_self_${name}"
+
+    # Validate against // TEST: stdout directive if present
+    expected=$(sed -n 's|^// TEST: stdout "\(.*\)"$|\1|p' "$vow_file" | head -1)
+    if [ -n "$expected" ]; then
+        actual=$("$TMPDIR/test_rust_${name}" </dev/null 2>/dev/null) || true
+        # Interpret \n escapes in expected string
+        expected_decoded=$(printf '%b' "$expected")
+        if [ "$actual" = "$expected_decoded" ]; then
+            pass "${name}/test-expected"
+        else
+            fail "${name}/test-expected" "expected '$expected' got '$(echo "$actual" | head -c 80)'"
+        fi
+    fi
+
+    # Validate against // TEST: exit directive if present
+    expected_exit=$(sed -n 's|^// TEST: exit \([0-9]*\)$|\1|p' "$vow_file" | head -1)
+    if [ -n "$expected_exit" ]; then
+        actual_exit=0
+        "$TMPDIR/test_rust_${name}" </dev/null >/dev/null 2>/dev/null || actual_exit=$?
+        if [ "$actual_exit" = "$expected_exit" ]; then
+            pass "${name}/test-exit"
+        else
+            fail "${name}/test-exit" "expected exit $expected_exit got $actual_exit"
+        fi
+    fi
+done
+echo ""
+
+# ─── Section 5: Debug Mode ─────────────────────────────────────────
+
+echo -e "${BOLD}--- Section 5: Debug Mode ---${RESET}"
 
 # divide.vow: VowViolation at runtime
 $RUST build --mode debug --no-verify examples/divide.vow -o "$TMPDIR/rust_divide_debug" >/dev/null 2>/dev/null
 run_self build --mode debug --no-verify examples/divide.vow -o "$TMPDIR/self_divide_debug" >/dev/null 2>/dev/null
 
 rust_exit=0 self_exit=0
-"$TMPDIR/rust_divide_debug" >"$TMPDIR/rust_dbg_out" 2>"$TMPDIR/rust_dbg_err" || rust_exit=$?
-run_self_bin "$TMPDIR/self_divide_debug" >"$TMPDIR/self_dbg_out" 2>"$TMPDIR/self_dbg_err" || self_exit=$?
+"$TMPDIR/rust_divide_debug" </dev/null >"$TMPDIR/rust_dbg_out" 2>"$TMPDIR/rust_dbg_err" || rust_exit=$?
+run_self_bin "$TMPDIR/self_divide_debug" </dev/null >"$TMPDIR/self_dbg_out" 2>"$TMPDIR/self_dbg_err" || self_exit=$?
 rust_err=$(cat "$TMPDIR/rust_dbg_err")
 self_err=$(cat "$TMPDIR/self_dbg_err")
 
@@ -301,12 +362,65 @@ for name in callee_blame clamp hello; do
 done
 echo ""
 
-# ─── Section 5: Multi-Module ───────────────────────────────────────
+# ─── Section 5b: Profile Mode ─────────────────────────────────────
 
-echo -e "${BOLD}--- Section 5: Multi-Module ---${RESET}"
+echo -e "${BOLD}--- Section 5b: Profile Mode ---${RESET}"
 
-for multi in stack geometry; do
-    main_file="examples/${multi}/main.vow"
+# Build profile_mode.vow with both compilers
+$RUST build --mode profile --no-verify tests/run/profile_mode.vow -o "$TMPDIR/rust_profile_mode" >/dev/null 2>/dev/null
+run_self build --mode profile --no-verify tests/run/profile_mode.vow -o "$TMPDIR/self_profile_mode" >/dev/null 2>/dev/null
+
+# Run and capture stderr (profile report) and stdout (program output)
+rust_prof_out=$("$TMPDIR/rust_profile_mode" </dev/null 2>"$TMPDIR/rust_prof_err") || true
+self_prof_out=$(run_self_bin "$TMPDIR/self_profile_mode" </dev/null 2>"$TMPDIR/self_prof_err") || true
+
+errors=()
+# Verify stdout matches expected output
+if [ "$rust_prof_out" != "5" ]; then errors+=("rust stdout='$rust_prof_out', expected '5'"); fi
+if [ "$self_prof_out" != "5" ]; then errors+=("self stdout='$self_prof_out', expected '5'"); fi
+# Verify profile report structure in stderr
+for compiler in rust self; do
+    errfile="$TMPDIR/${compiler}_prof_err"
+    if ! grep -q "vow profile report" "$errfile"; then errors+=("${compiler} stderr missing 'vow profile report'"); fi
+    if ! grep -q "total calls: 5" "$errfile"; then errors+=("${compiler} stderr missing 'total calls: 5'"); fi
+    if ! grep -q "unique functions: 2" "$errfile"; then errors+=("${compiler} stderr missing 'unique functions: 2'"); fi
+    # helper called 4 times (4/5 = 80.0%)
+    if ! grep -qE "helper\s+4\s" "$errfile"; then errors+=("${compiler} stderr: helper not called 4 times"); fi
+    # main called 1 time
+    if ! grep -qE "main\s+1\s" "$errfile"; then errors+=("${compiler} stderr: main not called 1 time"); fi
+    # helper should appear before main (sorted by count descending)
+    helper_line=$(grep -n "helper" "$errfile" | head -1 | cut -d: -f1)
+    main_line=$(grep -n "main" "$errfile" | grep -v "vow_main" | tail -1 | cut -d: -f1)
+    if [ -n "$helper_line" ] && [ -n "$main_line" ] && [ "$helper_line" -gt "$main_line" ]; then
+        errors+=("${compiler} stderr: helper should appear before main (sorted by count)")
+    fi
+done
+if [ ${#errors[@]} -eq 0 ]; then
+    pass "profile_mode/profile"
+else
+    fail "profile_mode/profile" "$(IFS='; '; echo "${errors[*]}")"
+fi
+echo ""
+
+# ─── Section 5c: Sanitize Mode ────────────────────────────────────
+
+echo -e "${BOLD}--- Section 5c: Sanitize Mode ---${RESET}"
+
+# sanitize_vec.vow: Vec operations with sanitize instrumentation
+$RUST build --mode sanitize --no-verify tests/debug/sanitize_vec.vow -o "$TMPDIR/rust_sanitize_vec" >/dev/null 2>/dev/null
+run_self build --mode sanitize --no-verify tests/debug/sanitize_vec.vow -o "$TMPDIR/self_sanitize_vec" >/dev/null 2>/dev/null
+compare_runtime "sanitize_vec/sanitize" "$TMPDIR/rust_sanitize_vec" "$TMPDIR/self_sanitize_vec"
+
+echo ""
+# ─── Section 6: Multi-Module ───────────────────────────────────────
+
+echo -e "${BOLD}--- Section 6: Multi-Module ---${RESET}"
+
+for multi in stack geometry bignum gc math; do
+    case "$multi" in
+        math) main_file="lib/math/main.vow" ;;
+        *)    main_file="examples/${multi}/main.vow" ;;
+    esac
     printf "${BOLD}%s${RESET}\n" "$multi"
 
     # build --no-verify
@@ -336,9 +450,9 @@ for multi in stack geometry; do
 done
 echo ""
 
-# ─── Section 6: Error Handling ─────────────────────────────────────
+# ─── Section 7: Error Handling ─────────────────────────────────────
 
-echo -e "${BOLD}--- Section 6: Error Handling ---${RESET}"
+echo -e "${BOLD}--- Section 7: Error Handling ---${RESET}"
 
 cat > "$TMPDIR/parse_error.vow" <<'EOF'
 module M 123
@@ -375,9 +489,9 @@ for fixture in parse_error type_error missing_module const_type_mismatch; do
 done
 echo ""
 
-# ─── Section 7: Help Output ────────────────────────────────────────
+# ─── Section 8: Help Output ────────────────────────────────────────
 
-echo -e "${BOLD}--- Section 7: Help Output ---${RESET}"
+echo -e "${BOLD}--- Section 8: Help Output ---${RESET}"
 
 # --help → valid JSON with "tool" key
 rust_help=$($RUST --help 2>/dev/null) || true
@@ -415,23 +529,23 @@ else
 fi
 
 # help/coverage-rust: cross-reference grammar.md → Rust --help
-if uv run python scripts/check_help_coverage.py docs/skill/grammar.md "$rust_help" 2>/dev/null; then
+if uv run python scripts/check_help_coverage.py docs/spec/grammar.md "$rust_help" 2>/dev/null; then
     pass "help/coverage-rust"
 else
     fail "help/coverage-rust" "Rust --help missing grammar.md features"
 fi
 
 # help/coverage-self: cross-reference grammar.md → self-hosted --help
-if uv run python scripts/check_help_coverage.py docs/skill/grammar.md "$self_help" 2>/dev/null; then
+if uv run python scripts/check_help_coverage.py docs/spec/grammar.md "$self_help" 2>/dev/null; then
     pass "help/coverage-self"
 else
     fail "help/coverage-self" "self-hosted --help missing grammar.md features"
 fi
 echo ""
 
-# ─── Section 8: Bootstrap Triple Test ──────────────────────────────
+# ─── Section 9: Bootstrap Triple Test ──────────────────────────────
 
-echo -e "${BOLD}--- Section 8: Bootstrap Triple Test ---${RESET}"
+echo -e "${BOLD}--- Section 9: Bootstrap Triple Test ---${RESET}"
 
 scripts/concat_vow.sh clif > "$TMPDIR/compiler_clif.vow"
 
@@ -454,9 +568,9 @@ else
 fi
 echo ""
 
-# ─── Section 9: Build + Verify Default Mode ────────────────────────
+# ─── Section 10: Build + Verify Default Mode ───────────────────────
 
-echo -e "${BOLD}--- Section 9: Build + Verify Default Mode ---${RESET}"
+echo -e "${BOLD}--- Section 10: Build + Verify Default Mode ---${RESET}"
 
 for name in clamp max callee_blame cegis_broken; do
     vow_file="examples/${name}.vow"
@@ -472,6 +586,59 @@ for name in clamp max callee_blame cegis_broken; do
 
     compare_json "${name}/build-verify" "$rust_json" "$self_json" "$rust_exit" "$self_exit"
 done
+echo ""
+
+# ─── Section 10: Test Subcommand ────────────────────────────────────
+
+echo -e "${BOLD}--- Section 10: Test Subcommand ---${RESET}"
+
+# Run vowc test with both compilers on compiler/ directory
+rust_test_json=$($RUST test compiler/ 2>/dev/null) || true
+self_test_json=$(run_self test compiler/ 2>/dev/null) || true
+
+if [ -z "$rust_test_json" ] || [ -z "$self_test_json" ]; then
+    skip "test/subcommand" "empty output"
+else
+    # Check that both report TestsPassed
+    rust_status=$(echo "$rust_test_json" | uv run python -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null) || rust_status=""
+    self_status=$(echo "$self_test_json" | uv run python -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null) || self_status=""
+
+    if [ "$rust_status" = "TestsPassed" ] && [ "$self_status" = "TestsPassed" ]; then
+        pass "test/status"
+    else
+        fail "test/status" "rust=$rust_status self=$self_status"
+    fi
+
+    # Check counts match
+    rust_total=$(echo "$rust_test_json" | uv run python -c "import json,sys; print(json.load(sys.stdin)['total'])" 2>/dev/null) || rust_total=""
+    self_total=$(echo "$self_test_json" | uv run python -c "import json,sys; print(json.load(sys.stdin)['total'])" 2>/dev/null) || self_total=""
+
+    if [ "$rust_total" = "$self_total" ] && [ -n "$rust_total" ] && [ "$rust_total" -gt 0 ]; then
+        pass "test/counts"
+    else
+        fail "test/counts" "rust_total=$rust_total self_total=$self_total"
+    fi
+
+    # Check contract_density field exists
+    rust_cd=$(echo "$rust_test_json" | uv run python -c "import json,sys; d=json.load(sys.stdin); print('ok' if 'contract_density' in d else 'missing')" 2>/dev/null) || rust_cd=""
+    self_cd=$(echo "$self_test_json" | uv run python -c "import json,sys; d=json.load(sys.stdin); print('ok' if 'contract_density' in d else 'missing')" 2>/dev/null) || self_cd=""
+
+    if [ "$rust_cd" = "ok" ] && [ "$self_cd" = "ok" ]; then
+        pass "test/contract-density"
+    else
+        fail "test/contract-density" "rust=$rust_cd self=$self_cd"
+    fi
+
+    # Check --filter works
+    rust_filter=$($RUST test compiler/ --filter arith 2>/dev/null) || true
+    filter_total=$(echo "$rust_filter" | uv run python -c "import json,sys; print(json.load(sys.stdin)['total'])" 2>/dev/null) || filter_total=""
+
+    if [ "$filter_total" = "1" ]; then
+        pass "test/filter"
+    else
+        fail "test/filter" "expected 1 test with --filter arith, got $filter_total"
+    fi
+fi
 echo ""
 
 # ─── Summary ────────────────────────────────────────────────────────

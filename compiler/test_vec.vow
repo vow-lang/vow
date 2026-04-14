@@ -1,0 +1,16 @@
+module TestVec
+
+fn main() -> i32 {
+    let v: Vec<i64> = Vec::new();
+    if v.len() != 0 { return 1; }
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    if v.len() != 3 { return 2; }
+    if v[0] != 10 { return 3; }
+    if v[1] != 20 { return 4; }
+    if v[2] != 30 { return 5; }
+    v[1] = 99;
+    if v[1] != 99 { return 6; }
+    0
+}
