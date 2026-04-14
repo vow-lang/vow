@@ -25,6 +25,9 @@ CONTRACTS = REPO / "docs" / "skill" / "contracts.md"
 MAIN_RS = REPO / "vow" / "src" / "main.rs"
 MAIN_VOW = REPO / "compiler" / "main.vow"
 
+SCHEMA_VERSION = "2"
+DEFAULT_UNWIND = 10
+
 
 # ---------------------------------------------------------------------------
 # Markdown table extraction
@@ -52,13 +55,18 @@ def extract_table(text: str, heading: str, *, heading_level: int = 3) -> list[li
             in_table = False
             continue
         if in_section and line.startswith("#"):
-            break
+            level = len(line) - len(line.lstrip("#"))
+            if level <= heading_level:
+                break
+            in_table = False
+            continue
         if in_section and line.startswith("|") and "---" in line:
             in_table = True
             continue
         if in_section and in_table:
             if not line.startswith("|"):
-                break
+                in_table = False
+                continue
             cells = _split_table_row(line)
             cells = [re.sub(r"`([^`]*)`", r"\1", c) for c in cells]
             rows.append(cells)
@@ -242,6 +250,31 @@ def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
         decl_options[key] = value
         decl_option_entries.append(option)
 
+    test_opt_rows = extract_table(cli, "vow test", heading_level=3)
+    test_options: dict[str, str] = {}
+    test_option_entries: list[dict] = []
+    for row in test_opt_rows:
+        if len(row) < 3:
+            continue
+        flag, default, desc = row[0], row[1], row[2]
+        if flag.startswith("<"):
+            continue
+        if flag == "--mode debug":
+            key, value, option = normalize_option(
+                flag,
+                default,
+                desc,
+                merge_mode=True,
+            )
+            test_options[key] = value
+            test_option_entries.append(option)
+            continue
+        if flag == "--mode release":
+            continue
+        key, value, option = normalize_option(flag, default, desc)
+        test_options[key] = value
+        test_option_entries.append(option)
+
     contracts_opt_rows = extract_table(cli, "vow contracts", heading_level=3)
     contracts_options: dict[str, str] = {}
     contracts_option_entries: list[dict] = []
@@ -255,7 +288,7 @@ def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
     # --- Verification limits from contracts.md ---
     collection_rows = extract_table(contracts, "Collection Models for Verification")
     verification_limits: dict[str, str | int] = {
-        "loop_unwind": 10,
+        "loop_unwind": DEFAULT_UNWIND,
     }
     for row in collection_rows:
         if len(row) >= 2:
@@ -264,7 +297,7 @@ def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
             verification_limits[type_name] = capacity
 
     return {
-        "schema_version": "2",
+        "schema_version": SCHEMA_VERSION,
         "kind": "tool_help",
         "tool": "vow",
         "audience": "agent",
@@ -299,7 +332,7 @@ def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
         "commands": {
             "build": "Compile source to native executable (verifies by default; use --no-verify to skip)",
             "verify": "Verify contracts without producing an executable (use --no-cache to skip cache)",
-            "test": "Run tests (not yet implemented)",
+            "test": "Run tests: discover, compile, execute test_*.vow files with JSON results",
             "decl": "Emit declaration file (.vow.d) with type signatures only",
             "contracts": "List all contracts with optional verification status",
         },
@@ -343,8 +376,26 @@ def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
                 ],
             },
             "test": {
-                "status": "unimplemented",
-                "usage": "vow test [<source.vow>]",
+                "status": "implemented",
+                "usage": "vow test [OPTIONS] [<path>]",
+                "arguments": [
+                    {
+                        "name": "path",
+                        "kind": "path",
+                        "required": False,
+                        "default": ".",
+                        "description": "Directory to scan or single .vow file",
+                    }
+                ],
+                "options": test_option_entries,
+                "stdout": {
+                    "format": "json",
+                },
+                "notes": [
+                    "discovers test_*.vow and *_test.vow files",
+                    "each test must contain main() -> i32 returning 0 on success",
+                    "default mode is debug (runtime vow checks enabled)",
+                ],
             },
             "decl": {
                 "status": "implemented",
@@ -380,6 +431,7 @@ def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
         },
         "build_options": build_options,
         "verify_options": verify_options,
+        "test_options": test_options,
         "decl_options": decl_options,
         "contracts_options": contracts_options,
         "global_options": {
@@ -550,7 +602,7 @@ def build_help_human(data: dict) -> str:
     lines.append("USAGE")
     lines.append("  vow build [OPTIONS] <source.vow>    Compile to native executable")
     lines.append("  vow verify [OPTIONS] <source.vow>    Verify contracts only (no executable)")
-    lines.append("  vow test [<source.vow>]             Run tests (not yet implemented)")
+    lines.append("  vow test [OPTIONS] [<path>]          Run tests with JSON results")
     lines.append("  vow contracts [OPTIONS] <source.vow> List all contracts")
     lines.append("  vow decl [OPTIONS] <source.vow>    Emit declaration file (.vow.d)")
     lines.append("  vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)")
@@ -567,6 +619,13 @@ def build_help_human(data: dict) -> str:
         pad = max(24, len(flag) + 2)
         lines.append(f"  {flag:<{pad}s}{desc}")
     lines.append("")
+
+    if data.get("test_options"):
+        lines.append("TEST OPTIONS")
+        for flag, desc in data["test_options"].items():
+            pad = max(24, len(flag) + 2)
+            lines.append(f"  {flag:<{pad}s}{desc}")
+        lines.append("")
 
     lines.append("CONTRACTS OPTIONS")
     for flag, desc in data.get("contracts_options", {}).items():
@@ -662,7 +721,7 @@ def build_help_human(data: dict) -> str:
     vlimits = data.get("verification_limits", {})
     if vlimits:
         lines.append("VERIFICATION LIMITS")
-        lines.append(f"  Loop unwind  : {vlimits.get('loop_unwind', 10)} iterations")
+        lines.append(f"  Loop unwind  : {vlimits.get('loop_unwind', DEFAULT_UNWIND)} iterations")
         for key, val in vlimits.items():
             if key != "loop_unwind":
                 lines.append(f"  {key:<14s}: {val} max capacity")
@@ -763,6 +822,7 @@ def main() -> None:
         print(f"  effects: {len(data['language']['effects'])}")
         print(f"  builtins: {len(data['language']['builtins'])}")
         print(f"  build_options: {len(data['build_options'])}")
+        print(f"  test_options: {len(data['test_options'])}")
         print(f"  verify_options: {len(data['verify_options'])}")
         return
 

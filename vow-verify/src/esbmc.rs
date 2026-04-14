@@ -220,12 +220,14 @@ pub fn emit_verify_c_source(
     c_src
 }
 
+pub const DEFAULT_UNWIND: u32 = 10;
+
 pub fn verify_function_with_module_and_const_fns(
     func: &Function,
     module: &Module,
     const_fns: &HashMap<FuncId, ConstantValue>,
 ) -> VerificationResult {
-    verify_function_with_module_and_const_fns_with_unwind(func, module, const_fns, 10)
+    verify_function_with_module_and_const_fns_with_unwind(func, module, const_fns, DEFAULT_UNWIND)
 }
 
 pub fn verify_function_with_module_and_const_fns_with_unwind(
@@ -259,7 +261,7 @@ fn verify_function_inner(
 }
 
 pub fn run_esbmc(esbmc: &std::path::Path, c_src: &str) -> VerificationResult {
-    run_esbmc_with_unwind(esbmc, c_src, 10)
+    run_esbmc_with_unwind(esbmc, c_src, DEFAULT_UNWIND)
 }
 
 pub fn run_esbmc_with_unwind(

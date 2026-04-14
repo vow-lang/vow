@@ -14,8 +14,9 @@ use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{CollectingEmitter, Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
-    Counterexample, VerificationResult, detect_constant_functions, emit_verify_c_source,
-    find_esbmc, run_esbmc_with_unwind, verify_function_with_module_and_const_fns_with_unwind,
+    Counterexample, DEFAULT_UNWIND, VerificationResult, detect_constant_functions,
+    emit_verify_c_source, find_esbmc, run_esbmc_with_unwind,
+    verify_function_with_module_and_const_fns_with_unwind,
 };
 
 use cache::{CachedVerifyResult, VerifyCache};
@@ -62,7 +63,7 @@ struct Args {
     debug_trace: TraceArg,
     #[arg(long)]
     no_cache: bool,
-    #[arg(long, default_value_t = 10)]
+    #[arg(long, default_value_t = DEFAULT_UNWIND)]
     unwind: u32,
     #[arg(long)]
     help: bool,
@@ -100,7 +101,7 @@ struct BuildArgs {
     debug_trace: TraceArg,
     #[arg(long)]
     no_cache: bool,
-    #[arg(long, default_value_t = 10)]
+    #[arg(long, default_value_t = DEFAULT_UNWIND)]
     unwind: u32,
     #[arg(long)]
     help: bool,
@@ -118,7 +119,7 @@ struct VerifyArgs {
     human: bool,
     #[arg(long)]
     no_cache: bool,
-    #[arg(long, default_value_t = 10)]
+    #[arg(long, default_value_t = DEFAULT_UNWIND)]
     unwind: u32,
 }
 
@@ -245,14 +246,15 @@ fn skill_json() -> String {
           "default": "source without .vow extension"
         },
         {
-          "form": "--mode <debug|release>",
-          "description": "Build mode; debug inserts runtime vow checks (default: release)",
+          "form": "--mode <debug|release|profile>",
+          "description": "Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit (default: release)",
           "long": "--mode",
-          "value_name": "mode",
+          "value_name": "debug|release|profile",
           "value_kind": "enum",
           "values": [
             "debug",
-            "release"
+            "release",
+            "profile"
           ],
           "default": "release"
         },
@@ -361,7 +363,8 @@ fn skill_json() -> String {
           "name": "path",
           "kind": "path",
           "required": false,
-          "default": "."
+          "default": ".",
+          "description": "Directory to scan or single .vow file"
         }
       ],
       "options": [
@@ -373,14 +376,15 @@ fn skill_json() -> String {
         },
         {
           "form": "--filter <pat>",
-          "description": "Only run tests whose name contains pat",
+          "description": "Only run tests whose name contains pat (default: (none))",
           "long": "--filter",
           "value_name": "pat",
-          "value_kind": "string"
+          "value_kind": "string",
+          "default": "(none)"
         },
         {
           "form": "--mode <debug|release>",
-          "description": "Build mode; debug inserts runtime vow checks (default: debug)",
+          "description": "Build mode; debug inserts runtime vow checks (default: (default))",
           "long": "--mode",
           "value_name": "mode",
           "value_kind": "enum",
@@ -388,19 +392,19 @@ fn skill_json() -> String {
             "debug",
             "release"
           ],
-          "default": "debug"
+          "default": "(default)"
         },
         {
           "form": "--timeout <ms>",
           "description": "Per-test execution timeout in milliseconds (default: 30000)",
           "long": "--timeout",
           "value_name": "ms",
-          "value_kind": "integer",
-          "default": 30000
+          "value_kind": "string",
+          "default": "30000"
         },
         {
           "form": "--unwind <N>",
-          "description": "ESBMC loop unwind bound (with --verify) (default: 10)",
+          "description": "ESBMC loop unwind bound (with --verify)",
           "long": "--unwind",
           "value_name": "N",
           "value_kind": "integer",
@@ -408,12 +412,12 @@ fn skill_json() -> String {
         }
       ],
       "stdout": {
-        "format": "json",
-        "schema_ref": "docs/skill/schemas/test-result.schema.json"
+        "format": "json"
       },
       "notes": [
         "discovers test_*.vow and *_test.vow files",
-        "each test must contain main() -> i32 returning 0 on success"
+        "each test must contain main() -> i32 returning 0 on success",
+        "default mode is debug (runtime vow checks enabled)"
       ]
     },
     "decl": {
@@ -504,16 +508,15 @@ fn skill_json() -> String {
     "--no-cache": "Disable verification result caching",
     "--unwind <N>": "ESBMC loop unwind bound (default: 10)"
   },
-  "decl_options": {
-    "-o, --output <path>": "Output declaration file path (default: <source>.vow.d)"
-  },
   "test_options": {
-    "<path>": "Directory to scan or single .vow file (default: .)",
     "--verify": "Run ESBMC verification on test files",
-    "--filter <pat>": "Only run tests whose name contains pat",
+    "--filter <pat>": "Only run tests whose name contains pat (default: (none))",
     "--mode <debug|release>": "Build mode; debug inserts runtime vow checks (default: (default))",
     "--timeout <ms>": "Per-test execution timeout in milliseconds (default: 30000)",
     "--unwind <N>": "ESBMC loop unwind bound (with --verify)"
+  },
+  "decl_options": {
+    "-o, --output <path>": "Output declaration file path (default: <source>.vow.d)"
   },
   "contracts_options": {
     "--verify": "Run ESBMC verification and report per-contract status",
@@ -836,7 +839,7 @@ fn skill_human() -> String {
 USAGE
   vow build [OPTIONS] <source.vow>    Compile to native executable
   vow verify [OPTIONS] <source.vow>    Verify contracts only (no executable)
-  vow test [OPTIONS] [<path>]          Run tests (test_*.vow / *_test.vow)
+  vow test [OPTIONS] [<path>]          Run tests with JSON results
   vow contracts [OPTIONS] <source.vow> List all contracts
   vow decl [OPTIONS] <source.vow>    Emit declaration file (.vow.d)
   vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)
@@ -855,9 +858,8 @@ VERIFY OPTIONS
   --unwind <N>            ESBMC loop unwind bound (default: 10)
 
 TEST OPTIONS
-  <path>                  Directory to scan or single .vow file (default: .)
   --verify                Run ESBMC verification on test files
-  --filter <pat>          Only run tests whose name contains pat
+  --filter <pat>          Only run tests whose name contains pat (default: (none))
   --mode <debug|release>  Build mode; debug inserts runtime vow checks (default: (default))
   --timeout <ms>          Per-test execution timeout in milliseconds (default: 30000)
   --unwind <N>            ESBMC loop unwind bound (with --verify)
@@ -2233,8 +2235,6 @@ fn count_contract_density(ir_module: &vow_ir::Module) -> ContractDensity {
     }
 }
 
-// TODO: --unwind is accepted but not threaded to ESBMC (hardcoded to 10 in vow-verify).
-// This affects build/verify/test equally — fix in vow-verify when adding unwind passthrough.
 fn run_test_command(
     path: &Path,
     verify: bool,
@@ -2927,7 +2927,7 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            run_contracts_command(&source, c.verify, c.no_cache, c.unwind.unwrap_or(10));
+            run_contracts_command(&source, c.verify, c.no_cache, c.unwind.unwrap_or(DEFAULT_UNWIND));
         }
         None => {
             if args.help {
