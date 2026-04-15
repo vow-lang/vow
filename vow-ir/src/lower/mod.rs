@@ -154,6 +154,10 @@ pub struct LowerCtx {
     loop_continue_phis: Vec<Vec<(String, InstId)>>,
     // For for-each: the index Phi to increment on continue (None for while/loop)
     loop_continue_idx_phi: Vec<Option<InstId>>,
+    // Scope depth at loop header (before body scope push) for correct continue resolution.
+    // continue must resolve loop-carried vars from this depth, not the current scope, to
+    // avoid picking up shadowed bindings in inner blocks.
+    loop_continue_scope_depth: Vec<usize>,
     // Per-loop break-value Upsilon collector.  `Some(vec)` for `loop` (collects
     // (source_block, upsilon_id, value_ty)), `None` for `while`.
     loop_break_upsilons: Vec<Option<Vec<(BlockId, InstId, Ty)>>>,
@@ -227,6 +231,7 @@ impl LowerCtx {
             loop_header_blocks: Vec::new(),
             loop_continue_phis: Vec::new(),
             loop_continue_idx_phi: Vec::new(),
+            loop_continue_scope_depth: Vec::new(),
             loop_break_upsilons: Vec::new(),
             inst_vec_elem_type: HashMap::new(),
             struct_field_vec_elems,
@@ -399,6 +404,18 @@ impl LowerCtx {
 
     pub(super) fn lookup(&self, name: &str) -> Option<InstId> {
         for frame in self.scope.iter().rev() {
+            if let Some(&id) = frame.get(name) {
+                return Some(id);
+            }
+        }
+        None
+    }
+
+    /// Look up a variable considering only scope frames up to (exclusive) `depth`.
+    /// Used by `continue` to resolve loop-carried vars from the loop header scope,
+    /// skipping any inner-scope shadows introduced in the loop body.
+    pub(super) fn lookup_at_depth(&self, name: &str, depth: usize) -> Option<InstId> {
+        for frame in self.scope[..depth].iter().rev() {
             if let Some(&id) = frame.get(name) {
                 return Some(id);
             }
@@ -1220,10 +1237,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.loop_header_blocks.push(header_block);
             ctx.loop_continue_phis.push(phi_ids.clone());
             ctx.loop_continue_idx_phi.push(None);
+            ctx.loop_continue_scope_depth.push(ctx.scope.len());
             ctx.loop_break_upsilons.push(None);
             ctx.push_alloc_scope();
             lower_block(ctx, body);
             ctx.loop_break_upsilons.pop();
+            ctx.loop_continue_scope_depth.pop();
             ctx.loop_continue_idx_phi.pop();
             ctx.loop_continue_phis.pop();
             ctx.loop_header_blocks.pop();
@@ -1400,6 +1419,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ctx.inst_struct_type.insert(elem_id, elem_name);
             }
 
+            // Save scope depth before pushing the for-each binding scope.
+            // Loop-carried phis track outer mutation variables whose bindings
+            // live at this depth; the for-each binding is a new scope that must
+            // be excluded from continue's lookup to avoid resolving to it.
+            let for_scope_depth = ctx.scope.len();
+
             ctx.push_scope();
             ctx.define(binding.clone(), elem_id);
 
@@ -1407,7 +1432,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.loop_header_blocks.push(header_block);
             ctx.loop_continue_phis.push(phi_ids.clone());
             ctx.loop_continue_idx_phi.push(Some(idx_phi));
+            ctx.loop_continue_scope_depth.push(for_scope_depth);
             lower_block(ctx, body);
+            ctx.loop_continue_scope_depth.pop();
             ctx.loop_continue_idx_phi.pop();
             ctx.loop_continue_phis.pop();
             ctx.loop_header_blocks.pop();
@@ -1523,10 +1550,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.loop_header_blocks.push(header_block);
             ctx.loop_continue_phis.push(phi_ids.clone());
             ctx.loop_continue_idx_phi.push(None);
+            ctx.loop_continue_scope_depth.push(ctx.scope.len());
             ctx.loop_break_upsilons.push(Some(Vec::new()));
             ctx.push_alloc_scope();
             lower_block(ctx, body);
             let break_ups = ctx.loop_break_upsilons.pop().unwrap();
+            ctx.loop_continue_scope_depth.pop();
             ctx.loop_continue_idx_phi.pop();
             ctx.loop_continue_phis.pop();
             ctx.loop_header_blocks.pop();
@@ -1630,10 +1659,17 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .expect("continue outside of loop");
             let phis = ctx.loop_continue_phis.last().cloned().unwrap_or_default();
             let idx_phi = ctx.loop_continue_idx_phi.last().copied().flatten();
+            let scope_depth = ctx
+                .loop_continue_scope_depth
+                .last()
+                .copied()
+                .expect("continue outside of loop");
 
             // Emit back-edge Upsilons for mutation variables.
+            // Use lookup_at_depth to resolve from the loop header scope, not the
+            // current scope, so that shadowed bindings in inner blocks are skipped.
             for (name, phi_id) in &phis {
-                if let Some(cur_val) = ctx.lookup(name) {
+                if let Some(cur_val) = ctx.lookup_at_depth(name, scope_depth) {
                     ctx.emit(
                         Opcode::Upsilon,
                         ctx.inst_ty(cur_val),

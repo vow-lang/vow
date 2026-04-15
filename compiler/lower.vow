@@ -32,6 +32,7 @@ struct LowerCtx {
     loop_continue_phi_names: Vec<Vec<String>>,
     loop_continue_phi_ids: Vec<Vec<i64>>,
     loop_continue_idx_phi: Vec<i64>,
+    loop_continue_scope_depth: Vec<i64>,
     loop_is_loop: Vec<i64>,
     loop_break_up_ids: Vec<i64>,
     loop_break_up_blocks: Vec<i64>,
@@ -87,6 +88,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         loop_continue_phi_names: Vec::new(),
         loop_continue_phi_ids: Vec::new(),
         loop_continue_idx_phi: Vec::new(),
+        loop_continue_scope_depth: Vec::new(),
         loop_is_loop: Vec::new(),
         loop_break_up_ids: Vec::new(),
         loop_break_up_blocks: Vec::new(),
@@ -200,6 +202,17 @@ fn lctx_assign(ctx: LowerCtx, name: String, val: i64) {
 fn lctx_lookup(ctx: LowerCtx, name: String) -> i64 {
     let n: i64 = ctx.scope_vars.len();
     let mut i: i64 = n;
+    while i > 0 {
+        i = i - 1;
+        if ctx.scope_vars[i] == name {
+            return ctx.scope_vals[i];
+        }
+    }
+    -1
+}
+
+fn lctx_lookup_at_depth(ctx: LowerCtx, name: String, depth: i64) -> i64 {
+    let mut i: i64 = depth;
     while i > 0 {
         i = i - 1;
         if ctx.scope_vars[i] == name {
@@ -1368,12 +1381,14 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_continue_phi_names.push(cpn);
         ctx.loop_continue_phi_ids.push(cpi);
         ctx.loop_continue_idx_phi.push(-1);
+        ctx.loop_continue_scope_depth.push(ctx.scope_vars.len());
         ctx.loop_is_loop.push(0);
         ctx.loop_break_counts.push(0);
         lctx_push_alloc_scope(ctx);
         lower_block(ctx, body_bid);
         ctx.loop_break_counts.pop();
         ctx.loop_is_loop.pop();
+        ctx.loop_continue_scope_depth.pop();
         ctx.loop_continue_idx_phi.pop();
         ctx.loop_continue_phi_ids.pop();
         ctx.loop_continue_phi_names.pop();
@@ -1490,6 +1505,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_continue_phi_names.push(lcpn);
         ctx.loop_continue_phi_ids.push(lcpi);
         ctx.loop_continue_idx_phi.push(-1);
+        ctx.loop_continue_scope_depth.push(ctx.scope_vars.len());
         ctx.loop_is_loop.push(1);
         ctx.loop_break_counts.push(0);
         let break_start: i64 = ctx.loop_break_up_ids.len();
@@ -1498,6 +1514,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let break_count: i64 = ctx.loop_break_counts[break_count_idx];
         ctx.loop_break_counts.pop();
         ctx.loop_is_loop.pop();
+        ctx.loop_continue_scope_depth.pop();
         ctx.loop_continue_idx_phi.pop();
         ctx.loop_continue_phi_ids.pop();
         ctx.loop_continue_phi_names.pop();
@@ -1645,6 +1662,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             lctx_tag(ctx, elem_id, elem_tag);
         }
 
+        let for_scope_depth: i64 = ctx.scope_vars.len();
         lctx_push_scope(ctx);
         lctx_define(ctx, binding_name, elem_id);
 
@@ -1661,12 +1679,14 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_continue_phi_names.push(fcpn);
         ctx.loop_continue_phi_ids.push(fcpi);
         ctx.loop_continue_idx_phi.push(idx_phi);
+        ctx.loop_continue_scope_depth.push(for_scope_depth);
         ctx.loop_is_loop.push(0);
         ctx.loop_break_counts.push(0);
         lctx_push_alloc_scope(ctx);
         lower_block(ctx, body_bid);
         ctx.loop_break_counts.pop();
         ctx.loop_is_loop.pop();
+        ctx.loop_continue_scope_depth.pop();
         ctx.loop_continue_idx_phi.pop();
         ctx.loop_continue_phi_ids.pop();
         ctx.loop_continue_phi_names.pop();
@@ -2570,11 +2590,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let hdr_block: i64 = ctx.loop_header_blocks[nlh - 1];
             let phi_names: Vec<String> = ctx.loop_continue_phi_names[nlh - 1];
             let phi_ids2: Vec<i64> = ctx.loop_continue_phi_ids[nlh - 1];
+            let scope_depth: i64 = ctx.loop_continue_scope_depth[nlh - 1];
             let nphis: i64 = phi_names.len();
             let mut pi: i64 = 0;
             while pi < nphis {
                 let vname: String = phi_names[pi];
-                let cur_val: i64 = lctx_lookup(ctx, vname);
+                let cur_val: i64 = lctx_lookup_at_depth(ctx, vname, scope_depth);
                 let val_ty: i64 = ITY_I64();
                 let up_args: Vec<i64> = Vec::new();
                 up_args.push(cur_val);

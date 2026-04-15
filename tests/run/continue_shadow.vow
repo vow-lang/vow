@@ -1,0 +1,21 @@
+// TEST: stdout "5\n495\n"
+// Regression test for #143: shadowed variables must not corrupt loop-carried
+// Phi bindings on continue. The outer x (mutated) should flow to the Phi,
+// not the inner shadow.
+module ContinueShadow
+
+fn main() -> i32 [io] {
+    let mut x: i64 = 0;
+    let mut count: i64 = 0;
+    while x < 5 {
+        x = x + 1;
+        let x: i64 = 99;
+        count = count + x;
+        continue;
+    }
+    print_i64(x);
+    print_str("\n");
+    print_i64(count);
+    print_str("\n");
+    0
+}
