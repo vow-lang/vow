@@ -724,7 +724,8 @@ fn emit_inst(
                     "__vow_string_from_cstr" => {
                         out.push_str(&format!(
                             "  v{id}.len = __VERIFIER_nondet_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < INT64_MAX);\n"
+                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < INT64_MAX);\n\
+                             \x20 v{id}.data = (int8_t*)0;\n"
                         ));
                     }
                     "__vow_string_len" => {
@@ -790,6 +791,7 @@ fn emit_inst(
                             "  __ESBMC_assert(v{start} >= 0 && v{start} <= v{s}.len, \"substring start\");\n\
                              \x20 __ESBMC_assert(v{end} >= v{start} && v{end} <= v{s}.len, \"substring end\");\n\
                              \x20 v{id}.len = v{end} - v{start};\n\
+                             \x20 v{id}.data = (int8_t*)realloc((int8_t*)0, (size_t)(v{id}.len + 1));\n\
                              \x20 for (int64_t __i = 0; __i < v{id}.len; __i++) {{\n\
                              \x20   v{id}.data[__i] = v{s}.data[v{start} + __i];\n\
                              \x20 }}\n"
@@ -1081,17 +1083,20 @@ pub fn emit_c_function_full(
                     if vec_vars.contains(&id) {
                         out.push_str(&format!(
                             "  __vow_vec_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len >= 0);\n"
+                             \x20 __ESBMC_assume(v{id}.len >= 0);\n\
+                             \x20 v{id}.data = (int64_t*)0;\n"
                         ));
                     } else if string_vars.contains(&id) {
                         out.push_str(&format!(
                             "  __vow_string_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len >= 0);\n"
+                             \x20 __ESBMC_assume(v{id}.len >= 0);\n\
+                             \x20 v{id}.data = (int8_t*)0;\n"
                         ));
                     } else if hashmap_vars.contains(&id) {
                         out.push_str(&format!(
                             "  __vow_hashmap_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len >= 0);\n"
+                             \x20 __ESBMC_assume(v{id}.len >= 0);\n\
+                             \x20 v{id}.keys = (int64_t*)0;\n  v{id}.vals = (int64_t*)0;\n"
                         ));
                     } else if option_vars.contains(&id) {
                         out.push_str(&format!("  __vow_option_t v{};\n  v{}.tag = 0;\n", id, id));
