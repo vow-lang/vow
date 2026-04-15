@@ -4653,7 +4653,7 @@ fn verify_outcome_to_output(
 // ---------------------------------------------------------------------------
 
 pub fn run_verify_only(source: &Path) -> BuildOutput {
-    run_verify_only_inner(source, false, 10)
+    run_verify_only_inner(source, false, DEFAULT_MAX_K_STEP)
 }
 
 fn run_verify_only_inner(source: &Path, no_cache: bool, max_k_step: u32) -> BuildOutput {

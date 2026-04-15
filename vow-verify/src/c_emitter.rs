@@ -675,16 +675,14 @@ fn emit_inst(
             if let InstData::CallExtern(ref name) = inst.data {
                 match name.as_str() {
                     "__vow_vec_new" => {
-                        out.push_str(&format!(
-                            "  v{id}.len = 0;\n\
-                             \x20 v{id}.data = (int64_t*)malloc(sizeof(int64_t));\n"
-                        ));
+                        out.push_str(&format!("  v{id}.len = 0;\n  v{id}.data = (int64_t*)0;\n"));
                     }
                     "__vow_vec_push_val" => {
                         let vec = inst.args[0].0;
                         let val = inst.args[1].0;
                         out.push_str(&format!(
-                            "  v{vec}.data[v{vec}.len] = v{val};\n  v{vec}.len++;\n"
+                            "  v{vec}.data = (int64_t*)realloc(v{vec}.data, sizeof(int64_t) * (size_t)(v{vec}.len + 1));\n\
+                             \x20 v{vec}.data[v{vec}.len] = v{val};\n  v{vec}.len++;\n"
                         ));
                     }
                     "__vow_vec_get_val" => {
@@ -726,8 +724,7 @@ fn emit_inst(
                     "__vow_string_from_cstr" => {
                         out.push_str(&format!(
                             "  v{id}.len = __VERIFIER_nondet_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < INT64_MAX);\n\
-                             \x20 v{id}.data = (int8_t*)malloc((size_t)v{id}.len + 1);\n"
+                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < INT64_MAX);\n"
                         ));
                     }
                     "__vow_string_len" => {
@@ -743,7 +740,8 @@ fn emit_inst(
                         let s = inst.args[0].0;
                         let byte = inst.args[1].0;
                         out.push_str(&format!(
-                            "  v{s}.data[v{s}.len] = (int8_t)v{byte};\n  v{s}.len++;\n"
+                            "  v{s}.data = (int8_t*)realloc(v{s}.data, (size_t)(v{s}.len + 1));\n\
+                             \x20 v{s}.data[v{s}.len] = (int8_t)v{byte};\n  v{s}.len++;\n"
                         ));
                     }
                     "__vow_string_byte_at" => {
@@ -820,9 +818,7 @@ fn emit_inst(
                 match name.as_str() {
                     "__vow_map_new" => {
                         out.push_str(&format!(
-                            "  v{id}.len = 0;\n\
-                             \x20 v{id}.keys = (int64_t*)malloc(sizeof(int64_t));\n\
-                             \x20 v{id}.vals = (int64_t*)malloc(sizeof(int64_t));\n"
+                            "  v{id}.len = 0;\n  v{id}.keys = (int64_t*)0;\n  v{id}.vals = (int64_t*)0;\n"
                         ));
                     }
                     "__vow_map_len" => {
@@ -840,6 +836,8 @@ fn emit_inst(
                              \x20     if (v{m}.keys[__i] == v{k}) {{ v{m}.vals[__i] = v{v}; __found = 1; break; }}\n\
                              \x20   }}\n\
                              \x20   if (!__found) {{\n\
+                             \x20     v{m}.keys = (int64_t*)realloc(v{m}.keys, sizeof(int64_t) * (size_t)(v{m}.len + 1));\n\
+                             \x20     v{m}.vals = (int64_t*)realloc(v{m}.vals, sizeof(int64_t) * (size_t)(v{m}.len + 1));\n\
                              \x20     v{m}.keys[v{m}.len] = v{k}; v{m}.vals[v{m}.len] = v{v}; v{m}.len++;\n\
                              \x20   }}\n\
                              \x20 }}\n"
@@ -1083,21 +1081,17 @@ pub fn emit_c_function_full(
                     if vec_vars.contains(&id) {
                         out.push_str(&format!(
                             "  __vow_vec_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len >= 0);\n\
-                             \x20 v{id}.data = (int64_t*)malloc(sizeof(int64_t));\n"
+                             \x20 __ESBMC_assume(v{id}.len >= 0);\n"
                         ));
                     } else if string_vars.contains(&id) {
                         out.push_str(&format!(
                             "  __vow_string_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len >= 0);\n\
-                             \x20 v{id}.data = (int8_t*)malloc((size_t)v{id}.len + 1);\n"
+                             \x20 __ESBMC_assume(v{id}.len >= 0);\n"
                         ));
                     } else if hashmap_vars.contains(&id) {
                         out.push_str(&format!(
                             "  __vow_hashmap_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len >= 0);\n\
-                             \x20 v{id}.keys = (int64_t*)malloc(sizeof(int64_t));\n\
-                             \x20 v{id}.vals = (int64_t*)malloc(sizeof(int64_t));\n"
+                             \x20 __ESBMC_assume(v{id}.len >= 0);\n"
                         ));
                     } else if option_vars.contains(&id) {
                         out.push_str(&format!("  __vow_option_t v{};\n  v{}.tag = 0;\n", id, id));

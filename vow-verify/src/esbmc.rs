@@ -185,7 +185,7 @@ fn parse_assignment_line(line: &str) -> Option<(String, String)> {
 // Debug: save C source and command for ESBMC debugging
 // ---------------------------------------------------------------------------
 
-fn save_esbmc_debug(esbmc: &std::path::Path, c_src: &str, func_name: &str) {
+fn save_esbmc_debug(esbmc: &std::path::Path, c_src: &str, func_name: &str, max_k_step: u32) {
     if std::env::var("VOW_VERIFY_DEBUG").is_err() {
         return;
     }
@@ -199,9 +199,10 @@ fn save_esbmc_debug(esbmc: &std::path::Path, c_src: &str, func_name: &str) {
     let _ = std::fs::write(debug_dir.join(&c_name), c_src);
 
     let cmd = format!(
-        "{} /tmp/vow-verify-debug/{} --no-bounds-check --no-pointer-check --k-induction-parallel --64\n",
+        "{} /tmp/vow-verify-debug/{} --no-bounds-check --no-pointer-check --k-induction-parallel --max-k-step {} --64\n",
         esbmc.display(),
         c_name,
+        max_k_step,
     );
     let _ = std::fs::write(debug_dir.join(&cmd_name), cmd);
 }
@@ -315,7 +316,7 @@ pub fn run_esbmc_with_max_k_step(
         return VerificationResult::ToolError(e.to_string());
     }
 
-    save_esbmc_debug(esbmc, c_src, func_name);
+    save_esbmc_debug(esbmc, c_src, func_name, max_k_step);
 
     let output = match Command::new(esbmc)
         .arg(tmp.path())
