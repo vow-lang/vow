@@ -1245,7 +1245,33 @@ pub fn emit_c_function_full(
     out
 }
 
-fn emit_c_preamble(out: &mut String) {
+#[derive(Default)]
+struct ShiftNeeds {
+    shl_i64: bool,
+    shr_i64: bool,
+    shl_u64: bool,
+    shr_u64: bool,
+}
+
+fn scan_shift_needs(funcs: &[&Function]) -> ShiftNeeds {
+    let mut needs = ShiftNeeds::default();
+    for func in funcs {
+        for block in &func.blocks {
+            for inst in &block.insts {
+                match inst.opcode {
+                    Opcode::ShlI64 => needs.shl_i64 = true,
+                    Opcode::ShrI64 => needs.shr_i64 = true,
+                    Opcode::ShlU64 => needs.shl_u64 = true,
+                    Opcode::ShrU64 => needs.shr_u64 = true,
+                    _ => {}
+                }
+            }
+        }
+    }
+    needs
+}
+
+fn emit_c_preamble(out: &mut String, shifts: &ShiftNeeds) {
     out.push_str("#include <stdint.h>\n");
     out.push_str("#include <stdbool.h>\n");
     out.push_str("extern void __ESBMC_assume(_Bool);\n");
@@ -1268,31 +1294,42 @@ fn emit_c_preamble(out: &mut String) {
         VOW_HASHMAP_MAX, VOW_HASHMAP_MAX
     ));
     out.push_str("typedef struct { int64_t tag; int64_t payload; } __vow_option_t;\n");
-    out.push_str(
-        "static inline int64_t __vow_shl_i64(int64_t value, int64_t count) {\n\
-         \x20 uint64_t shift = ((uint64_t)count) & 63ULL;\n\
-         \x20 return (int64_t)(((uint64_t)value) << shift);\n\
-         }\n",
-    );
-    out.push_str(
-        "static inline int64_t __vow_shr_i64(int64_t value, int64_t count) {\n\
-         \x20 uint64_t shift = ((uint64_t)count) & 63ULL;\n\
-         \x20 uint64_t bits = (uint64_t)value;\n\
-         \x20 uint64_t logical = bits >> shift;\n\
-         \x20 uint64_t sign_fill = value < 0 ? ~(~0ULL >> shift) : 0ULL;\n\
-         \x20 return (int64_t)(logical | sign_fill);\n\
-         }\n",
-    );
-    out.push_str(
-        "static inline uint64_t __vow_shl_u64(uint64_t value, uint64_t count) {\n\
-         \x20 return value << (count & 63ULL);\n\
-         }\n",
-    );
-    out.push_str(
-        "static inline uint64_t __vow_shr_u64(uint64_t value, uint64_t count) {\n\
-         \x20 return value >> (count & 63ULL);\n\
-         }\n\n",
-    );
+    if shifts.shl_i64 {
+        out.push_str(
+            "static inline int64_t __vow_shl_i64(int64_t value, int64_t count) {\n\
+             \x20 uint64_t shift = ((uint64_t)count) & 63ULL;\n\
+             \x20 return (int64_t)(((uint64_t)value) << shift);\n\
+             }\n",
+        );
+    }
+    if shifts.shr_i64 {
+        out.push_str(
+            "static inline int64_t __vow_shr_i64(int64_t value, int64_t count) {\n\
+             \x20 uint64_t shift = ((uint64_t)count) & 63ULL;\n\
+             \x20 uint64_t bits = (uint64_t)value;\n\
+             \x20 uint64_t logical = bits >> shift;\n\
+             \x20 uint64_t sign_fill = value < 0 ? ~(~0ULL >> shift) : 0ULL;\n\
+             \x20 return (int64_t)(logical | sign_fill);\n\
+             }\n",
+        );
+    }
+    if shifts.shl_u64 {
+        out.push_str(
+            "static inline uint64_t __vow_shl_u64(uint64_t value, uint64_t count) {\n\
+             \x20 return value << (count & 63ULL);\n\
+             }\n",
+        );
+    }
+    if shifts.shr_u64 {
+        out.push_str(
+            "static inline uint64_t __vow_shr_u64(uint64_t value, uint64_t count) {\n\
+             \x20 return value >> (count & 63ULL);\n\
+             }\n",
+        );
+    }
+    if shifts.shl_i64 || shifts.shr_i64 || shifts.shl_u64 || shifts.shr_u64 {
+        out.push('\n');
+    }
 }
 
 fn emit_forward_declaration(func: &Function, out: &mut String) {
@@ -1324,7 +1361,8 @@ fn emit_forward_declaration(func: &Function, out: &mut String) {
 
 pub fn emit_c_module(funcs: &[&Function], const_fns: &HashMap<FuncId, ConstantValue>) -> String {
     let mut out = String::new();
-    emit_c_preamble(&mut out);
+    let shifts = scan_shift_needs(funcs);
+    emit_c_preamble(&mut out, &shifts);
     for func in funcs {
         out.push_str(&emit_c_function(func, const_fns));
         out.push('\n');
@@ -1342,7 +1380,16 @@ pub fn emit_c_module_with_callees(
     modelable_fns: &HashSet<FuncId>,
 ) -> String {
     let mut out = String::new();
-    emit_c_preamble(&mut out);
+
+    // Collect all functions (target + callees) for shift scanning
+    let mut all_funcs: Vec<&Function> = vec![target];
+    for fid in callee_ids {
+        if let Some(callee) = module.functions.iter().find(|f| f.id == *fid) {
+            all_funcs.push(callee);
+        }
+    }
+    let shifts = scan_shift_needs(&all_funcs);
+    emit_c_preamble(&mut out, &shifts);
 
     // Forward declarations for all callees
     for fid in callee_ids {
@@ -1774,7 +1821,7 @@ mod tests {
     }
 
     #[test]
-    fn emit_c_module_includes_shift_helpers() {
+    fn emit_c_module_includes_only_needed_shift_helpers() {
         let func = make_func(
             "bits",
             vec![Ty::I64, Ty::I64],
@@ -1790,19 +1837,57 @@ mod tests {
         let c = emit_c_module(&[&func], &HashMap::new());
         assert!(
             c.contains("static inline int64_t __vow_shl_i64"),
-            "helpers: {c}"
+            "shl_i64 should be present: {c}"
         );
         assert!(
-            c.contains("static inline int64_t __vow_shr_i64"),
-            "helpers: {c}"
+            !c.contains("static inline int64_t __vow_shr_i64"),
+            "shr_i64 should NOT be present: {c}"
         );
         assert!(
-            c.contains("static inline uint64_t __vow_shl_u64"),
-            "helpers: {c}"
+            !c.contains("static inline uint64_t __vow_shl_u64"),
+            "shl_u64 should NOT be present: {c}"
         );
         assert!(
             c.contains("static inline uint64_t __vow_shr_u64"),
-            "helpers: {c}"
+            "shr_u64 should be present: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_c_module_omits_shift_helpers_when_unused() {
+        let func = make_func(
+            "add",
+            vec![Ty::I64, Ty::I64],
+            Ty::I64,
+            vec![
+                inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
+                inst(
+                    2,
+                    Opcode::WrappingAddI64,
+                    Ty::I64,
+                    vec![0, 1],
+                    InstData::None,
+                ),
+                inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+            ],
+        );
+        let c = emit_c_module(&[&func], &HashMap::new());
+        assert!(
+            !c.contains("__vow_shl_i64"),
+            "no shift helpers should be present: {c}"
+        );
+        assert!(
+            !c.contains("__vow_shr_i64"),
+            "no shift helpers should be present: {c}"
+        );
+        assert!(
+            !c.contains("__vow_shl_u64"),
+            "no shift helpers should be present: {c}"
+        );
+        assert!(
+            !c.contains("__vow_shr_u64"),
+            "no shift helpers should be present: {c}"
         );
     }
 
