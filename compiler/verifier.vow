@@ -510,10 +510,12 @@ fn vow_hash_string(s: String) -> i64 {
     h
 }
 
-fn verify_cache_key(c_source: String, unwind: String) -> String {
+fn verify_cache_key(c_source: String, unwind: String, solver: String, encoding: String) -> String {
     let h: i64 = vow_hash_string(c_source);
     let h2: i64 = h * 33 + vow_hash_string(unwind);
-    let abs_h: i64 = { if h2 < 0 { 0 - h2 } else { h2 } };
+    let h3: i64 = h2 * 33 + vow_hash_string(solver);
+    let h4: i64 = h3 * 33 + vow_hash_string(encoding);
+    let abs_h: i64 = { if h4 < 0 { 0 - h4 } else { h4 } };
     i64_to_str(abs_h)
 }
 
@@ -566,7 +568,7 @@ fn verify_function_full(f: IrFunction, m: IrModule, unwind: String, use_cache: b
     let c_source: String = emit_c_for_verify(f, m);
     if use_cache {
         verify_cache_ensure_dir();
-        let cache_key: String = verify_cache_key(c_source, unwind);
+        let cache_key: String = verify_cache_key(c_source, unwind, solver, encoding);
         let cached: i64 = verify_cache_lookup(cache_key);
         if cached == VERIFY_PROVEN() {
             return VerifyResult {
@@ -599,7 +601,7 @@ fn verify_function_full(f: IrFunction, m: IrModule, unwind: String, use_cache: b
     let status: i64 = parse_verify_status(combined);
     if use_cache {
         if status == VERIFY_PROVEN() || status == VERIFY_FAILED() {
-            let cache_key2: String = verify_cache_key(c_source, unwind);
+            let cache_key2: String = verify_cache_key(c_source, unwind, solver, encoding);
             verify_cache_store(cache_key2, status);
         }
     }
@@ -641,7 +643,7 @@ fn verify_start(f: IrFunction, m: IrModule, unwind: String, idx: i64, use_cache:
     let c_source: String = emit_c_for_verify(f, m);
     if use_cache {
         verify_cache_ensure_dir();
-        let cache_key: String = verify_cache_key(c_source, unwind);
+        let cache_key: String = verify_cache_key(c_source, unwind, solver, encoding);
         let cached: i64 = verify_cache_lookup(cache_key);
         if cached == VERIFY_PROVEN() {
             return -2;
