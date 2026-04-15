@@ -32,6 +32,8 @@ MAIN_VOW = REPO / "compiler" / "main.vow"
 
 SCHEMA_VERSION = "2"
 DEFAULT_UNWIND = 10
+DEFAULT_SOLVER = "auto"
+DEFAULT_ENCODING = "auto"
 
 
 # ---------------------------------------------------------------------------

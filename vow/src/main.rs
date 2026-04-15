@@ -383,6 +383,41 @@ fn skill_json() -> String {
           "value_name": "N",
           "value_kind": "integer",
           "default": 10
+        },
+        {
+          "form": "--solver <boolector|z3|bitwuzla|auto>",
+          "description": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
+          "long": "--solver",
+          "value_name": "boolector|z3|bitwuzla|auto",
+          "value_kind": "enum",
+          "values": [
+            "boolector",
+            "z3",
+            "bitwuzla",
+            "auto"
+          ],
+          "default": "auto"
+        },
+        {
+          "form": "--encoding <bv|ir|auto>",
+          "description": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
+          "long": "--encoding",
+          "value_name": "bv|ir|auto",
+          "value_kind": "enum",
+          "values": [
+            "bv",
+            "ir",
+            "auto"
+          ],
+          "default": "auto"
+        },
+        {
+          "form": "--timeout <N>",
+          "description": "ESBMC per-function timeout in seconds (default: (none))",
+          "long": "--timeout",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": "(none)"
         }
       ],
       "stdout": {
@@ -429,6 +464,41 @@ fn skill_json() -> String {
           "value_name": "N",
           "value_kind": "integer",
           "default": 10
+        },
+        {
+          "form": "--solver <boolector|z3|bitwuzla|auto>",
+          "description": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
+          "long": "--solver",
+          "value_name": "boolector|z3|bitwuzla|auto",
+          "value_kind": "enum",
+          "values": [
+            "boolector",
+            "z3",
+            "bitwuzla",
+            "auto"
+          ],
+          "default": "auto"
+        },
+        {
+          "form": "--encoding <bv|ir|auto>",
+          "description": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
+          "long": "--encoding",
+          "value_name": "bv|ir|auto",
+          "value_kind": "enum",
+          "values": [
+            "bv",
+            "ir",
+            "auto"
+          ],
+          "default": "auto"
+        },
+        {
+          "form": "--timeout <N>",
+          "description": "ESBMC per-function timeout in seconds (default: (none))",
+          "long": "--timeout",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": "(none)"
         }
       ],
       "stdout": {
@@ -570,6 +640,33 @@ fn skill_json() -> String {
           "value_name": "N",
           "value_kind": "integer",
           "default": 10
+        },
+        {
+          "form": "--solver <boolector|z3|bitwuzla|auto>",
+          "description": "ESBMC SMT solver (with --verify)",
+          "long": "--solver",
+          "value_name": "boolector|z3|bitwuzla|auto",
+          "value_kind": "enum",
+          "values": [
+            "boolector",
+            "z3",
+            "bitwuzla",
+            "auto"
+          ],
+          "default": "auto"
+        },
+        {
+          "form": "--encoding <bv|ir|auto>",
+          "description": "ESBMC encoding mode (with --verify); ir requires z3 (default: auto)",
+          "long": "--encoding",
+          "value_name": "bv|ir|auto",
+          "value_kind": "enum",
+          "values": [
+            "bv",
+            "ir",
+            "auto"
+          ],
+          "default": "auto"
         }
       ],
       "stdout": {
@@ -589,11 +686,17 @@ fn skill_json() -> String {
     "--dump-ir": "Print IR text to stdout and exit (no JSON output, no codegen)",
     "--debug-trace <off|calls|full>": "Emit JSON trace lines to stderr at runtime (default: off)",
     "--no-cache": "Disable compile and verify caching",
-    "--unwind <N>": "ESBMC loop unwind bound (default: 10)"
+    "--unwind <N>": "ESBMC loop unwind bound (default: 10)",
+    "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
+    "--encoding <bv|ir|auto>": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
+    "--timeout <N>": "ESBMC per-function timeout in seconds (default: (none))"
   },
   "verify_options": {
     "--no-cache": "Disable verification result caching",
-    "--unwind <N>": "ESBMC loop unwind bound (default: 10)"
+    "--unwind <N>": "ESBMC loop unwind bound (default: 10)",
+    "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
+    "--encoding <bv|ir|auto>": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
+    "--timeout <N>": "ESBMC per-function timeout in seconds (default: (none))"
   },
   "test_options": {
     "--verify": "Run ESBMC verification on test files",
@@ -608,7 +711,9 @@ fn skill_json() -> String {
   "contracts_options": {
     "--verify": "Run ESBMC verification and report per-contract status",
     "--no-cache": "Disable verification result caching",
-    "--unwind <N>": "ESBMC loop unwind bound (default: 10)"
+    "--unwind <N>": "ESBMC loop unwind bound (default: 10)",
+    "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver (with --verify)",
+    "--encoding <bv|ir|auto>": "ESBMC encoding mode (with --verify); ir requires z3 (default: auto)"
   },
   "global_options": {
     "--help": "Emit versioned JSON tool-help data",
@@ -720,6 +825,9 @@ fn skill_json() -> String {
       "print_i64": "fn(v: i64) -> () [io]",
       "print_u64": "fn(v: u64) -> () [io]",
       "eprintln_str": "fn(s: String) -> () [io]",
+      "debug_str": "fn(s: String) -> () []",
+      "debug_i64": "fn(v: i64) -> () []",
+      "debug_u64": "fn(v: u64) -> () []",
       "fs_read": "fn(path: String) -> String [read]",
       "fs_write": "fn(path: String, data: String) -> i64 [write]",
       "fs_exists": "fn(path: String) -> i64 [read]",
@@ -950,10 +1058,16 @@ BUILD OPTIONS
   --debug-trace <off|calls|full>  Emit JSON trace lines to stderr at runtime (default: off)
   --no-cache              Disable compile and verify caching
   --unwind <N>            ESBMC loop unwind bound (default: 10)
+  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)
+  --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)
+  --timeout <N>           ESBMC per-function timeout in seconds (default: (none))
 
 VERIFY OPTIONS
   --no-cache              Disable verification result caching
   --unwind <N>            ESBMC loop unwind bound (default: 10)
+  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)
+  --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)
+  --timeout <N>           ESBMC per-function timeout in seconds (default: (none))
 
 TEST OPTIONS
   --verify                Run ESBMC verification on test files
@@ -966,6 +1080,8 @@ CONTRACTS OPTIONS
   --verify                Run ESBMC verification and report per-contract status
   --no-cache              Disable verification result caching
   --unwind <N>            ESBMC loop unwind bound (default: 10)
+  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver (with --verify)
+  --encoding <bv|ir|auto>  ESBMC encoding mode (with --verify); ir requires z3 (default: auto)
 
 DECL OPTIONS
   -o, --output <path>     Output declaration file path (default: <source>.vow.d)
@@ -1013,7 +1129,7 @@ LANGUAGE SUMMARY
 TYPES     : i32  i64  u8  u64  f32  f64  bool  ()  !  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>
 EFFECTS   : io  read  write  panic  unsafe
 BUILTINS  : print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [io]   print_u64: fn(v: u64) -> () [io]
-            eprintln_str: fn(s: String) -> () [io]   fs_read: fn(path: String) -> String [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   parse_i64: fn(s: String) -> i64 []   i64_to_string: fn(v: i64) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
+            eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   parse_i64: fn(s: String) -> i64 []   i64_to_string: fn(v: i64) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
 METHODS   : Vec: Vec::new/push/pop/len/clear/truncate/v[i]/v[i] = val   String: String::from/String::new/len/byte_at/push_byte/push_str/clear/contains/eq/substring/parse_i64/parse_u64
             HashMap: HashMap::new/insert/get/contains_key/remove/len   Option: unwrap
 OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! & ?
@@ -1741,6 +1857,16 @@ Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they 
 | `print_u64`      | `fn(v: u64) -> ()`                         | `[io]`     |
 | `eprintln_str`   | `fn(s: String) -> ()`                      | `[io]`     |
 
+#### Debug
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `debug_str`      | `fn(s: String) -> ()`                      | `[]`       |
+| `debug_i64`      | `fn(v: i64) -> ()`                         | `[]`       |
+| `debug_u64`      | `fn(v: u64) -> ()`                         | `[]`       |
+
+**Debug print semantics:** Debug prints are effect-free and callable from pure functions. In debug and sanitize modes (`--mode debug`, `--mode sanitize`), they write to stderr. In release and profile modes, the debug call itself is not emitted — no function call occurs. However, argument expressions are still evaluated (e.g., `String::from("label")` still allocates). They are also no-ops during verification. Use them to trace values inside pure kernel code without restructuring the effect hierarchy.
+
 #### Filesystem
 
 | Function         | Signature                                  | Effects    |
@@ -1887,6 +2013,9 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
 | `--no-cache`    | (off)       | Disable compile and verify caching           |
 | `--unwind <N>`  | `10`        | ESBMC loop unwind bound                      |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
+| `--timeout <N>` | (none)      | ESBMC per-function timeout in seconds        |
 
 ### `vow verify`
 
@@ -1902,6 +2031,9 @@ vow verify [OPTIONS] <source.vow>
 |-------------------|-------------|--------------------------------------------|
 | `--no-cache`      | (off)       | Disable verification result caching        |
 | `--unwind <N>`    | `10`        | ESBMC loop unwind bound                   |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
+| `--timeout <N>` | (none)      | ESBMC per-function timeout in seconds        |
 
 ### `vow contracts`
 
@@ -1918,6 +2050,8 @@ vow contracts [OPTIONS] <source.vow>
 | `--verify`        | (off)       | Run ESBMC verification and report per-contract status |
 | `--no-cache`      | (off)       | Disable verification result caching        |
 | `--unwind <N>`    | `10`        | ESBMC loop unwind bound                   |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver (with --verify)           |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |
 
 ### `vow skill`
 
