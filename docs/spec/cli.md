@@ -21,7 +21,7 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--dump-ir`       | (off)       | Print IR text to stdout and exit (no JSON output, no codegen) |
 | `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
 | `--no-cache`    | (off)       | Disable compile and verify caching           |
-| `--unwind <N>`  | `10`        | ESBMC loop unwind bound                      |
+| `--max-k-step <N>` | `50`     | ESBMC max k-induction step                   |
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
 | `--timeout <N>` | (none)      | ESBMC per-function timeout in seconds        |
@@ -39,7 +39,7 @@ vow verify [OPTIONS] <source.vow>
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
 | `--no-cache`      | (off)       | Disable verification result caching        |
-| `--unwind <N>`    | `10`        | ESBMC loop unwind bound                   |
+| `--max-k-step <N>` | `50`       | ESBMC max k-induction step                |
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
 | `--timeout <N>` | (none)      | ESBMC per-function timeout in seconds        |
@@ -58,7 +58,7 @@ vow contracts [OPTIONS] <source.vow>
 |-------------------|-------------|--------------------------------------------|
 | `--verify`        | (off)       | Run ESBMC verification and report per-contract status |
 | `--no-cache`      | (off)       | Disable verification result caching        |
-| `--unwind <N>`    | `10`        | ESBMC loop unwind bound                   |
+| `--max-k-step <N>` | `50`       | ESBMC max k-induction step                |
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver (with --verify)           |
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |
 
@@ -94,7 +94,7 @@ vow test [OPTIONS] [<path>]
 | `--mode debug`    | (default)   | Insert runtime vow checks                 |
 | `--mode release`  | `debug`     | Omit all vow checks for performance       |
 | `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
-| `--unwind <N>`    | `10`        | ESBMC loop unwind bound (with --verify)    |
+| `--max-k-step <N>` | `50`       | ESBMC max k-induction step (with --verify) |
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` in the given directory, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
 

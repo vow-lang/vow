@@ -47,7 +47,7 @@ fn get_source_path(argv: Vec<String>) -> String {
         if first_byte != 45 {
             if i > 1 {
                 let prev: String = argv[i - 1];
-                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--unwind") || prev == String::from("--debug-trace") || prev == String::from("--filter") || prev == String::from("--timeout") {
+                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--max-k-step") || prev == String::from("--debug-trace") || prev == String::from("--filter") || prev == String::from("--timeout") || prev == String::from("--solver") || prev == String::from("--encoding") {
                     i = i - 1;
                 } else {
                     return a;
@@ -70,7 +70,7 @@ fn get_source_path_sub(argv: Vec<String>) -> String {
         if first_byte != 45 {
             if i > 2 {
                 let prev: String = argv[i - 1];
-                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--unwind") || prev == String::from("--debug-trace") || prev == String::from("--filter") || prev == String::from("--timeout") {
+                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--max-k-step") || prev == String::from("--debug-trace") || prev == String::from("--filter") || prev == String::from("--timeout") || prev == String::from("--solver") || prev == String::from("--encoding") {
                     i = i - 1;
                 } else {
                     return a;
@@ -300,7 +300,7 @@ fn run_frontend(argv: Vec<String>, sub: bool) -> FrontendResult [io] {
     run_frontend_for_path(path)
 }
 
-fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, unwind: String, use_cache: bool, solver: String, encoding: String) -> i64 [io] {
+fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, max_k_step: String, use_cache: bool, solver: String, encoding: String) -> i64 [io] {
     let mut fi: i64 = 0;
     let mut all_proven: i64 = 1;
     while fi < fns.len() {
@@ -308,7 +308,7 @@ fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, path: String, ces: Ve
         let vows: Vec<IrVowEntry> = f.vows;
         if vows.len() > 0 {
             eprintln_str(str3(String::from("Verifying "), f.name, String::from("...")));
-            let vr: VerifyResult = verify_function_full(f, ir_mod, unwind, use_cache, solver, encoding);
+            let vr: VerifyResult = verify_function_full(f, ir_mod, max_k_step, use_cache, solver, encoding);
             let st: i64 = vr.status;
             if st == VERIFY_PROVEN() {
                 eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN")));
@@ -386,10 +386,10 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
         diag_emit_verify_json(String::from("CompileFailed"), dctx, Vec::new());
         return 1;
     }
-    let unwind_str: String = get_flag_arg(argv, String::from("--unwind"));
-    let unwind: String = {
-        if unwind_str.len() > 0 { unwind_str }
-        else { String::from("10") }
+    let mks_str: String = get_flag_arg(argv, String::from("--max-k-step"));
+    let max_k_step: String = {
+        if mks_str.len() > 0 { mks_str }
+        else { String::from("50") }
     };
     let use_cache: bool = !has_flag(argv, String::from("--no-cache"));
     let mut solver: String = get_flag_arg(argv, String::from("--solver"));
@@ -412,7 +412,7 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
     emit_ir_warnings(ir_mod, dctx);
     let fns: Vec<IrFunction> = ir_mod.functions;
     let ces: Vec<VerifyCE> = Vec::new();
-    let all_proven: i64 = run_verify_loop(fns, ir_mod, path, ces, unwind, use_cache, solver, encoding);
+    let all_proven: i64 = run_verify_loop(fns, ir_mod, path, ces, max_k_step, use_cache, solver, encoding);
     let status_str: String = {
         if all_proven == 1 {
             String::from("Verified")
@@ -472,10 +472,10 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         }
     }
     let use_cache: bool = !has_flag(argv, String::from("--no-cache"));
-    let unwind_str: String = get_flag_arg(argv, String::from("--unwind"));
-    let unwind: String = {
-        if unwind_str.len() > 0 { unwind_str }
-        else { String::from("10") }
+    let mks_str: String = get_flag_arg(argv, String::from("--max-k-step"));
+    let max_k_step: String = {
+        if mks_str.len() > 0 { mks_str }
+        else { String::from("50") }
     };
     let mut solver: String = get_flag_arg(argv, String::from("--solver"));
     let encoding: String = get_flag_arg(argv, String::from("--encoding"));
@@ -498,7 +498,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
             let vows: Vec<IrVowEntry> = f.vows;
             if vows.len() > 0 {
                 eprintln_str(str3(String::from("Starting verification of "), f.name, String::from("...")));
-                let h: i64 = verify_start(f, ir_mod, unwind, fi, use_cache, solver, encoding);
+                let h: i64 = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding);
                 handles.push(h);
                 vow_fn_indices.push(fi);
             }
@@ -540,7 +540,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
                 eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN")));
                 if use_cache {
                     let c_src2: String = emit_c_for_verify(f, ir_mod);
-                    let ck2: String = verify_cache_key(c_src2, unwind, solver, encoding);
+                    let ck2: String = verify_cache_key(c_src2, max_k_step, solver, encoding);
                     verify_cache_store(ck2, VERIFY_PROVEN());
                 }
             } else if st == VERIFY_FAILED() {
@@ -931,10 +931,10 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
                 diag_emit_verify_json(String::from("VerifyFailed"), dctx, Vec::new());
                 return 1;
             }
-            let unwind_str: String = get_flag_arg(argv, String::from("--unwind"));
-            let unwind: String = {
-                if unwind_str.len() > 0 { unwind_str }
-                else { String::from("10") }
+            let mks_str: String = get_flag_arg(argv, String::from("--max-k-step"));
+            let max_k_step: String = {
+                if mks_str.len() > 0 { mks_str }
+                else { String::from("50") }
             };
             let str_eids: Vec<i64> = e.expr_str_eids;
             let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
@@ -942,7 +942,7 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
             let fns: Vec<IrFunction> = ir_mod.functions;
             let ces: Vec<VerifyCE> = Vec::new();
             let use_cache_leg: bool = !has_flag(argv, String::from("--no-cache"));
-            let all_proven: i64 = run_verify_loop(fns, ir_mod, path, ces, unwind, use_cache_leg, String::from(""), String::from(""));
+            let all_proven: i64 = run_verify_loop(fns, ir_mod, path, ces, max_k_step, use_cache_leg, String::from(""), String::from(""));
             let status_str: String = {
                 if all_proven == 1 {
                     String::from("Verified")
@@ -1111,12 +1111,12 @@ fn skill_json() -> String {
     r.push_str(String::from("          \"value_kind\": \"flag\"\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
-    r.push_str(String::from("          \"form\": \"--unwind <N>\",\n"));
-    r.push_str(String::from("          \"description\": \"ESBMC loop unwind bound (default: 10)\",\n"));
-    r.push_str(String::from("          \"long\": \"--unwind\",\n"));
+    r.push_str(String::from("          \"form\": \"--max-k-step <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"ESBMC max k-induction step (default: 50)\",\n"));
+    r.push_str(String::from("          \"long\": \"--max-k-step\",\n"));
     r.push_str(String::from("          \"value_name\": \"N\",\n"));
     r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
-    r.push_str(String::from("          \"default\": 10\n"));
+    r.push_str(String::from("          \"default\": 50\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
     r.push_str(String::from("          \"form\": \"--solver <boolector|z3|bitwuzla|auto>\",\n"));
@@ -1192,12 +1192,12 @@ fn skill_json() -> String {
     r.push_str(String::from("          \"value_kind\": \"flag\"\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
-    r.push_str(String::from("          \"form\": \"--unwind <N>\",\n"));
-    r.push_str(String::from("          \"description\": \"ESBMC loop unwind bound (default: 10)\",\n"));
-    r.push_str(String::from("          \"long\": \"--unwind\",\n"));
+    r.push_str(String::from("          \"form\": \"--max-k-step <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"ESBMC max k-induction step (default: 50)\",\n"));
+    r.push_str(String::from("          \"long\": \"--max-k-step\",\n"));
     r.push_str(String::from("          \"value_name\": \"N\",\n"));
     r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
-    r.push_str(String::from("          \"default\": 10\n"));
+    r.push_str(String::from("          \"default\": 50\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
     r.push_str(String::from("          \"form\": \"--solver <boolector|z3|bitwuzla|auto>\",\n"));
@@ -1294,12 +1294,12 @@ fn skill_json() -> String {
     r.push_str(String::from("          \"default\": \"30000\"\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
-    r.push_str(String::from("          \"form\": \"--unwind <N>\",\n"));
-    r.push_str(String::from("          \"description\": \"ESBMC loop unwind bound (with --verify)\",\n"));
-    r.push_str(String::from("          \"long\": \"--unwind\",\n"));
+    r.push_str(String::from("          \"form\": \"--max-k-step <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"ESBMC max k-induction step (with --verify)\",\n"));
+    r.push_str(String::from("          \"long\": \"--max-k-step\",\n"));
     r.push_str(String::from("          \"value_name\": \"N\",\n"));
     r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
-    r.push_str(String::from("          \"default\": 10\n"));
+    r.push_str(String::from("          \"default\": 50\n"));
     r.push_str(String::from("        }\n"));
     r.push_str(String::from("      ],\n"));
     r.push_str(String::from("      \"stdout\": {\n"));
@@ -1368,12 +1368,12 @@ fn skill_json() -> String {
     r.push_str(String::from("          \"value_kind\": \"flag\"\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
-    r.push_str(String::from("          \"form\": \"--unwind <N>\",\n"));
-    r.push_str(String::from("          \"description\": \"ESBMC loop unwind bound (default: 10)\",\n"));
-    r.push_str(String::from("          \"long\": \"--unwind\",\n"));
+    r.push_str(String::from("          \"form\": \"--max-k-step <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"ESBMC max k-induction step (default: 50)\",\n"));
+    r.push_str(String::from("          \"long\": \"--max-k-step\",\n"));
     r.push_str(String::from("          \"value_name\": \"N\",\n"));
     r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
-    r.push_str(String::from("          \"default\": 10\n"));
+    r.push_str(String::from("          \"default\": 50\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
     r.push_str(String::from("          \"form\": \"--solver <boolector|z3|bitwuzla|auto>\",\n"));
@@ -1420,14 +1420,14 @@ fn skill_json() -> String {
     r.push_str(String::from("    \"--dump-ir\": \"Print IR text to stdout and exit (no JSON output, no codegen)\",\n"));
     r.push_str(String::from("    \"--debug-trace <off|calls|full>\": \"Emit JSON trace lines to stderr at runtime (default: off)\",\n"));
     r.push_str(String::from("    \"--no-cache\": \"Disable compile and verify caching\",\n"));
-    r.push_str(String::from("    \"--unwind <N>\": \"ESBMC loop unwind bound (default: 10)\",\n"));
+    r.push_str(String::from("    \"--max-k-step <N>\": \"ESBMC max k-induction step (default: 50)\",\n"));
     r.push_str(String::from("    \"--solver <boolector|z3|bitwuzla|auto>\": \"ESBMC SMT solver; auto selects per-function via heuristic (default: auto)\",\n"));
     r.push_str(String::from("    \"--encoding <bv|ir|auto>\": \"ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)\",\n"));
     r.push_str(String::from("    \"--timeout <N>\": \"ESBMC per-function timeout in seconds (default: (none))\"\n"));
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"verify_options\": {\n"));
     r.push_str(String::from("    \"--no-cache\": \"Disable verification result caching\",\n"));
-    r.push_str(String::from("    \"--unwind <N>\": \"ESBMC loop unwind bound (default: 10)\",\n"));
+    r.push_str(String::from("    \"--max-k-step <N>\": \"ESBMC max k-induction step (default: 50)\",\n"));
     r.push_str(String::from("    \"--solver <boolector|z3|bitwuzla|auto>\": \"ESBMC SMT solver; auto selects per-function via heuristic (default: auto)\",\n"));
     r.push_str(String::from("    \"--encoding <bv|ir|auto>\": \"ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)\",\n"));
     r.push_str(String::from("    \"--timeout <N>\": \"ESBMC per-function timeout in seconds (default: (none))\"\n"));
@@ -1437,7 +1437,7 @@ fn skill_json() -> String {
     r.push_str(String::from("    \"--filter <pat>\": \"Only run tests whose name contains pat (default: (none))\",\n"));
     r.push_str(String::from("    \"--mode <debug|release>\": \"Build mode; debug inserts runtime vow checks (default: (default))\",\n"));
     r.push_str(String::from("    \"--timeout <ms>\": \"Per-test execution timeout in milliseconds (default: 30000)\",\n"));
-    r.push_str(String::from("    \"--unwind <N>\": \"ESBMC loop unwind bound (with --verify)\"\n"));
+    r.push_str(String::from("    \"--max-k-step <N>\": \"ESBMC max k-induction step (with --verify)\"\n"));
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"decl_options\": {\n"));
     r.push_str(String::from("    \"-o, --output <path>\": \"Output declaration file path (default: <source>.vow.d)\"\n"));
@@ -1445,7 +1445,7 @@ fn skill_json() -> String {
     r.push_str(String::from("  \"contracts_options\": {\n"));
     r.push_str(String::from("    \"--verify\": \"Run ESBMC verification and report per-contract status\",\n"));
     r.push_str(String::from("    \"--no-cache\": \"Disable verification result caching\",\n"));
-    r.push_str(String::from("    \"--unwind <N>\": \"ESBMC loop unwind bound (default: 10)\",\n"));
+    r.push_str(String::from("    \"--max-k-step <N>\": \"ESBMC max k-induction step (default: 50)\",\n"));
     r.push_str(String::from("    \"--solver <boolector|z3|bitwuzla|auto>\": \"ESBMC SMT solver (with --verify)\",\n"));
     r.push_str(String::from("    \"--encoding <bv|ir|auto>\": \"ESBMC encoding mode (with --verify); ir requires z3 (default: auto)\"\n"));
     r.push_str(String::from("  },\n"));
@@ -1760,11 +1760,9 @@ fn skill_json() -> String {
     r.push_str(String::from("      ]\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  },\n"));
-    r.push_str(String::from("  \"verification_limits\": {\n"));
-    r.push_str(String::from("    \"loop_unwind\": 10,\n"));
-    r.push_str(String::from("    \"Vec<T>\": 128,\n"));
-    r.push_str(String::from("    \"String\": 256,\n"));
-    r.push_str(String::from("    \"HashMap<K, V>\": 64\n"));
+    r.push_str(String::from("  \"verification_defaults\": {\n"));
+    r.push_str(String::from("    \"strategy\": \"k-induction-parallel\",\n"));
+    r.push_str(String::from("    \"max_k_step\": 50\n"));
     r.push_str(String::from("  }\n"));
     r.push_str(String::from("}\n"));
     r
@@ -1791,14 +1789,14 @@ fn skill_human() -> String {
     r.push_str(String::from("  --dump-ir               Print IR text to stdout and exit (no JSON output, no codegen)\n"));
     r.push_str(String::from("  --debug-trace <off|calls|full>  Emit JSON trace lines to stderr at runtime (default: off)\n"));
     r.push_str(String::from("  --no-cache              Disable compile and verify caching\n"));
-    r.push_str(String::from("  --unwind <N>            ESBMC loop unwind bound (default: 10)\n"));
+    r.push_str(String::from("  --max-k-step <N>        ESBMC max k-induction step (default: 50)\n"));
     r.push_str(String::from("  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)\n"));
     r.push_str(String::from("  --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)\n"));
     r.push_str(String::from("  --timeout <N>           ESBMC per-function timeout in seconds (default: (none))\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("VERIFY OPTIONS\n"));
     r.push_str(String::from("  --no-cache              Disable verification result caching\n"));
-    r.push_str(String::from("  --unwind <N>            ESBMC loop unwind bound (default: 10)\n"));
+    r.push_str(String::from("  --max-k-step <N>        ESBMC max k-induction step (default: 50)\n"));
     r.push_str(String::from("  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)\n"));
     r.push_str(String::from("  --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)\n"));
     r.push_str(String::from("  --timeout <N>           ESBMC per-function timeout in seconds (default: (none))\n"));
@@ -1808,12 +1806,12 @@ fn skill_human() -> String {
     r.push_str(String::from("  --filter <pat>          Only run tests whose name contains pat (default: (none))\n"));
     r.push_str(String::from("  --mode <debug|release>  Build mode; debug inserts runtime vow checks (default: (default))\n"));
     r.push_str(String::from("  --timeout <ms>          Per-test execution timeout in milliseconds (default: 30000)\n"));
-    r.push_str(String::from("  --unwind <N>            ESBMC loop unwind bound (with --verify)\n"));
+    r.push_str(String::from("  --max-k-step <N>        ESBMC max k-induction step (with --verify)\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("CONTRACTS OPTIONS\n"));
     r.push_str(String::from("  --verify                Run ESBMC verification and report per-contract status\n"));
     r.push_str(String::from("  --no-cache              Disable verification result caching\n"));
-    r.push_str(String::from("  --unwind <N>            ESBMC loop unwind bound (default: 10)\n"));
+    r.push_str(String::from("  --max-k-step <N>        ESBMC max k-induction step (default: 50)\n"));
     r.push_str(String::from("  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver (with --verify)\n"));
     r.push_str(String::from("  --encoding <bv|ir|auto>  ESBMC encoding mode (with --verify); ir requires z3 (default: auto)\n"));
     r.push_str(String::from("\n"));
@@ -1868,11 +1866,10 @@ fn skill_human() -> String {
     r.push_str(String::from("            HashMap: HashMap::new/insert/get/contains_key/remove/len   Option: unwrap\n"));
     r.push_str(String::from("OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! & ?\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("VERIFICATION LIMITS\n"));
-    r.push_str(String::from("  Loop unwind  : 10 iterations\n"));
-    r.push_str(String::from("  Vec<T>        : 128 max capacity\n"));
-    r.push_str(String::from("  String        : 256 max capacity\n"));
-    r.push_str(String::from("  HashMap<K, V> : 64 max capacity\n"));
+    r.push_str(String::from("VERIFICATION\n"));
+    r.push_str(String::from("  Strategy      : k-induction-parallel (incremental BMC + k-induction)\n"));
+    r.push_str(String::from("  Max k step    : 50 (default; override with --max-k-step)\n"));
+    r.push_str(String::from("  Containers    : unbounded (no artificial capacity limits)\n"));
     r
 }
 // GENERATE:SKILL_HUMAN:END
@@ -2746,7 +2743,7 @@ fn skill_full() -> String {
     r.push_str(String::from("| `--dump-ir`       | (off)       | Print IR text to stdout and exit (no JSON output, no codegen) |\n"));
     r.push_str(String::from("| `--debug-trace <off\\|calls\\|full>` | `off` | Emit JSON trace lines to stderr at runtime |\n"));
     r.push_str(String::from("| `--no-cache`    | (off)       | Disable compile and verify caching           |\n"));
-    r.push_str(String::from("| `--unwind <N>`  | `10`        | ESBMC loop unwind bound                      |\n"));
+    r.push_str(String::from("| `--max-k-step <N>` | `50`     | ESBMC max k-induction step                   |\n"));
     r.push_str(String::from("| `--solver <boolector\\|z3\\|bitwuzla\\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |\n"));
     r.push_str(String::from("| `--encoding <bv\\|ir\\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |\n"));
     r.push_str(String::from("| `--timeout <N>` | (none)      | ESBMC per-function timeout in seconds        |\n"));
@@ -2764,7 +2761,7 @@ fn skill_full() -> String {
     r.push_str(String::from("| Flag              | Default     | Description                                |\n"));
     r.push_str(String::from("|-------------------|-------------|--------------------------------------------|\n"));
     r.push_str(String::from("| `--no-cache`      | (off)       | Disable verification result caching        |\n"));
-    r.push_str(String::from("| `--unwind <N>`    | `10`        | ESBMC loop unwind bound                   |\n"));
+    r.push_str(String::from("| `--max-k-step <N>` | `50`       | ESBMC max k-induction step                |\n"));
     r.push_str(String::from("| `--solver <boolector\\|z3\\|bitwuzla\\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |\n"));
     r.push_str(String::from("| `--encoding <bv\\|ir\\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |\n"));
     r.push_str(String::from("| `--timeout <N>` | (none)      | ESBMC per-function timeout in seconds        |\n"));
@@ -2783,7 +2780,7 @@ fn skill_full() -> String {
     r.push_str(String::from("|-------------------|-------------|--------------------------------------------|\n"));
     r.push_str(String::from("| `--verify`        | (off)       | Run ESBMC verification and report per-contract status |\n"));
     r.push_str(String::from("| `--no-cache`      | (off)       | Disable verification result caching        |\n"));
-    r.push_str(String::from("| `--unwind <N>`    | `10`        | ESBMC loop unwind bound                   |\n"));
+    r.push_str(String::from("| `--max-k-step <N>` | `50`       | ESBMC max k-induction step                |\n"));
     r.push_str(String::from("| `--solver <boolector\\|z3\\|bitwuzla\\|auto>` | `auto` | ESBMC SMT solver (with --verify)           |\n"));
     r.push_str(String::from("| `--encoding <bv\\|ir\\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |\n"));
     r.push_str(String::from("\n"));
@@ -2819,7 +2816,7 @@ fn skill_full() -> String {
     r.push_str(String::from("| `--mode debug`    | (default)   | Insert runtime vow checks                 |\n"));
     r.push_str(String::from("| `--mode release`  | `debug`     | Omit all vow checks for performance       |\n"));
     r.push_str(String::from("| `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |\n"));
-    r.push_str(String::from("| `--unwind <N>`    | `10`        | ESBMC loop unwind bound (with --verify)    |\n"));
+    r.push_str(String::from("| `--max-k-step <N>` | `50`       | ESBMC max k-induction step (with --verify) |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Test discovery: files matching `test_*.vow` or `*_test.vow` in the given directory, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.\n"));
     r.push_str(String::from("\n"));
@@ -3181,21 +3178,16 @@ fn skill_full() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("### ESBMC Configuration\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("- Loop unwind bound: **10** -- loops are checked for up to 10 iterations\n"));
+    r.push_str(String::from("- Verification strategy: **k-induction-parallel** (incremental BMC + k-induction proof)\n"));
+    r.push_str(String::from("- Max k-induction step: **50** (default; override with `--max-k-step`)\n"));
     r.push_str(String::from("- Architecture: 64-bit\n"));
     r.push_str(String::from("- Array bounds / pointer checks disabled (Vow handles these in its own model)\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Collection Models for Verification\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("ESBMC uses bounded models for collection types:\n"));
+    r.push_str(String::from("Collections (`Vec<T>`, `String`, `HashMap<K, V>`) are modeled with unbounded, dynamically allocated storage -- the same semantics as at runtime. There are no artificial capacity limits in the verification model. ESBMC reasons about container operations using k-induction to prove properties for all iterations.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("| Type              | Max Capacity | Supported Operations |\n"));
-    r.push_str(String::from("|-------------------|-------------|----------------------------------------------|\n"));
-    r.push_str(String::from("| `Vec<T>`          | 128         | `new`, `push`, `pop`, `len`, `get`, `set`    |\n"));
-    r.push_str(String::from("| `String`          | 256         | `from`, `len`, `push_byte`, `byte_at`        |\n"));
-    r.push_str(String::from("| `HashMap<K, V>`   | 64          | `new`, `insert`, `get`, `contains_key`, `len`|\n"));
-    r.push_str(String::from("\n"));
-    r.push_str(String::from("These support the same operations as the runtime but with bounded storage. `String::from` produces a nondeterministic length (0 to 255) in verification.\n"));
+    r.push_str(String::from("`String::from` produces a nondeterministic non-negative length in verification.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Blame Model\n"));
     r.push_str(String::from("\n"));
@@ -3401,7 +3393,7 @@ fn skill_full() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Unbound Loop Iterations\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Without a bound on loop iterations, ESBMC may timeout (unwind bound is 10):\n"));
+    r.push_str(String::from("Without a bound on loop iterations, ESBMC may timeout (max-k-step is 50):\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn fill(n: i64) -> Vec<i64> vow {\n"));
@@ -3938,7 +3930,7 @@ fn skill_full() -> String {
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Key points:**\n"));
-    r.push_str(String::from("- `requires: n <= 8` keeps iterations within ESBMC's unwind bound (10)\n"));
+    r.push_str(String::from("- `requires: n <= 8` keeps iterations tractable for verification\n"));
     r.push_str(String::from("- `invariant: i >= 0, invariant: i <= n` is inductive: true on entry, preserved by the loop body\n"));
     r.push_str(String::from("- The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`\n"));
     r.push_str(String::from("\n"));
@@ -4581,20 +4573,20 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
 
     let do_verify: bool = has_flag(argv, String::from("--verify"));
     let use_cache: bool = !has_flag(argv, String::from("--no-cache"));
-    let unwind_str: String = get_flag_arg(argv, String::from("--unwind"));
-    let unwind: String = {
-        if unwind_str.len() > 0 { unwind_str }
-        else { String::from("10") }
+    let mks_str: String = get_flag_arg(argv, String::from("--max-k-step"));
+    let max_k_step: String = {
+        if mks_str.len() > 0 { mks_str }
+        else { String::from("50") }
     };
-    let mut c_solver: String = get_flag_arg(argv, String::from("--solver"));
-    let c_encoding: String = get_flag_arg(argv, String::from("--encoding"));
-    if c_encoding == String::from("ir") {
-        if c_solver == String::from("boolector") || c_solver == String::from("bitwuzla") {
+    let mut solver: String = get_flag_arg(argv, String::from("--solver"));
+    let encoding: String = get_flag_arg(argv, String::from("--encoding"));
+    if encoding == String::from("ir") {
+        if solver == String::from("boolector") || solver == String::from("bitwuzla") {
             eprintln_str(String::from("error: --encoding ir requires --solver z3"));
             return 1;
         }
-        if c_solver.len() == 0 || c_solver == String::from("auto") {
-            c_solver = String::from("z3");
+        if solver.len() == 0 || solver == String::from("auto") {
+            solver = String::from("z3");
         }
     }
 
@@ -4643,7 +4635,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
         while fi < nf {
             let func: IrFunction = ir_mod.functions[fi];
             if func.vows.len() > 0 {
-                let vr: VerifyResult = verify_function_full(func, ir_mod, unwind, use_cache, c_solver, c_encoding);
+                let vr: VerifyResult = verify_function_full(func, ir_mod, max_k_step, use_cache, solver, encoding);
                 let st: i64 = vr.status;
                 let mut ei: i64 = 0;
                 while ei < e_func_names.len() {

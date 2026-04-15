@@ -48,14 +48,6 @@ pub fn detect_constant_functions(module: &Module) -> HashMap<FuncId, ConstantVal
 }
 
 // ---------------------------------------------------------------------------
-// Vec model capacity for bounded model checking
-// ---------------------------------------------------------------------------
-
-const VOW_VEC_MAX: usize = 128;
-const VOW_STRING_MAX: usize = 256;
-const VOW_HASHMAP_MAX: usize = 64;
-
-// ---------------------------------------------------------------------------
 // Type mapping
 // ---------------------------------------------------------------------------
 
@@ -683,15 +675,14 @@ fn emit_inst(
             if let InstData::CallExtern(ref name) = inst.data {
                 match name.as_str() {
                     "__vow_vec_new" => {
-                        out.push_str(&format!("  v{}.len = 0;\n", id));
+                        out.push_str(&format!("  v{id}.len = 0;\n  v{id}.data = (int64_t*)0;\n"));
                     }
                     "__vow_vec_push_val" => {
                         let vec = inst.args[0].0;
                         let val = inst.args[1].0;
                         out.push_str(&format!(
-                            "  __ESBMC_assert(v{vec}.len < {}, \"vec capacity\");\n\
-                             \x20 v{vec}.data[v{vec}.len] = v{val};\n  v{vec}.len++;\n",
-                            VOW_VEC_MAX
+                            "  v{vec}.data = (int64_t*)realloc(v{vec}.data, sizeof(int64_t) * (size_t)(v{vec}.len + 1));\n\
+                             \x20 v{vec}.data[v{vec}.len] = v{val};\n  v{vec}.len++;\n"
                         ));
                     }
                     "__vow_vec_get_val" => {
@@ -733,8 +724,8 @@ fn emit_inst(
                     "__vow_string_from_cstr" => {
                         out.push_str(&format!(
                             "  v{id}.len = __VERIFIER_nondet_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < {});\n",
-                            VOW_STRING_MAX
+                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < INT64_MAX);\n\
+                             \x20 v{id}.data = (v{id}.len > 0) ? (int8_t*)malloc((size_t)v{id}.len) : (int8_t*)0;\n"
                         ));
                     }
                     "__vow_string_len" => {
@@ -750,9 +741,8 @@ fn emit_inst(
                         let s = inst.args[0].0;
                         let byte = inst.args[1].0;
                         out.push_str(&format!(
-                            "  __ESBMC_assert(v{s}.len < {}, \"string capacity\");\n\
-                             \x20 v{s}.data[v{s}.len] = (int8_t)v{byte};\n  v{s}.len++;\n",
-                            VOW_STRING_MAX
+                            "  v{s}.data = (int8_t*)realloc(v{s}.data, (size_t)(v{s}.len + 1));\n\
+                             \x20 v{s}.data[v{s}.len] = (int8_t)v{byte};\n  v{s}.len++;\n"
                         ));
                     }
                     "__vow_string_byte_at" => {
@@ -801,10 +791,10 @@ fn emit_inst(
                             "  __ESBMC_assert(v{start} >= 0 && v{start} <= v{s}.len, \"substring start\");\n\
                              \x20 __ESBMC_assert(v{end} >= v{start} && v{end} <= v{s}.len, \"substring end\");\n\
                              \x20 v{id}.len = v{end} - v{start};\n\
-                             \x20 for (int64_t __i = 0; __i < v{id}.len && __i < {}; __i++) {{\n\
+                             \x20 v{id}.data = (int8_t*)realloc((int8_t*)0, (size_t)(v{id}.len + 1));\n\
+                             \x20 for (int64_t __i = 0; __i < v{id}.len; __i++) {{\n\
                              \x20   v{id}.data[__i] = v{s}.data[v{start} + __i];\n\
-                             \x20 }}\n",
-                            VOW_STRING_MAX
+                             \x20 }}\n"
                         ));
                     }
                     "__vow_string_parse_i64_opt" | "__vow_string_parse_u64_opt" => {
@@ -829,7 +819,9 @@ fn emit_inst(
             if let InstData::CallExtern(ref name) = inst.data {
                 match name.as_str() {
                     "__vow_map_new" => {
-                        out.push_str(&format!("  v{id}.len = 0;\n"));
+                        out.push_str(&format!(
+                            "  v{id}.len = 0;\n  v{id}.keys = (int64_t*)0;\n  v{id}.vals = (int64_t*)0;\n"
+                        ));
                     }
                     "__vow_map_len" => {
                         let m = inst.args[0].0;
@@ -846,7 +838,8 @@ fn emit_inst(
                              \x20     if (v{m}.keys[__i] == v{k}) {{ v{m}.vals[__i] = v{v}; __found = 1; break; }}\n\
                              \x20   }}\n\
                              \x20   if (!__found) {{\n\
-                             \x20     __ESBMC_assert(v{m}.len < {VOW_HASHMAP_MAX}, \"hashmap capacity\");\n\
+                             \x20     v{m}.keys = (int64_t*)realloc(v{m}.keys, sizeof(int64_t) * (size_t)(v{m}.len + 1));\n\
+                             \x20     v{m}.vals = (int64_t*)realloc(v{m}.vals, sizeof(int64_t) * (size_t)(v{m}.len + 1));\n\
                              \x20     v{m}.keys[v{m}.len] = v{k}; v{m}.vals[v{m}.len] = v{v}; v{m}.len++;\n\
                              \x20   }}\n\
                              \x20 }}\n"
@@ -1088,11 +1081,24 @@ pub fn emit_c_function_full(
                 let id = inst.id.0;
                 if let Some(&(_, cl)) = arg_var_map.iter().find(|(ir, _)| *ir == idx) {
                     if vec_vars.contains(&id) {
-                        out.push_str(&format!("  __vow_vec_t v{};\n  v{}.len = 0;\n", id, id));
+                        out.push_str(&format!(
+                            "  __vow_vec_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
+                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < INT64_MAX);\n\
+                             \x20 v{id}.data = (v{id}.len > 0) ? (int64_t*)malloc(sizeof(int64_t) * (size_t)v{id}.len) : (int64_t*)0;\n"
+                        ));
                     } else if string_vars.contains(&id) {
-                        out.push_str(&format!("  __vow_string_t v{};\n  v{}.len = 0;\n", id, id));
+                        out.push_str(&format!(
+                            "  __vow_string_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
+                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < INT64_MAX);\n\
+                             \x20 v{id}.data = (v{id}.len > 0) ? (int8_t*)malloc((size_t)v{id}.len) : (int8_t*)0;\n"
+                        ));
                     } else if hashmap_vars.contains(&id) {
-                        out.push_str(&format!("  __vow_hashmap_t v{};\n  v{}.len = 0;\n", id, id));
+                        out.push_str(&format!(
+                            "  __vow_hashmap_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
+                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < INT64_MAX);\n\
+                             \x20 v{id}.keys = (v{id}.len > 0) ? (int64_t*)malloc(sizeof(int64_t) * (size_t)v{id}.len) : (int64_t*)0;\n\
+                             \x20 v{id}.vals = (v{id}.len > 0) ? (int64_t*)malloc(sizeof(int64_t) * (size_t)v{id}.len) : (int64_t*)0;\n"
+                        ));
                     } else if option_vars.contains(&id) {
                         out.push_str(&format!("  __vow_option_t v{};\n  v{}.tag = 0;\n", id, id));
                     } else {
@@ -1281,18 +1287,11 @@ fn emit_c_preamble(out: &mut String, shifts: &ShiftNeeds) {
     out.push_str("extern float __VERIFIER_nondet_float(void);\n");
     out.push_str("extern double __VERIFIER_nondet_double(void);\n");
     out.push_str("extern _Bool __VERIFIER_nondet_bool(void);\n\n");
-    out.push_str(&format!(
-        "typedef struct {{ int64_t len; int64_t data[{}]; }} __vow_vec_t;\n",
-        VOW_VEC_MAX
-    ));
-    out.push_str(&format!(
-        "typedef struct {{ int64_t len; int8_t data[{}]; }} __vow_string_t;\n",
-        VOW_STRING_MAX
-    ));
-    out.push_str(&format!(
-        "typedef struct {{ int64_t len; int64_t keys[{}]; int64_t vals[{}]; }} __vow_hashmap_t;\n",
-        VOW_HASHMAP_MAX, VOW_HASHMAP_MAX
-    ));
+    out.push_str("typedef struct { int64_t len; int64_t* data; } __vow_vec_t;\n");
+    out.push_str("typedef struct { int64_t len; int8_t* data; } __vow_string_t;\n");
+    out.push_str(
+        "typedef struct { int64_t len; int64_t* keys; int64_t* vals; } __vow_hashmap_t;\n",
+    );
     out.push_str("typedef struct { int64_t tag; int64_t payload; } __vow_option_t;\n");
     if shifts.shl_i64 {
         out.push_str(
@@ -2138,7 +2137,7 @@ mod tests {
         let out = emit_c_module(&[&f], &HashMap::new());
         assert!(out.contains("__vow_vec_t"), "vec typedef: {out}");
         assert!(out.contains("int64_t len"), "vec len field: {out}");
-        assert!(out.contains("int64_t data["), "vec data field: {out}");
+        assert!(out.contains("int64_t* data"), "vec data ptr field: {out}");
     }
 
     #[test]
@@ -2203,8 +2202,8 @@ mod tests {
         );
         let c = emit_c_function(&func, &HashMap::new());
         assert!(
-            c.contains("__ESBMC_assert(v2.len < 128, \"vec capacity\")"),
-            "push capacity: {c}"
+            !c.contains("vec capacity"),
+            "push must NOT have capacity assertion: {c}"
         );
         assert!(c.contains("v2.data[v2.len] = v3;"), "push store: {c}");
         assert!(c.contains("v2.len++;"), "push increment: {c}");
@@ -2439,7 +2438,7 @@ mod tests {
         );
         let out = emit_c_module(&[&f], &HashMap::new());
         assert!(out.contains("__vow_string_t"), "string typedef: {out}");
-        assert!(out.contains("int8_t data["), "string data field: {out}");
+        assert!(out.contains("int8_t* data"), "string data ptr field: {out}");
     }
 
     #[test]
@@ -2469,8 +2468,8 @@ mod tests {
             "nondet len: {c}"
         );
         assert!(
-            c.contains("__ESBMC_assume(v1.len >= 0 && v1.len < 256)"),
-            "len bounded: {c}"
+            c.contains("__ESBMC_assume(v1.len >= 0 && v1.len < INT64_MAX)"),
+            "len bounded by type: {c}"
         );
         assert!(
             c.contains("return 0; /* modelled type return */"),
@@ -2541,8 +2540,8 @@ mod tests {
         );
         let c = emit_c_function(&func, &HashMap::new());
         assert!(
-            c.contains("__ESBMC_assert(v1.len < 256, \"string capacity\")"),
-            "push_byte capacity: {c}"
+            !c.contains("string capacity"),
+            "push_byte must NOT have capacity assertion: {c}"
         );
         assert!(
             c.contains("v1.data[v1.len] = (int8_t)v2;"),
@@ -2909,8 +2908,8 @@ mod tests {
         assert!(c.contains("v0.keys[__i] == v1"), "key search: {c}");
         assert!(c.contains("v0.vals[__i] = v2"), "update existing: {c}");
         assert!(
-            c.contains("__ESBMC_assert(v0.len < 64, \"hashmap capacity\")"),
-            "insert capacity: {c}"
+            !c.contains("hashmap capacity"),
+            "insert must NOT have capacity assertion: {c}"
         );
         assert!(c.contains("v0.keys[v0.len] = v1"), "insert new key: {c}");
         assert!(c.contains("v0.vals[v0.len] = v2"), "insert new val: {c}");
@@ -3081,8 +3080,8 @@ mod tests {
             c.contains("__vow_hashmap_t"),
             "hashmap typedef in header: {c}"
         );
-        assert!(c.contains("int64_t keys["), "keys array in typedef: {c}");
-        assert!(c.contains("int64_t vals["), "vals array in typedef: {c}");
+        assert!(c.contains("int64_t* keys"), "keys ptr in typedef: {c}");
+        assert!(c.contains("int64_t* vals"), "vals ptr in typedef: {c}");
     }
 
     #[test]

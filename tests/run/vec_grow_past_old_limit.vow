@@ -1,0 +1,20 @@
+module VecGrowPastOldLimit
+
+fn main() -> i32 [io] {
+    let v: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < 200 {
+        v.push(i);
+        i = i + 1;
+    }
+    if v.len() != 200 {
+        return 1;
+    }
+    if v[0] != 0 {
+        return 1;
+    }
+    if v[199] != 199 {
+        return 1;
+    }
+    0
+}
