@@ -725,7 +725,7 @@ fn emit_inst(
                         out.push_str(&format!(
                             "  v{id}.len = __VERIFIER_nondet_long();\n\
                              \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < INT64_MAX);\n\
-                             \x20 v{id}.data = (int8_t*)0;\n"
+                             \x20 v{id}.data = (v{id}.len > 0) ? (int8_t*)malloc((size_t)v{id}.len) : (int8_t*)0;\n"
                         ));
                     }
                     "__vow_string_len" => {
@@ -1084,19 +1084,20 @@ pub fn emit_c_function_full(
                         out.push_str(&format!(
                             "  __vow_vec_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
                              \x20 __ESBMC_assume(v{id}.len >= 0);\n\
-                             \x20 v{id}.data = (int64_t*)0;\n"
+                             \x20 v{id}.data = (v{id}.len > 0) ? (int64_t*)malloc(sizeof(int64_t) * (size_t)v{id}.len) : (int64_t*)0;\n"
                         ));
                     } else if string_vars.contains(&id) {
                         out.push_str(&format!(
                             "  __vow_string_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
                              \x20 __ESBMC_assume(v{id}.len >= 0);\n\
-                             \x20 v{id}.data = (int8_t*)0;\n"
+                             \x20 v{id}.data = (v{id}.len > 0) ? (int8_t*)malloc((size_t)v{id}.len) : (int8_t*)0;\n"
                         ));
                     } else if hashmap_vars.contains(&id) {
                         out.push_str(&format!(
                             "  __vow_hashmap_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
                              \x20 __ESBMC_assume(v{id}.len >= 0);\n\
-                             \x20 v{id}.keys = (int64_t*)0;\n  v{id}.vals = (int64_t*)0;\n"
+                             \x20 v{id}.keys = (v{id}.len > 0) ? (int64_t*)malloc(sizeof(int64_t) * (size_t)v{id}.len) : (int64_t*)0;\n\
+                             \x20 v{id}.vals = (v{id}.len > 0) ? (int64_t*)malloc(sizeof(int64_t) * (size_t)v{id}.len) : (int64_t*)0;\n"
                         ));
                     } else if option_vars.contains(&id) {
                         out.push_str(&format!("  __vow_option_t v{};\n  v{}.tag = 0;\n", id, id));
