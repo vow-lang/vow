@@ -1,0 +1,13 @@
+module BitwiseMask
+
+fn mask_low_byte(x: i64) -> i64 vow {
+    ensures: result >= 0,
+    ensures: result <= 255
+} {
+    x & 255
+}
+
+fn main() -> i32 [io] {
+    print_i64(mask_low_byte(1000));
+    0
+}

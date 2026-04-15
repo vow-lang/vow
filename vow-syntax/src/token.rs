@@ -97,6 +97,7 @@ pub enum TokenKind {
 
     // Other operators
     Amp,       // &
+    Pipe,      // |
     Question,  // ?
     FatArrow,  // =>
     ThinArrow, // ->

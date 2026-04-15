@@ -138,7 +138,11 @@ fn arb_binop() -> impl Strategy<Value = BinOp> {
         BinOp::Ge,
         BinOp::And,
         BinOp::Or,
+        BinOp::BitAnd,
+        BinOp::BitOr,
         BinOp::BitXor,
+        BinOp::Shl,
+        BinOp::Shr,
     ])
 }
 

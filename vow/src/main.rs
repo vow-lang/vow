@@ -726,6 +726,13 @@ fn skill_json() -> String {
         "||",
         "!"
       ],
+      "bitwise": [
+        "&",
+        "|",
+        "^",
+        "<<",
+        ">>"
+      ],
       "unary": [
         "-",
         "!",
@@ -947,7 +954,7 @@ BUILTINS  : print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [i
             eprintln_str: fn(s: String) -> () [io]   fs_read: fn(path: String) -> String [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   parse_i64: fn(s: String) -> i64 []   i64_to_string: fn(v: i64) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
 METHODS   : Vec: Vec::new/push/pop/len/clear/truncate/v[i]/v[i] = val   String: String::from/String::new/len/byte_at/push_byte/push_str/clear/contains/eq/substring/parse_i64/parse_u64
             HashMap: HashMap::new/insert/get/contains_key/remove/len   Option: unwrap
-OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   - ! & ?
+OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! & ?
 
 VERIFICATION LIMITS
   Loop unwind  : 10 iterations
@@ -1232,6 +1239,18 @@ Checked operators abort with `ArithmeticOverflow` on overflow.
 | `>`      | Greater than           |
 | `>=`     | Greater than or equal  |
 
+### Bitwise Operators
+
+| Operator | Meaning      |
+|----------|--------------|
+| `&`      | Bitwise AND  |
+| `\|`     | Bitwise OR   |
+| `^`      | Bitwise XOR  |
+| `<<`     | Left shift   |
+| `>>`     | Right shift  |
+
+Bitwise operators require integer operands of the same type. Shift expressions return the left operand's type. `>>` is arithmetic for `i64` and logical for `u64`.
+
 ### Logical Operators
 
 | Operator | Meaning    |
@@ -1241,6 +1260,16 @@ Checked operators abort with `ArithmeticOverflow` on overflow.
 | `!`      | Logical NOT|
 
 `&&` and `||` use short-circuit evaluation: for `a && b`, `b` is only evaluated if `a` is true; for `a || b`, `b` is only evaluated if `a` is false.
+
+### Operator Precedence
+
+From loosest to tightest, Vow follows the usual C/Rust precedence for logical and bitwise operators:
+
+`||`, `&&`, comparisons (`== != < <= > >=`), `|`, `^`, `&`, `<< >>`, `+ -`, `* / %`
+
+Unary `-`, `!`, `&`, and `?` bind tighter than every binary operator.
+
+Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs & rhs` is bitwise AND.
 
 ### Unary Operators
 

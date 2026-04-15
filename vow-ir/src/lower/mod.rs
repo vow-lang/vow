@@ -2666,11 +2666,39 @@ fn binop_opcode(op: BinOp, operand_ty: &Ty) -> (Opcode, Ty) {
         }
         BinOp::And => (Opcode::And, Ty::Bool),
         BinOp::Or => (Opcode::Or, Ty::Bool),
+        BinOp::BitAnd => {
+            if is_u64 {
+                (Opcode::BitAndU64, Ty::U64)
+            } else {
+                (Opcode::BitAndI64, Ty::I64)
+            }
+        }
+        BinOp::BitOr => {
+            if is_u64 {
+                (Opcode::BitOrU64, Ty::U64)
+            } else {
+                (Opcode::BitOrI64, Ty::I64)
+            }
+        }
         BinOp::BitXor => {
             if is_u64 {
                 (Opcode::XorU64, Ty::U64)
             } else {
                 (Opcode::XorI64, Ty::I64)
+            }
+        }
+        BinOp::Shl => {
+            if is_u64 {
+                (Opcode::ShlU64, Ty::U64)
+            } else {
+                (Opcode::ShlI64, Ty::I64)
+            }
+        }
+        BinOp::Shr => {
+            if is_u64 {
+                (Opcode::ShrU64, Ty::U64)
+            } else {
+                (Opcode::ShrI64, Ty::I64)
             }
         }
     }

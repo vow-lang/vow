@@ -195,6 +195,14 @@ const IOP_CONST_U64: i64 = 102;
 const IOP_CAST_I64_TO_U64: i64 = 103;
 const IOP_CAST_U64_TO_I64: i64 = 104;
 const IOP_DEBUG_CALL: i64 = 105;
+const IOP_BITAND_I64: i64 = 106;
+const IOP_BITOR_I64: i64 = 107;
+const IOP_SHL_I64: i64 = 108;
+const IOP_SHR_I64: i64 = 109;
+const IOP_BITAND_U64: i64 = 110;
+const IOP_BITOR_U64: i64 = 111;
+const IOP_SHL_U64: i64 = 112;
+const IOP_SHR_U64: i64 = 113;
 
 // InstData kind constants (match compiler/ir.vow IDATA_*)
 #[allow(dead_code)]
@@ -1132,8 +1140,28 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
                     set_val!(iid, val);
                 }
 
+                IOP_BITAND_I64 | IOP_BITAND_U64 => {
+                    let val = builder.ins().band(arg!(0), arg!(1));
+                    set_val!(iid, val);
+                }
+                IOP_BITOR_I64 | IOP_BITOR_U64 => {
+                    let val = builder.ins().bor(arg!(0), arg!(1));
+                    set_val!(iid, val);
+                }
                 IOP_XOR_I32 | IOP_XOR_I64 | IOP_XOR_U64 => {
                     let val = builder.ins().bxor(arg!(0), arg!(1));
+                    set_val!(iid, val);
+                }
+                IOP_SHL_I64 | IOP_SHL_U64 => {
+                    let val = builder.ins().ishl(arg!(0), arg!(1));
+                    set_val!(iid, val);
+                }
+                IOP_SHR_I64 => {
+                    let val = builder.ins().sshr(arg!(0), arg!(1));
+                    set_val!(iid, val);
+                }
+                IOP_SHR_U64 => {
+                    let val = builder.ins().ushr(arg!(0), arg!(1));
                     set_val!(iid, val);
                 }
 

@@ -360,7 +360,11 @@ pub enum BinOp {
     Ge,
     And,
     Or,
+    BitAnd,
+    BitOr,
     BitXor,
+    Shl,
+    Shr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -515,7 +519,12 @@ mod tests {
             BinOp::Ge,
             BinOp::And,
             BinOp::Or,
+            BinOp::BitAnd,
+            BinOp::BitOr,
+            BinOp::BitXor,
+            BinOp::Shl,
+            BinOp::Shr,
         ];
-        assert_eq!(ops.len(), 16);
+        assert_eq!(ops.len(), 21);
     }
 }

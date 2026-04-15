@@ -89,6 +89,7 @@ fn tok_eof() -> i64 vow { ensures: result >= 0 } { 76 }
 fn tok_kw_const() -> i64 vow { ensures: result >= 0 } { 77 }
 fn tok_caret() -> i64 vow { ensures: result >= 0 } { 78 }
 fn tok_kw_continue() -> i64 vow { ensures: result >= 0 } { 79 }
+fn tok_pipe() -> i64 vow { ensures: result >= 0 } { 80 }
 
 fn tok_suffix_i8() -> i64 vow { ensures: result >= 0 } { 0 }
 fn tok_suffix_i16() -> i64 vow { ensures: result >= 0 } { 1 }

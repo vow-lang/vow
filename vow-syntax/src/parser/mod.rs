@@ -81,6 +81,10 @@ impl Parser {
         &self.tokens[self.cursor].kind
     }
 
+    fn peek_n_kind(&self, offset: usize) -> Option<&TokenKind> {
+        self.tokens.get(self.cursor + offset).map(|t| &t.kind)
+    }
+
     fn advance(&mut self) -> &Token {
         let tok = &self.tokens[self.cursor];
         if self.cursor + 1 < self.tokens.len() {

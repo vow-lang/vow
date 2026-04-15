@@ -435,16 +435,19 @@ pub fn print_type(ty: &Type) -> String {
 fn binop_precedence(op: BinOp) -> u8 {
     match op {
         BinOp::Or => 1,
-        BinOp::BitXor => 2,
-        BinOp::And => 3,
-        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => 4,
-        BinOp::Add | BinOp::Sub | BinOp::AddChecked | BinOp::SubChecked => 5,
+        BinOp::And => 2,
+        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => 3,
+        BinOp::BitOr => 4,
+        BinOp::BitXor => 5,
+        BinOp::BitAnd => 6,
+        BinOp::Shl | BinOp::Shr => 7,
+        BinOp::Add | BinOp::Sub | BinOp::AddChecked | BinOp::SubChecked => 8,
         BinOp::Mul
         | BinOp::Div
         | BinOp::Rem
         | BinOp::MulChecked
         | BinOp::DivChecked
-        | BinOp::RemChecked => 6,
+        | BinOp::RemChecked => 9,
     }
 }
 
@@ -468,14 +471,18 @@ fn binop_str(op: BinOp) -> &'static str {
         BinOp::Ge => ">=",
         BinOp::And => "&&",
         BinOp::Or => "||",
+        BinOp::BitAnd => "&",
+        BinOp::BitOr => "|",
         BinOp::BitXor => "^",
+        BinOp::Shl => "<<",
+        BinOp::Shr => ">>",
     }
 }
 
 fn expr_precedence(expr: &Expr) -> u8 {
     match &expr.kind {
         ExprKind::BinaryOp { op, .. } => binop_precedence(*op),
-        ExprKind::UnaryOp { .. } => 6,
+        ExprKind::UnaryOp { .. } => 10,
         _ => 255,
     }
 }
@@ -682,7 +689,18 @@ pub fn print_expr(expr: &Expr) -> String {
         ExprKind::Borrow { expr } => format!("&{}", print_expr(expr)),
         ExprKind::Question { expr } => format!("{}?", print_expr(expr)),
         ExprKind::Cast { expr, target_ty } => {
-            format!("{} as {}", print_expr(expr), print_type(target_ty))
+            let inner = match &expr.kind {
+                ExprKind::Lit(_)
+                | ExprKind::Ident(_)
+                | ExprKind::Call { .. }
+                | ExprKind::MethodCall { .. }
+                | ExprKind::FieldAccess { .. }
+                | ExprKind::Index { .. }
+                | ExprKind::Question { .. }
+                | ExprKind::Cast { .. } => print_expr(expr),
+                _ => format!("({})", print_expr(expr)),
+            };
+            format!("{} as {}", inner, print_type(target_ty))
         }
         ExprKind::Assign { lhs, rhs } => {
             format!("{} = {}", print_expr(lhs), print_expr(rhs))
@@ -1134,6 +1152,18 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_parens_binary_operand() {
+        let expr = Expr {
+            kind: ExprKind::Cast {
+                expr: Box::new(binop_expr(BinOp::Add, ident_expr("a"), ident_expr("b"))),
+                target_ty: Box::new(named_ty("u64")),
+            },
+            span: s(),
+        };
+        assert_eq!(print_expr(&expr), "(a + b) as u64");
+    }
+
+    #[test]
     fn test_all_binop_strings() {
         let pairs: &[(BinOp, &str)] = &[
             (BinOp::Add, "+"),
@@ -1154,6 +1184,11 @@ mod tests {
             (BinOp::Ge, ">="),
             (BinOp::And, "&&"),
             (BinOp::Or, "||"),
+            (BinOp::BitAnd, "&"),
+            (BinOp::BitOr, "|"),
+            (BinOp::BitXor, "^"),
+            (BinOp::Shl, "<<"),
+            (BinOp::Shr, ">>"),
         ];
         for (op, expected_op_str) in pairs {
             let expr = binop_expr(*op, ident_expr("a"), ident_expr("b"));

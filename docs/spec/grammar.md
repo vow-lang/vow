@@ -213,6 +213,18 @@ Checked operators abort with `ArithmeticOverflow` on overflow.
 | `>`      | Greater than           |
 | `>=`     | Greater than or equal  |
 
+### Bitwise Operators
+
+| Operator | Meaning      |
+|----------|--------------|
+| `&`      | Bitwise AND  |
+| `\|`     | Bitwise OR   |
+| `^`      | Bitwise XOR  |
+| `<<`     | Left shift   |
+| `>>`     | Right shift  |
+
+Bitwise operators require integer operands of the same type. Shift expressions return the left operand's type. `>>` is arithmetic for `i64` and logical for `u64`.
+
 ### Logical Operators
 
 | Operator | Meaning    |
@@ -222,6 +234,16 @@ Checked operators abort with `ArithmeticOverflow` on overflow.
 | `!`      | Logical NOT|
 
 `&&` and `||` use short-circuit evaluation: for `a && b`, `b` is only evaluated if `a` is true; for `a || b`, `b` is only evaluated if `a` is false.
+
+### Operator Precedence
+
+From loosest to tightest, Vow follows the usual C/Rust precedence for logical and bitwise operators:
+
+`||`, `&&`, comparisons (`== != < <= > >=`), `|`, `^`, `&`, `<< >>`, `+ -`, `* / %`
+
+Unary `-`, `!`, `&`, and `?` bind tighter than every binary operator.
+
+Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs & rhs` is bitwise AND.
 
 ### Unary Operators
 

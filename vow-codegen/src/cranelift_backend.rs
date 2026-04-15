@@ -550,10 +550,33 @@ fn lower_inst(
         }
 
         // ------------------------------------------------------------------
+        // Integer bitwise operations
+        // ------------------------------------------------------------------
+        Opcode::BitAndI64 | Opcode::BitAndU64 => {
+            let val = builder.ins().band(arg!(0), arg!(1));
+            ctx.value_map.insert(inst.id, val);
+        }
+        Opcode::BitOrI64 | Opcode::BitOrU64 => {
+            let val = builder.ins().bor(arg!(0), arg!(1));
+            ctx.value_map.insert(inst.id, val);
+        }
+        // ------------------------------------------------------------------
         // Bitwise XOR
         // ------------------------------------------------------------------
         Opcode::XorI32 | Opcode::XorI64 | Opcode::XorU64 => {
             let val = builder.ins().bxor(arg!(0), arg!(1));
+            ctx.value_map.insert(inst.id, val);
+        }
+        Opcode::ShlI64 | Opcode::ShlU64 => {
+            let val = builder.ins().ishl(arg!(0), arg!(1));
+            ctx.value_map.insert(inst.id, val);
+        }
+        Opcode::ShrI64 => {
+            let val = builder.ins().sshr(arg!(0), arg!(1));
+            ctx.value_map.insert(inst.id, val);
+        }
+        Opcode::ShrU64 => {
+            let val = builder.ins().ushr(arg!(0), arg!(1));
             ctx.value_map.insert(inst.id, val);
         }
 
@@ -2730,6 +2753,39 @@ mod tests {
                         inst(3, Opcode::And, Ty::Bool, vec![0, 1], InstData::None),
                         inst(4, Opcode::Or, Ty::Bool, vec![0, 1], InstData::None),
                         inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
+                    ],
+                }],
+                local_names: std::collections::HashMap::new(),
+            }],
+        );
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn compile_integer_bitwise_ops() {
+        let module = make_module(
+            "test",
+            vec![Function {
+                id: FuncId(0),
+                name: "bits".to_string(),
+                params: vec![Ty::I64, Ty::I64],
+                param_names: vec![],
+                return_ty: Ty::I64,
+                effects: vec![],
+                vows: vec![],
+                blocks: vec![BasicBlock {
+                    id: BlockId(0),
+                    insts: vec![
+                        inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                        inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
+                        inst(2, Opcode::BitAndI64, Ty::I64, vec![0, 1], InstData::None),
+                        inst(3, Opcode::BitOrI64, Ty::I64, vec![0, 1], InstData::None),
+                        inst(4, Opcode::XorI64, Ty::I64, vec![0, 1], InstData::None),
+                        inst(5, Opcode::ShlI64, Ty::I64, vec![0, 1], InstData::None),
+                        inst(6, Opcode::ShrI64, Ty::I64, vec![0, 1], InstData::None),
+                        inst(7, Opcode::Return, Ty::Unit, vec![6], InstData::None),
                     ],
                 }],
                 local_names: std::collections::HashMap::new(),

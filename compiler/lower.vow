@@ -634,7 +634,11 @@ fn binop_opcode(op: i64, operand_ty: i64) -> i64 vow {
     if op == BINOP_GE() { return if is_u64 { IOP_GE_U64() } else { IOP_GE_I64() }; }
     if op == BINOP_AND() { return IOP_AND(); }
     if op == BINOP_OR() { return IOP_OR(); }
+    if op == BINOP_BITAND() { return if is_u64 { IOP_BITAND_U64() } else { IOP_BITAND_I64() }; }
+    if op == BINOP_BITOR() { return if is_u64 { IOP_BITOR_U64() } else { IOP_BITOR_I64() }; }
     if op == BINOP_XOR() { return if is_u64 { IOP_XOR_U64() } else { IOP_XOR_I64() }; }
+    if op == BINOP_SHL() { return if is_u64 { IOP_SHL_U64() } else { IOP_SHL_I64() }; }
+    if op == BINOP_SHR() { return if is_u64 { IOP_SHR_U64() } else { IOP_SHR_I64() }; }
     IOP_WADD_I64()
 }
 
@@ -2898,12 +2902,16 @@ fn binop_str(op: i64) -> String {
     if op == BINOP_GE() { return String::from(">="); }
     if op == BINOP_AND() { return String::from("&&"); }
     if op == BINOP_OR() { return String::from("||"); }
+    if op == BINOP_BITAND() { return String::from("&"); }
+    if op == BINOP_BITOR() { return String::from("|"); }
     if op == BINOP_ADD_CHK() { return String::from("+!"); }
     if op == BINOP_SUB_CHK() { return String::from("-!"); }
     if op == BINOP_MUL_CHK() { return String::from("*!"); }
     if op == BINOP_DIV_CHK() { return String::from("/!"); }
     if op == BINOP_REM_CHK() { return String::from("%!"); }
     if op == BINOP_XOR() { return String::from("^"); }
+    if op == BINOP_SHL() { return String::from("<<"); }
+    if op == BINOP_SHR() { return String::from(">>"); }
     String::from("?")
 }
 

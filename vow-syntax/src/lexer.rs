@@ -179,10 +179,7 @@ impl<'src> Lexer<'src> {
                     Ok(Token::new(TokenKind::PipePipe, Span::new(start as u32, 2)))
                 } else {
                     self.pos += 1;
-                    Err(LexError {
-                        message: "unexpected character '|'".to_string(),
-                        span: Span::new(start as u32, 1),
-                    })
+                    Ok(Token::new(TokenKind::Pipe, Span::new(start as u32, 1)))
                 }
             }
             b':' => {
@@ -575,6 +572,14 @@ mod tests {
         let kinds = lex("&& ||");
         assert_eq!(kinds[0], TokenKind::AmpAmp);
         assert_eq!(kinds[1], TokenKind::PipePipe);
+    }
+
+    #[test]
+    fn lex_bitwise_operators() {
+        let kinds = lex("& | ^");
+        assert_eq!(kinds[0], TokenKind::Amp);
+        assert_eq!(kinds[1], TokenKind::Pipe);
+        assert_eq!(kinds[2], TokenKind::Caret);
     }
 
     #[test]
