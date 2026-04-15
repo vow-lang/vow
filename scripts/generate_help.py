@@ -31,7 +31,7 @@ MAIN_RS = REPO / "vow" / "src" / "main.rs"
 MAIN_VOW = REPO / "compiler" / "main.vow"
 
 SCHEMA_VERSION = "2"
-DEFAULT_UNWIND = 10
+DEFAULT_MAX_K_STEP = 50
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +144,7 @@ def normalize_option(
         option["value_kind"] = "enum"
         option["values"] = ["off", "calls", "full"]
         option["default"] = default
-    elif normalized_flag == "--unwind <N>":
+    elif normalized_flag == "--max-k-step <N>":
         option["default"] = int(default) if default.isdigit() else default
     elif output_default is not None:
         option["default"] = output_default
@@ -158,7 +158,7 @@ def normalize_option(
 # Build JSON structure from grammar.md + cli.md
 # ---------------------------------------------------------------------------
 
-def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
+def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
     # --- Types ---
     prim_types = extract_table_col(grammar, "Primitive Types", 0)
     param_types = extract_table_col(grammar, "Built-in Parameterized Types", 0)
@@ -291,16 +291,11 @@ def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
         contracts_options[key] = value
         contracts_option_entries.append(option)
 
-    # --- Verification limits from contracts.md ---
-    collection_rows = extract_table(contracts, "Collection Models for Verification")
-    verification_limits: dict[str, str | int] = {
-        "loop_unwind": DEFAULT_UNWIND,
+    # --- Verification defaults from contracts.md ---
+    verification_defaults: dict[str, str | int] = {
+        "strategy": "k-induction-parallel",
+        "max_k_step": DEFAULT_MAX_K_STEP,
     }
-    for row in collection_rows:
-        if len(row) >= 2:
-            type_name = row[0].strip()
-            capacity = int(row[1].strip())
-            verification_limits[type_name] = capacity
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -595,7 +590,7 @@ def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
                 ],
             },
         },
-        "verification_limits": verification_limits,
+        "verification_defaults": verification_defaults,
     }
 
 
@@ -728,13 +723,12 @@ def build_help_human(data: dict) -> str:
     lines.append(f"OPERATORS : {arith}   {checked} (checked)   {comp}   {logical}   {bitwise_str} (bitwise, integer-only)   unary {unary}")
     lines.append("")
 
-    vlimits = data.get("verification_limits", {})
-    if vlimits:
-        lines.append("VERIFICATION LIMITS")
-        lines.append(f"  Loop unwind  : {vlimits.get('loop_unwind', DEFAULT_UNWIND)} iterations")
-        for key, val in vlimits.items():
-            if key != "loop_unwind":
-                lines.append(f"  {key:<14s}: {val} max capacity")
+    vdefaults = data.get("verification_defaults", {})
+    if vdefaults:
+        lines.append("VERIFICATION")
+        lines.append(f"  Strategy      : {vdefaults.get('strategy', 'k-induction-parallel')} (incremental BMC + k-induction)")
+        lines.append(f"  Max k step    : {vdefaults.get('max_k_step', DEFAULT_MAX_K_STEP)} (default; override with --max-k-step)")
+        lines.append("  Containers    : unbounded (no artificial capacity limits)")
 
     return "\n".join(lines)
 

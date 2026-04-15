@@ -14,9 +14,9 @@ use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{CollectingEmitter, Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
-    Counterexample, DEFAULT_UNWIND, VerificationResult, detect_constant_functions,
-    emit_verify_c_source, find_esbmc, run_esbmc_with_unwind,
-    verify_function_with_module_and_const_fns_with_unwind,
+    Counterexample, DEFAULT_MAX_K_STEP, VerificationResult, detect_constant_functions,
+    emit_verify_c_source, find_esbmc, run_esbmc_with_max_k_step,
+    verify_function_with_module_and_const_fns_with_max_k_step,
 };
 
 use cache::{CachedVerifyResult, VerifyCache};
@@ -64,8 +64,8 @@ struct Args {
     debug_trace: TraceArg,
     #[arg(long)]
     no_cache: bool,
-    #[arg(long, default_value_t = DEFAULT_UNWIND)]
-    unwind: u32,
+    #[arg(long, default_value_t = DEFAULT_MAX_K_STEP)]
+    max_k_step: u32,
     #[arg(long)]
     help: bool,
     #[arg(long)]
@@ -104,8 +104,8 @@ struct BuildArgs {
     debug_trace: TraceArg,
     #[arg(long)]
     no_cache: bool,
-    #[arg(long, default_value_t = DEFAULT_UNWIND)]
-    unwind: u32,
+    #[arg(long, default_value_t = DEFAULT_MAX_K_STEP)]
+    max_k_step: u32,
     #[arg(long)]
     help: bool,
     #[arg(long)]
@@ -122,8 +122,8 @@ struct VerifyArgs {
     human: bool,
     #[arg(long)]
     no_cache: bool,
-    #[arg(long, default_value_t = DEFAULT_UNWIND)]
-    unwind: u32,
+    #[arg(long, default_value_t = DEFAULT_MAX_K_STEP)]
+    max_k_step: u32,
 }
 
 #[derive(clap::Args, Debug)]
@@ -143,9 +143,9 @@ struct TestArgs {
     /// Per-test execution timeout in milliseconds
     #[arg(long, default_value = "30000")]
     timeout: u64,
-    /// ESBMC loop unwind bound (only with --verify)
-    #[arg(long, default_value = "10")]
-    unwind: u32,
+    /// ESBMC max k-induction step (only with --verify)
+    #[arg(long, default_value_t = DEFAULT_MAX_K_STEP)]
+    max_k_step: u32,
     #[arg(long)]
     help: bool,
     #[arg(long)]
@@ -173,7 +173,7 @@ struct ContractsArgs {
     #[arg(long)]
     no_cache: bool,
     #[arg(long)]
-    unwind: Option<u32>,
+    max_k_step: Option<u32>,
     #[arg(long)]
     help: bool,
     #[arg(long)]
@@ -315,12 +315,12 @@ fn skill_json() -> String {
           "value_kind": "flag"
         },
         {
-          "form": "--unwind <N>",
-          "description": "ESBMC loop unwind bound (default: 10)",
-          "long": "--unwind",
+          "form": "--max-k-step <N>",
+          "description": "ESBMC max k-induction step (default: 50)",
+          "long": "--max-k-step",
           "value_name": "N",
           "value_kind": "integer",
-          "default": 10
+          "default": 50
         }
       ],
       "stdout": {
@@ -361,12 +361,12 @@ fn skill_json() -> String {
           "value_kind": "flag"
         },
         {
-          "form": "--unwind <N>",
-          "description": "ESBMC loop unwind bound (default: 10)",
-          "long": "--unwind",
+          "form": "--max-k-step <N>",
+          "description": "ESBMC max k-induction step (default: 50)",
+          "long": "--max-k-step",
           "value_name": "N",
           "value_kind": "integer",
-          "default": 10
+          "default": 50
         }
       ],
       "stdout": {
@@ -428,12 +428,12 @@ fn skill_json() -> String {
           "default": "30000"
         },
         {
-          "form": "--unwind <N>",
-          "description": "ESBMC loop unwind bound (with --verify)",
-          "long": "--unwind",
+          "form": "--max-k-step <N>",
+          "description": "ESBMC max k-induction step (with --verify)",
+          "long": "--max-k-step",
           "value_name": "N",
           "value_kind": "integer",
-          "default": 10
+          "default": 50
         }
       ],
       "stdout": {
@@ -502,12 +502,12 @@ fn skill_json() -> String {
           "value_kind": "flag"
         },
         {
-          "form": "--unwind <N>",
-          "description": "ESBMC loop unwind bound (default: 10)",
-          "long": "--unwind",
+          "form": "--max-k-step <N>",
+          "description": "ESBMC max k-induction step (default: 50)",
+          "long": "--max-k-step",
           "value_name": "N",
           "value_kind": "integer",
-          "default": 10
+          "default": 50
         }
       ],
       "stdout": {
@@ -527,18 +527,18 @@ fn skill_json() -> String {
     "--dump-ir": "Print IR text to stdout and exit (no JSON output, no codegen)",
     "--debug-trace <off|calls|full>": "Emit JSON trace lines to stderr at runtime (default: off)",
     "--no-cache": "Disable compile and verify caching",
-    "--unwind <N>": "ESBMC loop unwind bound (default: 10)"
+    "--max-k-step <N>": "ESBMC max k-induction step (default: 50)"
   },
   "verify_options": {
     "--no-cache": "Disable verification result caching",
-    "--unwind <N>": "ESBMC loop unwind bound (default: 10)"
+    "--max-k-step <N>": "ESBMC max k-induction step (default: 50)"
   },
   "test_options": {
     "--verify": "Run ESBMC verification on test files",
     "--filter <pat>": "Only run tests whose name contains pat (default: (none))",
     "--mode <debug|release>": "Build mode; debug inserts runtime vow checks (default: (default))",
     "--timeout <ms>": "Per-test execution timeout in milliseconds (default: 30000)",
-    "--unwind <N>": "ESBMC loop unwind bound (with --verify)"
+    "--max-k-step <N>": "ESBMC max k-induction step (with --verify)"
   },
   "decl_options": {
     "-o, --output <path>": "Output declaration file path (default: <source>.vow.d)"
@@ -546,7 +546,7 @@ fn skill_json() -> String {
   "contracts_options": {
     "--verify": "Run ESBMC verification and report per-contract status",
     "--no-cache": "Disable verification result caching",
-    "--unwind <N>": "ESBMC loop unwind bound (default: 10)"
+    "--max-k-step <N>": "ESBMC max k-induction step (default: 50)"
   },
   "global_options": {
     "--help": "Emit versioned JSON tool-help data",
@@ -658,6 +658,9 @@ fn skill_json() -> String {
       "print_i64": "fn(v: i64) -> () [io]",
       "print_u64": "fn(v: u64) -> () [io]",
       "eprintln_str": "fn(s: String) -> () [io]",
+      "debug_str": "fn(s: String) -> () []",
+      "debug_i64": "fn(v: i64) -> () []",
+      "debug_u64": "fn(v: u64) -> () []",
       "fs_read": "fn(path: String) -> String [read]",
       "fs_write": "fn(path: String, data: String) -> i64 [write]",
       "fs_exists": "fn(path: String) -> i64 [read]",
@@ -856,11 +859,9 @@ fn skill_json() -> String {
       ]
     }
   },
-  "verification_limits": {
-    "loop_unwind": 10,
-    "Vec<T>": 128,
-    "String": 256,
-    "HashMap<K, V>": 64
+  "verification_defaults": {
+    "strategy": "k-induction-parallel",
+    "max_k_step": 50
   }
 }"##
     .to_string()
@@ -887,23 +888,23 @@ BUILD OPTIONS
   --dump-ir               Print IR text to stdout and exit (no JSON output, no codegen)
   --debug-trace <off|calls|full>  Emit JSON trace lines to stderr at runtime (default: off)
   --no-cache              Disable compile and verify caching
-  --unwind <N>            ESBMC loop unwind bound (default: 10)
+  --max-k-step <N>        ESBMC max k-induction step (default: 50)
 
 VERIFY OPTIONS
   --no-cache              Disable verification result caching
-  --unwind <N>            ESBMC loop unwind bound (default: 10)
+  --max-k-step <N>        ESBMC max k-induction step (default: 50)
 
 TEST OPTIONS
   --verify                Run ESBMC verification on test files
   --filter <pat>          Only run tests whose name contains pat (default: (none))
   --mode <debug|release>  Build mode; debug inserts runtime vow checks (default: (default))
   --timeout <ms>          Per-test execution timeout in milliseconds (default: 30000)
-  --unwind <N>            ESBMC loop unwind bound (with --verify)
+  --max-k-step <N>        ESBMC max k-induction step (with --verify)
 
 CONTRACTS OPTIONS
   --verify                Run ESBMC verification and report per-contract status
   --no-cache              Disable verification result caching
-  --unwind <N>            ESBMC loop unwind bound (default: 10)
+  --max-k-step <N>        ESBMC max k-induction step (default: 50)
 
 DECL OPTIONS
   -o, --output <path>     Output declaration file path (default: <source>.vow.d)
@@ -951,16 +952,15 @@ LANGUAGE SUMMARY
 TYPES     : i32  i64  u8  u64  f32  f64  bool  ()  !  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>
 EFFECTS   : io  read  write  panic  unsafe
 BUILTINS  : print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [io]   print_u64: fn(v: u64) -> () [io]
-            eprintln_str: fn(s: String) -> () [io]   fs_read: fn(path: String) -> String [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   parse_i64: fn(s: String) -> i64 []   i64_to_string: fn(v: i64) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
+            eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   parse_i64: fn(s: String) -> i64 []   i64_to_string: fn(v: i64) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
 METHODS   : Vec: Vec::new/push/pop/len/clear/truncate/v[i]/v[i] = val   String: String::from/String::new/len/byte_at/push_byte/push_str/clear/contains/eq/substring/parse_i64/parse_u64
             HashMap: HashMap::new/insert/get/contains_key/remove/len   Option: unwrap
 OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! & ?
 
-VERIFICATION LIMITS
-  Loop unwind  : 10 iterations
-  Vec<T>        : 128 max capacity
-  String        : 256 max capacity
-  HashMap<K, V> : 64 max capacity"##
+VERIFICATION
+  Strategy      : k-induction-parallel (incremental BMC + k-induction)
+  Max k step    : 50 (default; override with --max-k-step)
+  Containers    : unbounded (no artificial capacity limits)"##
         .to_string()
 }
 // GENERATE:SKILL_HUMAN:END
@@ -1679,6 +1679,16 @@ Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they 
 | `print_u64`      | `fn(v: u64) -> ()`                         | `[io]`     |
 | `eprintln_str`   | `fn(s: String) -> ()`                      | `[io]`     |
 
+#### Debug
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `debug_str`      | `fn(s: String) -> ()`                      | `[]`       |
+| `debug_i64`      | `fn(v: i64) -> ()`                         | `[]`       |
+| `debug_u64`      | `fn(v: u64) -> ()`                         | `[]`       |
+
+**Debug print semantics:** Debug prints are effect-free and callable from pure functions. In debug and sanitize modes (`--mode debug`, `--mode sanitize`), they write to stderr. In release and profile modes, the debug call itself is not emitted — no function call occurs. However, argument expressions are still evaluated (e.g., `String::from("label")` still allocates). They are also no-ops during verification. Use them to trace values inside pure kernel code without restructuring the effect hierarchy.
+
 #### Filesystem
 
 | Function         | Signature                                  | Effects    |
@@ -1824,7 +1834,7 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--dump-ir`       | (off)       | Print IR text to stdout and exit (no JSON output, no codegen) |
 | `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
 | `--no-cache`    | (off)       | Disable compile and verify caching           |
-| `--unwind <N>`  | `10`        | ESBMC loop unwind bound                      |
+| `--max-k-step <N>` | `50`     | ESBMC max k-induction step                   |
 
 ### `vow verify`
 
@@ -1839,7 +1849,7 @@ vow verify [OPTIONS] <source.vow>
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
 | `--no-cache`      | (off)       | Disable verification result caching        |
-| `--unwind <N>`    | `10`        | ESBMC loop unwind bound                   |
+| `--max-k-step <N>` | `50`       | ESBMC max k-induction step                |
 
 ### `vow contracts`
 
@@ -1855,7 +1865,7 @@ vow contracts [OPTIONS] <source.vow>
 |-------------------|-------------|--------------------------------------------|
 | `--verify`        | (off)       | Run ESBMC verification and report per-contract status |
 | `--no-cache`      | (off)       | Disable verification result caching        |
-| `--unwind <N>`    | `10`        | ESBMC loop unwind bound                   |
+| `--max-k-step <N>` | `50`       | ESBMC max k-induction step                |
 
 ### `vow skill`
 
@@ -1889,7 +1899,7 @@ vow test [OPTIONS] [<path>]
 | `--mode debug`    | (default)   | Insert runtime vow checks                 |
 | `--mode release`  | `debug`     | Omit all vow checks for performance       |
 | `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
-| `--unwind <N>`    | `10`        | ESBMC loop unwind bound (with --verify)    |
+| `--max-k-step <N>` | `50`       | ESBMC max k-induction step (with --verify) |
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` in the given directory, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
 
@@ -2251,21 +2261,16 @@ Contract clauses become IR opcodes. The C emitter translates `requires` to `__ES
 
 ### ESBMC Configuration
 
-- Loop unwind bound: **10** — loops are checked for up to 10 iterations
+- Verification strategy: **k-induction-parallel** (incremental BMC + k-induction proof)
+- Max k-induction step: **50** (default; override with `--max-k-step`)
 - Architecture: 64-bit
 - Array bounds / pointer checks disabled (Vow handles these in its own model)
 
 ### Collection Models for Verification
 
-ESBMC uses bounded models for collection types:
+Collections (`Vec<T>`, `String`, `HashMap<K, V>`) are modeled with unbounded, dynamically allocated storage — the same semantics as at runtime. There are no artificial capacity limits in the verification model. ESBMC reasons about container operations using k-induction to prove properties for all iterations.
 
-| Type              | Max Capacity | Supported Operations |
-|-------------------|-------------|----------------------------------------------|
-| `Vec<T>`          | 128         | `new`, `push`, `pop`, `len`, `get`, `set`    |
-| `String`          | 256         | `from`, `len`, `push_byte`, `byte_at`        |
-| `HashMap<K, V>`   | 64          | `new`, `insert`, `get`, `contains_key`, `len`|
-
-These support the same operations as the runtime but with bounded storage. `String::from` produces a nondeterministic length (0 to 255) in verification.
+`String::from` produces a nondeterministic non-negative length in verification.
 
 ## Blame Model
 
@@ -2471,7 +2476,7 @@ This is not inductive — `v.len() == n` is only true after the loop.
 
 ### Unbound Loop Iterations
 
-Without a bound on loop iterations, ESBMC may timeout (unwind bound is 10):
+Without a bound on loop iterations, ESBMC may timeout (max-k-step is 50):
 
 ```vow
 fn fill(n: i64) -> Vec<i64> vow {
@@ -3008,7 +3013,7 @@ $ vow build examples/vec_fill.vow
 ```
 
 **Key points:**
-- `requires: n <= 8` keeps iterations within ESBMC's unwind bound (10)
+- `requires: n <= 8` keeps iterations tractable for verification
 - `invariant: i >= 0, invariant: i <= n` is inductive: true on entry, preserved by the loop body
 - The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`
 
@@ -4409,7 +4414,7 @@ fn run_verification_sync(
     file: &str,
     call_site_index: &std::collections::HashMap<String, Vec<CallSiteInfo>>,
     verify_cache: Option<&VerifyCache>,
-    unwind: u32,
+    max_k_step: u32,
 ) -> VerifyOutcome {
     let const_fns = detect_constant_functions(ir_module);
     for func in &ir_module.functions {
@@ -4419,7 +4424,7 @@ fn run_verification_sync(
 
         let result = if let Some(vc) = verify_cache {
             let c_src = emit_verify_c_source(func, ir_module, &const_fns);
-            let key = VerifyCache::cache_key(&c_src, unwind);
+            let key = VerifyCache::cache_key(&c_src, max_k_step);
 
             if let Some(cached) = vc.lookup(&key) {
                 match cached {
@@ -4433,7 +4438,7 @@ fn run_verification_sync(
                     Some(p) => p,
                     None => return VerifyOutcome::ToolNotFound,
                 };
-                let res = run_esbmc_with_unwind(&esbmc, &c_src, unwind, &func.name);
+                let res = run_esbmc_with_max_k_step(&esbmc, &c_src, max_k_step, &func.name);
                 match &res {
                     VerificationResult::Proven => {
                         vc.store(&key, &CachedVerifyResult::Proven);
@@ -4455,8 +4460,8 @@ fn run_verification_sync(
                 res
             }
         } else {
-            verify_function_with_module_and_const_fns_with_unwind(
-                func, ir_module, &const_fns, unwind,
+            verify_function_with_module_and_const_fns_with_max_k_step(
+                func, ir_module, &const_fns, max_k_step,
             )
         };
 
@@ -4651,7 +4656,7 @@ pub fn run_verify_only(source: &Path) -> BuildOutput {
     run_verify_only_inner(source, false, 10)
 }
 
-fn run_verify_only_inner(source: &Path, no_cache: bool, unwind: u32) -> BuildOutput {
+fn run_verify_only_inner(source: &Path, no_cache: bool, max_k_step: u32) -> BuildOutput {
     let frontend = match compile_frontend(source) {
         Ok(f) => f,
         Err(output) => return *output,
@@ -4669,7 +4674,7 @@ fn run_verify_only_inner(source: &Path, no_cache: bool, unwind: u32) -> BuildOut
         &file,
         &call_site_index,
         verify_cache.as_ref(),
-        unwind,
+        max_k_step,
     );
     verify_outcome_to_output(outcome, frontend.diagnostics, None)
 }
@@ -4718,7 +4723,7 @@ fn run_pipeline_inner(
     dump_ir: bool,
     trace: TraceMode,
     no_cache: bool,
-    unwind: u32,
+    max_k_step: u32,
 ) -> BuildOutput {
     let frontend = match compile_frontend(source) {
         Ok(f) => f,
@@ -4726,7 +4731,7 @@ fn run_pipeline_inner(
     };
 
     run_pipeline_from_frontend(
-        frontend, source, output, mode, no_verify, dump_ir, trace, no_cache, unwind,
+        frontend, source, output, mode, no_verify, dump_ir, trace, no_cache, max_k_step,
     )
 }
 
@@ -4740,7 +4745,7 @@ fn run_pipeline_from_frontend(
     dump_ir: bool,
     trace: TraceMode,
     no_cache: bool,
-    unwind: u32,
+    max_k_step: u32,
 ) -> BuildOutput {
     let all_diagnostics = frontend.diagnostics;
     let ir_module = frontend.ir_module;
@@ -4780,7 +4785,7 @@ fn run_pipeline_from_frontend(
             &file_for_verify,
             &call_site_index,
             verify_cache.as_ref(),
-            unwind,
+            max_k_step,
         )
     });
 
@@ -4916,7 +4921,7 @@ fn run_test_command(
     filter: Option<&str>,
     mode: BuildMode,
     timeout_ms: u64,
-    unwind: u32,
+    max_k_step: u32,
 ) {
     if !path.exists() {
         let result = TestResult {
@@ -5003,7 +5008,7 @@ fn run_test_command(
             false,
             TraceMode::Off,
             true,
-            unwind,
+            max_k_step,
         );
 
         let diagnostics: Vec<DiagnosticJson> = result
@@ -5205,10 +5210,10 @@ fn run_build_command(
     dump_ir: bool,
     trace: TraceMode,
     no_cache: bool,
-    unwind: u32,
+    max_k_step: u32,
 ) {
     let result = run_pipeline_inner(
-        source, output, mode, no_verify, dump_ir, trace, no_cache, unwind,
+        source, output, mode, no_verify, dump_ir, trace, no_cache, max_k_step,
     );
     if !dump_ir {
         result.emit_json();
@@ -5287,8 +5292,8 @@ fn run_decl_command(source: &Path, output: Option<&Path>) {
     eprintln!("wrote {}", out_path.display());
 }
 
-fn run_verify_command(source: &Path, no_cache: bool, unwind: u32) {
-    let result = run_verify_only_inner(source, no_cache, unwind);
+fn run_verify_command(source: &Path, no_cache: bool, max_k_step: u32) {
+    let result = run_verify_only_inner(source, no_cache, max_k_step);
     result.emit_json();
     if matches!(
         &result.status,
@@ -5341,7 +5346,7 @@ fn update_contract_statuses(
     entries: &mut [ContractEntryJson],
     ir_module: &vow_ir::Module,
     verify_cache: Option<&VerifyCache>,
-    unwind: u32,
+    max_k_step: u32,
 ) {
     let const_fns = detect_constant_functions(ir_module);
     for func in &ir_module.functions {
@@ -5351,7 +5356,7 @@ fn update_contract_statuses(
 
         let result = if let Some(vc) = verify_cache {
             let c_src = emit_verify_c_source(func, ir_module, &const_fns);
-            let key = VerifyCache::cache_key(&c_src, unwind);
+            let key = VerifyCache::cache_key(&c_src, max_k_step);
 
             if let Some(cached) = vc.lookup(&key) {
                 match cached {
@@ -5372,7 +5377,7 @@ fn update_contract_statuses(
                         continue;
                     }
                 };
-                let res = run_esbmc_with_unwind(&esbmc, &c_src, unwind, &func.name);
+                let res = run_esbmc_with_max_k_step(&esbmc, &c_src, max_k_step, &func.name);
                 match &res {
                     VerificationResult::Proven => {
                         vc.store(&key, &CachedVerifyResult::Proven);
@@ -5394,8 +5399,8 @@ fn update_contract_statuses(
                 res
             }
         } else {
-            verify_function_with_module_and_const_fns_with_unwind(
-                func, ir_module, &const_fns, unwind,
+            verify_function_with_module_and_const_fns_with_max_k_step(
+                func, ir_module, &const_fns, max_k_step,
             )
         };
 
@@ -5424,7 +5429,7 @@ fn update_contract_statuses(
     }
 }
 
-fn run_contracts_command(source: &Path, verify: bool, no_cache: bool, unwind: u32) {
+fn run_contracts_command(source: &Path, verify: bool, no_cache: bool, max_k_step: u32) {
     let frontend = match compile_frontend(source) {
         Ok(f) => f,
         Err(output) => {
@@ -5469,7 +5474,7 @@ fn run_contracts_command(source: &Path, verify: bool, no_cache: bool, unwind: u3
             &mut entries,
             &frontend.ir_module,
             verify_cache.as_ref(),
-            unwind,
+            max_k_step,
         );
     }
 
@@ -5521,7 +5526,7 @@ fn main() {
                 b.dump_ir,
                 trace,
                 b.no_cache,
-                b.unwind,
+                b.max_k_step,
             );
         }
         Some(Command::Verify(v)) => {
@@ -5540,7 +5545,7 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            run_verify_command(&source, v.no_cache, v.unwind);
+            run_verify_command(&source, v.no_cache, v.max_k_step);
         }
         Some(Command::Test(t)) => {
             if t.help {
@@ -5567,7 +5572,7 @@ fn main() {
                 t.filter.as_deref(),
                 mode,
                 t.timeout,
-                t.unwind,
+                t.max_k_step,
             );
         }
         Some(Command::Decl(d)) => {
@@ -5608,7 +5613,7 @@ fn main() {
                 &source,
                 c.verify,
                 c.no_cache,
-                c.unwind.unwrap_or(DEFAULT_UNWIND),
+                c.max_k_step.unwrap_or(DEFAULT_MAX_K_STEP),
             );
         }
         Some(Command::Skill(s)) => {
@@ -5667,7 +5672,7 @@ fn main() {
                 args.dump_ir,
                 trace,
                 args.no_cache,
-                args.unwind,
+                args.max_k_step,
             );
         }
     }
@@ -6074,19 +6079,20 @@ fn main() -> i32 [io] {
     }
 
     #[test]
-    fn build_args_accept_unwind_flag() {
-        let args = Args::try_parse_from(["vow", "build", "--unwind", "5", "main.vow"]).unwrap();
+    fn build_args_accept_max_k_step_flag() {
+        let args = Args::try_parse_from(["vow", "build", "--max-k-step", "5", "main.vow"]).unwrap();
         match args.command {
-            Some(Command::Build(build)) => assert_eq!(build.unwind, 5),
+            Some(Command::Build(build)) => assert_eq!(build.max_k_step, 5),
             other => panic!("expected build command, got {other:?}"),
         }
     }
 
     #[test]
-    fn verify_args_accept_unwind_flag() {
-        let args = Args::try_parse_from(["vow", "verify", "--unwind", "7", "main.vow"]).unwrap();
+    fn verify_args_accept_max_k_step_flag() {
+        let args =
+            Args::try_parse_from(["vow", "verify", "--max-k-step", "7", "main.vow"]).unwrap();
         match args.command {
-            Some(Command::Verify(verify)) => assert_eq!(verify.unwind, 7),
+            Some(Command::Verify(verify)) => assert_eq!(verify.max_k_step, 7),
             other => panic!("expected verify command, got {other:?}"),
         }
     }

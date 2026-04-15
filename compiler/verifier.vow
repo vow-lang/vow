@@ -164,6 +164,7 @@ fn emit_c_preamble() -> String {
     let out: String = String::from("");
     out.push_str(String::from("#include <stdint.h>\n"));
     out.push_str(String::from("#include <stdbool.h>\n"));
+    out.push_str(String::from("#include <stdlib.h>\n"));
     out.push_str(String::from("extern void __ESBMC_assume(_Bool);\n"));
     out.push_str(String::from("extern void __ESBMC_assert(_Bool, const char*);\n"));
     out.push_str(String::from("extern int __VERIFIER_nondet_int(void);\n"));
@@ -171,23 +172,9 @@ fn emit_c_preamble() -> String {
     out.push_str(String::from("extern float __VERIFIER_nondet_float(void);\n"));
     out.push_str(String::from("extern double __VERIFIER_nondet_double(void);\n"));
     out.push_str(String::from("extern _Bool __VERIFIER_nondet_bool(void);\n\n"));
-    out.push_str(str3(
-        String::from("typedef struct { int64_t len; int64_t data["),
-        i64_to_str(VOW_VEC_MAX()),
-        String::from("]; } __vow_vec_t;\n")
-    ));
-    out.push_str(str3(
-        String::from("typedef struct { int64_t len; int8_t data["),
-        i64_to_str(VOW_STRING_MAX()),
-        String::from("]; } __vow_string_t;\n")
-    ));
-    out.push_str(str5(
-        String::from("typedef struct { int64_t len; int64_t keys["),
-        i64_to_str(VOW_HASHMAP_MAX()),
-        String::from("]; int64_t vals["),
-        i64_to_str(VOW_HASHMAP_MAX()),
-        String::from("]; } __vow_hashmap_t;\n\n")
-    ));
+    out.push_str(String::from("typedef struct { int64_t len; int64_t* data; } __vow_vec_t;\n"));
+    out.push_str(String::from("typedef struct { int64_t len; int8_t* data; } __vow_string_t;\n"));
+    out.push_str(String::from("typedef struct { int64_t len; int64_t* keys; int64_t* vals; } __vow_hashmap_t;\n\n"));
     out
 }
 
@@ -224,7 +211,7 @@ fn esbmc_exists() -> bool [io] {
     fs_exists(esbmc_path()) != 0
 }
 
-fn save_esbmc_debug(c_source: String, tmp_path: String, unwind: String, func_name: String, debug: bool) [io] {
+fn save_esbmc_debug(c_source: String, tmp_path: String, max_k_step: String, func_name: String, debug: bool) [io] {
     if !debug {
         return;
     }
@@ -240,35 +227,37 @@ fn save_esbmc_debug(c_source: String, tmp_path: String, unwind: String, func_nam
     cmd.push_str(esbmc_path());
     cmd.push_str(String::from(" "));
     cmd.push_str(c_path);
-    cmd.push_str(String::from(" --no-bounds-check --no-pointer-check --unwind "));
-    cmd.push_str(unwind);
+    cmd.push_str(String::from(" --no-bounds-check --no-pointer-check --k-induction-parallel --max-k-step "));
+    cmd.push_str(max_k_step);
     cmd.push_str(String::from(" --64\n"));
     fs_write(cmd_path, cmd);
 }
 
-fn run_esbmc(c_source: String, unwind: String, tmp_path: String, func_name: String) -> i64 [io] {
+fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: String) -> i64 [io] {
     fs_write(tmp_path, c_source);
-    save_esbmc_debug(c_source, tmp_path, unwind, func_name, false);
+    save_esbmc_debug(c_source, tmp_path, max_k_step, func_name, false);
     let esbmc_args: Vec<String> = Vec::new();
     esbmc_args.push(tmp_path);
     esbmc_args.push(String::from("--no-bounds-check"));
     esbmc_args.push(String::from("--no-pointer-check"));
-    esbmc_args.push(String::from("--unwind"));
-    esbmc_args.push(unwind);
+    esbmc_args.push(String::from("--k-induction-parallel"));
+    esbmc_args.push(String::from("--max-k-step"));
+    esbmc_args.push(max_k_step);
     esbmc_args.push(String::from("--64"));
     let exit_code: i64 = process_run(esbmc_path(), esbmc_args);
     exit_code
 }
 
-fn start_esbmc(c_source: String, unwind: String, tmp_path: String, func_name: String) -> i64 [io] {
+fn start_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: String) -> i64 [io] {
     fs_write(tmp_path, c_source);
-    save_esbmc_debug(c_source, tmp_path, unwind, func_name, false);
+    save_esbmc_debug(c_source, tmp_path, max_k_step, func_name, false);
     let esbmc_args: Vec<String> = Vec::new();
     esbmc_args.push(tmp_path);
     esbmc_args.push(String::from("--no-bounds-check"));
     esbmc_args.push(String::from("--no-pointer-check"));
-    esbmc_args.push(String::from("--unwind"));
-    esbmc_args.push(unwind);
+    esbmc_args.push(String::from("--k-induction-parallel"));
+    esbmc_args.push(String::from("--max-k-step"));
+    esbmc_args.push(max_k_step);
     esbmc_args.push(String::from("--64"));
     let handle: i64 = process_start(esbmc_path(), esbmc_args);
     handle
@@ -494,9 +483,9 @@ fn vow_hash_string(s: String) -> i64 {
     h
 }
 
-fn verify_cache_key(c_source: String, unwind: String) -> String {
+fn verify_cache_key(c_source: String, max_k_step: String) -> String {
     let h: i64 = vow_hash_string(c_source);
-    let h2: i64 = h * 33 + vow_hash_string(unwind);
+    let h2: i64 = h * 33 + vow_hash_string(max_k_step);
     let abs_h: i64 = { if h2 < 0 { 0 - h2 } else { h2 } };
     i64_to_str(abs_h)
 }
@@ -535,7 +524,7 @@ fn verify_cache_store(key: String, status: i64) [io] {
     fs_write(path, content);
 }
 
-fn verify_function_full(f: IrFunction, m: IrModule, unwind: String, use_cache: bool) -> VerifyResult [io] {
+fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cache: bool) -> VerifyResult [io] {
     let vows: Vec<IrVowEntry> = f.vows;
     if vows.len() == 0 {
         return VerifyResult {
@@ -550,7 +539,7 @@ fn verify_function_full(f: IrFunction, m: IrModule, unwind: String, use_cache: b
     let c_source: String = emit_c_for_verify(f, m);
     if use_cache {
         verify_cache_ensure_dir();
-        let cache_key: String = verify_cache_key(c_source, unwind);
+        let cache_key: String = verify_cache_key(c_source, max_k_step);
         let cached: i64 = verify_cache_lookup(cache_key);
         if cached == VERIFY_PROVEN() {
             return VerifyResult {
@@ -564,7 +553,7 @@ fn verify_function_full(f: IrFunction, m: IrModule, unwind: String, use_cache: b
         }
     }
     let fn_name: String = f.name;
-    let exit_code: i64 = run_esbmc(c_source, unwind, String::from("/tmp/__vow_verify.c"), fn_name);
+    let exit_code: i64 = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name);
     if exit_code == -1 {
         return VerifyResult {
             status: VERIFY_NOT_FOUND(),
@@ -583,7 +572,7 @@ fn verify_function_full(f: IrFunction, m: IrModule, unwind: String, use_cache: b
     let status: i64 = parse_verify_status(combined);
     if use_cache {
         if status == VERIFY_PROVEN() || status == VERIFY_FAILED() {
-            let cache_key2: String = verify_cache_key(c_source, unwind);
+            let cache_key2: String = verify_cache_key(c_source, max_k_step);
             verify_cache_store(cache_key2, status);
         }
     }
@@ -617,7 +606,7 @@ fn verify_function_full(f: IrFunction, m: IrModule, unwind: String, use_cache: b
     }
 }
 
-fn verify_start(f: IrFunction, m: IrModule, unwind: String, idx: i64, use_cache: bool) -> i64 [io] {
+fn verify_start(f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_cache: bool) -> i64 [io] {
     let vows: Vec<IrVowEntry> = f.vows;
     if vows.len() == 0 {
         return -1;
@@ -625,7 +614,7 @@ fn verify_start(f: IrFunction, m: IrModule, unwind: String, idx: i64, use_cache:
     let c_source: String = emit_c_for_verify(f, m);
     if use_cache {
         verify_cache_ensure_dir();
-        let cache_key: String = verify_cache_key(c_source, unwind);
+        let cache_key: String = verify_cache_key(c_source, max_k_step);
         let cached: i64 = verify_cache_lookup(cache_key);
         if cached == VERIFY_PROVEN() {
             return -2;
@@ -635,7 +624,7 @@ fn verify_start(f: IrFunction, m: IrModule, unwind: String, idx: i64, use_cache:
     tmp_path.push_str(i64_to_str(idx));
     tmp_path.push_str(String::from(".c"));
     let fn_name: String = f.name;
-    let handle: i64 = start_esbmc(c_source, unwind, tmp_path, fn_name);
+    let handle: i64 = start_esbmc(c_source, max_k_step, tmp_path, fn_name);
     handle
 }
 

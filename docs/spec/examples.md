@@ -187,7 +187,7 @@ $ vow build examples/vec_fill.vow
 ```
 
 **Key points:**
-- `requires: n <= 8` keeps iterations within ESBMC's unwind bound (10)
+- `requires: n <= 8` keeps iterations tractable for verification
 - `invariant: i >= 0, invariant: i <= n` is inductive: true on entry, preserved by the loop body
 - The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`
 
