@@ -4586,8 +4586,17 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
         if unwind_str.len() > 0 { unwind_str }
         else { String::from("10") }
     };
-    let c_solver: String = get_flag_arg(argv, String::from("--solver"));
+    let mut c_solver: String = get_flag_arg(argv, String::from("--solver"));
     let c_encoding: String = get_flag_arg(argv, String::from("--encoding"));
+    if c_encoding == String::from("ir") {
+        if c_solver == String::from("boolector") || c_solver == String::from("bitwuzla") {
+            eprintln_str(String::from("error: --encoding ir requires --solver z3"));
+            return 1;
+        }
+        if c_solver.len() == 0 || c_solver == String::from("auto") {
+            c_solver = String::from("z3");
+        }
+    }
 
     // Collect per-contract entries into parallel arrays
     let e_vow_ids: Vec<i64> = Vec::new();
