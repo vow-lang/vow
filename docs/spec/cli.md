@@ -22,6 +22,9 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
 | `--no-cache`    | (off)       | Disable compile and verify caching           |
 | `--max-k-step <N>` | `50`     | ESBMC max k-induction step                   |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
+| `--timeout <N>` | (none)      | ESBMC per-function timeout in seconds        |
 
 ### `vow verify`
 
@@ -37,6 +40,9 @@ vow verify [OPTIONS] <source.vow>
 |-------------------|-------------|--------------------------------------------|
 | `--no-cache`      | (off)       | Disable verification result caching        |
 | `--max-k-step <N>` | `50`       | ESBMC max k-induction step                |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
+| `--timeout <N>` | (none)      | ESBMC per-function timeout in seconds        |
 
 ### `vow contracts`
 
@@ -53,6 +59,8 @@ vow contracts [OPTIONS] <source.vow>
 | `--verify`        | (off)       | Run ESBMC verification and report per-contract status |
 | `--no-cache`      | (off)       | Disable verification result caching        |
 | `--max-k-step <N>` | `50`       | ESBMC max k-induction step                |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver (with --verify)           |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |
 
 ### `vow skill`
 

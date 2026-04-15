@@ -14,9 +14,9 @@ use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{CollectingEmitter, Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
-    Counterexample, DEFAULT_MAX_K_STEP, VerificationResult, detect_constant_functions,
-    emit_verify_c_source, find_esbmc, run_esbmc_with_max_k_step,
-    verify_function_with_module_and_const_fns_with_max_k_step,
+    Counterexample, DEFAULT_MAX_K_STEP, Encoding, Solver, SolverConfig, VerificationResult,
+    detect_constant_functions, emit_verify_c_source, find_esbmc, run_esbmc_with_max_k_step,
+    verify_function_with_module_and_const_fns_configured,
 };
 
 use cache::{CachedVerifyResult, VerifyCache};
@@ -38,6 +38,49 @@ enum TraceArg {
     Off,
     Calls,
     Full,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum SolverArg {
+    Boolector,
+    Z3,
+    Bitwuzla,
+    Auto,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum EncodingArg {
+    Bv,
+    Ir,
+    Auto,
+}
+
+fn make_solver_config(
+    solver: SolverArg,
+    encoding: EncodingArg,
+    timeout: Option<u32>,
+) -> SolverConfig {
+    let s = match solver {
+        SolverArg::Boolector => Solver::Boolector,
+        SolverArg::Z3 => Solver::Z3,
+        SolverArg::Bitwuzla => Solver::Bitwuzla,
+        SolverArg::Auto => Solver::Auto,
+    };
+    let e = match encoding {
+        EncodingArg::Bv => Encoding::Bv,
+        EncodingArg::Ir => Encoding::Ir,
+        EncodingArg::Auto => Encoding::Auto,
+    };
+    let config = SolverConfig {
+        solver: s,
+        encoding: e,
+        timeout_secs: timeout,
+    };
+    if let Err(msg) = config.validate() {
+        eprintln!("error: {msg}");
+        std::process::exit(1);
+    }
+    config
 }
 
 #[derive(Parser, Debug)]
@@ -66,6 +109,12 @@ struct Args {
     no_cache: bool,
     #[arg(long, default_value_t = DEFAULT_MAX_K_STEP)]
     max_k_step: u32,
+    #[arg(long, value_enum, default_value = "auto")]
+    solver: SolverArg,
+    #[arg(long, value_enum, default_value = "auto")]
+    encoding: EncodingArg,
+    #[arg(long)]
+    timeout: Option<u32>,
     #[arg(long)]
     help: bool,
     #[arg(long)]
@@ -106,6 +155,12 @@ struct BuildArgs {
     no_cache: bool,
     #[arg(long, default_value_t = DEFAULT_MAX_K_STEP)]
     max_k_step: u32,
+    #[arg(long, value_enum, default_value = "auto")]
+    solver: SolverArg,
+    #[arg(long, value_enum, default_value = "auto")]
+    encoding: EncodingArg,
+    #[arg(long)]
+    timeout: Option<u32>,
     #[arg(long)]
     help: bool,
     #[arg(long)]
@@ -124,6 +179,12 @@ struct VerifyArgs {
     no_cache: bool,
     #[arg(long, default_value_t = DEFAULT_MAX_K_STEP)]
     max_k_step: u32,
+    #[arg(long, value_enum, default_value = "auto")]
+    solver: SolverArg,
+    #[arg(long, value_enum, default_value = "auto")]
+    encoding: EncodingArg,
+    #[arg(long)]
+    timeout: Option<u32>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -174,6 +235,12 @@ struct ContractsArgs {
     no_cache: bool,
     #[arg(long)]
     max_k_step: Option<u32>,
+    #[arg(long, value_enum, default_value = "auto")]
+    solver: SolverArg,
+    #[arg(long, value_enum, default_value = "auto")]
+    encoding: EncodingArg,
+    #[arg(long)]
+    timeout: Option<u32>,
     #[arg(long)]
     help: bool,
     #[arg(long)]
@@ -321,6 +388,41 @@ fn skill_json() -> String {
           "value_name": "N",
           "value_kind": "integer",
           "default": 50
+        },
+        {
+          "form": "--solver <boolector|z3|bitwuzla|auto>",
+          "description": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
+          "long": "--solver",
+          "value_name": "boolector|z3|bitwuzla|auto",
+          "value_kind": "enum",
+          "values": [
+            "boolector",
+            "z3",
+            "bitwuzla",
+            "auto"
+          ],
+          "default": "auto"
+        },
+        {
+          "form": "--encoding <bv|ir|auto>",
+          "description": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
+          "long": "--encoding",
+          "value_name": "bv|ir|auto",
+          "value_kind": "enum",
+          "values": [
+            "bv",
+            "ir",
+            "auto"
+          ],
+          "default": "auto"
+        },
+        {
+          "form": "--timeout <N>",
+          "description": "ESBMC per-function timeout in seconds (default: (none))",
+          "long": "--timeout",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": "(none)"
         }
       ],
       "stdout": {
@@ -367,6 +469,41 @@ fn skill_json() -> String {
           "value_name": "N",
           "value_kind": "integer",
           "default": 50
+        },
+        {
+          "form": "--solver <boolector|z3|bitwuzla|auto>",
+          "description": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
+          "long": "--solver",
+          "value_name": "boolector|z3|bitwuzla|auto",
+          "value_kind": "enum",
+          "values": [
+            "boolector",
+            "z3",
+            "bitwuzla",
+            "auto"
+          ],
+          "default": "auto"
+        },
+        {
+          "form": "--encoding <bv|ir|auto>",
+          "description": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
+          "long": "--encoding",
+          "value_name": "bv|ir|auto",
+          "value_kind": "enum",
+          "values": [
+            "bv",
+            "ir",
+            "auto"
+          ],
+          "default": "auto"
+        },
+        {
+          "form": "--timeout <N>",
+          "description": "ESBMC per-function timeout in seconds (default: (none))",
+          "long": "--timeout",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": "(none)"
         }
       ],
       "stdout": {
@@ -508,6 +645,33 @@ fn skill_json() -> String {
           "value_name": "N",
           "value_kind": "integer",
           "default": 50
+        },
+        {
+          "form": "--solver <boolector|z3|bitwuzla|auto>",
+          "description": "ESBMC SMT solver (with --verify)",
+          "long": "--solver",
+          "value_name": "boolector|z3|bitwuzla|auto",
+          "value_kind": "enum",
+          "values": [
+            "boolector",
+            "z3",
+            "bitwuzla",
+            "auto"
+          ],
+          "default": "auto"
+        },
+        {
+          "form": "--encoding <bv|ir|auto>",
+          "description": "ESBMC encoding mode (with --verify); ir requires z3 (default: auto)",
+          "long": "--encoding",
+          "value_name": "bv|ir|auto",
+          "value_kind": "enum",
+          "values": [
+            "bv",
+            "ir",
+            "auto"
+          ],
+          "default": "auto"
         }
       ],
       "stdout": {
@@ -527,11 +691,17 @@ fn skill_json() -> String {
     "--dump-ir": "Print IR text to stdout and exit (no JSON output, no codegen)",
     "--debug-trace <off|calls|full>": "Emit JSON trace lines to stderr at runtime (default: off)",
     "--no-cache": "Disable compile and verify caching",
-    "--max-k-step <N>": "ESBMC max k-induction step (default: 50)"
+    "--max-k-step <N>": "ESBMC max k-induction step (default: 50)",
+    "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
+    "--encoding <bv|ir|auto>": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
+    "--timeout <N>": "ESBMC per-function timeout in seconds (default: (none))"
   },
   "verify_options": {
     "--no-cache": "Disable verification result caching",
-    "--max-k-step <N>": "ESBMC max k-induction step (default: 50)"
+    "--max-k-step <N>": "ESBMC max k-induction step (default: 50)",
+    "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
+    "--encoding <bv|ir|auto>": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
+    "--timeout <N>": "ESBMC per-function timeout in seconds (default: (none))"
   },
   "test_options": {
     "--verify": "Run ESBMC verification on test files",
@@ -546,7 +716,9 @@ fn skill_json() -> String {
   "contracts_options": {
     "--verify": "Run ESBMC verification and report per-contract status",
     "--no-cache": "Disable verification result caching",
-    "--max-k-step <N>": "ESBMC max k-induction step (default: 50)"
+    "--max-k-step <N>": "ESBMC max k-induction step (default: 50)",
+    "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver (with --verify)",
+    "--encoding <bv|ir|auto>": "ESBMC encoding mode (with --verify); ir requires z3 (default: auto)"
   },
   "global_options": {
     "--help": "Emit versioned JSON tool-help data",
@@ -889,10 +1061,16 @@ BUILD OPTIONS
   --debug-trace <off|calls|full>  Emit JSON trace lines to stderr at runtime (default: off)
   --no-cache              Disable compile and verify caching
   --max-k-step <N>        ESBMC max k-induction step (default: 50)
+  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)
+  --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)
+  --timeout <N>           ESBMC per-function timeout in seconds (default: (none))
 
 VERIFY OPTIONS
   --no-cache              Disable verification result caching
   --max-k-step <N>        ESBMC max k-induction step (default: 50)
+  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)
+  --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)
+  --timeout <N>           ESBMC per-function timeout in seconds (default: (none))
 
 TEST OPTIONS
   --verify                Run ESBMC verification on test files
@@ -905,6 +1083,8 @@ CONTRACTS OPTIONS
   --verify                Run ESBMC verification and report per-contract status
   --no-cache              Disable verification result caching
   --max-k-step <N>        ESBMC max k-induction step (default: 50)
+  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver (with --verify)
+  --encoding <bv|ir|auto>  ESBMC encoding mode (with --verify); ir requires z3 (default: auto)
 
 DECL OPTIONS
   -o, --output <path>     Output declaration file path (default: <source>.vow.d)
@@ -4415,6 +4595,7 @@ fn run_verification_sync(
     call_site_index: &std::collections::HashMap<String, Vec<CallSiteInfo>>,
     verify_cache: Option<&VerifyCache>,
     max_k_step: u32,
+    config: &SolverConfig,
 ) -> VerifyOutcome {
     let const_fns = detect_constant_functions(ir_module);
     for func in &ir_module.functions {
@@ -4422,9 +4603,27 @@ fn run_verification_sync(
             continue;
         }
 
+        // Resolve Auto solver via heuristic (Phase B).
+        // Skip heuristic when encoding is Ir — that forces Z3 via resolve().
+        let func_config = if config.solver == Solver::Auto && config.encoding != Encoding::Ir {
+            let heuristic = vow_verify::classify_function(func);
+            SolverConfig {
+                solver: heuristic.solver,
+                encoding: config.encoding,
+                timeout_secs: config.timeout_secs,
+            }
+        } else {
+            *config
+        };
+
         let result = if let Some(vc) = verify_cache {
             let c_src = emit_verify_c_source(func, ir_module, &const_fns);
-            let key = VerifyCache::cache_key(&c_src, max_k_step);
+            let key = VerifyCache::cache_key(
+                &c_src,
+                max_k_step,
+                func_config.solver_str(),
+                func_config.encoding_str(),
+            );
 
             if let Some(cached) = vc.lookup(&key) {
                 match cached {
@@ -4438,9 +4637,10 @@ fn run_verification_sync(
                     Some(p) => p,
                     None => return VerifyOutcome::ToolNotFound,
                 };
-                let res = run_esbmc_with_max_k_step(&esbmc, &c_src, max_k_step, &func.name);
+                let res =
+                    run_esbmc_with_max_k_step(&esbmc, &c_src, max_k_step, &func.name, &func_config);
                 match &res {
-                    VerificationResult::Proven => {
+                    VerificationResult::Proven | VerificationResult::ProvenIr => {
                         vc.store(&key, &CachedVerifyResult::Proven);
                     }
                     VerificationResult::Failed(ce) => {
@@ -4460,8 +4660,12 @@ fn run_verification_sync(
                 res
             }
         } else {
-            verify_function_with_module_and_const_fns_with_max_k_step(
-                func, ir_module, &const_fns, max_k_step,
+            verify_function_with_module_and_const_fns_configured(
+                func,
+                ir_module,
+                &const_fns,
+                max_k_step,
+                &func_config,
             )
         };
 
@@ -4485,7 +4689,7 @@ fn run_verification_sync(
                     function: func.name.clone(),
                 };
             }
-            VerificationResult::Proven => {}
+            VerificationResult::Proven | VerificationResult::ProvenIr => {}
             VerificationResult::ToolNotFound => {
                 return VerifyOutcome::ToolNotFound;
             }
@@ -4653,10 +4857,20 @@ fn verify_outcome_to_output(
 // ---------------------------------------------------------------------------
 
 pub fn run_verify_only(source: &Path) -> BuildOutput {
-    run_verify_only_inner(source, false, DEFAULT_MAX_K_STEP)
+    run_verify_only_inner(
+        source,
+        false,
+        DEFAULT_MAX_K_STEP,
+        &SolverConfig::default_config(),
+    )
 }
 
-fn run_verify_only_inner(source: &Path, no_cache: bool, max_k_step: u32) -> BuildOutput {
+fn run_verify_only_inner(
+    source: &Path,
+    no_cache: bool,
+    max_k_step: u32,
+    config: &SolverConfig,
+) -> BuildOutput {
     let frontend = match compile_frontend(source) {
         Ok(f) => f,
         Err(output) => return *output,
@@ -4675,6 +4889,7 @@ fn run_verify_only_inner(source: &Path, no_cache: bool, max_k_step: u32) -> Buil
         &call_site_index,
         verify_cache.as_ref(),
         max_k_step,
+        config,
     );
     verify_outcome_to_output(outcome, frontend.diagnostics, None)
 }
@@ -4711,7 +4926,17 @@ pub fn run_pipeline(
     dump_ir: bool,
     trace: TraceMode,
 ) -> BuildOutput {
-    run_pipeline_inner(source, output, mode, no_verify, dump_ir, trace, false, 10)
+    run_pipeline_inner(
+        source,
+        output,
+        mode,
+        no_verify,
+        dump_ir,
+        trace,
+        false,
+        10,
+        &SolverConfig::default_config(),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4724,6 +4949,7 @@ fn run_pipeline_inner(
     trace: TraceMode,
     no_cache: bool,
     max_k_step: u32,
+    config: &SolverConfig,
 ) -> BuildOutput {
     let frontend = match compile_frontend(source) {
         Ok(f) => f,
@@ -4731,7 +4957,7 @@ fn run_pipeline_inner(
     };
 
     run_pipeline_from_frontend(
-        frontend, source, output, mode, no_verify, dump_ir, trace, no_cache, max_k_step,
+        frontend, source, output, mode, no_verify, dump_ir, trace, no_cache, max_k_step, config,
     )
 }
 
@@ -4746,6 +4972,7 @@ fn run_pipeline_from_frontend(
     trace: TraceMode,
     no_cache: bool,
     max_k_step: u32,
+    config: &SolverConfig,
 ) -> BuildOutput {
     let all_diagnostics = frontend.diagnostics;
     let ir_module = frontend.ir_module;
@@ -4776,6 +5003,7 @@ fn run_pipeline_from_frontend(
     } else {
         VerifyCache::new()
     };
+    let verify_config = *config;
     let verify_handle = thread::spawn(move || -> VerifyOutcome {
         if no_verify {
             return VerifyOutcome::Skipped;
@@ -4786,6 +5014,7 @@ fn run_pipeline_from_frontend(
             &call_site_index,
             verify_cache.as_ref(),
             max_k_step,
+            &verify_config,
         )
     });
 
@@ -5009,6 +5238,7 @@ fn run_test_command(
             TraceMode::Off,
             true,
             max_k_step,
+            &SolverConfig::default_config(),
         );
 
         let diagnostics: Vec<DiagnosticJson> = result
@@ -5211,9 +5441,10 @@ fn run_build_command(
     trace: TraceMode,
     no_cache: bool,
     max_k_step: u32,
+    config: &SolverConfig,
 ) {
     let result = run_pipeline_inner(
-        source, output, mode, no_verify, dump_ir, trace, no_cache, max_k_step,
+        source, output, mode, no_verify, dump_ir, trace, no_cache, max_k_step, config,
     );
     if !dump_ir {
         result.emit_json();
@@ -5292,8 +5523,8 @@ fn run_decl_command(source: &Path, output: Option<&Path>) {
     eprintln!("wrote {}", out_path.display());
 }
 
-fn run_verify_command(source: &Path, no_cache: bool, max_k_step: u32) {
-    let result = run_verify_only_inner(source, no_cache, max_k_step);
+fn run_verify_command(source: &Path, no_cache: bool, max_k_step: u32, config: &SolverConfig) {
+    let result = run_verify_only_inner(source, no_cache, max_k_step, config);
     result.emit_json();
     if matches!(
         &result.status,
@@ -5347,6 +5578,7 @@ fn update_contract_statuses(
     ir_module: &vow_ir::Module,
     verify_cache: Option<&VerifyCache>,
     max_k_step: u32,
+    config: &SolverConfig,
 ) {
     let const_fns = detect_constant_functions(ir_module);
     for func in &ir_module.functions {
@@ -5356,7 +5588,12 @@ fn update_contract_statuses(
 
         let result = if let Some(vc) = verify_cache {
             let c_src = emit_verify_c_source(func, ir_module, &const_fns);
-            let key = VerifyCache::cache_key(&c_src, max_k_step);
+            let key = VerifyCache::cache_key(
+                &c_src,
+                max_k_step,
+                config.solver_str(),
+                config.encoding_str(),
+            );
 
             if let Some(cached) = vc.lookup(&key) {
                 match cached {
@@ -5377,9 +5614,9 @@ fn update_contract_statuses(
                         continue;
                     }
                 };
-                let res = run_esbmc_with_max_k_step(&esbmc, &c_src, max_k_step, &func.name);
+                let res = run_esbmc_with_max_k_step(&esbmc, &c_src, max_k_step, &func.name, config);
                 match &res {
-                    VerificationResult::Proven => {
+                    VerificationResult::Proven | VerificationResult::ProvenIr => {
                         vc.store(&key, &CachedVerifyResult::Proven);
                     }
                     VerificationResult::Failed(ce) => {
@@ -5399,8 +5636,8 @@ fn update_contract_statuses(
                 res
             }
         } else {
-            verify_function_with_module_and_const_fns_with_max_k_step(
-                func, ir_module, &const_fns, max_k_step,
+            verify_function_with_module_and_const_fns_configured(
+                func, ir_module, &const_fns, max_k_step, config,
             )
         };
 
@@ -5409,6 +5646,9 @@ fn update_contract_statuses(
                 match &result {
                     VerificationResult::Proven => {
                         entry.status = "proven".to_string();
+                    }
+                    VerificationResult::ProvenIr => {
+                        entry.status = "proven-ir".to_string();
                     }
                     VerificationResult::Failed(ce) => {
                         if ce.vow_id == Some(entry.vow_id) {
@@ -5429,7 +5669,13 @@ fn update_contract_statuses(
     }
 }
 
-fn run_contracts_command(source: &Path, verify: bool, no_cache: bool, max_k_step: u32) {
+fn run_contracts_command(
+    source: &Path,
+    verify: bool,
+    no_cache: bool,
+    max_k_step: u32,
+    config: &SolverConfig,
+) {
     let frontend = match compile_frontend(source) {
         Ok(f) => f,
         Err(output) => {
@@ -5475,6 +5721,7 @@ fn run_contracts_command(source: &Path, verify: bool, no_cache: bool, max_k_step
             &frontend.ir_module,
             verify_cache.as_ref(),
             max_k_step,
+            config,
         );
     }
 
@@ -5518,6 +5765,7 @@ fn main() {
                 TraceArg::Calls => TraceMode::Calls,
                 TraceArg::Full => TraceMode::Full,
             };
+            let bconfig = make_solver_config(b.solver, b.encoding, b.timeout);
             run_build_command(
                 &source,
                 b.output.as_deref(),
@@ -5527,6 +5775,7 @@ fn main() {
                 trace,
                 b.no_cache,
                 b.max_k_step,
+                &bconfig,
             );
         }
         Some(Command::Verify(v)) => {
@@ -5545,7 +5794,8 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            run_verify_command(&source, v.no_cache, v.max_k_step);
+            let config = make_solver_config(v.solver, v.encoding, v.timeout);
+            run_verify_command(&source, v.no_cache, v.max_k_step, &config);
         }
         Some(Command::Test(t)) => {
             if t.help {
@@ -5609,11 +5859,13 @@ fn main() {
                     std::process::exit(1);
                 }
             };
+            let config = make_solver_config(c.solver, c.encoding, c.timeout);
             run_contracts_command(
                 &source,
                 c.verify,
                 c.no_cache,
                 c.max_k_step.unwrap_or(DEFAULT_MAX_K_STEP),
+                &config,
             );
         }
         Some(Command::Skill(s)) => {
@@ -5664,6 +5916,7 @@ fn main() {
                 TraceArg::Full => TraceMode::Full,
             };
 
+            let config = make_solver_config(args.solver, args.encoding, args.timeout);
             run_build_command(
                 &source,
                 args.output.as_deref(),
@@ -5673,6 +5926,7 @@ fn main() {
                 trace,
                 args.no_cache,
                 args.max_k_step,
+                &config,
             );
         }
     }

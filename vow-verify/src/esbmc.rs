@@ -6,6 +6,8 @@ use std::collections::HashMap;
 
 use vow_ir::{FuncId, Function, Module, Ty};
 
+use crate::solver_strategy::SolverConfig;
+
 use crate::c_emitter::{
     ConstantValue, collect_modelable_callees, detect_constant_functions, emit_c_module,
     emit_c_module_with_callees,
@@ -27,6 +29,8 @@ pub struct Counterexample {
 #[derive(Debug)]
 pub enum VerificationResult {
     Proven,
+    /// Proven under integer arithmetic (`--ir` mode); overflow not modeled.
+    ProvenIr,
     Failed(Counterexample),
     Timeout,
     ToolNotFound,
@@ -267,13 +271,26 @@ pub fn verify_function_with_module_and_const_fns_with_max_k_step(
     const_fns: &HashMap<FuncId, ConstantValue>,
     max_k_step: u32,
 ) -> VerificationResult {
+    let config = SolverConfig::default_config();
+    verify_function_with_module_and_const_fns_configured(
+        func, module, const_fns, max_k_step, &config,
+    )
+}
+
+pub fn verify_function_with_module_and_const_fns_configured(
+    func: &Function,
+    module: &Module,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+    max_k_step: u32,
+    config: &SolverConfig,
+) -> VerificationResult {
     let esbmc = match find_esbmc() {
         Some(p) => p,
         None => return VerificationResult::ToolNotFound,
     };
 
     let c_src = emit_verify_c_source(func, module, const_fns);
-    run_esbmc_with_max_k_step(&esbmc, &c_src, max_k_step, &func.name)
+    run_esbmc_with_max_k_step(&esbmc, &c_src, max_k_step, &func.name, config)
 }
 
 fn verify_function_inner(
@@ -296,7 +313,13 @@ pub fn run_esbmc_k_induction(
     c_src: &str,
     func_name: &str,
 ) -> VerificationResult {
-    run_esbmc_with_max_k_step(esbmc, c_src, DEFAULT_MAX_K_STEP, func_name)
+    run_esbmc_with_max_k_step(
+        esbmc,
+        c_src,
+        DEFAULT_MAX_K_STEP,
+        func_name,
+        &SolverConfig::default_config(),
+    )
 }
 
 pub fn run_esbmc_with_max_k_step(
@@ -304,6 +327,7 @@ pub fn run_esbmc_with_max_k_step(
     c_src: &str,
     max_k_step: u32,
     func_name: &str,
+    config: &SolverConfig,
 ) -> VerificationResult {
     let mut tmp = match tempfile::Builder::new().suffix(".c").tempfile() {
         Ok(f) => f,
@@ -318,20 +342,61 @@ pub fn run_esbmc_with_max_k_step(
 
     save_esbmc_debug(esbmc, c_src, func_name, max_k_step);
 
-    let output = match Command::new(esbmc)
-        .arg(tmp.path())
+    let mut cmd = Command::new(esbmc);
+    cmd.arg(tmp.path())
         .arg("--no-bounds-check")
         .arg("--no-pointer-check")
         .arg("--k-induction-parallel")
         .arg("--max-k-step")
         .arg(max_k_step.to_string())
-        .arg("--64")
-        .output()
-    {
+        .arg("--64");
+
+    for arg in config.esbmc_args() {
+        cmd.arg(arg);
+    }
+
+    // If timeout is set, use spawn + thread-based timeout
+    if let Some(timeout_secs) = config.timeout_secs {
+        use std::process::Stdio;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => return VerificationResult::ToolError(e.to_string()),
+        };
+        let child_id = child.id();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(child.wait_with_output());
+        });
+        match rx.recv_timeout(Duration::from_secs(timeout_secs as u64)) {
+            Ok(Ok(output)) => {
+                return parse_esbmc_result(&output);
+            }
+            Ok(Err(e)) => {
+                return VerificationResult::ToolError(e.to_string());
+            }
+            Err(_timeout) => {
+                let _ = Command::new("kill")
+                    .arg("-9")
+                    .arg(child_id.to_string())
+                    .output();
+                return VerificationResult::Timeout;
+            }
+        }
+    }
+
+    let output = match cmd.output() {
         Ok(o) => o,
         Err(e) => return VerificationResult::ToolError(e.to_string()),
     };
 
+    parse_esbmc_result(&output)
+}
+
+fn parse_esbmc_result(output: &std::process::Output) -> VerificationResult {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let combined = format!("{stdout}{stderr}");

@@ -47,7 +47,7 @@ fn get_source_path(argv: Vec<String>) -> String {
         if first_byte != 45 {
             if i > 1 {
                 let prev: String = argv[i - 1];
-                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--max-k-step") || prev == String::from("--debug-trace") || prev == String::from("--filter") || prev == String::from("--timeout") {
+                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--max-k-step") || prev == String::from("--debug-trace") || prev == String::from("--filter") || prev == String::from("--timeout") || prev == String::from("--solver") || prev == String::from("--encoding") {
                     i = i - 1;
                 } else {
                     return a;
@@ -70,7 +70,7 @@ fn get_source_path_sub(argv: Vec<String>) -> String {
         if first_byte != 45 {
             if i > 2 {
                 let prev: String = argv[i - 1];
-                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--max-k-step") || prev == String::from("--debug-trace") || prev == String::from("--filter") || prev == String::from("--timeout") {
+                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--max-k-step") || prev == String::from("--debug-trace") || prev == String::from("--filter") || prev == String::from("--timeout") || prev == String::from("--solver") || prev == String::from("--encoding") {
                     i = i - 1;
                 } else {
                     return a;
@@ -300,7 +300,7 @@ fn run_frontend(argv: Vec<String>, sub: bool) -> FrontendResult [io] {
     run_frontend_for_path(path)
 }
 
-fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, max_k_step: String, use_cache: bool) -> i64 [io] {
+fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, max_k_step: String, use_cache: bool, solver: String, encoding: String) -> i64 [io] {
     let mut fi: i64 = 0;
     let mut all_proven: i64 = 1;
     while fi < fns.len() {
@@ -308,7 +308,7 @@ fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, path: String, ces: Ve
         let vows: Vec<IrVowEntry> = f.vows;
         if vows.len() > 0 {
             eprintln_str(str3(String::from("Verifying "), f.name, String::from("...")));
-            let vr: VerifyResult = verify_function_full(f, ir_mod, max_k_step, use_cache);
+            let vr: VerifyResult = verify_function_full(f, ir_mod, max_k_step, use_cache, solver, encoding);
             let st: i64 = vr.status;
             if st == VERIFY_PROVEN() {
                 eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN")));
@@ -392,6 +392,17 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
         else { String::from("50") }
     };
     let use_cache: bool = !has_flag(argv, String::from("--no-cache"));
+    let mut solver: String = get_flag_arg(argv, String::from("--solver"));
+    let encoding: String = get_flag_arg(argv, String::from("--encoding"));
+    if encoding == String::from("ir") {
+        if solver == String::from("boolector") || solver == String::from("bitwuzla") {
+            eprintln_str(String::from("error: --encoding ir requires --solver z3"));
+            return 1;
+        }
+        if solver.len() == 0 || solver == String::from("auto") {
+            solver = String::from("z3");
+        }
+    }
     if !esbmc_exists() {
         eprintln_str(String::from("error: ESBMC not found; install ESBMC to run verification"));
         diag_emit_verify_json(String::from("VerifyFailed"), dctx, Vec::new());
@@ -401,7 +412,7 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
     emit_ir_warnings(ir_mod, dctx);
     let fns: Vec<IrFunction> = ir_mod.functions;
     let ces: Vec<VerifyCE> = Vec::new();
-    let all_proven: i64 = run_verify_loop(fns, ir_mod, path, ces, max_k_step, use_cache);
+    let all_proven: i64 = run_verify_loop(fns, ir_mod, path, ces, max_k_step, use_cache, solver, encoding);
     let status_str: String = {
         if all_proven == 1 {
             String::from("Verified")
@@ -466,6 +477,17 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         if mks_str.len() > 0 { mks_str }
         else { String::from("50") }
     };
+    let mut solver: String = get_flag_arg(argv, String::from("--solver"));
+    let encoding: String = get_flag_arg(argv, String::from("--encoding"));
+    if encoding == String::from("ir") {
+        if solver == String::from("boolector") || solver == String::from("bitwuzla") {
+            eprintln_str(String::from("error: --encoding ir requires --solver z3"));
+            return 1;
+        }
+        if solver.len() == 0 || solver == String::from("auto") {
+            solver = String::from("z3");
+        }
+    }
     let fns: Vec<IrFunction> = ir_mod.functions;
     let handles: Vec<i64> = Vec::new();
     let vow_fn_indices: Vec<i64> = Vec::new();
@@ -476,7 +498,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
             let vows: Vec<IrVowEntry> = f.vows;
             if vows.len() > 0 {
                 eprintln_str(str3(String::from("Starting verification of "), f.name, String::from("...")));
-                let h: i64 = verify_start(f, ir_mod, max_k_step, fi, use_cache);
+                let h: i64 = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding);
                 handles.push(h);
                 vow_fn_indices.push(fi);
             }
@@ -518,7 +540,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
                 eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN")));
                 if use_cache {
                     let c_src2: String = emit_c_for_verify(f, ir_mod);
-                    let ck2: String = verify_cache_key(c_src2, max_k_step);
+                    let ck2: String = verify_cache_key(c_src2, max_k_step, solver, encoding);
                     verify_cache_store(ck2, VERIFY_PROVEN());
                 }
             } else if st == VERIFY_FAILED() {
@@ -731,7 +753,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                     let vf: IrFunction = vfns[vfi];
                     let vows: Vec<IrVowEntry> = vf.vows;
                     if vows.len() > 0 {
-                        let vh: i64 = verify_start(vf, ir_mod, String::from("10"), vfi, false);
+                        let vh: i64 = verify_start(vf, ir_mod, String::from("10"), vfi, false, String::from(""), String::from(""));
                         if vh != -1 && vh != -2 {
                             let vr: VerifyResult = verify_collect(vh, vf);
                             if vr.status == VERIFY_FAILED() {
@@ -920,7 +942,7 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
             let fns: Vec<IrFunction> = ir_mod.functions;
             let ces: Vec<VerifyCE> = Vec::new();
             let use_cache_leg: bool = !has_flag(argv, String::from("--no-cache"));
-            let all_proven: i64 = run_verify_loop(fns, ir_mod, path, ces, max_k_step, use_cache_leg);
+            let all_proven: i64 = run_verify_loop(fns, ir_mod, path, ces, max_k_step, use_cache_leg, String::from(""), String::from(""));
             let status_str: String = {
                 if all_proven == 1 {
                     String::from("Verified")
@@ -1095,6 +1117,41 @@ fn skill_json() -> String {
     r.push_str(String::from("          \"value_name\": \"N\",\n"));
     r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
     r.push_str(String::from("          \"default\": 50\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--solver <boolector|z3|bitwuzla|auto>\",\n"));
+    r.push_str(String::from("          \"description\": \"ESBMC SMT solver; auto selects per-function via heuristic (default: auto)\",\n"));
+    r.push_str(String::from("          \"long\": \"--solver\",\n"));
+    r.push_str(String::from("          \"value_name\": \"boolector|z3|bitwuzla|auto\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"enum\",\n"));
+    r.push_str(String::from("          \"values\": [\n"));
+    r.push_str(String::from("            \"boolector\",\n"));
+    r.push_str(String::from("            \"z3\",\n"));
+    r.push_str(String::from("            \"bitwuzla\",\n"));
+    r.push_str(String::from("            \"auto\"\n"));
+    r.push_str(String::from("          ],\n"));
+    r.push_str(String::from("          \"default\": \"auto\"\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--encoding <bv|ir|auto>\",\n"));
+    r.push_str(String::from("          \"description\": \"ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)\",\n"));
+    r.push_str(String::from("          \"long\": \"--encoding\",\n"));
+    r.push_str(String::from("          \"value_name\": \"bv|ir|auto\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"enum\",\n"));
+    r.push_str(String::from("          \"values\": [\n"));
+    r.push_str(String::from("            \"bv\",\n"));
+    r.push_str(String::from("            \"ir\",\n"));
+    r.push_str(String::from("            \"auto\"\n"));
+    r.push_str(String::from("          ],\n"));
+    r.push_str(String::from("          \"default\": \"auto\"\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--timeout <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"ESBMC per-function timeout in seconds (default: (none))\",\n"));
+    r.push_str(String::from("          \"long\": \"--timeout\",\n"));
+    r.push_str(String::from("          \"value_name\": \"N\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
+    r.push_str(String::from("          \"default\": \"(none)\"\n"));
     r.push_str(String::from("        }\n"));
     r.push_str(String::from("      ],\n"));
     r.push_str(String::from("      \"stdout\": {\n"));
@@ -1141,6 +1198,41 @@ fn skill_json() -> String {
     r.push_str(String::from("          \"value_name\": \"N\",\n"));
     r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
     r.push_str(String::from("          \"default\": 50\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--solver <boolector|z3|bitwuzla|auto>\",\n"));
+    r.push_str(String::from("          \"description\": \"ESBMC SMT solver; auto selects per-function via heuristic (default: auto)\",\n"));
+    r.push_str(String::from("          \"long\": \"--solver\",\n"));
+    r.push_str(String::from("          \"value_name\": \"boolector|z3|bitwuzla|auto\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"enum\",\n"));
+    r.push_str(String::from("          \"values\": [\n"));
+    r.push_str(String::from("            \"boolector\",\n"));
+    r.push_str(String::from("            \"z3\",\n"));
+    r.push_str(String::from("            \"bitwuzla\",\n"));
+    r.push_str(String::from("            \"auto\"\n"));
+    r.push_str(String::from("          ],\n"));
+    r.push_str(String::from("          \"default\": \"auto\"\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--encoding <bv|ir|auto>\",\n"));
+    r.push_str(String::from("          \"description\": \"ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)\",\n"));
+    r.push_str(String::from("          \"long\": \"--encoding\",\n"));
+    r.push_str(String::from("          \"value_name\": \"bv|ir|auto\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"enum\",\n"));
+    r.push_str(String::from("          \"values\": [\n"));
+    r.push_str(String::from("            \"bv\",\n"));
+    r.push_str(String::from("            \"ir\",\n"));
+    r.push_str(String::from("            \"auto\"\n"));
+    r.push_str(String::from("          ],\n"));
+    r.push_str(String::from("          \"default\": \"auto\"\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--timeout <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"ESBMC per-function timeout in seconds (default: (none))\",\n"));
+    r.push_str(String::from("          \"long\": \"--timeout\",\n"));
+    r.push_str(String::from("          \"value_name\": \"N\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
+    r.push_str(String::from("          \"default\": \"(none)\"\n"));
     r.push_str(String::from("        }\n"));
     r.push_str(String::from("      ],\n"));
     r.push_str(String::from("      \"stdout\": {\n"));
@@ -1282,6 +1374,33 @@ fn skill_json() -> String {
     r.push_str(String::from("          \"value_name\": \"N\",\n"));
     r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
     r.push_str(String::from("          \"default\": 50\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--solver <boolector|z3|bitwuzla|auto>\",\n"));
+    r.push_str(String::from("          \"description\": \"ESBMC SMT solver (with --verify)\",\n"));
+    r.push_str(String::from("          \"long\": \"--solver\",\n"));
+    r.push_str(String::from("          \"value_name\": \"boolector|z3|bitwuzla|auto\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"enum\",\n"));
+    r.push_str(String::from("          \"values\": [\n"));
+    r.push_str(String::from("            \"boolector\",\n"));
+    r.push_str(String::from("            \"z3\",\n"));
+    r.push_str(String::from("            \"bitwuzla\",\n"));
+    r.push_str(String::from("            \"auto\"\n"));
+    r.push_str(String::from("          ],\n"));
+    r.push_str(String::from("          \"default\": \"auto\"\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--encoding <bv|ir|auto>\",\n"));
+    r.push_str(String::from("          \"description\": \"ESBMC encoding mode (with --verify); ir requires z3 (default: auto)\",\n"));
+    r.push_str(String::from("          \"long\": \"--encoding\",\n"));
+    r.push_str(String::from("          \"value_name\": \"bv|ir|auto\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"enum\",\n"));
+    r.push_str(String::from("          \"values\": [\n"));
+    r.push_str(String::from("            \"bv\",\n"));
+    r.push_str(String::from("            \"ir\",\n"));
+    r.push_str(String::from("            \"auto\"\n"));
+    r.push_str(String::from("          ],\n"));
+    r.push_str(String::from("          \"default\": \"auto\"\n"));
     r.push_str(String::from("        }\n"));
     r.push_str(String::from("      ],\n"));
     r.push_str(String::from("      \"stdout\": {\n"));
@@ -1301,11 +1420,17 @@ fn skill_json() -> String {
     r.push_str(String::from("    \"--dump-ir\": \"Print IR text to stdout and exit (no JSON output, no codegen)\",\n"));
     r.push_str(String::from("    \"--debug-trace <off|calls|full>\": \"Emit JSON trace lines to stderr at runtime (default: off)\",\n"));
     r.push_str(String::from("    \"--no-cache\": \"Disable compile and verify caching\",\n"));
-    r.push_str(String::from("    \"--max-k-step <N>\": \"ESBMC max k-induction step (default: 50)\"\n"));
+    r.push_str(String::from("    \"--max-k-step <N>\": \"ESBMC max k-induction step (default: 50)\",\n"));
+    r.push_str(String::from("    \"--solver <boolector|z3|bitwuzla|auto>\": \"ESBMC SMT solver; auto selects per-function via heuristic (default: auto)\",\n"));
+    r.push_str(String::from("    \"--encoding <bv|ir|auto>\": \"ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)\",\n"));
+    r.push_str(String::from("    \"--timeout <N>\": \"ESBMC per-function timeout in seconds (default: (none))\"\n"));
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"verify_options\": {\n"));
     r.push_str(String::from("    \"--no-cache\": \"Disable verification result caching\",\n"));
-    r.push_str(String::from("    \"--max-k-step <N>\": \"ESBMC max k-induction step (default: 50)\"\n"));
+    r.push_str(String::from("    \"--max-k-step <N>\": \"ESBMC max k-induction step (default: 50)\",\n"));
+    r.push_str(String::from("    \"--solver <boolector|z3|bitwuzla|auto>\": \"ESBMC SMT solver; auto selects per-function via heuristic (default: auto)\",\n"));
+    r.push_str(String::from("    \"--encoding <bv|ir|auto>\": \"ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)\",\n"));
+    r.push_str(String::from("    \"--timeout <N>\": \"ESBMC per-function timeout in seconds (default: (none))\"\n"));
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"test_options\": {\n"));
     r.push_str(String::from("    \"--verify\": \"Run ESBMC verification on test files\",\n"));
@@ -1320,7 +1445,9 @@ fn skill_json() -> String {
     r.push_str(String::from("  \"contracts_options\": {\n"));
     r.push_str(String::from("    \"--verify\": \"Run ESBMC verification and report per-contract status\",\n"));
     r.push_str(String::from("    \"--no-cache\": \"Disable verification result caching\",\n"));
-    r.push_str(String::from("    \"--max-k-step <N>\": \"ESBMC max k-induction step (default: 50)\"\n"));
+    r.push_str(String::from("    \"--max-k-step <N>\": \"ESBMC max k-induction step (default: 50)\",\n"));
+    r.push_str(String::from("    \"--solver <boolector|z3|bitwuzla|auto>\": \"ESBMC SMT solver (with --verify)\",\n"));
+    r.push_str(String::from("    \"--encoding <bv|ir|auto>\": \"ESBMC encoding mode (with --verify); ir requires z3 (default: auto)\"\n"));
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"global_options\": {\n"));
     r.push_str(String::from("    \"--help\": \"Emit versioned JSON tool-help data\",\n"));
@@ -1663,10 +1790,16 @@ fn skill_human() -> String {
     r.push_str(String::from("  --debug-trace <off|calls|full>  Emit JSON trace lines to stderr at runtime (default: off)\n"));
     r.push_str(String::from("  --no-cache              Disable compile and verify caching\n"));
     r.push_str(String::from("  --max-k-step <N>        ESBMC max k-induction step (default: 50)\n"));
+    r.push_str(String::from("  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)\n"));
+    r.push_str(String::from("  --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)\n"));
+    r.push_str(String::from("  --timeout <N>           ESBMC per-function timeout in seconds (default: (none))\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("VERIFY OPTIONS\n"));
     r.push_str(String::from("  --no-cache              Disable verification result caching\n"));
     r.push_str(String::from("  --max-k-step <N>        ESBMC max k-induction step (default: 50)\n"));
+    r.push_str(String::from("  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)\n"));
+    r.push_str(String::from("  --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)\n"));
+    r.push_str(String::from("  --timeout <N>           ESBMC per-function timeout in seconds (default: (none))\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("TEST OPTIONS\n"));
     r.push_str(String::from("  --verify                Run ESBMC verification on test files\n"));
@@ -1679,6 +1812,8 @@ fn skill_human() -> String {
     r.push_str(String::from("  --verify                Run ESBMC verification and report per-contract status\n"));
     r.push_str(String::from("  --no-cache              Disable verification result caching\n"));
     r.push_str(String::from("  --max-k-step <N>        ESBMC max k-induction step (default: 50)\n"));
+    r.push_str(String::from("  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver (with --verify)\n"));
+    r.push_str(String::from("  --encoding <bv|ir|auto>  ESBMC encoding mode (with --verify); ir requires z3 (default: auto)\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("DECL OPTIONS\n"));
     r.push_str(String::from("  -o, --output <path>     Output declaration file path (default: <source>.vow.d)\n"));
@@ -2609,6 +2744,9 @@ fn skill_full() -> String {
     r.push_str(String::from("| `--debug-trace <off\\|calls\\|full>` | `off` | Emit JSON trace lines to stderr at runtime |\n"));
     r.push_str(String::from("| `--no-cache`    | (off)       | Disable compile and verify caching           |\n"));
     r.push_str(String::from("| `--max-k-step <N>` | `50`     | ESBMC max k-induction step                   |\n"));
+    r.push_str(String::from("| `--solver <boolector\\|z3\\|bitwuzla\\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |\n"));
+    r.push_str(String::from("| `--encoding <bv\\|ir\\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |\n"));
+    r.push_str(String::from("| `--timeout <N>` | (none)      | ESBMC per-function timeout in seconds        |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow verify`\n"));
     r.push_str(String::from("\n"));
@@ -2624,6 +2762,9 @@ fn skill_full() -> String {
     r.push_str(String::from("|-------------------|-------------|--------------------------------------------|\n"));
     r.push_str(String::from("| `--no-cache`      | (off)       | Disable verification result caching        |\n"));
     r.push_str(String::from("| `--max-k-step <N>` | `50`       | ESBMC max k-induction step                |\n"));
+    r.push_str(String::from("| `--solver <boolector\\|z3\\|bitwuzla\\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |\n"));
+    r.push_str(String::from("| `--encoding <bv\\|ir\\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |\n"));
+    r.push_str(String::from("| `--timeout <N>` | (none)      | ESBMC per-function timeout in seconds        |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow contracts`\n"));
     r.push_str(String::from("\n"));
@@ -2640,6 +2781,8 @@ fn skill_full() -> String {
     r.push_str(String::from("| `--verify`        | (off)       | Run ESBMC verification and report per-contract status |\n"));
     r.push_str(String::from("| `--no-cache`      | (off)       | Disable verification result caching        |\n"));
     r.push_str(String::from("| `--max-k-step <N>` | `50`       | ESBMC max k-induction step                |\n"));
+    r.push_str(String::from("| `--solver <boolector\\|z3\\|bitwuzla\\|auto>` | `auto` | ESBMC SMT solver (with --verify)           |\n"));
+    r.push_str(String::from("| `--encoding <bv\\|ir\\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow skill`\n"));
     r.push_str(String::from("\n"));
@@ -4435,6 +4578,17 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
         if mks_str.len() > 0 { mks_str }
         else { String::from("50") }
     };
+    let mut solver: String = get_flag_arg(argv, String::from("--solver"));
+    let encoding: String = get_flag_arg(argv, String::from("--encoding"));
+    if encoding == String::from("ir") {
+        if solver == String::from("boolector") || solver == String::from("bitwuzla") {
+            eprintln_str(String::from("error: --encoding ir requires --solver z3"));
+            return 1;
+        }
+        if solver.len() == 0 || solver == String::from("auto") {
+            solver = String::from("z3");
+        }
+    }
 
     // Collect per-contract entries into parallel arrays
     let e_vow_ids: Vec<i64> = Vec::new();
@@ -4481,7 +4635,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
         while fi < nf {
             let func: IrFunction = ir_mod.functions[fi];
             if func.vows.len() > 0 {
-                let vr: VerifyResult = verify_function_full(func, ir_mod, max_k_step, use_cache);
+                let vr: VerifyResult = verify_function_full(func, ir_mod, max_k_step, use_cache, solver, encoding);
                 let st: i64 = vr.status;
                 let mut ei: i64 = 0;
                 while ei < e_func_names.len() {

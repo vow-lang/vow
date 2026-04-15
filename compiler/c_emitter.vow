@@ -1359,11 +1359,41 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
     out.push_str(String::from("}\n"));
 }
 
-fn cemit_preamble() -> String {
+fn func_has_shift_op(f: IrFunction, target_op: i64) -> i64 {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: i64 = 0;
+    while bi < blocks.len() {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let mut ii: i64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.op == target_op {
+                return 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    0
+}
+
+fn scan_shift_needs_in_fns(fns: Vec<IrFunction>, start: i64, end: i64, target_op: i64) -> i64 {
+    let mut fi: i64 = start;
+    while fi < end {
+        let f: IrFunction = fns[fi];
+        if func_has_shift_op(f, target_op) == 1 {
+            return 1;
+        }
+        fi = fi + 1;
+    }
+    0
+}
+
+fn cemit_preamble(need_shl_i64: i64, need_shr_i64: i64, need_shl_u64: i64, need_shr_u64: i64) -> String {
     let out: String = String::from("");
     out.push_str(String::from("#include <stdint.h>\n"));
     out.push_str(String::from("#include <stdbool.h>\n"));
-    out.push_str(String::from("#include <stdlib.h>\n"));
     out.push_str(String::from("extern void __ESBMC_assume(_Bool);\n"));
     out.push_str(String::from("extern void __ESBMC_assert(_Bool, const char*);\n"));
     out.push_str(String::from("extern int __VERIFIER_nondet_int(void);\n"));
@@ -1374,23 +1404,34 @@ fn cemit_preamble() -> String {
     out.push_str(String::from("typedef struct { int64_t len; int64_t* data; } __vow_vec_t;\n"));
     out.push_str(String::from("typedef struct { int64_t len; int8_t* data; } __vow_string_t;\n"));
     out.push_str(String::from("typedef struct { int64_t len; int64_t* keys; int64_t* vals; } __vow_hashmap_t;\n\n"));
-    out.push_str(String::from("static inline int64_t __vow_shl_i64(int64_t value, int64_t count) {\n"));
-    out.push_str(String::from("  uint64_t shift = ((uint64_t)count) & 63ULL;\n"));
-    out.push_str(String::from("  return (int64_t)(((uint64_t)value) << shift);\n"));
-    out.push_str(String::from("}\n"));
-    out.push_str(String::from("static inline int64_t __vow_shr_i64(int64_t value, int64_t count) {\n"));
-    out.push_str(String::from("  uint64_t shift = ((uint64_t)count) & 63ULL;\n"));
-    out.push_str(String::from("  uint64_t bits = (uint64_t)value;\n"));
-    out.push_str(String::from("  uint64_t logical = bits >> shift;\n"));
-    out.push_str(String::from("  uint64_t sign_fill = value < 0 ? ~(~0ULL >> shift) : 0ULL;\n"));
-    out.push_str(String::from("  return (int64_t)(logical | sign_fill);\n"));
-    out.push_str(String::from("}\n"));
-    out.push_str(String::from("static inline uint64_t __vow_shl_u64(uint64_t value, uint64_t count) {\n"));
-    out.push_str(String::from("  return value << (count & 63ULL);\n"));
-    out.push_str(String::from("}\n"));
-    out.push_str(String::from("static inline uint64_t __vow_shr_u64(uint64_t value, uint64_t count) {\n"));
-    out.push_str(String::from("  return value >> (count & 63ULL);\n"));
-    out.push_str(String::from("}\n\n"));
+    if need_shl_i64 != 0 {
+        out.push_str(String::from("static inline int64_t __vow_shl_i64(int64_t value, int64_t count) {\n"));
+        out.push_str(String::from("  uint64_t shift = ((uint64_t)count) & 63ULL;\n"));
+        out.push_str(String::from("  return (int64_t)(((uint64_t)value) << shift);\n"));
+        out.push_str(String::from("}\n"));
+    }
+    if need_shr_i64 != 0 {
+        out.push_str(String::from("static inline int64_t __vow_shr_i64(int64_t value, int64_t count) {\n"));
+        out.push_str(String::from("  uint64_t shift = ((uint64_t)count) & 63ULL;\n"));
+        out.push_str(String::from("  uint64_t bits = (uint64_t)value;\n"));
+        out.push_str(String::from("  uint64_t logical = bits >> shift;\n"));
+        out.push_str(String::from("  uint64_t sign_fill = value < 0 ? ~(~0ULL >> shift) : 0ULL;\n"));
+        out.push_str(String::from("  return (int64_t)(logical | sign_fill);\n"));
+        out.push_str(String::from("}\n"));
+    }
+    if need_shl_u64 != 0 {
+        out.push_str(String::from("static inline uint64_t __vow_shl_u64(uint64_t value, uint64_t count) {\n"));
+        out.push_str(String::from("  return value << (count & 63ULL);\n"));
+        out.push_str(String::from("}\n"));
+    }
+    if need_shr_u64 != 0 {
+        out.push_str(String::from("static inline uint64_t __vow_shr_u64(uint64_t value, uint64_t count) {\n"));
+        out.push_str(String::from("  return value >> (count & 63ULL);\n"));
+        out.push_str(String::from("}\n"));
+    }
+    if need_shl_i64 != 0 || need_shr_i64 != 0 || need_shl_u64 != 0 || need_shr_u64 != 0 {
+        out.push_byte(10);
+    }
     out
 }
 
@@ -1430,12 +1471,17 @@ fn emit_forward_declaration(out: String, f: IrFunction) {
 }
 
 fn emit_c_module(m: IrModule) -> String {
-    let out: String = cemit_preamble();
+    let fns: Vec<IrFunction> = m.functions;
+    let n: i64 = fns.len();
+    let need_shl_i64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHL_I64());
+    let need_shr_i64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHR_I64());
+    let need_shl_u64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHL_U64());
+    let need_shr_u64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHR_U64());
+    let out: String = cemit_preamble(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64);
 
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
     let empty_modelable: Vec<i64> = Vec::new();
 
-    let fns: Vec<IrFunction> = m.functions;
     let mut fi: i64 = 0;
     while fi < fns.len() {
         let f: IrFunction = fns[fi];
@@ -1446,10 +1492,35 @@ fn emit_c_module(m: IrModule) -> String {
     out
 }
 
+fn scan_shift_op_in_module_fns(fns: Vec<IrFunction>, target_fi: i64, callee_fis: Vec<i64>, target_op: i64) -> i64 {
+    let mut fi: i64 = 0;
+    while fi < fns.len() {
+        let f: IrFunction = fns[fi];
+        let mut check: i64 = 0;
+        if f.id == target_fi { check = 1; }
+        if check == 0 {
+            let mut ci: i64 = 0;
+            while ci < callee_fis.len() {
+                if callee_fis[ci] == f.id { check = 1; ci = callee_fis.len(); }
+                ci = ci + 1;
+            }
+        }
+        if check == 1 {
+            if func_has_shift_op(f, target_op) == 1 { return 1; }
+        }
+        fi = fi + 1;
+    }
+    0
+}
+
 fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>, modelable_fi_set: Vec<i64>) -> String {
-    let out: String = cemit_preamble();
-    let const_fn_indices: Vec<i64> = detect_const_fns(m);
     let fns: Vec<IrFunction> = m.functions;
+    let need_shl_i64: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHL_I64());
+    let need_shr_i64: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHR_I64());
+    let need_shl_u64: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHL_U64());
+    let need_shr_u64: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHR_U64());
+    let out: String = cemit_preamble(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64);
+    let const_fn_indices: Vec<i64> = detect_const_fns(m);
 
     let mut ci: i64 = 0;
     while ci < callee_fis.len() {

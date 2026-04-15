@@ -126,8 +126,10 @@ impl VerifyCache {
         Some(Self { dir })
     }
 
-    pub fn cache_key(c_source: &str, max_k_step: u32) -> String {
-        let combined = format!("{c_source}\n__max_k_step={max_k_step}");
+    pub fn cache_key(c_source: &str, max_k_step: u32, solver: &str, encoding: &str) -> String {
+        let combined = format!(
+            "{c_source}\n__max_k_step={max_k_step}\n__solver={solver}\n__encoding={encoding}"
+        );
         let hash = fnv1a_hash(combined.as_bytes());
         format!("{hash:016x}")
     }
@@ -278,8 +280,15 @@ mod tests {
 
     #[test]
     fn cache_key_includes_max_k_step() {
-        let k1 = VerifyCache::cache_key("int f() { return 0; }", 10);
-        let k2 = VerifyCache::cache_key("int f() { return 0; }", 20);
+        let k1 = VerifyCache::cache_key("int f() { return 0; }", 10, "boolector", "bv");
+        let k2 = VerifyCache::cache_key("int f() { return 0; }", 20, "boolector", "bv");
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn cache_key_includes_solver_encoding() {
+        let k1 = VerifyCache::cache_key("int f() { return 0; }", 10, "boolector", "bv");
+        let k2 = VerifyCache::cache_key("int f() { return 0; }", 10, "z3", "ir");
         assert_ne!(k1, k2);
     }
 }
