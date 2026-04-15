@@ -567,10 +567,11 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             }
             if !ty_is_integer(e.ts, rhs_tid) {
                 env_emit_error(e, String::from("bitwise operator requires integer operands"), expr_span(a, eid));
-                return lhs_tid;
+                return CTY_I64();
             }
             if lhs_tid != rhs_tid {
                 env_emit_error(e, String::from("bitwise operator requires matching integer types"), expr_span(a, eid));
+                return CTY_I64();
             }
             return lhs_tid;
         }

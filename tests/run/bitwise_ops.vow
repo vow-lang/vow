@@ -1,4 +1,4 @@
-// TEST: stdout "6 & 3 = 2\n6 | 3 = 7\n1 << 5 = 32\n-8 >> 1 = -4\n8u64 >> 1u64 = 4\n"
+// TEST: stdout "6 & 3 = 2\n6 | 3 = 7\n1 << 5 = 32\n-8 >> 1 = -4\n8u64 >> 1u64 = 4\n6u64 & 3u64 = 2\n6u64 | 3u64 = 7\n1u64 << 5u64 = 32\n"
 module BitwiseOps
 
 fn main() [io] {
@@ -27,5 +27,17 @@ fn main() [io] {
 
     print_str(String::from("8u64 >> 1u64 = "));
     print_u64(ux >> uy);
+    print_str(String::from("\n"));
+
+    print_str(String::from("6u64 & 3u64 = "));
+    print_u64(6u64 & 3u64);
+    print_str(String::from("\n"));
+
+    print_str(String::from("6u64 | 3u64 = "));
+    print_u64(6u64 | 3u64);
+    print_str(String::from("\n"));
+
+    print_str(String::from("1u64 << 5u64 = "));
+    print_u64(1u64 << 5u64);
     print_str(String::from("\n"));
 }

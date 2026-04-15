@@ -181,6 +181,7 @@ def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
     comparison = extract_table_col(grammar, "Comparison Operators", 0)
     logical = extract_table_col(grammar, "Logical Operators", 0)
     unary = extract_table_col(grammar, "Unary Operators", 0)
+    bitwise = extract_table_col(grammar, "Bitwise Operators", 0)
 
     # --- Methods ---
     def method_names(heading: str) -> list[str]:
@@ -518,6 +519,7 @@ def build_help_json(grammar: str, cli: str, contracts: str) -> dict:
                 "checked_arithmetic": checked,
                 "comparison": comparison,
                 "logical": logical,
+                "bitwise": bitwise,
                 "unary": unary,
             },
             "vow_clauses": {
@@ -721,8 +723,9 @@ def build_help_human(data: dict) -> str:
     checked = " ".join(ops["checked_arithmetic"])
     comp = " ".join(ops["comparison"])
     logical = " ".join(ops["logical"])
+    bitwise_str = " ".join(ops["bitwise"])
     unary = " ".join(ops["unary"])
-    lines.append(f"OPERATORS : {arith}   {checked} (checked)   {comp}   {logical}   {unary}")
+    lines.append(f"OPERATORS : {arith}   {checked} (checked)   {comp}   {logical}   {bitwise_str} (bitwise, integer-only)   unary {unary}")
     lines.append("")
 
     vlimits = data.get("verification_limits", {})

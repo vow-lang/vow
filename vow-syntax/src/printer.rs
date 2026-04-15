@@ -1184,6 +1184,11 @@ mod tests {
             (BinOp::Ge, ">="),
             (BinOp::And, "&&"),
             (BinOp::Or, "||"),
+            (BinOp::BitAnd, "&"),
+            (BinOp::BitOr, "|"),
+            (BinOp::BitXor, "^"),
+            (BinOp::Shl, "<<"),
+            (BinOp::Shr, ">>"),
         ];
         for (op, expected_op_str) in pairs {
             let expr = binop_expr(*op, ident_expr("a"), ident_expr("b"));
