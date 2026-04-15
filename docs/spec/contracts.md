@@ -15,21 +15,16 @@ Contract clauses become IR opcodes. The C emitter translates `requires` to `__ES
 
 ### ESBMC Configuration
 
-- Loop unwind bound: **10** — loops are checked for up to 10 iterations
+- Verification strategy: **k-induction-parallel** (incremental BMC + k-induction proof)
+- Max k-induction step: **50** (default; override with `--max-k-step`)
 - Architecture: 64-bit
 - Array bounds / pointer checks disabled (Vow handles these in its own model)
 
 ### Collection Models for Verification
 
-ESBMC uses bounded models for collection types:
+Collections (`Vec<T>`, `String`, `HashMap<K, V>`) are modeled with unbounded, dynamically allocated storage — the same semantics as at runtime. There are no artificial capacity limits in the verification model. ESBMC reasons about container operations using k-induction to prove properties for all iterations.
 
-| Type              | Max Capacity | Supported Operations |
-|-------------------|-------------|----------------------------------------------|
-| `Vec<T>`          | 128         | `new`, `push`, `pop`, `len`, `get`, `set`    |
-| `String`          | 256         | `from`, `len`, `push_byte`, `byte_at`        |
-| `HashMap<K, V>`   | 64          | `new`, `insert`, `get`, `contains_key`, `len`|
-
-These support the same operations as the runtime but with bounded storage. `String::from` produces a nondeterministic length (0 to 255) in verification.
+`String::from` produces a nondeterministic non-negative length in verification.
 
 ## Blame Model
 
@@ -235,7 +230,7 @@ This is not inductive — `v.len() == n` is only true after the loop.
 
 ### Unbound Loop Iterations
 
-Without a bound on loop iterations, ESBMC may timeout (unwind bound is 10):
+Without a bound on loop iterations, ESBMC may timeout (max-k-step is 50):
 
 ```vow
 fn fill(n: i64) -> Vec<i64> vow {

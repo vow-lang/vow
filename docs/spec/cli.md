@@ -21,7 +21,7 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--dump-ir`       | (off)       | Print IR text to stdout and exit (no JSON output, no codegen) |
 | `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
 | `--no-cache`    | (off)       | Disable compile and verify caching           |
-| `--unwind <N>`  | `10`        | ESBMC loop unwind bound                      |
+| `--max-k-step <N>` | `50`     | ESBMC max k-induction step                   |
 
 ### `vow verify`
 
@@ -36,7 +36,7 @@ vow verify [OPTIONS] <source.vow>
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
 | `--no-cache`      | (off)       | Disable verification result caching        |
-| `--unwind <N>`    | `10`        | ESBMC loop unwind bound                   |
+| `--max-k-step <N>` | `50`       | ESBMC max k-induction step                |
 
 ### `vow contracts`
 
@@ -52,7 +52,7 @@ vow contracts [OPTIONS] <source.vow>
 |-------------------|-------------|--------------------------------------------|
 | `--verify`        | (off)       | Run ESBMC verification and report per-contract status |
 | `--no-cache`      | (off)       | Disable verification result caching        |
-| `--unwind <N>`    | `10`        | ESBMC loop unwind bound                   |
+| `--max-k-step <N>` | `50`       | ESBMC max k-induction step                |
 
 ### `vow skill`
 
@@ -86,7 +86,7 @@ vow test [OPTIONS] [<path>]
 | `--mode debug`    | (default)   | Insert runtime vow checks                 |
 | `--mode release`  | `debug`     | Omit all vow checks for performance       |
 | `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
-| `--unwind <N>`    | `10`        | ESBMC loop unwind bound (with --verify)    |
+| `--max-k-step <N>` | `50`       | ESBMC max k-induction step (with --verify) |
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` in the given directory, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
 

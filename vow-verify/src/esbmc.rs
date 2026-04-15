@@ -185,7 +185,7 @@ fn parse_assignment_line(line: &str) -> Option<(String, String)> {
 // Debug: save C source and command for ESBMC debugging
 // ---------------------------------------------------------------------------
 
-fn save_esbmc_debug(esbmc: &std::path::Path, c_src: &str, func_name: &str) {
+fn save_esbmc_debug(esbmc: &std::path::Path, c_src: &str, func_name: &str, max_k_step: u32) {
     if std::env::var("VOW_VERIFY_DEBUG").is_err() {
         return;
     }
@@ -199,9 +199,10 @@ fn save_esbmc_debug(esbmc: &std::path::Path, c_src: &str, func_name: &str) {
     let _ = std::fs::write(debug_dir.join(&c_name), c_src);
 
     let cmd = format!(
-        "{} /tmp/vow-verify-debug/{} --no-bounds-check --no-pointer-check --unwind 10 --64\n",
+        "{} /tmp/vow-verify-debug/{} --no-bounds-check --no-pointer-check --k-induction-parallel --max-k-step {} --64\n",
         esbmc.display(),
         c_name,
+        max_k_step,
     );
     let _ = std::fs::write(debug_dir.join(&cmd_name), cmd);
 }
@@ -245,21 +246,26 @@ pub fn emit_verify_c_source(
     c_src
 }
 
-pub const DEFAULT_UNWIND: u32 = 10;
+pub const DEFAULT_MAX_K_STEP: u32 = 50;
 
 pub fn verify_function_with_module_and_const_fns(
     func: &Function,
     module: &Module,
     const_fns: &HashMap<FuncId, ConstantValue>,
 ) -> VerificationResult {
-    verify_function_with_module_and_const_fns_with_unwind(func, module, const_fns, DEFAULT_UNWIND)
+    verify_function_with_module_and_const_fns_with_max_k_step(
+        func,
+        module,
+        const_fns,
+        DEFAULT_MAX_K_STEP,
+    )
 }
 
-pub fn verify_function_with_module_and_const_fns_with_unwind(
+pub fn verify_function_with_module_and_const_fns_with_max_k_step(
     func: &Function,
     module: &Module,
     const_fns: &HashMap<FuncId, ConstantValue>,
-    unwind: u32,
+    max_k_step: u32,
 ) -> VerificationResult {
     let esbmc = match find_esbmc() {
         Some(p) => p,
@@ -267,7 +273,7 @@ pub fn verify_function_with_module_and_const_fns_with_unwind(
     };
 
     let c_src = emit_verify_c_source(func, module, const_fns);
-    run_esbmc_with_unwind(&esbmc, &c_src, unwind, &func.name)
+    run_esbmc_with_max_k_step(&esbmc, &c_src, max_k_step, &func.name)
 }
 
 fn verify_function_inner(
@@ -282,17 +288,21 @@ fn verify_function_inner(
     let mut c_src = emit_c_module(&[func], const_fns);
     c_src.push_str(&emit_harness(func));
 
-    run_esbmc(&esbmc, &c_src, &func.name)
+    run_esbmc_k_induction(&esbmc, &c_src, &func.name)
 }
 
-pub fn run_esbmc(esbmc: &std::path::Path, c_src: &str, func_name: &str) -> VerificationResult {
-    run_esbmc_with_unwind(esbmc, c_src, DEFAULT_UNWIND, func_name)
-}
-
-pub fn run_esbmc_with_unwind(
+pub fn run_esbmc_k_induction(
     esbmc: &std::path::Path,
     c_src: &str,
-    unwind: u32,
+    func_name: &str,
+) -> VerificationResult {
+    run_esbmc_with_max_k_step(esbmc, c_src, DEFAULT_MAX_K_STEP, func_name)
+}
+
+pub fn run_esbmc_with_max_k_step(
+    esbmc: &std::path::Path,
+    c_src: &str,
+    max_k_step: u32,
     func_name: &str,
 ) -> VerificationResult {
     let mut tmp = match tempfile::Builder::new().suffix(".c").tempfile() {
@@ -306,14 +316,15 @@ pub fn run_esbmc_with_unwind(
         return VerificationResult::ToolError(e.to_string());
     }
 
-    save_esbmc_debug(esbmc, c_src, func_name);
+    save_esbmc_debug(esbmc, c_src, func_name, max_k_step);
 
     let output = match Command::new(esbmc)
         .arg(tmp.path())
         .arg("--no-bounds-check")
         .arg("--no-pointer-check")
-        .arg("--unwind")
-        .arg(unwind.to_string())
+        .arg("--k-induction-parallel")
+        .arg("--max-k-step")
+        .arg(max_k_step.to_string())
         .arg("--64")
         .output()
     {
