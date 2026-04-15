@@ -14,8 +14,9 @@ use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{CollectingEmitter, Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
-    Counterexample, DEFAULT_UNWIND, VerificationResult, detect_constant_functions,
-    emit_verify_c_source, find_esbmc, run_esbmc_with_unwind,
+    Counterexample, DEFAULT_UNWIND, Encoding, Solver, SolverConfig, VerificationResult,
+    detect_constant_functions, emit_verify_c_source, find_esbmc, run_esbmc_with_unwind,
+    verify_function_with_module_and_const_fns_configured,
     verify_function_with_module_and_const_fns_with_unwind,
 };
 
@@ -38,6 +39,49 @@ enum TraceArg {
     Off,
     Calls,
     Full,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum SolverArg {
+    Boolector,
+    Z3,
+    Bitwuzla,
+    Auto,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum EncodingArg {
+    Bv,
+    Ir,
+    Auto,
+}
+
+fn make_solver_config(
+    solver: SolverArg,
+    encoding: EncodingArg,
+    timeout: Option<u32>,
+) -> SolverConfig {
+    let s = match solver {
+        SolverArg::Boolector => Solver::Boolector,
+        SolverArg::Z3 => Solver::Z3,
+        SolverArg::Bitwuzla => Solver::Bitwuzla,
+        SolverArg::Auto => Solver::Auto,
+    };
+    let e = match encoding {
+        EncodingArg::Bv => Encoding::Bv,
+        EncodingArg::Ir => Encoding::Ir,
+        EncodingArg::Auto => Encoding::Auto,
+    };
+    let config = SolverConfig {
+        solver: s,
+        encoding: e,
+        timeout_secs: timeout,
+    };
+    if let Err(msg) = config.validate() {
+        eprintln!("error: {msg}");
+        std::process::exit(1);
+    }
+    config
 }
 
 #[derive(Parser, Debug)]
@@ -66,6 +110,12 @@ struct Args {
     no_cache: bool,
     #[arg(long, default_value_t = DEFAULT_UNWIND)]
     unwind: u32,
+    #[arg(long, value_enum, default_value = "auto")]
+    solver: SolverArg,
+    #[arg(long, value_enum, default_value = "auto")]
+    encoding: EncodingArg,
+    #[arg(long)]
+    timeout: Option<u32>,
     #[arg(long)]
     help: bool,
     #[arg(long)]
@@ -106,6 +156,12 @@ struct BuildArgs {
     no_cache: bool,
     #[arg(long, default_value_t = DEFAULT_UNWIND)]
     unwind: u32,
+    #[arg(long, value_enum, default_value = "auto")]
+    solver: SolverArg,
+    #[arg(long, value_enum, default_value = "auto")]
+    encoding: EncodingArg,
+    #[arg(long)]
+    timeout: Option<u32>,
     #[arg(long)]
     help: bool,
     #[arg(long)]
@@ -124,6 +180,12 @@ struct VerifyArgs {
     no_cache: bool,
     #[arg(long, default_value_t = DEFAULT_UNWIND)]
     unwind: u32,
+    #[arg(long, value_enum, default_value = "auto")]
+    solver: SolverArg,
+    #[arg(long, value_enum, default_value = "auto")]
+    encoding: EncodingArg,
+    #[arg(long)]
+    timeout: Option<u32>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -4410,6 +4472,7 @@ fn run_verification_sync(
     call_site_index: &std::collections::HashMap<String, Vec<CallSiteInfo>>,
     verify_cache: Option<&VerifyCache>,
     unwind: u32,
+    config: &SolverConfig,
 ) -> VerifyOutcome {
     let const_fns = detect_constant_functions(ir_module);
     for func in &ir_module.functions {
@@ -4417,9 +4480,26 @@ fn run_verification_sync(
             continue;
         }
 
+        // Resolve Auto solver via heuristic (Phase B)
+        let func_config = if config.solver == Solver::Auto {
+            let heuristic = vow_verify::classify_function(func);
+            SolverConfig {
+                solver: heuristic.solver,
+                encoding: config.encoding,
+                timeout_secs: config.timeout_secs,
+            }
+        } else {
+            *config
+        };
+
         let result = if let Some(vc) = verify_cache {
             let c_src = emit_verify_c_source(func, ir_module, &const_fns);
-            let key = VerifyCache::cache_key(&c_src, unwind);
+            let key = VerifyCache::cache_key(
+                &c_src,
+                unwind,
+                func_config.solver_str(),
+                func_config.encoding_str(),
+            );
 
             if let Some(cached) = vc.lookup(&key) {
                 match cached {
@@ -4433,9 +4513,9 @@ fn run_verification_sync(
                     Some(p) => p,
                     None => return VerifyOutcome::ToolNotFound,
                 };
-                let res = run_esbmc_with_unwind(&esbmc, &c_src, unwind, &func.name);
+                let res = run_esbmc_with_unwind(&esbmc, &c_src, unwind, &func.name, &func_config);
                 match &res {
-                    VerificationResult::Proven => {
+                    VerificationResult::Proven | VerificationResult::ProvenIr => {
                         vc.store(&key, &CachedVerifyResult::Proven);
                     }
                     VerificationResult::Failed(ce) => {
@@ -4455,8 +4535,12 @@ fn run_verification_sync(
                 res
             }
         } else {
-            verify_function_with_module_and_const_fns_with_unwind(
-                func, ir_module, &const_fns, unwind,
+            verify_function_with_module_and_const_fns_configured(
+                func,
+                ir_module,
+                &const_fns,
+                unwind,
+                &func_config,
             )
         };
 
@@ -4480,7 +4564,7 @@ fn run_verification_sync(
                     function: func.name.clone(),
                 };
             }
-            VerificationResult::Proven => {}
+            VerificationResult::Proven | VerificationResult::ProvenIr => {}
             VerificationResult::ToolNotFound => {
                 return VerifyOutcome::ToolNotFound;
             }
@@ -4648,10 +4732,15 @@ fn verify_outcome_to_output(
 // ---------------------------------------------------------------------------
 
 pub fn run_verify_only(source: &Path) -> BuildOutput {
-    run_verify_only_inner(source, false, 10)
+    run_verify_only_inner(source, false, 10, &SolverConfig::default_config())
 }
 
-fn run_verify_only_inner(source: &Path, no_cache: bool, unwind: u32) -> BuildOutput {
+fn run_verify_only_inner(
+    source: &Path,
+    no_cache: bool,
+    unwind: u32,
+    config: &SolverConfig,
+) -> BuildOutput {
     let frontend = match compile_frontend(source) {
         Ok(f) => f,
         Err(output) => return *output,
@@ -4670,6 +4759,7 @@ fn run_verify_only_inner(source: &Path, no_cache: bool, unwind: u32) -> BuildOut
         &call_site_index,
         verify_cache.as_ref(),
         unwind,
+        config,
     );
     verify_outcome_to_output(outcome, frontend.diagnostics, None)
 }
@@ -4706,7 +4796,17 @@ pub fn run_pipeline(
     dump_ir: bool,
     trace: TraceMode,
 ) -> BuildOutput {
-    run_pipeline_inner(source, output, mode, no_verify, dump_ir, trace, false, 10)
+    run_pipeline_inner(
+        source,
+        output,
+        mode,
+        no_verify,
+        dump_ir,
+        trace,
+        false,
+        10,
+        &SolverConfig::default_config(),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4719,6 +4819,7 @@ fn run_pipeline_inner(
     trace: TraceMode,
     no_cache: bool,
     unwind: u32,
+    config: &SolverConfig,
 ) -> BuildOutput {
     let frontend = match compile_frontend(source) {
         Ok(f) => f,
@@ -4726,7 +4827,7 @@ fn run_pipeline_inner(
     };
 
     run_pipeline_from_frontend(
-        frontend, source, output, mode, no_verify, dump_ir, trace, no_cache, unwind,
+        frontend, source, output, mode, no_verify, dump_ir, trace, no_cache, unwind, config,
     )
 }
 
@@ -4741,6 +4842,7 @@ fn run_pipeline_from_frontend(
     trace: TraceMode,
     no_cache: bool,
     unwind: u32,
+    config: &SolverConfig,
 ) -> BuildOutput {
     let all_diagnostics = frontend.diagnostics;
     let ir_module = frontend.ir_module;
@@ -4771,6 +4873,7 @@ fn run_pipeline_from_frontend(
     } else {
         VerifyCache::new()
     };
+    let verify_config = *config;
     let verify_handle = thread::spawn(move || -> VerifyOutcome {
         if no_verify {
             return VerifyOutcome::Skipped;
@@ -4781,6 +4884,7 @@ fn run_pipeline_from_frontend(
             &call_site_index,
             verify_cache.as_ref(),
             unwind,
+            &verify_config,
         )
     });
 
@@ -5004,6 +5108,7 @@ fn run_test_command(
             TraceMode::Off,
             true,
             unwind,
+            &SolverConfig::default_config(),
         );
 
         let diagnostics: Vec<DiagnosticJson> = result
@@ -5206,9 +5311,10 @@ fn run_build_command(
     trace: TraceMode,
     no_cache: bool,
     unwind: u32,
+    config: &SolverConfig,
 ) {
     let result = run_pipeline_inner(
-        source, output, mode, no_verify, dump_ir, trace, no_cache, unwind,
+        source, output, mode, no_verify, dump_ir, trace, no_cache, unwind, config,
     );
     if !dump_ir {
         result.emit_json();
@@ -5287,8 +5393,8 @@ fn run_decl_command(source: &Path, output: Option<&Path>) {
     eprintln!("wrote {}", out_path.display());
 }
 
-fn run_verify_command(source: &Path, no_cache: bool, unwind: u32) {
-    let result = run_verify_only_inner(source, no_cache, unwind);
+fn run_verify_command(source: &Path, no_cache: bool, unwind: u32, config: &SolverConfig) {
+    let result = run_verify_only_inner(source, no_cache, unwind, config);
     result.emit_json();
     if matches!(
         &result.status,
@@ -5342,6 +5448,7 @@ fn update_contract_statuses(
     ir_module: &vow_ir::Module,
     verify_cache: Option<&VerifyCache>,
     unwind: u32,
+    config: &SolverConfig,
 ) {
     let const_fns = detect_constant_functions(ir_module);
     for func in &ir_module.functions {
@@ -5351,7 +5458,8 @@ fn update_contract_statuses(
 
         let result = if let Some(vc) = verify_cache {
             let c_src = emit_verify_c_source(func, ir_module, &const_fns);
-            let key = VerifyCache::cache_key(&c_src, unwind);
+            let key =
+                VerifyCache::cache_key(&c_src, unwind, config.solver_str(), config.encoding_str());
 
             if let Some(cached) = vc.lookup(&key) {
                 match cached {
@@ -5372,9 +5480,9 @@ fn update_contract_statuses(
                         continue;
                     }
                 };
-                let res = run_esbmc_with_unwind(&esbmc, &c_src, unwind, &func.name);
+                let res = run_esbmc_with_unwind(&esbmc, &c_src, unwind, &func.name, config);
                 match &res {
-                    VerificationResult::Proven => {
+                    VerificationResult::Proven | VerificationResult::ProvenIr => {
                         vc.store(&key, &CachedVerifyResult::Proven);
                     }
                     VerificationResult::Failed(ce) => {
@@ -5405,6 +5513,9 @@ fn update_contract_statuses(
                     VerificationResult::Proven => {
                         entry.status = "proven".to_string();
                     }
+                    VerificationResult::ProvenIr => {
+                        entry.status = "proven-ir".to_string();
+                    }
                     VerificationResult::Failed(ce) => {
                         if ce.vow_id == Some(entry.vow_id) {
                             entry.status = "failed".to_string();
@@ -5424,7 +5535,13 @@ fn update_contract_statuses(
     }
 }
 
-fn run_contracts_command(source: &Path, verify: bool, no_cache: bool, unwind: u32) {
+fn run_contracts_command(
+    source: &Path,
+    verify: bool,
+    no_cache: bool,
+    unwind: u32,
+    config: &SolverConfig,
+) {
     let frontend = match compile_frontend(source) {
         Ok(f) => f,
         Err(output) => {
@@ -5470,6 +5587,7 @@ fn run_contracts_command(source: &Path, verify: bool, no_cache: bool, unwind: u3
             &frontend.ir_module,
             verify_cache.as_ref(),
             unwind,
+            config,
         );
     }
 
@@ -5513,6 +5631,7 @@ fn main() {
                 TraceArg::Calls => TraceMode::Calls,
                 TraceArg::Full => TraceMode::Full,
             };
+            let config = make_solver_config(b.solver, b.encoding, b.timeout);
             run_build_command(
                 &source,
                 b.output.as_deref(),
@@ -5522,6 +5641,7 @@ fn main() {
                 trace,
                 b.no_cache,
                 b.unwind,
+                &config,
             );
         }
         Some(Command::Verify(v)) => {
@@ -5540,7 +5660,8 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            run_verify_command(&source, v.no_cache, v.unwind);
+            let config = make_solver_config(v.solver, v.encoding, v.timeout);
+            run_verify_command(&source, v.no_cache, v.unwind, &config);
         }
         Some(Command::Test(t)) => {
             if t.help {
@@ -5609,6 +5730,7 @@ fn main() {
                 c.verify,
                 c.no_cache,
                 c.unwind.unwrap_or(DEFAULT_UNWIND),
+                &SolverConfig::default_config(),
             );
         }
         Some(Command::Skill(s)) => {
@@ -5659,6 +5781,7 @@ fn main() {
                 TraceArg::Full => TraceMode::Full,
             };
 
+            let config = make_solver_config(args.solver, args.encoding, args.timeout);
             run_build_command(
                 &source,
                 args.output.as_deref(),
@@ -5668,6 +5791,7 @@ fn main() {
                 trace,
                 args.no_cache,
                 args.unwind,
+                &config,
             );
         }
     }

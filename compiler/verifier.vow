@@ -251,7 +251,20 @@ fn save_esbmc_debug(c_source: String, tmp_path: String, unwind: String, func_nam
     fs_write(cmd_path, cmd);
 }
 
-fn run_esbmc(c_source: String, unwind: String, tmp_path: String, func_name: String) -> i64 [io] {
+fn append_solver_args(args: Vec<String>, solver: String, encoding: String) {
+    if solver.len() > 0 {
+        if solver != String::from("boolector") {
+            args.push(str2(String::from("--"), solver));
+        }
+    }
+    if encoding.len() > 0 {
+        if encoding != String::from("bv") {
+            args.push(str2(String::from("--"), encoding));
+        }
+    }
+}
+
+fn run_esbmc(c_source: String, unwind: String, tmp_path: String, func_name: String, solver: String, encoding: String) -> i64 [io] {
     fs_write(tmp_path, c_source);
     save_esbmc_debug(c_source, tmp_path, unwind, func_name, false);
     let esbmc_args: Vec<String> = Vec::new();
@@ -261,11 +274,12 @@ fn run_esbmc(c_source: String, unwind: String, tmp_path: String, func_name: Stri
     esbmc_args.push(String::from("--unwind"));
     esbmc_args.push(unwind);
     esbmc_args.push(String::from("--64"));
+    append_solver_args(esbmc_args, solver, encoding);
     let exit_code: i64 = process_run(esbmc_path(), esbmc_args);
     exit_code
 }
 
-fn start_esbmc(c_source: String, unwind: String, tmp_path: String, func_name: String) -> i64 [io] {
+fn start_esbmc(c_source: String, unwind: String, tmp_path: String, func_name: String, solver: String, encoding: String) -> i64 [io] {
     fs_write(tmp_path, c_source);
     save_esbmc_debug(c_source, tmp_path, unwind, func_name, false);
     let esbmc_args: Vec<String> = Vec::new();
@@ -275,6 +289,7 @@ fn start_esbmc(c_source: String, unwind: String, tmp_path: String, func_name: St
     esbmc_args.push(String::from("--unwind"));
     esbmc_args.push(unwind);
     esbmc_args.push(String::from("--64"));
+    append_solver_args(esbmc_args, solver, encoding);
     let handle: i64 = process_start(esbmc_path(), esbmc_args);
     handle
 }
@@ -540,7 +555,7 @@ fn verify_cache_store(key: String, status: i64) [io] {
     fs_write(path, content);
 }
 
-fn verify_function_full(f: IrFunction, m: IrModule, unwind: String, use_cache: bool) -> VerifyResult [io] {
+fn verify_function_full(f: IrFunction, m: IrModule, unwind: String, use_cache: bool, solver: String, encoding: String) -> VerifyResult [io] {
     let vows: Vec<IrVowEntry> = f.vows;
     if vows.len() == 0 {
         return VerifyResult {
@@ -569,7 +584,7 @@ fn verify_function_full(f: IrFunction, m: IrModule, unwind: String, use_cache: b
         }
     }
     let fn_name: String = f.name;
-    let exit_code: i64 = run_esbmc(c_source, unwind, String::from("/tmp/__vow_verify.c"), fn_name);
+    let exit_code: i64 = run_esbmc(c_source, unwind, String::from("/tmp/__vow_verify.c"), fn_name, solver, encoding);
     if exit_code == -1 {
         return VerifyResult {
             status: VERIFY_NOT_FOUND(),
@@ -622,7 +637,7 @@ fn verify_function_full(f: IrFunction, m: IrModule, unwind: String, use_cache: b
     }
 }
 
-fn verify_start(f: IrFunction, m: IrModule, unwind: String, idx: i64, use_cache: bool) -> i64 [io] {
+fn verify_start(f: IrFunction, m: IrModule, unwind: String, idx: i64, use_cache: bool, solver: String, encoding: String) -> i64 [io] {
     let vows: Vec<IrVowEntry> = f.vows;
     if vows.len() == 0 {
         return -1;
@@ -640,7 +655,7 @@ fn verify_start(f: IrFunction, m: IrModule, unwind: String, idx: i64, use_cache:
     tmp_path.push_str(i64_to_str(idx));
     tmp_path.push_str(String::from(".c"));
     let fn_name: String = f.name;
-    let handle: i64 = start_esbmc(c_source, unwind, tmp_path, fn_name);
+    let handle: i64 = start_esbmc(c_source, unwind, tmp_path, fn_name, solver, encoding);
     handle
 }
 
