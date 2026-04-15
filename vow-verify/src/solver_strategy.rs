@@ -196,6 +196,8 @@ pub fn classify_function(func: &Function) -> SolverConfig {
 
 /// Run ESBMC with fallback: if BV times out in auto mode, retry with --ir --z3.
 /// Returns the result and the config that produced it.
+/// Not yet wired into the main verification loop — reserved for Phase D integration.
+#[allow(dead_code)]
 pub fn run_with_fallback(
     esbmc: &Path,
     c_src: &str,
@@ -223,11 +225,9 @@ pub fn run_with_fallback(
 
     match result {
         VerificationResult::Timeout => {
-            // Can only fallback to IR with Z3
-            let can_ir = matches!(
-                bv_config.solver,
-                Solver::Z3 | Solver::Boolector | Solver::Auto
-            );
+            // IR encoding only works with Z3. If the resolved BV solver was
+            // Boolector or Z3, we can switch to Z3+IR. Bitwuzla cannot do IR.
+            let can_ir = !matches!(bv_config.solver, Solver::Bitwuzla);
             if !can_ir {
                 return (VerificationResult::Timeout, bv_config);
             }

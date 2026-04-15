@@ -252,15 +252,11 @@ fn save_esbmc_debug(c_source: String, tmp_path: String, unwind: String, func_nam
 }
 
 fn append_solver_args(args: Vec<String>, solver: String, encoding: String) {
-    if solver.len() > 0 {
-        if solver != String::from("boolector") {
-            args.push(str2(String::from("--"), solver));
-        }
+    if solver.len() > 0 && solver != String::from("boolector") && solver != String::from("auto") {
+        args.push(str2(String::from("--"), solver));
     }
-    if encoding.len() > 0 {
-        if encoding != String::from("bv") {
-            args.push(str2(String::from("--"), encoding));
-        }
+    if encoding.len() > 0 && encoding != String::from("bv") && encoding != String::from("auto") {
+        args.push(str2(String::from("--"), encoding));
     }
 }
 

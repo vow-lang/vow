@@ -236,6 +236,12 @@ struct ContractsArgs {
     no_cache: bool,
     #[arg(long)]
     unwind: Option<u32>,
+    #[arg(long, value_enum, default_value = "auto")]
+    solver: SolverArg,
+    #[arg(long, value_enum, default_value = "auto")]
+    encoding: EncodingArg,
+    #[arg(long)]
+    timeout: Option<u32>,
     #[arg(long)]
     help: bool,
     #[arg(long)]
@@ -4614,8 +4620,9 @@ fn run_verification_sync(
             continue;
         }
 
-        // Resolve Auto solver via heuristic (Phase B)
-        let func_config = if config.solver == Solver::Auto {
+        // Resolve Auto solver via heuristic (Phase B).
+        // Skip heuristic when encoding is Ir — that forces Z3 via resolve().
+        let func_config = if config.solver == Solver::Auto && config.encoding != Encoding::Ir {
             let heuristic = vow_verify::classify_function(func);
             SolverConfig {
                 solver: heuristic.solver,
@@ -5859,12 +5866,13 @@ fn main() {
                     std::process::exit(1);
                 }
             };
+            let config = make_solver_config(c.solver, c.encoding, c.timeout);
             run_contracts_command(
                 &source,
                 c.verify,
                 c.no_cache,
                 c.unwind.unwrap_or(DEFAULT_UNWIND),
-                &SolverConfig::default_config(),
+                &config,
             );
         }
         Some(Command::Skill(s)) => {

@@ -279,8 +279,15 @@ mod tests {
 
     #[test]
     fn cache_key_includes_unwind() {
-        let k1 = VerifyCache::cache_key("int f() { return 0; }", 10);
-        let k2 = VerifyCache::cache_key("int f() { return 0; }", 20);
+        let k1 = VerifyCache::cache_key("int f() { return 0; }", 10, "boolector", "bv");
+        let k2 = VerifyCache::cache_key("int f() { return 0; }", 20, "boolector", "bv");
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn cache_key_includes_solver_encoding() {
+        let k1 = VerifyCache::cache_key("int f() { return 0; }", 10, "boolector", "bv");
+        let k2 = VerifyCache::cache_key("int f() { return 0; }", 10, "z3", "ir");
         assert_ne!(k1, k2);
     }
 }
