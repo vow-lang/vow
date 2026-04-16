@@ -308,9 +308,6 @@ fn verify_function_inner(
     run_esbmc_k_induction(&esbmc, &c_src, &func.name)
 }
 
-/// Default timeout for a single ESBMC invocation (5 minutes).
-const ESBMC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
-
 pub fn run_esbmc_with_unwind(
     esbmc: &std::path::Path,
     c_src: &str,
@@ -375,7 +372,8 @@ pub fn run_esbmc_with_max_k_step(
         .process_group(0);
 
     // SAFETY: pre_exec runs between fork() and exec() in the child.
-    // All operations inside must be async-signal-safe (no heap allocation).
+    // The error paths use last_os_error()/from_raw_os_error() which may
+    // allocate, but this only happens on failure just before the child aborts.
     #[cfg(target_os = "linux")]
     let parent_pid = std::process::id();
     unsafe {
@@ -420,38 +418,40 @@ pub fn run_esbmc_with_max_k_step(
         buf
     });
 
-    // Use the configured timeout if present, otherwise fall back to ESBMC_TIMEOUT.
-    let timeout = config
-        .timeout_secs
-        .map(|s| std::time::Duration::from_secs(s as u64))
-        .unwrap_or(ESBMC_TIMEOUT);
-    let deadline = std::time::Instant::now() + timeout;
-    let timed_out = loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break false,
-            Ok(None) => {
-                if std::time::Instant::now() >= deadline {
-                    kill_process_group(&mut child);
-                    let _ = child.wait();
-                    break true;
+    // If a timeout is configured, poll with deadline; otherwise block on wait().
+    // PR_SET_PDEATHSIG handles orphan cleanup in both cases.
+    if let Some(timeout_secs) = config.timeout_secs {
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs as u64);
+        let timed_out = loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break false,
+                Ok(None) => {
+                    if std::time::Instant::now() >= deadline {
+                        kill_process_group(&mut child);
+                        let _ = child.wait();
+                        break true;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
                 }
-                std::thread::sleep(std::time::Duration::from_millis(50));
+                Err(e) => {
+                    kill_process_group(&mut child);
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = stdout_thread.join();
+                    let _ = stderr_thread.join();
+                    return VerificationResult::ToolError(format!("wait error: {e}"));
+                }
             }
-            Err(e) => {
-                kill_process_group(&mut child);
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = stdout_thread.join();
-                let _ = stderr_thread.join();
-                return VerificationResult::ToolError(format!("wait error: {e}"));
-            }
+        };
+        if timed_out {
+            let _ = stdout_thread.join();
+            let _ = stderr_thread.join();
+            return VerificationResult::Timeout;
         }
-    };
-
-    if timed_out {
-        let _ = stdout_thread.join();
-        let _ = stderr_thread.join();
-        return VerificationResult::Timeout;
+    } else {
+        // No timeout: block until ESBMC finishes.
+        let _ = child.wait();
     }
 
     let stdout = stdout_thread.join().unwrap_or_default();
