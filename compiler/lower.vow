@@ -1803,11 +1803,14 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 ctx.warnings.push(w);
             }
             let fidx: i64 = lctx_struct_field_index(ctx, recv_tag_str, field_name);
-            lctx_mark_escaped(ctx, val_id);
-            let fs_args: Vec<i64> = Vec::new();
-            fs_args.push(recv_id);
-            fs_args.push(val_id);
-            return lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, IDATA_FIELD(), fidx, 0, String::from(""));
+            if fidx != -1 {
+                lctx_mark_escaped(ctx, val_id);
+                let fs_args: Vec<i64> = Vec::new();
+                fs_args.push(recv_id);
+                fs_args.push(val_id);
+                return lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, IDATA_FIELD(), fidx, 0, String::from(""));
+            }
+            return lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), Vec::new(), IDATA_CONST_I64(), 0, 0, String::from(""));
         }
         if lhs_tag == EXPR_INDEX() {
             let recv_eid: i64 = expr_a(a, lhs_eid);
@@ -1846,6 +1849,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             ctx.warnings.push(w);
         }
         let fidx: i64 = lctx_struct_field_index(ctx, recv_tag_str, field_name);
+        if fidx == -1 {
+            return lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), Vec::new(), IDATA_CONST_I64(), 0, 0, String::from(""));
+        }
         let fg_args: Vec<i64> = Vec::new();
         fg_args.push(recv_id);
         let result: i64 = lctx_emit(ctx, IOP_FIELD_GET(), ITY_I64(), fg_args, IDATA_FIELD(), fidx, 0, String::from(""));
@@ -1894,11 +1900,13 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let fname: String = arena_str(a, fname_sid);
             let fidx: i64 = lctx_struct_field_index(ctx, struct_name, fname);
             let val_id: i64 = lower_expr(ctx, fval_eid);
-            lctx_mark_escaped(ctx, val_id);
-            let fs_args: Vec<i64> = Vec::new();
-            fs_args.push(ptr_id);
-            fs_args.push(val_id);
-            lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, IDATA_FIELD(), fidx, 0, String::from(""));
+            if fidx != -1 {
+                lctx_mark_escaped(ctx, val_id);
+                let fs_args: Vec<i64> = Vec::new();
+                fs_args.push(ptr_id);
+                fs_args.push(val_id);
+                lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, IDATA_FIELD(), fidx, 0, String::from(""));
+            }
             fi = fi + 1;
         }
         return ptr_id;

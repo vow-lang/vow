@@ -1133,14 +1133,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         }
                         FIELD_IDX_SENTINEL
                     } as u32;
-                    ctx.mark_escaped(new_val);
-                    ctx.emit(
-                        Opcode::FieldSet,
-                        Ty::Unit,
-                        vec![ptr_id, new_val],
-                        InstData::FieldIndex(field_idx),
-                        span,
-                    );
+                    if field_idx != FIELD_IDX_SENTINEL as u32 {
+                        ctx.mark_escaped(new_val);
+                        ctx.emit(
+                            Opcode::FieldSet,
+                            Ty::Unit,
+                            vec![ptr_id, new_val],
+                            InstData::FieldIndex(field_idx),
+                            span,
+                        );
+                    }
                 }
                 ExprKind::Index { base, index } => {
                     let vec_ptr = lower_expr(ctx, base);
@@ -1759,27 +1761,37 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 }
                 FIELD_IDX_SENTINEL
             } as u32;
-            let result_id = ctx.emit(
-                Opcode::FieldGet,
-                Ty::I64,
-                vec![ptr_id],
-                InstData::FieldIndex(field_idx),
-                span,
-            );
-            if let Some(type_names) = ctx.struct_field_type_names.get(&struct_name)
-                && let Some(type_name) = type_names.get(field_idx as usize)
-                && !type_name.is_empty()
-                && !matches!(type_name.as_str(), "i32" | "i64" | "f32" | "f64" | "bool")
-            {
-                ctx.inst_struct_type.insert(result_id, type_name.clone());
+            if field_idx == FIELD_IDX_SENTINEL as u32 {
+                ctx.emit(
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    vec![],
+                    InstData::ConstI64(0),
+                    span,
+                )
+            } else {
+                let result_id = ctx.emit(
+                    Opcode::FieldGet,
+                    Ty::I64,
+                    vec![ptr_id],
+                    InstData::FieldIndex(field_idx),
+                    span,
+                );
+                if let Some(type_names) = ctx.struct_field_type_names.get(&struct_name)
+                    && let Some(type_name) = type_names.get(field_idx as usize)
+                    && !type_name.is_empty()
+                    && !matches!(type_name.as_str(), "i32" | "i64" | "f32" | "f64" | "bool")
+                {
+                    ctx.inst_struct_type.insert(result_id, type_name.clone());
+                }
+                if let Some(vec_elems) = ctx.struct_field_vec_elems.get(&struct_name)
+                    && let Some(elem_name) = vec_elems.get(field_idx as usize)
+                    && !elem_name.is_empty()
+                {
+                    ctx.inst_vec_elem_type.insert(result_id, elem_name.clone());
+                }
+                result_id
             }
-            if let Some(vec_elems) = ctx.struct_field_vec_elems.get(&struct_name)
-                && let Some(elem_name) = vec_elems.get(field_idx as usize)
-                && !elem_name.is_empty()
-            {
-                ctx.inst_vec_elem_type.insert(result_id, elem_name.clone());
-            }
-            result_id
         }
         ExprKind::StructLiteral { name, fields } => {
             let field_names = if let Some(names) = ctx.struct_field_map.get(name) {
@@ -1822,14 +1834,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     }
                 } as u32;
                 let val_id = lower_expr(ctx, field_expr);
-                ctx.mark_escaped(val_id);
-                ctx.emit(
-                    Opcode::FieldSet,
-                    Ty::Unit,
-                    vec![ptr_id, val_id],
-                    InstData::FieldIndex(idx),
-                    span,
-                );
+                if idx != FIELD_IDX_SENTINEL as u32 {
+                    ctx.mark_escaped(val_id);
+                    ctx.emit(
+                        Opcode::FieldSet,
+                        Ty::Unit,
+                        vec![ptr_id, val_id],
+                        InstData::FieldIndex(idx),
+                        span,
+                    );
+                }
             }
             ptr_id
         }
