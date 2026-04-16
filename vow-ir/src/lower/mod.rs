@@ -163,6 +163,9 @@ pub struct LowerCtx {
     // Per-loop break-value Upsilon collector.  `Some(vec)` for `loop` (collects
     // (source_block, upsilon_id, value_ty)), `None` for `while`.
     loop_break_upsilons: Vec<Option<Vec<(BlockId, InstId, Ty)>>>,
+    // Per-loop exit-block Phi IDs for mutation variables.  Break emits Upsilons
+    // targeting these so the exit block receives updated values.
+    loop_exit_phis: Vec<Vec<(String, InstId)>>,
     // InstId of a Vec allocation → element type name (for struct-in-Vec field access)
     inst_vec_elem_type: HashMap<InstId, String>,
     // struct name → per-field Vec element type name (for FieldGet → Vec propagation)
@@ -237,6 +240,7 @@ impl LowerCtx {
             loop_continue_idx_phi: Vec::new(),
             loop_continue_scope_depth: Vec::new(),
             loop_break_upsilons: Vec::new(),
+            loop_exit_phis: Vec::new(),
             inst_vec_elem_type: HashMap::new(),
             struct_field_vec_elems,
             warnings: Vec::new(),
@@ -1299,6 +1303,34 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             // Lower condition, then branch.
             let cond_id = lower_expr(ctx, condition);
+            // Save the block we're in after condition lowering (may differ from
+            // header_block if the condition created new blocks, e.g. &&/||).
+            let cond_block = ctx.current_block;
+
+            // Pre-emit exit-block Phis for mutation variables so break sites
+            // (and the natural condition-false exit) can supply updated values.
+            let mut exit_phi_ids: Vec<(String, InstId)> = vec![];
+            ctx.switch_to_block(exit_block);
+            for (name, pre_val) in &loop_vars {
+                let ty = ctx.inst_ty(*pre_val);
+                let phi_id = ctx.emit(Opcode::Phi, ty, vec![], InstData::None, span);
+                exit_phi_ids.push((name.clone(), phi_id));
+            }
+            ctx.switch_to_block(cond_block);
+
+            // Upsilons for natural exit (condition false → exit_block):
+            // pass header Phi values into exit-block Phis.
+            for (name, exit_phi) in &exit_phi_ids {
+                let header_phi = phi_ids.iter().find(|(n, _)| n == name).unwrap().1;
+                ctx.emit(
+                    Opcode::Upsilon,
+                    ctx.inst_ty(header_phi),
+                    vec![header_phi],
+                    InstData::PhiTarget(*exit_phi),
+                    span,
+                );
+            }
+
             ctx.emit(
                 Opcode::Branch,
                 Ty::Unit,
@@ -1315,6 +1347,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.loop_exit_blocks.push(exit_block);
             ctx.loop_header_blocks.push(header_block);
             ctx.loop_continue_phis.push(phi_ids.clone());
+            ctx.loop_exit_phis.push(exit_phi_ids.clone());
             ctx.loop_continue_idx_phi.push(None);
             ctx.loop_continue_scope_depth.push(ctx.scope.len());
             ctx.loop_break_upsilons.push(None);
@@ -1325,6 +1358,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.loop_break_upsilons.pop();
             ctx.loop_continue_scope_depth.pop();
             ctx.loop_continue_idx_phi.pop();
+            ctx.loop_exit_phis.pop();
             ctx.loop_continue_phis.pop();
             ctx.loop_header_blocks.pop();
             ctx.loop_exit_blocks.pop();
@@ -1367,12 +1401,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 );
             }
 
-            // Restore scope to Phi values so the exit block sees the loop-exit values.
-            for (name, phi_id) in &phi_ids {
-                ctx.assign(name, *phi_id);
+            // Bind names to exit-block Phis so post-loop code reads correct values.
+            for (name, exit_phi) in &exit_phi_ids {
+                ctx.assign(name, *exit_phi);
             }
 
-            // Exit block.
+            // Exit block (Phis already emitted above).
             ctx.switch_to_block(exit_block);
             ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
         }
@@ -1480,6 +1514,31 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 InstData::None,
                 span,
             );
+
+            // Pre-emit exit-block Phis for mutation variables so break sites
+            // (and the natural condition-false exit) can supply updated values.
+            let mut exit_phi_ids: Vec<(String, InstId)> = vec![];
+            ctx.switch_to_block(exit_block);
+            for (name, pre_val) in &loop_vars {
+                let ty = ctx.inst_ty(*pre_val);
+                let phi_id = ctx.emit(Opcode::Phi, ty, vec![], InstData::None, span);
+                exit_phi_ids.push((name.clone(), phi_id));
+            }
+            ctx.switch_to_block(header_block);
+
+            // Upsilons for natural exit (condition false → exit_block):
+            // pass header Phi values into exit-block Phis.
+            for (name, exit_phi) in &exit_phi_ids {
+                let header_phi = phi_ids.iter().find(|(n, _)| n == name).unwrap().1;
+                ctx.emit(
+                    Opcode::Upsilon,
+                    ctx.inst_ty(header_phi),
+                    vec![header_phi],
+                    InstData::PhiTarget(*exit_phi),
+                    span,
+                );
+            }
+
             ctx.emit(
                 Opcode::Branch,
                 Ty::Unit,
@@ -1516,6 +1575,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.loop_exit_blocks.push(exit_block);
             ctx.loop_header_blocks.push(header_block);
             ctx.loop_continue_phis.push(phi_ids.clone());
+            ctx.loop_exit_phis.push(exit_phi_ids.clone());
             ctx.loop_continue_idx_phi.push(Some(idx_phi));
             ctx.loop_continue_scope_depth.push(for_scope_depth);
             ctx.push_alloc_scope();
@@ -1524,6 +1584,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.loop_alloc_scope_depth.pop();
             ctx.loop_continue_scope_depth.pop();
             ctx.loop_continue_idx_phi.pop();
+            ctx.loop_exit_phis.pop();
             ctx.loop_continue_phis.pop();
             ctx.loop_header_blocks.pop();
             ctx.loop_exit_blocks.pop();
@@ -1589,11 +1650,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 );
             }
 
-            // Restore scope to Phi values for exit
-            for (name, phi_id) in &phi_ids {
-                ctx.assign(name, *phi_id);
+            // Bind names to exit-block Phis so post-loop code reads correct values.
+            for (name, exit_phi) in &exit_phi_ids {
+                ctx.assign(name, *exit_phi);
             }
 
+            // Exit block (Phis already emitted above).
             ctx.switch_to_block(exit_block);
             ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
         }
@@ -1650,9 +1712,21 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 vow::lower_invariant(ctx, lv);
             }
 
+            // Pre-emit exit-block Phis for mutation variables so break sites
+            // can supply updated values via Upsilons.
+            let mut exit_phi_ids: Vec<(String, InstId)> = vec![];
+            ctx.switch_to_block(exit_block);
+            for (name, pre_val) in &loop_vars {
+                let ty = ctx.inst_ty(*pre_val);
+                let phi_id = ctx.emit(Opcode::Phi, ty, vec![], InstData::None, span);
+                exit_phi_ids.push((name.clone(), phi_id));
+            }
+            ctx.switch_to_block(header_block);
+
             ctx.loop_exit_blocks.push(exit_block);
             ctx.loop_header_blocks.push(header_block);
             ctx.loop_continue_phis.push(phi_ids.clone());
+            ctx.loop_exit_phis.push(exit_phi_ids.clone());
             ctx.loop_continue_idx_phi.push(None);
             ctx.loop_continue_scope_depth.push(ctx.scope.len());
             ctx.loop_break_upsilons.push(Some(Vec::new()));
@@ -1663,6 +1737,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             let break_ups = ctx.loop_break_upsilons.pop().unwrap();
             ctx.loop_continue_scope_depth.pop();
             ctx.loop_continue_idx_phi.pop();
+            ctx.loop_exit_phis.pop();
             ctx.loop_continue_phis.pop();
             ctx.loop_header_blocks.pop();
             ctx.loop_exit_blocks.pop();
@@ -1700,8 +1775,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 );
             }
 
-            for (name, phi_id) in &phi_ids {
-                ctx.assign(name, *phi_id);
+            // Bind names to exit-block Phis so post-loop code reads correct values.
+            for (name, exit_phi) in &exit_phi_ids {
+                ctx.assign(name, *exit_phi);
             }
 
             ctx.switch_to_block(exit_block);
@@ -1762,6 +1838,21 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     vec![]
                 };
                 ctx.emit_alloc_frees_to_depth(depth, &live_out, span);
+            }
+
+            // Emit Upsilons for loop mutation variables targeting the
+            // exit-block Phis so the exit block receives updated values.
+            let exit_phis = ctx.loop_exit_phis.last().cloned().unwrap_or_default();
+            for (name, exit_phi) in &exit_phis {
+                if let Some(cur_val) = ctx.lookup(name) {
+                    ctx.emit(
+                        Opcode::Upsilon,
+                        ctx.inst_ty(cur_val),
+                        vec![cur_val],
+                        InstData::PhiTarget(*exit_phi),
+                        span,
+                    );
+                }
             }
 
             ctx.emit(

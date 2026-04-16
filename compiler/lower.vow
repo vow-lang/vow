@@ -38,6 +38,8 @@ struct LowerCtx {
     loop_break_up_blocks: Vec<i64>,
     loop_break_up_tys: Vec<i64>,
     loop_break_counts: Vec<i64>,
+    loop_exit_phi_names: Vec<Vec<String>>,
+    loop_exit_phi_ids: Vec<Vec<i64>>,
     vec_elem_inst_ids: Vec<i64>,
     vec_elem_names: Vec<String>,
     warnings: Vec<String>,
@@ -95,6 +97,8 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         loop_break_up_blocks: Vec::new(),
         loop_break_up_tys: Vec::new(),
         loop_break_counts: Vec::new(),
+        loop_exit_phi_names: Vec::new(),
+        loop_exit_phi_ids: Vec::new(),
         vec_elem_inst_ids: Vec::new(),
         vec_elem_names: Vec::new(),
         warnings: Vec::new(),
@@ -1466,6 +1470,31 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
 
         let cond_id: i64 = lower_expr(ctx, cond_eid);
+        let cond_block: i64 = ctx.current_block;
+
+        // Pre-emit exit-block Phis for mutation variables.
+        let exit_phi_ids: Vec<i64> = Vec::new();
+        let exit_phi_names: Vec<String> = Vec::new();
+        lctx_switch_to_block(ctx, exit_block);
+        let mut epi: i64 = 0;
+        while epi < nassigned {
+            let ep_args: Vec<i64> = Vec::new();
+            let ep_id: i64 = lctx_emit(ctx, IOP_PHI(), ITY_I64(), ep_args, IDATA_NONE(), 0, 0, String::from(""));
+            exit_phi_ids.push(ep_id);
+            exit_phi_names.push(assigned[epi]);
+            epi = epi + 1;
+        }
+        lctx_switch_to_block(ctx, cond_block);
+
+        // Upsilons for natural exit (condition false): header Phi values → exit Phis.
+        let mut eui: i64 = 0;
+        while eui < nassigned {
+            let up_args: Vec<i64> = Vec::new();
+            up_args.push(phi_ids[eui]);
+            lctx_emit(ctx, IOP_UPSILON(), ITY_I64(), up_args, IDATA_PHI_TARGET(), exit_phi_ids[eui], 0, String::from(""));
+            eui = eui + 1;
+        }
+
         let br_args: Vec<i64> = Vec::new();
         br_args.push(cond_id);
         lctx_emit(ctx, IOP_BRANCH(), ITY_UNIT(), br_args, IDATA_BRANCH_TARGETS(), body_block, exit_block, String::from(""));
@@ -1489,6 +1518,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
         ctx.loop_continue_phi_names.push(cpn);
         ctx.loop_continue_phi_ids.push(cpi);
+        ctx.loop_exit_phi_names.push(exit_phi_names);
+        ctx.loop_exit_phi_ids.push(exit_phi_ids);
         ctx.loop_continue_idx_phi.push(-1);
         ctx.loop_continue_scope_depth.push(ctx.scope_vars.len());
         ctx.loop_is_loop.push(0);
@@ -1497,10 +1528,16 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_alloc_scope_depths.push(ctx.alloc_ids.len());
         lower_block(ctx, body_bid);
         ctx.loop_alloc_scope_depths.pop();
+        // Save exit phi info before popping.
+        let epn_idx: i64 = ctx.loop_exit_phi_names.len() - 1;
+        let w_exit_phi_names: Vec<String> = ctx.loop_exit_phi_names[epn_idx];
+        let w_exit_phi_ids: Vec<i64> = ctx.loop_exit_phi_ids[epn_idx];
         ctx.loop_break_counts.pop();
         ctx.loop_is_loop.pop();
         ctx.loop_continue_scope_depth.pop();
         ctx.loop_continue_idx_phi.pop();
+        ctx.loop_exit_phi_ids.pop();
+        ctx.loop_exit_phi_names.pop();
         ctx.loop_continue_phi_ids.pop();
         ctx.loop_continue_phi_names.pop();
         ctx.loop_header_blocks.pop();
@@ -1546,10 +1583,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), header_block, 0, String::from(""));
         }
 
+        // Bind names to exit-block Phis so post-loop code reads correct values.
+        let w_nexit: i64 = w_exit_phi_names.len();
         let mut ai4: i64 = 0;
-        while ai4 < nassigned {
-            let vname: String = assigned[ai4];
-            lctx_assign(ctx, vname, phi_ids[ai4]);
+        while ai4 < w_nexit {
+            let vname: String = w_exit_phi_names[ai4];
+            lctx_assign(ctx, vname, w_exit_phi_ids[ai4]);
             ai4 = ai4 + 1;
         }
 
@@ -1610,6 +1649,20 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             bpi = bpi + 1;
         }
 
+        // Pre-emit exit-block Phis for mutation variables.
+        let l_exit_phi_ids: Vec<i64> = Vec::new();
+        let l_exit_phi_names: Vec<String> = Vec::new();
+        lctx_switch_to_block(ctx, exit_block);
+        let mut lepi: i64 = 0;
+        while lepi < nassigned {
+            let lep_args: Vec<i64> = Vec::new();
+            let lep_id: i64 = lctx_emit(ctx, IOP_PHI(), ITY_I64(), lep_args, IDATA_NONE(), 0, 0, String::from(""));
+            l_exit_phi_ids.push(lep_id);
+            l_exit_phi_names.push(assigned[lepi]);
+            lepi = lepi + 1;
+        }
+        lctx_switch_to_block(ctx, header_block);
+
         ctx.loop_exit_blocks.push(exit_block);
         ctx.loop_header_blocks.push(header_block);
         let lcpn: Vec<String> = Vec::new();
@@ -1622,6 +1675,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
         ctx.loop_continue_phi_names.push(lcpn);
         ctx.loop_continue_phi_ids.push(lcpi);
+        ctx.loop_exit_phi_names.push(l_exit_phi_names);
+        ctx.loop_exit_phi_ids.push(l_exit_phi_ids);
         ctx.loop_continue_idx_phi.push(-1);
         ctx.loop_continue_scope_depth.push(ctx.scope_vars.len());
         ctx.loop_is_loop.push(1);
@@ -1633,10 +1688,16 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_alloc_scope_depths.pop();
         let break_count_idx: i64 = ctx.loop_break_counts.len() - 1;
         let break_count: i64 = ctx.loop_break_counts[break_count_idx];
+        // Save exit phi info before popping.
+        let lepn_idx: i64 = ctx.loop_exit_phi_names.len() - 1;
+        let l_saved_exit_names: Vec<String> = ctx.loop_exit_phi_names[lepn_idx];
+        let l_saved_exit_ids: Vec<i64> = ctx.loop_exit_phi_ids[lepn_idx];
         ctx.loop_break_counts.pop();
         ctx.loop_is_loop.pop();
         ctx.loop_continue_scope_depth.pop();
         ctx.loop_continue_idx_phi.pop();
+        ctx.loop_exit_phi_ids.pop();
+        ctx.loop_exit_phi_names.pop();
         ctx.loop_continue_phi_ids.pop();
         ctx.loop_continue_phi_names.pop();
         ctx.loop_header_blocks.pop();
@@ -1682,10 +1743,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args2, IDATA_JUMP_TARGET(), header_block, 0, String::from(""));
         }
 
+        // Bind names to exit-block Phis so post-loop code reads correct values.
+        let l_nexit: i64 = l_saved_exit_names.len();
         let mut ai4: i64 = 0;
-        while ai4 < nassigned {
-            let vname: String = assigned[ai4];
-            lctx_assign(ctx, vname, phi_ids[ai4]);
+        while ai4 < l_nexit {
+            let vname: String = l_saved_exit_names[ai4];
+            lctx_assign(ctx, vname, l_saved_exit_ids[ai4]);
             ai4 = ai4 + 1;
         }
 
@@ -1784,6 +1847,30 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         cond_args.push(idx_phi);
         cond_args.push(len_id);
         let cond_id: i64 = lctx_emit(ctx, IOP_LT_I64(), ITY_BOOL(), cond_args, IDATA_NONE(), 0, 0, String::from(""));
+
+        // Pre-emit exit-block Phis for mutation variables.
+        let f_exit_phi_ids: Vec<i64> = Vec::new();
+        let f_exit_phi_names: Vec<String> = Vec::new();
+        lctx_switch_to_block(ctx, exit_block);
+        let mut fepi: i64 = 0;
+        while fepi < nassigned {
+            let fep_args: Vec<i64> = Vec::new();
+            let fep_id: i64 = lctx_emit(ctx, IOP_PHI(), ITY_I64(), fep_args, IDATA_NONE(), 0, 0, String::from(""));
+            f_exit_phi_ids.push(fep_id);
+            f_exit_phi_names.push(assigned[fepi]);
+            fepi = fepi + 1;
+        }
+        lctx_switch_to_block(ctx, header_block);
+
+        // Upsilons for natural exit (condition false): header Phi values → exit Phis.
+        let mut feui: i64 = 0;
+        while feui < nassigned {
+            let up_args: Vec<i64> = Vec::new();
+            up_args.push(phi_ids[feui]);
+            lctx_emit(ctx, IOP_UPSILON(), ITY_I64(), up_args, IDATA_PHI_TARGET(), f_exit_phi_ids[feui], 0, String::from(""));
+            feui = feui + 1;
+        }
+
         let br_args: Vec<i64> = Vec::new();
         br_args.push(cond_id);
         lctx_emit(ctx, IOP_BRANCH(), ITY_UNIT(), br_args, IDATA_BRANCH_TARGETS(), body_block, exit_block, String::from(""));
@@ -1821,6 +1908,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
         ctx.loop_continue_phi_names.push(fcpn);
         ctx.loop_continue_phi_ids.push(fcpi);
+        ctx.loop_exit_phi_names.push(f_exit_phi_names);
+        ctx.loop_exit_phi_ids.push(f_exit_phi_ids);
         ctx.loop_continue_idx_phi.push(idx_phi);
         ctx.loop_continue_scope_depth.push(for_scope_depth);
         ctx.loop_is_loop.push(0);
@@ -1829,10 +1918,16 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_alloc_scope_depths.push(ctx.alloc_ids.len());
         lower_block(ctx, body_bid);
         ctx.loop_alloc_scope_depths.pop();
+        // Save exit phi info before popping.
+        let fepn_idx: i64 = ctx.loop_exit_phi_names.len() - 1;
+        let f_saved_exit_names: Vec<String> = ctx.loop_exit_phi_names[fepn_idx];
+        let f_saved_exit_ids: Vec<i64> = ctx.loop_exit_phi_ids[fepn_idx];
         ctx.loop_break_counts.pop();
         ctx.loop_is_loop.pop();
         ctx.loop_continue_scope_depth.pop();
         ctx.loop_continue_idx_phi.pop();
+        ctx.loop_exit_phi_ids.pop();
+        ctx.loop_exit_phi_names.pop();
         ctx.loop_continue_phi_ids.pop();
         ctx.loop_continue_phi_names.pop();
         ctx.loop_header_blocks.pop();
@@ -1890,13 +1985,16 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), header_block, 0, String::from(""));
         }
 
+        // Bind names to exit-block Phis so post-loop code reads correct values.
+        let f_nexit: i64 = f_saved_exit_names.len();
         let mut ai4: i64 = 0;
-        while ai4 < nassigned {
-            let vname: String = assigned[ai4];
-            lctx_assign(ctx, vname, phi_ids[ai4]);
+        while ai4 < f_nexit {
+            let vname: String = f_saved_exit_names[ai4];
+            lctx_assign(ctx, vname, f_saved_exit_ids[ai4]);
             ai4 = ai4 + 1;
         }
 
+        // Exit block (Phis already emitted above).
         lctx_switch_to_block(ctx, exit_block);
 
         let u_args: Vec<i64> = Vec::new();
@@ -2799,6 +2897,25 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     ctx.loop_break_counts[cnt_idx] = old_cnt + 1;
                 }
             }
+            // Emit Upsilons for exit-block Phis with current mutation values.
+            let nep: i64 = ctx.loop_exit_phi_names.len();
+            if nep > 0 {
+                let ep_names: Vec<String> = ctx.loop_exit_phi_names[nep - 1];
+                let ep_ids: Vec<i64> = ctx.loop_exit_phi_ids[nep - 1];
+                let nep2: i64 = ep_names.len();
+                let mut epi: i64 = 0;
+                while epi < nep2 {
+                    let vname: String = ep_names[epi];
+                    let cur_val: i64 = lctx_lookup(ctx, vname);
+                    if cur_val != -1 {
+                        let up_args: Vec<i64> = Vec::new();
+                        up_args.push(cur_val);
+                        lctx_emit(ctx, IOP_UPSILON(), ITY_I64(), up_args, IDATA_PHI_TARGET(), ep_ids[epi], 0, String::from(""));
+                    }
+                    epi = epi + 1;
+                }
+            }
+
             // Free loop body allocations before jumping to exit.
             // Trace transitive sources of break value through Phi/Upsilon chains.
             let nlasd: i64 = ctx.loop_alloc_scope_depths.len();
