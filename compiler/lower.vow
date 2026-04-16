@@ -1443,6 +1443,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_exit_blocks.pop();
 
         // Free loop-body temporaries before back-edge.
+        // Include transitive sources so Phi/Upsilon aliases aren't freed.
         if !lctx_is_terminated(ctx) {
             let loop_live_out: Vec<i64> = Vec::new();
             let mut li: i64 = 0;
@@ -1450,6 +1451,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let vname: String = assigned[li];
                 let cur: i64 = lctx_lookup(ctx, vname);
                 loop_live_out.push(cur);
+                let sources: Vec<i64> = lctx_collect_return_sources(ctx, cur);
+                let mut si: i64 = 0;
+                while si < sources.len() {
+                    loop_live_out.push(sources[si]);
+                    si = si + 1;
+                }
                 li = li + 1;
             }
             lctx_pop_alloc_scope_frees(ctx, loop_live_out);
@@ -1770,6 +1777,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         lctx_pop_scope(ctx);
 
         // Free loop-body temporaries before back-edge.
+        // Include transitive sources so Phi/Upsilon aliases aren't freed.
         if !lctx_is_terminated(ctx) {
             let loop_live_out: Vec<i64> = Vec::new();
             let mut li: i64 = 0;
@@ -1777,6 +1785,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let vname: String = assigned[li];
                 let cur: i64 = lctx_lookup(ctx, vname);
                 loop_live_out.push(cur);
+                let sources: Vec<i64> = lctx_collect_return_sources(ctx, cur);
+                let mut si: i64 = 0;
+                while si < sources.len() {
+                    loop_live_out.push(sources[si]);
+                    si = si + 1;
+                }
                 li = li + 1;
             }
             lctx_pop_alloc_scope_frees(ctx, loop_live_out);

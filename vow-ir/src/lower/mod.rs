@@ -1316,12 +1316,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.loop_exit_blocks.pop();
 
             // Free loop-body temporaries before back-edge.
+            // Include transitive sources so Phi/Upsilon aliases aren't freed.
             if !ctx.is_terminated() {
-                // Mutation values flow back to header Phis — don't free them.
-                let loop_live_out: Vec<InstId> = phi_ids
-                    .iter()
-                    .filter_map(|(name, _)| ctx.lookup(name))
-                    .collect();
+                let mut loop_live_out: Vec<InstId> = Vec::new();
+                for (name, _) in &phi_ids {
+                    if let Some(val) = ctx.lookup(name) {
+                        for src in ctx.collect_return_sources(val) {
+                            loop_live_out.push(src);
+                        }
+                    }
+                }
                 ctx.pop_alloc_scope_frees(&loop_live_out, span);
             } else {
                 ctx.alloc_scopes.pop();
@@ -1513,11 +1517,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.pop_scope();
 
             // Free loop-body temporaries before back-edge.
+            // Include transitive sources so Phi/Upsilon aliases aren't freed.
             if !ctx.is_terminated() {
-                let loop_live_out: Vec<InstId> = phi_ids
-                    .iter()
-                    .filter_map(|(name, _)| ctx.lookup(name))
-                    .collect();
+                let mut loop_live_out: Vec<InstId> = Vec::new();
+                for (name, _) in &phi_ids {
+                    if let Some(val) = ctx.lookup(name) {
+                        for src in ctx.collect_return_sources(val) {
+                            loop_live_out.push(src);
+                        }
+                    }
+                }
                 ctx.pop_alloc_scope_frees(&loop_live_out, span);
             } else {
                 ctx.alloc_scopes.pop();
