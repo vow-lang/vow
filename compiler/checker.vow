@@ -952,6 +952,9 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
     }
 
     if tag == EXPR_BREAK() {
+        if e.loop_kind_stack.len() == 0 {
+            env_emit_error(e, String::from("`break` outside of a loop"), expr_span(a, eid));
+        }
         let val_eid: i64 = expr_a(a, eid);
         let mut val_tid: i64 = CTY_UNIT();
         if val_eid != -1 {
@@ -975,6 +978,9 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
     }
 
     if tag == EXPR_CONTINUE() {
+        if e.loop_kind_stack.len() == 0 {
+            env_emit_error(e, String::from("`continue` outside of a loop"), expr_span(a, eid));
+        }
         return CTY_NEVER();
     }
 

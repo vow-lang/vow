@@ -1,0 +1,7 @@
+// TEST: stderr "outside of a loop"
+module ContinueOutsideLoop
+
+fn main() -> i32 {
+    continue;
+    0
+}
