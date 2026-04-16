@@ -1,0 +1,226 @@
+module SatTypes
+
+const STATUS_SAT: i64 = 10;
+const STATUS_UNSAT: i64 = 20;
+const STATUS_ERROR: i64 = 1;
+
+const PARSE_OK: i64 = 1;
+const PARSE_ERR: i64 = 0;
+
+const VAL_FALSE: i64 = -1;
+const VAL_UNASSIGNED: i64 = 0;
+const VAL_TRUE: i64 = 1;
+
+struct Formula {
+    num_vars: i64,
+    input_clause_count: i64,
+    lits: Vec<i64>,
+    clause_start: Vec<i64>,
+    clause_len: Vec<i64>,
+}
+
+struct ParseResult {
+    ok: i64,
+    message: String,
+    formula: Formula,
+}
+
+struct SolveResult {
+    status: i64,
+    num_vars: i64,
+    assignment: Vec<i64>,
+    original_clauses: i64,
+    learnt_clauses: i64,
+    decisions: i64,
+    propagations: i64,
+    conflicts: i64,
+    restarts: i64,
+}
+
+fn str2(a: String, b: String) -> String {
+    let out: String = String::from("");
+    out.push_str(a);
+    out.push_str(b);
+    out
+}
+
+fn str3(a: String, b: String, c: String) -> String {
+    let out: String = String::from("");
+    out.push_str(a);
+    out.push_str(b);
+    out.push_str(c);
+    out
+}
+
+fn str4(a: String, b: String, c: String, d: String) -> String {
+    let out: String = String::from("");
+    out.push_str(a);
+    out.push_str(b);
+    out.push_str(c);
+    out.push_str(d);
+    out
+}
+
+fn abs_i64(x: i64) -> i64 {
+    if x < 0 {
+        -x
+    } else {
+        x
+    }
+}
+
+fn max_i64(a: i64, b: i64) -> i64 {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}
+
+fn min_i64(a: i64, b: i64) -> i64 {
+    if a < b {
+        a
+    } else {
+        b
+    }
+}
+
+fn is_space_byte(b: i64) -> bool {
+    b == 32 || b == 9 || b == 10 || b == 13
+}
+
+fn is_inline_space_byte(b: i64) -> bool {
+    b == 32 || b == 9 || b == 13
+}
+
+fn is_digit_byte(b: i64) -> bool {
+    b >= 48 && b <= 57
+}
+
+fn lit_var(lit: i64) -> i64 vow {
+    requires: lit != 0,
+    ensures: result > 0
+} {
+    if lit < 0 {
+        -lit
+    } else {
+        lit
+    }
+}
+
+fn lit_bucket(lit: i64) -> i64 vow {
+    requires: lit != 0,
+    ensures: result >= 0
+} {
+    if lit > 0 {
+        (lit - 1) * 2
+    } else {
+        ((-lit) - 1) * 2 + 1
+    }
+}
+
+fn lit_value(assigns: Vec<i64>, lit: i64) -> i64 vow {
+    requires: lit != 0,
+    requires: lit_var(lit) >= 0,
+    requires: lit_var(lit) < assigns.len(),
+    ensures: result >= -1,
+    ensures: result <= 1
+} {
+    let v: i64 = assigns[lit_var(lit)];
+    if lit < 0 {
+        -v
+    } else {
+        v
+    }
+}
+
+fn make_zero_vec(n: i64) -> Vec<i64> vow {
+    requires: n >= 0,
+    ensures: result.len() == n
+} {
+    let out: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n,
+        invariant: out.len() == i
+    } {
+        out.push(0);
+        i = i + 1;
+    }
+    out
+}
+
+fn make_i64_vec(n: i64, val: i64) -> Vec<i64> vow {
+    requires: n >= 0,
+    ensures: result.len() == n
+} {
+    let out: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n,
+        invariant: out.len() == i
+    } {
+        out.push(val);
+        i = i + 1;
+    }
+    out
+}
+
+fn make_empty_buckets(n: i64) -> Vec<Vec<i64>> vow {
+    requires: n >= 0,
+    ensures: result.len() == n
+} {
+    let out: Vec<Vec<i64>> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n,
+        invariant: out.len() == i
+    } {
+        out.push(Vec::new());
+        i = i + 1;
+    }
+    out
+}
+
+fn empty_formula() -> Formula {
+    Formula {
+        num_vars: 0,
+        input_clause_count: 0,
+        lits: Vec::new(),
+        clause_start: Vec::new(),
+        clause_len: Vec::new(),
+    }
+}
+
+fn ok_parse(formula: Formula) -> ParseResult {
+    ParseResult {
+        ok: PARSE_OK,
+        message: String::from(""),
+        formula: formula,
+    }
+}
+
+fn err_parse(msg: String) -> ParseResult {
+    ParseResult {
+        ok: PARSE_ERR,
+        message: msg,
+        formula: empty_formula(),
+    }
+}
+
+fn empty_solve_result(status: i64) -> SolveResult {
+    SolveResult {
+        status: status,
+        num_vars: 0,
+        assignment: Vec::new(),
+        original_clauses: 0,
+        learnt_clauses: 0,
+        decisions: 0,
+        propagations: 0,
+        conflicts: 0,
+        restarts: 0,
+    }
+}

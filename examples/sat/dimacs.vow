@@ -1,0 +1,254 @@
+module Dimacs
+use types
+
+struct IntToken {
+    ok: i64,
+    value: i64,
+    next: i64,
+    message: String,
+}
+
+fn skip_inline_ws(src: String, start: i64, end: i64) -> i64 {
+    let mut i: i64 = start;
+    while i < end {
+        if !is_inline_space_byte(src.byte_at(i)) {
+            return i;
+        }
+        i = i + 1;
+    }
+    i
+}
+
+fn make_ok_token(value: i64, next: i64) -> IntToken {
+    IntToken {
+        ok: 1,
+        value: value,
+        next: next,
+        message: String::from(""),
+    }
+}
+
+fn make_err_token(msg: String) -> IntToken {
+    IntToken {
+        ok: 0,
+        value: 0,
+        next: 0,
+        message: msg,
+    }
+}
+
+fn line_error(line_no: i64, msg: String) -> String {
+    str4(String::from("line "), i64_to_string(line_no), String::from(": "), msg)
+}
+
+fn parse_int_token(src: String, start: i64, end: i64, line_no: i64) -> IntToken {
+    let i0: i64 = skip_inline_ws(src, start, end);
+    if i0 >= end {
+        return make_err_token(line_error(line_no, String::from("expected integer token")));
+    }
+
+    let mut sign: i64 = 1;
+    let mut i: i64 = i0;
+    if src.byte_at(i) == 45 {
+        sign = -1;
+        i = i + 1;
+    }
+
+    if i >= end || !is_digit_byte(src.byte_at(i)) {
+        return make_err_token(line_error(line_no, String::from("invalid integer token")));
+    }
+
+    let mut value: i64 = 0;
+    while i < end && is_digit_byte(src.byte_at(i)) {
+        value = value * 10 + (src.byte_at(i) - 48);
+        i = i + 1;
+    }
+
+    if i < end && !is_inline_space_byte(src.byte_at(i)) {
+        return make_err_token(line_error(line_no, String::from("invalid trailing characters in integer token")));
+    }
+
+    make_ok_token(sign * value, i)
+}
+
+fn append_formula_clause(formula: Formula, clause: Vec<i64>) {
+    let starts: Vec<i64> = formula.clause_start;
+    let lens: Vec<i64> = formula.clause_len;
+    let lits: Vec<i64> = formula.lits;
+    starts.push(lits.len());
+    lens.push(clause.len());
+
+    let mut i: i64 = 0;
+    let n: i64 = clause.len();
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
+        lits.push(clause[i]);
+        i = i + 1;
+    }
+}
+
+fn add_lit_to_clause(clause: Vec<i64>, lit: i64) -> i64 {
+    let mut i: i64 = 0;
+    let n: i64 = clause.len();
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
+        let cur: i64 = clause[i];
+        if cur == lit {
+            return 0;
+        }
+        if cur == -lit {
+            return 2;
+        }
+        i = i + 1;
+    }
+    clause.push(lit);
+    1
+}
+
+fn parse_header(src: String, start: i64, end: i64, line_no: i64) -> IntToken {
+    let mut i: i64 = start + 1;
+    i = skip_inline_ws(src, i, end);
+    if i + 2 >= end {
+        return make_err_token(line_error(line_no, String::from("expected 'p cnf <vars> <clauses>' header")));
+    }
+    if src.byte_at(i) != 99 || src.byte_at(i + 1) != 110 || src.byte_at(i + 2) != 102 {
+        return make_err_token(line_error(line_no, String::from("expected 'cnf' after 'p'")));
+    }
+    i = i + 3;
+    if i < end && !is_inline_space_byte(src.byte_at(i)) {
+        return make_err_token(line_error(line_no, String::from("unexpected token after 'cnf'")));
+    }
+    make_ok_token(0, i)
+}
+
+fn parse_dimacs(src: String) -> ParseResult {
+    if src.len() == 0 {
+        return err_parse(String::from("empty DIMACS input"));
+    }
+
+    let formula: Formula = empty_formula();
+    let current_clause: Vec<i64> = Vec::new();
+    let mut skip_clause: i64 = 0;
+    let mut header_seen: i64 = 0;
+    let mut declared_vars: i64 = 0;
+    let mut declared_clauses: i64 = -1;
+    let mut actual_clause_count: i64 = 0;
+
+    let n: i64 = src.len();
+    let mut line_start: i64 = 0;
+    let mut line_no: i64 = 1;
+    while line_start < n {
+        let mut line_end: i64 = line_start;
+        while line_end < n && src.byte_at(line_end) != 10 {
+            line_end = line_end + 1;
+        }
+
+        let first_non_ws: i64 = skip_inline_ws(src, line_start, line_end);
+        if first_non_ws < line_end {
+            let first: i64 = src.byte_at(first_non_ws);
+            if first == 99 {
+                0;
+            } else {
+                if first == 112 {
+                    if current_clause.len() > 0 {
+                        return err_parse(line_error(line_no, String::from("header cannot appear in the middle of a clause")));
+                    }
+                    if header_seen == 1 {
+                        return err_parse(line_error(line_no, String::from("duplicate 'p cnf' header")));
+                    }
+
+                    let hdr: IntToken = parse_header(src, first_non_ws, line_end, line_no);
+                    if hdr.ok == 0 {
+                        return err_parse(hdr.message);
+                    }
+
+                    let vars_tok: IntToken = parse_int_token(src, hdr.next, line_end, line_no);
+                    if vars_tok.ok == 0 {
+                        return err_parse(vars_tok.message);
+                    }
+                    let clauses_tok: IntToken = parse_int_token(src, vars_tok.next, line_end, line_no);
+                    if clauses_tok.ok == 0 {
+                        return err_parse(clauses_tok.message);
+                    }
+                    let after: i64 = skip_inline_ws(src, clauses_tok.next, line_end);
+                    if after != line_end {
+                        return err_parse(line_error(line_no, String::from("unexpected trailing tokens in header")));
+                    }
+                    if vars_tok.value < 0 || clauses_tok.value < 0 {
+                        return err_parse(line_error(line_no, String::from("header counts must be non-negative")));
+                    }
+
+                    declared_vars = vars_tok.value;
+                    declared_clauses = clauses_tok.value;
+                    formula.num_vars = declared_vars;
+                    formula.input_clause_count = declared_clauses;
+                    header_seen = 1;
+                } else {
+                    if header_seen == 0 {
+                        return err_parse(line_error(line_no, String::from("encountered clause tokens before header")));
+                    }
+                    if actual_clause_count == declared_clauses && current_clause.len() == 0 {
+                        return err_parse(line_error(line_no, String::from("extra clause tokens after declared clause count")));
+                    }
+
+                    let mut i: i64 = first_non_ws;
+                    while i < line_end {
+                        i = skip_inline_ws(src, i, line_end);
+                        if i >= line_end {
+                            i = line_end;
+                        } else {
+                            let tok: IntToken = parse_int_token(src, i, line_end, line_no);
+                            if tok.ok == 0 {
+                                return err_parse(tok.message);
+                            }
+                            i = tok.next;
+
+                            if tok.value == 0 {
+                                actual_clause_count = actual_clause_count + 1;
+                                if skip_clause == 0 {
+                                    append_formula_clause(formula, current_clause);
+                                }
+                                current_clause.clear();
+                                skip_clause = 0;
+                            } else {
+                                let v: i64 = abs_i64(tok.value);
+                                if v < 1 || v > declared_vars {
+                                    return err_parse(line_error(line_no, String::from("literal out of declared variable range")));
+                                }
+                                if skip_clause == 0 {
+                                    let add_status: i64 = add_lit_to_clause(current_clause, tok.value);
+                                    if add_status == 2 {
+                                        skip_clause = 1;
+                                        current_clause.clear();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        line_start = line_end + 1;
+        line_no = line_no + 1;
+    }
+
+    if header_seen == 0 {
+        return err_parse(String::from("missing 'p cnf <vars> <clauses>' header"));
+    }
+    if current_clause.len() > 0 {
+        return err_parse(String::from("unterminated final clause (missing trailing 0)"));
+    }
+    if actual_clause_count != declared_clauses {
+        return err_parse(str4(String::from("clause count mismatch: header says "),
+            i64_to_string(declared_clauses),
+            String::from(", parsed "),
+            i64_to_string(actual_clause_count)));
+    }
+    formula.input_clause_count = actual_clause_count;
+    ok_parse(formula)
+}

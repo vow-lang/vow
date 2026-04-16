@@ -1,0 +1,72 @@
+[
+  {
+    "id": "081f111af59344b61346367a930e24f6",
+    "filename": "Break_triple_04_06.xml.cnf.xz",
+    "tier": "smoke",
+    "expected": "SAT",
+    "notes": "Scheduling; minisat1m=yes"
+  },
+  {
+    "id": "062f58e44eb73f9274b57af5092cad90",
+    "filename": "rook-51-0-0.cnf.xz",
+    "tier": "smoke",
+    "expected": "UNSAT",
+    "notes": "Crafted rooks instance"
+  },
+  {
+    "id": "0aa22564d00e9716519918d84b25c4a7",
+    "filename": "sudoku-N30-12.cnf.xz",
+    "tier": "smoke",
+    "expected": "UNSAT",
+    "notes": "Sudoku contradiction"
+  },
+  {
+    "id": "07cea7a64248a60d509368d09d3057c2",
+    "filename": "pj2013_k9.cnf.xz",
+    "tier": "core",
+    "expected": "UNSAT",
+    "notes": "Hardware model checking"
+  },
+  {
+    "id": "0e1d562093d5f4fc9013cf4a14a03f70",
+    "filename": "Break_12_50.xml.cnf.xz",
+    "tier": "core",
+    "expected": "SAT",
+    "notes": "Scheduling"
+  },
+  {
+    "id": "115fa7f61704bc12b2373aa471bc434f",
+    "filename": "Circuit_multiplier24.cnf.xz",
+    "tier": "core",
+    "expected": "SAT",
+    "notes": "Circuit multiplier"
+  },
+  {
+    "id": "0ed8c06438673f179985a79b9d6a9fe4",
+    "filename": "cfi-rigid-s2-0064-04-or_2_shuffle_all.cnf.xz",
+    "tier": "core",
+    "expected": "UNSAT",
+    "notes": "Graph isomorphism"
+  },
+  {
+    "id": "00d5a43a481477fa4d56a2ce152a6cfb",
+    "filename": "st_890_86_9_572.normalised.cnf.xz",
+    "tier": "stretch",
+    "expected": "UNKNOWN",
+    "notes": "Argumentation; 2025 normalized instance"
+  },
+  {
+    "id": "06d2ca2ee0b47f00d93090495f7fd4f4",
+    "filename": "clqcl_100_6_5.normalised.cnf.xz",
+    "tier": "stretch",
+    "expected": "UNKNOWN",
+    "notes": "Clique coloring; 2025 normalized instance"
+  },
+  {
+    "id": "12820b981e6b199a1b1a8c896386a337",
+    "filename": "RoundRobin_n16_d14.cnf.xz",
+    "tier": "stretch",
+    "expected": "UNKNOWN",
+    "notes": "Round-robin scheduling"
+  }
+]

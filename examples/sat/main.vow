@@ -1,0 +1,99 @@
+module Main
+use dimacs
+use solver
+use types
+
+fn usage() -> String {
+    let out: String = String::from("");
+    out.push_str(String::from("usage: sat [--help] [--stats] [path.cnf]\n"));
+    out.push_str(String::from("Reads DIMACS CNF from a file or stdin and prints SAT/UNSAT.\n"));
+    out
+}
+
+fn print_error(msg: String) [io] {
+    eprintln_str(msg);
+}
+
+fn print_stats(result: SolveResult, elapsed_ms: i64) [io] {
+    eprintln_str(str2(String::from("vars="), i64_to_string(result.num_vars)));
+    eprintln_str(str2(String::from("clauses="), i64_to_string(result.original_clauses)));
+    eprintln_str(str2(String::from("learnts="), i64_to_string(result.learnt_clauses)));
+    eprintln_str(str2(String::from("decisions="), i64_to_string(result.decisions)));
+    eprintln_str(str2(String::from("propagations="), i64_to_string(result.propagations)));
+    eprintln_str(str2(String::from("conflicts="), i64_to_string(result.conflicts)));
+    eprintln_str(str2(String::from("restarts="), i64_to_string(result.restarts)));
+    eprintln_str(str2(String::from("elapsed_ms="), i64_to_string(elapsed_ms)));
+}
+
+fn read_input(path: String) -> String [read] {
+    if path.len() > 0 {
+        fs_read(path)
+    } else {
+        stdin_read()
+    }
+}
+
+fn main() -> i32 [read, io] {
+    let argv: Vec<String> = args();
+    let mut path: String = String::from("");
+    let mut show_stats: i64 = 0;
+
+    let mut i: i64 = 1;
+    while i < argv.len() {
+        let arg: String = argv[i];
+        if arg.eq(String::from("--help")) {
+            print_str(usage());
+            process_exit(0);
+        } else {
+            if arg.eq(String::from("--stats")) {
+                show_stats = 1;
+            } else {
+                if arg.len() > 0 && arg.byte_at(0) == 45 {
+                    print_error(str2(String::from("unknown flag: "), arg));
+                    process_exit(STATUS_ERROR);
+                }
+                if path.len() > 0 {
+                    print_error(String::from("expected at most one positional path argument"));
+                    process_exit(STATUS_ERROR);
+                }
+                path = arg;
+            }
+        }
+        i = i + 1;
+    }
+
+    let src: String = read_input(path);
+    if src.len() == 0 {
+        print_error(String::from("failed to read DIMACS input"));
+        process_exit(STATUS_ERROR);
+    }
+
+    let parsed: ParseResult = parse_dimacs(src);
+    if parsed.ok == 0 {
+        print_error(parsed.message);
+        process_exit(STATUS_ERROR);
+    }
+
+    let start_ms: i64 = time_unix_ms();
+    let result: SolveResult = solve_formula(parsed.formula);
+    let elapsed_ms: i64 = time_unix_ms() - start_ms;
+
+    if result.status == STATUS_SAT {
+        print_str(String::from("SAT\n"));
+        print_assignment(result.assignment);
+        if show_stats == 1 {
+            print_stats(result, elapsed_ms);
+        }
+        process_exit(STATUS_SAT);
+    }
+    if result.status == STATUS_UNSAT {
+        print_str(String::from("UNSAT\n"));
+        if show_stats == 1 {
+            print_stats(result, elapsed_ms);
+        }
+        process_exit(STATUS_UNSAT);
+    }
+
+    print_error(String::from("internal solver error"));
+    process_exit(STATUS_ERROR);
+}
