@@ -2191,8 +2191,8 @@ vow verify [OPTIONS] <source.vow>
 | `--no-cache`      | (off)       | Disable verification result caching        |
 | `--max-k-step <N>` | `50`       | ESBMC max k-induction step                |
 | `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
-| `--string-max <N>` | `256`     | Max String capacity for verification model |
-| `--hashmap-max <N>` | `64`     | Max HashMap capacity for verification model|
+| `--string-max <N>`| `256`       | Max String capacity for verification model |
+| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
 
 ### `vow contracts`
 
@@ -2210,8 +2210,8 @@ vow contracts [OPTIONS] <source.vow>
 | `--no-cache`      | (off)       | Disable verification result caching        |
 | `--max-k-step <N>` | `50`       | ESBMC max k-induction step                |
 | `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
-| `--string-max <N>` | `256`     | Max String capacity for verification model |
-| `--hashmap-max <N>` | `64`     | Max HashMap capacity for verification model|
+| `--string-max <N>`| `256`       | Max String capacity for verification model |
+| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
 
 ### `vow skill`
 
@@ -2247,8 +2247,8 @@ vow test [OPTIONS] [<path>]
 | `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
 | `--max-k-step <N>` | `50`       | ESBMC max k-induction step (with --verify) |
 | `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
-| `--string-max <N>` | `256`     | Max String capacity for verification model |
-| `--hashmap-max <N>` | `64`     | Max HashMap capacity for verification model|
+| `--string-max <N>`| `256`       | Max String capacity for verification model |
+| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` in the given directory, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
 
