@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -308,16 +309,6 @@ fn verify_function_inner(
     run_esbmc_k_induction(&esbmc, &c_src, &func.name)
 }
 
-pub fn run_esbmc_with_unwind(
-    esbmc: &std::path::Path,
-    c_src: &str,
-    max_k_step: u32,
-    func_name: &str,
-    config: &SolverConfig,
-) -> VerificationResult {
-    run_esbmc_with_max_k_step(esbmc, c_src, max_k_step, func_name, config)
-}
-
 pub fn run_esbmc_k_induction(
     esbmc: &std::path::Path,
     c_src: &str,
@@ -367,9 +358,9 @@ pub fn run_esbmc_with_max_k_step(
     }
 
     // Set up pipes and process-group isolation for orphan prevention.
-    cmd.stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(unix)]
+    cmd.process_group(0);
 
     // SAFETY: pre_exec runs between fork() and exec() in the child.
     // The error paths use last_os_error()/from_raw_os_error() which may
@@ -424,14 +415,14 @@ pub fn run_esbmc_with_max_k_step(
                 Ok(Some(_)) => break false,
                 Ok(None) => {
                     if std::time::Instant::now() >= deadline {
-                        kill_process_group(&mut child);
+                        force_kill(&mut child);
                         let _ = child.wait();
                         break true;
                     }
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 }
                 Err(e) => {
-                    kill_process_group(&mut child);
+                    force_kill(&mut child);
                     let _ = child.kill();
                     let _ = child.wait();
                     let _ = stdout_thread.join();
@@ -465,14 +456,19 @@ pub fn run_esbmc_with_max_k_step(
     }
 }
 
-/// Send SIGKILL to the entire process group of `child`.
-/// Falls back to killing just the child if the group kill fails.
-fn kill_process_group(child: &mut std::process::Child) {
-    let pid = child.id() as i32;
-    let ret = unsafe { libc::kill(-pid, libc::SIGKILL) };
-    if ret != 0 {
-        let _ = child.kill();
+/// Kill the ESBMC child process. On Unix, sends SIGKILL to the entire
+/// process group; falls back to killing just the child if that fails.
+/// On non-Unix, kills just the child directly.
+fn force_kill(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id() as i32;
+        let ret = unsafe { libc::kill(-pid, libc::SIGKILL) };
+        if ret == 0 {
+            return;
+        }
     }
+    let _ = child.kill();
 }
 
 // ---------------------------------------------------------------------------
