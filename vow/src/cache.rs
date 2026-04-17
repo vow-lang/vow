@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use vow_verify::Counterexample;
 
+use crate::frontend::DependencyManifest;
+
 pub struct CompileCache {
     dir: PathBuf,
 }
@@ -22,9 +24,10 @@ impl CompileCache {
         Some(Self { dir })
     }
 
-    pub fn cache_key(source_files: &[PathBuf], mode: &str, trace: &str) -> String {
+    pub fn cache_key(deps: &DependencyManifest, mode: &str, trace: &str) -> String {
         let mut hasher = DefaultHasher::new();
-        let mut entries: Vec<(String, u64)> = source_files
+        let mut entries: Vec<(String, u64)> = deps
+            .paths()
             .iter()
             .filter_map(|p| {
                 let canon = p.canonicalize().ok()?;
@@ -232,6 +235,7 @@ fn parse_cached_result(content: &str) -> Option<CachedVerifyResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn verify_cache_roundtrip_proven() {
@@ -289,6 +293,40 @@ mod tests {
     fn cache_key_includes_solver_encoding() {
         let k1 = VerifyCache::cache_key("int f() { return 0; }", 10, "boolector", "bv");
         let k2 = VerifyCache::cache_key("int f() { return 0; }", 10, "z3", "ir");
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn compile_cache_key_ignores_dependency_order() {
+        let dir = TempDir::new().unwrap();
+        let a = dir.path().join("a.vow");
+        let b = dir.path().join("b.vow");
+        std::fs::write(&a, "module A").unwrap();
+        std::fs::write(&b, "module B").unwrap();
+
+        let deps_ab = DependencyManifest::from_paths(vec![a.clone(), b.clone()]);
+        let deps_ba = DependencyManifest::from_paths(vec![b, a]);
+
+        let k1 = CompileCache::cache_key(&deps_ab, "Release", "Off");
+        let k2 = CompileCache::cache_key(&deps_ba, "Release", "Off");
+
+        assert_eq!(k1, k2);
+    }
+
+    #[test]
+    fn compile_cache_key_changes_when_dependency_set_changes() {
+        let dir = TempDir::new().unwrap();
+        let a = dir.path().join("a.vow");
+        let b = dir.path().join("b.vow");
+        std::fs::write(&a, "module A").unwrap();
+        std::fs::write(&b, "module B").unwrap();
+
+        let deps_a = DependencyManifest::from_paths(vec![a.clone()]);
+        let deps_ab = DependencyManifest::from_paths(vec![a, b]);
+
+        let k1 = CompileCache::cache_key(&deps_a, "Release", "Off");
+        let k2 = CompileCache::cache_key(&deps_ab, "Release", "Off");
+
         assert_ne!(k1, k2);
     }
 }
