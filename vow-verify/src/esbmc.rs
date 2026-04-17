@@ -343,7 +343,6 @@ pub fn run_esbmc_with_max_k_step(
 
     save_esbmc_debug(esbmc, c_src, func_name, max_k_step);
 
-    // Build the ESBMC command.
     let mut cmd = Command::new(esbmc);
     cmd.arg(tmp.path())
         .arg("--no-bounds-check")
@@ -423,7 +422,6 @@ pub fn run_esbmc_with_max_k_step(
                 }
                 Err(e) => {
                     force_kill(&mut child);
-                    let _ = child.kill();
                     let _ = child.wait();
                     let _ = stdout_thread.join();
                     let _ = stderr_thread.join();
