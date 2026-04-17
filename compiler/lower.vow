@@ -2898,7 +2898,11 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 }
             }
             // Emit Upsilons for exit-block Phis with current mutation values.
+            // Use lookup_at_depth to resolve from the loop header scope,
+            // not the current scope, to avoid picking up shadowed bindings.
             let nep: i64 = ctx.loop_exit_phi_names.len();
+            let nlh2: i64 = ctx.loop_continue_scope_depth.len();
+            let brk_scope_depth: i64 = ctx.loop_continue_scope_depth[nlh2 - 1];
             if nep > 0 {
                 let ep_names: Vec<String> = ctx.loop_exit_phi_names[nep - 1];
                 let ep_ids: Vec<i64> = ctx.loop_exit_phi_ids[nep - 1];
@@ -2906,7 +2910,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let mut epi: i64 = 0;
                 while epi < nep2 {
                     let vname: String = ep_names[epi];
-                    let cur_val: i64 = lctx_lookup(ctx, vname);
+                    let cur_val: i64 = lctx_lookup_at_depth(ctx, vname, brk_scope_depth);
                     if cur_val != -1 {
                         let up_args: Vec<i64> = Vec::new();
                         up_args.push(cur_val);
@@ -2919,6 +2923,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             // Free loop body allocations before jumping to exit.
             // Trace transitive sources of break value and mutation variables
             // through Phi/Upsilon chains so they aren't freed prematurely.
+            // Resolve mutation vars at loop header scope depth.
             let nlasd: i64 = ctx.loop_alloc_scope_depths.len();
             if nlasd > 0 {
                 let depth: i64 = ctx.loop_alloc_scope_depths[nlasd - 1];
@@ -2939,7 +2944,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     let mut mvi: i64 = 0;
                     while mvi < nmv {
                         let mv_name: String = mv_names[mvi];
-                        let mv_val: i64 = lctx_lookup(ctx, mv_name);
+                        let mv_val: i64 = lctx_lookup_at_depth(ctx, mv_name, brk_scope_depth);
                         if mv_val != -1 {
                             break_live_out.push(mv_val);
                             let mv_sources: Vec<i64> = lctx_collect_return_sources(ctx, mv_val);

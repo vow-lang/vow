@@ -1830,10 +1830,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             // Emit Upsilons for loop mutation variables targeting the
             // exit-block Phis so the exit block receives updated values.
-            // Must be emitted before alloc frees so values are captured first.
+            // Use lookup_at_depth to resolve from the loop header scope,
+            // not the current scope, to avoid picking up shadowed bindings.
             let exit_phis = ctx.loop_exit_phis.last().cloned().unwrap_or_default();
+            let scope_depth = ctx
+                .loop_continue_scope_depth
+                .last()
+                .copied()
+                .unwrap_or(0);
             for (name, exit_phi) in &exit_phis {
-                if let Some(cur_val) = ctx.lookup(name) {
+                if let Some(cur_val) = ctx.lookup_at_depth(name, scope_depth) {
                     ctx.emit(
                         Opcode::Upsilon,
                         ctx.inst_ty(cur_val),
@@ -1847,6 +1853,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             // Free loop body allocations before jumping to exit.
             // Use collect_return_sources to trace through Phi/Upsilon chains —
             // break_val and mutation variables may alias heap allocations.
+            // Resolve mutation vars at loop header scope depth.
             if let Some(&depth) = ctx.loop_alloc_scope_depth.last() {
                 let mut live_out: Vec<InstId> = if let Some(bv) = break_val {
                     ctx.collect_return_sources(bv).into_iter().collect()
@@ -1854,7 +1861,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     vec![]
                 };
                 for (name, _) in &exit_phis {
-                    if let Some(cur_val) = ctx.lookup(name) {
+                    if let Some(cur_val) = ctx.lookup_at_depth(name, scope_depth) {
                         live_out.extend(ctx.collect_return_sources(cur_val));
                     }
                 }
