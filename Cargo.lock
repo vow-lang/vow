@@ -897,6 +897,7 @@ dependencies = [
 name = "vow-verify"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "tempfile",
  "vow-diag",
  "vow-ir",

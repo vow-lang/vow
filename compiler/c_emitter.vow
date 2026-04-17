@@ -1393,6 +1393,7 @@ fn scan_shift_needs_in_fns(fns: Vec<IrFunction>, start: i64, end: i64, target_op
 fn cemit_preamble(need_shl_i64: i64, need_shr_i64: i64, need_shl_u64: i64, need_shr_u64: i64) -> String {
     let out: String = String::from("");
     out.push_str(String::from("#include <stdint.h>\n"));
+    out.push_str(String::from("#include <stdlib.h>\n"));
     out.push_str(String::from("#include <stdbool.h>\n"));
     out.push_str(String::from("extern void __ESBMC_assume(_Bool);\n"));
     out.push_str(String::from("extern void __ESBMC_assert(_Bool, const char*);\n"));

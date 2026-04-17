@@ -1,8 +1,9 @@
-use std::io::Write;
-use std::path::PathBuf;
-use std::process::Command;
-
 use std::collections::HashMap;
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
 
 use vow_ir::{FuncId, Function, Module, Ty};
 
@@ -355,50 +356,95 @@ pub fn run_esbmc_with_max_k_step(
         cmd.arg(arg);
     }
 
-    // If timeout is set, use spawn + thread-based timeout
-    if let Some(timeout_secs) = config.timeout_secs {
-        use std::process::Stdio;
-        use std::sync::mpsc;
-        use std::time::Duration;
+    // Set up pipes and process-group isolation for orphan prevention.
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(unix)]
+    cmd.process_group(0);
 
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-        let child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => return VerificationResult::ToolError(e.to_string()),
-        };
-        let child_id = child.id();
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(child.wait_with_output());
-        });
-        match rx.recv_timeout(Duration::from_secs(timeout_secs as u64)) {
-            Ok(Ok(output)) => {
-                return parse_esbmc_result(&output);
-            }
-            Ok(Err(e)) => {
-                return VerificationResult::ToolError(e.to_string());
-            }
-            Err(_timeout) => {
-                let _ = Command::new("kill")
-                    .arg("-9")
-                    .arg(child_id.to_string())
-                    .output();
-                return VerificationResult::Timeout;
-            }
+    // SAFETY: pre_exec runs between fork() and exec() in the child.
+    // The error paths use last_os_error()/from_raw_os_error() which may
+    // allocate, but this only happens on failure just before the child aborts.
+    #[cfg(target_os = "linux")]
+    {
+        let parent_pid = std::process::id();
+        unsafe {
+            cmd.pre_exec(move || {
+                let ret = libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+                if ret != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::getppid() as u32 != parent_pid {
+                    return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
+                }
+                Ok(())
+            });
         }
     }
 
-    let output = match cmd.output() {
-        Ok(o) => o,
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
         Err(e) => return VerificationResult::ToolError(e.to_string()),
     };
 
-    parse_esbmc_result(&output)
-}
+    // Drain stdout/stderr on background threads to prevent pipe buffer deadlock.
+    let stdout_handle = child.stdout.take();
+    let stderr_handle = child.stderr.take();
+    let stdout_thread = std::thread::spawn(move || {
+        let mut buf = String::new();
+        if let Some(mut r) = stdout_handle {
+            let _ = std::io::Read::read_to_string(&mut r, &mut buf);
+        }
+        buf
+    });
+    let stderr_thread = std::thread::spawn(move || {
+        let mut buf = String::new();
+        if let Some(mut r) = stderr_handle {
+            let _ = std::io::Read::read_to_string(&mut r, &mut buf);
+        }
+        buf
+    });
 
-fn parse_esbmc_result(output: &std::process::Output) -> VerificationResult {
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    // If a timeout is configured, poll with deadline; otherwise block on wait().
+    // PR_SET_PDEATHSIG handles orphan cleanup in both cases.
+    if let Some(timeout_secs) = config.timeout_secs {
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs as u64);
+        let timed_out = loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break false,
+                Ok(None) => {
+                    if std::time::Instant::now() >= deadline {
+                        force_kill(&mut child);
+                        let _ = child.wait();
+                        break true;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(e) => {
+                    force_kill(&mut child);
+                    let _ = child.wait();
+                    let _ = stdout_thread.join();
+                    let _ = stderr_thread.join();
+                    return VerificationResult::ToolError(format!("wait error: {e}"));
+                }
+            }
+        };
+        if timed_out {
+            let _ = stdout_thread.join();
+            let _ = stderr_thread.join();
+            return VerificationResult::Timeout;
+        }
+    } else {
+        // No timeout: block until ESBMC finishes.
+        if let Err(e) = child.wait() {
+            let _ = stdout_thread.join();
+            let _ = stderr_thread.join();
+            return VerificationResult::ToolError(format!("wait error: {e}"));
+        }
+    }
+
+    let stdout = stdout_thread.join().unwrap_or_default();
+    let stderr = stderr_thread.join().unwrap_or_default();
     let combined = format!("{stdout}{stderr}");
 
     if combined.contains("VERIFICATION SUCCESSFUL") {
@@ -410,6 +456,21 @@ fn parse_esbmc_result(output: &std::process::Output) -> VerificationResult {
     } else {
         VerificationResult::ToolError(format!("unexpected esbmc output:\n{combined}"))
     }
+}
+
+/// Kill the ESBMC child process. On Unix, sends SIGKILL to the entire
+/// process group; falls back to killing just the child if that fails.
+/// On non-Unix, kills just the child directly.
+fn force_kill(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pgid = child.id() as i32;
+        let ret = unsafe { libc::kill(-pgid, libc::SIGKILL) };
+        if ret == 0 {
+            return;
+        }
+    }
+    let _ = child.kill();
 }
 
 // ---------------------------------------------------------------------------
