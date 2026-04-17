@@ -1293,8 +1293,7 @@ METHODS   : Vec: Vec::new/push/pop/len/clear/truncate/v[i]/v[i] = val   String: 
 OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! & ?
 
 VERIFICATION DEFAULTS (configurable via --max-k-step, --vec-max, --string-max, --hashmap-max)
-  Strategy      : k-induction-parallel (incremental BMC + k-induction)
-  Max k step    : 50 (default; override with --max-k-step)
+  Incremental BMC : 50 max iterations (--max-k-step)
   Vec<T>        : 128 max capacity (--vec-max)
   String        : 256 max capacity (--string-max)
   HashMap<K, V> : 64 max capacity (--hashmap-max)"##
@@ -4737,8 +4736,13 @@ fn run_verification_sync(
                     Some(p) => p,
                     None => return VerifyOutcome::ToolNotFound,
                 };
-                let res =
-                    run_esbmc_with_max_k_step(&esbmc, &c_src, limits.max_k_step, &func.name, &func_config);
+                let res = run_esbmc_with_max_k_step(
+                    &esbmc,
+                    &c_src,
+                    limits.max_k_step,
+                    &func.name,
+                    &func_config,
+                );
                 match &res {
                     VerificationResult::Proven | VerificationResult::ProvenIr => {
                         vc.store(&key, &CachedVerifyResult::Proven);
@@ -4959,12 +4963,7 @@ fn verify_outcome_to_output(
 
 pub fn run_verify_only(source: &Path) -> BuildOutput {
     let limits = VerifyLimits::default();
-    run_verify_only_inner(
-        source,
-        false,
-        &limits,
-        &SolverConfig::default_config(),
-    )
+    run_verify_only_inner(source, false, &limits, &SolverConfig::default_config())
 }
 
 fn run_verify_only_inner(
@@ -5702,7 +5701,13 @@ fn update_contract_statuses(
                         continue;
                     }
                 };
-                let res = run_esbmc_with_max_k_step(&esbmc, &c_src, limits.max_k_step, &func.name, config);
+                let res = run_esbmc_with_max_k_step(
+                    &esbmc,
+                    &c_src,
+                    limits.max_k_step,
+                    &func.name,
+                    config,
+                );
                 match &res {
                     VerificationResult::Proven | VerificationResult::ProvenIr => {
                         vc.store(&key, &CachedVerifyResult::Proven);
@@ -5725,7 +5730,12 @@ fn update_contract_statuses(
             }
         } else {
             verify_function_with_module_and_const_fns_configured(
-                func, ir_module, &const_fns, limits.max_k_step, config, limits,
+                func,
+                ir_module,
+                &const_fns,
+                limits.max_k_step,
+                config,
+                limits,
             )
         };
 
@@ -5980,13 +5990,7 @@ fn main() {
             };
             validate_limits(&limits);
             let config = make_solver_config(c.solver, c.encoding, c.timeout);
-            run_contracts_command(
-                &source,
-                c.verify,
-                c.no_cache,
-                &limits,
-                &config,
-            );
+            run_contracts_command(&source, c.verify, c.no_cache, &limits, &config);
         }
         Some(Command::Skill(s)) => {
             if s.help {
