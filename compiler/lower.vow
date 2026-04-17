@@ -46,6 +46,7 @@ struct LowerCtx {
     alloc_sizes: Vec<i64>,
     escaped_ids: Vec<i64>,
     alloc_scope_starts: Vec<i64>,
+    loop_alloc_scope_depths: Vec<i64>,
     file: String,
 }
 
@@ -102,6 +103,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         alloc_sizes: Vec::new(),
         escaped_ids: Vec::new(),
         alloc_scope_starts: Vec::new(),
+        loop_alloc_scope_depths: Vec::new(),
         file: String::from(""),
     }
 }
@@ -335,6 +337,49 @@ fn lctx_discard_alloc_scope(ctx: LowerCtx) {
     }
 }
 
+fn lctx_emit_alloc_frees_to_depth(ctx: LowerCtx, target_depth: i64, live_out: Vec<i64>) {
+    let n: i64 = ctx.alloc_ids.len();
+    let mut i: i64 = target_depth;
+    while i < n {
+        let id: i64 = ctx.alloc_ids[i];
+        let tag: String = ctx.alloc_tags[i];
+        let mut skip: bool = lctx_is_escaped(ctx, id);
+        if !skip {
+            let mut li: i64 = 0;
+            while li < live_out.len() {
+                if live_out[li] == id {
+                    skip = true;
+                }
+                li = li + 1;
+            }
+        }
+        if !skip {
+            if lower_str_starts_with(tag, String::from("region:")) {
+                let size: i64 = ctx.alloc_sizes[i];
+                let free_args: Vec<i64> = Vec::new();
+                free_args.push(id);
+                lctx_emit(ctx, IOP_REGION_FREE(), ITY_UNIT(), free_args, IDATA_ALLOC_SIZE(), size, 8, String::from(""));
+            }
+            if tag == String::from("String") {
+                let free_args: Vec<i64> = Vec::new();
+                free_args.push(id);
+                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_free"));
+            }
+            if tag == String::from("Vec") {
+                let free_args: Vec<i64> = Vec::new();
+                free_args.push(id);
+                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_free_val"));
+            }
+            if tag == String::from("HashMap") {
+                let free_args: Vec<i64> = Vec::new();
+                free_args.push(id);
+                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_map_free"));
+            }
+        }
+        i = i + 1;
+    }
+}
+
 fn lctx_mark_escaped(ctx: LowerCtx, id: i64) {
     ctx.escaped_ids.push(id);
 }
@@ -525,7 +570,7 @@ fn lctx_find_enum(ctx: LowerCtx, name: String) -> i64 {
 
 fn lctx_find_variant_tag(ctx: LowerCtx, enum_name: String, variant_name: String) -> i64 {
     let eidx: i64 = lctx_find_enum(ctx, enum_name);
-    if eidx == -1 { return 0; }
+    if eidx == -1 { return -1; }
     let variants: Vec<String> = ctx.enum_variant_lists[eidx];
     let n: i64 = variants.len();
     let mut i: i64 = 0;
@@ -535,7 +580,7 @@ fn lctx_find_variant_tag(ctx: LowerCtx, enum_name: String, variant_name: String)
         }
         i = i + 1;
     }
-    0
+    -1
 }
 
 fn lctx_struct_field_index(ctx: LowerCtx, struct_name: String, field_name: String) -> i64 {
@@ -544,10 +589,10 @@ fn lctx_struct_field_index(ctx: LowerCtx, struct_name: String, field_name: Strin
         if struct_name.len() > 0 {
             let w: String = String::from("warning: struct '");
             w.push_str(struct_name);
-            w.push_str(String::from("' not registered -- field lookup defaulting to index 0"));
+            w.push_str(String::from("' not registered -- field lookup returning -1"));
             ctx.warnings.push(w);
         }
-        return 0;
+        return -1;
     }
     let fields: Vec<String> = ctx.struct_field_lists[sidx];
     let n: i64 = fields.len();
@@ -563,13 +608,14 @@ fn lctx_struct_field_index(ctx: LowerCtx, struct_name: String, field_name: Strin
         w.push_str(field_name);
         w.push_str(String::from("' not found in struct '"));
         w.push_str(struct_name);
-        w.push_str(String::from("' -- defaulting to index 0"));
+        w.push_str(String::from("' -- returning -1"));
         ctx.warnings.push(w);
     }
-    0
+    -1
 }
 
 fn lctx_struct_field_type(ctx: LowerCtx, struct_name: String, field_idx: i64) -> String {
+    if field_idx == -1 { return String::from(""); }
     let sidx: i64 = lctx_find_struct(ctx, struct_name);
     if sidx == -1 { return String::from(""); }
     let type_names: Vec<String> = ctx.struct_field_type_names[sidx];
@@ -580,6 +626,7 @@ fn lctx_struct_field_type(ctx: LowerCtx, struct_name: String, field_idx: i64) ->
 }
 
 fn lctx_struct_field_vec_elem(ctx: LowerCtx, struct_name: String, field_idx: i64) -> String {
+    if field_idx == -1 { return String::from(""); }
     let sidx: i64 = lctx_find_struct(ctx, struct_name);
     if sidx == -1 { return String::from(""); }
     let vec_elems: Vec<String> = ctx.struct_field_vec_elems[sidx];
@@ -608,6 +655,7 @@ fn lower_ast_ty(a: AstArena, tid: i64) -> i64 {
     if tid == -1 { return ITY_UNIT(); }
     let tag: i64 = type_tag(a, tid);
     if tag == TY_UNIT() { return ITY_UNIT(); }
+    if tag == TY_NEVER() { return ITY_UNIT(); }
     if tag == TY_NAMED() {
         let name_sid: i64 = type_a(a, tid);
         let name: String = arena_str(a, name_sid);
@@ -622,11 +670,18 @@ fn lower_ast_ty(a: AstArena, tid: i64) -> i64 {
         return ITY_PTR();
     }
     if tag == TY_GENERIC() { return ITY_PTR(); }
-    ITY_UNIT()
+    if tag == TY_REF() { return ITY_PTR(); }
+    if tag == TY_SLICE() { return ITY_PTR(); }
+    if tag == TY_TUPLE() { return ITY_PTR(); }
+    -1
+}
+
+fn is_valid_binop(op: i64) -> bool {
+    op >= 0 && op <= 22
 }
 
 fn binop_opcode(op: i64, operand_ty: i64) -> i64 vow {
-    requires: op >= 0
+    requires: is_valid_binop(op)
 } {
     let is_u64: bool = operand_ty == ITY_U64();
     if op == BINOP_ADD() { return if is_u64 { IOP_WADD_U64() } else { IOP_WADD_I64() }; }
@@ -652,20 +707,18 @@ fn binop_opcode(op: i64, operand_ty: i64) -> i64 vow {
     if op == BINOP_XOR() { return if is_u64 { IOP_XOR_U64() } else { IOP_XOR_I64() }; }
     if op == BINOP_SHL() { return if is_u64 { IOP_SHL_U64() } else { IOP_SHL_I64() }; }
     if op == BINOP_SHR() { return if is_u64 { IOP_SHR_U64() } else { IOP_SHR_I64() }; }
-    IOP_WADD_I64()
+    -1
+}
+
+fn is_comparison_binop(op: i64) -> bool {
+    op == BINOP_EQ() || op == BINOP_NE() || op == BINOP_LT() || op == BINOP_LE() ||
+    op == BINOP_GT() || op == BINOP_GE() || op == BINOP_AND() || op == BINOP_OR()
 }
 
 fn binop_result_ty(op: i64, operand_ty: i64) -> i64 vow {
-    requires: op >= 0
+    requires: is_valid_binop(op)
 } {
-    if op == BINOP_EQ() { return ITY_BOOL(); }
-    if op == BINOP_NE() { return ITY_BOOL(); }
-    if op == BINOP_LT() { return ITY_BOOL(); }
-    if op == BINOP_LE() { return ITY_BOOL(); }
-    if op == BINOP_GT() { return ITY_BOOL(); }
-    if op == BINOP_GE() { return ITY_BOOL(); }
-    if op == BINOP_AND() { return ITY_BOOL(); }
-    if op == BINOP_OR() { return ITY_BOOL(); }
+    if is_comparison_binop(op) { return ITY_BOOL(); }
     if operand_ty == ITY_U64() { return ITY_U64(); }
     ITY_I64()
 }
@@ -1196,16 +1249,44 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let then_terminated: bool = lctx_is_terminated(ctx);
         let then_exit_block: i64 = ctx.current_block;
 
-        // Discard branch alloc scope (branch temporaries freed at function exit).
-        lctx_discard_alloc_scope(ctx);
+        // Collect mutation values before freeing branch temporaries.
+        let then_mut_vals: Vec<i64> = Vec::new();
+        let mut tmi: i64 = 0;
+        while tmi < nmut {
+            then_mut_vals.push(lctx_lookup(ctx, mutations[tmi]));
+            tmi = tmi + 1;
+        }
+        // Free branch temporaries (keep result and transitive sources alive).
+        if !then_terminated {
+            let then_live_out: Vec<i64> = Vec::new();
+            let mut loi: i64 = 0;
+            while loi < then_mut_vals.len() {
+                then_live_out.push(then_mut_vals[loi]);
+                let srcs: Vec<i64> = lctx_collect_return_sources(ctx, then_mut_vals[loi]);
+                let mut si: i64 = 0;
+                while si < srcs.len() {
+                    then_live_out.push(srcs[si]);
+                    si = si + 1;
+                }
+                loi = loi + 1;
+            }
+            then_live_out.push(then_result);
+            let rsrcs: Vec<i64> = lctx_collect_return_sources(ctx, then_result);
+            let mut rsi: i64 = 0;
+            while rsi < rsrcs.len() {
+                then_live_out.push(rsrcs[rsi]);
+                rsi = rsi + 1;
+            }
+            lctx_pop_alloc_scope_frees(ctx, then_live_out);
+        } else {
+            lctx_discard_alloc_scope(ctx);
+        }
 
         let mut_up_then: Vec<i64> = Vec::new();
         let mut mi: i64 = 0;
         while mi < nmut {
-            let mname: String = mutations[mi];
-            let mval: i64 = lctx_lookup(ctx, mname);
             let up_args: Vec<i64> = Vec::new();
-            up_args.push(mval);
+            up_args.push(then_mut_vals[mi]);
             let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
             mut_up_then.push(up_id);
             mi = mi + 1;
@@ -1240,16 +1321,44 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let else_terminated: bool = lctx_is_terminated(ctx);
         let else_exit_block: i64 = ctx.current_block;
 
-        // Discard branch alloc scope (branch temporaries freed at function exit).
-        lctx_discard_alloc_scope(ctx);
+        // Collect mutation values before freeing branch temporaries.
+        let else_mut_vals: Vec<i64> = Vec::new();
+        let mut emi: i64 = 0;
+        while emi < nmut {
+            else_mut_vals.push(lctx_lookup(ctx, mutations[emi]));
+            emi = emi + 1;
+        }
+        // Free branch temporaries (keep result and transitive sources alive).
+        if !else_terminated {
+            let else_live_out: Vec<i64> = Vec::new();
+            let mut eloi: i64 = 0;
+            while eloi < else_mut_vals.len() {
+                else_live_out.push(else_mut_vals[eloi]);
+                let esrcs: Vec<i64> = lctx_collect_return_sources(ctx, else_mut_vals[eloi]);
+                let mut esi: i64 = 0;
+                while esi < esrcs.len() {
+                    else_live_out.push(esrcs[esi]);
+                    esi = esi + 1;
+                }
+                eloi = eloi + 1;
+            }
+            else_live_out.push(else_result);
+            let ersrcs: Vec<i64> = lctx_collect_return_sources(ctx, else_result);
+            let mut ersi: i64 = 0;
+            while ersi < ersrcs.len() {
+                else_live_out.push(ersrcs[ersi]);
+                ersi = ersi + 1;
+            }
+            lctx_pop_alloc_scope_frees(ctx, else_live_out);
+        } else {
+            lctx_discard_alloc_scope(ctx);
+        }
 
         let mut_up_else: Vec<i64> = Vec::new();
         let mut mi2: i64 = 0;
         while mi2 < nmut {
-            let mname: String = mutations[mi2];
-            let mval: i64 = lctx_lookup(ctx, mname);
             let up_args: Vec<i64> = Vec::new();
-            up_args.push(mval);
+            up_args.push(else_mut_vals[mi2]);
             let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
             mut_up_else.push(up_id);
             mi2 = mi2 + 1;
@@ -1385,7 +1494,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_is_loop.push(0);
         ctx.loop_break_counts.push(0);
         lctx_push_alloc_scope(ctx);
+        ctx.loop_alloc_scope_depths.push(ctx.alloc_ids.len());
         lower_block(ctx, body_bid);
+        ctx.loop_alloc_scope_depths.pop();
         ctx.loop_break_counts.pop();
         ctx.loop_is_loop.pop();
         ctx.loop_continue_scope_depth.pop();
@@ -1396,6 +1507,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_exit_blocks.pop();
 
         // Free loop-body temporaries before back-edge.
+        // Include transitive sources so Phi/Upsilon aliases aren't freed.
         if !lctx_is_terminated(ctx) {
             let loop_live_out: Vec<i64> = Vec::new();
             let mut li: i64 = 0;
@@ -1403,6 +1515,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let vname: String = assigned[li];
                 let cur: i64 = lctx_lookup(ctx, vname);
                 loop_live_out.push(cur);
+                let sources: Vec<i64> = lctx_collect_return_sources(ctx, cur);
+                let mut si: i64 = 0;
+                while si < sources.len() {
+                    loop_live_out.push(sources[si]);
+                    si = si + 1;
+                }
                 li = li + 1;
             }
             lctx_pop_alloc_scope_frees(ctx, loop_live_out);
@@ -1509,7 +1627,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_is_loop.push(1);
         ctx.loop_break_counts.push(0);
         let break_start: i64 = ctx.loop_break_up_ids.len();
+        lctx_push_alloc_scope(ctx);
+        ctx.loop_alloc_scope_depths.push(ctx.alloc_ids.len());
         lower_block(ctx, body_bid);
+        ctx.loop_alloc_scope_depths.pop();
         let break_count_idx: i64 = ctx.loop_break_counts.len() - 1;
         let break_count: i64 = ctx.loop_break_counts[break_count_idx];
         ctx.loop_break_counts.pop();
@@ -1520,6 +1641,28 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_continue_phi_names.pop();
         ctx.loop_header_blocks.pop();
         ctx.loop_exit_blocks.pop();
+
+        // Free loop-body temporaries before back-edge.
+        // Include transitive sources so Phi/Upsilon aliases aren't freed.
+        if !lctx_is_terminated(ctx) {
+            let loop_live_out2: Vec<i64> = Vec::new();
+            let mut lli: i64 = 0;
+            while lli < nassigned {
+                let vname: String = assigned[lli];
+                let cur: i64 = lctx_lookup(ctx, vname);
+                loop_live_out2.push(cur);
+                let sources: Vec<i64> = lctx_collect_return_sources(ctx, cur);
+                let mut si: i64 = 0;
+                while si < sources.len() {
+                    loop_live_out2.push(sources[si]);
+                    si = si + 1;
+                }
+                lli = lli + 1;
+            }
+            lctx_pop_alloc_scope_frees(ctx, loop_live_out2);
+        } else {
+            lctx_discard_alloc_scope(ctx);
+        }
 
         if !lctx_is_terminated(ctx) {
             let mut ai3: i64 = 0;
@@ -1683,7 +1826,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         ctx.loop_is_loop.push(0);
         ctx.loop_break_counts.push(0);
         lctx_push_alloc_scope(ctx);
+        ctx.loop_alloc_scope_depths.push(ctx.alloc_ids.len());
         lower_block(ctx, body_bid);
+        ctx.loop_alloc_scope_depths.pop();
         ctx.loop_break_counts.pop();
         ctx.loop_is_loop.pop();
         ctx.loop_continue_scope_depth.pop();
@@ -1696,6 +1841,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         lctx_pop_scope(ctx);
 
         // Free loop-body temporaries before back-edge.
+        // Include transitive sources so Phi/Upsilon aliases aren't freed.
         if !lctx_is_terminated(ctx) {
             let loop_live_out: Vec<i64> = Vec::new();
             let mut li: i64 = 0;
@@ -1703,6 +1849,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let vname: String = assigned[li];
                 let cur: i64 = lctx_lookup(ctx, vname);
                 loop_live_out.push(cur);
+                let sources: Vec<i64> = lctx_collect_return_sources(ctx, cur);
+                let mut si: i64 = 0;
+                while si < sources.len() {
+                    loop_live_out.push(sources[si]);
+                    si = si + 1;
+                }
                 li = li + 1;
             }
             lctx_pop_alloc_scope_frees(ctx, loop_live_out);
@@ -1795,11 +1947,14 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 ctx.warnings.push(w);
             }
             let fidx: i64 = lctx_struct_field_index(ctx, recv_tag_str, field_name);
-            lctx_mark_escaped(ctx, val_id);
-            let fs_args: Vec<i64> = Vec::new();
-            fs_args.push(recv_id);
-            fs_args.push(val_id);
-            return lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, IDATA_FIELD(), fidx, 0, String::from(""));
+            if fidx != -1 {
+                lctx_mark_escaped(ctx, val_id);
+                let fs_args: Vec<i64> = Vec::new();
+                fs_args.push(recv_id);
+                fs_args.push(val_id);
+                return lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, IDATA_FIELD(), fidx, 0, String::from(""));
+            }
+            return lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), Vec::new(), IDATA_CONST_I64(), 0, 0, String::from(""));
         }
         if lhs_tag == EXPR_INDEX() {
             let recv_eid: i64 = expr_a(a, lhs_eid);
@@ -1838,6 +1993,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             ctx.warnings.push(w);
         }
         let fidx: i64 = lctx_struct_field_index(ctx, recv_tag_str, field_name);
+        if fidx == -1 {
+            return lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), Vec::new(), IDATA_CONST_I64(), 0, 0, String::from(""));
+        }
         let fg_args: Vec<i64> = Vec::new();
         fg_args.push(recv_id);
         let result: i64 = lctx_emit(ctx, IOP_FIELD_GET(), ITY_I64(), fg_args, IDATA_FIELD(), fidx, 0, String::from(""));
@@ -1886,11 +2044,13 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let fname: String = arena_str(a, fname_sid);
             let fidx: i64 = lctx_struct_field_index(ctx, struct_name, fname);
             let val_id: i64 = lower_expr(ctx, fval_eid);
-            lctx_mark_escaped(ctx, val_id);
-            let fs_args: Vec<i64> = Vec::new();
-            fs_args.push(ptr_id);
-            fs_args.push(val_id);
-            lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, IDATA_FIELD(), fidx, 0, String::from(""));
+            if fidx != -1 {
+                lctx_mark_escaped(ctx, val_id);
+                let fs_args: Vec<i64> = Vec::new();
+                fs_args.push(ptr_id);
+                fs_args.push(val_id);
+                lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, IDATA_FIELD(), fidx, 0, String::from(""));
+            }
             fi = fi + 1;
         }
         return ptr_id;
@@ -2384,16 +2544,46 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 }
 
                 let arm_result: i64 = lower_expr(ctx, body_eid);
+                let arm_terminated: bool = lctx_is_terminated(ctx);
                 lctx_pop_scope(ctx);
 
-                // Discard match arm alloc scope.
-                lctx_discard_alloc_scope(ctx);
+                // Collect mutation values before freeing match arm temporaries.
+                let arm_mut_vals: Vec<i64> = Vec::new();
+                let mut ami: i64 = 0;
+                while ami < nmut {
+                    arm_mut_vals.push(lctx_lookup(ctx, match_muts[ami]));
+                    ami = ami + 1;
+                }
+                // Free match arm temporaries (keep result and transitive sources alive).
+                if !arm_terminated {
+                    let arm_live_out: Vec<i64> = Vec::new();
+                    let mut aloi: i64 = 0;
+                    while aloi < arm_mut_vals.len() {
+                        arm_live_out.push(arm_mut_vals[aloi]);
+                        let asrcs: Vec<i64> = lctx_collect_return_sources(ctx, arm_mut_vals[aloi]);
+                        let mut asi: i64 = 0;
+                        while asi < asrcs.len() {
+                            arm_live_out.push(asrcs[asi]);
+                            asi = asi + 1;
+                        }
+                        aloi = aloi + 1;
+                    }
+                    arm_live_out.push(arm_result);
+                    let arsrcs: Vec<i64> = lctx_collect_return_sources(ctx, arm_result);
+                    let mut arsi: i64 = 0;
+                    while arsi < arsrcs.len() {
+                        arm_live_out.push(arsrcs[arsi]);
+                        arsi = arsi + 1;
+                    }
+                    lctx_pop_alloc_scope_frees(ctx, arm_live_out);
+                } else {
+                    lctx_discard_alloc_scope(ctx);
+                }
 
                 let mut mci: i64 = 0;
                 while mci < nmut {
-                    let mv: i64 = lctx_lookup(ctx, match_muts[mci]);
                     let mu_args: Vec<i64> = Vec::new();
-                    mu_args.push(mv);
+                    mu_args.push(arm_mut_vals[mci]);
                     let mu_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), mu_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
                     arm_mut_ups.push(mu_id);
                     mci = mci + 1;
@@ -2427,16 +2617,46 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     lctx_define(ctx, pname, ptr_id);
                 }
                 let arm_result: i64 = lower_expr(ctx, body_eid);
+                let arm_terminated2: bool = lctx_is_terminated(ctx);
                 lctx_pop_scope(ctx);
 
-                // Discard match arm alloc scope.
-                lctx_discard_alloc_scope(ctx);
+                // Collect mutation values before freeing match arm temporaries.
+                let arm_mut_vals2: Vec<i64> = Vec::new();
+                let mut ami2: i64 = 0;
+                while ami2 < nmut {
+                    arm_mut_vals2.push(lctx_lookup(ctx, match_muts[ami2]));
+                    ami2 = ami2 + 1;
+                }
+                // Free match arm temporaries (keep result and transitive sources alive).
+                if !arm_terminated2 {
+                    let arm_live_out2: Vec<i64> = Vec::new();
+                    let mut aloi2: i64 = 0;
+                    while aloi2 < arm_mut_vals2.len() {
+                        arm_live_out2.push(arm_mut_vals2[aloi2]);
+                        let asrcs2: Vec<i64> = lctx_collect_return_sources(ctx, arm_mut_vals2[aloi2]);
+                        let mut asi2: i64 = 0;
+                        while asi2 < asrcs2.len() {
+                            arm_live_out2.push(asrcs2[asi2]);
+                            asi2 = asi2 + 1;
+                        }
+                        aloi2 = aloi2 + 1;
+                    }
+                    arm_live_out2.push(arm_result);
+                    let arsrcs2: Vec<i64> = lctx_collect_return_sources(ctx, arm_result);
+                    let mut arsi2: i64 = 0;
+                    while arsi2 < arsrcs2.len() {
+                        arm_live_out2.push(arsrcs2[arsi2]);
+                        arsi2 = arsi2 + 1;
+                    }
+                    lctx_pop_alloc_scope_frees(ctx, arm_live_out2);
+                } else {
+                    lctx_discard_alloc_scope(ctx);
+                }
 
                 let mut mci2: i64 = 0;
                 while mci2 < nmut {
-                    let mv2: i64 = lctx_lookup(ctx, match_muts[mci2]);
                     let mu2_args: Vec<i64> = Vec::new();
-                    mu2_args.push(mv2);
+                    mu2_args.push(arm_mut_vals2[mci2]);
                     let mu2_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), mu2_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
                     arm_mut_ups.push(mu2_id);
                     mci2 = mci2 + 1;
@@ -2559,8 +2779,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         if nle > 0 {
             let exit_block: i64 = ctx.loop_exit_blocks[nle - 1];
             let val_eid: i64 = expr_a(a, eid);
+            let break_live_out: Vec<i64> = Vec::new();
             if val_eid != -1 {
                 let val_id: i64 = lower_expr(ctx, val_eid);
+                break_live_out.push(val_id);
                 let is_loop_idx: i64 = ctx.loop_is_loop.len() - 1;
                 let is_loop: i64 = ctx.loop_is_loop[is_loop_idx];
                 if is_loop == 1 {
@@ -2577,6 +2799,22 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     ctx.loop_break_counts[cnt_idx] = old_cnt + 1;
                 }
             }
+            // Free loop body allocations before jumping to exit.
+            // Trace transitive sources of break value through Phi/Upsilon chains.
+            let nlasd: i64 = ctx.loop_alloc_scope_depths.len();
+            if nlasd > 0 {
+                let depth: i64 = ctx.loop_alloc_scope_depths[nlasd - 1];
+                if break_live_out.len() > 0 {
+                    let bv: i64 = break_live_out[0];
+                    let sources: Vec<i64> = lctx_collect_return_sources(ctx, bv);
+                    let mut si: i64 = 0;
+                    while si < sources.len() {
+                        break_live_out.push(sources[si]);
+                        si = si + 1;
+                    }
+                }
+                lctx_emit_alloc_frees_to_depth(ctx, depth, break_live_out);
+            }
             let jmp_args: Vec<i64> = Vec::new();
             return lctx_emit(ctx, IOP_JUMP(), ITY_UNIT(), jmp_args, IDATA_JUMP_TARGET(), exit_block, 0, String::from(""));
         }
@@ -2592,6 +2830,29 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let phi_ids2: Vec<i64> = ctx.loop_continue_phi_ids[nlh - 1];
             let scope_depth: i64 = ctx.loop_continue_scope_depth[nlh - 1];
             let nphis: i64 = phi_names.len();
+
+            // Free loop body allocations before jumping back to header.
+            // Include transitive sources so Phi/Upsilon aliases aren't freed.
+            let nlasd: i64 = ctx.loop_alloc_scope_depths.len();
+            if nlasd > 0 {
+                let depth: i64 = ctx.loop_alloc_scope_depths[nlasd - 1];
+                let cont_live_out: Vec<i64> = Vec::new();
+                let mut cli: i64 = 0;
+                while cli < nphis {
+                    let vname: String = phi_names[cli];
+                    let cval: i64 = lctx_lookup_at_depth(ctx, vname, scope_depth);
+                    cont_live_out.push(cval);
+                    let csources: Vec<i64> = lctx_collect_return_sources(ctx, cval);
+                    let mut csi: i64 = 0;
+                    while csi < csources.len() {
+                        cont_live_out.push(csources[csi]);
+                        csi = csi + 1;
+                    }
+                    cli = cli + 1;
+                }
+                lctx_emit_alloc_frees_to_depth(ctx, depth, cont_live_out);
+            }
+
             let mut pi: i64 = 0;
             while pi < nphis {
                 let vname: String = phi_names[pi];
@@ -3065,6 +3326,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     ctx.alloc_sizes = Vec::new();
     ctx.escaped_ids = Vec::new();
     ctx.alloc_scope_starts = Vec::new();
+    ctx.loop_alloc_scope_depths = Vec::new();
 
     if vow_lid != -1 {
         ctx.cur_vow_lid = vow_lid;

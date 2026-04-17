@@ -573,7 +573,8 @@ fn current_binop(p: Parser) -> i64 {
     else if tag == tok_pipe_pipe() { BINOP_OR() }
     else if tag == tok_amp() { BINOP_BITAND() }
     else if tag == tok_pipe() { BINOP_BITOR() }
-    else { BINOP_XOR() }
+    else if tag == tok_caret() { BINOP_XOR() }
+    else { -1 }
 }
 
 fn advance_binop(p: Parser) {

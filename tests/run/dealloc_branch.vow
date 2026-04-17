@@ -1,0 +1,44 @@
+// TEST: stdout "branch_ok:12:for_ok:12"
+module DeallocBranch
+
+// Test that allocations inside if-else branches are freed,
+// not leaked. Before the fix, branch alloc scopes were discarded
+// without emitting free calls.
+fn branch_allocs(flag: bool) -> i64 {
+    let result: i64 = if flag {
+        let s: String = String::from("hello");
+        s.len()
+    } else {
+        let s: String = String::from("world!");
+        let v: Vec<i64> = Vec::new();
+        v.push(1);
+        s.len() + v.len()
+    };
+    result
+}
+
+// Test that allocations inside for-each loop bodies are freed
+// each iteration, not accumulated across iterations.
+fn for_each_allocs() -> i64 {
+    let items: Vec<i64> = Vec::new();
+    items.push(1);
+    items.push(2);
+    items.push(3);
+    let mut total: i64 = 0;
+    for item in items {
+        let s: String = String::from("ab");
+        total = total + item + s.len();
+    }
+    total
+}
+
+fn main() -> i32 [io] {
+    let a: i64 = branch_allocs(false);
+    let b: i64 = branch_allocs(true);
+    print_str(String::from("branch_ok:"));
+    print_i64(a + b);
+    print_str(String::from(":for_ok:"));
+    let c: i64 = for_each_allocs();
+    print_i64(c);
+    0
+}

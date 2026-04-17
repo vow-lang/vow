@@ -5132,11 +5132,7 @@ fn count_contract_density(ir_module: &vow_ir::Module) -> ContractDensity {
         }
     }
     // Integer math matching self-hosted: (n * 1000) / total gives tenths of a percent
-    let tenths = if total > 0 {
-        (with_vows * 1000) / total
-    } else {
-        0
-    };
+    let tenths = ((with_vows * 1000).checked_div(total)).unwrap_or(0);
     ContractDensity {
         functions_total: total,
         functions_with_vows: with_vows,
@@ -5386,8 +5382,9 @@ fn run_test_command(
     }
 
     // Compute final density (integer math matching self-hosted compiler)
-    if total_density.functions_total > 0 {
-        let tenths = (total_density.functions_with_vows * 1000) / total_density.functions_total;
+    if let Some(tenths) =
+        (total_density.functions_with_vows * 1000).checked_div(total_density.functions_total)
+    {
         total_density.density_pct = (tenths / 10) as f64 + (tenths % 10) as f64 / 10.0;
     }
 

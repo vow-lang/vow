@@ -1,0 +1,12 @@
+// TEST: stderr "ContractTypeMismatch"
+module ContractEnsuresNotBool
+
+fn id(x: i64) -> i64 vow {
+    ensures: result + 1
+} {
+    x
+}
+
+fn main() -> () [io] {
+    print_i64(id(42));
+}
