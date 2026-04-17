@@ -1833,11 +1833,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             // Use lookup_at_depth to resolve from the loop header scope,
             // not the current scope, to avoid picking up shadowed bindings.
             let exit_phis = ctx.loop_exit_phis.last().cloned().unwrap_or_default();
-            let scope_depth = ctx
-                .loop_continue_scope_depth
-                .last()
-                .copied()
-                .unwrap_or(0);
+            let scope_depth = ctx.loop_continue_scope_depth.last().copied().unwrap_or(0);
             for (name, exit_phi) in &exit_phis {
                 if let Some(cur_val) = ctx.lookup_at_depth(name, scope_depth) {
                     ctx.emit(
