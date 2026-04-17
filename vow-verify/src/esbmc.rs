@@ -438,7 +438,11 @@ pub fn run_esbmc_with_max_k_step(
         }
     } else {
         // No timeout: block until ESBMC finishes.
-        let _ = child.wait();
+        if let Err(e) = child.wait() {
+            let _ = stdout_thread.join();
+            let _ = stderr_thread.join();
+            return VerificationResult::ToolError(format!("wait error: {e}"));
+        }
     }
 
     let stdout = stdout_thread.join().unwrap_or_default();
@@ -462,8 +466,8 @@ pub fn run_esbmc_with_max_k_step(
 fn force_kill(child: &mut std::process::Child) {
     #[cfg(unix)]
     {
-        let pid = child.id() as i32;
-        let ret = unsafe { libc::kill(-pid, libc::SIGKILL) };
+        let pgid = child.id() as i32;
+        let ret = unsafe { libc::kill(-pgid, libc::SIGKILL) };
         if ret == 0 {
             return;
         }
