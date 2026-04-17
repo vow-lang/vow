@@ -1,15 +1,8 @@
 module Main
 
-use lexer
-use token
-use ast
-use parser
-use types
-use env
-use checker
 use ir
 use ir_printer
-use lower
+use frontend
 use clif
 use c_emitter
 use verifier
@@ -136,76 +129,6 @@ fn default_output(path: String) -> String {
     r
 }
 
-fn get_dir_path(path: String) -> String {
-    let mut last_slash: i64 = -1;
-    let mut i: i64 = 0;
-    let n: i64 = path.len();
-    while i < n {
-        if path.byte_at(i) == 47 {
-            last_slash = i;
-        }
-        i = i + 1;
-    }
-    if last_slash == -1 {
-        String::from(".")
-    } else {
-        let r: String = String::from("");
-        let mut j: i64 = 0;
-        while j < last_slash {
-            r.push_byte(path.byte_at(j));
-            j = j + 1;
-        }
-        r
-    }
-}
-
-fn resolve_use_path(arena: AstArena, root_dir: String, use_lid: i64) -> String {
-    let r: String = String::from("");
-    r.push_str(root_dir);
-    let n: i64 = list_len(arena, use_lid);
-    let mut i: i64 = 0;
-    while i < n {
-        let sid: i64 = list_get(arena, use_lid, i);
-        let component: String = arena.strs[sid];
-        r.push_byte(47);
-        r.push_str(component);
-        i = i + 1;
-    }
-    r.push_str(String::from(".vow"));
-    r
-}
-
-fn load_deps(root_dir: String, m: Module, arena: AstArena, all_items: Vec<i64>, visited: Vec<String>, dctx: DiagCtx) [io] {
-    let uses: Vec<i64> = m.uses;
-    let n_uses: i64 = uses.len();
-    let mut ui: i64 = 0;
-    while ui < n_uses {
-        let use_lid: i64 = uses[ui];
-        let dep_path: String = resolve_use_path(arena, root_dir, use_lid);
-        if !vec_contains_str(visited, dep_path) {
-            visited.push(dep_path);
-            let src: String = fs_read(dep_path);
-            if src.len() == 0 {
-                let d: Diagnostic = diag_error(EC_IO_ERROR(), str2(String::from("cannot read "), dep_path), dep_path, 0, 0);
-                diag_ctx_emit(dctx, d);
-            } else {
-                diag_ctx_add_source(dctx, dep_path, src);
-                let tokens: Vec<Token> = lex(src);
-                let dep_m: Module = parse_module_into(tokens, arena, dctx, dep_path);
-                load_deps(root_dir, dep_m, arena, all_items, visited, dctx);
-                let dep_items: Vec<i64> = dep_m.items;
-                let n_dep: i64 = dep_items.len();
-                let mut di: i64 = 0;
-                while di < n_dep {
-                    all_items.push(dep_items[di]);
-                    di = di + 1;
-                }
-            }
-        }
-        ui = ui + 1;
-    }
-}
-
 fn CMD_NONE() -> i64 vow { ensures: result >= 0 } { 0 }
 fn CMD_BUILD() -> i64 vow { ensures: result >= 0 } { 1 }
 fn CMD_VERIFY() -> i64 vow { ensures: result >= 0 } { 2 }
@@ -236,56 +159,7 @@ fn get_subcommand(argv: Vec<String>) -> i64 {
     CMD_NONE()
 }
 
-struct FrontendResult {
-    path: String,
-    dctx: DiagCtx,
-    merged: Module,
-    str_eids: Vec<i64>,
-    n_items: i64,
-    n_errors: i64,
-}
-
-fn run_frontend_for_path(path: String) -> FrontendResult [io] {
-    let dctx: DiagCtx = diag_ctx_new();
-    let src: String = fs_read(path);
-    diag_ctx_add_source(dctx, path, src);
-    let tokens: Vec<Token> = lex(src);
-    let arena: AstArena = arena_new();
-    let m: Module = parse_module_into(tokens, arena, dctx, path);
-    let root_dir: String = get_dir_path(path);
-    let all_items: Vec<i64> = Vec::new();
-    let visited: Vec<String> = Vec::new();
-    visited.push(path);
-    load_deps(root_dir, m, arena, all_items, visited, dctx);
-    let root_items: Vec<i64> = m.items;
-    let n_root: i64 = root_items.len();
-    let mut ri: i64 = 0;
-    while ri < n_root {
-        all_items.push(root_items[ri]);
-        ri = ri + 1;
-    }
-    let merged: Module = Module {
-        name_sid: 0,
-        uses: Vec::new(),
-        items: all_items,
-        arena: arena,
-    };
-    let n_items: i64 = all_items.len();
-    let e: CheckEnv = env_new(dctx, path);
-    check_module(e, merged);
-    let n_errors: i64 = dctx.error_count;
-    let str_eids: Vec<i64> = e.expr_str_eids;
-    FrontendResult {
-        path: path,
-        dctx: dctx,
-        merged: merged,
-        str_eids: str_eids,
-        n_items: n_items,
-        n_errors: n_errors,
-    }
-}
-
-fn run_frontend(argv: Vec<String>, sub: bool) -> FrontendResult [io] {
+fn frontend_path_from_argv(argv: Vec<String>, sub: bool) -> String [io] {
     let path: String = {
         if sub {
             get_source_path_sub(argv)
@@ -297,7 +171,7 @@ fn run_frontend(argv: Vec<String>, sub: bool) -> FrontendResult [io] {
         eprintln_str("usage: vowc <command> [options] <file.vow>");
         process_exit(1);
     }
-    run_frontend_for_path(path)
+    path
 }
 
 fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, max_k_step: String, use_cache: bool, solver: String, encoding: String) -> i64 [io] {
@@ -373,13 +247,12 @@ fn emit_ir_warnings(ir_mod: IrModule, dctx: DiagCtx) [io] {
 }
 
 fn run_verify(argv: Vec<String>) -> i32 [io] {
-    let fr: FrontendResult = run_frontend(argv, true);
-    let path: String = fr.path;
-    let dctx: DiagCtx = fr.dctx;
-    let merged: Module = fr.merged;
-    let str_eids: Vec<i64> = fr.str_eids;
-    let n_items: i64 = fr.n_items;
-    let n_errors: i64 = fr.n_errors;
+    let path: String = frontend_path_from_argv(argv, true);
+    let fr: LoweredFrontend = frontend_lower_path(path);
+    let checked: CheckedFrontend = fr.checked;
+    let dctx: DiagCtx = checked.dctx;
+    let n_items: i64 = checked.n_items;
+    let n_errors: i64 = checked.n_errors;
     diag_ctx_print_all(dctx);
     eprintln_str(str4(i64_to_str(n_items), String::from(" items, "), i64_to_str(n_errors), String::from(" errors")));
     if n_errors > 0 {
@@ -408,7 +281,7 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
         diag_emit_verify_json(String::from("VerifyFailed"), dctx, Vec::new());
         return 1;
     }
-    let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
+    let ir_mod: IrModule = fr.ir_mod;
     emit_ir_warnings(ir_mod, dctx);
     let fns: Vec<IrFunction> = ir_mod.functions;
     let ces: Vec<VerifyCE> = Vec::new();
@@ -428,13 +301,12 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
 }
 
 fn run_build(argv: Vec<String>) -> i32 [io] {
-    let fr: FrontendResult = run_frontend(argv, true);
-    let path: String = fr.path;
-    let dctx: DiagCtx = fr.dctx;
-    let merged: Module = fr.merged;
-    let str_eids: Vec<i64> = fr.str_eids;
-    let n_items: i64 = fr.n_items;
-    let n_errors: i64 = fr.n_errors;
+    let path: String = frontend_path_from_argv(argv, true);
+    let fr: LoweredFrontend = frontend_lower_path(path);
+    let checked: CheckedFrontend = fr.checked;
+    let dctx: DiagCtx = checked.dctx;
+    let n_items: i64 = checked.n_items;
+    let n_errors: i64 = checked.n_errors;
     diag_ctx_print_all(dctx);
     eprintln_str(str4(i64_to_str(n_items), String::from(" items, "), i64_to_str(n_errors), String::from(" errors")));
     if n_errors > 0 {
@@ -461,7 +333,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         else if trace_str == String::from("full") { 2 }
         else { 0 }
     };
-    let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
+    let ir_mod: IrModule = fr.ir_mod;
     emit_ir_warnings(ir_mod, dctx);
     let do_verify: bool = !has_flag(argv, String::from("--no-verify"));
     if do_verify {
@@ -717,8 +589,9 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
         let start_time: i64 = time_unix_ms();
 
         // Compile
-        let fr: FrontendResult = run_frontend_for_path(test_path);
-        if fr.n_errors > 0 {
+        let fr: LoweredFrontend = frontend_lower_path(test_path);
+        let checked: CheckedFrontend = fr.checked;
+        if checked.n_errors > 0 {
             let duration: i64 = time_unix_ms() - start_time;
             let diag_json: String = String::from("[{\"error_code\":\"CompileError\",\"message\":\"compilation failed\",\"severity\":\"error\"}]");
             let entry: String = emit_test_entry_json(test_path, short_name, String::from("compile_error"), -1, String::from(""), String::from(""), duration, diag_json);
@@ -726,7 +599,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
             failed = failed + 1;
             ti = ti + 1;
         } else {
-            let ir_mod: IrModule = lower_module_vow(fr.merged, fr.str_eids, test_path);
+            let ir_mod: IrModule = fr.ir_mod;
 
             // Count contract density
             let fns2: Vec<IrFunction> = ir_mod.functions;
@@ -879,34 +752,12 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
         eprintln_str("usage: main [-o <output>] <file.vow>");
         return 1;
     }
-    let dctx: DiagCtx = diag_ctx_new();
-    let src: String = fs_read(path);
-    diag_ctx_add_source(dctx, path, src);
-    let tokens: Vec<Token> = lex(src);
-    let arena: AstArena = arena_new();
-    let m: Module = parse_module_into(tokens, arena, dctx, path);
-    let root_dir: String = get_dir_path(path);
-    let all_items: Vec<i64> = Vec::new();
-    let visited: Vec<String> = Vec::new();
-    visited.push(path);
-    load_deps(root_dir, m, arena, all_items, visited, dctx);
-    let root_items: Vec<i64> = m.items;
-    let n_root: i64 = root_items.len();
-    let mut ri: i64 = 0;
-    while ri < n_root {
-        all_items.push(root_items[ri]);
-        ri = ri + 1;
-    }
-    let merged: Module = Module {
-        name_sid: 0,
-        uses: Vec::new(),
-        items: all_items,
-        arena: arena,
-    };
-    let n_items: i64 = all_items.len();
-    let e: CheckEnv = env_new(dctx, path);
-    check_module(e, merged);
-    let n_errors: i64 = dctx.error_count;
+    let fr: LoweredFrontend = frontend_lower_path(path);
+    let checked: CheckedFrontend = fr.checked;
+    let dctx: DiagCtx = checked.dctx;
+    let n_items: i64 = checked.n_items;
+    let n_errors: i64 = checked.n_errors;
+    let ir_mod: IrModule = fr.ir_mod;
     diag_ctx_print_all(dctx);
     let emit_c: bool = has_flag(argv, String::from("--emit-c"));
     let do_verify: bool = has_flag(argv, String::from("--verify"));
@@ -936,8 +787,6 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
                 if mks_str.len() > 0 { mks_str }
                 else { String::from("50") }
             };
-            let str_eids: Vec<i64> = e.expr_str_eids;
-            let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
             emit_ir_warnings(ir_mod, dctx);
             let fns: Vec<IrFunction> = ir_mod.functions;
             let ces: Vec<VerifyCE> = Vec::new();
@@ -955,8 +804,6 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
                 return 1;
             }
         } else if emit_c {
-            let str_eids: Vec<i64> = e.expr_str_eids;
-            let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
             emit_ir_warnings(ir_mod, dctx);
             let c_code: String = emit_c_module(ir_mod);
             print_str(c_code);
@@ -975,8 +822,6 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
                 else if trace_str == String::from("full") { 2 }
                 else { 0 }
             };
-            let str_eids: Vec<i64> = e.expr_str_eids;
-            let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
             emit_ir_warnings(ir_mod, dctx);
             let result: i64 = clif_emit_module(ir_mod, out, mode, trace);
             if result == -1 {
@@ -989,8 +834,6 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
                 diag_emit_build_json(String::from("Unverified"), out, dctx);
             }
         } else {
-            let str_eids: Vec<i64> = e.expr_str_eids;
-            let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
             emit_ir_warnings(ir_mod, dctx);
             let ir_text: String = print_module(ir_mod);
             print_str(ir_text);
@@ -4558,18 +4401,17 @@ fn vow_kind_from_desc(desc: String) -> String {
 }
 
 fn run_contracts(argv: Vec<String>) -> i32 [io] {
-    let fr: FrontendResult = run_frontend(argv, true);
-    let path: String = fr.path;
-    let dctx: DiagCtx = fr.dctx;
-    let merged: Module = fr.merged;
-    let str_eids: Vec<i64> = fr.str_eids;
-    let n_errors: i64 = fr.n_errors;
+    let path: String = frontend_path_from_argv(argv, true);
+    let fr: LoweredFrontend = frontend_lower_path(path);
+    let checked: CheckedFrontend = fr.checked;
+    let dctx: DiagCtx = checked.dctx;
+    let n_errors: i64 = checked.n_errors;
     diag_ctx_print_all(dctx);
     if n_errors > 0 {
         diag_emit_verify_json(String::from("CompileFailed"), dctx, Vec::new());
         return 1;
     }
-    let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
+    let ir_mod: IrModule = fr.ir_mod;
 
     let do_verify: bool = has_flag(argv, String::from("--verify"));
     let use_cache: bool = !has_flag(argv, String::from("--no-cache"));

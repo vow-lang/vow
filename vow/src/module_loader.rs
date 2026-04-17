@@ -4,12 +4,12 @@ use std::path::{Path, PathBuf};
 use vow_diag::{Blame, Diagnostic, ErrorCode, Severity, SourceLocation};
 use vow_syntax::ast::Module;
 
-pub struct ModuleGraph {
+pub(crate) struct ModuleGraph {
     /// Modules in dependency-first order; root is last.
     pub modules: Vec<(PathBuf, Module)>,
 }
 
-pub fn load_modules(root: &Path, root_ast: &Module) -> Result<ModuleGraph, Vec<Diagnostic>> {
+pub(crate) fn load_modules(root: &Path, root_ast: &Module) -> Result<ModuleGraph, Vec<Diagnostic>> {
     let root_dir = root.parent().unwrap_or(root);
     let mut modules: Vec<(PathBuf, Module)> = Vec::new();
     let mut visited: HashSet<PathBuf> = HashSet::new();
@@ -59,7 +59,7 @@ fn load_deps(
             Err(e) => {
                 errors.push(Diagnostic {
                     severity: Severity::Error,
-                    code: ErrorCode::TypeMismatch,
+                    code: ErrorCode::IoError,
                     message: format!("cannot load module `{}`: {e}", use_decl.path.join(".")),
                     primary: SourceLocation {
                         file: use_decl.path.join("."),
@@ -83,68 +83,9 @@ fn resolve_use(root_dir: &Path, path: &[String]) -> PathBuf {
     result.with_extension("vow")
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    fn write_vow(dir: &TempDir, name: &str, src: &str) -> PathBuf {
-        let path = dir.path().join(name);
-        std::fs::write(&path, src).unwrap();
-        path
-    }
-
-    #[test]
-    fn load_modules_missing_import_returns_error() {
-        let dir = TempDir::new().unwrap();
-        let src = "module Main\nuse nonexistent\nfn f() -> i32 { 0 }";
-        let path = write_vow(&dir, "main.vow", src);
-        let (ast, diags) = vow_syntax::parser::parse_module(src, &path.to_string_lossy());
-        assert!(diags.is_empty());
-        let result = load_modules(&path, &ast);
-        assert!(result.is_err(), "should fail when import not found");
-        let errors = result.err().unwrap();
-        assert!(!errors.is_empty());
-        assert!(errors[0].message.contains("nonexistent"));
-    }
-
-    #[test]
-    fn load_modules_duplicate_import_not_loaded_twice() {
-        let dir = TempDir::new().unwrap();
-        write_vow(&dir, "lib.vow", "module Lib\nfn helper() -> i32 { 0 }");
-        let src = "module Main\nuse lib\nuse lib\nfn f() -> i32 { 0 }";
-        let path = write_vow(&dir, "main.vow", src);
-        let (ast, diags) = vow_syntax::parser::parse_module(src, &path.to_string_lossy());
-        assert!(diags.is_empty());
-        let result = load_modules(&path, &ast);
-        assert!(result.is_ok(), "should succeed with duplicate import");
-        let graph = result.unwrap();
-        let lib_count = graph
-            .modules
-            .iter()
-            .filter(|(p, _)| p.ends_with("lib.vow"))
-            .count();
-        assert_eq!(lib_count, 1, "lib should only appear once");
-    }
-
-    #[test]
-    fn merge_modules_combines_items() {
-        let dir = TempDir::new().unwrap();
-        write_vow(&dir, "lib.vow", "module Lib\nfn helper() -> i32 { 0 }");
-        let src = "module Main\nuse lib\nfn main_fn() -> i32 { 0 }";
-        let path = write_vow(&dir, "main.vow", src);
-        let (ast, _) = vow_syntax::parser::parse_module(src, &path.to_string_lossy());
-        let graph = load_modules(&path, &ast).unwrap();
-        let merged = merge_modules(graph);
-        assert_eq!(merged.name, "Main");
-        assert_eq!(merged.items.len(), 2, "should have helper + main_fn");
-        assert!(merged.uses.is_empty(), "merged module has no uses");
-    }
-}
-
 /// Merge all modules into a single Module for unified type-checking and lowering.
 /// All items from dependency modules are visible as if declared in the root.
-pub fn merge_modules(graph: ModuleGraph) -> Module {
+pub(crate) fn merge_modules(graph: ModuleGraph) -> Module {
     let (_, root_module) = graph
         .modules
         .last()

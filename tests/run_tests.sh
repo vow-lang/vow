@@ -75,6 +75,28 @@ json_field() {
   python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('$field',''))" <<< "$json"
 }
 
+json_path_field() {
+  local json="$1"
+  local path="$2"
+  JSON_PATH="$path" python3 -c "
+import json
+import os
+import sys
+
+cur = json.loads(sys.stdin.read())
+for part in os.environ['JSON_PATH'].split('.'):
+    if isinstance(cur, dict):
+        cur = cur.get(part, '')
+    else:
+        cur = ''
+        break
+if isinstance(cur, (dict, list)):
+    print(json.dumps(cur))
+else:
+    print(cur)
+" <<< "$json"
+}
+
 json_cx_field() {
   local json="$1"
   local field="$2"
@@ -490,6 +512,69 @@ for d in "$SCRIPT_DIR"/multi/*/; do
 done
 
 # --- Summary ---
+
+section_header "Phase 7: frontend/ (staged boundary regressions)"
+
+stack_main="$SCRIPT_DIR/multi/stack/main.vow"
+geometry_main="$SCRIPT_DIR/multi/geometry/main.vow"
+
+name="frontend_stack_contracts"
+if matches_filter "$name"; then
+  set +e
+  contracts_json="$(run_vowc contracts "$stack_main" 2>/dev/null)"
+  contracts_exit=$?
+  set -e
+  contracts_total="$(json_path_field "$contracts_json" "summary.total")"
+  if [[ "$contracts_exit" -ne 0 ]]; then
+    fail "$name" "exit $contracts_exit"
+  elif [[ "$contracts_total" != "2" ]]; then
+    fail "$name" "summary.total=$contracts_total (expected 2)"
+  else
+    pass "$name"
+  fi
+fi
+
+name="frontend_stack_test"
+if matches_filter "$name"; then
+  set +e
+  test_json="$(run_vowc test "$stack_main" 2>/dev/null)"
+  test_exit=$?
+  set -e
+  test_status="$(json_field "$test_json" "status")"
+  test_passed="$(json_field "$test_json" "passed")"
+  if [[ "$test_exit" -ne 0 ]]; then
+    fail "$name" "exit $test_exit"
+  elif [[ "$test_status" != "TestsPassed" ]]; then
+    fail "$name" "status=$test_status (expected TestsPassed)"
+  elif [[ "$test_passed" != "1" ]]; then
+    fail "$name" "passed=$test_passed (expected 1)"
+  else
+    pass "$name"
+  fi
+fi
+
+name="frontend_geometry_verify"
+if [[ "$NO_VERIFY" == true ]]; then
+  if matches_filter "$name"; then
+    echo -e "  ${YELLOW}SKIP${RESET} frontend_geometry_verify — --no-verify"
+    SKIP=$((SKIP + 1))
+  fi
+else
+  if matches_filter "$name"; then
+    set +e
+    verify_json="$(run_vowc verify "$geometry_main" 2>/dev/null)"
+    verify_exit=$?
+    set -e
+    verify_status="$(json_field "$verify_json" "status")"
+    if [[ "$verify_exit" -ne 0 ]]; then
+      fail "$name" "exit $verify_exit"
+    elif [[ "$verify_status" != "Verified" ]]; then
+      fail "$name" "status=$verify_status (expected Verified)"
+    else
+      pass "$name"
+    fi
+  fi
+fi
 
 echo ""
 echo -e "${BOLD}=== Summary ===${RESET}"

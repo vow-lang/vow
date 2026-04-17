@@ -1,5 +1,6 @@
-pub mod cache;
-pub mod module_loader;
+mod cache;
+mod frontend;
+mod module_loader;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,7 +13,7 @@ use serde::Serialize;
 use vow_codegen::cranelift_backend::CraneliftBackend;
 use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
-use vow_diag::{CollectingEmitter, Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
+use vow_diag::{Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
     Counterexample, DEFAULT_MAX_K_STEP, Encoding, Solver, SolverConfig, VerificationResult,
     detect_constant_functions, emit_verify_c_source, find_esbmc, run_esbmc_with_max_k_step,
@@ -20,6 +21,7 @@ use vow_verify::{
 };
 
 use cache::{CachedVerifyResult, VerifyCache};
+use frontend::{FrontendBundle, FrontendError, FrontendGoal, prepare_frontend};
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -4482,107 +4484,38 @@ fn build_call_site_index(
 // Frontend (parse → module load → type check → IR lower)
 // ---------------------------------------------------------------------------
 
-struct FrontendResult {
-    ir_module: Arc<vow_ir::Module>,
-    diagnostics: Vec<Diagnostic>,
-    source_files: Vec<PathBuf>,
+fn emit_frontend_diagnostics(diagnostics: &[Diagnostic]) {
+    let mut stderr_emit = HumanEmitter::new(Box::new(std::io::stderr()));
+    for diagnostic in diagnostics {
+        stderr_emit.emit(diagnostic);
+    }
+    stderr_emit.finish();
 }
 
-fn compile_frontend(source: &Path) -> Result<FrontendResult, Box<BuildOutput>> {
-    let src = match std::fs::read_to_string(source) {
-        Ok(s) => s,
-        Err(e) => {
-            return Err(Box::new(BuildOutput {
-                status: BuildStatus::CompileFailed {
-                    message: e.to_string(),
-                },
-                executable: None,
-                diagnostics: vec![],
-                counterexamples: vec![],
-                verify_status: None,
-                verify_message: None,
-            }));
+fn frontend_error_to_output(error: FrontendError) -> BuildOutput {
+    let message = error.failure_message().to_string();
+    let diagnostics = error.into_diagnostics();
+    BuildOutput {
+        status: BuildStatus::CompileFailed { message },
+        executable: None,
+        diagnostics,
+        counterexamples: vec![],
+        verify_status: None,
+        verify_message: None,
+    }
+}
+
+fn compile_frontend(source: &Path) -> Result<FrontendBundle, Box<BuildOutput>> {
+    match prepare_frontend(source, FrontendGoal::LoweredIr) {
+        Ok(bundle) => {
+            emit_frontend_diagnostics(bundle.diagnostics());
+            Ok(bundle)
         }
-    };
-
-    let mut stderr_emit = HumanEmitter::new(Box::new(std::io::stderr()));
-    let mut all_diagnostics: Vec<Diagnostic> = Vec::new();
-
-    let file_str = source.to_string_lossy();
-    let (root_ast, parse_diags) = vow_syntax::parser::parse_module(&src, &file_str);
-    let parse_failed = parse_diags.iter().any(|d| d.severity == Severity::Error);
-    for d in &parse_diags {
-        stderr_emit.emit(d);
-    }
-    all_diagnostics.extend(parse_diags);
-    if parse_failed {
-        return Err(Box::new(BuildOutput {
-            status: BuildStatus::CompileFailed {
-                message: "parse error".to_string(),
-            },
-            executable: None,
-            diagnostics: all_diagnostics,
-            counterexamples: vec![],
-            verify_status: None,
-            verify_message: None,
-        }));
-    }
-
-    let (ast, source_files) = match module_loader::load_modules(source, &root_ast) {
-        Ok(graph) => {
-            let files: Vec<PathBuf> = graph.modules.iter().map(|(p, _)| p.clone()).collect();
-            (module_loader::merge_modules(graph), files)
+        Err(error) => {
+            emit_frontend_diagnostics(error.diagnostics());
+            Err(Box::new(frontend_error_to_output(error)))
         }
-        Err(diags) => {
-            for d in &diags {
-                stderr_emit.emit(d);
-            }
-            all_diagnostics.extend(diags);
-            return Err(Box::new(BuildOutput {
-                status: BuildStatus::CompileFailed {
-                    message: "module load error".to_string(),
-                },
-                executable: None,
-                diagnostics: all_diagnostics,
-                counterexamples: vec![],
-                verify_status: None,
-                verify_message: None,
-            }));
-        }
-    };
-
-    let mut collecting_emit = CollectingEmitter::new(&mut stderr_emit);
-    let mut checker =
-        vow_types::check::Checker::new(source.to_string_lossy().to_string(), &mut collecting_emit);
-    checker.check_module(&ast);
-    let has_errors = checker.has_errors();
-    let string_exprs = checker.into_string_exprs();
-    all_diagnostics.extend(collecting_emit.into_diagnostics());
-    if has_errors {
-        return Err(Box::new(BuildOutput {
-            status: BuildStatus::CompileFailed {
-                message: "type error".to_string(),
-            },
-            executable: None,
-            diagnostics: all_diagnostics,
-            counterexamples: vec![],
-            verify_status: None,
-            verify_message: None,
-        }));
     }
-
-    let module = vow_ir::lower_module(&ast, &source.to_string_lossy(), &string_exprs);
-    for w in &module.warnings {
-        stderr_emit.emit(w);
-    }
-    all_diagnostics.extend(module.warnings.iter().cloned());
-    let ir_module = Arc::new(module);
-
-    Ok(FrontendResult {
-        ir_module,
-        diagnostics: all_diagnostics,
-        source_files,
-    })
 }
 
 // ---------------------------------------------------------------------------
@@ -4875,23 +4808,27 @@ fn run_verify_only_inner(
         Ok(f) => f,
         Err(output) => return *output,
     };
+    let all_diagnostics = frontend.diagnostics().to_vec();
+    let ir_module = frontend
+        .ir()
+        .expect("LoweredIr goal must produce IR for verify-only");
 
     if find_esbmc().is_none() {
-        return verify_outcome_to_output(VerifyOutcome::ToolNotFound, frontend.diagnostics, None);
+        return verify_outcome_to_output(VerifyOutcome::ToolNotFound, all_diagnostics, None);
     }
 
     let verify_cache = if no_cache { None } else { VerifyCache::new() };
     let file = source.to_string_lossy().to_string();
-    let call_site_index = build_call_site_index(&frontend.ir_module, &file);
+    let call_site_index = build_call_site_index(ir_module, &file);
     let outcome = run_verification_sync(
-        &frontend.ir_module,
+        ir_module,
         &file,
         &call_site_index,
         verify_cache.as_ref(),
         max_k_step,
         config,
     );
-    verify_outcome_to_output(outcome, frontend.diagnostics, None)
+    verify_outcome_to_output(outcome, all_diagnostics, None)
 }
 
 // ---------------------------------------------------------------------------
@@ -4963,7 +4900,7 @@ fn run_pipeline_inner(
 
 #[allow(clippy::too_many_arguments)]
 fn run_pipeline_from_frontend(
-    frontend: FrontendResult,
+    frontend: FrontendBundle,
     source: &Path,
     output: Option<&Path>,
     mode: BuildMode,
@@ -4974,8 +4911,11 @@ fn run_pipeline_from_frontend(
     max_k_step: u32,
     config: &SolverConfig,
 ) -> BuildOutput {
-    let all_diagnostics = frontend.diagnostics;
-    let ir_module = frontend.ir_module;
+    let all_diagnostics = frontend.diagnostics().to_vec();
+    let ir_module = frontend
+        .ir()
+        .cloned()
+        .expect("LoweredIr goal must produce IR for build pipeline");
 
     if dump_ir {
         print!("{}", vow_ir::print_module(&ir_module));
@@ -5032,7 +4972,7 @@ fn run_pipeline_from_frontend(
     } else {
         cache::CompileCache::new()
     };
-    let cache_key = cache::CompileCache::cache_key(&frontend.source_files, &mode_str, &trace_str);
+    let cache_key = cache::CompileCache::cache_key(frontend.dependencies(), &mode_str, &trace_str);
 
     if let Some(ref cc) = compile_cache
         && let Some(cached_obj) = cc.lookup(&cache_key)
@@ -5219,7 +5159,11 @@ fn run_test_command(
             }
         };
 
-        let density = count_contract_density(&frontend.ir_module);
+        let density = count_contract_density(
+            frontend
+                .ir()
+                .expect("LoweredIr goal must produce IR for test density"),
+        );
         total_density.functions_total += density.functions_total;
         total_density.functions_with_vows += density.functions_with_vows;
 
@@ -5455,50 +5399,19 @@ fn run_build_command(
 }
 
 fn run_decl_command(source: &Path, output: Option<&Path>) {
-    let src = match std::fs::read_to_string(source) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("vow decl: {}", e);
+    let frontend = match prepare_frontend(source, FrontendGoal::MergedAst) {
+        Ok(bundle) => {
+            emit_frontend_diagnostics(bundle.diagnostics());
+            bundle
+        }
+        Err(error) => {
+            emit_frontend_diagnostics(error.diagnostics());
+            eprintln!("vow decl: {}", error.failure_message());
             std::process::exit(1);
         }
     };
 
-    let file_str = source.to_string_lossy();
-    let (root_ast, parse_diags) = vow_syntax::parser::parse_module(&src, &file_str);
-    let mut stderr_emit = HumanEmitter::new(Box::new(std::io::stderr()));
-    let parse_failed = parse_diags.iter().any(|d| d.severity == Severity::Error);
-    for d in &parse_diags {
-        stderr_emit.emit(d);
-    }
-    if parse_failed {
-        eprintln!("vow decl: parse errors");
-        std::process::exit(1);
-    }
-
-    let (ast, _source_files) = match module_loader::load_modules(source, &root_ast) {
-        Ok(graph) => {
-            let files: Vec<PathBuf> = graph.modules.iter().map(|(p, _)| p.clone()).collect();
-            (module_loader::merge_modules(graph), files)
-        }
-        Err(diags) => {
-            for d in &diags {
-                stderr_emit.emit(d);
-            }
-            eprintln!("vow decl: module load error");
-            std::process::exit(1);
-        }
-    };
-
-    let mut collecting_emit = CollectingEmitter::new(&mut stderr_emit);
-    let mut checker =
-        vow_types::check::Checker::new(source.to_string_lossy().to_string(), &mut collecting_emit);
-    checker.check_module(&ast);
-    if checker.has_errors() {
-        eprintln!("vow decl: type errors");
-        std::process::exit(1);
-    }
-
-    let decl_text = vow_syntax::printer::print_declarations(&ast);
+    let decl_text = vow_syntax::printer::print_declarations(frontend.module());
 
     let out_path = match output {
         Some(p) => p.to_path_buf(),
@@ -5680,9 +5593,13 @@ fn run_contracts_command(
             std::process::exit(1);
         }
     };
+    let all_diagnostics = frontend.diagnostics().to_vec();
+    let ir_module = frontend
+        .ir()
+        .expect("LoweredIr goal must produce IR for contracts");
 
     let mut entries: Vec<ContractEntryJson> = Vec::new();
-    for func in &frontend.ir_module.functions {
+    for func in &ir_module.functions {
         for vow in &func.vows {
             let kind = vow_kind_from_description(&vow.description);
             let blame = match vow.blame {
@@ -5708,14 +5625,14 @@ fn run_contracts_command(
     if verify {
         if find_esbmc().is_none() {
             let output =
-                verify_outcome_to_output(VerifyOutcome::ToolNotFound, frontend.diagnostics, None);
+                verify_outcome_to_output(VerifyOutcome::ToolNotFound, all_diagnostics, None);
             output.emit_json();
             std::process::exit(1);
         }
         let verify_cache = if no_cache { None } else { VerifyCache::new() };
         update_contract_statuses(
             &mut entries,
-            &frontend.ir_module,
+            ir_module,
             verify_cache.as_ref(),
             max_k_step,
             config,
