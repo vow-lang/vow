@@ -2917,7 +2917,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             }
 
             // Free loop body allocations before jumping to exit.
-            // Trace transitive sources of break value through Phi/Upsilon chains.
+            // Trace transitive sources of break value and mutation variables
+            // through Phi/Upsilon chains so they aren't freed prematurely.
             let nlasd: i64 = ctx.loop_alloc_scope_depths.len();
             if nlasd > 0 {
                 let depth: i64 = ctx.loop_alloc_scope_depths[nlasd - 1];
@@ -2928,6 +2929,27 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     while si < sources.len() {
                         break_live_out.push(sources[si]);
                         si = si + 1;
+                    }
+                }
+                // Include mutation variable values so they survive the free.
+                let nep3: i64 = ctx.loop_exit_phi_names.len();
+                if nep3 > 0 {
+                    let mv_names: Vec<String> = ctx.loop_exit_phi_names[nep3 - 1];
+                    let nmv: i64 = mv_names.len();
+                    let mut mvi: i64 = 0;
+                    while mvi < nmv {
+                        let mv_name: String = mv_names[mvi];
+                        let mv_val: i64 = lctx_lookup(ctx, mv_name);
+                        if mv_val != -1 {
+                            break_live_out.push(mv_val);
+                            let mv_sources: Vec<i64> = lctx_collect_return_sources(ctx, mv_val);
+                            let mut msi: i64 = 0;
+                            while msi < mv_sources.len() {
+                                break_live_out.push(mv_sources[msi]);
+                                msi = msi + 1;
+                            }
+                        }
+                        mvi = mvi + 1;
                     }
                 }
                 lctx_emit_alloc_frees_to_depth(ctx, depth, break_live_out);
