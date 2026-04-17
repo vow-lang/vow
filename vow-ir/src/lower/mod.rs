@@ -992,6 +992,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 for src in ctx.collect_return_sources(then_val) {
                     live_out.push(src);
                 }
+                for mv in &then_mut_vals {
+                    for src in ctx.collect_return_sources(*mv) {
+                        live_out.push(src);
+                    }
+                }
                 ctx.pop_alloc_scope_frees(&live_out, span);
             } else {
                 ctx.alloc_scopes.pop();
@@ -1039,6 +1044,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 live_out.push(else_val);
                 for src in ctx.collect_return_sources(else_val) {
                     live_out.push(src);
+                }
+                for mv in &else_mut_vals {
+                    for src in ctx.collect_return_sources(*mv) {
+                        live_out.push(src);
+                    }
                 }
                 ctx.pop_alloc_scope_frees(&live_out, span);
             } else {
@@ -1777,7 +1787,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             if let Some(&depth) = ctx.loop_alloc_scope_depth.last() {
                 let mut live_out: Vec<InstId> = Vec::new();
                 for (name, _) in &phis {
-                    if let Some(val) = ctx.lookup(name) {
+                    if let Some(val) = ctx.lookup_at_depth(name, scope_depth) {
                         for src in ctx.collect_return_sources(val) {
                             live_out.push(src);
                         }
@@ -2176,6 +2186,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             for src in ctx.collect_return_sources(arm_result) {
                                 live_out.push(src);
                             }
+                            for mv in &arm_mut_vals {
+                                for src in ctx.collect_return_sources(*mv) {
+                                    live_out.push(src);
+                                }
+                            }
                             ctx.pop_alloc_scope_frees(&live_out, span);
                         } else {
                             ctx.alloc_scopes.pop();
@@ -2229,6 +2244,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             live_out.push(arm_result);
                             for src in ctx.collect_return_sources(arm_result) {
                                 live_out.push(src);
+                            }
+                            for mv in &arm_mut_vals {
+                                for src in ctx.collect_return_sources(*mv) {
+                                    live_out.push(src);
+                                }
                             }
                             ctx.pop_alloc_scope_frees(&live_out, span);
                         } else {

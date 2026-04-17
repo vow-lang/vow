@@ -1241,16 +1241,44 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let then_terminated: bool = lctx_is_terminated(ctx);
         let then_exit_block: i64 = ctx.current_block;
 
-        // Discard branch alloc scope (branch temporaries freed at function exit).
-        lctx_discard_alloc_scope(ctx);
+        // Collect mutation values before freeing branch temporaries.
+        let then_mut_vals: Vec<i64> = Vec::new();
+        let mut tmi: i64 = 0;
+        while tmi < nmut {
+            then_mut_vals.push(lctx_lookup(ctx, mutations[tmi]));
+            tmi = tmi + 1;
+        }
+        // Free branch temporaries (keep result and transitive sources alive).
+        if !then_terminated {
+            let then_live_out: Vec<i64> = Vec::new();
+            let mut loi: i64 = 0;
+            while loi < then_mut_vals.len() {
+                then_live_out.push(then_mut_vals[loi]);
+                let srcs: Vec<i64> = lctx_collect_return_sources(ctx, then_mut_vals[loi]);
+                let mut si: i64 = 0;
+                while si < srcs.len() {
+                    then_live_out.push(srcs[si]);
+                    si = si + 1;
+                }
+                loi = loi + 1;
+            }
+            then_live_out.push(then_result);
+            let rsrcs: Vec<i64> = lctx_collect_return_sources(ctx, then_result);
+            let mut rsi: i64 = 0;
+            while rsi < rsrcs.len() {
+                then_live_out.push(rsrcs[rsi]);
+                rsi = rsi + 1;
+            }
+            lctx_pop_alloc_scope_frees(ctx, then_live_out);
+        } else {
+            lctx_discard_alloc_scope(ctx);
+        }
 
         let mut_up_then: Vec<i64> = Vec::new();
         let mut mi: i64 = 0;
         while mi < nmut {
-            let mname: String = mutations[mi];
-            let mval: i64 = lctx_lookup(ctx, mname);
             let up_args: Vec<i64> = Vec::new();
-            up_args.push(mval);
+            up_args.push(then_mut_vals[mi]);
             let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
             mut_up_then.push(up_id);
             mi = mi + 1;
@@ -1285,16 +1313,44 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let else_terminated: bool = lctx_is_terminated(ctx);
         let else_exit_block: i64 = ctx.current_block;
 
-        // Discard branch alloc scope (branch temporaries freed at function exit).
-        lctx_discard_alloc_scope(ctx);
+        // Collect mutation values before freeing branch temporaries.
+        let else_mut_vals: Vec<i64> = Vec::new();
+        let mut emi: i64 = 0;
+        while emi < nmut {
+            else_mut_vals.push(lctx_lookup(ctx, mutations[emi]));
+            emi = emi + 1;
+        }
+        // Free branch temporaries (keep result and transitive sources alive).
+        if !else_terminated {
+            let else_live_out: Vec<i64> = Vec::new();
+            let mut eloi: i64 = 0;
+            while eloi < else_mut_vals.len() {
+                else_live_out.push(else_mut_vals[eloi]);
+                let esrcs: Vec<i64> = lctx_collect_return_sources(ctx, else_mut_vals[eloi]);
+                let mut esi: i64 = 0;
+                while esi < esrcs.len() {
+                    else_live_out.push(esrcs[esi]);
+                    esi = esi + 1;
+                }
+                eloi = eloi + 1;
+            }
+            else_live_out.push(else_result);
+            let ersrcs: Vec<i64> = lctx_collect_return_sources(ctx, else_result);
+            let mut ersi: i64 = 0;
+            while ersi < ersrcs.len() {
+                else_live_out.push(ersrcs[ersi]);
+                ersi = ersi + 1;
+            }
+            lctx_pop_alloc_scope_frees(ctx, else_live_out);
+        } else {
+            lctx_discard_alloc_scope(ctx);
+        }
 
         let mut_up_else: Vec<i64> = Vec::new();
         let mut mi2: i64 = 0;
         while mi2 < nmut {
-            let mname: String = mutations[mi2];
-            let mval: i64 = lctx_lookup(ctx, mname);
             let up_args: Vec<i64> = Vec::new();
-            up_args.push(mval);
+            up_args.push(else_mut_vals[mi2]);
             let up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
             mut_up_else.push(up_id);
             mi2 = mi2 + 1;
@@ -2472,16 +2528,46 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 }
 
                 let arm_result: i64 = lower_expr(ctx, body_eid);
+                let arm_terminated: bool = lctx_is_terminated(ctx);
                 lctx_pop_scope(ctx);
 
-                // Discard match arm alloc scope.
-                lctx_discard_alloc_scope(ctx);
+                // Collect mutation values before freeing match arm temporaries.
+                let arm_mut_vals: Vec<i64> = Vec::new();
+                let mut ami: i64 = 0;
+                while ami < nmut {
+                    arm_mut_vals.push(lctx_lookup(ctx, match_muts[ami]));
+                    ami = ami + 1;
+                }
+                // Free match arm temporaries (keep result and transitive sources alive).
+                if !arm_terminated {
+                    let arm_live_out: Vec<i64> = Vec::new();
+                    let mut aloi: i64 = 0;
+                    while aloi < arm_mut_vals.len() {
+                        arm_live_out.push(arm_mut_vals[aloi]);
+                        let asrcs: Vec<i64> = lctx_collect_return_sources(ctx, arm_mut_vals[aloi]);
+                        let mut asi: i64 = 0;
+                        while asi < asrcs.len() {
+                            arm_live_out.push(asrcs[asi]);
+                            asi = asi + 1;
+                        }
+                        aloi = aloi + 1;
+                    }
+                    arm_live_out.push(arm_result);
+                    let arsrcs: Vec<i64> = lctx_collect_return_sources(ctx, arm_result);
+                    let mut arsi: i64 = 0;
+                    while arsi < arsrcs.len() {
+                        arm_live_out.push(arsrcs[arsi]);
+                        arsi = arsi + 1;
+                    }
+                    lctx_pop_alloc_scope_frees(ctx, arm_live_out);
+                } else {
+                    lctx_discard_alloc_scope(ctx);
+                }
 
                 let mut mci: i64 = 0;
                 while mci < nmut {
-                    let mv: i64 = lctx_lookup(ctx, match_muts[mci]);
                     let mu_args: Vec<i64> = Vec::new();
-                    mu_args.push(mv);
+                    mu_args.push(arm_mut_vals[mci]);
                     let mu_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), mu_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
                     arm_mut_ups.push(mu_id);
                     mci = mci + 1;
@@ -2515,16 +2601,46 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     lctx_define(ctx, pname, ptr_id);
                 }
                 let arm_result: i64 = lower_expr(ctx, body_eid);
+                let arm_terminated2: bool = lctx_is_terminated(ctx);
                 lctx_pop_scope(ctx);
 
-                // Discard match arm alloc scope.
-                lctx_discard_alloc_scope(ctx);
+                // Collect mutation values before freeing match arm temporaries.
+                let arm_mut_vals2: Vec<i64> = Vec::new();
+                let mut ami2: i64 = 0;
+                while ami2 < nmut {
+                    arm_mut_vals2.push(lctx_lookup(ctx, match_muts[ami2]));
+                    ami2 = ami2 + 1;
+                }
+                // Free match arm temporaries (keep result and transitive sources alive).
+                if !arm_terminated2 {
+                    let arm_live_out2: Vec<i64> = Vec::new();
+                    let mut aloi2: i64 = 0;
+                    while aloi2 < arm_mut_vals2.len() {
+                        arm_live_out2.push(arm_mut_vals2[aloi2]);
+                        let asrcs2: Vec<i64> = lctx_collect_return_sources(ctx, arm_mut_vals2[aloi2]);
+                        let mut asi2: i64 = 0;
+                        while asi2 < asrcs2.len() {
+                            arm_live_out2.push(asrcs2[asi2]);
+                            asi2 = asi2 + 1;
+                        }
+                        aloi2 = aloi2 + 1;
+                    }
+                    arm_live_out2.push(arm_result);
+                    let arsrcs2: Vec<i64> = lctx_collect_return_sources(ctx, arm_result);
+                    let mut arsi2: i64 = 0;
+                    while arsi2 < arsrcs2.len() {
+                        arm_live_out2.push(arsrcs2[arsi2]);
+                        arsi2 = arsi2 + 1;
+                    }
+                    lctx_pop_alloc_scope_frees(ctx, arm_live_out2);
+                } else {
+                    lctx_discard_alloc_scope(ctx);
+                }
 
                 let mut mci2: i64 = 0;
                 while mci2 < nmut {
-                    let mv2: i64 = lctx_lookup(ctx, match_muts[mci2]);
                     let mu2_args: Vec<i64> = Vec::new();
-                    mu2_args.push(mv2);
+                    mu2_args.push(arm_mut_vals2[mci2]);
                     let mu2_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), mu2_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
                     arm_mut_ups.push(mu2_id);
                     mci2 = mci2 + 1;
@@ -2708,7 +2824,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 let mut cli: i64 = 0;
                 while cli < nphis {
                     let vname: String = phi_names[cli];
-                    let cval: i64 = lctx_lookup(ctx, vname);
+                    let cval: i64 = lctx_lookup_at_depth(ctx, vname, scope_depth);
                     cont_live_out.push(cval);
                     let csources: Vec<i64> = lctx_collect_return_sources(ctx, cval);
                     let mut csi: i64 = 0;

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::esbmc::{run_esbmc_with_max_k_step, VerificationResult};
+use crate::esbmc::{VerificationResult, run_esbmc_with_max_k_step};
 
 // ---------------------------------------------------------------------------
 // Solver / Encoding / Config types
