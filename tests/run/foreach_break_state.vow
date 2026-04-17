@@ -1,0 +1,19 @@
+// TEST: stdout "10\n"
+module ForeachBreakState
+
+fn main() -> i32 [io] {
+    let xs: Vec<i64> = Vec::new();
+    xs.push(5);
+    xs.push(10);
+    xs.push(15);
+    let mut hit: i64 = 0;
+    for x in xs {
+        if x == 10 {
+            hit = x;
+            break;
+        }
+    }
+    print_i64(hit);
+    print_str("\n");
+    0
+}
