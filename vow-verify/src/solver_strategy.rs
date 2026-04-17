@@ -254,7 +254,7 @@ pub fn run_with_fallback(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vow_ir::{BasicBlock, BlockId, FuncId, Inst, InstId, Ty, VowEntry};
+    use vow_ir::{BasicBlock, BlockId, FuncId, Inst, InstId, Ty};
     use vow_syntax::span::Span;
 
     fn inst(id: u32, opcode: Opcode, ty: Ty, args: Vec<u32>, data: InstData) -> Inst {

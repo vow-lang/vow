@@ -1281,6 +1281,7 @@ fn emit_c_preamble(out: &mut String, shifts: &ShiftNeeds) {
     out.push_str("#include <stdint.h>\n");
     out.push_str("#include <stddef.h>\n");
     out.push_str("#include <stdbool.h>\n");
+    out.push_str("#include <stddef.h>\n");
     out.push_str("extern void __ESBMC_assume(_Bool);\n");
     out.push_str("extern void __ESBMC_assert(_Bool, const char*);\n");
     out.push_str("extern int __VERIFIER_nondet_int(void);\n");
