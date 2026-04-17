@@ -525,7 +525,7 @@ fn lctx_find_enum(ctx: LowerCtx, name: String) -> i64 {
 
 fn lctx_find_variant_tag(ctx: LowerCtx, enum_name: String, variant_name: String) -> i64 {
     let eidx: i64 = lctx_find_enum(ctx, enum_name);
-    if eidx == -1 { return 0; }
+    if eidx == -1 { return -1; }
     let variants: Vec<String> = ctx.enum_variant_lists[eidx];
     let n: i64 = variants.len();
     let mut i: i64 = 0;
@@ -535,7 +535,7 @@ fn lctx_find_variant_tag(ctx: LowerCtx, enum_name: String, variant_name: String)
         }
         i = i + 1;
     }
-    0
+    -1
 }
 
 fn lctx_struct_field_index(ctx: LowerCtx, struct_name: String, field_name: String) -> i64 {
@@ -544,10 +544,10 @@ fn lctx_struct_field_index(ctx: LowerCtx, struct_name: String, field_name: Strin
         if struct_name.len() > 0 {
             let w: String = String::from("warning: struct '");
             w.push_str(struct_name);
-            w.push_str(String::from("' not registered -- field lookup defaulting to index 0"));
+            w.push_str(String::from("' not registered -- field lookup returning -1"));
             ctx.warnings.push(w);
         }
-        return 0;
+        return -1;
     }
     let fields: Vec<String> = ctx.struct_field_lists[sidx];
     let n: i64 = fields.len();
@@ -563,13 +563,14 @@ fn lctx_struct_field_index(ctx: LowerCtx, struct_name: String, field_name: Strin
         w.push_str(field_name);
         w.push_str(String::from("' not found in struct '"));
         w.push_str(struct_name);
-        w.push_str(String::from("' -- defaulting to index 0"));
+        w.push_str(String::from("' -- returning -1"));
         ctx.warnings.push(w);
     }
-    0
+    -1
 }
 
 fn lctx_struct_field_type(ctx: LowerCtx, struct_name: String, field_idx: i64) -> String {
+    if field_idx == -1 { return String::from(""); }
     let sidx: i64 = lctx_find_struct(ctx, struct_name);
     if sidx == -1 { return String::from(""); }
     let type_names: Vec<String> = ctx.struct_field_type_names[sidx];
@@ -580,6 +581,7 @@ fn lctx_struct_field_type(ctx: LowerCtx, struct_name: String, field_idx: i64) ->
 }
 
 fn lctx_struct_field_vec_elem(ctx: LowerCtx, struct_name: String, field_idx: i64) -> String {
+    if field_idx == -1 { return String::from(""); }
     let sidx: i64 = lctx_find_struct(ctx, struct_name);
     if sidx == -1 { return String::from(""); }
     let vec_elems: Vec<String> = ctx.struct_field_vec_elems[sidx];
@@ -608,6 +610,7 @@ fn lower_ast_ty(a: AstArena, tid: i64) -> i64 {
     if tid == -1 { return ITY_UNIT(); }
     let tag: i64 = type_tag(a, tid);
     if tag == TY_UNIT() { return ITY_UNIT(); }
+    if tag == TY_NEVER() { return ITY_UNIT(); }
     if tag == TY_NAMED() {
         let name_sid: i64 = type_a(a, tid);
         let name: String = arena_str(a, name_sid);
@@ -622,11 +625,18 @@ fn lower_ast_ty(a: AstArena, tid: i64) -> i64 {
         return ITY_PTR();
     }
     if tag == TY_GENERIC() { return ITY_PTR(); }
-    ITY_UNIT()
+    if tag == TY_REF() { return ITY_PTR(); }
+    if tag == TY_SLICE() { return ITY_PTR(); }
+    if tag == TY_TUPLE() { return ITY_PTR(); }
+    -1
+}
+
+fn is_valid_binop(op: i64) -> bool {
+    op >= 0 && op <= 22
 }
 
 fn binop_opcode(op: i64, operand_ty: i64) -> i64 vow {
-    requires: op >= 0
+    requires: is_valid_binop(op)
 } {
     let is_u64: bool = operand_ty == ITY_U64();
     if op == BINOP_ADD() { return if is_u64 { IOP_WADD_U64() } else { IOP_WADD_I64() }; }
@@ -652,20 +662,18 @@ fn binop_opcode(op: i64, operand_ty: i64) -> i64 vow {
     if op == BINOP_XOR() { return if is_u64 { IOP_XOR_U64() } else { IOP_XOR_I64() }; }
     if op == BINOP_SHL() { return if is_u64 { IOP_SHL_U64() } else { IOP_SHL_I64() }; }
     if op == BINOP_SHR() { return if is_u64 { IOP_SHR_U64() } else { IOP_SHR_I64() }; }
-    IOP_WADD_I64()
+    -1
+}
+
+fn is_comparison_binop(op: i64) -> bool {
+    op == BINOP_EQ() || op == BINOP_NE() || op == BINOP_LT() || op == BINOP_LE() ||
+    op == BINOP_GT() || op == BINOP_GE() || op == BINOP_AND() || op == BINOP_OR()
 }
 
 fn binop_result_ty(op: i64, operand_ty: i64) -> i64 vow {
-    requires: op >= 0
+    requires: is_valid_binop(op)
 } {
-    if op == BINOP_EQ() { return ITY_BOOL(); }
-    if op == BINOP_NE() { return ITY_BOOL(); }
-    if op == BINOP_LT() { return ITY_BOOL(); }
-    if op == BINOP_LE() { return ITY_BOOL(); }
-    if op == BINOP_GT() { return ITY_BOOL(); }
-    if op == BINOP_GE() { return ITY_BOOL(); }
-    if op == BINOP_AND() { return ITY_BOOL(); }
-    if op == BINOP_OR() { return ITY_BOOL(); }
+    if is_comparison_binop(op) { return ITY_BOOL(); }
     if operand_ty == ITY_U64() { return ITY_U64(); }
     ITY_I64()
 }
@@ -1795,11 +1803,14 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 ctx.warnings.push(w);
             }
             let fidx: i64 = lctx_struct_field_index(ctx, recv_tag_str, field_name);
-            lctx_mark_escaped(ctx, val_id);
-            let fs_args: Vec<i64> = Vec::new();
-            fs_args.push(recv_id);
-            fs_args.push(val_id);
-            return lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, IDATA_FIELD(), fidx, 0, String::from(""));
+            if fidx != -1 {
+                lctx_mark_escaped(ctx, val_id);
+                let fs_args: Vec<i64> = Vec::new();
+                fs_args.push(recv_id);
+                fs_args.push(val_id);
+                return lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, IDATA_FIELD(), fidx, 0, String::from(""));
+            }
+            return lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), Vec::new(), IDATA_CONST_I64(), 0, 0, String::from(""));
         }
         if lhs_tag == EXPR_INDEX() {
             let recv_eid: i64 = expr_a(a, lhs_eid);
@@ -1838,6 +1849,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             ctx.warnings.push(w);
         }
         let fidx: i64 = lctx_struct_field_index(ctx, recv_tag_str, field_name);
+        if fidx == -1 {
+            return lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), Vec::new(), IDATA_CONST_I64(), 0, 0, String::from(""));
+        }
         let fg_args: Vec<i64> = Vec::new();
         fg_args.push(recv_id);
         let result: i64 = lctx_emit(ctx, IOP_FIELD_GET(), ITY_I64(), fg_args, IDATA_FIELD(), fidx, 0, String::from(""));
@@ -1886,11 +1900,13 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let fname: String = arena_str(a, fname_sid);
             let fidx: i64 = lctx_struct_field_index(ctx, struct_name, fname);
             let val_id: i64 = lower_expr(ctx, fval_eid);
-            lctx_mark_escaped(ctx, val_id);
-            let fs_args: Vec<i64> = Vec::new();
-            fs_args.push(ptr_id);
-            fs_args.push(val_id);
-            lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, IDATA_FIELD(), fidx, 0, String::from(""));
+            if fidx != -1 {
+                lctx_mark_escaped(ctx, val_id);
+                let fs_args: Vec<i64> = Vec::new();
+                fs_args.push(ptr_id);
+                fs_args.push(val_id);
+                lctx_emit(ctx, IOP_FIELD_SET(), ITY_UNIT(), fs_args, IDATA_FIELD(), fidx, 0, String::from(""));
+            }
             fi = fi + 1;
         }
         return ptr_id;

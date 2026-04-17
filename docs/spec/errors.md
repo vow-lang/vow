@@ -159,6 +159,23 @@ extern "C" {
 
 **Fix:** Add a `vow { ... }` block to the extern declaration with `requires` and/or `ensures` clauses.
 
+### ContractTypeMismatch
+
+**Phase:** Type Checker
+**Meaning:** A `requires`, `ensures`, or `invariant` clause expression does not have type `bool`.
+
+```vow
+fn add(a: i64, b: i64) -> i64 vow {
+    requires: a + b
+} {
+    a + b
+}
+```
+
+**Output:** `` `requires` clause has type `i64` but must be `bool` ``
+
+**Fix:** Ensure every contract clause is a boolean expression (comparison, logical operator, or a call to a predicate function returning `bool`).
+
 ### VowRequiresViolated
 
 **Phase:** Verification (ESBMC)

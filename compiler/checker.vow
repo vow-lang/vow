@@ -302,6 +302,33 @@ fn register_enum(e: CheckEnv, m: Module, eid: i64) [io] {
     env_update_enum(e, name, vnames, vpayloads);
 }
 
+fn check_vow_clause(e: CheckEnv, m: Module, vow_lid: i64, kind: i64, context: String) [io] {
+    let a: AstArena = m.arena;
+    let n: i64 = list_len(a, vow_lid);
+    let mut i: i64 = 0;
+    while i < n {
+        let cid: i64 = list_get(a, vow_lid, i);
+        let ck: i64 = vow_clause_kind(a, cid);
+        if ck == kind {
+            let clause_eid: i64 = vow_clause_expr(a, cid);
+            let clause_tid: i64 = check_expr(e, m, clause_eid);
+            if clause_tid != CTY_BOOL() && !is_opaque(clause_tid) {
+                let msg: String = String::from("`");
+                if kind == CLAUSE_REQUIRES() {
+                    msg.push_str(String::from("requires"));
+                } else if kind == CLAUSE_ENSURES() {
+                    msg.push_str(String::from("ensures"));
+                } else {
+                    msg.push_str(String::from("invariant"));
+                }
+                msg.push_str(String::from("` clause must be `bool`"));
+                env_emit_error_code(e, EC_CONTRACT_TYPE_MISMATCH(), msg, expr_span(a, clause_eid));
+            }
+        }
+        i = i + 1;
+    }
+}
+
 fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
     let a: AstArena = m.arena;
     let save_ret: i64 = e.cur_ret_tid;
@@ -330,11 +357,23 @@ fn check_fn(e: CheckEnv, m: Module, fid: i64) [io] {
         i = i + 1;
     }
 
+    let vow_lid: i64 = fn_vow_lid(a, fid);
+    if vow_lid != -1 {
+        check_vow_clause(e, m, vow_lid, CLAUSE_REQUIRES(), String::from("function"));
+    }
+
     let body_bid: i64 = fn_body_bid(a, fid);
     let body_tid: i64 = check_block(e, m, body_bid);
 
     if !is_coercible(e.ts, body_tid, ret_tid) {
         env_emit_error(e, String::from("function body type mismatch"), fn_span(a, fid));
+    }
+
+    if vow_lid != -1 {
+        env_push_scope(e);
+        env_define_var(e, String::from("result"), ret_tid);
+        check_vow_clause(e, m, vow_lid, CLAUSE_ENSURES(), String::from("function"));
+        env_pop_scope(e);
     }
 
     env_pop_scope(e);
@@ -806,7 +845,11 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
     if tag == EXPR_WHILE() {
         let cond_eid: i64 = expr_a(a, eid);
         let body_bid: i64 = expr_b(a, eid);
+        let wvow_lid: i64 = expr_c(a, eid);
         let _cond_tid: i64 = check_expr(e, m, cond_eid);
+        if wvow_lid != -1 {
+            check_vow_clause(e, m, wvow_lid, CLAUSE_INVARIANT(), String::from("while loop"));
+        }
         e.loop_kind_stack.push(0);
         e.break_counts.push(0);
         let _body_tid: i64 = check_block(e, m, body_bid);
@@ -817,6 +860,10 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
 
     if tag == EXPR_LOOP() {
         let body_bid: i64 = expr_a(a, eid);
+        let lvow_lid: i64 = expr_b(a, eid);
+        if lvow_lid != -1 {
+            check_vow_clause(e, m, lvow_lid, CLAUSE_INVARIANT(), String::from("loop"));
+        }
         let break_start: i64 = e.break_tids.len();
         e.loop_kind_stack.push(1);
         e.break_counts.push(0);
@@ -891,6 +938,10 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         }
         env_push_scope(e);
         env_define_var(e, binding_name, elem_tid);
+        let fvow_lid: i64 = list_get(a, info_lid, 1);
+        if fvow_lid != -1 {
+            check_vow_clause(e, m, fvow_lid, CLAUSE_INVARIANT(), String::from("for-each loop"));
+        }
         e.loop_kind_stack.push(0);
         e.break_counts.push(0);
         let _body_tid: i64 = check_block(e, m, body_bid);

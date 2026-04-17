@@ -55,13 +55,9 @@ fn build_phi_upsilon_data(ir_func: &IrFunction) -> PhiUpsilonData {
     for block in &ir_func.blocks {
         for inst in &block.insts {
             match inst.opcode {
-                Opcode::Phi => {
-                    // Only track phis that have a Cranelift representation.
-                    // Unit-typed phis don't become block params so must be excluded.
-                    if ir_ty_to_cranelift(inst.ty).is_some() {
-                        block_phis.entry(block.id).or_default().push(inst.id);
-                        phi_home.insert(inst.id, block.id);
-                    }
+                Opcode::Phi if ir_ty_to_cranelift(inst.ty).is_some() => {
+                    block_phis.entry(block.id).or_default().push(inst.id);
+                    phi_home.insert(inst.id, block.id);
                 }
                 Opcode::Upsilon => {
                     if let InstData::PhiTarget(phi_id) = inst.data
