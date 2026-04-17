@@ -375,24 +375,20 @@ pub fn run_esbmc_with_max_k_step(
     // The error paths use last_os_error()/from_raw_os_error() which may
     // allocate, but this only happens on failure just before the child aborts.
     #[cfg(target_os = "linux")]
-    let parent_pid = std::process::id();
-    unsafe {
-        cmd.pre_exec(
-            #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
-            move || {
-                #[cfg(target_os = "linux")]
-                {
-                    let ret = libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
-                    if ret != 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    if libc::getppid() as u32 != parent_pid {
-                        return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
-                    }
+    {
+        let parent_pid = std::process::id();
+        unsafe {
+            cmd.pre_exec(move || {
+                let ret = libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+                if ret != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::getppid() as u32 != parent_pid {
+                    return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
                 }
                 Ok(())
-            },
-        );
+            });
+        }
     }
 
     let mut child = match cmd.spawn() {
