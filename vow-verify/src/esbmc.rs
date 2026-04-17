@@ -317,7 +317,13 @@ fn verify_function_inner(
     let mut c_src = emit_c_module(&[func], const_fns, limits);
     c_src.push_str(&emit_harness(func));
 
-    run_esbmc_k_induction(&esbmc, &c_src, &func.name)
+    run_esbmc_with_max_k_step(
+        &esbmc,
+        &c_src,
+        limits.max_k_step,
+        &func.name,
+        &SolverConfig::default_config(),
+    )
 }
 
 pub fn run_esbmc_k_induction(
