@@ -699,7 +699,7 @@ fn emit_inst(
             if let InstData::CallExtern(ref name) = inst.data {
                 match name.as_str() {
                     "__vow_vec_new" => {
-                        out.push_str(&format!("  v{id}.len = 0;\n  v{id}.data = (int64_t*)0;\n"));
+                        out.push_str(&format!("  v{id}.len = 0;\n"));
                     }
                     "__vow_vec_push_val" => {
                         let vec = inst.args[0].0;
@@ -845,9 +845,7 @@ fn emit_inst(
             if let InstData::CallExtern(ref name) = inst.data {
                 match name.as_str() {
                     "__vow_map_new" => {
-                        out.push_str(&format!(
-                            "  v{id}.len = 0;\n  v{id}.keys = (int64_t*)0;\n  v{id}.vals = (int64_t*)0;\n"
-                        ));
+                        out.push_str(&format!("  v{id}.len = 0;\n"));
                     }
                     "__vow_map_len" => {
                         let m = inst.args[0].0;
@@ -2186,7 +2184,10 @@ mod tests {
         let out = emit_c_module(&[&f], &HashMap::new(), &VerifyLimits::default());
         assert!(out.contains("__vow_vec_t"), "vec typedef: {out}");
         assert!(out.contains("int64_t len"), "vec len field: {out}");
-        assert!(out.contains("int64_t* data"), "vec data ptr field: {out}");
+        assert!(
+            out.contains("int64_t data[128]"),
+            "vec data array field: {out}"
+        );
     }
 
     #[test]
@@ -2251,8 +2252,8 @@ mod tests {
         );
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
-            !c.contains("vec capacity"),
-            "push must NOT have capacity assertion: {c}"
+            c.contains("vec capacity"),
+            "push must have capacity assertion: {c}"
         );
         assert!(c.contains("v2.data[v2.len] = v3;"), "push store: {c}");
         assert!(c.contains("v2.len++;"), "push increment: {c}");
@@ -2487,7 +2488,10 @@ mod tests {
         );
         let out = emit_c_module(&[&f], &HashMap::new(), &VerifyLimits::default());
         assert!(out.contains("__vow_string_t"), "string typedef: {out}");
-        assert!(out.contains("int8_t* data"), "string data ptr field: {out}");
+        assert!(
+            out.contains("int8_t data[256]"),
+            "string data array field: {out}"
+        );
     }
 
     #[test]
@@ -2517,8 +2521,8 @@ mod tests {
             "nondet len: {c}"
         );
         assert!(
-            c.contains("__ESBMC_assume(v1.len >= 0 && v1.len < INT64_MAX)"),
-            "len bounded by type: {c}"
+            c.contains("__ESBMC_assume(v1.len >= 0 && v1.len < 256)"),
+            "len bounded by string_max: {c}"
         );
         assert!(
             c.contains("return 0; /* modelled type return */"),
@@ -2589,8 +2593,8 @@ mod tests {
         );
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
-            !c.contains("string capacity"),
-            "push_byte must NOT have capacity assertion: {c}"
+            c.contains("string capacity"),
+            "push_byte must have capacity assertion: {c}"
         );
         assert!(
             c.contains("v1.data[v1.len] = (int8_t)v2;"),
@@ -2957,8 +2961,8 @@ mod tests {
         assert!(c.contains("v0.keys[__i] == v1"), "key search: {c}");
         assert!(c.contains("v0.vals[__i] = v2"), "update existing: {c}");
         assert!(
-            !c.contains("hashmap capacity"),
-            "insert must NOT have capacity assertion: {c}"
+            c.contains("hashmap capacity"),
+            "insert must have capacity assertion: {c}"
         );
         assert!(c.contains("v0.keys[v0.len] = v1"), "insert new key: {c}");
         assert!(c.contains("v0.vals[v0.len] = v2"), "insert new val: {c}");
@@ -3129,8 +3133,8 @@ mod tests {
             c.contains("__vow_hashmap_t"),
             "hashmap typedef in header: {c}"
         );
-        assert!(c.contains("int64_t* keys"), "keys ptr in typedef: {c}");
-        assert!(c.contains("int64_t* vals"), "vals ptr in typedef: {c}");
+        assert!(c.contains("int64_t keys[64]"), "keys array in typedef: {c}");
+        assert!(c.contains("int64_t vals[64]"), "vals array in typedef: {c}");
     }
 
     #[test]
