@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::esbmc::{VerificationResult, run_esbmc_with_unwind};
+use crate::esbmc::{run_esbmc_with_max_k_step, VerificationResult};
 
 // ---------------------------------------------------------------------------
 // Solver / Encoding / Config types
@@ -201,14 +201,14 @@ pub fn classify_function(func: &Function) -> SolverConfig {
 pub fn run_with_fallback(
     esbmc: &Path,
     c_src: &str,
-    unwind: u32,
+    max_k_step: u32,
     func_name: &str,
     config: &SolverConfig,
 ) -> (VerificationResult, SolverConfig) {
     // If encoding is explicit (not Auto), run once — no fallback.
     if config.encoding != Encoding::Auto {
         let resolved = config.resolve();
-        let result = run_esbmc_with_unwind(esbmc, c_src, unwind, func_name, &resolved);
+        let result = run_esbmc_with_max_k_step(esbmc, c_src, max_k_step, func_name, &resolved);
         return (result, resolved);
     }
 
@@ -221,7 +221,7 @@ pub fn run_with_fallback(
     }
     .resolve();
 
-    let result = run_esbmc_with_unwind(esbmc, c_src, unwind, func_name, &bv_config);
+    let result = run_esbmc_with_max_k_step(esbmc, c_src, max_k_step, func_name, &bv_config);
 
     match result {
         VerificationResult::Timeout => {
@@ -237,7 +237,8 @@ pub fn run_with_fallback(
                 encoding: Encoding::Ir,
                 timeout_secs: Some(timeout),
             };
-            let ir_result = run_esbmc_with_unwind(esbmc, c_src, unwind, func_name, &ir_config);
+            let ir_result =
+                run_esbmc_with_max_k_step(esbmc, c_src, max_k_step, func_name, &ir_config);
             match ir_result {
                 VerificationResult::Proven => (VerificationResult::ProvenIr, ir_config),
                 other => (other, ir_config),
