@@ -701,7 +701,7 @@ fn lower_ast_type_tag_name(a: AstArena, tid: i64) -> String {
     }
     if tag == TY_GENERIC() {
         let name_sid: i64 = type_a(a, tid);
-        return arena_str(a, name_sid);
+        return clone_string(arena_str(a, name_sid));
     }
     String::from("")
 }

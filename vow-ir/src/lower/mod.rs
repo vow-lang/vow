@@ -955,6 +955,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     InstData::CallTarget(call_info.id),
                     span,
                 );
+                // Record the return-type tag as metadata, but deliberately do not
+                // call `track_heap_alloc`: a user-defined helper may return an
+                // alias (e.g. arena-backed string) rather than a freshly-owned
+                // allocation, and freeing at the call site would invalidate
+                // still-live arena storage.
                 if let Some(ret_tag) = call_info.ret_tag {
                     ctx.inst_struct_type.insert(result, ret_tag);
                 }
