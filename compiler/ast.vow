@@ -210,6 +210,17 @@ fn cdef_name_sid(a: AstArena, cid: i64) -> i64 { a.cdef_data[cid * 3] }
 fn cdef_type_tid(a: AstArena, cid: i64) -> i64 { a.cdef_data[cid * 3 + 1] }
 fn cdef_value_eid(a: AstArena, cid: i64) -> i64 { a.cdef_data[cid * 3 + 2] }
 
+fn clone_string(src: String) -> String {
+    let out: String = String::from("");
+    let n: i64 = src.len();
+    let mut i: i64 = 0;
+    while i < n {
+        out.push_byte(src.byte_at(i));
+        i = i + 1;
+    }
+    out
+}
+
 fn arena_str(a: AstArena, sid: i64) -> String { a.strs[sid] }
 
 fn expr_span(a: AstArena, eid: i64) -> i64 { a.expr_data[eid * 5 + 4] }
