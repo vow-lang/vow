@@ -50,7 +50,7 @@ run_logged() {
 run_stage_cmd() {
     local cmd="$1"
     if [ "$VMEM_LIMIT_KB" -gt 0 ]; then
-        cmd="ulimit -v $VMEM_LIMIT_KB; $cmd"
+        cmd="ulimit -v $VMEM_LIMIT_KB && $cmd"
     fi
     run_logged "$cmd"
 }
