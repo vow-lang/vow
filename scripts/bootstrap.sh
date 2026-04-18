@@ -34,21 +34,25 @@ usage() {
     exit 0
 }
 
-run_stage_cmd() {
+run_logged() {
     local cmd="$1"
     local log
     log=$(mktemp)
-    local wrapped="$cmd"
-    if [ "$VMEM_LIMIT_KB" -gt 0 ]; then
-        wrapped="ulimit -v $VMEM_LIMIT_KB; $cmd"
-    fi
-    if bash -lc "$wrapped" >"$log" 2>&1; then
+    if bash -c "$cmd" >"$log" 2>&1; then
         rm -f "$log"
         return 0
     fi
     cat "$log"
     rm -f "$log"
     return 1
+}
+
+run_stage_cmd() {
+    local cmd="$1"
+    if [ "$VMEM_LIMIT_KB" -gt 0 ]; then
+        cmd="ulimit -v $VMEM_LIMIT_KB; $cmd"
+    fi
+    run_logged "$cmd"
 }
 
 for arg in "$@"; do
@@ -75,7 +79,7 @@ fi
 
 printf "${BOLD}Stage 1:${RESET} Rust compiler -> build/vowc\n"
 t0=$(date +%s)
-if ! run_stage_cmd "./target/release/vow build compiler/main.vow -o build/vowc"; then
+if ! run_logged "./target/release/vow build compiler/main.vow -o build/vowc"; then
     printf "  ${RED}FAILED${RESET}\n"
     exit 1
 fi
