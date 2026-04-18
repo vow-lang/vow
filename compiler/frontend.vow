@@ -14,7 +14,6 @@ struct CheckedFrontend {
     path: String,
     dctx: DiagCtx,
     sources: Vec<String>,
-    merged: Module,
     n_items: i64,
     n_errors: i64,
 }
@@ -26,6 +25,7 @@ struct LoweredFrontend {
 
 struct FrontendPrep {
     checked: CheckedFrontend,
+    merged: Module,
     str_eids: Vec<i64>,
 }
 
@@ -131,19 +131,14 @@ fn frontend_prepare_path(path: String) -> FrontendPrep [io] {
         path: path,
         dctx: dctx,
         sources: visited,
-        merged: merged,
         n_items: n_items,
         n_errors: dctx.error_count,
     };
     FrontendPrep {
         checked: checked,
+        merged: merged,
         str_eids: e.expr_str_eids,
     }
-}
-
-fn frontend_check_path(path: String) -> CheckedFrontend [io] {
-    let prep: FrontendPrep = frontend_prepare_path(path);
-    prep.checked
 }
 
 fn frontend_lower_path(path: String) -> LoweredFrontend [io] {
@@ -154,7 +149,7 @@ fn frontend_lower_path(path: String) -> LoweredFrontend [io] {
             // Keep callers on one lowered entry point even when checking fails.
             ir_module_new(checked.path)
         } else {
-            lower_module_vow(checked.merged, prep.str_eids, checked.path)
+            lower_module_vow(prep.merged, prep.str_eids, checked.path)
         }
     };
     LoweredFrontend {
