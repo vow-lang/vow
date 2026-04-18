@@ -524,13 +524,15 @@ if matches_filter "$name"; then
   contracts_json="$(run_vowc contracts "$stack_main" 2>/dev/null)"
   contracts_exit=$?
   set -e
-  contracts_total="$(json_path_field "$contracts_json" "summary.total")"
   if [[ "$contracts_exit" -ne 0 ]]; then
     fail "$name" "exit $contracts_exit"
-  elif [[ "$contracts_total" != "2" ]]; then
-    fail "$name" "summary.total=$contracts_total (expected 2)"
   else
-    pass "$name"
+    contracts_total="$(json_path_field "$contracts_json" "summary.total")"
+    if [[ "$contracts_total" != "2" ]]; then
+      fail "$name" "summary.total=$contracts_total (expected 2)"
+    else
+      pass "$name"
+    fi
   fi
 fi
 
@@ -540,16 +542,18 @@ if matches_filter "$name"; then
   test_json="$(run_vowc test "$stack_main" 2>/dev/null)"
   test_exit=$?
   set -e
-  test_status="$(json_field "$test_json" "status")"
-  test_passed="$(json_field "$test_json" "passed")"
   if [[ "$test_exit" -ne 0 ]]; then
     fail "$name" "exit $test_exit"
-  elif [[ "$test_status" != "TestsPassed" ]]; then
-    fail "$name" "status=$test_status (expected TestsPassed)"
-  elif [[ "$test_passed" != "1" ]]; then
-    fail "$name" "passed=$test_passed (expected 1)"
   else
-    pass "$name"
+    test_status="$(json_field "$test_json" "status")"
+    test_passed="$(json_field "$test_json" "passed")"
+    if [[ "$test_status" != "TestsPassed" ]]; then
+      fail "$name" "status=$test_status (expected TestsPassed)"
+    elif [[ "$test_passed" != "1" ]]; then
+      fail "$name" "passed=$test_passed (expected 1)"
+    else
+      pass "$name"
+    fi
   fi
 fi
 
@@ -565,13 +569,15 @@ else
     verify_json="$(run_vowc verify "$geometry_main" 2>/dev/null)"
     verify_exit=$?
     set -e
-    verify_status="$(json_field "$verify_json" "status")"
     if [[ "$verify_exit" -ne 0 ]]; then
       fail "$name" "exit $verify_exit"
-    elif [[ "$verify_status" != "Verified" ]]; then
-      fail "$name" "status=$verify_status (expected Verified)"
     else
-      pass "$name"
+      verify_status="$(json_field "$verify_json" "status")"
+      if [[ "$verify_status" != "Verified" ]]; then
+        fail "$name" "status=$verify_status (expected Verified)"
+      else
+        pass "$name"
+      fi
     fi
   fi
 fi
