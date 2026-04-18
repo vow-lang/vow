@@ -11,6 +11,10 @@ mkdir -p build
 
 SKIP_CARGO=false
 VMEM_LIMIT_KB="${VOW_BOOTSTRAP_VMEM_KB:-0}"
+if ! [[ "$VMEM_LIMIT_KB" =~ ^[0-9]+$ ]]; then
+    echo "Error: VOW_BOOTSTRAP_VMEM_KB must be a non-negative integer (got: '$VMEM_LIMIT_KB')" >&2
+    exit 1
+fi
 
 usage() {
     echo "Usage: $0 [--skip-cargo] [--help|-h]"
@@ -36,15 +40,15 @@ usage() {
 
 run_logged() {
     local cmd="$1"
-    local log
-    log=$(mktemp)
-    if bash -c "$cmd" >"$log" 2>&1; then
-        rm -f "$log"
-        return 0
-    fi
-    cat "$log"
-    rm -f "$log"
-    return 1
+    (
+        log=$(mktemp)
+        trap 'rm -f "$log"' EXIT INT TERM HUP
+        if bash -c "$cmd" >"$log" 2>&1; then
+            exit 0
+        fi
+        cat "$log"
+        exit 1
+    )
 }
 
 run_stage_cmd() {
