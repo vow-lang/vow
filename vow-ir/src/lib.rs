@@ -7,7 +7,7 @@ pub mod validator;
 
 pub use effects::{AbstractHeap, Effects, HeapSet, inst_effects};
 pub use insertion_set::InsertionSet;
-pub use lower::{StringExprSet, lower_function, lower_module};
+pub use lower::{StringExprSet, lower_module};
 pub use printer::{print_function, print_module};
 pub use types::{
     BasicBlock, BlockId, EnumLayout, FieldLayout, FuncId, Function, Inst, InstData, InstId, Module,

@@ -196,7 +196,7 @@ fn expand_ptr_bindings(
     result
 }
 
-pub fn lower_requires(ctx: &mut LowerCtx, vow_block: &VowBlock) {
+pub(crate) fn lower_requires(ctx: &mut LowerCtx, vow_block: &VowBlock) {
     for clause in &vow_block.clauses {
         if let VowClause::Requires { span, .. } = clause {
             let desc = clause_description(clause);
@@ -215,7 +215,7 @@ pub fn lower_requires(ctx: &mut LowerCtx, vow_block: &VowBlock) {
     }
 }
 
-pub fn lower_param_refinements(ctx: &mut LowerCtx, params: &[Param]) {
+pub(crate) fn lower_param_refinements(ctx: &mut LowerCtx, params: &[Param]) {
     for param in params {
         if let Some(ref refinement) = param.refinement {
             let clause = VowClause::Requires {
@@ -242,7 +242,7 @@ pub fn lower_param_refinements(ctx: &mut LowerCtx, params: &[Param]) {
     }
 }
 
-pub fn lower_ensures(ctx: &mut LowerCtx, vow_block: &VowBlock, result_id: InstId) {
+pub(crate) fn lower_ensures(ctx: &mut LowerCtx, vow_block: &VowBlock, result_id: InstId) {
     ctx.push_scope();
     ctx.define("result".to_string(), result_id);
     for clause in &vow_block.clauses {
@@ -264,7 +264,7 @@ pub fn lower_ensures(ctx: &mut LowerCtx, vow_block: &VowBlock, result_id: InstId
     ctx.pop_scope();
 }
 
-pub fn lower_invariant(ctx: &mut LowerCtx, vow_block: &VowBlock) {
+pub(crate) fn lower_invariant(ctx: &mut LowerCtx, vow_block: &VowBlock) {
     for clause in &vow_block.clauses {
         if let VowClause::Invariant { span, .. } = clause {
             let desc = clause_description(clause);

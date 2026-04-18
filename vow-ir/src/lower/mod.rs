@@ -123,7 +123,7 @@ pub(crate) fn lower_ty(ast_ty: &AstType) -> Ty {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FuncSigInfo {
+pub(crate) struct FuncSigInfo {
     id: FuncId,
     ret_ty: Ty,
     ret_tag: Option<String>,
@@ -166,7 +166,7 @@ fn vec_named_elem_type(ast_ty: &AstType) -> Option<String> {
 
 const FIELD_IDX_SENTINEL: usize = u32::MAX as usize;
 
-pub struct LowerCtx {
+pub(crate) struct LowerCtx {
     pub(super) func: Function,
     pub(super) current_block: BlockId,
     next_inst_id: u32,
@@ -223,7 +223,7 @@ pub struct LowerCtx {
 
 impl LowerCtx {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub(crate) fn new(
         name: String,
         params: Vec<Ty>,
         param_names: Vec<String>,
@@ -3176,7 +3176,7 @@ fn lower_block_inner(ctx: &mut LowerCtx, block: &Block) -> InstId {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn lower_function(
+pub(crate) fn lower_function(
     fn_def: &FnDef,
     file: &str,
     func_index: &HashMap<String, FuncSigInfo>,
