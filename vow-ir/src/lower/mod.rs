@@ -4282,7 +4282,10 @@ mod tests {
         struct_field_map.insert("Pair".to_string(), vec!["a".to_string(), "b".to_string()]);
 
         let mut struct_field_type_names = HashMap::new();
-        struct_field_type_names.insert("Pair".to_string(), vec!["i64".to_string(), "i64".to_string()]);
+        struct_field_type_names.insert(
+            "Pair".to_string(),
+            vec!["i64".to_string(), "i64".to_string()],
+        );
 
         let (func, _, warnings) = lower_function(
             &fn_def,
@@ -4296,7 +4299,10 @@ mod tests {
             &HashMap::new(),
         );
 
-        assert!(warnings.is_empty(), "unexpected lowering warnings: {warnings:?}");
+        assert!(
+            warnings.is_empty(),
+            "unexpected lowering warnings: {warnings:?}"
+        );
 
         let field_get = func
             .blocks
@@ -4352,7 +4358,10 @@ mod tests {
             &HashMap::new(),
         );
 
-        assert!(warnings.is_empty(), "unexpected lowering warnings: {warnings:?}");
+        assert!(
+            warnings.is_empty(),
+            "unexpected lowering warnings: {warnings:?}"
+        );
 
         let has_string_free = func.blocks.iter().flat_map(|b| b.insts.iter()).any(|i| {
             i.opcode == Opcode::Call
