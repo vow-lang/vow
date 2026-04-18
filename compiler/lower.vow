@@ -724,6 +724,7 @@ fn lower_ast_type_vec_elem_name(a: AstArena, tid: i64) -> String {
        elem_name == String::from("f32") || elem_name == String::from("f64") || elem_name == String::from("bool") {
         return String::from("");
     }
+    if elem_name == String::from("str") { return String::from("String"); }
     elem_name
 }
 

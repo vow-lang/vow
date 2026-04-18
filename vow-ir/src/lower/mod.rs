@@ -150,6 +150,7 @@ fn non_scalar_type_tag(ast_ty: &AstType) -> Option<String> {
 fn vec_named_elem_type(ast_ty: &AstType) -> Option<String> {
     match ast_ty {
         AstType::Generic { name, args, .. } if name == "Vec" => match args.first() {
+            Some(AstType::Named { name, .. }) if name == "str" => Some("String".to_string()),
             Some(AstType::Named { name, .. })
                 if !matches!(
                     name.as_str(),
