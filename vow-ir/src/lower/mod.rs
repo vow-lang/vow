@@ -956,10 +956,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 );
                 // Record the return-type tag as metadata, but deliberately do not
-                // call `track_heap_alloc`: a user-defined helper may return an
-                // alias (e.g. arena-backed string) rather than a freshly-owned
-                // allocation, and freeing at the call site would invalidate
-                // still-live arena storage.
+                // call `track_heap_alloc`: without ownership annotations in the
+                // function signature we cannot distinguish an alias (e.g. an
+                // arena-backed string) from a freshly-owned allocation.  We
+                // conservatively omit the free, accepting that fresh-heap
+                // user-defined returns will leak until ownership is tracked,
+                // since the alternative would reintroduce use-after-free on
+                // aliased returns.
                 if let Some(ret_tag) = call_info.ret_tag {
                     ctx.inst_struct_type.insert(result, ret_tag);
                 }

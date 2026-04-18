@@ -666,7 +666,7 @@ fn lower_ast_ty(a: AstArena, tid: i64) -> i64 {
     if tag == TY_NEVER() { return ITY_UNIT(); }
     if tag == TY_NAMED() {
         let name_sid: i64 = type_a(a, tid);
-        let name: String = clone_string(arena_str(a, name_sid));
+        let name: String = arena_str(a, name_sid);
         if name == String::from("i32") { return ITY_I32(); }
         if name == String::from("i64") { return ITY_I64(); }
         if name == String::from("u64") { return ITY_U64(); }
@@ -711,7 +711,7 @@ fn lower_ast_type_vec_elem_name(a: AstArena, tid: i64) -> String {
     let tag: i64 = type_tag(a, tid);
     if tag != TY_GENERIC() { return String::from(""); }
     let name_sid: i64 = type_a(a, tid);
-    let name: String = clone_string(arena_str(a, name_sid));
+    let name: String = arena_str(a, name_sid);
     if name != String::from("Vec") { return String::from(""); }
     let args_lid: i64 = type_b(a, tid);
     if list_len(a, args_lid) == 0 { return String::from(""); }
