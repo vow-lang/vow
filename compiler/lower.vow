@@ -1040,9 +1040,17 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             br_args.push(lhs_id);
             lctx_emit(ctx, IOP_BRANCH(), ITY_UNIT(), br_args, IDATA_BRANCH_TARGETS(), then_target, else_target, String::from(""));
 
-            // RHS block: evaluate RHS, Upsilon, Jump to merge
+            // RHS block: evaluate RHS, free temporaries, Upsilon, Jump to merge.
+            // Allocs inside the RHS must be freed in rhs_block (before the
+            // jump) — if tracked in the outer scope, the short-circuit path
+            // would still emit frees for values that were never allocated,
+            // causing double-free / invalid free.
             lctx_switch_to_block(ctx, rhs_block);
+            lctx_push_alloc_scope(ctx);
             let rhs_id: i64 = lower_expr(ctx, rhs_eid);
+            let rhs_live_out: Vec<i64> = Vec::new();
+            rhs_live_out.push(rhs_id);
+            lctx_pop_alloc_scope_frees(ctx, rhs_live_out);
             let rhs_up_args: Vec<i64> = Vec::new();
             rhs_up_args.push(rhs_id);
             let rhs_up_id: i64 = lctx_emit(ctx, IOP_UPSILON(), ITY_UNIT(), rhs_up_args, IDATA_PHI_TARGET(), 2147483647, 0, String::from(""));
@@ -1082,12 +1090,14 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let eq_id: i64 = lctx_emit(ctx, IOP_CALL(), ITY_BOOL(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_eq"));
             let lhs_tag: i64 = expr_tag(a, lhs_eid);
             if lhs_tag == EXPR_LIT_STR() {
+                lctx_mark_escaped(ctx, lhs_id);
                 let free_args: Vec<i64> = Vec::new();
                 free_args.push(lhs_id);
                 lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_free"));
             }
             let rhs_tag: i64 = expr_tag(a, rhs_eid);
             if rhs_tag == EXPR_LIT_STR() {
+                lctx_mark_escaped(ctx, rhs_id);
                 let free_args: Vec<i64> = Vec::new();
                 free_args.push(rhs_id);
                 lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_free"));

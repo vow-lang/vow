@@ -785,11 +785,15 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 );
 
-                // RHS block: evaluate RHS, feed into Phi
+                // RHS block: evaluate RHS, free temporaries, feed into Phi.
+                // Allocs inside the RHS must be freed in rhs_block (before the
+                // jump) — if they were tracked in the outer scope, the short-
+                // circuit path would still emit frees for values that were
+                // never allocated, causing double-free / invalid free.
                 ctx.switch_to_block(rhs_block);
                 ctx.push_alloc_scope();
                 let rhs_id = lower_expr(ctx, rhs);
-                ctx.alloc_scopes.pop();
+                ctx.pop_alloc_scope_frees(&[rhs_id], span);
                 let rhs_upsilon = ctx.emit(
                     Opcode::Upsilon,
                     Ty::Unit,
