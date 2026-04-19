@@ -386,6 +386,12 @@ unsafe extern "C" fn stack_overflow_handler(
         }
         return;
     }
+    // Accepted heuristic limitation: [bottom, top] covers the entire main
+    // stack region, not just the guard page. A use-after-return dereference of
+    // a dead stack address could land in this window and be reported as
+    // StackOverflow. Do not "tighten" the range to exclude live-stack addresses
+    // without a precise guard-page boundary — doing so would silently break
+    // real-overflow detection.
 
     // Read depth and function name (best-effort in signal context)
     let depth = STACK_DEPTH.load(Ordering::Relaxed);
