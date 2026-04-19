@@ -288,6 +288,246 @@ pub extern "C" fn __vow_profile_init() {
     });
 }
 
+// ---------------------------------------------------------------------------
+// Stack overflow detection
+// ---------------------------------------------------------------------------
+
+static STACK_DEPTH: AtomicI64 = AtomicI64::new(0);
+static STACK_FN_NAME: AtomicU64 = AtomicU64::new(0);
+// Stack boundary saved at init time (on the main stack, before any signal).
+static STACK_BOTTOM: AtomicU64 = AtomicU64::new(0);
+static STACK_TOP: AtomicU64 = AtomicU64::new(0);
+
+// STACK_FN_NAME tracks the most recently entered function, not the full call
+// chain. After a callee returns, the name may be stale (pointing to the callee
+// rather than the caller). This is intentional: the diagnostic reports the
+// "last known function" at overflow time, which is the deepest frame — exactly
+// the function whose entry pushed the stack past the limit.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_stack_enter(fn_name_ptr: *const i8) {
+    STACK_DEPTH.fetch_add(1, Ordering::Relaxed);
+    STACK_FN_NAME.store(fn_name_ptr as u64, Ordering::Relaxed);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_stack_exit() {
+    STACK_DEPTH.fetch_sub(1, Ordering::Relaxed);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_init_stack_guard() {
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        // Record the main stack boundaries while we're on the main stack.
+        // Use address of a local variable as a portable SP approximation.
+        let local = 0u8;
+        let sp_approx = &local as *const u8 as usize;
+        let mut rl: libc::rlimit = unsafe { std::mem::zeroed() };
+        if unsafe { libc::getrlimit(libc::RLIMIT_STACK, &mut rl) } == 0
+            && rl.rlim_cur != libc::RLIM_INFINITY
+        {
+            let stack_size = rl.rlim_cur as usize;
+            // Stack grows downward. The guard page sits just below
+            // `initial_SP - stack_size`. sp_approx is already `delta` bytes
+            // below initial_SP (startup frames), so computed STACK_BOTTOM =
+            // sp_approx - stack_size is `delta` below the actual bottom.
+            // The guard page fault address lands inside [BOTTOM, TOP] as long
+            // as delta >= PAGE_SIZE (~4KB), which holds on any realistic binary.
+            STACK_BOTTOM.store(
+                sp_approx.saturating_sub(stack_size) as u64,
+                Ordering::Relaxed,
+            );
+            STACK_TOP.store(sp_approx.saturating_add(4096) as u64, Ordering::Relaxed);
+        }
+
+        unsafe {
+            // Allocate an alternate signal stack so the SIGSEGV handler can run
+            // even when the main stack is exhausted.
+            let alt_stack_size = libc::SIGSTKSZ * 2;
+            // Allocated once at process startup; owned for process lifetime (freed by OS on exit).
+            let stack_mem = libc::mmap(
+                std::ptr::null_mut(),
+                alt_stack_size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            );
+            if stack_mem == libc::MAP_FAILED {
+                return;
+            }
+            let ss = libc::stack_t {
+                ss_sp: stack_mem,
+                ss_flags: 0,
+                ss_size: alt_stack_size,
+            };
+            if libc::sigaltstack(&ss, std::ptr::null_mut()) != 0 {
+                return;
+            }
+
+            // Install SIGSEGV handler on the alternate stack.
+            let mut sa: libc::sigaction = std::mem::zeroed();
+            sa.sa_flags = libc::SA_ONSTACK | libc::SA_SIGINFO;
+            libc::sigemptyset(&mut sa.sa_mask);
+            sa.sa_sigaction = stack_overflow_handler as *const () as usize;
+            libc::sigaction(libc::SIGSEGV, &sa, std::ptr::null_mut());
+        }
+    });
+}
+
+unsafe extern "C" fn stack_overflow_handler(
+    _sig: libc::c_int,
+    info: *mut libc::siginfo_t,
+    _ctx: *mut libc::c_void,
+) {
+    // Distinguish stack overflow from other SIGSEGVs by checking whether the
+    // fault address falls within the main stack region (saved at init time).
+    // If not a stack overflow, restore default handler and re-raise so the OS
+    // produces a core dump.
+    let bottom = STACK_BOTTOM.load(Ordering::Relaxed);
+    let top = STACK_TOP.load(Ordering::Relaxed);
+    if info.is_null() {
+        // SA_SIGINFO guarantees non-null on Linux, but handle defensively.
+        unsafe {
+            libc::signal(libc::SIGSEGV, libc::SIG_DFL);
+            libc::raise(libc::SIGSEGV);
+        }
+        return;
+    }
+    let fault_addr = unsafe { (*info).si_addr() } as u64;
+    let is_stack_overflow = if bottom != 0 && top != 0 {
+        fault_addr >= bottom && fault_addr <= top
+    } else {
+        // Bounds unknown (e.g. RLIM_INFINITY or getrlimit failed).
+        false
+    };
+    if !is_stack_overflow {
+        unsafe {
+            libc::signal(libc::SIGSEGV, libc::SIG_DFL);
+            libc::raise(libc::SIGSEGV);
+        }
+        return;
+    }
+    // Accepted heuristic limitation: [bottom, top] covers the entire main
+    // stack region, not just the guard page. A use-after-return dereference of
+    // a dead stack address could land in this window and be reported as
+    // StackOverflow. Do not "tighten" the range to exclude live-stack addresses
+    // without a precise guard-page boundary — doing so would silently break
+    // real-overflow detection.
+
+    // Read depth and function name (best-effort in signal context)
+    let depth = STACK_DEPTH.load(Ordering::Relaxed);
+    let fn_ptr = STACK_FN_NAME.load(Ordering::Relaxed) as *const i8;
+
+    let mut buf = [0u8; 512];
+    let mut pos = 0;
+
+    macro_rules! write_bytes {
+        ($bytes:expr) => {
+            let src = $bytes;
+            let n = src.len().min(buf.len().saturating_sub(pos));
+            buf[pos..pos + n].copy_from_slice(&src[..n]);
+            pos += n;
+        };
+    }
+
+    write_bytes!(b"{\"error\":\"StackOverflow\"");
+
+    if depth > 0 {
+        write_bytes!(b",\"depth\":");
+        let mut num_buf = [0u8; 20];
+        let num_str = format_i64_to_buf(depth, &mut num_buf);
+        write_bytes!(num_str);
+    }
+
+    if !fn_ptr.is_null() {
+        write_bytes!(b",\"function\":\"");
+        // SAFETY: fn_ptr points into .rodata (codegen-emitted function name
+        // global), so CStr::from_ptr is safe even in signal context.
+        let name = unsafe { CStr::from_ptr(fn_ptr) };
+        let name_bytes = name.to_bytes();
+        let n = name_bytes
+            .len()
+            .min(buf.len().saturating_sub(pos).saturating_sub(3));
+        buf[pos..pos + n].copy_from_slice(&name_bytes[..n]);
+        pos += n;
+        write_bytes!(b"\"");
+    }
+
+    write_bytes!(b"}\n");
+
+    unsafe {
+        libc::write(2, buf.as_ptr() as *const libc::c_void, pos);
+    }
+
+    // Also write human-readable line
+    let mut hbuf = [0u8; 512];
+    let mut hpos = 0;
+
+    macro_rules! hwrite {
+        ($bytes:expr) => {
+            let src = $bytes;
+            let n = src.len().min(hbuf.len().saturating_sub(hpos));
+            hbuf[hpos..hpos + n].copy_from_slice(&src[..n]);
+            hpos += n;
+        };
+    }
+
+    hwrite!(b"stack overflow");
+
+    if depth > 0 {
+        hwrite!(b" at depth ");
+        let mut num_buf = [0u8; 20];
+        let num_str = format_i64_to_buf(depth, &mut num_buf);
+        hwrite!(num_str);
+    }
+
+    if !fn_ptr.is_null() {
+        hwrite!(b" in ");
+        // SAFETY: fn_ptr points into .rodata (see JSON branch above).
+        let name = unsafe { CStr::from_ptr(fn_ptr) };
+        let name_bytes = name.to_bytes();
+        let n = name_bytes
+            .len()
+            .min(hbuf.len().saturating_sub(hpos).saturating_sub(1));
+        hbuf[hpos..hpos + n].copy_from_slice(&name_bytes[..n]);
+        hpos += n;
+    }
+
+    hwrite!(b"\n");
+
+    unsafe {
+        libc::write(2, hbuf.as_ptr() as *const libc::c_void, hpos);
+    }
+
+    unsafe {
+        libc::_exit(134);
+    }
+}
+
+fn format_i64_to_buf(mut val: i64, buf: &mut [u8; 20]) -> &[u8] {
+    if val == 0 {
+        buf[0] = b'0';
+        return &buf[..1];
+    }
+    let negative = val < 0;
+    if negative {
+        val = val.checked_neg().unwrap_or(i64::MAX);
+    }
+    let mut pos = 20;
+    while val > 0 {
+        pos -= 1;
+        buf[pos] = b'0' + (val % 10) as u8;
+        val /= 10;
+    }
+    if negative {
+        pos -= 1;
+        buf[pos] = b'-';
+    }
+    &buf[pos..]
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_arena_alloc(size: usize, align: usize) -> *mut u8 {
     if size == 0 {
