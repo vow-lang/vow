@@ -32,6 +32,10 @@ Contracts express **semantic correctness** — what is mathematically required f
 - **If ESBMC can't prove a correct contract, that's ESBMC's problem.** Mark the function as unverifiable or skip it in the verification pass. Do not distort the contract to accommodate the tool.
 - **Only add bounds that reflect genuine semantic constraints.** Overflow guards (e.g., `requires: x > -9223372036854775807` for `abs`) are legitimate — they prevent undefined behavior in the implementation. Loop iteration caps for ESBMC are not.
 
+## Pull Requests
+
+Always merge PRs via a merge commit (`gh pr merge --merge`). Do not squash or rebase-merge — preserving the individual commit history is required.
+
 ## Vow Compiler
 
 When implementing changes across Vow compilers, always modify BOTH the Rust compiler and the self-hosted compiler in the same session. Run the full test suite (`cargo test` and self-hosted tests) after changes to both.
