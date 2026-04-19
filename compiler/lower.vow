@@ -689,7 +689,7 @@ fn lower_ast_type_tag_name(a: AstArena, tid: i64) -> String {
     let tag: i64 = type_tag(a, tid);
     if tag == TY_NAMED() {
         let name_sid: i64 = type_a(a, tid);
-        let name: String = clone_string(arena_str(a, name_sid));
+        let name: String = arena_str(a, name_sid);
         if name == String::from("i32") || name == String::from("i64") || name == String::from("u64") ||
            name == String::from("f32") || name == String::from("f64") || name == String::from("bool") {
             return String::from("");
@@ -697,7 +697,7 @@ fn lower_ast_type_tag_name(a: AstArena, tid: i64) -> String {
         if name == String::from("str") {
             return String::from("String");
         }
-        return name;
+        return clone_string(name);
     }
     if tag == TY_GENERIC() {
         let name_sid: i64 = type_a(a, tid);
@@ -719,13 +719,13 @@ fn lower_ast_type_vec_elem_name(a: AstArena, tid: i64) -> String {
     let elem_tag: i64 = type_tag(a, elem_tid);
     if elem_tag != TY_NAMED() { return String::from(""); }
     let elem_sid: i64 = type_a(a, elem_tid);
-    let elem_name: String = clone_string(arena_str(a, elem_sid));
+    let elem_name: String = arena_str(a, elem_sid);
     if elem_name == String::from("i32") || elem_name == String::from("i64") || elem_name == String::from("u64") ||
        elem_name == String::from("f32") || elem_name == String::from("f64") || elem_name == String::from("bool") {
         return String::from("");
     }
     if elem_name == String::from("str") { return String::from("String"); }
-    elem_name
+    clone_string(elem_name)
 }
 
 fn is_valid_binop(op: i64) -> bool {
