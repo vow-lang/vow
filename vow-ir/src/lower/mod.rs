@@ -4376,6 +4376,90 @@ mod tests {
     }
 
     #[test]
+    fn multiple_arena_aliased_bindings_emit_no_frees_at_scope_exit() {
+        // Defense-in-depth: the single-binding case above proves the call site
+        // doesn't emit a free.  This variant pins the scope-exit behaviour for
+        // a realistic multi-binding sequence (the bootstrap crash path involved
+        // many arena-aliased String locals in a single lowering function).
+        let body = Block {
+            stmts: vec![
+                let_stmt(
+                    "a",
+                    Some(Type::Named {
+                        name: "String".to_string(),
+                        span: sp(),
+                    }),
+                    Expr {
+                        kind: ExprKind::Call {
+                            callee: Box::new(ident_expr("arena_str")),
+                            args: vec![],
+                        },
+                        span: sp(),
+                    },
+                ),
+                let_stmt(
+                    "b",
+                    Some(Type::Named {
+                        name: "String".to_string(),
+                        span: sp(),
+                    }),
+                    Expr {
+                        kind: ExprKind::Call {
+                            callee: Box::new(ident_expr("arena_str")),
+                            args: vec![],
+                        },
+                        span: sp(),
+                    },
+                ),
+            ],
+            trailing_expr: Some(Box::new(int_expr(0))),
+            span: sp(),
+        };
+        let fn_def = make_fn("f", vec![], i64_ty(), body, vec![]);
+
+        let mut func_index = HashMap::new();
+        func_index.insert(
+            "arena_str".to_string(),
+            FuncSigInfo {
+                id: FuncId(0),
+                ret_ty: Ty::Ptr,
+                ret_tag: Some("String".to_string()),
+                ret_vec_elem: None,
+            },
+        );
+
+        let (func, _, warnings) = lower_function(
+            &fn_def,
+            "",
+            &func_index,
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        assert!(
+            warnings.is_empty(),
+            "unexpected lowering warnings: {warnings:?}"
+        );
+
+        let free_count = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .filter(|i| {
+                i.opcode == Opcode::Call
+                    && i.data == InstData::CallExtern("__vow_string_free".to_string())
+            })
+            .count();
+        assert_eq!(
+            free_count, 0,
+            "arena-aliased let bindings must emit zero __vow_string_free calls at scope exit, got {free_count}"
+        );
+    }
+
+    #[test]
     fn region_free_emitted_for_unused_struct() {
         // fn f() -> i64 { let p = Pair{a:1, b:2}; 42 }
         let body = Block {
