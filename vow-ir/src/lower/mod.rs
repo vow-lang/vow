@@ -122,6 +122,8 @@ pub(crate) fn lower_ty(ast_ty: &AstType) -> Ty {
     }
 }
 
+const FIELD_IDX_SENTINEL: usize = u32::MAX as usize;
+
 pub struct LowerCtx {
     pub(super) func: Function,
     pub(super) current_block: BlockId,
@@ -161,6 +163,9 @@ pub struct LowerCtx {
     // Per-loop break-value Upsilon collector.  `Some(vec)` for `loop` (collects
     // (source_block, upsilon_id, value_ty)), `None` for `while`.
     loop_break_upsilons: Vec<Option<Vec<(BlockId, InstId, Ty)>>>,
+    // Per-loop exit-block Phi IDs for mutation variables.  Break emits Upsilons
+    // targeting these so the exit block receives updated values.
+    loop_exit_phis: Vec<Vec<(String, InstId)>>,
     // InstId of a Vec allocation → element type name (for struct-in-Vec field access)
     inst_vec_elem_type: HashMap<InstId, String>,
     // struct name → per-field Vec element type name (for FieldGet → Vec propagation)
@@ -170,6 +175,8 @@ pub struct LowerCtx {
     // Push on entering a branch/loop/match arm, pop (with frees) on exit.
     alloc_scopes: Vec<Vec<(InstId, String)>>,
     escaped_allocs: HashSet<InstId>,
+    // Alloc scope depth at each loop body entry (for break/continue frees).
+    loop_alloc_scope_depth: Vec<usize>,
 }
 
 impl LowerCtx {
@@ -233,11 +240,13 @@ impl LowerCtx {
             loop_continue_idx_phi: Vec::new(),
             loop_continue_scope_depth: Vec::new(),
             loop_break_upsilons: Vec::new(),
+            loop_exit_phis: Vec::new(),
             inst_vec_elem_type: HashMap::new(),
             struct_field_vec_elems,
             warnings: Vec::new(),
             alloc_scopes: vec![Vec::new()],
             escaped_allocs: HashSet::new(),
+            loop_alloc_scope_depth: Vec::new(),
         }
     }
 
@@ -286,6 +295,50 @@ impl LowerCtx {
                 Opcode::Call,
                 Ty::Unit,
                 vec![*id],
+                InstData::CallExtern(sym.to_string()),
+                span,
+            );
+        }
+    }
+
+    /// Emit frees for allocations from the innermost scope down to (and including)
+    /// the scope at `target_depth`. Does NOT pop any scopes.
+    /// Used by break/continue to free loop body temporaries before jumping.
+    pub(super) fn emit_alloc_frees_to_depth(
+        &mut self,
+        target_depth: usize,
+        live_out: &[InstId],
+        span: Span,
+    ) {
+        let allocs: Vec<(InstId, String)> = self.alloc_scopes[target_depth..]
+            .iter()
+            .flat_map(|scope| scope.iter().cloned())
+            .collect();
+        for (id, tag) in allocs {
+            if self.escaped_allocs.contains(&id) || live_out.contains(&id) {
+                continue;
+            }
+            if let Some(size_str) = tag.strip_prefix("region:") {
+                let size: u32 = size_str.parse().unwrap_or(0);
+                self.emit(
+                    Opcode::RegionFree,
+                    Ty::Unit,
+                    vec![id],
+                    InstData::AllocSize { size, align: 8 },
+                    span,
+                );
+                continue;
+            }
+            let sym = match tag.as_str() {
+                "String" => "__vow_string_free",
+                "Vec" => "__vow_vec_free_val",
+                "HashMap" => "__vow_map_free",
+                _ => continue,
+            };
+            self.emit(
+                Opcode::Call,
+                Ty::Unit,
+                vec![id],
                 InstData::CallExtern(sym.to_string()),
                 span,
             );
@@ -938,8 +991,22 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .iter()
                 .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                 .collect();
-            // Discard branch alloc scope (branch temporaries freed at function exit).
-            ctx.alloc_scopes.pop();
+            // Free branch temporaries (keep result and transitive sources alive).
+            if !then_terminated {
+                let mut live_out: Vec<InstId> = then_mut_vals.clone();
+                live_out.push(then_val);
+                for src in ctx.collect_return_sources(then_val) {
+                    live_out.push(src);
+                }
+                for mv in &then_mut_vals {
+                    for src in ctx.collect_return_sources(*mv) {
+                        live_out.push(src);
+                    }
+                }
+                ctx.pop_alloc_scope_frees(&live_out, span);
+            } else {
+                ctx.alloc_scopes.pop();
+            }
             let then_upsilon_id = if !then_terminated {
                 let u = ctx.emit(
                     Opcode::Upsilon,
@@ -977,8 +1044,22 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .iter()
                 .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                 .collect();
-            // Discard branch alloc scope (branch temporaries freed at function exit).
-            ctx.alloc_scopes.pop();
+            // Free branch temporaries (keep result and transitive sources alive).
+            if !else_terminated {
+                let mut live_out: Vec<InstId> = else_mut_vals.clone();
+                live_out.push(else_val);
+                for src in ctx.collect_return_sources(else_val) {
+                    live_out.push(src);
+                }
+                for mv in &else_mut_vals {
+                    for src in ctx.collect_return_sources(*mv) {
+                        live_out.push(src);
+                    }
+                }
+                ctx.pop_alloc_scope_frees(&live_out, span);
+            } else {
+                ctx.alloc_scopes.pop();
+            }
             let else_upsilon_id = if !else_terminated {
                 let u = ctx.emit(
                     Opcode::Upsilon,
@@ -1105,7 +1186,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         .unwrap_or_default();
                     if struct_name.is_empty() {
                         ctx.warn(
-                            format!("FieldSet on untagged instruction %{}, field '{}' -- defaulting to index 0", ptr_id.0, field),
+                            format!("FieldSet on untagged instruction %{}, field '{}' -- ICE: returning sentinel index", ptr_id.0, field),
                             span,
                         );
                     }
@@ -1115,30 +1196,32 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             None => {
                                 if !struct_name.is_empty() {
                                     ctx.warn(
-                                        format!("field '{}' not found in struct '{}' -- defaulting to index 0", field, struct_name),
+                                        format!("field '{}' not found in struct '{}' -- ICE: returning sentinel index", field, struct_name),
                                         span,
                                     );
                                 }
-                                0
+                                FIELD_IDX_SENTINEL
                             }
                         }
                     } else {
                         if !struct_name.is_empty() {
                             ctx.warn(
-                                format!("struct '{}' not registered -- field lookup defaulting to index 0", struct_name),
+                                format!("struct '{}' not registered -- field lookup ICE: returning sentinel index", struct_name),
                                 span,
                             );
                         }
-                        0
+                        FIELD_IDX_SENTINEL
                     } as u32;
-                    ctx.mark_escaped(new_val);
-                    ctx.emit(
-                        Opcode::FieldSet,
-                        Ty::Unit,
-                        vec![ptr_id, new_val],
-                        InstData::FieldIndex(field_idx),
-                        span,
-                    );
+                    if field_idx != FIELD_IDX_SENTINEL as u32 {
+                        ctx.mark_escaped(new_val);
+                        ctx.emit(
+                            Opcode::FieldSet,
+                            Ty::Unit,
+                            vec![ptr_id, new_val],
+                            InstData::FieldIndex(field_idx),
+                            span,
+                        );
+                    }
                 }
                 ExprKind::Index { base, index } => {
                     let vec_ptr = lower_expr(ctx, base);
@@ -1220,6 +1303,34 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             // Lower condition, then branch.
             let cond_id = lower_expr(ctx, condition);
+            // Save the block we're in after condition lowering (may differ from
+            // header_block if the condition created new blocks, e.g. &&/||).
+            let cond_block = ctx.current_block;
+
+            // Pre-emit exit-block Phis for mutation variables so break sites
+            // (and the natural condition-false exit) can supply updated values.
+            let mut exit_phi_ids: Vec<(String, InstId)> = vec![];
+            ctx.switch_to_block(exit_block);
+            for (name, pre_val) in &loop_vars {
+                let ty = ctx.inst_ty(*pre_val);
+                let phi_id = ctx.emit(Opcode::Phi, ty, vec![], InstData::None, span);
+                exit_phi_ids.push((name.clone(), phi_id));
+            }
+            ctx.switch_to_block(cond_block);
+
+            // Upsilons for natural exit (condition false → exit_block):
+            // pass header Phi values into exit-block Phis.
+            for (name, exit_phi) in &exit_phi_ids {
+                let header_phi = phi_ids.iter().find(|(n, _)| n == name).unwrap().1;
+                ctx.emit(
+                    Opcode::Upsilon,
+                    ctx.inst_ty(header_phi),
+                    vec![header_phi],
+                    InstData::PhiTarget(*exit_phi),
+                    span,
+                );
+            }
+
             ctx.emit(
                 Opcode::Branch,
                 Ty::Unit,
@@ -1236,25 +1347,33 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.loop_exit_blocks.push(exit_block);
             ctx.loop_header_blocks.push(header_block);
             ctx.loop_continue_phis.push(phi_ids.clone());
+            ctx.loop_exit_phis.push(exit_phi_ids.clone());
             ctx.loop_continue_idx_phi.push(None);
             ctx.loop_continue_scope_depth.push(ctx.scope.len());
             ctx.loop_break_upsilons.push(None);
             ctx.push_alloc_scope();
+            ctx.loop_alloc_scope_depth.push(ctx.alloc_scopes.len() - 1);
             lower_block(ctx, body);
+            ctx.loop_alloc_scope_depth.pop();
             ctx.loop_break_upsilons.pop();
             ctx.loop_continue_scope_depth.pop();
             ctx.loop_continue_idx_phi.pop();
+            ctx.loop_exit_phis.pop();
             ctx.loop_continue_phis.pop();
             ctx.loop_header_blocks.pop();
             ctx.loop_exit_blocks.pop();
 
             // Free loop-body temporaries before back-edge.
+            // Include transitive sources so Phi/Upsilon aliases aren't freed.
             if !ctx.is_terminated() {
-                // Mutation values flow back to header Phis — don't free them.
-                let loop_live_out: Vec<InstId> = phi_ids
-                    .iter()
-                    .filter_map(|(name, _)| ctx.lookup(name))
-                    .collect();
+                let mut loop_live_out: Vec<InstId> = Vec::new();
+                for (name, _) in &phi_ids {
+                    if let Some(val) = ctx.lookup(name) {
+                        for src in ctx.collect_return_sources(val) {
+                            loop_live_out.push(src);
+                        }
+                    }
+                }
                 ctx.pop_alloc_scope_frees(&loop_live_out, span);
             } else {
                 ctx.alloc_scopes.pop();
@@ -1282,12 +1401,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 );
             }
 
-            // Restore scope to Phi values so the exit block sees the loop-exit values.
-            for (name, phi_id) in &phi_ids {
-                ctx.assign(name, *phi_id);
+            // Bind names to exit-block Phis so post-loop code reads correct values.
+            for (name, exit_phi) in &exit_phi_ids {
+                ctx.assign(name, *exit_phi);
             }
 
-            // Exit block.
+            // Exit block (Phis already emitted above).
             ctx.switch_to_block(exit_block);
             ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
         }
@@ -1395,6 +1514,31 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 InstData::None,
                 span,
             );
+
+            // Pre-emit exit-block Phis for mutation variables so break sites
+            // (and the natural condition-false exit) can supply updated values.
+            let mut exit_phi_ids: Vec<(String, InstId)> = vec![];
+            ctx.switch_to_block(exit_block);
+            for (name, pre_val) in &loop_vars {
+                let ty = ctx.inst_ty(*pre_val);
+                let phi_id = ctx.emit(Opcode::Phi, ty, vec![], InstData::None, span);
+                exit_phi_ids.push((name.clone(), phi_id));
+            }
+            ctx.switch_to_block(header_block);
+
+            // Upsilons for natural exit (condition false → exit_block):
+            // pass header Phi values into exit-block Phis.
+            for (name, exit_phi) in &exit_phi_ids {
+                let header_phi = phi_ids.iter().find(|(n, _)| n == name).unwrap().1;
+                ctx.emit(
+                    Opcode::Upsilon,
+                    ctx.inst_ty(header_phi),
+                    vec![header_phi],
+                    InstData::PhiTarget(*exit_phi),
+                    span,
+                );
+            }
+
             ctx.emit(
                 Opcode::Branch,
                 Ty::Unit,
@@ -1431,16 +1575,37 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.loop_exit_blocks.push(exit_block);
             ctx.loop_header_blocks.push(header_block);
             ctx.loop_continue_phis.push(phi_ids.clone());
+            ctx.loop_exit_phis.push(exit_phi_ids.clone());
             ctx.loop_continue_idx_phi.push(Some(idx_phi));
             ctx.loop_continue_scope_depth.push(for_scope_depth);
+            ctx.push_alloc_scope();
+            ctx.loop_alloc_scope_depth.push(ctx.alloc_scopes.len() - 1);
             lower_block(ctx, body);
+            ctx.loop_alloc_scope_depth.pop();
             ctx.loop_continue_scope_depth.pop();
             ctx.loop_continue_idx_phi.pop();
+            ctx.loop_exit_phis.pop();
             ctx.loop_continue_phis.pop();
             ctx.loop_header_blocks.pop();
             ctx.loop_exit_blocks.pop();
 
             ctx.pop_scope();
+
+            // Free loop-body temporaries before back-edge.
+            // Include transitive sources so Phi/Upsilon aliases aren't freed.
+            if !ctx.is_terminated() {
+                let mut loop_live_out: Vec<InstId> = Vec::new();
+                for (name, _) in &phi_ids {
+                    if let Some(val) = ctx.lookup(name) {
+                        for src in ctx.collect_return_sources(val) {
+                            loop_live_out.push(src);
+                        }
+                    }
+                }
+                ctx.pop_alloc_scope_frees(&loop_live_out, span);
+            } else {
+                ctx.alloc_scopes.pop();
+            }
 
             // Increment index and emit back-edge
             if !ctx.is_terminated() {
@@ -1485,11 +1650,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 );
             }
 
-            // Restore scope to Phi values for exit
-            for (name, phi_id) in &phi_ids {
-                ctx.assign(name, *phi_id);
+            // Bind names to exit-block Phis so post-loop code reads correct values.
+            for (name, exit_phi) in &exit_phi_ids {
+                ctx.assign(name, *exit_phi);
             }
 
+            // Exit block (Phis already emitted above).
             ctx.switch_to_block(exit_block);
             ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
         }
@@ -1546,17 +1712,32 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 vow::lower_invariant(ctx, lv);
             }
 
+            // Pre-emit exit-block Phis for mutation variables so break sites
+            // can supply updated values via Upsilons.
+            let mut exit_phi_ids: Vec<(String, InstId)> = vec![];
+            ctx.switch_to_block(exit_block);
+            for (name, pre_val) in &loop_vars {
+                let ty = ctx.inst_ty(*pre_val);
+                let phi_id = ctx.emit(Opcode::Phi, ty, vec![], InstData::None, span);
+                exit_phi_ids.push((name.clone(), phi_id));
+            }
+            ctx.switch_to_block(header_block);
+
             ctx.loop_exit_blocks.push(exit_block);
             ctx.loop_header_blocks.push(header_block);
             ctx.loop_continue_phis.push(phi_ids.clone());
+            ctx.loop_exit_phis.push(exit_phi_ids.clone());
             ctx.loop_continue_idx_phi.push(None);
             ctx.loop_continue_scope_depth.push(ctx.scope.len());
             ctx.loop_break_upsilons.push(Some(Vec::new()));
             ctx.push_alloc_scope();
+            ctx.loop_alloc_scope_depth.push(ctx.alloc_scopes.len() - 1);
             lower_block(ctx, body);
+            ctx.loop_alloc_scope_depth.pop();
             let break_ups = ctx.loop_break_upsilons.pop().unwrap();
             ctx.loop_continue_scope_depth.pop();
             ctx.loop_continue_idx_phi.pop();
+            ctx.loop_exit_phis.pop();
             ctx.loop_continue_phis.pop();
             ctx.loop_header_blocks.pop();
             ctx.loop_exit_blocks.pop();
@@ -1594,8 +1775,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 );
             }
 
-            for (name, phi_id) in &phi_ids {
-                ctx.assign(name, *phi_id);
+            // Bind names to exit-block Phis so post-loop code reads correct values.
+            for (name, exit_phi) in &exit_phi_ids {
+                ctx.assign(name, *exit_phi);
             }
 
             ctx.switch_to_block(exit_block);
@@ -1623,7 +1805,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .copied()
                 .expect("break outside of loop");
 
-            if let Some(val_expr) = value {
+            let break_val = if let Some(val_expr) = value {
                 let val_id = lower_expr(ctx, val_expr);
                 // If inside a `loop` (Some), emit Upsilon for the break-value Phi.
                 let is_loop = matches!(ctx.loop_break_upsilons.last(), Some(Some(_)));
@@ -1641,6 +1823,45 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         ups.push((block, up_id, val_ty));
                     }
                 }
+                Some(val_id)
+            } else {
+                None
+            };
+
+            // Emit Upsilons for loop mutation variables targeting the
+            // exit-block Phis so the exit block receives updated values.
+            // Use lookup_at_depth to resolve from the loop header scope,
+            // not the current scope, to avoid picking up shadowed bindings.
+            let exit_phis = ctx.loop_exit_phis.last().cloned().unwrap_or_default();
+            let scope_depth = ctx.loop_continue_scope_depth.last().copied().unwrap_or(0);
+            for (name, exit_phi) in &exit_phis {
+                if let Some(cur_val) = ctx.lookup_at_depth(name, scope_depth) {
+                    ctx.emit(
+                        Opcode::Upsilon,
+                        ctx.inst_ty(cur_val),
+                        vec![cur_val],
+                        InstData::PhiTarget(*exit_phi),
+                        span,
+                    );
+                }
+            }
+
+            // Free loop body allocations before jumping to exit.
+            // Use collect_return_sources to trace through Phi/Upsilon chains —
+            // break_val and mutation variables may alias heap allocations.
+            // Resolve mutation vars at loop header scope depth.
+            if let Some(&depth) = ctx.loop_alloc_scope_depth.last() {
+                let mut live_out: Vec<InstId> = if let Some(bv) = break_val {
+                    ctx.collect_return_sources(bv).into_iter().collect()
+                } else {
+                    vec![]
+                };
+                for (name, _) in &exit_phis {
+                    if let Some(cur_val) = ctx.lookup_at_depth(name, scope_depth) {
+                        live_out.extend(ctx.collect_return_sources(cur_val));
+                    }
+                }
+                ctx.emit_alloc_frees_to_depth(depth, &live_out, span);
             }
 
             ctx.emit(
@@ -1664,6 +1885,20 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .last()
                 .copied()
                 .expect("continue outside of loop");
+
+            // Free loop body allocations before jumping back to header.
+            // Include transitive sources so Phi/Upsilon aliases aren't freed.
+            if let Some(&depth) = ctx.loop_alloc_scope_depth.last() {
+                let mut live_out: Vec<InstId> = Vec::new();
+                for (name, _) in &phis {
+                    if let Some(val) = ctx.lookup_at_depth(name, scope_depth) {
+                        for src in ctx.collect_return_sources(val) {
+                            live_out.push(src);
+                        }
+                    }
+                }
+                ctx.emit_alloc_frees_to_depth(depth, &live_out, span);
+            }
 
             // Emit back-edge Upsilons for mutation variables.
             // Use lookup_at_depth to resolve from the loop header scope, not the
@@ -1723,7 +1958,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             if struct_name.is_empty() {
                 ctx.warn(
                     format!(
-                        "FieldGet on untagged instruction %{}, field '{}' -- defaulting to index 0",
+                        "FieldGet on untagged instruction %{}, field '{}' -- ICE: returning sentinel index",
                         ptr_id.0, field
                     ),
                     span,
@@ -1736,48 +1971,58 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         if !struct_name.is_empty() {
                             ctx.warn(
                                 format!(
-                                    "field '{}' not found in struct '{}' -- defaulting to index 0",
+                                    "field '{}' not found in struct '{}' -- ICE: returning sentinel index",
                                     field, struct_name
                                 ),
                                 span,
                             );
                         }
-                        0
+                        FIELD_IDX_SENTINEL
                     }
                 }
             } else {
                 if !struct_name.is_empty() {
                     ctx.warn(
                         format!(
-                            "struct '{}' not registered -- field lookup defaulting to index 0",
+                            "struct '{}' not registered -- field lookup ICE: returning sentinel index",
                             struct_name
                         ),
                         span,
                     );
                 }
-                0
+                FIELD_IDX_SENTINEL
             } as u32;
-            let result_id = ctx.emit(
-                Opcode::FieldGet,
-                Ty::I64,
-                vec![ptr_id],
-                InstData::FieldIndex(field_idx),
-                span,
-            );
-            if let Some(type_names) = ctx.struct_field_type_names.get(&struct_name)
-                && let Some(type_name) = type_names.get(field_idx as usize)
-                && !type_name.is_empty()
-                && !matches!(type_name.as_str(), "i32" | "i64" | "f32" | "f64" | "bool")
-            {
-                ctx.inst_struct_type.insert(result_id, type_name.clone());
+            if field_idx == FIELD_IDX_SENTINEL as u32 {
+                ctx.emit(
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    vec![],
+                    InstData::ConstI64(0),
+                    span,
+                )
+            } else {
+                let result_id = ctx.emit(
+                    Opcode::FieldGet,
+                    Ty::I64,
+                    vec![ptr_id],
+                    InstData::FieldIndex(field_idx),
+                    span,
+                );
+                if let Some(type_names) = ctx.struct_field_type_names.get(&struct_name)
+                    && let Some(type_name) = type_names.get(field_idx as usize)
+                    && !type_name.is_empty()
+                    && !matches!(type_name.as_str(), "i32" | "i64" | "f32" | "f64" | "bool")
+                {
+                    ctx.inst_struct_type.insert(result_id, type_name.clone());
+                }
+                if let Some(vec_elems) = ctx.struct_field_vec_elems.get(&struct_name)
+                    && let Some(elem_name) = vec_elems.get(field_idx as usize)
+                    && !elem_name.is_empty()
+                {
+                    ctx.inst_vec_elem_type.insert(result_id, elem_name.clone());
+                }
+                result_id
             }
-            if let Some(vec_elems) = ctx.struct_field_vec_elems.get(&struct_name)
-                && let Some(elem_name) = vec_elems.get(field_idx as usize)
-                && !elem_name.is_empty()
-            {
-                ctx.inst_vec_elem_type.insert(result_id, elem_name.clone());
-            }
-            result_id
         }
         ExprKind::StructLiteral { name, fields } => {
             let field_names = if let Some(names) = ctx.struct_field_map.get(name) {
@@ -1785,7 +2030,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             } else {
                 ctx.warn(
                     format!(
-                        "struct '{}' not registered -- field lookup defaulting to index 0",
+                        "struct '{}' not registered -- field lookup ICE: returning sentinel index",
                         name
                     ),
                     span,
@@ -1812,22 +2057,24 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     None => {
                         if !field_names.is_empty() {
                             ctx.warn(
-                                format!("StructLiteral field '{}' not found in struct '{}' -- defaulting to index 0", field_name, name),
+                                format!("StructLiteral field '{}' not found in struct '{}' -- ICE: returning sentinel index", field_name, name),
                                 span,
                             );
                         }
-                        0
+                        FIELD_IDX_SENTINEL
                     }
                 } as u32;
                 let val_id = lower_expr(ctx, field_expr);
-                ctx.mark_escaped(val_id);
-                ctx.emit(
-                    Opcode::FieldSet,
-                    Ty::Unit,
-                    vec![ptr_id, val_id],
-                    InstData::FieldIndex(idx),
-                    span,
-                );
+                if idx != FIELD_IDX_SENTINEL as u32 {
+                    ctx.mark_escaped(val_id);
+                    ctx.emit(
+                        Opcode::FieldSet,
+                        Ty::Unit,
+                        vec![ptr_id, val_id],
+                        InstData::FieldIndex(idx),
+                        span,
+                    );
+                }
             }
             ptr_id
         }
@@ -2040,6 +2287,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         }
                         let arm_result = lower_expr(ctx, &arm.body);
                         let arm_ty = ctx.inst_ty(arm_result);
+                        let arm_terminated = ctx.is_terminated();
                         ctx.pop_scope();
 
                         let arm_mut_vals: Vec<InstId> = mutations
@@ -2047,8 +2295,22 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                             .collect();
 
-                        // Discard match arm alloc scope.
-                        ctx.alloc_scopes.pop();
+                        // Free match arm temporaries (keep transitive sources alive).
+                        if !arm_terminated {
+                            let mut live_out: Vec<InstId> = arm_mut_vals.clone();
+                            live_out.push(arm_result);
+                            for src in ctx.collect_return_sources(arm_result) {
+                                live_out.push(src);
+                            }
+                            for mv in &arm_mut_vals {
+                                for src in ctx.collect_return_sources(*mv) {
+                                    live_out.push(src);
+                                }
+                            }
+                            ctx.pop_alloc_scope_frees(&live_out, span);
+                        } else {
+                            ctx.alloc_scopes.pop();
+                        }
 
                         let up_id = ctx.emit(
                             Opcode::Upsilon,
@@ -2084,6 +2346,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         ctx.push_alloc_scope();
                         let arm_result = lower_expr(ctx, &arm.body);
                         let arm_ty = ctx.inst_ty(arm_result);
+                        let arm_terminated = ctx.is_terminated();
                         ctx.pop_scope();
 
                         let arm_mut_vals: Vec<InstId> = mutations
@@ -2091,8 +2354,22 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                             .collect();
 
-                        // Discard match arm alloc scope.
-                        ctx.alloc_scopes.pop();
+                        // Free match arm temporaries (keep transitive sources alive).
+                        if !arm_terminated {
+                            let mut live_out: Vec<InstId> = arm_mut_vals.clone();
+                            live_out.push(arm_result);
+                            for src in ctx.collect_return_sources(arm_result) {
+                                live_out.push(src);
+                            }
+                            for mv in &arm_mut_vals {
+                                for src in ctx.collect_return_sources(*mv) {
+                                    live_out.push(src);
+                                }
+                            }
+                            ctx.pop_alloc_scope_frees(&live_out, span);
+                        } else {
+                            ctx.alloc_scopes.pop();
+                        }
 
                         let up_id = ctx.emit(
                             Opcode::Upsilon,

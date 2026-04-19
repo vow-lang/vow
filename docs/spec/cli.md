@@ -21,10 +21,13 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--dump-ir`       | (off)       | Print IR text to stdout and exit (no JSON output, no codegen) |
 | `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
 | `--no-cache`    | (off)       | Disable compile and verify caching           |
-| `--max-k-step <N>` | `50`     | ESBMC max k-induction step                   |
+| `--max-k-step <N>` | `50`     | ESBMC incremental BMC max iterations          |
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
 | `--timeout <N>` | (none)      | ESBMC per-function timeout in seconds        |
+| `--vec-max <N>` | `128`       | Max Vec capacity for verification model      |
+| `--string-max <N>` | `256`    | Max String capacity for verification model   |
+| `--hashmap-max <N>` | `64`    | Max HashMap capacity for verification model  |
 
 ### `vow verify`
 
@@ -39,10 +42,13 @@ vow verify [OPTIONS] <source.vow>
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
 | `--no-cache`      | (off)       | Disable verification result caching        |
-| `--max-k-step <N>` | `50`       | ESBMC max k-induction step                |
+| `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations       |
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
 | `--timeout <N>` | (none)      | ESBMC per-function timeout in seconds        |
+| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
+| `--string-max <N>`| `256`       | Max String capacity for verification model |
+| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
 
 ### `vow contracts`
 
@@ -58,9 +64,12 @@ vow contracts [OPTIONS] <source.vow>
 |-------------------|-------------|--------------------------------------------|
 | `--verify`        | (off)       | Run ESBMC verification and report per-contract status |
 | `--no-cache`      | (off)       | Disable verification result caching        |
-| `--max-k-step <N>` | `50`       | ESBMC max k-induction step                |
+| `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations       |
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver (with --verify)           |
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |
+| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
+| `--string-max <N>`| `256`       | Max String capacity for verification model |
+| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
 
 ### `vow skill`
 
@@ -94,7 +103,10 @@ vow test [OPTIONS] [<path>]
 | `--mode debug`    | (default)   | Insert runtime vow checks                 |
 | `--mode release`  | `debug`     | Omit all vow checks for performance       |
 | `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
-| `--max-k-step <N>` | `50`       | ESBMC max k-induction step (with --verify) |
+| `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations (with --verify) |
+| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
+| `--string-max <N>`| `256`       | Max String capacity for verification model |
+| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` in the given directory, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
 

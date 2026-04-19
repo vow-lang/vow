@@ -16,15 +16,21 @@ Contract clauses become IR opcodes. The C emitter translates `requires` to `__ES
 ### ESBMC Configuration
 
 - Verification strategy: **k-induction-parallel** (incremental BMC + k-induction proof)
-- Max k-induction step: **50** (default; override with `--max-k-step`)
+- Incremental BMC with `--max-k-step` (default: **50**) — loops are verified incrementally up to N iterations
 - Architecture: 64-bit
 - Array bounds / pointer checks disabled (Vow handles these in its own model)
 
 ### Collection Models for Verification
 
-Collections (`Vec<T>`, `String`, `HashMap<K, V>`) are modeled with unbounded, dynamically allocated storage — the same semantics as at runtime. There are no artificial capacity limits in the verification model. ESBMC reasons about container operations using k-induction to prove properties for all iterations.
+ESBMC uses bounded models for collection types. Defaults are shown below; override with `--vec-max`, `--string-max`, `--hashmap-max`:
 
-`String::from` produces a nondeterministic non-negative length in verification.
+| Type              | Default Max Capacity | CLI Flag | Supported Operations |
+|-------------------|---------------------|----------|----------------------------------------------|
+| `Vec<T>`          | 128                 | `--vec-max <N>` | `new`, `push`, `pop`, `len`, `get`, `set`    |
+| `String`          | 256                 | `--string-max <N>` | `from`, `len`, `push_byte`, `byte_at`        |
+| `HashMap<K, V>`   | 64                  | `--hashmap-max <N>` | `new`, `insert`, `get`, `contains_key`, `len`|
+
+These support the same operations as the runtime but with bounded storage. `String::from` produces a nondeterministic length (0 to max-1) in verification.
 
 ## Blame Model
 
@@ -230,7 +236,7 @@ This is not inductive — `v.len() == n` is only true after the loop.
 
 ### Unbound Loop Iterations
 
-Without a bound on loop iterations, ESBMC may timeout (max-k-step is 50):
+Without a bound on loop iterations, ESBMC may timeout (default max-k-step is 50):
 
 ```vow
 fn fill(n: i64) -> Vec<i64> vow {

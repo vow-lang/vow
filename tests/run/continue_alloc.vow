@@ -1,0 +1,15 @@
+// TEST: stdout "done\n"
+module ContinueAlloc
+
+fn main() -> i32 [io] {
+    let mut i: i64 = 0;
+    while i < 100 {
+        let s: String = String::from("leak");
+        i = i + 1;
+        if i < 50 {
+            continue;
+        }
+    }
+    print_str("done\n");
+    0
+}

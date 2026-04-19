@@ -10,6 +10,11 @@ cd "$(dirname "$0")/.."
 mkdir -p build
 
 SKIP_CARGO=false
+VMEM_LIMIT_KB="${VOW_BOOTSTRAP_VMEM_KB:-0}"
+if ! [[ "$VMEM_LIMIT_KB" =~ ^[0-9]+$ ]]; then
+    echo "Error: VOW_BOOTSTRAP_VMEM_KB must be a non-negative integer (got: '$VMEM_LIMIT_KB')" >&2
+    exit 1
+fi
 
 usage() {
     echo "Usage: $0 [--skip-cargo] [--help|-h]"
@@ -26,7 +31,32 @@ usage() {
     echo "Options:"
     echo "  --skip-cargo  Skip Stage 0 if Rust binary already built"
     echo "  -h, --help    Show this help"
+    echo ""
+    echo "Environment:"
+    echo "  VOW_BOOTSTRAP_VMEM_KB  Optional per-stage virtual-memory cap in KB for"
+    echo "                         self-hosted rebuilds (default: unlimited)"
     exit 0
+}
+
+run_logged() {
+    local cmd="$1"
+    (
+        log=$(mktemp)
+        trap 'rm -f "$log"' EXIT INT TERM HUP
+        if bash -c "$cmd" >"$log" 2>&1; then
+            exit 0
+        fi
+        cat "$log"
+        exit 1
+    )
+}
+
+run_stage_cmd() {
+    local cmd="$1"
+    if [ "$VMEM_LIMIT_KB" -gt 0 ]; then
+        cmd="ulimit -v $VMEM_LIMIT_KB && $cmd"
+    fi
+    run_logged "$cmd"
 }
 
 for arg in "$@"; do
@@ -53,8 +83,8 @@ fi
 
 printf "${BOLD}Stage 1:${RESET} Rust compiler -> build/vowc\n"
 t0=$(date +%s)
-if ! output=$(./target/release/vow build compiler/main.vow -o build/vowc 2>&1); then
-    printf "  ${RED}FAILED${RESET}\n%s\n" "$output"
+if ! run_logged "./target/release/vow build compiler/main.vow -o build/vowc"; then
+    printf "  ${RED}FAILED${RESET}\n"
     exit 1
 fi
 t1=$(date +%s)
@@ -64,8 +94,11 @@ printf "  done in %ds\n" $((t1 - t0))
 
 printf "${BOLD}Stage 2:${RESET} build/vowc -> build/vowc2\n"
 t0=$(date +%s)
-if ! output=$(ulimit -v 2000000; build/vowc build compiler/main.vow -o build/vowc2 2>&1); then
-    printf "  ${RED}FAILED${RESET}\n%s\n" "$output"
+if ! run_stage_cmd "build/vowc build compiler/main.vow -o build/vowc2"; then
+    printf "  ${RED}FAILED${RESET}\n"
+    if [ "$VMEM_LIMIT_KB" -gt 0 ]; then
+        printf "  Hint: rerun with a higher VOW_BOOTSTRAP_VMEM_KB or unset it for no cap.\n"
+    fi
     exit 1
 fi
 t1=$(date +%s)
@@ -75,8 +108,11 @@ printf "  done in %ds\n" $((t1 - t0))
 
 printf "${BOLD}Stage 3:${RESET} build/vowc2 -> build/vowc3\n"
 t0=$(date +%s)
-if ! output=$(ulimit -v 2000000; build/vowc2 build compiler/main.vow -o build/vowc3 2>&1); then
-    printf "  ${RED}FAILED${RESET}\n%s\n" "$output"
+if ! run_stage_cmd "build/vowc2 build compiler/main.vow -o build/vowc3"; then
+    printf "  ${RED}FAILED${RESET}\n"
+    if [ "$VMEM_LIMIT_KB" -gt 0 ]; then
+        printf "  Hint: rerun with a higher VOW_BOOTSTRAP_VMEM_KB or unset it for no cap.\n"
+    fi
     exit 1
 fi
 t1=$(date +%s)

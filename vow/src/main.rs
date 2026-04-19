@@ -1,5 +1,6 @@
-pub mod cache;
-pub mod module_loader;
+mod cache;
+mod frontend;
+mod module_loader;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,14 +13,15 @@ use serde::Serialize;
 use vow_codegen::cranelift_backend::CraneliftBackend;
 use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
-use vow_diag::{CollectingEmitter, Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
+use vow_diag::{Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
     Counterexample, DEFAULT_MAX_K_STEP, Encoding, Solver, SolverConfig, VerificationResult,
-    detect_constant_functions, emit_verify_c_source, find_esbmc, run_esbmc_with_max_k_step,
-    verify_function_with_module_and_const_fns_configured,
+    VerifyLimits, detect_constant_functions, emit_verify_c_source, find_esbmc,
+    run_esbmc_with_max_k_step, verify_function_with_module_and_const_fns_configured,
 };
 
 use cache::{CachedVerifyResult, VerifyCache};
+use frontend::{FrontendBundle, FrontendError, FrontendGoal, prepare_frontend};
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -109,6 +111,12 @@ struct Args {
     no_cache: bool,
     #[arg(long, default_value_t = DEFAULT_MAX_K_STEP)]
     max_k_step: u32,
+    #[arg(long, default_value = "128")]
+    vec_max: usize,
+    #[arg(long, default_value = "256")]
+    string_max: usize,
+    #[arg(long, default_value = "64")]
+    hashmap_max: usize,
     #[arg(long, value_enum, default_value = "auto")]
     solver: SolverArg,
     #[arg(long, value_enum, default_value = "auto")]
@@ -155,6 +163,12 @@ struct BuildArgs {
     no_cache: bool,
     #[arg(long, default_value_t = DEFAULT_MAX_K_STEP)]
     max_k_step: u32,
+    #[arg(long, default_value = "128")]
+    vec_max: usize,
+    #[arg(long, default_value = "256")]
+    string_max: usize,
+    #[arg(long, default_value = "64")]
+    hashmap_max: usize,
     #[arg(long, value_enum, default_value = "auto")]
     solver: SolverArg,
     #[arg(long, value_enum, default_value = "auto")]
@@ -179,6 +193,12 @@ struct VerifyArgs {
     no_cache: bool,
     #[arg(long, default_value_t = DEFAULT_MAX_K_STEP)]
     max_k_step: u32,
+    #[arg(long, default_value = "128")]
+    vec_max: usize,
+    #[arg(long, default_value = "256")]
+    string_max: usize,
+    #[arg(long, default_value = "64")]
+    hashmap_max: usize,
     #[arg(long, value_enum, default_value = "auto")]
     solver: SolverArg,
     #[arg(long, value_enum, default_value = "auto")]
@@ -207,6 +227,12 @@ struct TestArgs {
     /// ESBMC max k-induction step (only with --verify)
     #[arg(long, default_value_t = DEFAULT_MAX_K_STEP)]
     max_k_step: u32,
+    #[arg(long, default_value = "128")]
+    vec_max: usize,
+    #[arg(long, default_value = "256")]
+    string_max: usize,
+    #[arg(long, default_value = "64")]
+    hashmap_max: usize,
     #[arg(long)]
     help: bool,
     #[arg(long)]
@@ -235,6 +261,12 @@ struct ContractsArgs {
     no_cache: bool,
     #[arg(long)]
     max_k_step: Option<u32>,
+    #[arg(long, default_value = "128")]
+    vec_max: usize,
+    #[arg(long, default_value = "256")]
+    string_max: usize,
+    #[arg(long, default_value = "64")]
+    hashmap_max: usize,
     #[arg(long, value_enum, default_value = "auto")]
     solver: SolverArg,
     #[arg(long, value_enum, default_value = "auto")]
@@ -390,6 +422,30 @@ fn skill_json() -> String {
           "default": 50
         },
         {
+          "form": "--vec-max <N>",
+          "description": "Max Vec capacity for verification model (default: 128)",
+          "long": "--vec-max",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 128
+        },
+        {
+          "form": "--string-max <N>",
+          "description": "Max String capacity for verification model (default: 256)",
+          "long": "--string-max",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 256
+        },
+        {
+          "form": "--hashmap-max <N>",
+          "description": "Max HashMap capacity for verification model (default: 64)",
+          "long": "--hashmap-max",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 64
+        },
+        {
           "form": "--solver <boolector|z3|bitwuzla|auto>",
           "description": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
           "long": "--solver",
@@ -469,6 +525,30 @@ fn skill_json() -> String {
           "value_name": "N",
           "value_kind": "integer",
           "default": 50
+        },
+        {
+          "form": "--vec-max <N>",
+          "description": "Max Vec capacity for verification model (default: 128)",
+          "long": "--vec-max",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 128
+        },
+        {
+          "form": "--string-max <N>",
+          "description": "Max String capacity for verification model (default: 256)",
+          "long": "--string-max",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 256
+        },
+        {
+          "form": "--hashmap-max <N>",
+          "description": "Max HashMap capacity for verification model (default: 64)",
+          "long": "--hashmap-max",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 64
         },
         {
           "form": "--solver <boolector|z3|bitwuzla|auto>",
@@ -571,6 +651,30 @@ fn skill_json() -> String {
           "value_name": "N",
           "value_kind": "integer",
           "default": 50
+        },
+        {
+          "form": "--vec-max <N>",
+          "description": "Max Vec capacity for verification model (default: 128)",
+          "long": "--vec-max",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 128
+        },
+        {
+          "form": "--string-max <N>",
+          "description": "Max String capacity for verification model (default: 256)",
+          "long": "--string-max",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 256
+        },
+        {
+          "form": "--hashmap-max <N>",
+          "description": "Max HashMap capacity for verification model (default: 64)",
+          "long": "--hashmap-max",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 64
         }
       ],
       "stdout": {
@@ -647,6 +751,30 @@ fn skill_json() -> String {
           "default": 50
         },
         {
+          "form": "--vec-max <N>",
+          "description": "Max Vec capacity for verification model (default: 128)",
+          "long": "--vec-max",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 128
+        },
+        {
+          "form": "--string-max <N>",
+          "description": "Max String capacity for verification model (default: 256)",
+          "long": "--string-max",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 256
+        },
+        {
+          "form": "--hashmap-max <N>",
+          "description": "Max HashMap capacity for verification model (default: 64)",
+          "long": "--hashmap-max",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 64
+        },
+        {
           "form": "--solver <boolector|z3|bitwuzla|auto>",
           "description": "ESBMC SMT solver (with --verify)",
           "long": "--solver",
@@ -692,6 +820,9 @@ fn skill_json() -> String {
     "--debug-trace <off|calls|full>": "Emit JSON trace lines to stderr at runtime (default: off)",
     "--no-cache": "Disable compile and verify caching",
     "--max-k-step <N>": "ESBMC max k-induction step (default: 50)",
+    "--vec-max <N>": "Max Vec capacity for verification model (default: 128)",
+    "--string-max <N>": "Max String capacity for verification model (default: 256)",
+    "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)",
     "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
     "--encoding <bv|ir|auto>": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
     "--timeout <N>": "ESBMC per-function timeout in seconds (default: (none))"
@@ -699,6 +830,9 @@ fn skill_json() -> String {
   "verify_options": {
     "--no-cache": "Disable verification result caching",
     "--max-k-step <N>": "ESBMC max k-induction step (default: 50)",
+    "--vec-max <N>": "Max Vec capacity for verification model (default: 128)",
+    "--string-max <N>": "Max String capacity for verification model (default: 256)",
+    "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)",
     "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
     "--encoding <bv|ir|auto>": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
     "--timeout <N>": "ESBMC per-function timeout in seconds (default: (none))"
@@ -708,7 +842,10 @@ fn skill_json() -> String {
     "--filter <pat>": "Only run tests whose name contains pat (default: (none))",
     "--mode <debug|release>": "Build mode; debug inserts runtime vow checks (default: (default))",
     "--timeout <ms>": "Per-test execution timeout in milliseconds (default: 30000)",
-    "--max-k-step <N>": "ESBMC max k-induction step (with --verify)"
+    "--max-k-step <N>": "ESBMC max k-induction step (with --verify)",
+    "--vec-max <N>": "Max Vec capacity for verification model (default: 128)",
+    "--string-max <N>": "Max String capacity for verification model (default: 256)",
+    "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)"
   },
   "decl_options": {
     "-o, --output <path>": "Output declaration file path (default: <source>.vow.d)"
@@ -717,6 +854,9 @@ fn skill_json() -> String {
     "--verify": "Run ESBMC verification and report per-contract status",
     "--no-cache": "Disable verification result caching",
     "--max-k-step <N>": "ESBMC max k-induction step (default: 50)",
+    "--vec-max <N>": "Max Vec capacity for verification model (default: 128)",
+    "--string-max <N>": "Max String capacity for verification model (default: 256)",
+    "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)",
     "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver (with --verify)",
     "--encoding <bv|ir|auto>": "ESBMC encoding mode (with --verify); ir requires z3 (default: auto)"
   },
@@ -1033,7 +1173,10 @@ fn skill_json() -> String {
   },
   "verification_defaults": {
     "strategy": "k-induction-parallel",
-    "max_k_step": 50
+    "max_k_step": 50,
+    "vec_max": 128,
+    "string_max": 256,
+    "hashmap_max": 64
   }
 }"##
     .to_string()
@@ -1061,6 +1204,9 @@ BUILD OPTIONS
   --debug-trace <off|calls|full>  Emit JSON trace lines to stderr at runtime (default: off)
   --no-cache              Disable compile and verify caching
   --max-k-step <N>        ESBMC max k-induction step (default: 50)
+  --vec-max <N>           Max Vec capacity for verification model (default: 128)
+  --string-max <N>        Max String capacity for verification model (default: 256)
+  --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)
   --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)
   --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)
   --timeout <N>           ESBMC per-function timeout in seconds (default: (none))
@@ -1068,6 +1214,9 @@ BUILD OPTIONS
 VERIFY OPTIONS
   --no-cache              Disable verification result caching
   --max-k-step <N>        ESBMC max k-induction step (default: 50)
+  --vec-max <N>           Max Vec capacity for verification model (default: 128)
+  --string-max <N>        Max String capacity for verification model (default: 256)
+  --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)
   --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)
   --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)
   --timeout <N>           ESBMC per-function timeout in seconds (default: (none))
@@ -1078,11 +1227,17 @@ TEST OPTIONS
   --mode <debug|release>  Build mode; debug inserts runtime vow checks (default: (default))
   --timeout <ms>          Per-test execution timeout in milliseconds (default: 30000)
   --max-k-step <N>        ESBMC max k-induction step (with --verify)
+  --vec-max <N>           Max Vec capacity for verification model (default: 128)
+  --string-max <N>        Max String capacity for verification model (default: 256)
+  --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)
 
 CONTRACTS OPTIONS
   --verify                Run ESBMC verification and report per-contract status
   --no-cache              Disable verification result caching
   --max-k-step <N>        ESBMC max k-induction step (default: 50)
+  --vec-max <N>           Max Vec capacity for verification model (default: 128)
+  --string-max <N>        Max String capacity for verification model (default: 256)
+  --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)
   --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver (with --verify)
   --encoding <bv|ir|auto>  ESBMC encoding mode (with --verify); ir requires z3 (default: auto)
 
@@ -1137,10 +1292,11 @@ METHODS   : Vec: Vec::new/push/pop/len/clear/truncate/v[i]/v[i] = val   String: 
             HashMap: HashMap::new/insert/get/contains_key/remove/len   Option: unwrap
 OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! & ?
 
-VERIFICATION
-  Strategy      : k-induction-parallel (incremental BMC + k-induction)
-  Max k step    : 50 (default; override with --max-k-step)
-  Containers    : unbounded (no artificial capacity limits)"##
+VERIFICATION DEFAULTS (configurable via --max-k-step, --vec-max, --string-max, --hashmap-max)
+  Incremental BMC : 50 max iterations (--max-k-step)
+  Vec<T>        : 128 max capacity (--vec-max)
+  String        : 256 max capacity (--string-max)
+  HashMap<K, V> : 64 max capacity (--hashmap-max)"##
         .to_string()
 }
 // GENERATE:SKILL_HUMAN:END
@@ -2015,6 +2171,9 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
 | `--no-cache`    | (off)       | Disable compile and verify caching           |
 | `--max-k-step <N>` | `50`     | ESBMC max k-induction step                   |
+| `--vec-max <N>` | `128`      | Max Vec capacity for verification model       |
+| `--string-max <N>` | `256`   | Max String capacity for verification model    |
+| `--hashmap-max <N>` | `64`   | Max HashMap capacity for verification model   |
 
 ### `vow verify`
 
@@ -2030,6 +2189,9 @@ vow verify [OPTIONS] <source.vow>
 |-------------------|-------------|--------------------------------------------|
 | `--no-cache`      | (off)       | Disable verification result caching        |
 | `--max-k-step <N>` | `50`       | ESBMC max k-induction step                |
+| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
+| `--string-max <N>`| `256`       | Max String capacity for verification model |
+| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
 
 ### `vow contracts`
 
@@ -2046,6 +2208,9 @@ vow contracts [OPTIONS] <source.vow>
 | `--verify`        | (off)       | Run ESBMC verification and report per-contract status |
 | `--no-cache`      | (off)       | Disable verification result caching        |
 | `--max-k-step <N>` | `50`       | ESBMC max k-induction step                |
+| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
+| `--string-max <N>`| `256`       | Max String capacity for verification model |
+| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
 
 ### `vow skill`
 
@@ -2080,6 +2245,9 @@ vow test [OPTIONS] [<path>]
 | `--mode release`  | `debug`     | Omit all vow checks for performance       |
 | `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
 | `--max-k-step <N>` | `50`       | ESBMC max k-induction step (with --verify) |
+| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
+| `--string-max <N>`| `256`       | Max String capacity for verification model |
+| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` in the given directory, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
 
@@ -4482,107 +4650,38 @@ fn build_call_site_index(
 // Frontend (parse → module load → type check → IR lower)
 // ---------------------------------------------------------------------------
 
-struct FrontendResult {
-    ir_module: Arc<vow_ir::Module>,
-    diagnostics: Vec<Diagnostic>,
-    source_files: Vec<PathBuf>,
+fn emit_frontend_diagnostics(diagnostics: &[Diagnostic]) {
+    let mut stderr_emit = HumanEmitter::new(Box::new(std::io::stderr()));
+    for diagnostic in diagnostics {
+        stderr_emit.emit(diagnostic);
+    }
+    stderr_emit.finish();
 }
 
-fn compile_frontend(source: &Path) -> Result<FrontendResult, Box<BuildOutput>> {
-    let src = match std::fs::read_to_string(source) {
-        Ok(s) => s,
-        Err(e) => {
-            return Err(Box::new(BuildOutput {
-                status: BuildStatus::CompileFailed {
-                    message: e.to_string(),
-                },
-                executable: None,
-                diagnostics: vec![],
-                counterexamples: vec![],
-                verify_status: None,
-                verify_message: None,
-            }));
+fn frontend_error_to_output(error: FrontendError) -> BuildOutput {
+    let message = error.failure_message().to_string();
+    let diagnostics = error.into_diagnostics();
+    BuildOutput {
+        status: BuildStatus::CompileFailed { message },
+        executable: None,
+        diagnostics,
+        counterexamples: vec![],
+        verify_status: None,
+        verify_message: None,
+    }
+}
+
+fn compile_frontend(source: &Path) -> Result<FrontendBundle, Box<BuildOutput>> {
+    match prepare_frontend(source, FrontendGoal::LoweredIr) {
+        Ok(bundle) => {
+            emit_frontend_diagnostics(bundle.diagnostics());
+            Ok(bundle)
         }
-    };
-
-    let mut stderr_emit = HumanEmitter::new(Box::new(std::io::stderr()));
-    let mut all_diagnostics: Vec<Diagnostic> = Vec::new();
-
-    let file_str = source.to_string_lossy();
-    let (root_ast, parse_diags) = vow_syntax::parser::parse_module(&src, &file_str);
-    let parse_failed = parse_diags.iter().any(|d| d.severity == Severity::Error);
-    for d in &parse_diags {
-        stderr_emit.emit(d);
-    }
-    all_diagnostics.extend(parse_diags);
-    if parse_failed {
-        return Err(Box::new(BuildOutput {
-            status: BuildStatus::CompileFailed {
-                message: "parse error".to_string(),
-            },
-            executable: None,
-            diagnostics: all_diagnostics,
-            counterexamples: vec![],
-            verify_status: None,
-            verify_message: None,
-        }));
-    }
-
-    let (ast, source_files) = match module_loader::load_modules(source, &root_ast) {
-        Ok(graph) => {
-            let files: Vec<PathBuf> = graph.modules.iter().map(|(p, _)| p.clone()).collect();
-            (module_loader::merge_modules(graph), files)
+        Err(error) => {
+            emit_frontend_diagnostics(error.diagnostics());
+            Err(Box::new(frontend_error_to_output(error)))
         }
-        Err(diags) => {
-            for d in &diags {
-                stderr_emit.emit(d);
-            }
-            all_diagnostics.extend(diags);
-            return Err(Box::new(BuildOutput {
-                status: BuildStatus::CompileFailed {
-                    message: "module load error".to_string(),
-                },
-                executable: None,
-                diagnostics: all_diagnostics,
-                counterexamples: vec![],
-                verify_status: None,
-                verify_message: None,
-            }));
-        }
-    };
-
-    let mut collecting_emit = CollectingEmitter::new(&mut stderr_emit);
-    let mut checker =
-        vow_types::check::Checker::new(source.to_string_lossy().to_string(), &mut collecting_emit);
-    checker.check_module(&ast);
-    let has_errors = checker.has_errors();
-    let string_exprs = checker.into_string_exprs();
-    all_diagnostics.extend(collecting_emit.into_diagnostics());
-    if has_errors {
-        return Err(Box::new(BuildOutput {
-            status: BuildStatus::CompileFailed {
-                message: "type error".to_string(),
-            },
-            executable: None,
-            diagnostics: all_diagnostics,
-            counterexamples: vec![],
-            verify_status: None,
-            verify_message: None,
-        }));
     }
-
-    let module = vow_ir::lower_module(&ast, &source.to_string_lossy(), &string_exprs);
-    for w in &module.warnings {
-        stderr_emit.emit(w);
-    }
-    all_diagnostics.extend(module.warnings.iter().cloned());
-    let ir_module = Arc::new(module);
-
-    Ok(FrontendResult {
-        ir_module,
-        diagnostics: all_diagnostics,
-        source_files,
-    })
 }
 
 // ---------------------------------------------------------------------------
@@ -4594,7 +4693,7 @@ fn run_verification_sync(
     file: &str,
     call_site_index: &std::collections::HashMap<String, Vec<CallSiteInfo>>,
     verify_cache: Option<&VerifyCache>,
-    max_k_step: u32,
+    limits: &VerifyLimits,
     config: &SolverConfig,
 ) -> VerifyOutcome {
     let const_fns = detect_constant_functions(ir_module);
@@ -4617,10 +4716,10 @@ fn run_verification_sync(
         };
 
         let result = if let Some(vc) = verify_cache {
-            let c_src = emit_verify_c_source(func, ir_module, &const_fns);
+            let c_src = emit_verify_c_source(func, ir_module, &const_fns, limits);
             let key = VerifyCache::cache_key(
                 &c_src,
-                max_k_step,
+                limits.max_k_step,
                 func_config.solver_str(),
                 func_config.encoding_str(),
             );
@@ -4637,8 +4736,13 @@ fn run_verification_sync(
                     Some(p) => p,
                     None => return VerifyOutcome::ToolNotFound,
                 };
-                let res =
-                    run_esbmc_with_max_k_step(&esbmc, &c_src, max_k_step, &func.name, &func_config);
+                let res = run_esbmc_with_max_k_step(
+                    &esbmc,
+                    &c_src,
+                    limits.max_k_step,
+                    &func.name,
+                    &func_config,
+                );
                 match &res {
                     VerificationResult::Proven | VerificationResult::ProvenIr => {
                         vc.store(&key, &CachedVerifyResult::Proven);
@@ -4664,8 +4768,9 @@ fn run_verification_sync(
                 func,
                 ir_module,
                 &const_fns,
-                max_k_step,
+                limits.max_k_step,
                 &func_config,
+                limits,
             )
         };
 
@@ -4857,41 +4962,41 @@ fn verify_outcome_to_output(
 // ---------------------------------------------------------------------------
 
 pub fn run_verify_only(source: &Path) -> BuildOutput {
-    run_verify_only_inner(
-        source,
-        false,
-        DEFAULT_MAX_K_STEP,
-        &SolverConfig::default_config(),
-    )
+    let limits = VerifyLimits::default();
+    run_verify_only_inner(source, false, &limits, &SolverConfig::default_config())
 }
 
 fn run_verify_only_inner(
     source: &Path,
     no_cache: bool,
-    max_k_step: u32,
+    limits: &VerifyLimits,
     config: &SolverConfig,
 ) -> BuildOutput {
     let frontend = match compile_frontend(source) {
         Ok(f) => f,
         Err(output) => return *output,
     };
+    let all_diagnostics = frontend.diagnostics().to_vec();
+    let ir_module = frontend
+        .ir()
+        .expect("LoweredIr goal must produce IR for verify-only");
 
     if find_esbmc().is_none() {
-        return verify_outcome_to_output(VerifyOutcome::ToolNotFound, frontend.diagnostics, None);
+        return verify_outcome_to_output(VerifyOutcome::ToolNotFound, all_diagnostics, None);
     }
 
     let verify_cache = if no_cache { None } else { VerifyCache::new() };
     let file = source.to_string_lossy().to_string();
-    let call_site_index = build_call_site_index(&frontend.ir_module, &file);
+    let call_site_index = build_call_site_index(ir_module, &file);
     let outcome = run_verification_sync(
-        &frontend.ir_module,
+        ir_module,
         &file,
         &call_site_index,
         verify_cache.as_ref(),
-        max_k_step,
+        limits,
         config,
     );
-    verify_outcome_to_output(outcome, frontend.diagnostics, None)
+    verify_outcome_to_output(outcome, all_diagnostics, None)
 }
 
 // ---------------------------------------------------------------------------
@@ -4926,6 +5031,7 @@ pub fn run_pipeline(
     dump_ir: bool,
     trace: TraceMode,
 ) -> BuildOutput {
+    let limits = VerifyLimits::default();
     run_pipeline_inner(
         source,
         output,
@@ -4934,7 +5040,7 @@ pub fn run_pipeline(
         dump_ir,
         trace,
         false,
-        10,
+        &limits,
         &SolverConfig::default_config(),
     )
 }
@@ -4948,7 +5054,7 @@ fn run_pipeline_inner(
     dump_ir: bool,
     trace: TraceMode,
     no_cache: bool,
-    max_k_step: u32,
+    limits: &VerifyLimits,
     config: &SolverConfig,
 ) -> BuildOutput {
     let frontend = match compile_frontend(source) {
@@ -4957,13 +5063,13 @@ fn run_pipeline_inner(
     };
 
     run_pipeline_from_frontend(
-        frontend, source, output, mode, no_verify, dump_ir, trace, no_cache, max_k_step, config,
+        frontend, source, output, mode, no_verify, dump_ir, trace, no_cache, limits, config,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
 fn run_pipeline_from_frontend(
-    frontend: FrontendResult,
+    frontend: FrontendBundle,
     source: &Path,
     output: Option<&Path>,
     mode: BuildMode,
@@ -4971,11 +5077,14 @@ fn run_pipeline_from_frontend(
     dump_ir: bool,
     trace: TraceMode,
     no_cache: bool,
-    max_k_step: u32,
+    limits: &VerifyLimits,
     config: &SolverConfig,
 ) -> BuildOutput {
-    let all_diagnostics = frontend.diagnostics;
-    let ir_module = frontend.ir_module;
+    let all_diagnostics = frontend.diagnostics().to_vec();
+    let ir_module = frontend
+        .ir()
+        .cloned()
+        .expect("LoweredIr goal must produce IR for build pipeline");
 
     if dump_ir {
         print!("{}", vow_ir::print_module(&ir_module));
@@ -5003,6 +5112,7 @@ fn run_pipeline_from_frontend(
     } else {
         VerifyCache::new()
     };
+    let verify_limits = *limits;
     let verify_config = *config;
     let verify_handle = thread::spawn(move || -> VerifyOutcome {
         if no_verify {
@@ -5013,7 +5123,7 @@ fn run_pipeline_from_frontend(
             &file_for_verify,
             &call_site_index,
             verify_cache.as_ref(),
-            max_k_step,
+            &verify_limits,
             &verify_config,
         )
     });
@@ -5032,7 +5142,7 @@ fn run_pipeline_from_frontend(
     } else {
         cache::CompileCache::new()
     };
-    let cache_key = cache::CompileCache::cache_key(&frontend.source_files, &mode_str, &trace_str);
+    let cache_key = cache::CompileCache::cache_key(frontend.dependencies(), &mode_str, &trace_str);
 
     if let Some(ref cc) = compile_cache
         && let Some(cached_obj) = cc.lookup(&cache_key)
@@ -5132,11 +5242,7 @@ fn count_contract_density(ir_module: &vow_ir::Module) -> ContractDensity {
         }
     }
     // Integer math matching self-hosted: (n * 1000) / total gives tenths of a percent
-    let tenths = if total > 0 {
-        (with_vows * 1000) / total
-    } else {
-        0
-    };
+    let tenths = ((with_vows * 1000).checked_div(total)).unwrap_or(0);
     ContractDensity {
         functions_total: total,
         functions_with_vows: with_vows,
@@ -5150,7 +5256,7 @@ fn run_test_command(
     filter: Option<&str>,
     mode: BuildMode,
     timeout_ms: u64,
-    max_k_step: u32,
+    limits: &VerifyLimits,
 ) {
     if !path.exists() {
         let result = TestResult {
@@ -5223,7 +5329,11 @@ fn run_test_command(
             }
         };
 
-        let density = count_contract_density(&frontend.ir_module);
+        let density = count_contract_density(
+            frontend
+                .ir()
+                .expect("LoweredIr goal must produce IR for test density"),
+        );
         total_density.functions_total += density.functions_total;
         total_density.functions_with_vows += density.functions_with_vows;
 
@@ -5237,7 +5347,7 @@ fn run_test_command(
             false,
             TraceMode::Off,
             true,
-            max_k_step,
+            limits,
             &SolverConfig::default_config(),
         );
 
@@ -5386,8 +5496,9 @@ fn run_test_command(
     }
 
     // Compute final density (integer math matching self-hosted compiler)
-    if total_density.functions_total > 0 {
-        let tenths = (total_density.functions_with_vows * 1000) / total_density.functions_total;
+    if let Some(tenths) =
+        (total_density.functions_with_vows * 1000).checked_div(total_density.functions_total)
+    {
         total_density.density_pct = (tenths / 10) as f64 + (tenths % 10) as f64 / 10.0;
     }
 
@@ -5431,6 +5542,13 @@ fn run_test_command(
 // Entry point
 // ---------------------------------------------------------------------------
 
+fn validate_limits(limits: &VerifyLimits) {
+    if limits.vec_max == 0 || limits.string_max == 0 || limits.hashmap_max == 0 {
+        eprintln!("error: --vec-max, --string-max, and --hashmap-max must be >= 1");
+        std::process::exit(1);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_build_command(
     source: &Path,
@@ -5440,11 +5558,11 @@ fn run_build_command(
     dump_ir: bool,
     trace: TraceMode,
     no_cache: bool,
-    max_k_step: u32,
+    limits: &VerifyLimits,
     config: &SolverConfig,
 ) {
     let result = run_pipeline_inner(
-        source, output, mode, no_verify, dump_ir, trace, no_cache, max_k_step, config,
+        source, output, mode, no_verify, dump_ir, trace, no_cache, limits, config,
     );
     if !dump_ir {
         result.emit_json();
@@ -5458,50 +5576,19 @@ fn run_build_command(
 }
 
 fn run_decl_command(source: &Path, output: Option<&Path>) {
-    let src = match std::fs::read_to_string(source) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("vow decl: {}", e);
+    let frontend = match prepare_frontend(source, FrontendGoal::MergedAst) {
+        Ok(bundle) => {
+            emit_frontend_diagnostics(bundle.diagnostics());
+            bundle
+        }
+        Err(error) => {
+            emit_frontend_diagnostics(error.diagnostics());
+            eprintln!("vow decl: {}", error.failure_message());
             std::process::exit(1);
         }
     };
 
-    let file_str = source.to_string_lossy();
-    let (root_ast, parse_diags) = vow_syntax::parser::parse_module(&src, &file_str);
-    let mut stderr_emit = HumanEmitter::new(Box::new(std::io::stderr()));
-    let parse_failed = parse_diags.iter().any(|d| d.severity == Severity::Error);
-    for d in &parse_diags {
-        stderr_emit.emit(d);
-    }
-    if parse_failed {
-        eprintln!("vow decl: parse errors");
-        std::process::exit(1);
-    }
-
-    let (ast, _source_files) = match module_loader::load_modules(source, &root_ast) {
-        Ok(graph) => {
-            let files: Vec<PathBuf> = graph.modules.iter().map(|(p, _)| p.clone()).collect();
-            (module_loader::merge_modules(graph), files)
-        }
-        Err(diags) => {
-            for d in &diags {
-                stderr_emit.emit(d);
-            }
-            eprintln!("vow decl: module load error");
-            std::process::exit(1);
-        }
-    };
-
-    let mut collecting_emit = CollectingEmitter::new(&mut stderr_emit);
-    let mut checker =
-        vow_types::check::Checker::new(source.to_string_lossy().to_string(), &mut collecting_emit);
-    checker.check_module(&ast);
-    if checker.has_errors() {
-        eprintln!("vow decl: type errors");
-        std::process::exit(1);
-    }
-
-    let decl_text = vow_syntax::printer::print_declarations(&ast);
+    let decl_text = vow_syntax::printer::print_declarations(frontend.module());
 
     let out_path = match output {
         Some(p) => p.to_path_buf(),
@@ -5523,8 +5610,8 @@ fn run_decl_command(source: &Path, output: Option<&Path>) {
     eprintln!("wrote {}", out_path.display());
 }
 
-fn run_verify_command(source: &Path, no_cache: bool, max_k_step: u32, config: &SolverConfig) {
-    let result = run_verify_only_inner(source, no_cache, max_k_step, config);
+fn run_verify_command(source: &Path, no_cache: bool, limits: &VerifyLimits, config: &SolverConfig) {
+    let result = run_verify_only_inner(source, no_cache, limits, config);
     result.emit_json();
     if matches!(
         &result.status,
@@ -5577,7 +5664,7 @@ fn update_contract_statuses(
     entries: &mut [ContractEntryJson],
     ir_module: &vow_ir::Module,
     verify_cache: Option<&VerifyCache>,
-    max_k_step: u32,
+    limits: &VerifyLimits,
     config: &SolverConfig,
 ) {
     let const_fns = detect_constant_functions(ir_module);
@@ -5587,10 +5674,10 @@ fn update_contract_statuses(
         }
 
         let result = if let Some(vc) = verify_cache {
-            let c_src = emit_verify_c_source(func, ir_module, &const_fns);
+            let c_src = emit_verify_c_source(func, ir_module, &const_fns, limits);
             let key = VerifyCache::cache_key(
                 &c_src,
-                max_k_step,
+                limits.max_k_step,
                 config.solver_str(),
                 config.encoding_str(),
             );
@@ -5614,7 +5701,13 @@ fn update_contract_statuses(
                         continue;
                     }
                 };
-                let res = run_esbmc_with_max_k_step(&esbmc, &c_src, max_k_step, &func.name, config);
+                let res = run_esbmc_with_max_k_step(
+                    &esbmc,
+                    &c_src,
+                    limits.max_k_step,
+                    &func.name,
+                    config,
+                );
                 match &res {
                     VerificationResult::Proven | VerificationResult::ProvenIr => {
                         vc.store(&key, &CachedVerifyResult::Proven);
@@ -5637,7 +5730,12 @@ fn update_contract_statuses(
             }
         } else {
             verify_function_with_module_and_const_fns_configured(
-                func, ir_module, &const_fns, max_k_step, config,
+                func,
+                ir_module,
+                &const_fns,
+                limits.max_k_step,
+                config,
+                limits,
             )
         };
 
@@ -5673,7 +5771,7 @@ fn run_contracts_command(
     source: &Path,
     verify: bool,
     no_cache: bool,
-    max_k_step: u32,
+    limits: &VerifyLimits,
     config: &SolverConfig,
 ) {
     let frontend = match compile_frontend(source) {
@@ -5683,9 +5781,13 @@ fn run_contracts_command(
             std::process::exit(1);
         }
     };
+    let all_diagnostics = frontend.diagnostics().to_vec();
+    let ir_module = frontend
+        .ir()
+        .expect("LoweredIr goal must produce IR for contracts");
 
     let mut entries: Vec<ContractEntryJson> = Vec::new();
-    for func in &frontend.ir_module.functions {
+    for func in &ir_module.functions {
         for vow in &func.vows {
             let kind = vow_kind_from_description(&vow.description);
             let blame = match vow.blame {
@@ -5711,16 +5813,16 @@ fn run_contracts_command(
     if verify {
         if find_esbmc().is_none() {
             let output =
-                verify_outcome_to_output(VerifyOutcome::ToolNotFound, frontend.diagnostics, None);
+                verify_outcome_to_output(VerifyOutcome::ToolNotFound, all_diagnostics, None);
             output.emit_json();
             std::process::exit(1);
         }
         let verify_cache = if no_cache { None } else { VerifyCache::new() };
         update_contract_statuses(
             &mut entries,
-            &frontend.ir_module,
+            ir_module,
             verify_cache.as_ref(),
-            max_k_step,
+            limits,
             config,
         );
     }
@@ -5765,6 +5867,13 @@ fn main() {
                 TraceArg::Calls => TraceMode::Calls,
                 TraceArg::Full => TraceMode::Full,
             };
+            let limits = VerifyLimits {
+                max_k_step: b.max_k_step,
+                vec_max: b.vec_max,
+                string_max: b.string_max,
+                hashmap_max: b.hashmap_max,
+            };
+            validate_limits(&limits);
             let bconfig = make_solver_config(b.solver, b.encoding, b.timeout);
             run_build_command(
                 &source,
@@ -5774,7 +5883,7 @@ fn main() {
                 b.dump_ir,
                 trace,
                 b.no_cache,
-                b.max_k_step,
+                &limits,
                 &bconfig,
             );
         }
@@ -5794,8 +5903,15 @@ fn main() {
                     std::process::exit(1);
                 }
             };
+            let limits = VerifyLimits {
+                max_k_step: v.max_k_step,
+                vec_max: v.vec_max,
+                string_max: v.string_max,
+                hashmap_max: v.hashmap_max,
+            };
+            validate_limits(&limits);
             let config = make_solver_config(v.solver, v.encoding, v.timeout);
-            run_verify_command(&source, v.no_cache, v.max_k_step, &config);
+            run_verify_command(&source, v.no_cache, &limits, &config);
         }
         Some(Command::Test(t)) => {
             if t.help {
@@ -5816,13 +5932,20 @@ fn main() {
                 }
                 ModeArg::Sanitize => BuildMode::Sanitize,
             };
+            let limits = VerifyLimits {
+                max_k_step: t.max_k_step,
+                vec_max: t.vec_max,
+                string_max: t.string_max,
+                hashmap_max: t.hashmap_max,
+            };
+            validate_limits(&limits);
             run_test_command(
                 &path,
                 t.verify,
                 t.filter.as_deref(),
                 mode,
                 t.timeout,
-                t.max_k_step,
+                &limits,
             );
         }
         Some(Command::Decl(d)) => {
@@ -5859,14 +5982,15 @@ fn main() {
                     std::process::exit(1);
                 }
             };
+            let limits = VerifyLimits {
+                max_k_step: c.max_k_step.unwrap_or(DEFAULT_MAX_K_STEP),
+                vec_max: c.vec_max,
+                string_max: c.string_max,
+                hashmap_max: c.hashmap_max,
+            };
+            validate_limits(&limits);
             let config = make_solver_config(c.solver, c.encoding, c.timeout);
-            run_contracts_command(
-                &source,
-                c.verify,
-                c.no_cache,
-                c.max_k_step.unwrap_or(DEFAULT_MAX_K_STEP),
-                &config,
-            );
+            run_contracts_command(&source, c.verify, c.no_cache, &limits, &config);
         }
         Some(Command::Skill(s)) => {
             if s.help {
@@ -5916,6 +6040,13 @@ fn main() {
                 TraceArg::Full => TraceMode::Full,
             };
 
+            let limits = VerifyLimits {
+                max_k_step: args.max_k_step,
+                vec_max: args.vec_max,
+                string_max: args.string_max,
+                hashmap_max: args.hashmap_max,
+            };
+            validate_limits(&limits);
             let config = make_solver_config(args.solver, args.encoding, args.timeout);
             run_build_command(
                 &source,
@@ -5925,7 +6056,7 @@ fn main() {
                 args.dump_ir,
                 trace,
                 args.no_cache,
-                args.max_k_step,
+                &limits,
                 &config,
             );
         }
@@ -8623,6 +8754,41 @@ fn main() -> i32 {
         assert_eq!(sce.branch_decisions[0].taken, "else");
         assert_eq!(sce.branch_decisions[0].condition_offset, 20);
         assert_eq!(sce.branch_decisions[0].condition_length, 8);
+    }
+
+    #[test]
+    fn verification_limits_are_configurable_in_help() {
+        let json = skill_json();
+        assert!(
+            json.contains("\"verification_defaults\""),
+            "JSON must contain verification_defaults"
+        );
+        assert!(
+            json.contains("\"--max-k-step\""),
+            "JSON must contain --max-k-step"
+        );
+        assert!(
+            !json.contains("\"--unwind\""),
+            "JSON must not contain --unwind"
+        );
+        assert!(
+            !json.contains("\"verification_limits\""),
+            "JSON must not contain verification_limits"
+        );
+
+        let human = skill_human();
+        assert!(
+            human.contains("VERIFICATION DEFAULTS"),
+            "Human help must contain VERIFICATION DEFAULTS"
+        );
+        assert!(
+            human.contains("--max-k-step"),
+            "Human help must contain --max-k-step"
+        );
+        assert!(
+            human.contains("Incremental BMC"),
+            "Human help must contain Incremental BMC"
+        );
     }
 
     #[test]

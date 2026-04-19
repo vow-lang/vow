@@ -1,15 +1,8 @@
 module Main
 
-use lexer
-use token
-use ast
-use parser
-use types
-use env
-use checker
 use ir
 use ir_printer
-use lower
+use frontend
 use clif
 use c_emitter
 use verifier
@@ -47,7 +40,7 @@ fn get_source_path(argv: Vec<String>) -> String {
         if first_byte != 45 {
             if i > 1 {
                 let prev: String = argv[i - 1];
-                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--max-k-step") || prev == String::from("--debug-trace") || prev == String::from("--filter") || prev == String::from("--timeout") || prev == String::from("--solver") || prev == String::from("--encoding") {
+                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--max-k-step") || prev == String::from("--debug-trace") || prev == String::from("--filter") || prev == String::from("--timeout") || prev == String::from("--solver") || prev == String::from("--encoding") || prev == String::from("--vec-max") || prev == String::from("--string-max") || prev == String::from("--hashmap-max") {
                     i = i - 1;
                 } else {
                     return a;
@@ -70,7 +63,7 @@ fn get_source_path_sub(argv: Vec<String>) -> String {
         if first_byte != 45 {
             if i > 2 {
                 let prev: String = argv[i - 1];
-                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--max-k-step") || prev == String::from("--debug-trace") || prev == String::from("--filter") || prev == String::from("--timeout") || prev == String::from("--solver") || prev == String::from("--encoding") {
+                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--max-k-step") || prev == String::from("--debug-trace") || prev == String::from("--filter") || prev == String::from("--timeout") || prev == String::from("--solver") || prev == String::from("--encoding") || prev == String::from("--vec-max") || prev == String::from("--string-max") || prev == String::from("--hashmap-max") {
                     i = i - 1;
                 } else {
                     return a;
@@ -136,76 +129,6 @@ fn default_output(path: String) -> String {
     r
 }
 
-fn get_dir_path(path: String) -> String {
-    let mut last_slash: i64 = -1;
-    let mut i: i64 = 0;
-    let n: i64 = path.len();
-    while i < n {
-        if path.byte_at(i) == 47 {
-            last_slash = i;
-        }
-        i = i + 1;
-    }
-    if last_slash == -1 {
-        String::from(".")
-    } else {
-        let r: String = String::from("");
-        let mut j: i64 = 0;
-        while j < last_slash {
-            r.push_byte(path.byte_at(j));
-            j = j + 1;
-        }
-        r
-    }
-}
-
-fn resolve_use_path(arena: AstArena, root_dir: String, use_lid: i64) -> String {
-    let r: String = String::from("");
-    r.push_str(root_dir);
-    let n: i64 = list_len(arena, use_lid);
-    let mut i: i64 = 0;
-    while i < n {
-        let sid: i64 = list_get(arena, use_lid, i);
-        let component: String = arena.strs[sid];
-        r.push_byte(47);
-        r.push_str(component);
-        i = i + 1;
-    }
-    r.push_str(String::from(".vow"));
-    r
-}
-
-fn load_deps(root_dir: String, m: Module, arena: AstArena, all_items: Vec<i64>, visited: Vec<String>, dctx: DiagCtx) [io] {
-    let uses: Vec<i64> = m.uses;
-    let n_uses: i64 = uses.len();
-    let mut ui: i64 = 0;
-    while ui < n_uses {
-        let use_lid: i64 = uses[ui];
-        let dep_path: String = resolve_use_path(arena, root_dir, use_lid);
-        if !vec_contains_str(visited, dep_path) {
-            visited.push(dep_path);
-            let src: String = fs_read(dep_path);
-            if src.len() == 0 {
-                let d: Diagnostic = diag_error(EC_IO_ERROR(), str2(String::from("cannot read "), dep_path), dep_path, 0, 0);
-                diag_ctx_emit(dctx, d);
-            } else {
-                diag_ctx_add_source(dctx, dep_path, src);
-                let tokens: Vec<Token> = lex(src);
-                let dep_m: Module = parse_module_into(tokens, arena, dctx, dep_path);
-                load_deps(root_dir, dep_m, arena, all_items, visited, dctx);
-                let dep_items: Vec<i64> = dep_m.items;
-                let n_dep: i64 = dep_items.len();
-                let mut di: i64 = 0;
-                while di < n_dep {
-                    all_items.push(dep_items[di]);
-                    di = di + 1;
-                }
-            }
-        }
-        ui = ui + 1;
-    }
-}
-
 fn CMD_NONE() -> i64 vow { ensures: result >= 0 } { 0 }
 fn CMD_BUILD() -> i64 vow { ensures: result >= 0 } { 1 }
 fn CMD_VERIFY() -> i64 vow { ensures: result >= 0 } { 2 }
@@ -236,56 +159,7 @@ fn get_subcommand(argv: Vec<String>) -> i64 {
     CMD_NONE()
 }
 
-struct FrontendResult {
-    path: String,
-    dctx: DiagCtx,
-    merged: Module,
-    str_eids: Vec<i64>,
-    n_items: i64,
-    n_errors: i64,
-}
-
-fn run_frontend_for_path(path: String) -> FrontendResult [io] {
-    let dctx: DiagCtx = diag_ctx_new();
-    let src: String = fs_read(path);
-    diag_ctx_add_source(dctx, path, src);
-    let tokens: Vec<Token> = lex(src);
-    let arena: AstArena = arena_new();
-    let m: Module = parse_module_into(tokens, arena, dctx, path);
-    let root_dir: String = get_dir_path(path);
-    let all_items: Vec<i64> = Vec::new();
-    let visited: Vec<String> = Vec::new();
-    visited.push(path);
-    load_deps(root_dir, m, arena, all_items, visited, dctx);
-    let root_items: Vec<i64> = m.items;
-    let n_root: i64 = root_items.len();
-    let mut ri: i64 = 0;
-    while ri < n_root {
-        all_items.push(root_items[ri]);
-        ri = ri + 1;
-    }
-    let merged: Module = Module {
-        name_sid: 0,
-        uses: Vec::new(),
-        items: all_items,
-        arena: arena,
-    };
-    let n_items: i64 = all_items.len();
-    let e: CheckEnv = env_new(dctx, path);
-    check_module(e, merged);
-    let n_errors: i64 = dctx.error_count;
-    let str_eids: Vec<i64> = e.expr_str_eids;
-    FrontendResult {
-        path: path,
-        dctx: dctx,
-        merged: merged,
-        str_eids: str_eids,
-        n_items: n_items,
-        n_errors: n_errors,
-    }
-}
-
-fn run_frontend(argv: Vec<String>, sub: bool) -> FrontendResult [io] {
+fn frontend_path_from_argv(argv: Vec<String>, sub: bool) -> String [io] {
     let path: String = {
         if sub {
             get_source_path_sub(argv)
@@ -297,10 +171,11 @@ fn run_frontend(argv: Vec<String>, sub: bool) -> FrontendResult [io] {
         eprintln_str("usage: vowc <command> [options] <file.vow>");
         process_exit(1);
     }
-    run_frontend_for_path(path)
+    path
 }
 
-fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, max_k_step: String, use_cache: bool, solver: String, encoding: String) -> i64 [io] {
+fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, max_k_step: String, use_cache: bool, solver: String, encoding: String,
+                   vec_max: i64, string_max: i64, hashmap_max: i64) -> i64 [io] {
     let mut fi: i64 = 0;
     let mut all_proven: i64 = 1;
     while fi < fns.len() {
@@ -308,7 +183,7 @@ fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, path: String, ces: Ve
         let vows: Vec<IrVowEntry> = f.vows;
         if vows.len() > 0 {
             eprintln_str(str3(String::from("Verifying "), f.name, String::from("...")));
-            let vr: VerifyResult = verify_function_full(f, ir_mod, max_k_step, use_cache, solver, encoding);
+            let vr: VerifyResult = verify_function_full(f, ir_mod, max_k_step, use_cache, solver, encoding, vec_max, string_max, hashmap_max);
             let st: i64 = vr.status;
             if st == VERIFY_PROVEN() {
                 eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN")));
@@ -372,25 +247,38 @@ fn emit_ir_warnings(ir_mod: IrModule, dctx: DiagCtx) [io] {
     }
 }
 
+fn validate_limits(vec_max: i64, string_max: i64, hashmap_max: i64) [io] {
+    if vec_max <= 0 || string_max <= 0 || hashmap_max <= 0 {
+        eprintln_str(String::from("error: --vec-max, --string-max, and --hashmap-max must be >= 1"));
+        process_exit(1);
+    }
+}
+
 fn run_verify(argv: Vec<String>) -> i32 [io] {
-    let fr: FrontendResult = run_frontend(argv, true);
-    let path: String = fr.path;
-    let dctx: DiagCtx = fr.dctx;
-    let merged: Module = fr.merged;
-    let str_eids: Vec<i64> = fr.str_eids;
-    let n_items: i64 = fr.n_items;
-    let n_errors: i64 = fr.n_errors;
+    let path: String = frontend_path_from_argv(argv, true);
+    let fr: LoweredFrontend = frontend_lower_path(path);
+    let checked: CheckedFrontend = fr.checked;
+    let dctx: DiagCtx = checked.dctx;
+    let n_items: i64 = checked.n_items;
+    let n_errors: i64 = checked.n_errors;
     diag_ctx_print_all(dctx);
     eprintln_str(str4(i64_to_str(n_items), String::from(" items, "), i64_to_str(n_errors), String::from(" errors")));
     if n_errors > 0 {
         diag_emit_verify_json(String::from("CompileFailed"), dctx, Vec::new());
         return 1;
     }
-    let mks_str: String = get_flag_arg(argv, String::from("--max-k-step"));
+    let max_k_step_str: String = get_flag_arg(argv, String::from("--max-k-step"));
     let max_k_step: String = {
-        if mks_str.len() > 0 { mks_str }
+        if max_k_step_str.len() > 0 { max_k_step_str }
         else { String::from("50") }
     };
+    let vec_max_str: String = get_flag_arg(argv, String::from("--vec-max"));
+    let vec_max: i64 = { if vec_max_str.len() > 0 { parse_i64(vec_max_str) } else { 128 } };
+    let string_max_str: String = get_flag_arg(argv, String::from("--string-max"));
+    let string_max: i64 = { if string_max_str.len() > 0 { parse_i64(string_max_str) } else { 256 } };
+    let hashmap_max_str: String = get_flag_arg(argv, String::from("--hashmap-max"));
+    let hashmap_max: i64 = { if hashmap_max_str.len() > 0 { parse_i64(hashmap_max_str) } else { 64 } };
+    validate_limits(vec_max, string_max, hashmap_max);
     let use_cache: bool = !has_flag(argv, String::from("--no-cache"));
     let mut solver: String = get_flag_arg(argv, String::from("--solver"));
     let encoding: String = get_flag_arg(argv, String::from("--encoding"));
@@ -408,11 +296,11 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
         diag_emit_verify_json(String::from("VerifyFailed"), dctx, Vec::new());
         return 1;
     }
-    let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
+    let ir_mod: IrModule = fr.ir_mod;
     emit_ir_warnings(ir_mod, dctx);
     let fns: Vec<IrFunction> = ir_mod.functions;
     let ces: Vec<VerifyCE> = Vec::new();
-    let all_proven: i64 = run_verify_loop(fns, ir_mod, path, ces, max_k_step, use_cache, solver, encoding);
+    let all_proven: i64 = run_verify_loop(fns, ir_mod, path, ces, max_k_step, use_cache, solver, encoding, vec_max, string_max, hashmap_max);
     let status_str: String = {
         if all_proven == 1 {
             String::from("Verified")
@@ -428,13 +316,12 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
 }
 
 fn run_build(argv: Vec<String>) -> i32 [io] {
-    let fr: FrontendResult = run_frontend(argv, true);
-    let path: String = fr.path;
-    let dctx: DiagCtx = fr.dctx;
-    let merged: Module = fr.merged;
-    let str_eids: Vec<i64> = fr.str_eids;
-    let n_items: i64 = fr.n_items;
-    let n_errors: i64 = fr.n_errors;
+    let path: String = frontend_path_from_argv(argv, true);
+    let fr: LoweredFrontend = frontend_lower_path(path);
+    let checked: CheckedFrontend = fr.checked;
+    let dctx: DiagCtx = checked.dctx;
+    let n_items: i64 = checked.n_items;
+    let n_errors: i64 = checked.n_errors;
     diag_ctx_print_all(dctx);
     eprintln_str(str4(i64_to_str(n_items), String::from(" items, "), i64_to_str(n_errors), String::from(" errors")));
     if n_errors > 0 {
@@ -461,7 +348,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         else if trace_str == String::from("full") { 2 }
         else { 0 }
     };
-    let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
+    let ir_mod: IrModule = fr.ir_mod;
     emit_ir_warnings(ir_mod, dctx);
     let do_verify: bool = !has_flag(argv, String::from("--no-verify"));
     if do_verify {
@@ -472,9 +359,9 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         }
     }
     let use_cache: bool = !has_flag(argv, String::from("--no-cache"));
-    let mks_str: String = get_flag_arg(argv, String::from("--max-k-step"));
+    let max_k_step_str: String = get_flag_arg(argv, String::from("--max-k-step"));
     let max_k_step: String = {
-        if mks_str.len() > 0 { mks_str }
+        if max_k_step_str.len() > 0 { max_k_step_str }
         else { String::from("50") }
     };
     let mut solver: String = get_flag_arg(argv, String::from("--solver"));
@@ -488,6 +375,13 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
             solver = String::from("z3");
         }
     }
+    let vec_max_str: String = get_flag_arg(argv, String::from("--vec-max"));
+    let vec_max: i64 = { if vec_max_str.len() > 0 { parse_i64(vec_max_str) } else { 128 } };
+    let string_max_str: String = get_flag_arg(argv, String::from("--string-max"));
+    let string_max: i64 = { if string_max_str.len() > 0 { parse_i64(string_max_str) } else { 256 } };
+    let hashmap_max_str: String = get_flag_arg(argv, String::from("--hashmap-max"));
+    let hashmap_max: i64 = { if hashmap_max_str.len() > 0 { parse_i64(hashmap_max_str) } else { 64 } };
+    validate_limits(vec_max, string_max, hashmap_max);
     let fns: Vec<IrFunction> = ir_mod.functions;
     let handles: Vec<i64> = Vec::new();
     let vow_fn_indices: Vec<i64> = Vec::new();
@@ -498,7 +392,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
             let vows: Vec<IrVowEntry> = f.vows;
             if vows.len() > 0 {
                 eprintln_str(str3(String::from("Starting verification of "), f.name, String::from("...")));
-                let h: i64 = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding);
+                let h: i64 = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding, vec_max, string_max, hashmap_max);
                 handles.push(h);
                 vow_fn_indices.push(fi);
             }
@@ -539,7 +433,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
             if st == VERIFY_PROVEN() {
                 eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN")));
                 if use_cache {
-                    let c_src2: String = emit_c_for_verify(f, ir_mod);
+                    let c_src2: String = emit_c_for_verify(f, ir_mod, vec_max, string_max, hashmap_max);
                     let ck2: String = verify_cache_key(c_src2, max_k_step, solver, encoding);
                     verify_cache_store(ck2, VERIFY_PROVEN());
                 }
@@ -667,6 +561,15 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
         else { 30000 }
     };
     let do_verify: bool = has_flag(argv, String::from("--verify"));
+    let t_mks_str: String = get_flag_arg(argv, String::from("--max-k-step"));
+    let t_max_k_step: String = { if t_mks_str.len() > 0 { t_mks_str } else { String::from("50") } };
+    let t_vm_str: String = get_flag_arg(argv, String::from("--vec-max"));
+    let t_vec_max: i64 = { if t_vm_str.len() > 0 { parse_i64(t_vm_str) } else { 128 } };
+    let t_sm_str: String = get_flag_arg(argv, String::from("--string-max"));
+    let t_string_max: i64 = { if t_sm_str.len() > 0 { parse_i64(t_sm_str) } else { 256 } };
+    let t_hm_str: String = get_flag_arg(argv, String::from("--hashmap-max"));
+    let t_hashmap_max: i64 = { if t_hm_str.len() > 0 { parse_i64(t_hm_str) } else { 64 } };
+    validate_limits(t_vec_max, t_string_max, t_hashmap_max);
 
     // Validate path exists
     if fs_exists(path) == 0 {
@@ -717,8 +620,9 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
         let start_time: i64 = time_unix_ms();
 
         // Compile
-        let fr: FrontendResult = run_frontend_for_path(test_path);
-        if fr.n_errors > 0 {
+        let fr: LoweredFrontend = frontend_lower_path(test_path);
+        let checked: CheckedFrontend = fr.checked;
+        if checked.n_errors > 0 {
             let duration: i64 = time_unix_ms() - start_time;
             let diag_json: String = String::from("[{\"error_code\":\"CompileError\",\"message\":\"compilation failed\",\"severity\":\"error\"}]");
             let entry: String = emit_test_entry_json(test_path, short_name, String::from("compile_error"), -1, String::from(""), String::from(""), duration, diag_json);
@@ -726,7 +630,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
             failed = failed + 1;
             ti = ti + 1;
         } else {
-            let ir_mod: IrModule = lower_module_vow(fr.merged, fr.str_eids, test_path);
+            let ir_mod: IrModule = fr.ir_mod;
 
             // Count contract density
             let fns2: Vec<IrFunction> = ir_mod.functions;
@@ -753,7 +657,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                     let vf: IrFunction = vfns[vfi];
                     let vows: Vec<IrVowEntry> = vf.vows;
                     if vows.len() > 0 {
-                        let vh: i64 = verify_start(vf, ir_mod, String::from("10"), vfi, false, String::from(""), String::from(""));
+                        let vh: i64 = verify_start(vf, ir_mod, t_max_k_step, vfi, false, String::from(""), String::from(""), t_vec_max, t_string_max, t_hashmap_max);
                         if vh != -1 && vh != -2 {
                             let vr: VerifyResult = verify_collect(vh, vf);
                             if vr.status == VERIFY_FAILED() {
@@ -879,34 +783,12 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
         eprintln_str("usage: main [-o <output>] <file.vow>");
         return 1;
     }
-    let dctx: DiagCtx = diag_ctx_new();
-    let src: String = fs_read(path);
-    diag_ctx_add_source(dctx, path, src);
-    let tokens: Vec<Token> = lex(src);
-    let arena: AstArena = arena_new();
-    let m: Module = parse_module_into(tokens, arena, dctx, path);
-    let root_dir: String = get_dir_path(path);
-    let all_items: Vec<i64> = Vec::new();
-    let visited: Vec<String> = Vec::new();
-    visited.push(path);
-    load_deps(root_dir, m, arena, all_items, visited, dctx);
-    let root_items: Vec<i64> = m.items;
-    let n_root: i64 = root_items.len();
-    let mut ri: i64 = 0;
-    while ri < n_root {
-        all_items.push(root_items[ri]);
-        ri = ri + 1;
-    }
-    let merged: Module = Module {
-        name_sid: 0,
-        uses: Vec::new(),
-        items: all_items,
-        arena: arena,
-    };
-    let n_items: i64 = all_items.len();
-    let e: CheckEnv = env_new(dctx, path);
-    check_module(e, merged);
-    let n_errors: i64 = dctx.error_count;
+    let fr: LoweredFrontend = frontend_lower_path(path);
+    let checked: CheckedFrontend = fr.checked;
+    let dctx: DiagCtx = checked.dctx;
+    let n_items: i64 = checked.n_items;
+    let n_errors: i64 = checked.n_errors;
+    let ir_mod: IrModule = fr.ir_mod;
     diag_ctx_print_all(dctx);
     let emit_c: bool = has_flag(argv, String::from("--emit-c"));
     let do_verify: bool = has_flag(argv, String::from("--verify"));
@@ -931,18 +813,20 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
                 diag_emit_verify_json(String::from("VerifyFailed"), dctx, Vec::new());
                 return 1;
             }
-            let mks_str: String = get_flag_arg(argv, String::from("--max-k-step"));
+            let max_k_step_str: String = get_flag_arg(argv, String::from("--max-k-step"));
             let max_k_step: String = {
-                if mks_str.len() > 0 { mks_str }
+                if max_k_step_str.len() > 0 { max_k_step_str }
                 else { String::from("50") }
             };
-            let str_eids: Vec<i64> = e.expr_str_eids;
-            let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
+            let vec_max_leg: i64 = { let s: String = get_flag_arg(argv, String::from("--vec-max")); if s.len() > 0 { parse_i64(s) } else { 128 } };
+            let string_max_leg: i64 = { let s: String = get_flag_arg(argv, String::from("--string-max")); if s.len() > 0 { parse_i64(s) } else { 256 } };
+            let hashmap_max_leg: i64 = { let s: String = get_flag_arg(argv, String::from("--hashmap-max")); if s.len() > 0 { parse_i64(s) } else { 64 } };
+            validate_limits(vec_max_leg, string_max_leg, hashmap_max_leg);
             emit_ir_warnings(ir_mod, dctx);
             let fns: Vec<IrFunction> = ir_mod.functions;
             let ces: Vec<VerifyCE> = Vec::new();
             let use_cache_leg: bool = !has_flag(argv, String::from("--no-cache"));
-            let all_proven: i64 = run_verify_loop(fns, ir_mod, path, ces, max_k_step, use_cache_leg, String::from(""), String::from(""));
+            let all_proven: i64 = run_verify_loop(fns, ir_mod, path, ces, max_k_step, use_cache_leg, String::from(""), String::from(""), vec_max_leg, string_max_leg, hashmap_max_leg);
             let status_str: String = {
                 if all_proven == 1 {
                     String::from("Verified")
@@ -955,10 +839,8 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
                 return 1;
             }
         } else if emit_c {
-            let str_eids: Vec<i64> = e.expr_str_eids;
-            let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
             emit_ir_warnings(ir_mod, dctx);
-            let c_code: String = emit_c_module(ir_mod);
+            let c_code: String = emit_c_module(ir_mod, VOW_VEC_MAX(), VOW_STRING_MAX(), VOW_HASHMAP_MAX());
             print_str(c_code);
         } else if has_output {
             let out: String = get_flag_arg(argv, String::from("-o"));
@@ -975,8 +857,6 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
                 else if trace_str == String::from("full") { 2 }
                 else { 0 }
             };
-            let str_eids: Vec<i64> = e.expr_str_eids;
-            let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
             emit_ir_warnings(ir_mod, dctx);
             let result: i64 = clif_emit_module(ir_mod, out, mode, trace);
             if result == -1 {
@@ -989,8 +869,6 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
                 diag_emit_build_json(String::from("Unverified"), out, dctx);
             }
         } else {
-            let str_eids: Vec<i64> = e.expr_str_eids;
-            let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
             emit_ir_warnings(ir_mod, dctx);
             let ir_text: String = print_module(ir_mod);
             print_str(ir_text);
@@ -1152,6 +1030,30 @@ fn skill_json() -> String {
     r.push_str(String::from("          \"value_name\": \"N\",\n"));
     r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
     r.push_str(String::from("          \"default\": \"(none)\"\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--vec-max <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"Max Vec capacity for verification model (default: 128)\",\n"));
+    r.push_str(String::from("          \"long\": \"--vec-max\",\n"));
+    r.push_str(String::from("          \"value_name\": \"N\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
+    r.push_str(String::from("          \"default\": 128\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--string-max <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"Max String capacity for verification model (default: 256)\",\n"));
+    r.push_str(String::from("          \"long\": \"--string-max\",\n"));
+    r.push_str(String::from("          \"value_name\": \"N\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
+    r.push_str(String::from("          \"default\": 256\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--hashmap-max <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"Max HashMap capacity for verification model (default: 64)\",\n"));
+    r.push_str(String::from("          \"long\": \"--hashmap-max\",\n"));
+    r.push_str(String::from("          \"value_name\": \"N\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
+    r.push_str(String::from("          \"default\": 64\n"));
     r.push_str(String::from("        }\n"));
     r.push_str(String::from("      ],\n"));
     r.push_str(String::from("      \"stdout\": {\n"));
@@ -1233,6 +1135,30 @@ fn skill_json() -> String {
     r.push_str(String::from("          \"value_name\": \"N\",\n"));
     r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
     r.push_str(String::from("          \"default\": \"(none)\"\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--vec-max <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"Max Vec capacity for verification model (default: 128)\",\n"));
+    r.push_str(String::from("          \"long\": \"--vec-max\",\n"));
+    r.push_str(String::from("          \"value_name\": \"N\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
+    r.push_str(String::from("          \"default\": 128\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--string-max <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"Max String capacity for verification model (default: 256)\",\n"));
+    r.push_str(String::from("          \"long\": \"--string-max\",\n"));
+    r.push_str(String::from("          \"value_name\": \"N\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
+    r.push_str(String::from("          \"default\": 256\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--hashmap-max <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"Max HashMap capacity for verification model (default: 64)\",\n"));
+    r.push_str(String::from("          \"long\": \"--hashmap-max\",\n"));
+    r.push_str(String::from("          \"value_name\": \"N\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
+    r.push_str(String::from("          \"default\": 64\n"));
     r.push_str(String::from("        }\n"));
     r.push_str(String::from("      ],\n"));
     r.push_str(String::from("      \"stdout\": {\n"));
@@ -1300,6 +1226,30 @@ fn skill_json() -> String {
     r.push_str(String::from("          \"value_name\": \"N\",\n"));
     r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
     r.push_str(String::from("          \"default\": 50\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--vec-max <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"Max Vec capacity for verification model (default: 128)\",\n"));
+    r.push_str(String::from("          \"long\": \"--vec-max\",\n"));
+    r.push_str(String::from("          \"value_name\": \"N\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
+    r.push_str(String::from("          \"default\": 128\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--string-max <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"Max String capacity for verification model (default: 256)\",\n"));
+    r.push_str(String::from("          \"long\": \"--string-max\",\n"));
+    r.push_str(String::from("          \"value_name\": \"N\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
+    r.push_str(String::from("          \"default\": 256\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--hashmap-max <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"Max HashMap capacity for verification model (default: 64)\",\n"));
+    r.push_str(String::from("          \"long\": \"--hashmap-max\",\n"));
+    r.push_str(String::from("          \"value_name\": \"N\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
+    r.push_str(String::from("          \"default\": 64\n"));
     r.push_str(String::from("        }\n"));
     r.push_str(String::from("      ],\n"));
     r.push_str(String::from("      \"stdout\": {\n"));
@@ -1401,6 +1351,30 @@ fn skill_json() -> String {
     r.push_str(String::from("            \"auto\"\n"));
     r.push_str(String::from("          ],\n"));
     r.push_str(String::from("          \"default\": \"auto\"\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--vec-max <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"Max Vec capacity for verification model (default: 128)\",\n"));
+    r.push_str(String::from("          \"long\": \"--vec-max\",\n"));
+    r.push_str(String::from("          \"value_name\": \"N\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
+    r.push_str(String::from("          \"default\": 128\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--string-max <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"Max String capacity for verification model (default: 256)\",\n"));
+    r.push_str(String::from("          \"long\": \"--string-max\",\n"));
+    r.push_str(String::from("          \"value_name\": \"N\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
+    r.push_str(String::from("          \"default\": 256\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--hashmap-max <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"Max HashMap capacity for verification model (default: 64)\",\n"));
+    r.push_str(String::from("          \"long\": \"--hashmap-max\",\n"));
+    r.push_str(String::from("          \"value_name\": \"N\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
+    r.push_str(String::from("          \"default\": 64\n"));
     r.push_str(String::from("        }\n"));
     r.push_str(String::from("      ],\n"));
     r.push_str(String::from("      \"stdout\": {\n"));
@@ -1423,21 +1397,30 @@ fn skill_json() -> String {
     r.push_str(String::from("    \"--max-k-step <N>\": \"ESBMC max k-induction step (default: 50)\",\n"));
     r.push_str(String::from("    \"--solver <boolector|z3|bitwuzla|auto>\": \"ESBMC SMT solver; auto selects per-function via heuristic (default: auto)\",\n"));
     r.push_str(String::from("    \"--encoding <bv|ir|auto>\": \"ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)\",\n"));
-    r.push_str(String::from("    \"--timeout <N>\": \"ESBMC per-function timeout in seconds (default: (none))\"\n"));
+    r.push_str(String::from("    \"--timeout <N>\": \"ESBMC per-function timeout in seconds (default: (none))\",\n"));
+    r.push_str(String::from("    \"--vec-max <N>\": \"Max Vec capacity for verification model (default: 128)\",\n"));
+    r.push_str(String::from("    \"--string-max <N>\": \"Max String capacity for verification model (default: 256)\",\n"));
+    r.push_str(String::from("    \"--hashmap-max <N>\": \"Max HashMap capacity for verification model (default: 64)\"\n"));
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"verify_options\": {\n"));
     r.push_str(String::from("    \"--no-cache\": \"Disable verification result caching\",\n"));
     r.push_str(String::from("    \"--max-k-step <N>\": \"ESBMC max k-induction step (default: 50)\",\n"));
     r.push_str(String::from("    \"--solver <boolector|z3|bitwuzla|auto>\": \"ESBMC SMT solver; auto selects per-function via heuristic (default: auto)\",\n"));
     r.push_str(String::from("    \"--encoding <bv|ir|auto>\": \"ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)\",\n"));
-    r.push_str(String::from("    \"--timeout <N>\": \"ESBMC per-function timeout in seconds (default: (none))\"\n"));
+    r.push_str(String::from("    \"--timeout <N>\": \"ESBMC per-function timeout in seconds (default: (none))\",\n"));
+    r.push_str(String::from("    \"--vec-max <N>\": \"Max Vec capacity for verification model (default: 128)\",\n"));
+    r.push_str(String::from("    \"--string-max <N>\": \"Max String capacity for verification model (default: 256)\",\n"));
+    r.push_str(String::from("    \"--hashmap-max <N>\": \"Max HashMap capacity for verification model (default: 64)\"\n"));
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"test_options\": {\n"));
     r.push_str(String::from("    \"--verify\": \"Run ESBMC verification on test files\",\n"));
     r.push_str(String::from("    \"--filter <pat>\": \"Only run tests whose name contains pat (default: (none))\",\n"));
     r.push_str(String::from("    \"--mode <debug|release>\": \"Build mode; debug inserts runtime vow checks (default: (default))\",\n"));
     r.push_str(String::from("    \"--timeout <ms>\": \"Per-test execution timeout in milliseconds (default: 30000)\",\n"));
-    r.push_str(String::from("    \"--max-k-step <N>\": \"ESBMC max k-induction step (with --verify)\"\n"));
+    r.push_str(String::from("    \"--max-k-step <N>\": \"ESBMC max k-induction step (with --verify)\",\n"));
+    r.push_str(String::from("    \"--vec-max <N>\": \"Max Vec capacity for verification model (default: 128)\",\n"));
+    r.push_str(String::from("    \"--string-max <N>\": \"Max String capacity for verification model (default: 256)\",\n"));
+    r.push_str(String::from("    \"--hashmap-max <N>\": \"Max HashMap capacity for verification model (default: 64)\"\n"));
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"decl_options\": {\n"));
     r.push_str(String::from("    \"-o, --output <path>\": \"Output declaration file path (default: <source>.vow.d)\"\n"));
@@ -1447,7 +1430,10 @@ fn skill_json() -> String {
     r.push_str(String::from("    \"--no-cache\": \"Disable verification result caching\",\n"));
     r.push_str(String::from("    \"--max-k-step <N>\": \"ESBMC max k-induction step (default: 50)\",\n"));
     r.push_str(String::from("    \"--solver <boolector|z3|bitwuzla|auto>\": \"ESBMC SMT solver (with --verify)\",\n"));
-    r.push_str(String::from("    \"--encoding <bv|ir|auto>\": \"ESBMC encoding mode (with --verify); ir requires z3 (default: auto)\"\n"));
+    r.push_str(String::from("    \"--encoding <bv|ir|auto>\": \"ESBMC encoding mode (with --verify); ir requires z3 (default: auto)\",\n"));
+    r.push_str(String::from("    \"--vec-max <N>\": \"Max Vec capacity for verification model (default: 128)\",\n"));
+    r.push_str(String::from("    \"--string-max <N>\": \"Max String capacity for verification model (default: 256)\",\n"));
+    r.push_str(String::from("    \"--hashmap-max <N>\": \"Max HashMap capacity for verification model (default: 64)\"\n"));
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"global_options\": {\n"));
     r.push_str(String::from("    \"--help\": \"Emit versioned JSON tool-help data\",\n"));
@@ -1762,7 +1748,10 @@ fn skill_json() -> String {
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"verification_defaults\": {\n"));
     r.push_str(String::from("    \"strategy\": \"k-induction-parallel\",\n"));
-    r.push_str(String::from("    \"max_k_step\": 50\n"));
+    r.push_str(String::from("    \"max_k_step\": 50,\n"));
+    r.push_str(String::from("    \"vec_max\": 128,\n"));
+    r.push_str(String::from("    \"string_max\": 256,\n"));
+    r.push_str(String::from("    \"hashmap_max\": 64\n"));
     r.push_str(String::from("  }\n"));
     r.push_str(String::from("}\n"));
     r
@@ -1793,6 +1782,9 @@ fn skill_human() -> String {
     r.push_str(String::from("  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)\n"));
     r.push_str(String::from("  --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)\n"));
     r.push_str(String::from("  --timeout <N>           ESBMC per-function timeout in seconds (default: (none))\n"));
+    r.push_str(String::from("  --vec-max <N>           Max Vec capacity for verification model (default: 128)\n"));
+    r.push_str(String::from("  --string-max <N>        Max String capacity for verification model (default: 256)\n"));
+    r.push_str(String::from("  --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("VERIFY OPTIONS\n"));
     r.push_str(String::from("  --no-cache              Disable verification result caching\n"));
@@ -1800,6 +1792,9 @@ fn skill_human() -> String {
     r.push_str(String::from("  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)\n"));
     r.push_str(String::from("  --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)\n"));
     r.push_str(String::from("  --timeout <N>           ESBMC per-function timeout in seconds (default: (none))\n"));
+    r.push_str(String::from("  --vec-max <N>           Max Vec capacity for verification model (default: 128)\n"));
+    r.push_str(String::from("  --string-max <N>        Max String capacity for verification model (default: 256)\n"));
+    r.push_str(String::from("  --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("TEST OPTIONS\n"));
     r.push_str(String::from("  --verify                Run ESBMC verification on test files\n"));
@@ -1807,6 +1802,9 @@ fn skill_human() -> String {
     r.push_str(String::from("  --mode <debug|release>  Build mode; debug inserts runtime vow checks (default: (default))\n"));
     r.push_str(String::from("  --timeout <ms>          Per-test execution timeout in milliseconds (default: 30000)\n"));
     r.push_str(String::from("  --max-k-step <N>        ESBMC max k-induction step (with --verify)\n"));
+    r.push_str(String::from("  --vec-max <N>           Max Vec capacity for verification model (default: 128)\n"));
+    r.push_str(String::from("  --string-max <N>        Max String capacity for verification model (default: 256)\n"));
+    r.push_str(String::from("  --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("CONTRACTS OPTIONS\n"));
     r.push_str(String::from("  --verify                Run ESBMC verification and report per-contract status\n"));
@@ -1814,6 +1812,9 @@ fn skill_human() -> String {
     r.push_str(String::from("  --max-k-step <N>        ESBMC max k-induction step (default: 50)\n"));
     r.push_str(String::from("  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver (with --verify)\n"));
     r.push_str(String::from("  --encoding <bv|ir|auto>  ESBMC encoding mode (with --verify); ir requires z3 (default: auto)\n"));
+    r.push_str(String::from("  --vec-max <N>           Max Vec capacity for verification model (default: 128)\n"));
+    r.push_str(String::from("  --string-max <N>        Max String capacity for verification model (default: 256)\n"));
+    r.push_str(String::from("  --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("DECL OPTIONS\n"));
     r.push_str(String::from("  -o, --output <path>     Output declaration file path (default: <source>.vow.d)\n"));
@@ -1869,7 +1870,9 @@ fn skill_human() -> String {
     r.push_str(String::from("VERIFICATION\n"));
     r.push_str(String::from("  Strategy      : k-induction-parallel (incremental BMC + k-induction)\n"));
     r.push_str(String::from("  Max k step    : 50 (default; override with --max-k-step)\n"));
-    r.push_str(String::from("  Containers    : unbounded (no artificial capacity limits)\n"));
+    r.push_str(String::from("  Vec<T>        : 128 max capacity (override with --vec-max)\n"));
+    r.push_str(String::from("  String        : 256 max capacity (override with --string-max)\n"));
+    r.push_str(String::from("  HashMap<K, V> : 64 max capacity (override with --hashmap-max)\n"));
     r
 }
 // GENERATE:SKILL_HUMAN:END
@@ -2747,6 +2750,9 @@ fn skill_full() -> String {
     r.push_str(String::from("| `--solver <boolector\\|z3\\|bitwuzla\\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |\n"));
     r.push_str(String::from("| `--encoding <bv\\|ir\\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |\n"));
     r.push_str(String::from("| `--timeout <N>` | (none)      | ESBMC per-function timeout in seconds        |\n"));
+    r.push_str(String::from("| `--vec-max <N>` | `128`       | Max Vec capacity for verification model      |\n"));
+    r.push_str(String::from("| `--string-max <N>` | `256`    | Max String capacity for verification model   |\n"));
+    r.push_str(String::from("| `--hashmap-max <N>` | `64`    | Max HashMap capacity for verification model  |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow verify`\n"));
     r.push_str(String::from("\n"));
@@ -2765,6 +2771,9 @@ fn skill_full() -> String {
     r.push_str(String::from("| `--solver <boolector\\|z3\\|bitwuzla\\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |\n"));
     r.push_str(String::from("| `--encoding <bv\\|ir\\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |\n"));
     r.push_str(String::from("| `--timeout <N>` | (none)      | ESBMC per-function timeout in seconds        |\n"));
+    r.push_str(String::from("| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |\n"));
+    r.push_str(String::from("| `--string-max <N>`| `256`       | Max String capacity for verification model |\n"));
+    r.push_str(String::from("| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow contracts`\n"));
     r.push_str(String::from("\n"));
@@ -2783,6 +2792,9 @@ fn skill_full() -> String {
     r.push_str(String::from("| `--max-k-step <N>` | `50`       | ESBMC max k-induction step                |\n"));
     r.push_str(String::from("| `--solver <boolector\\|z3\\|bitwuzla\\|auto>` | `auto` | ESBMC SMT solver (with --verify)           |\n"));
     r.push_str(String::from("| `--encoding <bv\\|ir\\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |\n"));
+    r.push_str(String::from("| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |\n"));
+    r.push_str(String::from("| `--string-max <N>`| `256`       | Max String capacity for verification model |\n"));
+    r.push_str(String::from("| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow skill`\n"));
     r.push_str(String::from("\n"));
@@ -2817,6 +2829,9 @@ fn skill_full() -> String {
     r.push_str(String::from("| `--mode release`  | `debug`     | Omit all vow checks for performance       |\n"));
     r.push_str(String::from("| `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |\n"));
     r.push_str(String::from("| `--max-k-step <N>` | `50`       | ESBMC max k-induction step (with --verify) |\n"));
+    r.push_str(String::from("| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |\n"));
+    r.push_str(String::from("| `--string-max <N>`| `256`       | Max String capacity for verification model |\n"));
+    r.push_str(String::from("| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Test discovery: files matching `test_*.vow` or `*_test.vow` in the given directory, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.\n"));
     r.push_str(String::from("\n"));
@@ -4558,18 +4573,17 @@ fn vow_kind_from_desc(desc: String) -> String {
 }
 
 fn run_contracts(argv: Vec<String>) -> i32 [io] {
-    let fr: FrontendResult = run_frontend(argv, true);
-    let path: String = fr.path;
-    let dctx: DiagCtx = fr.dctx;
-    let merged: Module = fr.merged;
-    let str_eids: Vec<i64> = fr.str_eids;
-    let n_errors: i64 = fr.n_errors;
+    let path: String = frontend_path_from_argv(argv, true);
+    let fr: LoweredFrontend = frontend_lower_path(path);
+    let checked: CheckedFrontend = fr.checked;
+    let dctx: DiagCtx = checked.dctx;
+    let n_errors: i64 = checked.n_errors;
     diag_ctx_print_all(dctx);
     if n_errors > 0 {
         diag_emit_verify_json(String::from("CompileFailed"), dctx, Vec::new());
         return 1;
     }
-    let ir_mod: IrModule = lower_module_vow(merged, str_eids, path);
+    let ir_mod: IrModule = fr.ir_mod;
 
     let do_verify: bool = has_flag(argv, String::from("--verify"));
     let use_cache: bool = !has_flag(argv, String::from("--no-cache"));
@@ -4589,6 +4603,10 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
             solver = String::from("z3");
         }
     }
+    let vec_max_c: i64 = { let s: String = get_flag_arg(argv, String::from("--vec-max")); if s.len() > 0 { parse_i64(s) } else { 128 } };
+    let string_max_c: i64 = { let s: String = get_flag_arg(argv, String::from("--string-max")); if s.len() > 0 { parse_i64(s) } else { 256 } };
+    let hashmap_max_c: i64 = { let s: String = get_flag_arg(argv, String::from("--hashmap-max")); if s.len() > 0 { parse_i64(s) } else { 64 } };
+    validate_limits(vec_max_c, string_max_c, hashmap_max_c);
 
     // Collect per-contract entries into parallel arrays
     let e_vow_ids: Vec<i64> = Vec::new();
@@ -4635,7 +4653,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
         while fi < nf {
             let func: IrFunction = ir_mod.functions[fi];
             if func.vows.len() > 0 {
-                let vr: VerifyResult = verify_function_full(func, ir_mod, max_k_step, use_cache, solver, encoding);
+                let vr: VerifyResult = verify_function_full(func, ir_mod, max_k_step, use_cache, solver, encoding, vec_max_c, string_max_c, hashmap_max_c);
                 let st: i64 = vr.status;
                 let mut ei: i64 = 0;
                 while ei < e_func_names.len() {

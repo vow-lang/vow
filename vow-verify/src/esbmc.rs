@@ -1,16 +1,17 @@
-use std::io::Write;
-use std::path::PathBuf;
-use std::process::Command;
-
 use std::collections::HashMap;
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
 
 use vow_ir::{FuncId, Function, Module, Ty};
 
 use crate::solver_strategy::SolverConfig;
 
 use crate::c_emitter::{
-    ConstantValue, collect_modelable_callees, detect_constant_functions, emit_c_module,
-    emit_c_module_with_callees,
+    ConstantValue, VerifyLimits, collect_modelable_callees, detect_constant_functions,
+    emit_c_module, emit_c_module_with_callees,
 };
 
 // ---------------------------------------------------------------------------
@@ -203,7 +204,7 @@ fn save_esbmc_debug(esbmc: &std::path::Path, c_src: &str, func_name: &str, max_k
     let _ = std::fs::write(debug_dir.join(&c_name), c_src);
 
     let cmd = format!(
-        "{} /tmp/vow-verify-debug/{} --no-bounds-check --no-pointer-check --k-induction-parallel --max-k-step {} --64\n",
+        "{} /tmp/vow-verify-debug/{} --no-bounds-check --no-pointer-check --incremental-bmc --max-k-step {} --64\n",
         esbmc.display(),
         c_name,
         max_k_step,
@@ -215,36 +216,42 @@ fn save_esbmc_debug(esbmc: &std::path::Path, c_src: &str, func_name: &str, max_k
 // Verification entry point
 // ---------------------------------------------------------------------------
 
-pub fn verify_function(func: &Function) -> VerificationResult {
+pub fn verify_function(func: &Function, limits: &VerifyLimits) -> VerificationResult {
     let empty: HashMap<FuncId, ConstantValue> = HashMap::new();
-    verify_function_inner(func, &empty)
+    verify_function_inner(func, &empty, limits)
 }
 
-pub fn verify_function_with_module(func: &Function, module: &Module) -> VerificationResult {
+pub fn verify_function_with_module(
+    func: &Function,
+    module: &Module,
+    limits: &VerifyLimits,
+) -> VerificationResult {
     let const_fns = detect_constant_functions(module);
-    verify_function_with_module_and_const_fns(func, module, &const_fns)
+    verify_function_with_module_and_const_fns(func, module, &const_fns, limits)
 }
 
 pub fn verify_function_with_const_fns(
     func: &Function,
     const_fns: &HashMap<FuncId, ConstantValue>,
+    limits: &VerifyLimits,
 ) -> VerificationResult {
-    verify_function_inner(func, const_fns)
+    verify_function_inner(func, const_fns, limits)
 }
 
 pub fn emit_verify_c_source(
     func: &Function,
     module: &Module,
     const_fns: &HashMap<FuncId, ConstantValue>,
+    limits: &VerifyLimits,
 ) -> String {
     let mut modelable_cache = HashMap::new();
     let callee_ids = collect_modelable_callees(func, module, const_fns, &mut modelable_cache);
 
     let mut c_src = if callee_ids.is_empty() {
-        emit_c_module(&[func], const_fns)
+        emit_c_module(&[func], const_fns, limits)
     } else {
         let modelable_fns: std::collections::HashSet<FuncId> = callee_ids.iter().copied().collect();
-        emit_c_module_with_callees(func, module, const_fns, &callee_ids, &modelable_fns)
+        emit_c_module_with_callees(func, module, const_fns, &callee_ids, &modelable_fns, limits)
     };
     c_src.push_str(&emit_harness(func));
     c_src
@@ -256,12 +263,14 @@ pub fn verify_function_with_module_and_const_fns(
     func: &Function,
     module: &Module,
     const_fns: &HashMap<FuncId, ConstantValue>,
+    limits: &VerifyLimits,
 ) -> VerificationResult {
     verify_function_with_module_and_const_fns_with_max_k_step(
         func,
         module,
         const_fns,
-        DEFAULT_MAX_K_STEP,
+        limits.max_k_step,
+        limits,
     )
 }
 
@@ -270,10 +279,11 @@ pub fn verify_function_with_module_and_const_fns_with_max_k_step(
     module: &Module,
     const_fns: &HashMap<FuncId, ConstantValue>,
     max_k_step: u32,
+    limits: &VerifyLimits,
 ) -> VerificationResult {
     let config = SolverConfig::default_config();
     verify_function_with_module_and_const_fns_configured(
-        func, module, const_fns, max_k_step, &config,
+        func, module, const_fns, max_k_step, &config, limits,
     )
 }
 
@@ -283,29 +293,37 @@ pub fn verify_function_with_module_and_const_fns_configured(
     const_fns: &HashMap<FuncId, ConstantValue>,
     max_k_step: u32,
     config: &SolverConfig,
+    limits: &VerifyLimits,
 ) -> VerificationResult {
     let esbmc = match find_esbmc() {
         Some(p) => p,
         None => return VerificationResult::ToolNotFound,
     };
 
-    let c_src = emit_verify_c_source(func, module, const_fns);
+    let c_src = emit_verify_c_source(func, module, const_fns, limits);
     run_esbmc_with_max_k_step(&esbmc, &c_src, max_k_step, &func.name, config)
 }
 
 fn verify_function_inner(
     func: &Function,
     const_fns: &HashMap<FuncId, ConstantValue>,
+    limits: &VerifyLimits,
 ) -> VerificationResult {
     let esbmc = match find_esbmc() {
         Some(p) => p,
         None => return VerificationResult::ToolNotFound,
     };
 
-    let mut c_src = emit_c_module(&[func], const_fns);
+    let mut c_src = emit_c_module(&[func], const_fns, limits);
     c_src.push_str(&emit_harness(func));
 
-    run_esbmc_k_induction(&esbmc, &c_src, &func.name)
+    run_esbmc_with_max_k_step(
+        &esbmc,
+        &c_src,
+        limits.max_k_step,
+        &func.name,
+        &SolverConfig::default_config(),
+    )
 }
 
 pub fn run_esbmc_k_induction(
@@ -346,7 +364,7 @@ pub fn run_esbmc_with_max_k_step(
     cmd.arg(tmp.path())
         .arg("--no-bounds-check")
         .arg("--no-pointer-check")
-        .arg("--k-induction-parallel")
+        .arg("--incremental-bmc")
         .arg("--max-k-step")
         .arg(max_k_step.to_string())
         .arg("--64");
@@ -355,50 +373,95 @@ pub fn run_esbmc_with_max_k_step(
         cmd.arg(arg);
     }
 
-    // If timeout is set, use spawn + thread-based timeout
-    if let Some(timeout_secs) = config.timeout_secs {
-        use std::process::Stdio;
-        use std::sync::mpsc;
-        use std::time::Duration;
+    // Set up pipes and process-group isolation for orphan prevention.
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(unix)]
+    cmd.process_group(0);
 
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-        let child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => return VerificationResult::ToolError(e.to_string()),
-        };
-        let child_id = child.id();
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(child.wait_with_output());
-        });
-        match rx.recv_timeout(Duration::from_secs(timeout_secs as u64)) {
-            Ok(Ok(output)) => {
-                return parse_esbmc_result(&output);
-            }
-            Ok(Err(e)) => {
-                return VerificationResult::ToolError(e.to_string());
-            }
-            Err(_timeout) => {
-                let _ = Command::new("kill")
-                    .arg("-9")
-                    .arg(child_id.to_string())
-                    .output();
-                return VerificationResult::Timeout;
-            }
+    // SAFETY: pre_exec runs between fork() and exec() in the child.
+    // The error paths use last_os_error()/from_raw_os_error() which may
+    // allocate, but this only happens on failure just before the child aborts.
+    #[cfg(target_os = "linux")]
+    {
+        let parent_pid = std::process::id();
+        unsafe {
+            cmd.pre_exec(move || {
+                let ret = libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+                if ret != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::getppid() as u32 != parent_pid {
+                    return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
+                }
+                Ok(())
+            });
         }
     }
 
-    let output = match cmd.output() {
-        Ok(o) => o,
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
         Err(e) => return VerificationResult::ToolError(e.to_string()),
     };
 
-    parse_esbmc_result(&output)
-}
+    // Drain stdout/stderr on background threads to prevent pipe buffer deadlock.
+    let stdout_handle = child.stdout.take();
+    let stderr_handle = child.stderr.take();
+    let stdout_thread = std::thread::spawn(move || {
+        let mut buf = String::new();
+        if let Some(mut r) = stdout_handle {
+            let _ = std::io::Read::read_to_string(&mut r, &mut buf);
+        }
+        buf
+    });
+    let stderr_thread = std::thread::spawn(move || {
+        let mut buf = String::new();
+        if let Some(mut r) = stderr_handle {
+            let _ = std::io::Read::read_to_string(&mut r, &mut buf);
+        }
+        buf
+    });
 
-fn parse_esbmc_result(output: &std::process::Output) -> VerificationResult {
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    // If a timeout is configured, poll with deadline; otherwise block on wait().
+    // PR_SET_PDEATHSIG handles orphan cleanup in both cases.
+    if let Some(timeout_secs) = config.timeout_secs {
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs as u64);
+        let timed_out = loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break false,
+                Ok(None) => {
+                    if std::time::Instant::now() >= deadline {
+                        force_kill(&mut child);
+                        let _ = child.wait();
+                        break true;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(e) => {
+                    force_kill(&mut child);
+                    let _ = child.wait();
+                    let _ = stdout_thread.join();
+                    let _ = stderr_thread.join();
+                    return VerificationResult::ToolError(format!("wait error: {e}"));
+                }
+            }
+        };
+        if timed_out {
+            let _ = stdout_thread.join();
+            let _ = stderr_thread.join();
+            return VerificationResult::Timeout;
+        }
+    } else {
+        // No timeout: block until ESBMC finishes.
+        if let Err(e) = child.wait() {
+            let _ = stdout_thread.join();
+            let _ = stderr_thread.join();
+            return VerificationResult::ToolError(format!("wait error: {e}"));
+        }
+    }
+
+    let stdout = stdout_thread.join().unwrap_or_default();
+    let stderr = stderr_thread.join().unwrap_or_default();
     let combined = format!("{stdout}{stderr}");
 
     if combined.contains("VERIFICATION SUCCESSFUL") {
@@ -410,6 +473,21 @@ fn parse_esbmc_result(output: &std::process::Output) -> VerificationResult {
     } else {
         VerificationResult::ToolError(format!("unexpected esbmc output:\n{combined}"))
     }
+}
+
+/// Kill the ESBMC child process. On Unix, sends SIGKILL to the entire
+/// process group; falls back to killing just the child if that fails.
+/// On non-Unix, kills just the child directly.
+fn force_kill(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pgid = child.id() as i32;
+        let ret = unsafe { libc::kill(-pgid, libc::SIGKILL) };
+        if ret == 0 {
+            return;
+        }
+    }
+    let _ = child.kill();
 }
 
 // ---------------------------------------------------------------------------
@@ -527,7 +605,7 @@ mod tests {
     #[test]
     fn verify_trivially_true_ensures() {
         let func = trivially_true_func();
-        match verify_function(&func) {
+        match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Proven => {}
             VerificationResult::ToolNotFound => {
                 eprintln!("SKIP: esbmc not found");
@@ -539,7 +617,7 @@ mod tests {
     #[test]
     fn verify_trivially_false_ensures() {
         let func = trivially_false_func();
-        match verify_function(&func) {
+        match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Failed(_) => {}
             VerificationResult::ToolNotFound => {
                 eprintln!("SKIP: esbmc not found");
@@ -592,7 +670,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
         };
-        match verify_function(&func) {
+        match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Proven | VerificationResult::ToolNotFound => {}
             other => panic!("expected Proven or ToolNotFound, got {other:?}"),
         }
@@ -601,7 +679,7 @@ mod tests {
     #[test]
     fn verify_trivially_false_has_structured_counterexample() {
         let func = trivially_false_func();
-        match verify_function(&func) {
+        match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Failed(ce) => {
                 assert_eq!(ce.vow_id, Some(0), "vow_id should be 0");
                 assert!(!ce.raw_output.is_empty(), "raw_output should be non-empty");
@@ -904,7 +982,7 @@ VERIFICATION FAILED";
     #[test]
     fn verify_vec_push_ensures_len() {
         let func = vec_push_one_ensures_len_1();
-        match verify_function(&func) {
+        match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Proven => {}
             VerificationResult::ToolNotFound => {
                 eprintln!("SKIP: esbmc not found");
@@ -916,7 +994,7 @@ VERIFICATION FAILED";
     #[test]
     fn verify_vec_violated_len_contract() {
         let func = vec_empty_ensures_len_1_violated();
-        match verify_function(&func) {
+        match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Failed(ce) => {
                 assert_eq!(ce.vow_id, Some(0), "vow_id should be 0");
             }
@@ -1064,7 +1142,7 @@ VERIFICATION FAILED";
     #[test]
     fn verify_string_push_byte_ensures_len() {
         let func = string_push_byte_ensures_len_gt_0();
-        match verify_function(&func) {
+        match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Proven => {}
             VerificationResult::ToolNotFound => {
                 eprintln!("SKIP: esbmc not found");
@@ -1076,7 +1154,7 @@ VERIFICATION FAILED";
     #[test]
     fn verify_string_violated_len_contract() {
         let func = string_empty_ensures_len_gt_0_violated();
-        match verify_function(&func) {
+        match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Failed(ce) => {
                 assert_eq!(ce.vow_id, Some(0), "vow_id should be 0");
             }
@@ -1312,7 +1390,7 @@ VERIFICATION FAILED";
     #[test]
     fn verify_hashmap_insert_ensures_contains() {
         let func = hashmap_insert_ensures_contains();
-        match verify_function(&func) {
+        match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Proven => {}
             VerificationResult::ToolNotFound => {
                 eprintln!("SKIP: esbmc not found");
@@ -1324,7 +1402,7 @@ VERIFICATION FAILED";
     #[test]
     fn verify_hashmap_insert_ensures_len() {
         let func = hashmap_insert_ensures_len_1();
-        match verify_function(&func) {
+        match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Proven => {}
             VerificationResult::ToolNotFound => {
                 eprintln!("SKIP: esbmc not found");
@@ -1336,7 +1414,7 @@ VERIFICATION FAILED";
     #[test]
     fn verify_hashmap_violated_len_contract() {
         let func = hashmap_empty_ensures_len_1_violated();
-        match verify_function(&func) {
+        match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Failed(ce) => {
                 assert_eq!(ce.vow_id, Some(0), "vow_id should be 0");
             }

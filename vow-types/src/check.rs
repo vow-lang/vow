@@ -3,6 +3,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use vow_diag::{Blame, Diagnostic, DiagnosticEmitter, ErrorCode, Severity, SourceLocation};
 use vow_syntax::ast::{
     BinOp, Block, Effect, Expr, ExprKind, FnDef, Item, Lit, Module, Pat, PatKind, Stmt, UnOp,
+    VowBlock, VowClause,
 };
 use vow_syntax::span::Span;
 
@@ -394,6 +395,27 @@ impl<'e> Checker<'e> {
         }
     }
 
+    fn check_vow_clauses(&mut self, vow: &VowBlock, context: &str) {
+        for clause in &vow.clauses {
+            let (expr, span, kind) = match clause {
+                VowClause::Requires { expr, span } => (expr, *span, "requires"),
+                VowClause::Ensures { expr, span } => (expr, *span, "ensures"),
+                VowClause::Invariant { expr, span } => (expr, *span, "invariant"),
+            };
+            let ty = self.check_expr(expr);
+            if ty != Ty::Bool && ty != Ty::Never {
+                self.emit_error_with_hints(
+                    ErrorCode::ContractTypeMismatch,
+                    format!("`{kind}` clause has type `{ty}` but must be `bool`"),
+                    span,
+                    vec![format!(
+                        "{context} `{kind}` clauses must evaluate to `bool`"
+                    )],
+                );
+            }
+        }
+    }
+
     fn check_fn(&mut self, fn_def: &FnDef) {
         let outer_effects = std::mem::replace(
             &mut self.current_fn_effects,
@@ -416,6 +438,22 @@ impl<'e> Checker<'e> {
             self.env.define(&param.name, ty);
         }
 
+        if let Some(ref vow) = fn_def.vow {
+            for clause in &vow.clauses {
+                if let VowClause::Requires { expr, span } = clause {
+                    let ty = self.check_expr(expr);
+                    if ty != Ty::Bool && ty != Ty::Never {
+                        self.emit_error_with_hints(
+                            ErrorCode::ContractTypeMismatch,
+                            format!("`requires` clause has type `{ty}` but must be `bool`"),
+                            *span,
+                            vec!["function `requires` clauses must evaluate to `bool`".to_string()],
+                        );
+                    }
+                }
+            }
+        }
+
         let body_ty = self.check_block(&fn_def.body);
 
         let expected = self.current_return_ty.clone();
@@ -433,6 +471,25 @@ impl<'e> Checker<'e> {
                     "function declares return type `{expected}`, but body evaluates to `{body_ty}`"
                 )],
             );
+        }
+
+        if let Some(ref vow) = fn_def.vow {
+            self.env.push_scope();
+            self.env.define("result", self.current_return_ty.clone());
+            for clause in &vow.clauses {
+                if let VowClause::Ensures { expr, span } = clause {
+                    let ty = self.check_expr(expr);
+                    if ty != Ty::Bool && ty != Ty::Never {
+                        self.emit_error_with_hints(
+                            ErrorCode::ContractTypeMismatch,
+                            format!("`ensures` clause has type `{ty}` but must be `bool`"),
+                            *span,
+                            vec!["function `ensures` clauses must evaluate to `bool`".to_string()],
+                        );
+                    }
+                }
+            }
+            self.env.pop_scope();
         }
 
         self.env.pop_scope();
@@ -1017,9 +1074,14 @@ impl<'e> Checker<'e> {
                 }
             }
             ExprKind::While {
-                condition, body, ..
+                condition,
+                vow,
+                body,
             } => {
                 self.check_expr(condition);
+                if let Some(vow) = vow {
+                    self.check_vow_clauses(vow, "while loop");
+                }
                 self.in_loop += 1;
                 self.break_types_stack.push(None);
                 self.check_block(body);
@@ -1030,8 +1092,8 @@ impl<'e> Checker<'e> {
             ExprKind::ForEach {
                 binding,
                 iterable,
+                vow,
                 body,
-                ..
             } => {
                 let iter_ty = self.check_expr(iterable);
                 let elem_ty = match &iter_ty {
@@ -1050,13 +1112,19 @@ impl<'e> Checker<'e> {
                 };
                 self.env.push_scope();
                 self.env.define(binding, elem_ty);
+                if let Some(vow) = vow {
+                    self.check_vow_clauses(vow, "for-each loop");
+                }
                 self.in_loop += 1;
                 self.check_block(body);
                 self.in_loop -= 1;
                 self.env.pop_scope();
                 Ty::Unit
             }
-            ExprKind::Loop { body, .. } => {
+            ExprKind::Loop { vow, body } => {
+                if let Some(vow) = vow {
+                    self.check_vow_clauses(vow, "loop");
+                }
                 self.in_loop += 1;
                 self.break_types_stack.push(Some(Vec::new()));
                 self.check_block(body);

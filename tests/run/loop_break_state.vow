@@ -1,0 +1,27 @@
+// TEST: stdout "1 10\n"
+module LoopBreakState
+
+fn main() -> i32 [io] {
+    let xs: Vec<i64> = Vec::new();
+    xs.push(10);
+    let mut idx: i64 = 0;
+    let mut found: i64 = 0;
+    let mut value: i64 = 0;
+    loop {
+        if idx >= xs.len() {
+            break;
+        }
+        let cand: i64 = xs[idx];
+        idx = idx + 1;
+        if cand == 10 {
+            value = cand;
+            found = 1;
+            break;
+        }
+    }
+    print_i64(found);
+    print_str(" ");
+    print_i64(value);
+    print_str("\n");
+    0
+}
