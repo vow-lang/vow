@@ -13,6 +13,8 @@ struct LowerCtx {
     string_pool: Vec<String>,
     func_names: Vec<String>,
     func_ret_tys: Vec<i64>,
+    func_ret_tags: Vec<String>,
+    func_ret_vec_elems: Vec<String>,
     struct_names: Vec<String>,
     struct_field_lists: Vec<Vec<String>>,
     struct_field_type_names: Vec<Vec<String>>,
@@ -72,6 +74,8 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         string_pool: Vec::new(),
         func_names: Vec::new(),
         func_ret_tys: Vec::new(),
+        func_ret_tags: Vec::new(),
+        func_ret_vec_elems: Vec::new(),
         struct_names: Vec::new(),
         struct_field_lists: Vec::new(),
         struct_field_type_names: Vec::new(),
@@ -680,6 +684,50 @@ fn lower_ast_ty(a: AstArena, tid: i64) -> i64 {
     -1
 }
 
+fn lower_ast_type_tag_name(a: AstArena, tid: i64) -> String {
+    if tid == -1 { return String::from(""); }
+    let tag: i64 = type_tag(a, tid);
+    if tag == TY_NAMED() {
+        let name_sid: i64 = type_a(a, tid);
+        let name: String = arena_str(a, name_sid);
+        if name == String::from("i32") || name == String::from("i64") || name == String::from("u64") ||
+           name == String::from("f32") || name == String::from("f64") || name == String::from("bool") {
+            return String::from("");
+        }
+        if name == String::from("str") {
+            return String::from("String");
+        }
+        return clone_string(name);
+    }
+    if tag == TY_GENERIC() {
+        let name_sid: i64 = type_a(a, tid);
+        return clone_string(arena_str(a, name_sid));
+    }
+    String::from("")
+}
+
+fn lower_ast_type_vec_elem_name(a: AstArena, tid: i64) -> String {
+    if tid == -1 { return String::from(""); }
+    let tag: i64 = type_tag(a, tid);
+    if tag != TY_GENERIC() { return String::from(""); }
+    let name_sid: i64 = type_a(a, tid);
+    let name: String = arena_str(a, name_sid);
+    if name != String::from("Vec") { return String::from(""); }
+    let args_lid: i64 = type_b(a, tid);
+    if list_len(a, args_lid) == 0 { return String::from(""); }
+    let elem_tid: i64 = list_get(a, args_lid, 0);
+    let elem_tag: i64 = type_tag(a, elem_tid);
+    if elem_tag != TY_NAMED() { return String::from(""); }
+    let elem_sid: i64 = type_a(a, elem_tid);
+    let elem_name: String = arena_str(a, elem_sid);
+    if elem_name == String::from("i32") || elem_name == String::from("i64") || elem_name == String::from("u64") ||
+       elem_name == String::from("f32") || elem_name == String::from("f64") || elem_name == String::from("bool") {
+        return String::from("");
+    }
+    if elem_name == String::from("str") { return String::from("String"); }
+    clone_string(elem_name)
+}
+
 fn is_valid_binop(op: i64) -> bool {
     op >= 0 && op <= 22
 }
@@ -1205,7 +1253,17 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 ai = ai + 1;
             }
             let ret_ty: i64 = ctx.func_ret_tys[fidx];
-            return lctx_emit(ctx, IOP_CALL(), ret_ty, call_args, IDATA_CALL_TARGET(), fidx, 0, String::from(""));
+            let result: i64 = lctx_emit(ctx, IOP_CALL(), ret_ty, call_args, IDATA_CALL_TARGET(), fidx, 0, String::from(""));
+            // Tag but don't track: can't distinguish owned heap from arena alias without ownership annotations.
+            let ret_tag: String = ctx.func_ret_tags[fidx];
+            if ret_tag.len() > 0 {
+                lctx_tag(ctx, result, ret_tag);
+            }
+            let ret_vec_elem: String = ctx.func_ret_vec_elems[fidx];
+            if ret_vec_elem.len() > 0 {
+                lctx_tag_vec_elem(ctx, result, ret_vec_elem);
+            }
+            return result;
         }
         let call_args: Vec<i64> = Vec::new();
         let nargs: i64 = list_len(a, args_lid);
@@ -3583,6 +3641,8 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>, file_path: String) -> IrModul
 
     let func_names: Vec<String> = Vec::new();
     let func_ret_tys: Vec<i64> = Vec::new();
+    let func_ret_tags: Vec<String> = Vec::new();
+    let func_ret_vec_elems: Vec<String> = Vec::new();
     let struct_names: Vec<String> = Vec::new();
     let struct_field_lists: Vec<Vec<String>> = Vec::new();
     let struct_field_type_names: Vec<Vec<String>> = Vec::new();
@@ -3603,6 +3663,8 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>, file_path: String) -> IrModul
             let ir_ret: i64 = lower_ast_ty(a, ret_tid);
             func_names.push(name);
             func_ret_tys.push(ir_ret);
+            func_ret_tags.push(lower_ast_type_tag_name(a, ret_tid));
+            func_ret_vec_elems.push(lower_ast_type_vec_elem_name(a, ret_tid));
         } else if ik == ITEM_STRUCT() {
             let sname_sid: i64 = sdef_name_sid(a, iid);
             let sname: String = arena_str(a, sname_sid);
@@ -3776,6 +3838,8 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>, file_path: String) -> IrModul
     ctx.file = file_path;
     ctx.func_names = func_names;
     ctx.func_ret_tys = func_ret_tys;
+    ctx.func_ret_tags = func_ret_tags;
+    ctx.func_ret_vec_elems = func_ret_vec_elems;
     ctx.struct_names = struct_names;
     ctx.struct_field_lists = struct_field_lists;
     ctx.struct_field_type_names = struct_field_type_names;

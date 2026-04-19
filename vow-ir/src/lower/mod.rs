@@ -122,9 +122,52 @@ pub(crate) fn lower_ty(ast_ty: &AstType) -> Ty {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FuncSigInfo {
+    id: FuncId,
+    ret_ty: Ty,
+    ret_tag: Option<String>,
+    ret_vec_elem: Option<String>,
+}
+
+fn non_scalar_type_tag(ast_ty: &AstType) -> Option<String> {
+    match ast_ty {
+        AstType::Named { name, .. }
+            if matches!(
+                name.as_str(),
+                "i32" | "i64" | "u64" | "f32" | "f64" | "bool"
+            ) =>
+        {
+            None
+        }
+        AstType::Named { name, .. } if name == "str" => Some("String".to_string()),
+        AstType::Named { name, .. } => Some(name.clone()),
+        AstType::Generic { name, .. } => Some(name.clone()),
+        _ => None,
+    }
+}
+
+fn vec_named_elem_type(ast_ty: &AstType) -> Option<String> {
+    match ast_ty {
+        AstType::Generic { name, args, .. } if name == "Vec" => match args.first() {
+            Some(AstType::Named { name, .. }) if name == "str" => Some("String".to_string()),
+            Some(AstType::Named { name, .. })
+                if !matches!(
+                    name.as_str(),
+                    "i32" | "i64" | "u64" | "f32" | "f64" | "bool"
+                ) =>
+            {
+                Some(name.clone())
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 const FIELD_IDX_SENTINEL: usize = u32::MAX as usize;
 
-pub struct LowerCtx {
+pub(crate) struct LowerCtx {
     pub(super) func: Function,
     pub(super) current_block: BlockId,
     next_inst_id: u32,
@@ -132,7 +175,7 @@ pub struct LowerCtx {
     pub(super) vow_block: Option<VowBlock>,
     pub(super) string_pool: Vec<String>,
     string_pool_index: HashMap<String, u32>,
-    func_index: HashMap<String, (FuncId, Ty)>,
+    func_index: HashMap<String, FuncSigInfo>,
     // struct name → field names in declaration order
     pub(super) struct_field_map: HashMap<String, Vec<String>>,
     // enum name → variant names in declaration order (index = tag)
@@ -181,14 +224,14 @@ pub struct LowerCtx {
 
 impl LowerCtx {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub(crate) fn new(
         name: String,
         params: Vec<Ty>,
         param_names: Vec<String>,
         return_ty: Ty,
         effects: Vec<Effect>,
         file: String,
-        func_index: HashMap<String, (FuncId, Ty)>,
+        func_index: HashMap<String, FuncSigInfo>,
         struct_field_map: HashMap<String, Vec<String>>,
         enum_variant_map: HashMap<String, Vec<String>>,
         struct_field_type_names: HashMap<String, Vec<String>>,
@@ -901,18 +944,26 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ExprKind::Ident(name) => name.clone(),
                 _ => todo!("non-ident callee in Call lowering"),
             };
-            let call_info = ctx.func_index.get(&callee_name).copied();
-            if let Some((fid, ret_ty)) = call_info {
+            let call_info = ctx.func_index.get(&callee_name).cloned();
+            if let Some(call_info) = call_info {
                 for &aid in &arg_ids {
                     ctx.mark_escaped(aid);
                 }
-                ctx.emit(
+                let result = ctx.emit(
                     Opcode::Call,
-                    ret_ty,
+                    call_info.ret_ty,
                     arg_ids,
-                    InstData::CallTarget(fid),
+                    InstData::CallTarget(call_info.id),
                     span,
-                )
+                );
+                // Tag but don't track: can't distinguish owned heap from arena alias without ownership annotations.
+                if let Some(ret_tag) = call_info.ret_tag {
+                    ctx.inst_struct_type.insert(result, ret_tag);
+                }
+                if let Some(ret_vec_elem) = call_info.ret_vec_elem {
+                    ctx.inst_vec_elem_type.insert(result, ret_vec_elem);
+                }
+                result
             } else if let Some((sym, ret_ty)) = vow_debug_builtin_to_runtime(&callee_name) {
                 ctx.emit(
                     Opcode::DebugCall,
@@ -3122,10 +3173,10 @@ fn lower_block_inner(ctx: &mut LowerCtx, block: &Block) -> InstId {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn lower_function(
+pub(crate) fn lower_function(
     fn_def: &FnDef,
     file: &str,
-    func_index: &HashMap<String, (FuncId, Ty)>,
+    func_index: &HashMap<String, FuncSigInfo>,
     struct_field_map: HashMap<String, Vec<String>>,
     enum_variant_map: HashMap<String, Vec<String>>,
     struct_field_type_names: HashMap<String, Vec<String>>,
@@ -3247,12 +3298,19 @@ pub fn lower_module(module: &AstModule, file: &str, string_exprs: &StringExprSet
         })
         .collect();
 
-    let func_index: HashMap<String, (FuncId, Ty)> = fn_items
+    let func_index: HashMap<String, FuncSigInfo> = fn_items
         .iter()
         .enumerate()
         .map(|(idx, fn_def)| {
-            let ret_ty = lower_ty(&fn_def.return_ty);
-            (fn_def.name.clone(), (FuncId(idx as u32), ret_ty))
+            (
+                fn_def.name.clone(),
+                FuncSigInfo {
+                    id: FuncId(idx as u32),
+                    ret_ty: lower_ty(&fn_def.return_ty),
+                    ret_tag: non_scalar_type_tag(&fn_def.return_ty),
+                    ret_vec_elem: vec_named_elem_type(&fn_def.return_ty),
+                },
+            )
         })
         .collect();
 
@@ -4188,6 +4246,217 @@ mod tests {
             &HashMap::new(),
         );
         func
+    }
+
+    #[test]
+    fn user_defined_call_results_keep_struct_tags_for_field_access() {
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(Expr {
+                kind: ExprKind::FieldAccess {
+                    base: Box::new(Expr {
+                        kind: ExprKind::Call {
+                            callee: Box::new(ident_expr("make_pair")),
+                            args: vec![],
+                        },
+                        span: sp(),
+                    }),
+                    field: "a".to_string(),
+                },
+                span: sp(),
+            })),
+            span: sp(),
+        };
+        let fn_def = make_fn("caller", vec![], i64_ty(), body, vec![]);
+
+        let mut func_index = HashMap::new();
+        func_index.insert(
+            "make_pair".to_string(),
+            FuncSigInfo {
+                id: FuncId(0),
+                ret_ty: Ty::Ptr,
+                ret_tag: Some("Pair".to_string()),
+                ret_vec_elem: None,
+            },
+        );
+
+        let mut struct_field_map = HashMap::new();
+        struct_field_map.insert("Pair".to_string(), vec!["a".to_string(), "b".to_string()]);
+
+        let mut struct_field_type_names = HashMap::new();
+        struct_field_type_names.insert(
+            "Pair".to_string(),
+            vec!["i64".to_string(), "i64".to_string()],
+        );
+
+        let (func, _, warnings) = lower_function(
+            &fn_def,
+            "",
+            &func_index,
+            struct_field_map,
+            HashMap::new(),
+            struct_field_type_names,
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            warnings.is_empty(),
+            "unexpected lowering warnings: {warnings:?}"
+        );
+
+        let field_get = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .find(|i| i.opcode == Opcode::FieldGet)
+            .expect("expected FieldGet");
+        assert_eq!(field_get.data, InstData::FieldIndex(0));
+    }
+
+    #[test]
+    fn user_defined_string_calls_do_not_assume_owned_heap_results() {
+        let body = Block {
+            stmts: vec![let_stmt(
+                "s",
+                Some(Type::Named {
+                    name: "String".to_string(),
+                    span: sp(),
+                }),
+                Expr {
+                    kind: ExprKind::Call {
+                        callee: Box::new(ident_expr("arena_str")),
+                        args: vec![],
+                    },
+                    span: sp(),
+                },
+            )],
+            trailing_expr: Some(Box::new(int_expr(0))),
+            span: sp(),
+        };
+        let fn_def = make_fn("f", vec![], i64_ty(), body, vec![]);
+
+        let mut func_index = HashMap::new();
+        func_index.insert(
+            "arena_str".to_string(),
+            FuncSigInfo {
+                id: FuncId(0),
+                ret_ty: Ty::Ptr,
+                ret_tag: Some("String".to_string()),
+                ret_vec_elem: None,
+            },
+        );
+
+        let (func, _, warnings) = lower_function(
+            &fn_def,
+            "",
+            &func_index,
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            warnings.is_empty(),
+            "unexpected lowering warnings: {warnings:?}"
+        );
+
+        let has_string_free = func.blocks.iter().flat_map(|b| b.insts.iter()).any(|i| {
+            i.opcode == Opcode::Call
+                && i.data == InstData::CallExtern("__vow_string_free".to_string())
+        });
+        assert!(
+            !has_string_free,
+            "user-defined String calls may return aliases and must not be freed at the call site"
+        );
+    }
+
+    #[test]
+    fn multiple_arena_aliased_bindings_emit_no_frees_at_scope_exit() {
+        // Defense-in-depth: the single-binding case above proves the call site
+        // doesn't emit a free.  This variant pins the scope-exit behaviour for
+        // a realistic multi-binding sequence (the bootstrap crash path involved
+        // many arena-aliased String locals in a single lowering function).
+        let body = Block {
+            stmts: vec![
+                let_stmt(
+                    "a",
+                    Some(Type::Named {
+                        name: "String".to_string(),
+                        span: sp(),
+                    }),
+                    Expr {
+                        kind: ExprKind::Call {
+                            callee: Box::new(ident_expr("arena_str")),
+                            args: vec![],
+                        },
+                        span: sp(),
+                    },
+                ),
+                let_stmt(
+                    "b",
+                    Some(Type::Named {
+                        name: "String".to_string(),
+                        span: sp(),
+                    }),
+                    Expr {
+                        kind: ExprKind::Call {
+                            callee: Box::new(ident_expr("arena_str")),
+                            args: vec![],
+                        },
+                        span: sp(),
+                    },
+                ),
+            ],
+            trailing_expr: Some(Box::new(int_expr(0))),
+            span: sp(),
+        };
+        let fn_def = make_fn("f", vec![], i64_ty(), body, vec![]);
+
+        let mut func_index = HashMap::new();
+        func_index.insert(
+            "arena_str".to_string(),
+            FuncSigInfo {
+                id: FuncId(0),
+                ret_ty: Ty::Ptr,
+                ret_tag: Some("String".to_string()),
+                ret_vec_elem: None,
+            },
+        );
+
+        let (func, _, warnings) = lower_function(
+            &fn_def,
+            "",
+            &func_index,
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        assert!(
+            warnings.is_empty(),
+            "unexpected lowering warnings: {warnings:?}"
+        );
+
+        let free_count = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .filter(|i| {
+                i.opcode == Opcode::Call
+                    && i.data == InstData::CallExtern("__vow_string_free".to_string())
+            })
+            .count();
+        assert_eq!(
+            free_count, 0,
+            "arena-aliased let bindings must emit zero __vow_string_free calls at scope exit, got {free_count}"
+        );
     }
 
     #[test]
