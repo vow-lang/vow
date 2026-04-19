@@ -1254,6 +1254,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             }
             let ret_ty: i64 = ctx.func_ret_tys[fidx];
             let result: i64 = lctx_emit(ctx, IOP_CALL(), ret_ty, call_args, IDATA_CALL_TARGET(), fidx, 0, String::from(""));
+            // Tag but don't track: can't distinguish owned heap from arena alias without ownership annotations.
             let ret_tag: String = ctx.func_ret_tags[fidx];
             if ret_tag.len() > 0 {
                 lctx_tag(ctx, result, ret_tag);
