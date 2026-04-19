@@ -415,35 +415,11 @@ fn skill_json() -> String {
         },
         {
           "form": "--max-k-step <N>",
-          "description": "ESBMC max k-induction step (default: 50)",
+          "description": "ESBMC incremental BMC max iterations (default: 50)",
           "long": "--max-k-step",
           "value_name": "N",
           "value_kind": "integer",
           "default": 50
-        },
-        {
-          "form": "--vec-max <N>",
-          "description": "Max Vec capacity for verification model (default: 128)",
-          "long": "--vec-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 128
-        },
-        {
-          "form": "--string-max <N>",
-          "description": "Max String capacity for verification model (default: 256)",
-          "long": "--string-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 256
-        },
-        {
-          "form": "--hashmap-max <N>",
-          "description": "Max HashMap capacity for verification model (default: 64)",
-          "long": "--hashmap-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 64
         },
         {
           "form": "--solver <boolector|z3|bitwuzla|auto>",
@@ -479,6 +455,30 @@ fn skill_json() -> String {
           "value_name": "N",
           "value_kind": "integer",
           "default": "(none)"
+        },
+        {
+          "form": "--vec-max <N>",
+          "description": "Max Vec capacity for verification model (default: 128)",
+          "long": "--vec-max",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 128
+        },
+        {
+          "form": "--string-max <N>",
+          "description": "Max String capacity for verification model (default: 256)",
+          "long": "--string-max",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 256
+        },
+        {
+          "form": "--hashmap-max <N>",
+          "description": "Max HashMap capacity for verification model (default: 64)",
+          "long": "--hashmap-max",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 64
         }
       ],
       "stdout": {
@@ -520,35 +520,11 @@ fn skill_json() -> String {
         },
         {
           "form": "--max-k-step <N>",
-          "description": "ESBMC max k-induction step (default: 50)",
+          "description": "ESBMC incremental BMC max iterations (default: 50)",
           "long": "--max-k-step",
           "value_name": "N",
           "value_kind": "integer",
           "default": 50
-        },
-        {
-          "form": "--vec-max <N>",
-          "description": "Max Vec capacity for verification model (default: 128)",
-          "long": "--vec-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 128
-        },
-        {
-          "form": "--string-max <N>",
-          "description": "Max String capacity for verification model (default: 256)",
-          "long": "--string-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 256
-        },
-        {
-          "form": "--hashmap-max <N>",
-          "description": "Max HashMap capacity for verification model (default: 64)",
-          "long": "--hashmap-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 64
         },
         {
           "form": "--solver <boolector|z3|bitwuzla|auto>",
@@ -584,6 +560,30 @@ fn skill_json() -> String {
           "value_name": "N",
           "value_kind": "integer",
           "default": "(none)"
+        },
+        {
+          "form": "--vec-max <N>",
+          "description": "Max Vec capacity for verification model (default: 128)",
+          "long": "--vec-max",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 128
+        },
+        {
+          "form": "--string-max <N>",
+          "description": "Max String capacity for verification model (default: 256)",
+          "long": "--string-max",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 256
+        },
+        {
+          "form": "--hashmap-max <N>",
+          "description": "Max HashMap capacity for verification model (default: 64)",
+          "long": "--hashmap-max",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 64
         }
       ],
       "stdout": {
@@ -646,7 +646,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--max-k-step <N>",
-          "description": "ESBMC max k-induction step (with --verify)",
+          "description": "ESBMC incremental BMC max iterations (with --verify)",
           "long": "--max-k-step",
           "value_name": "N",
           "value_kind": "integer",
@@ -744,35 +744,11 @@ fn skill_json() -> String {
         },
         {
           "form": "--max-k-step <N>",
-          "description": "ESBMC max k-induction step (default: 50)",
+          "description": "ESBMC incremental BMC max iterations (default: 50)",
           "long": "--max-k-step",
           "value_name": "N",
           "value_kind": "integer",
           "default": 50
-        },
-        {
-          "form": "--vec-max <N>",
-          "description": "Max Vec capacity for verification model (default: 128)",
-          "long": "--vec-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 128
-        },
-        {
-          "form": "--string-max <N>",
-          "description": "Max String capacity for verification model (default: 256)",
-          "long": "--string-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 256
-        },
-        {
-          "form": "--hashmap-max <N>",
-          "description": "Max HashMap capacity for verification model (default: 64)",
-          "long": "--hashmap-max",
-          "value_name": "N",
-          "value_kind": "integer",
-          "default": 64
         },
         {
           "form": "--solver <boolector|z3|bitwuzla|auto>",
@@ -800,6 +776,30 @@ fn skill_json() -> String {
             "auto"
           ],
           "default": "auto"
+        },
+        {
+          "form": "--vec-max <N>",
+          "description": "Max Vec capacity for verification model (default: 128)",
+          "long": "--vec-max",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 128
+        },
+        {
+          "form": "--string-max <N>",
+          "description": "Max String capacity for verification model (default: 256)",
+          "long": "--string-max",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 256
+        },
+        {
+          "form": "--hashmap-max <N>",
+          "description": "Max HashMap capacity for verification model (default: 64)",
+          "long": "--hashmap-max",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": 64
         }
       ],
       "stdout": {
@@ -819,30 +819,30 @@ fn skill_json() -> String {
     "--dump-ir": "Print IR text to stdout and exit (no JSON output, no codegen)",
     "--debug-trace <off|calls|full>": "Emit JSON trace lines to stderr at runtime (default: off)",
     "--no-cache": "Disable compile and verify caching",
-    "--max-k-step <N>": "ESBMC max k-induction step (default: 50)",
-    "--vec-max <N>": "Max Vec capacity for verification model (default: 128)",
-    "--string-max <N>": "Max String capacity for verification model (default: 256)",
-    "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)",
+    "--max-k-step <N>": "ESBMC incremental BMC max iterations (default: 50)",
     "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
     "--encoding <bv|ir|auto>": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
-    "--timeout <N>": "ESBMC per-function timeout in seconds (default: (none))"
+    "--timeout <N>": "ESBMC per-function timeout in seconds (default: (none))",
+    "--vec-max <N>": "Max Vec capacity for verification model (default: 128)",
+    "--string-max <N>": "Max String capacity for verification model (default: 256)",
+    "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)"
   },
   "verify_options": {
     "--no-cache": "Disable verification result caching",
-    "--max-k-step <N>": "ESBMC max k-induction step (default: 50)",
-    "--vec-max <N>": "Max Vec capacity for verification model (default: 128)",
-    "--string-max <N>": "Max String capacity for verification model (default: 256)",
-    "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)",
+    "--max-k-step <N>": "ESBMC incremental BMC max iterations (default: 50)",
     "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
     "--encoding <bv|ir|auto>": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
-    "--timeout <N>": "ESBMC per-function timeout in seconds (default: (none))"
+    "--timeout <N>": "ESBMC per-function timeout in seconds (default: (none))",
+    "--vec-max <N>": "Max Vec capacity for verification model (default: 128)",
+    "--string-max <N>": "Max String capacity for verification model (default: 256)",
+    "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)"
   },
   "test_options": {
     "--verify": "Run ESBMC verification on test files",
     "--filter <pat>": "Only run tests whose name contains pat (default: (none))",
     "--mode <debug|release>": "Build mode; debug inserts runtime vow checks (default: (default))",
     "--timeout <ms>": "Per-test execution timeout in milliseconds (default: 30000)",
-    "--max-k-step <N>": "ESBMC max k-induction step (with --verify)",
+    "--max-k-step <N>": "ESBMC incremental BMC max iterations (with --verify)",
     "--vec-max <N>": "Max Vec capacity for verification model (default: 128)",
     "--string-max <N>": "Max String capacity for verification model (default: 256)",
     "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)"
@@ -853,12 +853,12 @@ fn skill_json() -> String {
   "contracts_options": {
     "--verify": "Run ESBMC verification and report per-contract status",
     "--no-cache": "Disable verification result caching",
-    "--max-k-step <N>": "ESBMC max k-induction step (default: 50)",
+    "--max-k-step <N>": "ESBMC incremental BMC max iterations (default: 50)",
+    "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver (with --verify)",
+    "--encoding <bv|ir|auto>": "ESBMC encoding mode (with --verify); ir requires z3 (default: auto)",
     "--vec-max <N>": "Max Vec capacity for verification model (default: 128)",
     "--string-max <N>": "Max String capacity for verification model (default: 256)",
-    "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)",
-    "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver (with --verify)",
-    "--encoding <bv|ir|auto>": "ESBMC encoding mode (with --verify); ir requires z3 (default: auto)"
+    "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)"
   },
   "global_options": {
     "--help": "Emit versioned JSON tool-help data",
@@ -1203,30 +1203,30 @@ BUILD OPTIONS
   --dump-ir               Print IR text to stdout and exit (no JSON output, no codegen)
   --debug-trace <off|calls|full>  Emit JSON trace lines to stderr at runtime (default: off)
   --no-cache              Disable compile and verify caching
-  --max-k-step <N>        ESBMC max k-induction step (default: 50)
-  --vec-max <N>           Max Vec capacity for verification model (default: 128)
-  --string-max <N>        Max String capacity for verification model (default: 256)
-  --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)
+  --max-k-step <N>        ESBMC incremental BMC max iterations (default: 50)
   --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)
   --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)
   --timeout <N>           ESBMC per-function timeout in seconds (default: (none))
+  --vec-max <N>           Max Vec capacity for verification model (default: 128)
+  --string-max <N>        Max String capacity for verification model (default: 256)
+  --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)
 
 VERIFY OPTIONS
   --no-cache              Disable verification result caching
-  --max-k-step <N>        ESBMC max k-induction step (default: 50)
-  --vec-max <N>           Max Vec capacity for verification model (default: 128)
-  --string-max <N>        Max String capacity for verification model (default: 256)
-  --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)
+  --max-k-step <N>        ESBMC incremental BMC max iterations (default: 50)
   --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)
   --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)
   --timeout <N>           ESBMC per-function timeout in seconds (default: (none))
+  --vec-max <N>           Max Vec capacity for verification model (default: 128)
+  --string-max <N>        Max String capacity for verification model (default: 256)
+  --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)
 
 TEST OPTIONS
   --verify                Run ESBMC verification on test files
   --filter <pat>          Only run tests whose name contains pat (default: (none))
   --mode <debug|release>  Build mode; debug inserts runtime vow checks (default: (default))
   --timeout <ms>          Per-test execution timeout in milliseconds (default: 30000)
-  --max-k-step <N>        ESBMC max k-induction step (with --verify)
+  --max-k-step <N>        ESBMC incremental BMC max iterations (with --verify)
   --vec-max <N>           Max Vec capacity for verification model (default: 128)
   --string-max <N>        Max String capacity for verification model (default: 256)
   --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)
@@ -1234,12 +1234,12 @@ TEST OPTIONS
 CONTRACTS OPTIONS
   --verify                Run ESBMC verification and report per-contract status
   --no-cache              Disable verification result caching
-  --max-k-step <N>        ESBMC max k-induction step (default: 50)
+  --max-k-step <N>        ESBMC incremental BMC max iterations (default: 50)
+  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver (with --verify)
+  --encoding <bv|ir|auto>  ESBMC encoding mode (with --verify); ir requires z3 (default: auto)
   --vec-max <N>           Max Vec capacity for verification model (default: 128)
   --string-max <N>        Max String capacity for verification model (default: 256)
   --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)
-  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver (with --verify)
-  --encoding <bv|ir|auto>  ESBMC encoding mode (with --verify); ir requires z3 (default: auto)
 
 DECL OPTIONS
   -o, --output <path>     Output declaration file path (default: <source>.vow.d)
@@ -1293,10 +1293,11 @@ METHODS   : Vec: Vec::new/push/pop/len/clear/truncate/v[i]/v[i] = val   String: 
 OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! & ?
 
 VERIFICATION DEFAULTS (configurable via --max-k-step, --vec-max, --string-max, --hashmap-max)
-  Incremental BMC : 50 max iterations (--max-k-step)
-  Vec<T>        : 128 max capacity (--vec-max)
-  String        : 256 max capacity (--string-max)
-  HashMap<K, V> : 64 max capacity (--hashmap-max)"##
+  Strategy        : k-induction-parallel (incremental BMC + k-induction)
+  Max k step      : 50 max iterations (--max-k-step)
+  Vec<T>          : 128 max capacity
+  String          : 256 max capacity
+  HashMap<K, V>   : 64 max capacity"##
         .to_string()
 }
 // GENERATE:SKILL_HUMAN:END
@@ -1586,6 +1587,8 @@ Checked operators abort with `ArithmeticOverflow` on overflow.
 | `>>`     | Right shift  |
 
 Bitwise operators require integer operands of the same type. Shift expressions return the left operand's type. `>>` is arithmetic for `i64` and logical for `u64`.
+
+Unsuffixed integer literals are `i64` by default but coerce to the other operand's integer type when used with a bitwise or shift operator, so `x: i64 << 5` and `y: u64 << 3` both type-check. This matches the coercion rule already used by arithmetic operators and comparisons. Use a `u64` suffix (`5u64`) to force the `u64` type.
 
 ### Logical Operators
 
@@ -2170,10 +2173,13 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--dump-ir`       | (off)       | Print IR text to stdout and exit (no JSON output, no codegen) |
 | `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
 | `--no-cache`    | (off)       | Disable compile and verify caching           |
-| `--max-k-step <N>` | `50`     | ESBMC max k-induction step                   |
-| `--vec-max <N>` | `128`      | Max Vec capacity for verification model       |
-| `--string-max <N>` | `256`   | Max String capacity for verification model    |
-| `--hashmap-max <N>` | `64`   | Max HashMap capacity for verification model   |
+| `--max-k-step <N>` | `50`     | ESBMC incremental BMC max iterations          |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
+| `--timeout <N>` | (none)      | ESBMC per-function timeout in seconds        |
+| `--vec-max <N>` | `128`       | Max Vec capacity for verification model      |
+| `--string-max <N>` | `256`    | Max String capacity for verification model   |
+| `--hashmap-max <N>` | `64`    | Max HashMap capacity for verification model  |
 
 ### `vow verify`
 
@@ -2188,7 +2194,10 @@ vow verify [OPTIONS] <source.vow>
 | Flag              | Default     | Description                                |
 |-------------------|-------------|--------------------------------------------|
 | `--no-cache`      | (off)       | Disable verification result caching        |
-| `--max-k-step <N>` | `50`       | ESBMC max k-induction step                |
+| `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations       |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
+| `--timeout <N>` | (none)      | ESBMC per-function timeout in seconds        |
 | `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
 | `--string-max <N>`| `256`       | Max String capacity for verification model |
 | `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
@@ -2207,7 +2216,9 @@ vow contracts [OPTIONS] <source.vow>
 |-------------------|-------------|--------------------------------------------|
 | `--verify`        | (off)       | Run ESBMC verification and report per-contract status |
 | `--no-cache`      | (off)       | Disable verification result caching        |
-| `--max-k-step <N>` | `50`       | ESBMC max k-induction step                |
+| `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations       |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver (with --verify)           |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |
 | `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
 | `--string-max <N>`| `256`       | Max String capacity for verification model |
 | `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
@@ -2244,7 +2255,7 @@ vow test [OPTIONS] [<path>]
 | `--mode debug`    | (default)   | Insert runtime vow checks                 |
 | `--mode release`  | `debug`     | Omit all vow checks for performance       |
 | `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
-| `--max-k-step <N>` | `50`       | ESBMC max k-induction step (with --verify) |
+| `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations (with --verify) |
 | `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
 | `--string-max <N>`| `256`       | Max String capacity for verification model |
 | `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
@@ -2610,15 +2621,21 @@ Contract clauses become IR opcodes. The C emitter translates `requires` to `__ES
 ### ESBMC Configuration
 
 - Verification strategy: **k-induction-parallel** (incremental BMC + k-induction proof)
-- Max k-induction step: **50** (default; override with `--max-k-step`)
+- Incremental BMC with `--max-k-step` (default: **50**) — loops are verified incrementally up to N iterations
 - Architecture: 64-bit
 - Array bounds / pointer checks disabled (Vow handles these in its own model)
 
 ### Collection Models for Verification
 
-Collections (`Vec<T>`, `String`, `HashMap<K, V>`) are modeled with unbounded, dynamically allocated storage — the same semantics as at runtime. There are no artificial capacity limits in the verification model. ESBMC reasons about container operations using k-induction to prove properties for all iterations.
+ESBMC uses bounded models for collection types. Defaults are shown below; override with `--vec-max`, `--string-max`, `--hashmap-max`:
 
-`String::from` produces a nondeterministic non-negative length in verification.
+| Type              | Default Max Capacity | CLI Flag | Supported Operations |
+|-------------------|---------------------|----------|----------------------------------------------|
+| `Vec<T>`          | 128                 | `--vec-max <N>` | `new`, `push`, `pop`, `len`, `get`, `set`    |
+| `String`          | 256                 | `--string-max <N>` | `from`, `len`, `push_byte`, `byte_at`        |
+| `HashMap<K, V>`   | 64                  | `--hashmap-max <N>` | `new`, `insert`, `get`, `contains_key`, `len`|
+
+These support the same operations as the runtime but with bounded storage. `String::from` produces a nondeterministic length (0 to max-1) in verification.
 
 ## Blame Model
 
@@ -2824,7 +2841,7 @@ This is not inductive — `v.len() == n` is only true after the loop.
 
 ### Unbound Loop Iterations
 
-Without a bound on loop iterations, ESBMC may timeout (max-k-step is 50):
+Without a bound on loop iterations, ESBMC may timeout (default max-k-step is 50):
 
 ```vow
 fn fill(n: i64) -> Vec<i64> vow {
@@ -3084,6 +3101,23 @@ extern "C" {
 **Output:** `extern block requires a vow contract`
 
 **Fix:** Add a `vow { ... }` block to the extern declaration with `requires` and/or `ensures` clauses.
+
+### ContractTypeMismatch
+
+**Phase:** Type Checker
+**Meaning:** A `requires`, `ensures`, or `invariant` clause expression does not have type `bool`.
+
+```vow
+fn add(a: i64, b: i64) -> i64 vow {
+    requires: a + b
+} {
+    a + b
+}
+```
+
+**Output:** `` `requires` clause has type `i64` but must be `bool` ``
+
+**Fix:** Ensure every contract clause is a boolean expression (comparison, logical operator, or a call to a predicate function returning `bool`).
 
 ### VowRequiresViolated
 

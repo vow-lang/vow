@@ -225,6 +225,8 @@ Checked operators abort with `ArithmeticOverflow` on overflow.
 
 Bitwise operators require integer operands of the same type. Shift expressions return the left operand's type. `>>` is arithmetic for `i64` and logical for `u64`.
 
+Unsuffixed integer literals are `i64` by default but coerce to the other operand's integer type when used with a bitwise or shift operator, so `x: i64 << 5` and `y: u64 << 3` both type-check. This matches the coercion rule already used by arithmetic operators and comparisons. Use a `u64` suffix (`5u64`) to force the `u64` type.
+
 ### Logical Operators
 
 | Operator | Meaning    |

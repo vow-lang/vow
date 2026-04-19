@@ -517,11 +517,15 @@ fn parse_expr(p: Parser) -> i64 {
 }
 
 fn is_shift_left_op(p: Parser) -> bool {
-    at(p, tok_lt()) && peek_offset(p, 1).tag == tok_lt()
+    let is_lt: bool = at(p, tok_lt());
+    let t: Token = peek_offset(p, 1);
+    is_lt && t.tag == tok_lt()
 }
 
 fn is_shift_right_op(p: Parser) -> bool {
-    at(p, tok_gt()) && peek_offset(p, 1).tag == tok_gt()
+    let is_gt: bool = at(p, tok_gt());
+    let t: Token = peek_offset(p, 1);
+    is_gt && t.tag == tok_gt()
 }
 
 fn current_binop_prec(p: Parser) -> i64 {

@@ -1515,6 +1515,13 @@ impl<'e> Checker<'e> {
         if rhs == Ty::Never {
             return lhs;
         }
+        let (lhs, rhs) = if lhs == Ty::I32 && rhs.is_integer() {
+            (rhs.clone(), rhs)
+        } else if rhs == Ty::I32 && lhs.is_integer() {
+            (lhs.clone(), lhs)
+        } else {
+            (lhs, rhs)
+        };
         if !lhs.is_integer() {
             self.emit_error_with_hints(
                 ErrorCode::TypeMismatch,
