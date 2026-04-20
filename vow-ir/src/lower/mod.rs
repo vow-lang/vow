@@ -915,7 +915,18 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     eq_result
                 }
             } else {
-                let operand_ty = ctx.inst_ty(lhs_id);
+                // For bitwise/shift ops the checker may have coerced an i64
+                // literal-constant operand to the other side's integer type
+                // (e.g. `(1 << 63) >> ux` with `ux: u64` types as `u64`).
+                // Prefer the non-i64 side so shift semantics match the coerced
+                // type — otherwise logical shift becomes arithmetic.
+                let lhs_ty = ctx.inst_ty(lhs_id);
+                let rhs_ty = ctx.inst_ty(rhs_id);
+                let operand_ty = if lhs_ty == rhs_ty || lhs_ty != Ty::I64 {
+                    lhs_ty
+                } else {
+                    rhs_ty
+                };
                 let (opcode, ty) = binop_opcode(*op, &operand_ty);
                 ctx.emit(opcode, ty, vec![lhs_id, rhs_id], InstData::None, span)
             }

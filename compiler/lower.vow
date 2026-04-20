@@ -1157,9 +1157,15 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             }
             return eq_id;
         }
+        // For bitwise/shift ops the checker may have coerced an i64 literal-constant to the other side's type; prefer the non-i64 operand so shift semantics match.
         let lhs_ty: i64 = lctx_inst_ty(ctx, lhs_id);
-        let iop: i64 = binop_opcode(op, lhs_ty);
-        let rty: i64 = binop_result_ty(op, lhs_ty);
+        let rhs_ty: i64 = lctx_inst_ty(ctx, rhs_id);
+        let mut operand_ty: i64 = lhs_ty;
+        if lhs_ty != rhs_ty && lhs_ty == ITY_I64() {
+            operand_ty = rhs_ty;
+        }
+        let iop: i64 = binop_opcode(op, operand_ty);
+        let rty: i64 = binop_result_ty(op, operand_ty);
         let bin_args: Vec<i64> = Vec::new();
         bin_args.push(lhs_id);
         bin_args.push(rhs_id);
