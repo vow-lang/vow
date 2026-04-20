@@ -612,10 +612,10 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             // so `u64 << 3` coerces while `i64_var op u64_var` still errors.
             let lhs_tag: i64 = expr_tag(a, lhs_eid);
             let rhs_tag: i64 = expr_tag(a, rhs_eid);
-            if lhs_tid == CTY_I64() && lhs_tag == EXPR_LIT_INT() && ty_is_integer(e.ts, rhs_tid) {
+            if lhs_tid == CTY_I64() && lhs_tag == EXPR_LIT_INT() {
                 return rhs_tid;
             }
-            if rhs_tid == CTY_I64() && rhs_tag == EXPR_LIT_INT() && ty_is_integer(e.ts, lhs_tid) {
+            if rhs_tid == CTY_I64() && rhs_tag == EXPR_LIT_INT() {
                 return lhs_tid;
             }
             if lhs_tid != rhs_tid {
