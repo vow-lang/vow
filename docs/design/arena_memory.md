@@ -130,12 +130,24 @@ The following C-callable primitives MUST be provided by `vow-runtime`:
 void  __vow_arena_open(struct VowArena* a);
 void  __vow_arena_close(struct VowArena* a);
 void* __vow_arena_alloc(struct VowArena* a, uintptr_t bytes, uintptr_t align);
-bool  __vow_arena_try_extend(struct VowArena* a, void* ptr,
+i64   __vow_arena_try_extend(struct VowArena* a, void* ptr,
                              uintptr_t old_size, uintptr_t new_size);
 ```
 
+Return-type note: `__vow_arena_try_extend` returns `i64` (`1` for
+success, `0` for failure), not `bool`. Rust's `bool` has a 1-byte C
+ABI; the self-hosted compiler's FFI shim (see `vow-clif-shim`) uses
+`i64` uniformly for boolean returns to avoid the ABI-mismatch class
+documented in `CLAUDE.md` under "Self-Hosted Compiler Gotchas"
+(`__vow_string_eq` precedent). Every boolean-valued runtime primitive
+in this spec MUST follow the same convention.
+
 **`__vow_arena_open(a)`**: initializes `*a` to an arena with one
-freshly-allocated chunk of 4 KB.
+freshly-allocated chunk of 4 KB plus the 8-byte next-chunk link
+(4104 bytes total, per §3.2). If the underlying `malloc` fails, the
+runtime traps with a structured OOM error (consistent with the
+root-region OOM policy in §16); the trap is not recoverable from
+within Vow.
 
 **`__vow_arena_close(a)`**: walks the chunk chain, calls `free` on
 each chunk, leaves `*a` in an undefined state. Callers MUST NOT
@@ -148,13 +160,18 @@ Updates `cursor` and `chunk_end` to the new chunk. Also records
 `ptr` and `bytes` in `last_alloc_*`.
 
 **`__vow_arena_try_extend(a, ptr, old_size, new_size)`**: returns
-`true` if and only if `ptr == a->last_alloc_start` AND
+`1` (success) if and only if `ptr == a->last_alloc_start` AND
 `a->last_alloc_size == old_size` AND the current chunk has
 `(new_size - old_size)` bytes remaining after the existing
 allocation. On success, bumps the cursor by the additional bytes
-and returns `true`; the caller may treat the allocation as extended
-in place without copying. On failure, returns `false`; the caller
-MUST fall back to a fresh `__vow_arena_alloc` + `memcpy`.
+and returns `1`; the caller may treat the allocation as extended
+in place without copying. On failure, returns `0`; the caller MUST
+fall back to a fresh `__vow_arena_alloc` + `memcpy`. Callers test
+the result with `!= 0`.
+
+If `__vow_arena_alloc`'s fallback `malloc` for a new chunk fails,
+the runtime traps with the same structured OOM error as
+`__vow_arena_open` (§16).
 
 ### 3.4. Determinism
 
@@ -190,11 +207,22 @@ The algorithm is block-tree dataflow:
    either concrete blocks in the same function or the virtual caller
    node.
 3. Compute `region(I) = LUB(must_outlive(I))` in the block tree.
-   The LUB is the innermost block that is an ancestor of every block
-   in `must_outlive(I)`.
-4. If no such LUB exists (for example, the value must outlive two
-   sibling blocks with no ancestor relationship), the program is
-   rejected with `E_REGION_CONFLICT` (§13).
+   Because the virtual caller node is the unique root of the tree,
+   this LUB is always well-defined: the innermost block that is an
+   ancestor of every block in `must_outlive(I)`, falling back to the
+   virtual caller node when no concrete common ancestor exists.
+4. Validate `region(I)` against the **interprocedural store-effect
+   constraints** collected at each call site that takes `I` as an
+   argument. A store-effect constraint has the form
+   `region(arg_source) ⊒ region(arg_target)` — the source value
+   must outlive the container it is written into. If the caller's
+   concrete region assignments make any such constraint unsatisfiable
+   (for example, the callee requires storing `I` into parameter
+   `p_target`'s region, but `region(I)` is a strictly shorter-lived
+   descendant block of `region(p_target)` that closes before
+   `p_target`'s region does), the program is rejected with
+   `RegionConflict` (§13). This is the only path on which
+   `RegionConflict` fires; step 3's LUB itself never fails.
 5. If `region(I)` is the virtual caller node, the function's summary
    (§4.2) records the allocation as escaping to the caller.
 6. Otherwise, `region(I)` names a concrete block; the allocation is
@@ -209,7 +237,8 @@ The algorithm is block-tree dataflow:
 - A use as an argument to a call is resolved via the callee's
   region summary: if the callee's store effects say the parameter
   is stored into another parameter `j`'s region, the caller adds
-  `region(j-th argument)` to `must_outlive(I)`.
+  `region(j-th argument)` to `must_outlive(I)`, and additionally
+  records the store-effect inequality checked in step 4 above.
 
 ### 4.2. Region summary
 
@@ -263,14 +292,20 @@ permissive).
 
 ### 4.4. Rejection, not over-approximation
 
-When region inference encounters a placement conflict (no LUB exists
-in the block tree), the program MUST be rejected with
-`E_REGION_CONFLICT`. The compiler MUST NOT silently promote the
-value to the root region.
+When region inference encounters a placement conflict — an
+interprocedural store-effect constraint (§4.1, step 4) that cannot
+be satisfied by the caller's concrete region assignments — the
+program MUST be rejected with `RegionConflict`. The compiler MUST
+NOT silently promote the value to the root region or to any wider
+region than `must_outlive(I)` demands.
 
 Rationale: silent root-region placement causes memory growth for the
 program lifetime with no visible signal to the agent. Structured
 rejection is the feedback signal the CEGIS workflow depends on.
+
+Note that the block-tree LUB in step 3 always succeeds (the virtual
+caller node is the universal root); the rejection condition is
+solely the interprocedural constraint check in step 4.
 
 ### 4.5. Interaction with other passes
 
@@ -316,7 +351,8 @@ For each function:
 - `ConstantGlobal` return: ABI adds no hidden parameter. Return
   points into `.rodata` or the root region.
 - Scalar-returning functions: no hidden parameter regardless of
-  parameters.
+  parameters. **Exception:** `main` always receives `target_region`
+  regardless of its return type; see §5.4.
 
 Multiple escaping heap outputs require one `target_region` per
 distinct target region in the summary. In practice this is almost
@@ -344,9 +380,16 @@ using the function's hidden parameter.
 
 ### 5.4. Main entry point
 
-`main` receives `target_region = &__vow_root_arena` from the runtime
-startup shim. If `main`'s return is `i64` (the typical case), the
-parameter is unused. The uniform ABI is preserved regardless.
+`main` is a formal exception to the scalar-return ABI rule in §5.2:
+it always receives `target_region = &__vow_root_arena` from the
+runtime startup shim regardless of its declared return type. If
+`main`'s return is `i64` (the typical case), the parameter is
+unused by the body but remains present in the ABI so the startup
+shim can invoke every well-formed `main` signature uniformly.
+
+This is the only function whose ABI deviates from the table in
+§5.2. Every other function's hidden-parameter presence is a direct
+projection of its region summary.
 
 ## 6. Program-lifetime storage
 
@@ -358,7 +401,7 @@ compile time MUST be placed in `.rodata`. The surrounding descriptor
 with `cap: 0`, indicating read-only backing.
 
 Any operation that would mutate the backing of a `cap: 0` value
-MUST trap at runtime with `E_REGION_LITERAL_MUTATION` (§13). The
+MUST trap at runtime with `RegionLiteralMutation` (§13). The
 compiler MUST NOT silently promote literal-backed values to heap
 copies on mutation. Programs that need a mutable copy use
 `String::from(literal)` or equivalent explicit copy.
@@ -418,7 +461,7 @@ orphaned backing.
 
 `cap: 0` containers are literal-backed (§6.1). Operations that would
 grow or mutate the backing (`Vec::push`, `String::push_str`,
-`HashMap::insert`, etc.) MUST trap with `E_REGION_LITERAL_MUTATION`.
+`HashMap::insert`, etc.) MUST trap with `RegionLiteralMutation`.
 Agents wanting a mutable copy must explicitly copy via
 `Vec::from(literal)`, `String::from(literal)`, etc.
 
@@ -497,7 +540,7 @@ consumed_at(v) <= region_close(region(v))
 
 That is, the consumption site of `v` MUST occur at or before the
 close of the region containing `v`. Violation is rejected with
-`E_REGION_LINEAR` (§13).
+`RegionLinear` (§13).
 
 ### 9.2. Region close does not consume
 
@@ -628,90 +671,153 @@ callers during interprocedural analysis.
 
 ## 13. Error taxonomy
 
-New diagnostic error codes introduced by the arena model:
+New diagnostic error codes introduced by the arena model. Names
+follow the existing `vow-diag::ErrorCode` PascalCase convention
+(e.g., `LinearTypeViolation`, `VowRequiresViolated`,
+`EsbmcNotFound`); they are added as new variants to that enum and
+serialize via the same `#[derive(Serialize)]` path.
 
-### 13.1. `E_REGION_CONFLICT`
+Compile-time diagnostics (`RegionConflict`, `RegionLinear`,
+`RegionAbiMismatch`) use the existing `vow-diag::Diagnostic` wire
+format — they MUST NOT introduce a parallel shape. The live
+`Diagnostic` struct serializes as:
 
-Emitted when region inference cannot compute a consistent LUB for a
-value.
-
-JSON shape:
 ```json
 {
-  "error": "E_REGION_CONFLICT",
-  "severity": "error",
-  "value_span": { "start": N, "len": M },
-  "conflicting_sources": [
-    { "span": { "start": N, "len": M }, "region_hint": "parameter `a`" },
-    { "span": { "start": N, "len": M }, "region_hint": "parameter `b`" }
+  "severity": "Error",
+  "code": "<ErrorCode variant>",
+  "message": "...",
+  "primary":   { "file": "...", "byte_offset": N, "byte_len": M },
+  "secondary": [{ "file": "...", "byte_offset": N, "byte_len": M }, ...],
+  "blame": "None",
+  "hints": ["..."]
+}
+```
+
+All structured auxiliary info (region hints, parameter names, span
+labels) is surfaced through `primary` / `secondary` source locations
+plus a rendered `message` and human-readable `hints`. Any future
+need for strongly-typed auxiliary fields requires a separate
+`vow-diag::Diagnostic` extension proposal — it is not introduced
+here.
+
+The runtime error (`RegionLiteralMutation`) follows the existing
+runtime-error shape used by `VowViolation`, `ArithmeticOverflow`,
+and `IndexOutOfBounds` (see `docs/spec/errors.md`): a compact
+`{"error": "<Name>", ...}` object emitted from `vow-runtime`, not
+through `vow-diag`.
+
+### 13.1. `RegionConflict`
+
+Emitted when region inference cannot satisfy an interprocedural
+store-effect constraint (§4.1, step 4): the caller's concrete
+region assignments would require storing a value into a region that
+outlives `region(I)`.
+
+Example JSON (`code: RegionConflict`, `severity: Error`, `blame:
+None`). `primary` names the escaping value; `secondary` names the
+two conflicting sources (e.g., the argument position and the
+storing call site).
+
+```json
+{
+  "severity": "Error",
+  "code": "RegionConflict",
+  "message": "value `v` must outlive region(a) but would be stored into region(b), which closes earlier",
+  "primary":   { "file": "f.vow", "byte_offset": 1024, "byte_len":  3 },
+  "secondary": [
+    { "file": "f.vow", "byte_offset":  512, "byte_len":  1 },
+    { "file": "f.vow", "byte_offset":  896, "byte_len":  1 }
   ],
-  "suggestions": [
+  "blame": "None",
+  "hints": [
     "copy at one branch to unify regions",
     "return the value and let the caller place it"
   ]
 }
 ```
 
-### 13.2. `E_REGION_LINEAR`
+### 13.2. `RegionLinear`
 
 Emitted when a linear value is unconsumed at the close of its
-region.
+region (see §9).
 
-JSON shape:
 ```json
 {
-  "error": "E_REGION_LINEAR",
-  "severity": "error",
-  "value_name": "f",
-  "value_span": { "start": N, "len": M },
-  "allocated_at": { "start": N, "len": M },
-  "expected_consumption_before": { "start": N, "len": M },
-  "suggestions": [
+  "severity": "Error",
+  "code": "RegionLinear",
+  "message": "linear value `f` not consumed before region close",
+  "primary":   { "file": "g.vow", "byte_offset":  200, "byte_len":  1 },
+  "secondary": [
+    { "file": "g.vow", "byte_offset":  120, "byte_len":  1 },
+    { "file": "g.vow", "byte_offset":  340, "byte_len":  1 }
+  ],
+  "blame": "Callee",
+  "hints": [
     "consume the value via a sink function before block exit",
     "return the value to transfer the linear obligation to the caller"
   ]
 }
 ```
 
-### 13.3. `E_REGION_LITERAL_MUTATION`
+`primary` names the unconsumed-value binding; `secondary[0]` names
+the allocation site; `secondary[1]` names the block close that
+triggered rejection.
+
+### 13.3. `RegionLiteralMutation`
 
 Runtime trap emitted when a mutation operation is attempted on a
-`cap: 0` literal-backed container.
+`cap: 0` literal-backed container. Emitted by `vow-runtime`, not
+`vow-diag`. JSON shape matches the existing runtime-error family
+(see `docs/spec/errors.md`):
 
-JSON shape (runtime):
 ```json
 {
-  "error": "E_REGION_LITERAL_MUTATION",
-  "severity": "runtime",
+  "error": "RegionLiteralMutation",
   "operation": "String::push_str",
-  "value_origin": ".rodata literal",
-  "suggestion": "use String::from(literal) to obtain a mutable copy"
+  "origin": "rodata"
 }
 ```
 
-### 13.4. `E_REGION_ABI_MISMATCH`
+The handler prints `hint: use String::from(literal) to obtain a
+mutable copy` to stderr alongside the JSON, consistent with how
+`VowViolation` surfaces its `description`.
+
+### 13.4. `RegionAbiMismatch`
 
 Emitted at link/load time when a callee's region summary has
 changed and callers have stale metadata. Indicates a build
 inconsistency; not a program-level error.
 
-JSON shape:
 ```json
 {
-  "error": "E_REGION_ABI_MISMATCH",
-  "severity": "error",
-  "callee": "module::function",
-  "caller_expected_summary_hash": "sha256:...",
-  "callee_actual_summary_hash": "sha256:...",
-  "suggestion": "rebuild the caller module against the current callee metadata"
+  "severity": "Error",
+  "code": "RegionAbiMismatch",
+  "message": "caller's expected region summary for `module::function` does not match the current summary (hash mismatch)",
+  "primary":   { "file": "caller.vow", "byte_offset": 0, "byte_len": 0 },
+  "secondary": [
+    { "file": "callee.vow", "byte_offset": 0, "byte_len": 0 }
+  ],
+  "blame": "None",
+  "hints": [
+    "rebuild the caller module against the current callee metadata"
+  ]
 }
 ```
+
+The summary hashes themselves are rendered into `message` rather
+than surfaced as a separate typed field, matching the convention
+used by other build-inconsistency diagnostics today.
 
 ### 13.5. Error stability
 
 Error codes MUST be stable across compiler versions. New codes may
-be added; existing codes MUST NOT change meaning. Documented in
-`docs/spec/errors.md`.
+be added; existing codes MUST NOT change meaning. These four codes
+will be added to `docs/spec/errors.md` as part of the phase that
+introduces them in `vow-diag::ErrorCode` (Phase 3 for
+`RegionConflict`, Phase 6 for `RegionLinear`, Phase 4 for
+`RegionLiteralMutation` and `RegionAbiMismatch`); no entries are
+added here because the codes do not yet exist in the emitter.
 
 ## 14. Out of scope (v1)
 
@@ -780,7 +886,7 @@ the function record. `compiler/ir_printer.vow` prints region info.
 
 **3a (Rust):** `vow-ir/src/region.rs` (new). Block-tree dataflow,
 SCC fixed-point, per-function summary computation,
-`E_REGION_CONFLICT` emission. Runs after type/effect/linear checks;
+`RegionConflict` emission. Runs after type/effect/linear checks;
 populates IR region fields; lowerer still ignores them.
 
 **3b (self-hosted):** `compiler/region.vow` (new). Port of 3a.
@@ -789,7 +895,7 @@ populates IR region fields; lowerer still ignores them.
 the self-hosted compiler's own source. Zero diff required.
 
 **Side CI job:** run the region pass on `compiler/*.vow` and emit
-any `E_REGION_CONFLICT` as non-blocking warnings. This surfaces
+any `RegionConflict` as non-blocking warnings. This surfaces
 source-level fix-ups needed in Phase 5 early.
 
 ### Phase 4 — Lowering cutover (both compilers, atomic)
@@ -817,7 +923,7 @@ Binary fixed point is temporarily broken; re-established in Phase 5.
 ### Phase 5 — Bootstrap triple re-establishment + source fix-ups
 
 **5a.** Run the Phase 4 Rust compiler on every `compiler/*.vow`
-file. Collect `E_REGION_CONFLICT` emissions.
+file. Collect `RegionConflict` emissions.
 
 **5b.** Fix each conflict at the source level. Each fix is a small
 `.vow` edit plus a regression test.
@@ -836,7 +942,7 @@ until this succeeds.
 ### Phase 6 — Linear × region integration
 
 Implement the unconsumed-linear-at-region-close check (§9) in both
-compilers. Add `E_REGION_LINEAR` to `vow-diag`. Audit and fix
+compilers. Add `RegionLinear` to `vow-diag`. Audit and fix
 existing `linear struct` uses where the new check rejects them.
 Update the embedded skill document.
 
