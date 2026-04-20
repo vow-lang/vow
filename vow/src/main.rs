@@ -1359,6 +1359,16 @@ $ ulimit -v 2000000; ./hello
 Hello, world!
 ```
 
+## Development Discipline
+
+Vow is written by agents under a finite context window. These principles apply to every task, not just language design.
+
+**Deep modules, not shallow ones.** A deep module packs a lot of functionality behind a simple interface and hides complexity. A shallow module exposes a complex interface for not much functionality and surfaces complexity to every caller. Prefer deep. When you design or extend a module, ask: does the interface hide more complexity than it exposes? If not, collapse the module or move its logic behind a narrower boundary. Many exported symbols, thin wrappers, and "pass-through" functions are signs of a shallow module.
+
+**Surgical changes.** Prefer many small changes over one large change. Small changes are easier to review, debug, bisect with `git bisect`, and revert. A bug fix fixes the bug — it does not also refactor the surrounding code, rename variables, or reformat the file. Unrelated improvements belong in their own commits or PRs. If a task grows, split it; do not bundle.
+
+**Keep files small, functions smaller.** Context is precious. Every file an agent reads consumes budget that could go toward solving the problem. A 2000-line file forces whole-file reads and pushes other context out; a 200-line file does not. A 100-line function is harder to reason about than four 25-line functions with clear names. Split by responsibility as soon as a unit stops fitting a single coherent idea. This applies to both Vow source code and any tooling around it.
+
 ---
 
 # Vow Grammar Reference

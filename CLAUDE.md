@@ -22,6 +22,14 @@ Vow is a serious, production-grade project. All implementation decisions must re
 - **Scalability is a requirement.** Data structures, algorithms, and compiler passes must be chosen for reasonable asymptotic behavior, not just correctness on small inputs.
 - **No "experimental" excuses.** Do not defer correctness, robustness, or resource discipline with the rationale that the project is early-stage or experimental. Treat every change as if it will run in production.
 
+## Development Discipline
+
+These principles apply to all work in this repo — compiler code, self-hosted compiler, tooling, and benchmarks. They also apply to Vow programs written by agents (see `docs/spec/index.md`, which embeds the same guidance into the skill).
+
+- **Deep modules.** Favor deep modules (lots of functionality, simple interface, hides complexity) over shallow ones (thin wrappers, complex interface, surface complexity). When a module's interface is nearly as wide as its implementation, collapse it or widen its responsibilities. Many exported symbols and pass-through functions are a shallow-module smell.
+- **Surgical changes.** Many small changes beat one large change. They are easier to review, debug, `git bisect`, and revert. Do not bundle refactors, formatting, or unrelated cleanups into a bug fix. If a task grows, split it.
+- **Small files, smaller functions.** Context is precious — every file read consumes budget. Keep files and functions short enough that an agent can load the relevant unit without displacing other context. Split by responsibility as soon as a unit stops fitting a single coherent idea.
+
 ## Contract Authoring
 
 Contracts express **semantic correctness** — what is mathematically required for a function to be correct. They must never be weakened or artificially bounded to satisfy ESBMC's verification limits.
