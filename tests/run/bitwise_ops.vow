@@ -1,4 +1,4 @@
-// TEST: stdout "6 & 3 = 2\n6 | 3 = 7\n1 << 5 = 32\n-8 >> 1 = -4\n8u64 >> 1u64 = 4\n6u64 & 3u64 = 2\n6u64 | 3u64 = 7\n1u64 << 5u64 = 32\n"
+// TEST: stdout "6 & 3 = 2\n6 | 3 = 7\n1 << 5 = 32\n-8 >> 1 = -4\n8u64 >> 1u64 = 4\n6u64 & 3u64 = 2\n6u64 | 3u64 = 7\n1u64 << 5u64 = 32\nux << 3 = 64\nux >> 1 = 4\n3 & ux = 0\nux | 3 = 11\nux ^ 3 = 11\n3 << ux = 768\n"
 module BitwiseOps
 
 fn main() [io] {
@@ -39,5 +39,29 @@ fn main() [io] {
 
     print_str(String::from("1u64 << 5u64 = "));
     print_u64(1u64 << 5u64);
+    print_str(String::from("\n"));
+
+    print_str(String::from("ux << 3 = "));
+    print_u64(ux << 3);
+    print_str(String::from("\n"));
+
+    print_str(String::from("ux >> 1 = "));
+    print_u64(ux >> 1);
+    print_str(String::from("\n"));
+
+    print_str(String::from("3 & ux = "));
+    print_u64(3 & ux);
+    print_str(String::from("\n"));
+
+    print_str(String::from("ux | 3 = "));
+    print_u64(ux | 3);
+    print_str(String::from("\n"));
+
+    print_str(String::from("ux ^ 3 = "));
+    print_u64(ux ^ 3);
+    print_str(String::from("\n"));
+
+    print_str(String::from("3 << ux = "));
+    print_u64(3 << ux);
     print_str(String::from("\n"));
 }
