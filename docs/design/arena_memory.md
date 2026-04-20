@@ -1323,9 +1323,13 @@ that share the `__vow_arena_*` prefix with this spec's new
 symbols:
 
 - `pub extern "C" fn __vow_arena_alloc(size: usize, align: usize)
-  -> *mut u8` at `vow-runtime/src/lib.rs:292`.
+  -> *mut u8` (grep `pub extern "C" fn __vow_arena_alloc` in
+  `vow-runtime/src/lib.rs` — line numbers drift with the file;
+  at the time of writing it is near line 532, but do not rely on
+  the number).
 - `pub unsafe extern "C" fn __vow_arena_free(ptr: *mut u8, size:
-  usize, align: usize)` at `vow-runtime/src/lib.rs:305`.
+  usize, align: usize)` (grep
+  `pub unsafe extern "C" fn __vow_arena_free` in the same file).
 
 Both are declared as imports in
 `vow-codegen/src/cranelift_backend.rs` and
@@ -1479,22 +1483,37 @@ Bootstrap triple MUST still pass.
 
 ### Phase 8 — Cleanup
 
-Delete `track_heap_alloc`, `mark_escaped`, the no-op
-`__vow_string_free` / `__vow_vec_free` / `__vow_hashmap_free`.
-Delete PR #181's conservative patch. The patch leaves two
-identifier signatures behind in the tree, one per compiler side:
+Delete:
 
-- **Rust:** the `// Tag but don't track` comment at the
-  conservative patch sites in `vow-ir/src/lower/mod.rs`
-  (grep for `Tag but don't track`; the comment text is stable,
-  file line numbers will drift).
-- **Self-hosted:** `lctx_mark_escaped` call sites in
-  `compiler/lower.vow` (grep for `lctx_mark_escaped`). The
-  self-hosted lowerer does not carry a matching
-  `// Tag but don't track` comment — the function name itself
-  is the grep anchor.
+- `track_heap_alloc`, `mark_escaped` helpers.
+- The no-op `__vow_string_free` / `__vow_vec_free` /
+  `__vow_hashmap_free` free-helper functions (they became no-ops
+  in Phase 4).
+- The `RegionFree` IR opcode itself: remove it from
+  `Opcode` in `vow-ir/src/types.rs`, from the self-hosted
+  `compiler/ir.vow` opcode enumeration, and from any codegen
+  match arms that dispatch on it. After Phase 4 every
+  `RegionFree` instance in lowered IR is a no-op, so this
+  removal is mechanical — no semantic change from pre-Phase-8
+  behavior.
+- PR #181's conservative patch. The patch leaves two identifier
+  signatures behind in the tree, one per compiler side:
 
-Phase 8 MUST delete both sets atomically. Close issue #186.
+Both compilers carry a matching `// Tag but don't track: can't
+distinguish owned heap from arena alias without ownership
+annotations.` comment at the conservative-patch site:
+
+- **Rust:** `vow-ir/src/lower/mod.rs` (grep for
+  `Tag but don't track`; comment text is stable, line numbers
+  drift).
+- **Self-hosted:** `compiler/lower.vow` (same grep anchor).
+
+Plus `lctx_mark_escaped` call sites in `compiler/lower.vow`
+that the patch introduces — grep for `lctx_mark_escaped` to
+surface them all for deletion.
+
+Phase 8 MUST delete both the comments and the call sites
+atomically. Close issue #186.
 
 Final binary fixed-point re-verification.
 
