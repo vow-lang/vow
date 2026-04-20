@@ -51,21 +51,42 @@ transition debt.
 
 ## 2. Allocation model
 
-### 2.1. Uniform arena allocation
+### 2.1. Uniform placement rule
 
-Every heap-typed value MUST be allocated in exactly one arena. There
-is no other heap-allocation mechanism exposed by the language. In
-particular:
+Every heap-typed value MUST be placed in exactly one of:
+
+1. **An arena** (the runtime heap-allocation mechanism defined in
+   §3) — the default for values produced at runtime.
+2. **`.rodata`** — Class I compile-time literals (§6.1). These are
+   heap-typed by the type system (e.g., a string literal has type
+   `String`) but live in read-only static storage, not in any
+   arena. They carry the read-only-backing sentinel defined in
+   §6.1.
+3. **The root region** — Class II/III program-lifetime values
+   (§6.2). The root region is itself an arena (`__vow_root_arena`),
+   but it is singular and never closes; references into it are
+   valid for the entire process lifetime.
+
+Arenas are the only runtime heap-allocation mechanism exposed by
+the language. `.rodata` and the root region are described here only
+to make the exhaustive placement rule explicit; neither adds a new
+surface-level allocation primitive.
+
+In particular:
 
 - `String`, `Vec<T>`, `HashMap<K, V>` backings and descriptors are
-  arena-allocated.
-- Struct and enum values that contain heap-typed fields are
-  arena-allocated; their heap-typed fields are pointers into some
-  arena (possibly the same one as the containing struct, possibly
-  another).
-- Scalar values (`i8`..`i128`, `u8`..`u128`, `bool`, `f32`, `f64`,
-  `usize`) are not heap-typed and are not arena-allocated. They
-  live in registers or on the machine stack as today.
+  placed per the above rule: arena-allocated when constructed at
+  runtime, `.rodata`-backed when produced from a compile-time
+  literal (§6.1), root-region-allocated when pinned via
+  `pin_to_root` (§7 / §8.4).
+- Struct and enum values that contain heap-typed fields follow the
+  same rule recursively; their heap-typed fields are pointers into
+  some arena or into `.rodata`.
+- Scalar values (`i32`, `i64`, `u8`, `u64`, `f32`, `f64`, `bool` —
+  the current primitive set in `docs/spec/grammar.md`) are not
+  heap-typed and are not arena-allocated. They live in registers
+  or on the machine stack as today. Any future primitive scalar
+  type additions are also not heap-typed by construction.
 
 The compiler assigns each heap-producing instruction a region via a
 compiler pass (§4). The assignment determines which arena backs the
@@ -398,13 +419,30 @@ projection of its region summary.
 String literals, array literals, and any other constant known at
 compile time MUST be placed in `.rodata`. The surrounding descriptor
 (e.g., the 24-byte `{ptr, len, cap}` of `String`) is constructed
-with `cap: 0`, indicating read-only backing.
+with the read-only-backing sentinel `cap = VOW_CAP_RODATA`.
 
-Any operation that would mutate the backing of a `cap: 0` value
-MUST trap at runtime with `RegionLiteralMutation` (§13). The
-compiler MUST NOT silently promote literal-backed values to heap
-copies on mutation. Programs that need a mutable copy use
-`String::from(literal)` or equivalent explicit copy.
+`VOW_CAP_RODATA` is a reserved `usize` value that is distinguishable
+from every legal runtime capacity. It MUST NOT collide with the
+existing "empty, not yet allocated, growable" sentinel used by the
+current runtime (`cap = 0`; see `__vow_vec_reserve` in
+`vow-runtime`, which lazily allocates `VEC_INITIAL_CAP` when
+`v.cap == 0`). The Phase 1 implementation MUST choose the sentinel
+explicitly — the recommended value is `usize::MAX`, reserving it
+from the legal capacity range; any alternative (e.g., an unused
+high bit, or a distinct flag word added to the descriptor) is
+acceptable provided the read-only and lazy-empty states remain
+strictly disjoint at runtime. Phase 1 runtime changes MUST update
+`__vow_vec_reserve`, `__vow_vec_push`, `__vow_string_push_str`,
+`__vow_hashmap_insert`, and every other mutation entry point to
+test for `VOW_CAP_RODATA` first and trap before any growth logic
+is entered.
+
+Any operation that would mutate the backing of a
+`cap == VOW_CAP_RODATA` value MUST trap at runtime with
+`RegionLiteralMutation` (§13). The compiler MUST NOT silently
+promote literal-backed values to heap copies on mutation. Programs
+that need a mutable copy use `String::from(literal)` or equivalent
+explicit copy.
 
 ### 6.2. Class II/III: root region
 
@@ -459,10 +497,13 @@ orphaned backing.
 
 ### 7.3. Mutation of literal-backed containers
 
-`cap: 0` containers are literal-backed (§6.1). Operations that would
-grow or mutate the backing (`Vec::push`, `String::push_str`,
-`HashMap::insert`, etc.) MUST trap with `RegionLiteralMutation`.
-Agents wanting a mutable copy must explicitly copy via
+Containers whose descriptor carries `cap == VOW_CAP_RODATA` are
+literal-backed (§6.1). Operations that would grow or mutate the
+backing (`Vec::push`, `String::push_str`, `HashMap::insert`, etc.)
+MUST trap with `RegionLiteralMutation` before any allocation path
+runs. The trap check is required ahead of the existing
+`cap == 0` → lazy-allocate path so the two sentinels never alias
+in practice. Agents wanting a mutable copy must explicitly copy via
 `Vec::from(literal)`, `String::from(literal)`, etc.
 
 ### 7.4. FFI visibility of orphaned backings
@@ -674,102 +715,81 @@ callers during interprocedural analysis.
 New diagnostic error codes introduced by the arena model. Names
 follow the existing `vow-diag::ErrorCode` PascalCase convention
 (e.g., `LinearTypeViolation`, `VowRequiresViolated`,
-`EsbmcNotFound`); they are added as new variants to that enum and
-serialize via the same `#[derive(Serialize)]` path.
+`EsbmcNotFound`); they are added as new variants to that enum.
 
-Compile-time diagnostics (`RegionConflict`, `RegionLinear`,
-`RegionAbiMismatch`) use the existing `vow-diag::Diagnostic` wire
-format — they MUST NOT introduce a parallel shape. The live
-`Diagnostic` struct serializes as:
+Compile-time region diagnostics (`RegionConflict`, `RegionLinear`,
+`RegionAbiMismatch`) MUST be emitted through the same `vow-diag` →
+CLI adapter path that every existing compile-time diagnostic uses.
+The external CLI schema is the one authoritatively documented in
+`docs/spec/cli.md` (see `CompileFailed` example): each entry in the
+build output's `diagnostics[]` array has the shape
 
 ```json
 {
-  "severity": "Error",
-  "code": "<ErrorCode variant>",
+  "error_code": "<ErrorCode variant>",
   "message": "...",
-  "primary":   { "file": "...", "byte_offset": N, "byte_len": M },
-  "secondary": [{ "file": "...", "byte_offset": N, "byte_len": M }, ...],
-  "blame": "None",
-  "hints": ["..."]
+  "severity": "error",
+  "span":      { "file": "...", "offset": N, "length": M }
 }
 ```
 
-All structured auxiliary info (region hints, parameter names, span
-labels) is surfaced through `primary` / `secondary` source locations
-plus a rendered `message` and human-readable `hints`. Any future
-need for strongly-typed auxiliary fields requires a separate
-`vow-diag::Diagnostic` extension proposal — it is not introduced
-here.
+The examples below render what agents and tooling will see on the
+CLI — identical key names, identical value casing, identical span
+shape — for forward compatibility with every consumer of
+`vow build` / `vow verify` JSON.
+
+Structured auxiliary info (region hints, multiple conflicting
+sources, parameter names) is surfaced through the existing
+secondary-span / hint mechanism as and when `cli.md` documents
+extensions to the diagnostic shape; this design explicitly does not
+propose a new external wire format. Until then, auxiliary context
+belongs in the rendered `message` string.
 
 The runtime error (`RegionLiteralMutation`) follows the existing
 runtime-error shape used by `VowViolation`, `ArithmeticOverflow`,
 and `IndexOutOfBounds` (see `docs/spec/errors.md`): a compact
-`{"error": "<Name>", ...}` object emitted from `vow-runtime`, not
-through `vow-diag`.
+`{"error": "<Name>", ...}` object emitted from `vow-runtime`
+directly to stderr, not routed through `vow-diag`.
 
 ### 13.1. `RegionConflict`
 
 Emitted when region inference cannot satisfy an interprocedural
 store-effect constraint (§4.1, step 4): the caller's concrete
 region assignments would require storing a value into a region that
-outlives `region(I)`.
-
-Example JSON (`code: RegionConflict`, `severity: Error`, `blame:
-None`). `primary` names the escaping value; `secondary` names the
-two conflicting sources (e.g., the argument position and the
-storing call site).
+outlives `region(I)`. `span` names the escaping value.
 
 ```json
 {
-  "severity": "Error",
-  "code": "RegionConflict",
+  "error_code": "RegionConflict",
   "message": "value `v` must outlive region(a) but would be stored into region(b), which closes earlier",
-  "primary":   { "file": "f.vow", "byte_offset": 1024, "byte_len":  3 },
-  "secondary": [
-    { "file": "f.vow", "byte_offset":  512, "byte_len":  1 },
-    { "file": "f.vow", "byte_offset":  896, "byte_len":  1 }
-  ],
-  "blame": "None",
-  "hints": [
-    "copy at one branch to unify regions",
-    "return the value and let the caller place it"
-  ]
+  "severity": "error",
+  "span": { "file": "f.vow", "offset": 1024, "length": 3 }
 }
 ```
 
 ### 13.2. `RegionLinear`
 
 Emitted when a linear value is unconsumed at the close of its
-region (see §9).
+region (see §9). `span` names the unconsumed-value binding; the
+`message` identifies the allocation site and the region close that
+triggered rejection in rendered form.
 
 ```json
 {
-  "severity": "Error",
-  "code": "RegionLinear",
-  "message": "linear value `f` not consumed before region close",
-  "primary":   { "file": "g.vow", "byte_offset":  200, "byte_len":  1 },
-  "secondary": [
-    { "file": "g.vow", "byte_offset":  120, "byte_len":  1 },
-    { "file": "g.vow", "byte_offset":  340, "byte_len":  1 }
-  ],
-  "blame": "Callee",
-  "hints": [
-    "consume the value via a sink function before block exit",
-    "return the value to transfer the linear obligation to the caller"
-  ]
+  "error_code": "RegionLinear",
+  "message": "linear value `f` (allocated at g.vow:120) not consumed before region close at g.vow:340",
+  "severity": "error",
+  "span": { "file": "g.vow", "offset": 200, "length": 1 }
 }
 ```
-
-`primary` names the unconsumed-value binding; `secondary[0]` names
-the allocation site; `secondary[1]` names the block close that
-triggered rejection.
 
 ### 13.3. `RegionLiteralMutation`
 
 Runtime trap emitted when a mutation operation is attempted on a
-`cap: 0` literal-backed container. Emitted by `vow-runtime`, not
-`vow-diag`. JSON shape matches the existing runtime-error family
-(see `docs/spec/errors.md`):
+container whose descriptor carries the `VOW_CAP_RODATA` sentinel
+(§6.1). Emitted by `vow-runtime` directly to stderr, not routed
+through `vow-diag`. JSON shape matches the existing runtime-error
+family (see `docs/spec/errors.md`):
 
 ```json
 {
@@ -787,27 +807,19 @@ mutable copy` to stderr alongside the JSON, consistent with how
 
 Emitted at link/load time when a callee's region summary has
 changed and callers have stale metadata. Indicates a build
-inconsistency; not a program-level error.
+inconsistency; not a program-level error. `span` names the caller's
+call site; the summary hashes are rendered into `message` rather
+than surfaced as separate typed fields, matching the convention
+used by other build-inconsistency diagnostics today.
 
 ```json
 {
-  "severity": "Error",
-  "code": "RegionAbiMismatch",
-  "message": "caller's expected region summary for `module::function` does not match the current summary (hash mismatch)",
-  "primary":   { "file": "caller.vow", "byte_offset": 0, "byte_len": 0 },
-  "secondary": [
-    { "file": "callee.vow", "byte_offset": 0, "byte_len": 0 }
-  ],
-  "blame": "None",
-  "hints": [
-    "rebuild the caller module against the current callee metadata"
-  ]
+  "error_code": "RegionAbiMismatch",
+  "message": "region summary for `module::function` changed since caller was compiled (expected sha256:ab…, actual sha256:cd…); rebuild caller module",
+  "severity": "error",
+  "span": { "file": "caller.vow", "offset": 0, "length": 0 }
 }
 ```
-
-The summary hashes themselves are rendered into `message` rather
-than surfaced as a separate typed field, matching the convention
-used by other build-inconsistency diagnostics today.
 
 ### 13.5. Error stability
 
@@ -960,8 +972,10 @@ Bootstrap triple MUST still pass.
 Delete `track_heap_alloc`, `mark_escaped`, the no-op
 `__vow_string_free` / `__vow_vec_free` / `__vow_hashmap_free`.
 Delete PR #181's conservative patch and the `// Tag but don't
-track` comments at `vow-ir/src/lower/mod.rs:946` and
-`compiler/lower.vow:1242`. Close issue #186.
+track` comments in `vow-ir/src/lower/mod.rs` and
+`compiler/lower.vow` (grep for `Tag but don't track` — the
+comment text is stable, file line numbers will drift). Close
+issue #186.
 
 Final binary fixed-point re-verification.
 
