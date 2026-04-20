@@ -49,7 +49,7 @@ fn main() [io] {
     print_u64(ux << -(-2));
     print_str(String::from("\n"));
 
-    // A coerced literal-constant on the LHS must use unsigned shift semantics; both cases are wrong under arithmetic shift.
+    // Regression guard: coerced literals on the LHS must use unsigned (logical) shift; arithmetic shift would give wrong results for both of the following.
     print_str(String::from("(-1) >> shift = "));
     print_u64((-1) >> shift);
     print_str(String::from("\n"));
