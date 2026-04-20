@@ -135,9 +135,18 @@ The root region (§6) is the exception: its header lives in `.bss`.
 ### 3.2. Chunk layout
 
 Chunks are allocated via libc `malloc`. Each chunk is 4096 bytes plus
-one pointer (8 bytes) for the next-chunk link. Allocations larger
-than 2048 bytes (half-chunk threshold) are placed in a custom-sized
-chunk sized to fit the allocation plus the link.
+one pointer (8 bytes) for the next-chunk link, stored at the **start**
+of each chunk; usable allocation space begins at byte offset 8 within
+the chunk, giving 4096 usable bytes per normal chunk. Allocations
+larger than 2048 bytes (half-chunk threshold) are placed in a
+custom-sized chunk whose total size is
+`8 + bytes + (align - 1)`, where `align` is the requested alignment
+of the oversized allocation. The `align - 1` slack covers worst-case
+alignment padding after the 8-byte link and guarantees the
+allocation fits regardless of alignment; without it, high-alignment
+requests (e.g., 16-byte-aligned SIMD backings) would exceed the
+chunk's usable range and trigger repeated fallback allocation or
+out-of-bounds arithmetic.
 
 Chunks form a singly-linked list rooted at `first_chunk`. The
 `current_chunk` always points to the tail. The next-chunk pointer of
@@ -832,9 +841,14 @@ introduced to ESBMC's model.
 ### 10.2. Unwinding
 
 ESBMC unwinds the chunk-chain walk in `__vow_arena_close` bounded by
-the maximum chain length the analysis admits. The default
-`--unwind` SHOULD be 4, sufficient for most block-local arenas.
-Accumulating loops may require higher `--unwind`, exposed via
+the maximum chain length the analysis admits. For **Phase 1
+standalone arena verification** (§10.4), an ESBMC `--unwind` depth
+of 4 is sufficient for most block-local arenas; this is an ESBMC
+command-line parameter scoped to the arena primitive's own
+verification, separate from `VerifyLimits.max_k_step` (which
+governs incremental BMC step count for general program verification
+and whose default is set elsewhere). Accumulating loops in
+user-program regions may require higher `--unwind`, exposed via
 `VerifyLimits`.
 
 ### 10.3. Root region
@@ -1161,11 +1175,17 @@ step bundled with the Phase 1 runtime additions:
 - `vow-runtime/src/lib.rs` — both `pub extern "C" fn`
   definitions.
 - `vow-runtime/src/lib.rs` — every unit test that calls either
-  function directly (`arena_alloc_free_roundtrip` and
-  `arena_alloc_zero_returns_sentinel` at the time of writing,
-  which reference `__vow_arena_alloc` and `__vow_arena_free`;
-  future test additions referring to either old name must
-  follow).
+  function directly. At the time of writing:
+  - `arena_alloc_free_roundtrip` — references both old symbols.
+  - `arena_alloc_zero_returns_sentinel` — references
+    `__vow_arena_alloc` only.
+  - `arena_free_null_is_noop` — references `__vow_arena_free`
+    only.
+  - `arena_free_zero_size_is_noop` — references
+    `__vow_arena_free` only.
+
+  Future test additions referring to either old name must follow
+  the rename in the same commit.
 - `vow-codegen/src/cranelift_backend.rs` — the `declare_function`
   import sites for both symbols.
 - `vow-clif-shim/src/lib.rs` — the `declare_function` import
@@ -1225,9 +1245,15 @@ source-level fix-ups needed in Phase 5 early.
 `__vow_string_free` / `__vow_vec_free` / `__vow_hashmap_free`
 become no-ops (deleted in Phase 8).
 
-**Gate:** `cargo test --all` passes. `build/vowc test` passes. No
-correctness regression. Performance regression allowed; logged for
-Phase 9.
+**Gate:** `cargo test --all` passes. The project's integration
+test suite passes end-to-end — the concrete runner at Phase 4
+landing time is whichever `vow test` driver is in production
+(Rust-bootstrap `target/release/vow test` today; a self-hosted
+equivalent added to `build/vowc` once `cli.md` documents it for
+the self-hosted binary). The point of this gate is correctness
+parity against pre-Phase-4 behavior, independent of which binary
+hosts the runner. No correctness regression. Performance
+regression allowed; logged for Phase 9.
 
 Binary fixed point is temporarily broken; re-established in Phase 5.
 
