@@ -915,11 +915,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     eq_result
                 }
             } else {
-                // For bitwise/shift ops the checker may have coerced an i64
-                // literal-constant operand to the other side's integer type
-                // (e.g. `(1 << 63) >> ux` with `ux: u64` types as `u64`).
-                // Prefer the non-i64 side so shift semantics match the coerced
-                // type — otherwise logical shift becomes arithmetic.
+                // Prefer the non-i64 operand type so shift semantics match the checker's coerced type rather than defaulting to arithmetic shift.
                 let lhs_ty = ctx.inst_ty(lhs_id);
                 let rhs_ty = ctx.inst_ty(rhs_id);
                 let operand_ty = if lhs_ty == rhs_ty || lhs_ty != Ty::I64 {
