@@ -261,10 +261,40 @@ The algorithm is block-tree dataflow:
    the function body; children are nested blocks. A virtual "caller"
    node is the parent of the function body for purposes of escape.
 2. For each heap-producing instruction `I` at block `B`, compute
-   `must_outlive(I)` — the set of blocks the value must remain live
-   in for every use to be legal. Members of `must_outlive(I)` are
-   either concrete blocks in the same function or the virtual caller
-   node.
+   `must_outlive(I)` — the set of lifetime markers the value must
+   remain live across for every use to be legal. Each element is
+   one of:
+   - a concrete block in the same function (the value must
+     outlive that block's close),
+   - the virtual caller node (the value escapes to the caller),
+   - `Root` (the value is pinned into the root region via
+     `pin_to_root`, or is stored into a `Root`-regioned value;
+     its lifetime requirement is the entire process), or
+   - `Rodata` (the value originates from a compile-time literal;
+     treated as strictly longer-lived than every runtime region).
+
+   The `Root` and `Rodata` markers participate in LUB (step 3)
+   per the following coercions:
+   - `LUB({Rodata})` = `Rodata` (the value already lives
+     statically — no region placement needed).
+   - `Rodata ⊔ anything` = the "anything" side when it dominates,
+     otherwise widens to `Root`; a mixed-path value that is
+     sometimes a `.rodata` literal and sometimes runtime-allocated
+     with a wider-than-any-block lifetime is placed in the root
+     region.
+   - `Root ⊔ anything` = `Root` (root is strictly wider than any
+     block and strictly wider than `Rodata` at the *runtime*
+     writability dimension).
+   - `Root` / `Rodata` and the virtual caller node are
+     incomparable: a value that must outlive *both* the caller
+     and the root region is a spec-violation and is reported as
+     a bug (this combination cannot arise from well-formed
+     source).
+
+   This keeps stores into `pin_to_root`-ed targets or into
+   program-lifetime containers from being misclassified as
+   caller escapes (which would spuriously add a hidden-arg ABI
+   parameter).
 3. Compute `region(I) = LUB(must_outlive(I))` in the block tree.
    Because the virtual caller node is the unique root of the tree,
    this LUB is always well-defined: the innermost block that is an
@@ -781,13 +811,45 @@ program-lifetime — in practice, the root region via `pin_to_root`.
 ### 8.3. C → Vow (C returns a pointer)
 
 Externs that return heap pointers MUST be wrapped by a Vow function.
-The wrapper:
+The wrapper form depends on whether the returned payload is a
+**flat** byte buffer or a **pointer-containing** structure:
+
+**Flat payloads (POD / byte buffers).** For values whose memory
+contains no further heap pointers — `u8`-backed strings / byte
+arrays, scalar-only structs, fixed-width numeric arrays — the
+wrapper:
 
 1. Calls the extern.
-2. If the C pointer is heap-allocated, copies the bytes into the
-   wrapper's `target_region` via `__vow_arena_alloc` + `memcpy`.
+2. Copies the bytes into the wrapper's `target_region` via
+   `__vow_arena_alloc` + `memcpy`.
 3. Calls the corresponding C-side `free` on the extern's pointer.
 4. Returns the Vow-placed value.
+
+**Pointer-containing payloads (structs / arrays with nested
+heap-typed fields).** The flat memcpy+free pattern is **not sound**
+for these: a byte copy preserves stale pointers into the C-side
+backing, and the subsequent `free` of the outer pointer leaves
+those inner pointers dangling. For such payloads the wrapper MUST
+perform a **type-directed deep copy**:
+
+1. Call the extern.
+2. Walk the returned value's type recursively, allocating a
+   fresh copy in `target_region` for each pointer-containing
+   sub-object (using `__vow_arena_alloc` + `memcpy` for each
+   flat leaf segment along the way, the same way standard
+   container constructors do).
+3. Call the corresponding C-side `free` for every pointer in the
+   original graph — the outer pointer and every nested pointer
+   that C owns — following whatever ownership discipline the
+   extern documents. The wrapper MUST NOT assume a single
+   top-level `free` suffices.
+4. Return the Vow-placed value.
+
+The `String::from_raw_parts_copy` / `Vec::from_raw_parts_copy`
+helpers in §8.4 cover the flat-payload case. Deep-copy wrappers
+for pointer-containing payloads are per-type and MUST be written
+by hand (or generated alongside the extern's type definition);
+this spec does not propose a generic deep-copy intrinsic.
 
 The wrapper's region summary emerges from its body: a wrapper that
 allocates into `target_region` has `FreshInCaller`; a wrapper that
