@@ -204,8 +204,8 @@ struct LowerCtx<'a> {
     ir_func_id_to_ref: &'a HashMap<IrFuncId, FuncRef>,
     vow_violation_ref: Option<FuncRef>,
     overflow_ref: Option<FuncRef>,
-    arena_alloc_ref: FuncRef,
-    arena_free_ref: FuncRef,
+    malloc_ref: FuncRef,
+    free_ref: FuncRef,
     mode: BuildMode,
     trace: TraceMode,
     current_ir_block: BlockId,
@@ -857,9 +857,7 @@ fn lower_inst(
             };
             let size_val = builder.ins().iconst(types::I64, size);
             let align_val = builder.ins().iconst(types::I64, align);
-            let call_inst = builder
-                .ins()
-                .call(ctx.arena_alloc_ref, &[size_val, align_val]);
+            let call_inst = builder.ins().call(ctx.malloc_ref, &[size_val, align_val]);
             let ptr = builder.inst_results(call_inst)[0];
             ctx.value_map.insert(inst.id, ptr);
         }
@@ -880,7 +878,7 @@ fn lower_inst(
             let align_val = builder.ins().iconst(types::I64, align);
             builder
                 .ins()
-                .call(ctx.arena_free_ref, &[ptr_val, size_val, align_val]);
+                .call(ctx.free_ref, &[ptr_val, size_val, align_val]);
             let unit = builder.ins().iconst(types::I32, 0);
             ctx.value_map.insert(inst.id, unit);
         }
@@ -1126,8 +1124,8 @@ fn emit_vow_violation_body(
 struct RuntimeIds {
     vow_violation_id: Option<CraneliftFuncId>,
     overflow_id: Option<CraneliftFuncId>,
-    arena_alloc_id: CraneliftFuncId,
-    arena_free_id: CraneliftFuncId,
+    malloc_id: CraneliftFuncId,
+    free_id: CraneliftFuncId,
     trace_enter_id: Option<CraneliftFuncId>,
     trace_exit_id: Option<CraneliftFuncId>,
     trace_vow_id: Option<CraneliftFuncId>,
@@ -1188,8 +1186,8 @@ fn compile_ir_function(
     let vow_violation_ref =
         vow_violation_id.map(|id| obj_module.declare_func_in_func(id, builder.func));
     let overflow_ref = overflow_id.map(|id| obj_module.declare_func_in_func(id, builder.func));
-    let arena_alloc_ref = obj_module.declare_func_in_func(runtime.arena_alloc_id, builder.func);
-    let arena_free_ref = obj_module.declare_func_in_func(runtime.arena_free_id, builder.func);
+    let malloc_ref = obj_module.declare_func_in_func(runtime.malloc_id, builder.func);
+    let free_ref = obj_module.declare_func_in_func(runtime.free_id, builder.func);
 
     let mut ir_func_id_to_ref: HashMap<IrFuncId, FuncRef> = HashMap::new();
     for &(ir_id, cl_id) in ir_to_cl {
@@ -1383,8 +1381,8 @@ fn compile_ir_function(
             ir_func_id_to_ref: &ir_func_id_to_ref,
             vow_violation_ref,
             overflow_ref,
-            arena_alloc_ref,
-            arena_free_ref,
+            malloc_ref,
+            free_ref,
             mode,
             trace,
             current_ir_block: ir_block.id,
@@ -1848,20 +1846,20 @@ impl Backend for CraneliftBackend {
         }
 
         // Declare arena runtime functions (always needed)
-        let mut arena_alloc_sig = obj_module.make_signature();
-        arena_alloc_sig.params.push(AbiParam::new(types::I64)); // size
-        arena_alloc_sig.params.push(AbiParam::new(types::I64)); // align
-        arena_alloc_sig.returns.push(AbiParam::new(types::I64)); // *mut u8
-        let arena_alloc_id = obj_module
-            .declare_function("__vow_arena_alloc", Linkage::Import, &arena_alloc_sig)
+        let mut malloc_sig = obj_module.make_signature();
+        malloc_sig.params.push(AbiParam::new(types::I64)); // size
+        malloc_sig.params.push(AbiParam::new(types::I64)); // align
+        malloc_sig.returns.push(AbiParam::new(types::I64)); // *mut u8
+        let malloc_id = obj_module
+            .declare_function("__vow_malloc", Linkage::Import, &malloc_sig)
             .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
 
-        let mut arena_free_sig = obj_module.make_signature();
-        arena_free_sig.params.push(AbiParam::new(types::I64)); // *mut u8
-        arena_free_sig.params.push(AbiParam::new(types::I64)); // size
-        arena_free_sig.params.push(AbiParam::new(types::I64)); // align
-        let arena_free_id = obj_module
-            .declare_function("__vow_arena_free", Linkage::Import, &arena_free_sig)
+        let mut free_sig = obj_module.make_signature();
+        free_sig.params.push(AbiParam::new(types::I64)); // *mut u8
+        free_sig.params.push(AbiParam::new(types::I64)); // size
+        free_sig.params.push(AbiParam::new(types::I64)); // align
+        let free_id = obj_module
+            .declare_function("__vow_free", Linkage::Import, &free_sig)
             .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
 
         // Declare external runtime functions (debug/sanitize mode only)
@@ -1979,8 +1977,8 @@ impl Backend for CraneliftBackend {
                 &RuntimeIds {
                     vow_violation_id,
                     overflow_id,
-                    arena_alloc_id,
-                    arena_free_id,
+                    malloc_id,
+                    free_id,
                     trace_enter_id,
                     trace_exit_id,
                     trace_vow_id,

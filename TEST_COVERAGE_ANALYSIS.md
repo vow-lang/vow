@@ -90,10 +90,11 @@ The runtime crate has **71 public `extern "C"` functions** (15 safe + 56 unsafe)
 - `trace_exit_emits_json` — verify `{"event":"exit","fn":"..."}` on stderr
 - `trace_vow_emits_json` — verify `{"event":"vow","fn":"...","vow_id":N,"passed":true/false}`
 
-#### Arena (`__vow_arena_*`) — 3 tests
-- `arena_alloc_returns_non_null` — allocate 64 bytes, verify non-null
-- `arena_alloc_zero_size_returns_sentinel` — size 0 returns align as pointer
-- `arena_free_is_noop` — calling free does not crash (no-op by design)
+#### Allocator shim (`__vow_malloc` / `__vow_free`) — 4 tests
+- `malloc_free_roundtrip` — allocate 64 bytes, free
+- `malloc_zero_returns_sentinel` — size 0 returns align as pointer
+- `free_null_is_noop` — calling free(null) does not crash
+- `free_zero_size_is_noop` — size 0 is a no-op
 
 #### I/O print — 3 tests
 - `print_i64_writes_to_stdout` — capture stdout, verify output

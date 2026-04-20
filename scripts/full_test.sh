@@ -687,6 +687,20 @@ else
 fi
 echo ""
 
+# ─── Section 11: Arena Primitive ESBMC Verification ────────────────
+
+echo -e "${BOLD}--- Section 11: Arena Primitive Verification ---${RESET}"
+if command -v esbmc >/dev/null 2>&1; then
+    if (cd vow-runtime/verify && make verify) >"$TMPDIR/arena_verify.log" 2>&1; then
+        pass "arena/esbmc"
+    else
+        fail "arena/esbmc" "$(tail -5 "$TMPDIR/arena_verify.log")"
+    fi
+else
+    skip "arena/esbmc" "esbmc not on PATH"
+fi
+echo ""
+
 # ─── Summary ────────────────────────────────────────────────────────
 
 echo -e "${BOLD}=== Summary ===${RESET}"
