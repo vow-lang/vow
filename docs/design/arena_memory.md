@@ -451,7 +451,7 @@ The summary lattice, per field:
                         |                |
                     AliasOf(i)    ConstantGlobal
                          \               /
-                           ⊥ (seed)
+                          Uninit (⊥ seed)
   ```
 
   The diamond structure makes the incomparability explicit:
@@ -729,6 +729,23 @@ order). Common cases:
 - Multiple distinct store targets: one hidden parameter per
   distinct target. In practice this is almost always zero or one.
 
+**Rodata store targets are statically rejected.** A `store_effect`
+target is always a parameter (§4.2), but that parameter may at
+call-time resolve to a `.rodata`-backed value (e.g., `f(literal)`
+where `f`'s summary has `store_effects` on its first parameter).
+There is no arena header to pass for `.rodata`: literals live in
+read-only static storage, not in any arena (§2.1, §6.1). This
+spec resolves the case statically: the region pass MUST reject
+any call site whose substituted store-effect target region is
+`Rodata`, with `RegionLiteralMutation` (§13). The rejection
+fires at compile time, **before** ABI materialisation — the
+runtime ABI therefore never has to consider passing a null or
+sentinel `*VowArena` for a rodata target. Programmers who want
+to mutate a literal-backed value must produce a mutable copy
+via `String::from(literal)` / `Vec::from(literal)` / equivalent
+first, exactly the same path §7.3 prescribes for direct
+mutation.
+
 ### 5.3. Within-function allocation
 
 Allocations whose `region(I)` is a concrete block `B` inside the
@@ -837,9 +854,17 @@ The old backing is not freed. It remains allocated in the arena
 until the arena closes.
 
 At peak, a container that has doubled through `N` growths holds
-`O(N)` bytes of orphaned backings. The total is bounded by twice
-the current live capacity (identical to classical doubling
-`realloc`).
+`O(N)` bytes of orphaned backings. The total is bounded by
+**twice the current live capacity** at any point in time — the
+same asymptotic bound as classical doubling `realloc` — but the
+steady-state footprint is different: `realloc` frees each old
+buffer after the copy, so it settles back to 1× live capacity,
+whereas the arena model keeps every orphaned backing allocated
+until the arena closes, so the region's resident set stays
+near 2× live capacity until that point. This is an intentional
+trade: no per-growth `free` call, no dangling-pointer risk for
+FFI holders of the old backing (§7.4), at the cost of peak
+memory held by the region for the block's lifetime.
 
 ### 7.2. Zero-copy extension
 
@@ -944,28 +969,42 @@ The stdlib MUST provide:
 
 - `pin_to_root(value) -> value` for every heap-typed value type —
   places a copy of the value in the root region and returns a
-  descriptor pointing into root storage. Idempotent on
-  already-root values (the intrinsic checks the incoming
-  descriptor's region tag and returns it unchanged if it is
-  already `Root`). Because Vow does not have user-facing
-  generics (see `docs/spec/grammar.md` — only the built-in
-  container types `Vec<T>` / `Option<T>` are parameterized),
-  `pin_to_root` is a **compiler intrinsic**, not a generic
-  function the programmer writes. The type checker
-  monomorphises each call site by the argument's concrete type
-  (same mechanism used for `Vec::new()` today).
+  descriptor pointing into root storage. Because Vow does not
+  have user-facing generics (see `docs/spec/grammar.md` — only
+  the built-in container types `Vec<T>` / `Option<T>` are
+  parameterized), `pin_to_root` is a **compiler intrinsic**,
+  not a generic function the programmer writes. The type
+  checker monomorphises each call site by the argument's
+  concrete type (same mechanism used for `Vec::new()` today).
 
-  **Deep-copy obligation.** For pointer-containing values
-  (structs / enums with heap-typed fields, `Vec`s of heap-typed
-  elements, etc.), `pin_to_root` MUST perform a **type-directed
-  deep copy** into the root region, following the same
-  discipline as §8.3's pointer-containing FFI path. A shallow
-  descriptor copy is only sound for flat (POD / byte-buffer)
-  values; for anything richer, shallow-copying would leave
-  inner pointers referring to the source region, and those
-  inner regions may close long before root — producing a
-  silent dangling reference the type checker cannot see. The
-  intrinsic's monomorphisation therefore synthesises a
+  **Always deep-copy.** `pin_to_root` MUST always perform a
+  **type-directed deep copy** into the root region, following
+  the same discipline as §8.3's pointer-containing FFI path.
+  The intrinsic does not attempt to detect whether the input
+  already lives in root and short-circuit: the `{ptr, len, cap}`
+  container descriptor has no free bit for a region tag (`cap`
+  is reserved by `VOW_CAP_RODATA` for literal-backed values
+  (§6.1), and root-allocated containers carry real mutable
+  capacities), and scanning `__vow_root_arena`'s chunk chain
+  for pointer containment would add a per-call cost the
+  intrinsic cannot amortise.
+
+  Double-pinning is therefore the programmer's concern:
+  `pin_to_root(pin_to_root(x))` copies twice and produces two
+  distinct root-region values. The second copy is wasted but
+  not incorrect. The compiler MAY elide the outer call at
+  source-level constant-folding time when the argument
+  expression is itself a `pin_to_root` call on the same value;
+  the spec does not require this optimisation. Programmers
+  wanting to avoid redundant copies should structure code so
+  `pin_to_root` is called once at the region-boundary site.
+
+  A shallow descriptor copy is only sound for flat (POD /
+  byte-buffer) values; for anything richer, shallow-copying
+  would leave inner pointers referring to the source region,
+  and those inner regions may close long before root —
+  producing a silent dangling reference the type checker cannot
+  see. The intrinsic's monomorphisation therefore synthesises a
   per-type deep-copy walk at each call site.
 - `String::from_raw_parts_copy(ptr: *const u8, len: i64) -> String`
   — copies bytes from a raw C pointer into `target_region` as a
@@ -1059,16 +1098,31 @@ introduced to ESBMC's model.
 
 ### 10.2. Unwinding
 
-ESBMC unwinds the chunk-chain walk in `__vow_arena_close` bounded by
-the maximum chain length the analysis admits. For **Phase 1
-standalone arena verification** (§10.4), an ESBMC `--unwind` depth
-of 4 is sufficient for most block-local arenas; this is an ESBMC
-command-line parameter scoped to the arena primitive's own
-verification, separate from `VerifyLimits.max_k_step` (which
-governs incremental BMC step count for general program verification
-and whose default is set elsewhere). Accumulating loops in
-user-program regions may require higher `--unwind`, exposed via
-`VerifyLimits`.
+ESBMC unwinds the chunk-chain walk in `__vow_arena_close` bounded
+by the maximum chain length the analysis admits. For **Phase 1
+standalone arena verification** (§10.4), an ESBMC `--unwind`
+depth of 4 is sufficient for most block-local arenas. This is
+an ESBMC command-line parameter used only by the Phase-1 arena-
+primitive verification harness; it is **not** exposed on the
+`vowc build` / `vowc verify` CLI surface and is **not** a field
+on `VerifyLimits`.
+
+`VerifyLimits` is the public-facing verification configuration
+type defined at `vow-verify/src/c_emitter.rs:55`. It carries
+four fields: `max_k_step` (incremental-BMC iteration cap),
+`vec_max`, `string_max`, `hashmap_max` (container size caps for
+the verification model). None of these is an unwind knob.
+`max_k_step` governs incremental BMC step count across the
+whole program and is distinct from ESBMC's `--unwind` parameter.
+
+If a future user-program region requires a higher ESBMC unwind
+depth than Phase 1's internal default of 4, exposing that as a
+public knob requires a coordinated update to `VerifyLimits`,
+`docs/spec/cli.md`, and the help-output staleness check
+(`vow/src/main.rs` asserts that `--unwind` is not currently in
+the CLI help JSON). Until that coordinated update lands, the
+`--unwind` value is an internal implementation detail of the
+Phase-1 harness, not a normative user-visible parameter.
 
 ### 10.3. Root region
 
@@ -1321,22 +1375,38 @@ and extends it with operation-specific fields:
 }
 ```
 
-The handler prints `hint: use String::from(literal) to obtain a
-mutable copy` to stderr alongside the JSON, consistent with how
-`VowViolation` surfaces its `description`.
+After the JSON object, the handler prints a separate
+human-readable hint line to stderr:
+`hint: use String::from(literal) to obtain a mutable copy`.
+This is a distinct plain-text line, **not** a JSON field —
+different surfacing mechanism from `VowViolation`, whose
+equivalent guidance lives in the JSON object's `description`
+field. Machine consumers read the structured envelope above
+and ignore the trailing hint line; humans see both. If a future
+runtime wants to machine-surface the hint, the preferred path
+is adding a `hint` field to the JSON envelope; this spec does
+not require it.
 
 ### 13.4. `RegionAbiMismatch`
 
-Emitted at link/load time when a callee's region summary has
-changed and callers have stale metadata. Indicates a build
-inconsistency; not a program-level error. `span` names the
-caller's call site on a best-effort basis: linkers often do not
-have precise source positions, so an all-zero span
-(`{file: "...", offset: 0, length: 0}`) is a legitimate fallback
-indicating "no source position available". The summary hashes are
-rendered into `message` rather than surfaced as separate typed
-fields, matching the convention used by other build-inconsistency
-diagnostics today.
+Emitted during **module-metadata validation** at the start of a
+compilation that imports a module whose region summary has
+changed since the caller's compiled import record was recorded.
+This is not a native-linker "link time" error (Vow's
+`build/vowc` does whole-program compilation with no separate
+native-linker stage visible to the caller) and not a
+dynamic-load error (Vow has no dynamic loading today). It fires
+when stale metadata is detected during import resolution.
+
+Indicates a build inconsistency; not a program-level error.
+`span` names the caller's call site on a best-effort basis —
+module-metadata validation often resolves the stale-summary
+discovery before the caller has been lowered to per-call-site
+spans, so an all-zero span (`{file: "...", offset: 0, length: 0}`)
+is a legitimate fallback indicating "no call-site position
+available". The summary hashes are rendered into `message`
+rather than surfaced as separate typed fields, matching the
+convention used by other build-inconsistency diagnostics today.
 
 Example with best-effort (no source position):
 
@@ -1510,6 +1580,25 @@ Implement `pin_to_root`, `String::from_raw_parts_copy`,
 `Vec::from_raw_parts_copy` in the stdlib. Migrate all existing
 `extern` usage to wrapper patterns. `vow-clif-shim` FFI migrates
 to the wrapper idiom.
+
+**Spec sync requirement.** These three symbols are
+surface-visible builtins. Per `CLAUDE.md` ("Any change to Vow
+syntax, semantics, types, builtins, operators, effects, or CLI
+flags MUST include a corresponding update to the relevant
+`docs/spec/*.md` file"), Phase 7 MUST include a matching
+update to `docs/spec/grammar.md` documenting:
+
+- `pin_to_root`: the signature (per-type intrinsic,
+  monomorphised at each call site), its deep-copy semantics,
+  its `ConstantGlobal` return summary.
+- `String::from_raw_parts_copy` and `Vec::from_raw_parts_copy`:
+  per-type signatures with `len: i64`, the `FreshInCaller`
+  return summary, and the documented `i64 → uintptr_t` FFI
+  conversion.
+
+Phase 7 also regenerates `--help` via `scripts/generate_help.py`
+and the embedded skill document per the normal spec-sync
+workflow described in `CLAUDE.md`.
 
 Bootstrap triple MUST still pass.
 
