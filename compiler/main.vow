@@ -1869,7 +1869,7 @@ fn skill_human() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("VERIFICATION DEFAULTS (configurable via --max-k-step, --vec-max, --string-max, --hashmap-max)\n"));
     r.push_str(String::from("  Strategy        : k-induction-parallel (incremental BMC + k-induction)\n"));
-    r.push_str(String::from("  Max k step      : 50 max iterations (--max-k-step)\n"));
+    r.push_str(String::from("  Incremental BMC : 50 max iterations (--max-k-step)\n"));
     r.push_str(String::from("  Vec<T>          : 128 max capacity\n"));
     r.push_str(String::from("  String          : 256 max capacity\n"));
     r.push_str(String::from("  HashMap<K, V>   : 64 max capacity\n"));

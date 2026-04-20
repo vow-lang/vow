@@ -1294,7 +1294,7 @@ OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   &
 
 VERIFICATION DEFAULTS (configurable via --max-k-step, --vec-max, --string-max, --hashmap-max)
   Strategy        : k-induction-parallel (incremental BMC + k-induction)
-  Max k step      : 50 max iterations (--max-k-step)
+  Incremental BMC : 50 max iterations (--max-k-step)
   Vec<T>          : 128 max capacity
   String          : 256 max capacity
   HashMap<K, V>   : 64 max capacity"##

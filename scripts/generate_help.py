@@ -732,7 +732,7 @@ def build_help_human(data: dict) -> str:
     if vdefaults:
         lines.append("VERIFICATION DEFAULTS (configurable via --max-k-step, --vec-max, --string-max, --hashmap-max)")
         lines.append(f"  Strategy        : {vdefaults.get('strategy', 'k-induction-parallel')} (incremental BMC + k-induction)")
-        lines.append(f"  Max k step      : {vdefaults.get('max_k_step', DEFAULT_MAX_K_STEP)} max iterations (--max-k-step)")
+        lines.append(f"  Incremental BMC : {vdefaults.get('max_k_step', DEFAULT_MAX_K_STEP)} max iterations (--max-k-step)")
         lines.append(f"  Vec<T>          : {vdefaults.get('vec_max', 128)} max capacity")
         lines.append(f"  String          : {vdefaults.get('string_max', 256)} max capacity")
         lines.append(f"  HashMap<K, V>   : {vdefaults.get('hashmap_max', 64)} max capacity")
