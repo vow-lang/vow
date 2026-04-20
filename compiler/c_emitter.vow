@@ -940,13 +940,17 @@ fn emit_string_op(out: String, inst: IrInst, string_max: i64) {
     if ds == String::from("__vow_string_eq") {
         let a: i64 = iargs[0];
         let b: i64 = iargs[1];
-        let as_: String = i64_to_str(a);
-        let bs: String = i64_to_str(b);
         let ids: String = i64_to_str(id);
-        out.push_str(str5(String::from("  v"), ids,
-            String::from(" = (v"), as_, str3(String::from(".len == v"),
-            bs, String::from(".len)"))));
-        out.push_str(String::from(" ? __VERIFIER_nondet_bool() : 0;\n"));
+        if a == b {
+            out.push_str(str3(String::from("  v"), ids, String::from(" = 1;\n")));
+        } else {
+            let as_: String = i64_to_str(a);
+            let bs: String = i64_to_str(b);
+            out.push_str(str5(String::from("  v"), ids,
+                String::from(" = (v"), as_, str3(String::from(".len == v"),
+                bs, String::from(".len)"))));
+            out.push_str(String::from(" ? __VERIFIER_nondet_bool() : 0;\n"));
+        }
         return;
     }
     if ds == String::from("__vow_string_contains") {
@@ -1146,19 +1150,19 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
                         out.push_str(str3(String::from("  __vow_vec_t v"), ids, String::from(";\n")));
                         out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
                         out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len >= 0 && v")));
-                        out.push_str(str4(ids, String::from(".len < "), i64_to_str(vec_max), String::from(");\n")));
+                        out.push_str(str4(ids, String::from(".len <= "), i64_to_str(vec_max), String::from(");\n")));
                     } else if vec_contains_i64(string_vars, iid) {
                         let ids: String = i64_to_str(iid);
                         out.push_str(str3(String::from("  __vow_string_t v"), ids, String::from(";\n")));
                         out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
                         out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len >= 0 && v")));
-                        out.push_str(str4(ids, String::from(".len < "), i64_to_str(string_max), String::from(");\n")));
+                        out.push_str(str4(ids, String::from(".len <= "), i64_to_str(string_max), String::from(");\n")));
                     } else if vec_contains_i64(hashmap_vars, iid) {
                         let ids: String = i64_to_str(iid);
                         out.push_str(str3(String::from("  __vow_hashmap_t v"), ids, String::from(";\n")));
                         out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
                         out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len >= 0 && v")));
-                        out.push_str(str4(ids, String::from(".len < "), i64_to_str(hashmap_max), String::from(");\n")));
+                        out.push_str(str4(ids, String::from(".len <= "), i64_to_str(hashmap_max), String::from(");\n")));
                     } else {
                         let c_ty: String = {
                             if inst.ty == ITY_PTR() || inst.ty == ITY_LPTR() {
