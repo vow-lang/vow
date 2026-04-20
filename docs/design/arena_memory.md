@@ -307,10 +307,32 @@ suggests the wrong direction.
 
 The summary lattice, per field:
 
-- `return_region`: partially ordered from most permissive
-  (`ConstantGlobal`) to most restrictive (`FreshInCaller`). Summaries
-  tighten downward (become more restrictive) as more escape sites are
-  discovered.
+- `return_region`: the four `RegionConstraint` variants form a
+  partial order by how much caller-side work they require, from
+  most permissive to most restrictive:
+
+  ```
+  ConstantGlobal  ⊑  AliasOf(i)  ⊑  AliasOfAny(S)  ⊑  FreshInCaller
+  ```
+
+  `ConstantGlobal` is permissive (no caller-side region or hidden
+  parameter). `AliasOf(i)` and `AliasOfAny(S)` require the caller
+  to understand the aliasing constraint but not to pass a hidden
+  arena. `FreshInCaller` is the most restrictive state (caller
+  must supply a hidden `*VowArena`). Joins over `AliasOf` /
+  `AliasOfAny`:
+
+  - `AliasOf(i)` ⊔ `AliasOf(j)` = `AliasOfAny([i, j])` when
+    `i ≠ j`.
+  - `AliasOf(i)` ⊔ `AliasOfAny(S)` = `AliasOfAny(S ∪ {i})`.
+  - Any join that cannot be expressed within the Alias variants
+    (e.g., `AliasOf(i)` ⊔ `ConstantGlobal` where the callee must
+    admit both static storage and a param-aliasing path) tightens
+    the whole return to `FreshInCaller`.
+
+  Summaries tighten upward along this order as more escape sites
+  are discovered; the lattice has finite height, so iteration
+  terminates.
 - `store_effects`: ordered by set inclusion — the empty set is the
   most permissive (no caller obligations), and each added
   `StoreEffect` is strictly more restrictive. Summaries tighten
@@ -338,15 +360,22 @@ never relaxes from `FreshInCaller` back to `ConstantGlobal`, and
 most permissive assumption consistent with all observed escapes —
 exactly the information callers need to satisfy §4.1, step 4.
 
-This direction is mandatory. Starting from the most-restrictive
-end — e.g., empty `store_effects` combined with `return_region =
-FreshInCaller` — is **not** valid: an empty effect set is already
-the most-permissive state, and monotone convergence cannot add to
-it. Any implementation that seeds store_effects as empty and claims
-"summaries only become more permissive" will silently suppress real
-`RegionConflict` diagnostics, because a fresh constraint discovered
-during re-analysis cannot be incorporated without breaking
-monotonicity.
+This direction is mandatory. Starting `return_region` from the
+most-restrictive end — i.e., seeding `return_region = FreshInCaller`
+instead of `ConstantGlobal` — is **not** valid. `return_region`
+only tightens and never relaxes; a `FreshInCaller` seed would
+permanently over-approximate every function in the SCC as requiring
+a caller-provided region, even when the true summary is
+`ConstantGlobal` or `AliasOf(i)`. Every such function would be
+emitted with an incorrect hidden `*VowArena` parameter, producing
+ABI drift between the inferred summary and actual behavior and
+suppressing `RegionConflict` diagnostics at call sites that rely on
+the true summary to detect a constraint violation.
+
+`store_effects` has the opposite direction but the same hazard on
+the wrong end: it only grows and never shrinks, so it must be
+seeded at the empty set. A non-empty seed would require a shrink
+step to reach the true minimum, which is not monotone.
 
 ### 4.4. Rejection, not over-approximation
 
@@ -408,41 +437,44 @@ For each function:
   intended region.
 - `ConstantGlobal` return: ABI adds no hidden parameter. Return
   points into `.rodata` or the root region.
-- Scalar-returning functions: no hidden parameter **unless** the
-  summary has non-empty `store_effects` whose target region is not
-  already reachable from a parameter (see below). **Exception:**
-  `main` always receives `target_region` regardless of its return
-  type; see §5.4.
+- Scalar-returning functions: no hidden parameter from the return.
+  Store effects may still require hidden parameters — see below.
+  **Exception:** `main` always receives `target_region` regardless
+  of its return type; see §5.4.
 
 **Store-effect-driven hidden region parameters.** A function's
 hidden-region parameter set is a projection of the full summary,
-not of the return type alone. For every distinct target region in
-the summary — whether introduced by `return_region = FreshInCaller`
-or by a `StoreEffect` that allocates into a region not already
-carried by an explicit parameter — the ABI adds one hidden
-`*VowArena` parameter. Common cases:
+not of the return type alone. Each `StoreEffect` in §4.2 has the
+form `{ target: param_index, source: RegionConstraint }` — so
+every store target is, by construction, a parameter of the
+callee. For each distinct store target `param_index` appearing in
+`store_effects`, the ABI adds one hidden `*VowArena` parameter
+that carries the arena header for that parameter's region. The
+parameter itself (e.g., a `Vec<T>` descriptor) does not embed the
+arena header; per §3.1, block-region headers live in the caller's
+stack frame, so the caller must pass the address of the header
+the callee will allocate into.
 
-- Pure heap-returning function: one hidden `target_region`
-  (FreshInCaller).
-- Scalar-returning function that stores fresh allocations into a
-  `Vec<T>` / `HashMap<K,V>` / struct passed as a parameter: zero
-  hidden parameters — the target region is reachable through the
-  container parameter's descriptor.
-- Scalar-returning function that stores fresh allocations into a
-  region that is neither its return target nor reachable through
-  an existing parameter: one hidden region parameter per distinct
-  such target. This case is unusual but MUST be emitted; otherwise
-  the callee has no ABI mechanism to route the allocation and
-  would silently alias into its own block region, breaking the
-  store-effect contract.
-- Multiple escaping heap outputs: one `target_region` per distinct
-  target region. In practice this is almost always one.
+The hidden-region parameter set for a function is therefore:
 
-The hidden-region parameter set for a function is therefore
-determined by taking the union of `{FreshInCaller target}` (if
-applicable) and `{target regions of store_effects whose region is
-not reachable via any explicit parameter}`, then emitting one
-`*VowArena` parameter per element.
+```
+hidden_regions(f) = ({ target_region } if return_region == FreshInCaller else ∅)
+                    ∪ { store_target(e) : e ∈ f.store_effects }
+```
+
+with duplicates removed. One `*VowArena` parameter is appended to
+the ABI per element, in a stable order (`target_region` first if
+present, then store-target hidden regions in ascending `param_index`
+order). Common cases:
+
+- Pure heap-returning function: one hidden `target_region`.
+- Scalar-returning function with no escaping store effects: zero
+  hidden parameters.
+- Scalar-returning function that stores fresh allocations into a
+  `Vec<T>` / `HashMap<K,V>` parameter: one hidden parameter
+  carrying that parameter's arena header.
+- Multiple distinct store targets: one hidden parameter per
+  distinct target. In practice this is almost always zero or one.
 
 ### 5.3. Within-function allocation
 
@@ -456,13 +488,17 @@ __vow_arena_alloc(&B_arena, bytes, align)
 where `B_arena` is the stack-allocated VowArena header for block
 `B`.
 
-Allocations whose `region(I)` is the virtual caller node lower to:
+Allocations whose `region(I)` is `Caller(k)` lower to:
 
 ```
-__vow_arena_alloc(target_region, bytes, align)
+__vow_arena_alloc(hidden_region[k], bytes, align)
 ```
 
-using the function's hidden parameter.
+where `hidden_region[k]` names the k-th hidden region parameter
+appended by the ABI (§5.2). Functions with a single hidden region
+always use `Caller(0)`, which names `target_region` for a
+`FreshInCaller` return or the single store-target hidden region
+for a pure scalar mutator.
 
 ### 5.4. Main entry point
 
@@ -743,11 +779,22 @@ The IR gains a `RegionId` enum:
 
 ```
 RegionId =
-    | Block(BlockId)     // named block within the current function
-    | Root               // root region
-    | Rodata             // .rodata static storage
-    | Caller             // caller-provided target_region (FreshInCaller returns)
+    | Block(BlockId)           // named block within the current function
+    | Root                     // root region
+    | Rodata                   // .rodata static storage
+    | Caller(HiddenRegionIdx)  // one of the function's caller-provided
+                               // hidden `*VowArena` parameters (§5.2)
 ```
+
+`HiddenRegionIdx` is a zero-based index into the ordered list of
+hidden region parameters that the ABI appends to the function's
+signature. Index `0` always refers to `target_region` when the
+function's `return_region == FreshInCaller`; subsequent indices
+enumerate the store-target hidden parameters in the stable order
+defined in §5.2. Lowering uses `HiddenRegionIdx` to select the
+correct `*VowArena` parameter in the emitted
+`__vow_arena_alloc(...)` call; functions with a single hidden
+region always use `Caller(0)`.
 
 Every heap-producing `Inst` carries a `region: RegionId` field.
 
