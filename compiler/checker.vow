@@ -547,12 +547,7 @@ fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
     }
 }
 
-// True when the expression is a pure integer-literal constant: a literal, a
-// unary negation of one, or an arithmetic/bitwise binop over two such operands.
-// Used by the bitwise coercion gate so that `ux << (1 + 1)` works the same as
-// `ux << 5` — both sides are unsuffixed literal constants typed as CTY_I64 that
-// should coerce to the other operand's integer type. Walking the expression
-// tree avoids introducing a new type-system axis (an "unresolved literal" type).
+// Recursive: pure i64 constant expressions coerce like bare literals, avoiding a new type-system axis.
 fn expr_is_lit_int_const(a: AstArena, eid: i64) -> bool {
     let tag: i64 = expr_tag(a, eid);
     if tag == EXPR_LIT_INT() {
@@ -643,11 +638,7 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 env_emit_error(e, String::from("bitwise operator requires integer operands"), expr_span(a, eid));
                 return CTY_I64();
             }
-            // An operand typed CTY_I64 whose expression is a pure literal constant
-            // (see expr_is_lit_int_const) acts as an unsuffixed integer literal
-            // and coerces to the other operand's integer type. Variables and
-            // calls short-circuit the predicate, and suffixed literals like
-            // `1u64` carry CTY_U64, so the CTY_I64 check already rules them out.
+            // CTY_I64 + literal-constant expression = unsuffixed literal; coerce to the other operand's integer type.
             if lhs_tid == CTY_I64() && expr_is_lit_int_const(a, lhs_eid) {
                 return rhs_tid;
             }
