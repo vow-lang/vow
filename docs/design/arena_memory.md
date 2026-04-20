@@ -277,24 +277,41 @@ The algorithm is block-tree dataflow:
    per the following coercions:
    - `LUB({Rodata})` = `Rodata` (the value already lives
      statically — no region placement needed).
-   - `Rodata ⊔ anything` = the "anything" side when it dominates,
-     otherwise widens to `Root`; a mixed-path value that is
-     sometimes a `.rodata` literal and sometimes runtime-allocated
-     with a wider-than-any-block lifetime is placed in the root
-     region.
-   - `Root ⊔ anything` = `Root` (root is strictly wider than any
-     block and strictly wider than `Rodata` at the *runtime*
-     writability dimension).
-   - `Root` / `Rodata` and the virtual caller node are
-     incomparable: a value that must outlive *both* the caller
-     and the root region is a spec-violation and is reported as
-     a bug (this combination cannot arise from well-formed
-     source).
+   - `Rodata ⊔ concrete-block` = `Rodata` (rodata strictly
+     outlives every block).
+   - `Root ⊔ concrete-block` = `Root` (root strictly outlives
+     every block).
+   - `Rodata ⊔ Root` = `Root` (a mixed-path value that is
+     sometimes a `.rodata` literal and sometimes
+     root-pinned is placed in the root region; root covers
+     the runtime-writability dimension that `.rodata` cannot).
+   - `Rodata ⊔ virtual-caller` = `Rodata` (a function that
+     returns a `.rodata` literal has a `ConstantGlobal` return).
+   - `Root ⊔ virtual-caller` = `Root` (a function that returns
+     a root-pinned value — e.g., `return pin_to_root(s)` — also
+     has a `ConstantGlobal` return; root strictly outlives any
+     caller lifetime, so the caller does not need to supply a
+     region, and the runtime pointer is valid for the entire
+     process).
+   - `anything ⊔ FreshInCaller` = `FreshInCaller` is a
+     `return_region` rule (§4.3), not a `must_outlive` coercion;
+     it applies only in the summary lattice.
+
+   Step 5 is extended to recognise these non-block `region(I)`
+   outcomes: if `region(I)` is `Root` or `Rodata`, the
+   allocation is lowered with `RegionId::Root` / `RegionId::Rodata`
+   respectively (per §12.1), and the function's summary records
+   `return_region = ConstantGlobal` for values that reach the
+   return expression along such a path. The virtual-caller
+   branch in step 5 still fires for values whose `region(I)` is
+   the virtual caller node itself, not for values coerced into
+   `Root`/`Rodata`.
 
    This keeps stores into `pin_to_root`-ed targets or into
    program-lifetime containers from being misclassified as
    caller escapes (which would spuriously add a hidden-arg ABI
-   parameter).
+   parameter), and handles `return pin_to_root(s)` correctly as
+   a `ConstantGlobal` return rather than a spec violation.
 3. Compute `region(I) = LUB(must_outlive(I))` in the block tree.
    Because the virtual caller node is the unique root of the tree,
    this LUB is always well-defined: the innermost block that is an
@@ -312,10 +329,25 @@ The algorithm is block-tree dataflow:
    `p_target`'s region does), the program is rejected with
    `RegionConflict` (§13). This is the only path on which
    `RegionConflict` fires; step 3's LUB itself never fails.
-5. If `region(I)` is the virtual caller node, the function's summary
-   (§4.2) records the allocation as escaping to the caller.
-6. Otherwise, `region(I)` names a concrete block; the allocation is
-   placed in that block's arena.
+5. Dispatch on `region(I)`:
+   - **Virtual caller node.** The function's summary (§4.2)
+     records the allocation as escaping to the caller
+     (`return_region` widens toward `FreshInCaller`; store
+     effects widen per the target parameter's region).
+   - **`Root`.** The allocation is lowered with
+     `RegionId::Root` and routed to `__vow_root_arena`. The
+     function's summary records `return_region = ConstantGlobal`
+     for values reaching the return along this path (root
+     lifetime is program-lifetime, equivalent from the caller's
+     perspective to static storage).
+   - **`Rodata`.** The allocation slot is lowered with
+     `RegionId::Rodata`; no runtime allocation is emitted
+     because the backing already exists in `.rodata`. The
+     function's summary records `return_region = ConstantGlobal`
+     for values reaching the return along this path.
+   - **Concrete block `B`.** The allocation is lowered with
+     `RegionId::Block(B)` and placed in that block's arena
+     (§5.3).
 
 `must_outlive(I)` is computed by following use-def chains:
 
@@ -398,13 +430,19 @@ The summary lattice, per field:
 
   ```
                           FreshInCaller
-                        /       |
-                  AliasOfAny(S)  |
-                        |        |
-                    AliasOf(i)   ConstantGlobal
-                          \      /
+                        /               \
+                AliasOfAny(S)            |
+                        |                |
+                    AliasOf(i)    ConstantGlobal
+                         \               /
                            ⊥ (seed)
   ```
+
+  The diamond structure makes the incomparability explicit:
+  `AliasOf(i)` / `AliasOfAny(S)` (left branch) and
+  `ConstantGlobal` (right branch) have no comparable
+  relationship with each other; their only common upper bound
+  is `FreshInCaller`.
 
   Joins:
 
@@ -868,12 +906,17 @@ The stdlib MUST provide:
   a generic function the programmer writes. The type checker
   monomorphises each call site by the argument's concrete type
   (same mechanism used for `Vec::new()` today).
-- `String::from_raw_parts_copy(ptr: *const u8, len: usize) -> String`
+- `String::from_raw_parts_copy(ptr: *const u8, len: i64) -> String`
   — copies bytes from a raw C pointer into `target_region` as a
-  `String`. `FreshInCaller`.
-- `Vec::from_raw_parts_copy(ptr, len) -> Vec<T>` for each
+  `String`. `FreshInCaller`. `len` is declared as `i64` to match
+  the existing length-bearing APIs in `docs/spec/grammar.md`
+  (Vow has no `usize` surface type today); at the FFI boundary
+  the value is converted to `uintptr_t` before calling C, the
+  same conversion every existing length-aware extern uses.
+- `Vec::from_raw_parts_copy(ptr, len: i64) -> Vec<T>` for each
   supported element type `T` — analogous for `Vec`. Also a
-  compiler intrinsic, monomorphised per call site.
+  compiler intrinsic, monomorphised per call site. Same
+  `i64 ↔ uintptr_t` ABI conversion at the FFI boundary.
 
 These helpers encapsulate the canonical wrapper pattern so agents
 can compose FFI without hand-rolling the region wiring.
@@ -1438,11 +1481,20 @@ Bootstrap triple MUST still pass.
 
 Delete `track_heap_alloc`, `mark_escaped`, the no-op
 `__vow_string_free` / `__vow_vec_free` / `__vow_hashmap_free`.
-Delete PR #181's conservative patch and the `// Tag but don't
-track` comments in `vow-ir/src/lower/mod.rs` and
-`compiler/lower.vow` (grep for `Tag but don't track` — the
-comment text is stable, file line numbers will drift). Close
-issue #186.
+Delete PR #181's conservative patch. The patch leaves two
+identifier signatures behind in the tree, one per compiler side:
+
+- **Rust:** the `// Tag but don't track` comment at the
+  conservative patch sites in `vow-ir/src/lower/mod.rs`
+  (grep for `Tag but don't track`; the comment text is stable,
+  file line numbers will drift).
+- **Self-hosted:** `lctx_mark_escaped` call sites in
+  `compiler/lower.vow` (grep for `lctx_mark_escaped`). The
+  self-hosted lowerer does not carry a matching
+  `// Tag but don't track` comment — the function name itself
+  is the grep anchor.
+
+Phase 8 MUST delete both sets atomically. Close issue #186.
 
 Final binary fixed-point re-verification.
 
