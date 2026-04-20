@@ -763,13 +763,21 @@ returns a `.rodata` pointer has `ConstantGlobal`.
 
 The stdlib MUST provide:
 
-- `pin_to_root<T>(value: T) -> T` — allocates in the root region
-  and moves the value there. Idempotent on already-root values.
+- `pin_to_root(value) -> value` for every heap-typed value type —
+  allocates in the root region and moves the value there.
+  Idempotent on already-root values. Because Vow does not have
+  user-facing generics (see `docs/spec/grammar.md` — only the
+  built-in container types `Vec<T>` / `Option<T>` are
+  parameterized), `pin_to_root` is a **compiler intrinsic**, not
+  a generic function the programmer writes. The type checker
+  monomorphises each call site by the argument's concrete type
+  (same mechanism used for `Vec::new()` today).
 - `String::from_raw_parts_copy(ptr: *const u8, len: usize) -> String`
   — copies bytes from a raw C pointer into `target_region` as a
   `String`. `FreshInCaller`.
-- `Vec::from_raw_parts_copy<T>(ptr: *const T, len: usize) -> Vec<T>`
-  — analogous for `Vec<T>`.
+- `Vec::from_raw_parts_copy(ptr, len) -> Vec<T>` for each
+  supported element type `T` — analogous for `Vec`. Also a
+  compiler intrinsic, monomorphised per call site.
 
 These helpers encapsulate the canonical wrapper pattern so agents
 can compose FFI without hand-rolling the region wiring.
@@ -917,15 +925,26 @@ Two new IR opcodes mark region boundaries:
 
 - `RegionOpen(BlockId)` — emitted at block entry when the block
   region is non-empty under the four-criterion rule in §3.5.
+  For a loop body, `RegionOpen` is emitted at the start of every
+  iteration (immediately after the loop header's condition is
+  checked and control enters the body).
 - `RegionClose(BlockId)` — emitted at **every** exit from the
   block, enumerated exhaustively: normal fall-through to the
   block's end, `break`, `continue`, `return`, and any other
   control-flow edge that leaves the block (e.g., early exits
-  from `match` arms). `continue` in particular MUST close every
-  enclosing block region up to but not including the target
-  loop's body — otherwise a loop-body arena header would stay
-  open across iterations, turning per-iteration reclamation into
-  function-lifetime retention in long-running loops.
+  from `match` arms, `?`/`try` short-circuits once those land).
+
+  `continue` MUST close every open block region from the
+  innermost enclosing block **through and including the target
+  loop's body**, in innermost-first order. A fresh
+  `RegionOpen(loop_body)` then fires at the start of the next
+  iteration. Stopping short of the loop body — leaving its
+  region open across iterations — would both (a) turn
+  per-iteration reclamation into function-lifetime retention in
+  long-running loops and (b) risk reopening an already-open
+  header on the next iteration's `RegionOpen`, which is
+  undefined in the runtime model. The loop body's region thus
+  has the same open/close cadence as one iteration of its body.
 
 Empty-region blocks do not emit these opcodes.
 
@@ -1013,8 +1032,11 @@ triggered rejection in rendered form.
 Runtime trap emitted when a mutation operation is attempted on a
 container whose descriptor carries the `VOW_CAP_RODATA` sentinel
 (§6.1). Emitted by `vow-runtime` directly to stderr, not routed
-through `vow-diag`. JSON shape matches the existing runtime-error
-family (see `docs/spec/errors.md`):
+through `vow-diag`. JSON shape follows the existing runtime-error
+envelope (see `docs/spec/errors.md` — `VowViolation`,
+`ArithmeticOverflow`, `IndexOutOfBounds`, `UnwrapOnNone` are bare
+`{"error": "..."}` objects) and extends it with
+operation-specific fields:
 
 ```json
 {
@@ -1032,10 +1054,16 @@ mutable copy` to stderr alongside the JSON, consistent with how
 
 Emitted at link/load time when a callee's region summary has
 changed and callers have stale metadata. Indicates a build
-inconsistency; not a program-level error. `span` names the caller's
-call site; the summary hashes are rendered into `message` rather
-than surfaced as separate typed fields, matching the convention
-used by other build-inconsistency diagnostics today.
+inconsistency; not a program-level error. `span` names the
+caller's call site on a best-effort basis: linkers often do not
+have precise source positions, so an all-zero span
+(`{file: "...", offset: 0, length: 0}`) is a legitimate fallback
+indicating "no source position available". The summary hashes are
+rendered into `message` rather than surfaced as separate typed
+fields, matching the convention used by other build-inconsistency
+diagnostics today.
+
+Example with best-effort (no source position):
 
 ```json
 {
@@ -1104,30 +1132,50 @@ Add `__vow_arena_open`, `__vow_arena_close`, `__vow_arena_alloc`,
 header, chunk-chained bump allocator, 4 KB chunks.
 
 **Symbol-collision note.** The existing `vow-runtime` already
-exports a function named `__vow_arena_alloc` with a different
-signature: `pub extern "C" fn __vow_arena_alloc(size: usize, align:
-usize) -> *mut u8` (see `vow-runtime/src/lib.rs`, declared as an
-import in `vow-codegen/src/cranelift_backend.rs` and
-`vow-clif-shim/src/lib.rs`). That older function is a global-allocator
-shim and is unrelated to the arena-per-scope model. The two symbols
-cannot coexist. Phase 1 MUST atomically rename the older shim to
-`__vow_malloc` across every site that references it by name:
+exports two companion functions in the global-allocator shim
+that share the `__vow_arena_*` prefix with this spec's new
+symbols:
 
-- `vow-runtime/src/lib.rs` — the `pub extern "C" fn` definition.
-- `vow-runtime/src/lib.rs` — every unit test that calls the
+- `pub extern "C" fn __vow_arena_alloc(size: usize, align: usize)
+  -> *mut u8` at `vow-runtime/src/lib.rs:292`.
+- `pub unsafe extern "C" fn __vow_arena_free(ptr: *mut u8, size:
+  usize, align: usize)` at `vow-runtime/src/lib.rs:305`.
+
+Both are declared as imports in
+`vow-codegen/src/cranelift_backend.rs` and
+`vow-clif-shim/src/lib.rs`. Neither is related to the
+arena-per-scope model; they are generic `malloc`/`free`-style
+entry points whose names happen to collide. The two `_alloc`
+symbols cannot coexist, and leaving `__vow_arena_free` unrenamed
+would produce a confusingly-named companion alongside the new
+`__vow_arena_open` / `__vow_arena_close` / `__vow_arena_alloc`
+primitives in this document. Phase 1 MUST atomically rename both
+shims:
+
+- `__vow_arena_alloc` → `__vow_malloc`
+- `__vow_arena_free`  → `__vow_free`
+
+across every site that references either name, in a single PR
+step bundled with the Phase 1 runtime additions:
+
+- `vow-runtime/src/lib.rs` — both `pub extern "C" fn`
+  definitions.
+- `vow-runtime/src/lib.rs` — every unit test that calls either
   function directly (`arena_alloc_free_roundtrip` and
-  `arena_alloc_zero_returns_sentinel` at the time of writing;
-  future test additions referring to the old name must follow).
+  `arena_alloc_zero_returns_sentinel` at the time of writing,
+  which reference `__vow_arena_alloc` and `__vow_arena_free`;
+  future test additions referring to either old name must
+  follow).
 - `vow-codegen/src/cranelift_backend.rs` — the `declare_function`
-  import site.
-- `vow-clif-shim/src/lib.rs` — the `declare_function` import site.
+  import sites for both symbols.
+- `vow-clif-shim/src/lib.rs` — the `declare_function` import
+  sites for both symbols.
 
-Every occurrence is mechanical. The rename is a single PR step
-bundled with the Phase 1 runtime additions — not a separate
-cleanup — so that "runtime ships unused by the compiler" is true
-of the *new* symbol at the moment Phase 1 lands, and so CI stays
-green across the rename (tests that referenced the old name are
-renamed in the same commit).
+Every occurrence is mechanical. Bundling the rename with Phase 1
+keeps CI green across the rename (tests that referenced the old
+names are renamed in the same commit) and leaves the
+`__vow_arena_*` symbol space entirely free for the spec's new
+primitives at the moment Phase 1 lands.
 
 Standalone C-level tests + ESBMC verification on the primitive in
 isolation (§10.4). Runtime ships unused by the compiler.
