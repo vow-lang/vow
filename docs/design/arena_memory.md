@@ -944,6 +944,17 @@ RegionId =
                                // hidden `*VowArena` parameters (§5.2)
 ```
 
+**Naming-collision note.** `vow-ir` already defines a
+`pub struct RegionId(pub u32)` newtype at `vow-ir/src/types.rs:15`
+used by the pre-arena effects-tracking machinery (`InstData` and
+`AbstractHeap::Region`). The two definitions cannot coexist under
+the same name. Phase 2 (§15) MUST atomically rename the existing
+newtype to `AbstractRegionId` across `vow-ir` and every
+downstream consumer, freeing the `RegionId` name for the enum in
+this document. The rename is a single mechanical step bundled
+with the Phase 2 IR extension, equivalent in spirit to Phase 1's
+`__vow_arena_alloc → __vow_malloc` rename.
+
 `HiddenRegionIdx` is a zero-based index into the ordered list of
 hidden region parameters that the ABI appends to the function's
 signature. Index `0` always refers to `target_region` when the
@@ -958,10 +969,24 @@ Every heap-producing `Inst` carries a `region: RegionId` field.
 
 ### 12.2. No new opcodes for allocation placement
 
-Existing allocation opcodes (`StringNew`, `VecNew`, etc.) are not
-renamed. The region pass attaches the `RegionId` to the existing
-opcode; lowering consumes the `RegionId` to select the correct
-arena pointer in the emitted call to `__vow_arena_alloc`.
+The existing per-object allocation opcode is `RegionAlloc` (see
+`vow-ir/src/types.rs`, `Opcode::RegionAlloc`), with a companion
+`RegionFree`. No per-type allocation opcode layer (`StringNew`,
+`VecNew`, etc.) exists or is introduced by this document.
+
+Phase 2 (§15) extends `RegionAlloc` with a `region: RegionId`
+field; the region pass attaches that field and lowering consumes
+it to select the correct `*VowArena` header in the emitted
+`__vow_arena_alloc(...)` call. `RegionFree` becomes a no-op in
+Phase 4 (its body is gutted once lowering routes all reclamation
+through arena close) and is deleted entirely in Phase 8.
+
+Note the naming neighborhood: `RegionAlloc` / `RegionFree` are
+**per-object** IR opcodes, distinct from `RegionOpen(BlockId)` /
+`RegionClose(BlockId)` (§12.3), which are **per-arena boundary**
+opcodes. Phase 2 may rename `RegionAlloc` to, e.g., `HeapAlloc` if
+this neighborhood becomes confusing — the choice is a phase-2
+implementation detail and not load-bearing on the spec.
 
 ### 12.3. Block region opcodes
 
@@ -1244,14 +1269,27 @@ isolation (§10.4). Runtime ships unused by the compiler.
 
 ### Phase 2 — IR extension (both compilers, atomic)
 
-**2a (Rust):** `vow-ir` gains `RegionId`, `region: RegionId` field
-on heap-producing `Inst`s, `RegionSummary` in function metadata.
-Module-format version bump. Default every heap inst to
-`RegionId::Root` (conservative placeholder).
+**Symbol-collision note.** `vow-ir/src/types.rs:15` already
+defines `pub struct RegionId(pub u32)` as a newtype used by the
+pre-arena effects-tracking machinery (`InstData` and
+`AbstractHeap::Region`). Phase 2 MUST atomically rename that
+existing newtype to `AbstractRegionId` across `vow-ir` and every
+downstream consumer, freeing the `RegionId` name for the new
+enum defined in §12.1. Bundle this rename with the Phase 2 IR
+additions so CI stays green through the change (equivalent in
+spirit to Phase 1's `__vow_arena_alloc → __vow_malloc` rename).
 
-**2b (self-hosted):** `compiler/ir.vow` gets matching `RegionId`
-representation. `compiler/ast.vow` gains `RegionSummary` slot on
-the function record. `compiler/ir_printer.vow` prints region info.
+**2a (Rust):** after the rename above, `vow-ir` gains the new
+`RegionId` enum (§12.1), a `region: RegionId` field on the
+existing `RegionAlloc` opcode (§12.2), and a `RegionSummary`
+slot in function metadata. Module-format version bump. Default
+every `RegionAlloc` to `RegionId::Root` (conservative
+placeholder; Phase 3 replaces this with inferred values).
+
+**2b (self-hosted):** `compiler/ir.vow` gets matching
+`RegionId` representation. `compiler/ast.vow` gains
+`RegionSummary` slot on the function record.
+`compiler/ir_printer.vow` prints region info.
 
 **Gate:** bootstrap triple still passes; no behavior change.
 
