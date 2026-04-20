@@ -915,13 +915,17 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     eq_result
                 }
             } else {
-                // Prefer the non-i64 operand type so shift semantics match the checker's coerced type rather than defaulting to arithmetic shift.
+                // Only bitwise/shift ops coerce an i64 literal-constant side at the checker; for other ops keep lhs_ty so arithmetic/comparison lowering doesn't reinterpret signedness.
                 let lhs_ty = ctx.inst_ty(lhs_id);
-                let rhs_ty = ctx.inst_ty(rhs_id);
-                let operand_ty = if lhs_ty == rhs_ty || lhs_ty != Ty::I64 {
-                    lhs_ty
+                let is_bitwise = matches!(
+                    op,
+                    BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr
+                );
+                let operand_ty = if is_bitwise && lhs_ty == Ty::I64 {
+                    let rhs_ty = ctx.inst_ty(rhs_id);
+                    if rhs_ty != Ty::I64 { rhs_ty } else { lhs_ty }
                 } else {
-                    rhs_ty
+                    lhs_ty
                 };
                 let (opcode, ty) = binop_opcode(*op, &operand_ty);
                 ctx.emit(opcode, ty, vec![lhs_id, rhs_id], InstData::None, span)

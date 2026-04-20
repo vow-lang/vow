@@ -1157,12 +1157,15 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             }
             return eq_id;
         }
-        // For bitwise/shift ops the checker may have coerced an i64 literal-constant to the other side's type; prefer the non-i64 operand so shift semantics match.
+        // Only bitwise/shift ops coerce an i64 literal-constant side at the checker; for other ops keep lhs_ty so arithmetic/comparison lowering doesn't reinterpret signedness.
         let lhs_ty: i64 = lctx_inst_ty(ctx, lhs_id);
-        let rhs_ty: i64 = lctx_inst_ty(ctx, rhs_id);
         let mut operand_ty: i64 = lhs_ty;
-        if lhs_ty != rhs_ty && lhs_ty == ITY_I64() {
-            operand_ty = rhs_ty;
+        let is_bitwise: bool = op == BINOP_BITAND() || op == BINOP_BITOR() || op == BINOP_XOR() || op == BINOP_SHL() || op == BINOP_SHR();
+        if is_bitwise && lhs_ty == ITY_I64() {
+            let rhs_ty: i64 = lctx_inst_ty(ctx, rhs_id);
+            if rhs_ty != ITY_I64() {
+                operand_ty = rhs_ty;
+            }
         }
         let iop: i64 = binop_opcode(op, operand_ty);
         let rty: i64 = binop_result_ty(op, operand_ty);
