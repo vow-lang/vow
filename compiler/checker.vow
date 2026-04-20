@@ -608,6 +608,15 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 env_emit_error(e, String::from("bitwise operator requires integer operands"), expr_span(a, eid));
                 return CTY_I64();
             }
+            // CTY_I64 + EXPR_LIT_INT together identify an unsuffixed literal: variables/calls have a non-LIT_INT tag, and u64-suffixed literals have CTY_U64 type.
+            let lhs_tag: i64 = expr_tag(a, lhs_eid);
+            let rhs_tag: i64 = expr_tag(a, rhs_eid);
+            if lhs_tid == CTY_I64() && lhs_tag == EXPR_LIT_INT() {
+                return rhs_tid;
+            }
+            if rhs_tid == CTY_I64() && rhs_tag == EXPR_LIT_INT() {
+                return lhs_tid;
+            }
             if lhs_tid != rhs_tid {
                 env_emit_error(e, String::from("bitwise operator requires matching integer types"), expr_span(a, eid));
                 return CTY_I64();

@@ -1,0 +1,43 @@
+// TEST: stdout "ok"
+// Regression test for #184: short-circuit && / || must isolate alloc scope
+// for the RHS. Without the isolation, a short-circuited RHS would free an
+// uninitialized String handle on the merge path, causing invalid-free /
+// double-free crashes.
+module ShortCircuitStringAlloc
+
+fn classify(tn: String) -> i64 {
+    // `||` where RHS allocates a String via String::from.
+    if tn == String::from("String") || tn == String::from("str") {
+        return 0;
+    }
+    // `&&` where RHS allocates a String via String::from.
+    if tn == String::from("i64") && String::from("i64") == tn {
+        return 1;
+    }
+    // `||` with a direct string literal on RHS (tracked alloc + manual free).
+    if tn == String::from("f64") || tn == "f64" {
+        return 3;
+    }
+    2
+}
+
+fn main() -> i32 [io] {
+    let tags: Vec<String> = Vec::new();
+    tags.push(String::from("i64"));
+    tags.push(String::from("String"));
+    tags.push(String::from("other"));
+
+    let mut i: i64 = 0;
+    let mut sum: i64 = 0;
+    while i < tags.len() {
+        sum = sum + classify(tags[i]);
+        i = i + 1;
+    }
+
+    if sum == 3 {
+        print_str(String::from("ok"));
+    } else {
+        print_str(String::from("fail"));
+    }
+    0
+}
