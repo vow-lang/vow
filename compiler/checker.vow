@@ -547,6 +547,41 @@ fn bind_arm_pattern(e: CheckEnv, m: Module, pid: i64, scrutinee_tid: i64) [io] {
     }
 }
 
+// True when the expression is a pure integer-literal constant: a literal, a
+// unary negation of one, or an arithmetic/bitwise binop over two such operands.
+// Used by the bitwise coercion gate so that `ux << (1 + 1)` works the same as
+// `ux << 5` — both sides are unsuffixed literal constants typed as CTY_I64 that
+// should coerce to the other operand's integer type. Walking the expression
+// tree avoids introducing a new type-system axis (an "unresolved literal" type).
+fn expr_is_lit_int_const(a: AstArena, eid: i64) -> bool {
+    let tag: i64 = expr_tag(a, eid);
+    if tag == EXPR_LIT_INT() {
+        return true;
+    }
+    if tag == EXPR_UNOP() {
+        let op: i64 = expr_a(a, eid);
+        if op == UNOP_NEG() {
+            let operand_eid: i64 = expr_b(a, eid);
+            return expr_is_lit_int_const(a, operand_eid);
+        }
+        return false;
+    }
+    if tag == EXPR_BINOP() {
+        let op: i64 = expr_a(a, eid);
+        let is_const_op: bool = op == BINOP_ADD() || op == BINOP_SUB()
+            || op == BINOP_MUL() || op == BINOP_DIV() || op == BINOP_REM()
+            || op == BINOP_BITAND() || op == BINOP_BITOR() || op == BINOP_XOR()
+            || op == BINOP_SHL() || op == BINOP_SHR();
+        if is_const_op {
+            let lhs_eid: i64 = expr_b(a, eid);
+            let rhs_eid: i64 = expr_c(a, eid);
+            return expr_is_lit_int_const(a, lhs_eid) && expr_is_lit_int_const(a, rhs_eid);
+        }
+        return false;
+    }
+    false
+}
+
 fn check_expr(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
     let tid: i64 = check_expr_inner(e, m, eid);
     if tid == CTY_STR() {
@@ -608,13 +643,15 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 env_emit_error(e, String::from("bitwise operator requires integer operands"), expr_span(a, eid));
                 return CTY_I64();
             }
-            // CTY_I64 + EXPR_LIT_INT together identify an unsuffixed literal: variables/calls have a non-LIT_INT tag, and u64-suffixed literals have CTY_U64 type.
-            let lhs_tag: i64 = expr_tag(a, lhs_eid);
-            let rhs_tag: i64 = expr_tag(a, rhs_eid);
-            if lhs_tid == CTY_I64() && lhs_tag == EXPR_LIT_INT() {
+            // An operand typed CTY_I64 whose expression is a pure literal constant
+            // (see expr_is_lit_int_const) acts as an unsuffixed integer literal
+            // and coerces to the other operand's integer type. Variables and
+            // calls short-circuit the predicate, and suffixed literals like
+            // `1u64` carry CTY_U64, so the CTY_I64 check already rules them out.
+            if lhs_tid == CTY_I64() && expr_is_lit_int_const(a, lhs_eid) {
                 return rhs_tid;
             }
-            if rhs_tid == CTY_I64() && rhs_tag == EXPR_LIT_INT() {
+            if rhs_tid == CTY_I64() && expr_is_lit_int_const(a, rhs_eid) {
                 return lhs_tid;
             }
             if lhs_tid != rhs_tid {
