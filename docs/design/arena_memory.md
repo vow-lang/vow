@@ -451,10 +451,35 @@ Iteration:
    contribution.
 3. Update summaries.
 4. Repeat until no summary changes.
-5. At termination, assert that every function's `return_region`
-   is a published variant (no remaining `Uninit`). A remaining
-   `Uninit` means the function has no heap-producing paths that
-   escape; the final summary is `ConstantGlobal`.
+5. At termination, resolve any remaining `Uninit` by examining
+   the function's return *expression* structure (not just its
+   heap-producing instructions):
+   - If the return expression always evaluates to a parameter
+     value (or field of a parameter) at index `i`, the final
+     summary is `AliasOf(i)` — or `AliasOfAny(S)` if multiple
+     parameter sources are possible along different paths. This
+     covers pass-through functions like
+     `fn id(s: String) -> String { s }`, which has no
+     heap-producing instruction in the function body but is
+     semantically an alias-of-parameter return and MUST NOT be
+     summarized as `ConstantGlobal`.
+   - If the return expression is always a `.rodata` literal or a
+     `ConstantGlobal` call, the final summary is
+     `ConstantGlobal`.
+   - If the return is of a scalar type (never a heap-typed
+     value), the final summary is `ConstantGlobal` — scalar
+     returns carry no region obligation.
+   - Otherwise (the function has no statically-determinable
+     return value pattern — dead code, an unreachable-by-design
+     stub, or a truly empty heap-return function), the final
+     summary is `ConstantGlobal` as the benign default.
+
+   The key property is that `Uninit` does **not** silently
+   default to `ConstantGlobal` for every heap-typed return path;
+   alias-only pass-through functions would otherwise be
+   misclassified, causing callers to treat parameter-aliased
+   returns as program-lifetime values and skip required region
+   constraints.
 
 Convergence is guaranteed because the lattice is finite and each
 update is monotone in the tightening direction: `return_region`
@@ -870,7 +895,12 @@ The arena primitive MUST be verified in isolation during Phase 1
   current chunk's usable range.
 - The chunk chain is acyclic.
 - Every chunk is freed by `__vow_arena_close`.
-- `__vow_arena_try_extend` modifies only `cursor`, never copies data.
+- `__vow_arena_try_extend` modifies only `cursor` and (on success)
+  `last_alloc_size`; it never copies data and never changes
+  `last_alloc_start`. On success, `a->last_alloc_size == new_size`
+  (post-condition required by §3.3 so that consecutive extends on
+  the same allocation see the up-to-date size in subsequent
+  `old_size` comparisons).
 
 ## 11. Contracts × regions
 
@@ -1003,11 +1033,22 @@ extensions to the diagnostic shape; this design explicitly does not
 propose a new external wire format. Until then, auxiliary context
 belongs in the rendered `message` string.
 
-The runtime error (`RegionLiteralMutation`) follows the existing
-runtime-error shape used by `VowViolation`, `ArithmeticOverflow`,
-and `IndexOutOfBounds` (see `docs/spec/errors.md`): a compact
-`{"error": "<Name>", ...}` object emitted from `vow-runtime`
-directly to stderr, not routed through `vow-diag`.
+The runtime error (`RegionLiteralMutation`) is emitted from
+`vow-runtime` directly to stderr, not routed through `vow-diag`.
+It uses the same outer envelope as the existing runtime-error
+family in `docs/spec/errors.md` — a compact
+`{"error": "<Name>", ...}` object — but individual runtime errors
+in that family vary in which auxiliary fields they carry:
+
+- Bare envelope (no auxiliary fields beyond `error`):
+  `ArithmeticOverflow`, `UnwrapOnNone`, `IndexOutOfBounds`.
+- Extended envelope: `VowViolation` carries `vow_id`, `blame`,
+  `description`, `file`, `offset`, `values`.
+
+`RegionLiteralMutation` falls into the *extended* group: it
+adds `operation` and `origin` to the envelope (see §13.3).
+"Follows the runtime-error family" here means the outer envelope
+shape, not a strict match with any single existing code.
 
 ### 13.1. `RegionConflict`
 
@@ -1046,11 +1087,12 @@ triggered rejection in rendered form.
 Runtime trap emitted when a mutation operation is attempted on a
 container whose descriptor carries the `VOW_CAP_RODATA` sentinel
 (§6.1). Emitted by `vow-runtime` directly to stderr, not routed
-through `vow-diag`. JSON shape follows the existing runtime-error
-envelope (see `docs/spec/errors.md` — `VowViolation`,
-`ArithmeticOverflow`, `IndexOutOfBounds`, `UnwrapOnNone` are bare
-`{"error": "..."}` objects) and extends it with
-operation-specific fields:
+through `vow-diag`. JSON shape follows the outer runtime-error
+envelope (see `docs/spec/errors.md`: `ArithmeticOverflow`,
+`UnwrapOnNone`, and `IndexOutOfBounds` use bare `{"error": "..."}`
+objects; `VowViolation` uses the same envelope with auxiliary
+fields `vow_id`/`blame`/`description`/`file`/`offset`/`values`)
+and extends it with operation-specific fields:
 
 ```json
 {
@@ -1329,9 +1371,18 @@ during implementation:
 - **Incremental recompilation on summary change.** Today
   `build/vowc` rebuilds everything; when incremental builds matter,
   summary-diff propagation becomes load-bearing.
-- **Root-region OOM policy.** `pin_to_root` of a very large value
-  could OOM. Runtime policy: trap with a structured error.
-  Documentation needed; behavior identical to existing OOM paths.
+- **Root-region OOM — external error envelope.** The OOM policy
+  itself is **settled**: any arena operation whose underlying
+  `malloc` fails (initial chunk in `__vow_arena_open`, fallback
+  chunk in `__vow_arena_alloc`, `pin_to_root` into the root
+  region) traps with a structured runtime error. The trap is not
+  recoverable from within Vow. The open piece that remains is
+  the **exact JSON wire shape** of the OOM error envelope — it
+  is not yet documented in `docs/spec/errors.md` and is expected
+  to be added alongside Phase 1 when the primitive ships. §3.3
+  refers to this policy as "a structured OOM error" on that
+  basis; the guarantee is the trap-and-exit semantics, not any
+  particular field layout.
 - **Verifier `--unwind` auto-tuning.** The default of 4 may need
   raising for deeply nested calls or accumulating loops. `VerifyLimits`
   exposes the knob; defaults may be revised after Phase 9.
