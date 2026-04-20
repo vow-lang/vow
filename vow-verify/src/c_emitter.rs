@@ -2970,7 +2970,9 @@ mod tests {
         );
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         // Exactly one shared nondet declaration for the (1, 3) pair.
-        let decls = c.matches("_Bool __str_eq_1_3 = __VERIFIER_nondet_bool();").count();
+        let decls = c
+            .matches("_Bool __str_eq_1_3 = __VERIFIER_nondet_bool();")
+            .count();
         assert_eq!(decls, 1, "expected exactly one shared nondet decl: {c}");
         // Both call sites reference the same cached name.
         assert!(
