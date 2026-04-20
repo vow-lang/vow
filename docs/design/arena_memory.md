@@ -187,11 +187,17 @@ Updates `cursor` and `chunk_end` to the new chunk. Also records
 `1` (success) if and only if `ptr == a->last_alloc_start` AND
 `a->last_alloc_size == old_size` AND the current chunk has
 `(new_size - old_size)` bytes remaining after the existing
-allocation. On success, bumps the cursor by the additional bytes
-and returns `1`; the caller may treat the allocation as extended
-in place without copying. On failure, returns `0`; the caller MUST
-fall back to a fresh `__vow_arena_alloc` + `memcpy`. Callers test
-the result with `!= 0`.
+allocation. On success, bumps the cursor by the additional bytes,
+**updates `a->last_alloc_size` to `new_size`**, and returns `1`;
+the caller may treat the allocation as extended in place without
+copying. The `last_alloc_size` update is required so that a
+subsequent consecutive `try_extend` on the same allocation (e.g.,
+two back-to-back `Vec::push` calls hitting the fast path) sees
+the post-extend size in its `old_size` comparison rather than the
+stale pre-extend size. On failure, returns `0` and leaves the
+arena header unchanged; the caller MUST fall back to a fresh
+`__vow_arena_alloc` + `memcpy`. Callers test the result with
+`!= 0`.
 
 If `__vow_arena_alloc`'s fallback `malloc` for a new chunk fails,
 the runtime traps with the same structured OOM error as
@@ -403,35 +409,74 @@ The summary lattice, per field:
 
 Iteration:
 
-1. **Seed** every function in the SCC with the most-permissive
-   summary: `return_region = ConstantGlobal` (no caller-side region
-   work needed); `store_effects = {}` (no caller-side obligations);
-   `param_regions` are free placeholders.
+1. **Seed** every function in the SCC with the bottom-of-lattice
+   unknown state. Because `return_region`'s published variants
+   (`ConstantGlobal`, `AliasOf(i)`, `AliasOfAny(S)`,
+   `FreshInCaller`) form a semilattice with incomparable branches
+   (§4.2), no published variant is a sound seed — seeding at any
+   of them forces the first join to that variant or above, which
+   would over-approximate functions whose true summary sits on a
+   parallel branch. The region pass therefore uses an internal
+   `Uninit` variant as the bottom element during SCC iteration:
+
+   ```
+   InternalRegionConstraint = Uninit | <any published variant>
+   ```
+
+   `Uninit` satisfies `Uninit ⊔ x = x` for every published
+   variant `x`. It MUST NOT be written to module metadata and
+   MUST NOT appear in any stored summary after iteration
+   terminates; every function's final `return_region` is a
+   published variant.
+
+   Seed every function in the SCC with
+   `return_region = Uninit`; `store_effects = {}` (the already-
+   bottom state for set inclusion); `param_regions` are free
+   placeholders.
 2. Re-analyze each function with the current summaries. Each
    re-analysis may tighten the function's own summary —
-   `return_region` downward toward `FreshInCaller`, `store_effects`
-   upward by adding newly discovered effects.
+   `return_region` moves upward from `Uninit` toward
+   `FreshInCaller` via the join rules in §4.2; `store_effects`
+   grows by adding newly discovered effects. Use `⊔` to combine
+   the current summary with every newly discovered escape's
+   contribution.
 3. Update summaries.
 4. Repeat until no summary changes.
+5. At termination, assert that every function's `return_region`
+   is a published variant (no remaining `Uninit`). A remaining
+   `Uninit` means the function has no heap-producing paths that
+   escape; the final summary is `ConstantGlobal`.
 
 Convergence is guaranteed because the lattice is finite and each
 update is monotone in the tightening direction: `return_region`
-never relaxes from `FreshInCaller` back to `ConstantGlobal`, and
+never relaxes from `FreshInCaller` back toward `Uninit`, and
 `store_effects` never shrinks. The final summaries represent the
 most permissive assumption consistent with all observed escapes —
 exactly the information callers need to satisfy §4.1, step 4.
 
-This direction is mandatory. Starting `return_region` from the
-most-restrictive end — i.e., seeding `return_region = FreshInCaller`
-instead of `ConstantGlobal` — is **not** valid. `return_region`
-only tightens and never relaxes; a `FreshInCaller` seed would
-permanently over-approximate every function in the SCC as requiring
-a caller-provided region, even when the true summary is
-`ConstantGlobal` or `AliasOf(i)`. Every such function would be
-emitted with an incorrect hidden `*VowArena` parameter, producing
-ABI drift between the inferred summary and actual behavior and
-suppressing `RegionConflict` diagnostics at call sites that rely on
-the true summary to detect a constraint violation.
+This direction is mandatory. Starting `return_region` from any
+non-bottom point is **not** valid:
+
+- Seeding at `FreshInCaller` (most restrictive) permanently
+  over-approximates every SCC member as requiring a caller-
+  provided region, even when the true summary is
+  `ConstantGlobal` or `AliasOf(i)`. Every such function would
+  be emitted with an incorrect hidden `*VowArena` parameter,
+  producing ABI drift and suppressing `RegionConflict`
+  diagnostics at call sites that rely on the true summary.
+- Seeding at `ConstantGlobal` (a non-bottom element) does **not**
+  fix this: because `ConstantGlobal` and `AliasOf(i)` are
+  incomparable (§4.2), a recursive function whose true summary
+  is `AliasOf(i)` causes the first join to compute
+  `ConstantGlobal ⊔ AliasOf(i) = FreshInCaller`, and since
+  summaries only tighten, `AliasOf(i)` becomes unreachable and
+  the function gets a spurious hidden arena parameter.
+- Seeding at `AliasOf(i)` / `AliasOfAny(S)` fails symmetrically
+  against a true `ConstantGlobal` summary.
+
+Only `Uninit` is a sound seed; every other starting point is
+biased toward one branch of the semilattice and cannot reach the
+other.
 
 `store_effects` has the opposite direction but the same hazard on
 the wrong end: it only grows and never shrinks, so it must be
@@ -870,10 +915,17 @@ arena pointer in the emitted call to `__vow_arena_alloc`.
 
 Two new IR opcodes mark region boundaries:
 
-- `RegionOpen(BlockId)` — emitted at block entry when the block has
-  at least one allocation assigned to its region.
-- `RegionClose(BlockId)` — emitted at all exits of the block
-  (normal exit, `break`, `return`).
+- `RegionOpen(BlockId)` — emitted at block entry when the block
+  region is non-empty under the four-criterion rule in §3.5.
+- `RegionClose(BlockId)` — emitted at **every** exit from the
+  block, enumerated exhaustively: normal fall-through to the
+  block's end, `break`, `continue`, `return`, and any other
+  control-flow edge that leaves the block (e.g., early exits
+  from `match` arms). `continue` in particular MUST close every
+  enclosing block region up to but not including the target
+  loop's body — otherwise a loop-body arena header would stay
+  open across iterations, turning per-iteration reclamation into
+  function-lifetime retention in long-running loops.
 
 Empty-region blocks do not emit these opcodes.
 
@@ -1059,12 +1111,23 @@ import in `vow-codegen/src/cranelift_backend.rs` and
 `vow-clif-shim/src/lib.rs`). That older function is a global-allocator
 shim and is unrelated to the arena-per-scope model. The two symbols
 cannot coexist. Phase 1 MUST atomically rename the older shim to
-`__vow_malloc` across `vow-runtime`, `vow-codegen`, and
-`vow-clif-shim`, freeing the `__vow_arena_alloc` symbol for the new
-signature in this document. The rename is a single mechanical PR
-step bundled with the Phase 1 runtime additions — not a separate
-cleanup — so that "runtime ships unused by the compiler" is true of
-the *new* symbol at the moment Phase 1 lands.
+`__vow_malloc` across every site that references it by name:
+
+- `vow-runtime/src/lib.rs` — the `pub extern "C" fn` definition.
+- `vow-runtime/src/lib.rs` — every unit test that calls the
+  function directly (`arena_alloc_free_roundtrip` and
+  `arena_alloc_zero_returns_sentinel` at the time of writing;
+  future test additions referring to the old name must follow).
+- `vow-codegen/src/cranelift_backend.rs` — the `declare_function`
+  import site.
+- `vow-clif-shim/src/lib.rs` — the `declare_function` import site.
+
+Every occurrence is mechanical. The rename is a single PR step
+bundled with the Phase 1 runtime additions — not a separate
+cleanup — so that "runtime ships unused by the compiler" is true
+of the *new* symbol at the moment Phase 1 lands, and so CI stays
+green across the rename (tests that referenced the old name are
+renamed in the same commit).
 
 Standalone C-level tests + ESBMC verification on the primitive in
 isolation (§10.4). Runtime ships unused by the compiler.
