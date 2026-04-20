@@ -148,20 +148,23 @@ the tail is `NULL`.
 The following C-callable primitives MUST be provided by `vow-runtime`:
 
 ```c
-void  __vow_arena_open(struct VowArena* a);
-void  __vow_arena_close(struct VowArena* a);
-void* __vow_arena_alloc(struct VowArena* a, uintptr_t bytes, uintptr_t align);
-i64   __vow_arena_try_extend(struct VowArena* a, void* ptr,
-                             uintptr_t old_size, uintptr_t new_size);
+void     __vow_arena_open(struct VowArena* a);
+void     __vow_arena_close(struct VowArena* a);
+void*    __vow_arena_alloc(struct VowArena* a, uintptr_t bytes, uintptr_t align);
+int64_t  __vow_arena_try_extend(struct VowArena* a, void* ptr,
+                                uintptr_t old_size, uintptr_t new_size);
 ```
 
-Return-type note: `__vow_arena_try_extend` returns `i64` (`1` for
-success, `0` for failure), not `bool`. Rust's `bool` has a 1-byte C
-ABI; the self-hosted compiler's FFI shim (see `vow-clif-shim`) uses
-`i64` uniformly for boolean returns to avoid the ABI-mismatch class
-documented in `CLAUDE.md` under "Self-Hosted Compiler Gotchas"
-(`__vow_string_eq` precedent). Every boolean-valued runtime primitive
-in this spec MUST follow the same convention.
+Return-type note: `__vow_arena_try_extend` returns `int64_t` (`1`
+for success, `0` for failure), not `bool`. Rust's `bool` has a
+1-byte C ABI; the self-hosted compiler's FFI shim (see
+`vow-clif-shim`) uses 64-bit integer returns uniformly for boolean
+values to avoid the ABI-mismatch class documented in `CLAUDE.md`
+under "Self-Hosted Compiler Gotchas" (`__vow_string_eq` precedent).
+Every boolean-valued runtime primitive in this spec MUST follow the
+same convention. In the C header the type is written `int64_t`
+(from `<stdint.h>`); in the Rust definition and in Vow FFI bindings
+the corresponding `i64` ABI-compatible type is used.
 
 **`__vow_arena_open(a)`**: initializes `*a` to an arena with one
 freshly-allocated chunk of 4 KB plus the 8-byte next-chunk link
@@ -298,18 +301,52 @@ in module metadata only; there is no surface syntax.
 
 Mutually recursive functions form strongly-connected components in
 the call graph. Within an SCC, summaries MUST be computed via
-monotone fixed-point iteration:
+monotone fixed-point iteration over the **constraint lattice** —
+note the direction carefully, because a naive reading of §4.2
+suggests the wrong direction.
 
-1. Seed every function in the SCC with a conservative summary:
-   `return_region = FreshInCaller` for heap returns; empty store
-   effects; `param_regions` are free variables.
-2. Re-analyze each function with the current summaries.
+The summary lattice, per field:
+
+- `return_region`: partially ordered from most permissive
+  (`ConstantGlobal`) to most restrictive (`FreshInCaller`). Summaries
+  tighten downward (become more restrictive) as more escape sites are
+  discovered.
+- `store_effects`: ordered by set inclusion — the empty set is the
+  most permissive (no caller obligations), and each added
+  `StoreEffect` is strictly more restrictive. Summaries tighten
+  upward (grow) as more escape-via-store sites are discovered.
+- `param_regions`: placeholders; substitution happens at call sites
+  and does not participate in the SCC lattice.
+
+Iteration:
+
+1. **Seed** every function in the SCC with the most-permissive
+   summary: `return_region = ConstantGlobal` (no caller-side region
+   work needed); `store_effects = {}` (no caller-side obligations);
+   `param_regions` are free placeholders.
+2. Re-analyze each function with the current summaries. Each
+   re-analysis may tighten the function's own summary —
+   `return_region` downward toward `FreshInCaller`, `store_effects`
+   upward by adding newly discovered effects.
 3. Update summaries.
 4. Repeat until no summary changes.
 
-Convergence is guaranteed because the `RegionConstraint` lattice is
-finite and the update is monotone (summaries only become more
-permissive).
+Convergence is guaranteed because the lattice is finite and each
+update is monotone in the tightening direction: `return_region`
+never relaxes from `FreshInCaller` back to `ConstantGlobal`, and
+`store_effects` never shrinks. The final summaries represent the
+most permissive assumption consistent with all observed escapes —
+exactly the information callers need to satisfy §4.1, step 4.
+
+This direction is mandatory. Starting from the most-restrictive
+end — e.g., empty `store_effects` combined with `return_region =
+FreshInCaller` — is **not** valid: an empty effect set is already
+the most-permissive state, and monotone convergence cannot add to
+it. Any implementation that seeds store_effects as empty and claims
+"summaries only become more permissive" will silently suppress real
+`RegionConflict` diagnostics, because a fresh constraint discovered
+during re-analysis cannot be incorporated without breaking
+monotonicity.
 
 ### 4.4. Rejection, not over-approximation
 
@@ -371,13 +408,41 @@ For each function:
   intended region.
 - `ConstantGlobal` return: ABI adds no hidden parameter. Return
   points into `.rodata` or the root region.
-- Scalar-returning functions: no hidden parameter regardless of
-  parameters. **Exception:** `main` always receives `target_region`
-  regardless of its return type; see §5.4.
+- Scalar-returning functions: no hidden parameter **unless** the
+  summary has non-empty `store_effects` whose target region is not
+  already reachable from a parameter (see below). **Exception:**
+  `main` always receives `target_region` regardless of its return
+  type; see §5.4.
 
-Multiple escaping heap outputs require one `target_region` per
-distinct target region in the summary. In practice this is almost
-always one.
+**Store-effect-driven hidden region parameters.** A function's
+hidden-region parameter set is a projection of the full summary,
+not of the return type alone. For every distinct target region in
+the summary — whether introduced by `return_region = FreshInCaller`
+or by a `StoreEffect` that allocates into a region not already
+carried by an explicit parameter — the ABI adds one hidden
+`*VowArena` parameter. Common cases:
+
+- Pure heap-returning function: one hidden `target_region`
+  (FreshInCaller).
+- Scalar-returning function that stores fresh allocations into a
+  `Vec<T>` / `HashMap<K,V>` / struct passed as a parameter: zero
+  hidden parameters — the target region is reachable through the
+  container parameter's descriptor.
+- Scalar-returning function that stores fresh allocations into a
+  region that is neither its return target nor reachable through
+  an existing parameter: one hidden region parameter per distinct
+  such target. This case is unusual but MUST be emitted; otherwise
+  the callee has no ABI mechanism to route the allocation and
+  would silently alias into its own block region, breaking the
+  store-effect contract.
+- Multiple escaping heap outputs: one `target_region` per distinct
+  target region. In practice this is almost always one.
+
+The hidden-region parameter set for a function is therefore
+determined by taking the union of `{FreshInCaller target}` (if
+applicable) and `{target regions of store_effects whose region is
+not reachable via any explicit parameter}`, then emitting one
+`*VowArena` parameter per element.
 
 ### 5.3. Within-function allocation
 
@@ -761,7 +826,7 @@ outlives `region(I)`. `span` names the escaping value.
 ```json
 {
   "error_code": "RegionConflict",
-  "message": "value `v` must outlive region(a) but would be stored into region(b), which closes earlier",
+  "message": "value `v` is placed in region(b) which closes before region(a), the container it is stored into; move the allocation to a wider scope",
   "severity": "error",
   "span": { "file": "f.vow", "offset": 1024, "length": 3 }
 }
@@ -877,6 +942,21 @@ Land this document as a reviewed PR. Cross-reference from
 Add `__vow_arena_open`, `__vow_arena_close`, `__vow_arena_alloc`,
 `__vow_arena_try_extend` to `vow-runtime`. Implement the VowArena
 header, chunk-chained bump allocator, 4 KB chunks.
+
+**Symbol-collision note.** The existing `vow-runtime` already
+exports a function named `__vow_arena_alloc` with a different
+signature: `pub extern "C" fn __vow_arena_alloc(size: usize, align:
+usize) -> *mut u8` (see `vow-runtime/src/lib.rs`, declared as an
+import in `vow-codegen/src/cranelift_backend.rs` and
+`vow-clif-shim/src/lib.rs`). That older function is a global-allocator
+shim and is unrelated to the arena-per-scope model. The two symbols
+cannot coexist. Phase 1 MUST atomically rename the older shim to
+`__vow_malloc` across `vow-runtime`, `vow-codegen`, and
+`vow-clif-shim`, freeing the `__vow_arena_alloc` symbol for the new
+signature in this document. The rename is a single mechanical PR
+step bundled with the Phase 1 runtime additions — not a separate
+cleanup — so that "runtime ships unused by the compiler" is true of
+the *new* symbol at the moment Phase 1 lands.
 
 Standalone C-level tests + ESBMC verification on the primitive in
 isolation (§10.4). Runtime ships unused by the compiler.
