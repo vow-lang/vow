@@ -280,9 +280,11 @@ The design target is arena-per-scope allocation:
 
 The language supports linear types for resources that must be consumed exactly once, such as file handles or other external capabilities. `linear struct` values are tracked by the type checker and must be consumed exactly once.
 
+The concrete semantics, ABI, runtime representation, and migration plan for arena-per-scope are specified in [`docs/design/arena_memory.md`](design/arena_memory.md), which is normative for this section.
+
 Status:
 
-- Arena-per-scope memory model: `Target`
+- Arena-per-scope memory model: `In Progress` (spec: `docs/design/arena_memory.md`)
 - Linear types as a resource discipline: `Implemented`
 - Current runtime representation relies on explicit allocation rather than the full intended region model: `Partial`
 
@@ -462,7 +464,7 @@ This section records the current maturity of major design areas without changing
 | Refinement type predicates in verification | Partial | Syntax exists, full semantic forwarding is incomplete |
 | Effect propagation for user-defined functions | Implemented | Core effect checking works |
 | Builtin panic/unsafe effect coverage | Partial | Not all builtins are yet modeled precisely |
-| Arena-per-scope memory model | Target | Intended design direction |
+| Arena-per-scope memory model | In Progress | Spec: `docs/design/arena_memory.md` |
 | Linear resource types | Implemented | `linear struct` with single-consumption tracking |
 | Debug mode contract and boundary traces | Partial | Available but not yet a full execution trace facility |
 | Mandatory contracts on extern declarations | Target | FFI design boundary not yet fully enforced |
