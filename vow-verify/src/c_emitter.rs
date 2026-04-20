@@ -783,14 +783,15 @@ fn emit_inst(
                     "__vow_string_eq" => {
                         let a = inst.args[0].0;
                         let b = inst.args[1].0;
-                        out.push_str(&format!(
-                            "  v{id} = (v{a}.len == v{b}.len);\n\
-                             \x20 if (v{id}) {{\n\
-                             \x20   for (int64_t __i = 0; __i < v{a}.len; __i++) {{\n\
-                             \x20     if (v{a}.data[__i] != v{b}.data[__i]) {{ v{id} = 0; break; }}\n\
-                             \x20   }}\n\
-                             \x20 }}\n"
-                        ));
+                        if a == b {
+                            out.push_str(&format!("  v{id} = 1;\n"));
+                        } else {
+                            let lo = a.min(b);
+                            let hi = a.max(b);
+                            out.push_str(&format!(
+                                "  v{id} = (v{a}.len == v{b}.len) ? __str_eq_{lo}_{hi} : 0;\n"
+                            ));
+                        }
                     }
                     "__vow_string_contains" => {
                         let h = inst.args[0].0;
@@ -1111,23 +1112,22 @@ pub fn emit_c_function_full(
                 let id = inst.id.0;
                 if let Some(&(_, cl)) = arg_var_map.iter().find(|(ir, _)| *ir == idx) {
                     if vec_vars.contains(&id) {
+                        let vec_max = limits.vec_max;
                         out.push_str(&format!(
                             "  __vow_vec_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < INT64_MAX);\n\
-                             \x20 v{id}.data = (v{id}.len > 0) ? (int64_t*)malloc(sizeof(int64_t) * (size_t)v{id}.len) : (int64_t*)0;\n"
+                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {vec_max});\n"
                         ));
                     } else if string_vars.contains(&id) {
+                        let string_max = limits.string_max;
                         out.push_str(&format!(
                             "  __vow_string_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < INT64_MAX);\n\
-                             \x20 v{id}.data = (v{id}.len > 0) ? (int8_t*)malloc((size_t)v{id}.len) : (int8_t*)0;\n"
+                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {string_max});\n"
                         ));
                     } else if hashmap_vars.contains(&id) {
+                        let hashmap_max = limits.hashmap_max;
                         out.push_str(&format!(
                             "  __vow_hashmap_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < INT64_MAX);\n\
-                             \x20 v{id}.keys = (v{id}.len > 0) ? (int64_t*)malloc(sizeof(int64_t) * (size_t)v{id}.len) : (int64_t*)0;\n\
-                             \x20 v{id}.vals = (v{id}.len > 0) ? (int64_t*)malloc(sizeof(int64_t) * (size_t)v{id}.len) : (int64_t*)0;\n"
+                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {hashmap_max});\n"
                         ));
                     } else if option_vars.contains(&id) {
                         out.push_str(&format!("  __vow_option_t v{};\n  v{}.tag = 0;\n", id, id));
@@ -1200,6 +1200,39 @@ pub fn emit_c_function_full(
         ups_sources.sort();
         for src in ups_sources {
             out.push_str(&format!("  int64_t __ups_{};\n", src));
+        }
+    }
+
+    // Per-pair nondet cache for abstract __vow_string_eq. A fresh
+    // __VERIFIER_nondet_bool() on every call would let ESBMC pick different
+    // values for the same (a,b) pair, breaking determinism (e.g. body proves
+    // `a.eq(b)` then `ensures: a.eq(b)` fails). Declare one shared bool per
+    // unordered pair (min, max) and reuse it at every call site.
+    {
+        let mut eq_pairs: Vec<(u32, u32)> = Vec::new();
+        for block in &func.blocks {
+            for inst in &block.insts {
+                if inst.opcode == Opcode::Call
+                    && let InstData::CallExtern(ref name) = inst.data
+                    && name == "__vow_string_eq"
+                    && inst.args.len() == 2
+                {
+                    let a = inst.args[0].0;
+                    let b = inst.args[1].0;
+                    if a != b {
+                        let pair = (a.min(b), a.max(b));
+                        if !eq_pairs.contains(&pair) {
+                            eq_pairs.push(pair);
+                        }
+                    }
+                }
+            }
+        }
+        eq_pairs.sort();
+        for (lo, hi) in eq_pairs {
+            out.push_str(&format!(
+                "  _Bool __str_eq_{lo}_{hi} = __VERIFIER_nondet_bool();\n"
+            ));
         }
     }
 
@@ -2495,6 +2528,156 @@ mod tests {
     }
 
     #[test]
+    fn emit_getarg_container_bounds() {
+        use vow_ir::InstId;
+        // A String parameter: GetArg(0) followed by __vow_string_len to mark it.
+        let str_func = Function {
+            id: FuncId(0),
+            name: "str_arg".to_string(),
+            params: vec![Ty::Ptr],
+            param_names: vec!["s".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(0)],
+                        data: InstData::CallExtern("__vow_string_len".to_string()),
+                        origin: sp(),
+                    },
+                    inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+        };
+        let c = emit_c_function(&str_func, &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            c.contains("__ESBMC_assume(v0.len >= 0 && v0.len <= 256)"),
+            "GetArg bound must include len == string_max (reachable via push_byte): {c}"
+        );
+        assert!(
+            !c.contains("INT64_MAX"),
+            "GetArg bound must not use INT64_MAX: {c}"
+        );
+        assert!(
+            !c.contains("v0.data = "),
+            "GetArg must not assign to fixed-array data field: {c}"
+        );
+
+        // A Vec<i64> parameter: GetArg(0) followed by __vow_vec_len.
+        let vec_func = Function {
+            id: FuncId(0),
+            name: "vec_arg".to_string(),
+            params: vec![Ty::Ptr],
+            param_names: vec!["v".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(0)],
+                        data: InstData::CallExtern("__vow_vec_len".to_string()),
+                        origin: sp(),
+                    },
+                    inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+        };
+        let c = emit_c_function(&vec_func, &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            c.contains("__ESBMC_assume(v0.len >= 0 && v0.len <= 128)"),
+            "GetArg bound must include len == vec_max: {c}"
+        );
+        assert!(!c.contains("v0.data = "), "no data assignment: {c}");
+
+        // A HashMap parameter: GetArg(0) followed by __vow_map_len.
+        let map_func = Function {
+            id: FuncId(0),
+            name: "map_arg".to_string(),
+            params: vec![Ty::Ptr],
+            param_names: vec!["m".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(0)],
+                        data: InstData::CallExtern("__vow_map_len".to_string()),
+                        origin: sp(),
+                    },
+                    inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+        };
+        let c = emit_c_function(&map_func, &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            c.contains("__ESBMC_assume(v0.len >= 0 && v0.len <= 64)"),
+            "GetArg bound must include len == hashmap_max: {c}"
+        );
+        assert!(!c.contains("v0.keys = "), "no keys assignment: {c}");
+        assert!(!c.contains("v0.vals = "), "no vals assignment: {c}");
+    }
+
+    #[test]
+    fn emit_string_eq_self_comparison_is_reflexive() {
+        use vow_ir::InstId;
+        let func = make_func(
+            "self_eq",
+            vec![],
+            Ty::Bool,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                Inst {
+                    id: InstId(1),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                },
+                Inst {
+                    id: InstId(2),
+                    opcode: Opcode::Call,
+                    ty: Ty::Bool,
+                    args: vec![InstId(1), InstId(1)],
+                    data: InstData::CallExtern("__vow_string_eq".to_string()),
+                    origin: sp(),
+                },
+                inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            c.contains("v2 = 1;"),
+            "string_eq(x, x) must be reflexive (emit `= 1`): {c}"
+        );
+        assert!(
+            !c.contains("__VERIFIER_nondet_bool"),
+            "self-compare should not use nondet: {c}"
+        );
+    }
+
+    #[test]
     fn emit_string_from_cstr() {
         use vow_ir::InstId;
         let func = make_func(
@@ -2727,12 +2910,78 @@ mod tests {
         );
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
-            c.contains("v4 = (v1.len == v3.len)"),
-            "string eq length check: {c}"
+            c.contains("_Bool __str_eq_1_3 = __VERIFIER_nondet_bool();"),
+            "string eq must declare shared per-pair nondet: {c}"
         );
         assert!(
-            c.contains("v1.data[__i] != v3.data[__i]"),
-            "string eq byte comparison: {c}"
+            c.contains("v4 = (v1.len == v3.len) ? __str_eq_1_3 : 0"),
+            "string eq abstract model must reference shared nondet: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_string_eq_is_deterministic_per_pair() {
+        // Two __vow_string_eq calls on the same (a, b) pair must read the same
+        // cached nondet — otherwise ESBMC can pick different values and reject
+        // contracts like `ensures: a.eq(b)` after the body established it.
+        use vow_ir::InstId;
+        let func = make_func(
+            "two_compares",
+            vec![],
+            Ty::Bool,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                Inst {
+                    id: InstId(1),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                },
+                inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(2)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                },
+                Inst {
+                    id: InstId(4),
+                    opcode: Opcode::Call,
+                    ty: Ty::Bool,
+                    args: vec![InstId(1), InstId(3)],
+                    data: InstData::CallExtern("__vow_string_eq".to_string()),
+                    origin: sp(),
+                },
+                // Second call with swapped arg order — must hash to the same pair.
+                Inst {
+                    id: InstId(5),
+                    opcode: Opcode::Call,
+                    ty: Ty::Bool,
+                    args: vec![InstId(3), InstId(1)],
+                    data: InstData::CallExtern("__vow_string_eq".to_string()),
+                    origin: sp(),
+                },
+                inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        // Exactly one shared nondet declaration for the (1, 3) pair.
+        let decls = c
+            .matches("_Bool __str_eq_1_3 = __VERIFIER_nondet_bool();")
+            .count();
+        assert_eq!(decls, 1, "expected exactly one shared nondet decl: {c}");
+        // Both call sites reference the same cached name.
+        assert!(
+            c.contains("v4 = (v1.len == v3.len) ? __str_eq_1_3 : 0"),
+            "first eq call must use cached nondet: {c}"
+        );
+        assert!(
+            c.contains("v5 = (v3.len == v1.len) ? __str_eq_1_3 : 0"),
+            "swapped-order eq call must use the same cached nondet: {c}"
         );
     }
 

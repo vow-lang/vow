@@ -1,0 +1,25 @@
+module StringParamVerify
+
+fn str_len_nonneg(s: String) -> i64 vow {
+  ensures: result >= 0
+} {
+  s.len()
+}
+
+fn vec_len_nonneg(v: Vec<i64>) -> i64 vow {
+  ensures: result >= 0
+} {
+  v.len()
+}
+
+fn map_len_nonneg(m: HashMap<i64, i64>) -> i64 vow {
+  ensures: result >= 0
+} {
+  m.len()
+}
+
+fn main() -> i32 [io] {
+  let s: String = String::from("hello");
+  print_i64(str_len_nonneg(s));
+  0
+}
