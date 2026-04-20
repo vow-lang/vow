@@ -786,8 +786,10 @@ fn emit_inst(
                         if a == b {
                             out.push_str(&format!("  v{id} = 1;\n"));
                         } else {
+                            let lo = a.min(b);
+                            let hi = a.max(b);
                             out.push_str(&format!(
-                                "  v{id} = (v{a}.len == v{b}.len) ? __VERIFIER_nondet_bool() : 0;\n"
+                                "  v{id} = (v{a}.len == v{b}.len) ? __str_eq_{lo}_{hi} : 0;\n"
                             ));
                         }
                     }
@@ -1198,6 +1200,39 @@ pub fn emit_c_function_full(
         ups_sources.sort();
         for src in ups_sources {
             out.push_str(&format!("  int64_t __ups_{};\n", src));
+        }
+    }
+
+    // Per-pair nondet cache for abstract __vow_string_eq. A fresh
+    // __VERIFIER_nondet_bool() on every call would let ESBMC pick different
+    // values for the same (a,b) pair, breaking determinism (e.g. body proves
+    // `a.eq(b)` then `ensures: a.eq(b)` fails). Declare one shared bool per
+    // unordered pair (min, max) and reuse it at every call site.
+    {
+        let mut eq_pairs: Vec<(u32, u32)> = Vec::new();
+        for block in &func.blocks {
+            for inst in &block.insts {
+                if inst.opcode == Opcode::Call
+                    && let InstData::CallExtern(ref name) = inst.data
+                    && name == "__vow_string_eq"
+                    && inst.args.len() == 2
+                {
+                    let a = inst.args[0].0;
+                    let b = inst.args[1].0;
+                    if a != b {
+                        let pair = (a.min(b), a.max(b));
+                        if !eq_pairs.contains(&pair) {
+                            eq_pairs.push(pair);
+                        }
+                    }
+                }
+            }
+        }
+        eq_pairs.sort();
+        for (lo, hi) in eq_pairs {
+            out.push_str(&format!(
+                "  _Bool __str_eq_{lo}_{hi} = __VERIFIER_nondet_bool();\n"
+            ));
         }
     }
 
@@ -2875,8 +2910,76 @@ mod tests {
         );
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
-            c.contains("v4 = (v1.len == v3.len) ? __VERIFIER_nondet_bool() : 0"),
-            "string eq abstract model: {c}"
+            c.contains("_Bool __str_eq_1_3 = __VERIFIER_nondet_bool();"),
+            "string eq must declare shared per-pair nondet: {c}"
+        );
+        assert!(
+            c.contains("v4 = (v1.len == v3.len) ? __str_eq_1_3 : 0"),
+            "string eq abstract model must reference shared nondet: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_string_eq_is_deterministic_per_pair() {
+        // Two __vow_string_eq calls on the same (a, b) pair must read the same
+        // cached nondet — otherwise ESBMC can pick different values and reject
+        // contracts like `ensures: a.eq(b)` after the body established it.
+        use vow_ir::InstId;
+        let func = make_func(
+            "two_compares",
+            vec![],
+            Ty::Bool,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                Inst {
+                    id: InstId(1),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                },
+                inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(2)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                },
+                Inst {
+                    id: InstId(4),
+                    opcode: Opcode::Call,
+                    ty: Ty::Bool,
+                    args: vec![InstId(1), InstId(3)],
+                    data: InstData::CallExtern("__vow_string_eq".to_string()),
+                    origin: sp(),
+                },
+                // Second call with swapped arg order — must hash to the same pair.
+                Inst {
+                    id: InstId(5),
+                    opcode: Opcode::Call,
+                    ty: Ty::Bool,
+                    args: vec![InstId(3), InstId(1)],
+                    data: InstData::CallExtern("__vow_string_eq".to_string()),
+                    origin: sp(),
+                },
+                inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        // Exactly one shared nondet declaration for the (1, 3) pair.
+        let decls = c.matches("_Bool __str_eq_1_3 = __VERIFIER_nondet_bool();").count();
+        assert_eq!(decls, 1, "expected exactly one shared nondet decl: {c}");
+        // Both call sites reference the same cached name.
+        assert!(
+            c.contains("v4 = (v1.len == v3.len) ? __str_eq_1_3 : 0"),
+            "first eq call must use cached nondet: {c}"
+        );
+        assert!(
+            c.contains("v5 = (v3.len == v1.len) ? __str_eq_1_3 : 0"),
+            "swapped-order eq call must use the same cached nondet: {c}"
         );
     }
 
