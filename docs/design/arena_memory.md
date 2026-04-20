@@ -207,10 +207,30 @@ if the runtime is deterministic.
 ### 3.5. Empty-region elision
 
 A block region with no heap allocations MUST NOT emit any arena
-operations. The region pass tracks which blocks contain heap
-allocations (directly or via inner calls with store effects into the
-block's region) and emits `__vow_arena_open` / `__vow_arena_close`
-only for non-empty regions.
+operations. A block's region is considered **non-empty** if any of
+the following holds:
+
+1. The block directly contains a heap-producing instruction `I`
+   with `region(I) == Block(B)` for this block.
+2. The block contains a call to a function with a non-empty
+   `store_effects` entry whose target's substituted region is
+   this block.
+3. The block contains a call to a function whose `return_region ==
+   FreshInCaller` where the caller's hidden-region argument
+   routes to this block — i.e., the callee allocates into this
+   block's arena via `target_region`.
+4. The block contains a call whose return is stored or otherwise
+   pinned such that `must_outlive` places the returned value in
+   this block (the return aliases an argument that lives in this
+   block, or a later use transitively requires it).
+
+Only blocks that meet none of the above are elided. The region
+pass emits `__vow_arena_open` / `__vow_arena_close` for every
+non-empty block region. Criterion (3) is the specifically
+hazardous case: omitting it would leave a block whose only
+allocations are performed by a callee through a hidden
+`target_region` routed to an unopened header, which is undefined
+behavior in the runtime model (§3.3).
 
 ## 4. Region inference
 
@@ -258,11 +278,27 @@ The algorithm is block-tree dataflow:
 - A use as the source of `obj.field = I` or `vec.push(I)` or
   `map.insert(k, I)` adds the region of `obj` (respectively `vec`,
   `map`).
-- A use as an argument to a call is resolved via the callee's
-  region summary: if the callee's store effects say the parameter
-  is stored into another parameter `j`'s region, the caller adds
-  `region(j-th argument)` to `must_outlive(I)`, and additionally
-  records the store-effect inequality checked in step 4 above.
+- A use as an argument to a call must account for both the
+  callee's store effects **and** the callee's `return_region`:
+  - **Store effects.** If the callee's store effects say
+    parameter `p` is written into parameter `j`'s region, and
+    `I` is the argument at position `p`, the caller adds
+    `region(j-th argument)` to `must_outlive(I)` and records
+    the store-effect inequality checked in step 4 above.
+  - **Return aliasing.** If the callee's `return_region` is
+    `AliasOf(j)` or `AliasOfAny(S)` and `I` is the argument at
+    one of the aliased parameter positions (`j` or any element
+    of `S`), the call's return value may carry `I` into a wider
+    region in the caller's use-def graph. The caller
+    propagates every `must_outlive` member of the return value
+    back to `I`: for each block `B` in `must_outlive(return
+    value)`, add `B` to `must_outlive(I)`. This prevents a
+    dangling reference after `I`'s original block closes in
+    patterns like `let t = id(s); use(t)` where `id : AliasOf(0)`
+    outlives `s`'s defining block.
+  - `ConstantGlobal` / `FreshInCaller` returns do not alias any
+    argument and contribute no extra constraints on `I` beyond
+    those already captured by store effects.
 
 ### 4.2. Region summary
 
@@ -308,31 +344,56 @@ suggests the wrong direction.
 The summary lattice, per field:
 
 - `return_region`: the four `RegionConstraint` variants form a
-  partial order by how much caller-side work they require, from
-  most permissive to most restrictive:
+  join-semilattice that is **not** a total chain — `AliasOf(i)`
+  and `ConstantGlobal` are incomparable because `AliasOf(i)`
+  claims the return always aliases parameter `i`'s region, while
+  `ConstantGlobal` claims it always points into static storage;
+  neither implies the other. The Hasse diagram (bottom is
+  uninitialised):
 
   ```
-  ConstantGlobal  ⊑  AliasOf(i)  ⊑  AliasOfAny(S)  ⊑  FreshInCaller
+                          FreshInCaller
+                        /       |
+                  AliasOfAny(S)  |
+                        |        |
+                    AliasOf(i)   ConstantGlobal
+                          \      /
+                           ⊥ (seed)
   ```
+
+  Joins:
+
+  - `AliasOf(i)` ⊔ `AliasOf(j)` = `AliasOfAny([i, j])` when
+    `i ≠ j`; `AliasOf(i)` otherwise.
+  - `AliasOf(i)` ⊔ `AliasOfAny(S)` = `AliasOfAny(S ∪ {i})`.
+  - `AliasOfAny(S)` ⊔ `AliasOfAny(T)` = `AliasOfAny(S ∪ T)`.
+  - `AliasOf(i)` ⊔ `ConstantGlobal` = `FreshInCaller` (they sit
+    on parallel branches; their least upper bound is the top of
+    the lattice).
+  - `AliasOfAny(S)` ⊔ `ConstantGlobal` = `FreshInCaller` (same
+    reason).
+  - Anything ⊔ `FreshInCaller` = `FreshInCaller`.
 
   `ConstantGlobal` is permissive (no caller-side region or hidden
   parameter). `AliasOf(i)` and `AliasOfAny(S)` require the caller
   to understand the aliasing constraint but not to pass a hidden
   arena. `FreshInCaller` is the most restrictive state (caller
-  must supply a hidden `*VowArena`). Joins over `AliasOf` /
-  `AliasOfAny`:
+  must supply a hidden `*VowArena`). Summaries tighten upward
+  along this order as more escape sites are discovered; the
+  lattice has finite height, so iteration terminates.
 
-  - `AliasOf(i)` ⊔ `AliasOf(j)` = `AliasOfAny([i, j])` when
-    `i ≠ j`.
-  - `AliasOf(i)` ⊔ `AliasOfAny(S)` = `AliasOfAny(S ∪ {i})`.
-  - Any join that cannot be expressed within the Alias variants
-    (e.g., `AliasOf(i)` ⊔ `ConstantGlobal` where the callee must
-    admit both static storage and a param-aliasing path) tightens
-    the whole return to `FreshInCaller`.
-
-  Summaries tighten upward along this order as more escape sites
-  are discovered; the lattice has finite height, so iteration
-  terminates.
+  The semantic rationale for the parallel-branch topology: a
+  function whose body contains one path returning a `.rodata`
+  literal and another returning a parameter alias does **not**
+  satisfy either `ConstantGlobal` or `AliasOf(i)` individually
+  (the first would mis-type the parameter-aliasing path; the
+  second would mis-type the literal path). The only sound
+  summary is `FreshInCaller`, obtained by joining the two. An
+  alternative total-chain design where `ConstantGlobal ⊑
+  AliasOf(i)` was considered and rejected: it would make the
+  join `AliasOf(i)` for such functions, over-constraining the
+  caller to provide a parameter at position `i` whose region
+  the return is falsely claimed to alias.
 - `store_effects`: ordered by set inclusion — the empty set is the
   most permissive (no caller obligations), and each added
   `StoreEffect` is strictly more restrictive. Summaries tighten
