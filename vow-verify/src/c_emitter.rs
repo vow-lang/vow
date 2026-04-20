@@ -784,12 +784,7 @@ fn emit_inst(
                         let a = inst.args[0].0;
                         let b = inst.args[1].0;
                         out.push_str(&format!(
-                            "  v{id} = (v{a}.len == v{b}.len);\n\
-                             \x20 if (v{id}) {{\n\
-                             \x20   for (int64_t __i = 0; __i < v{a}.len; __i++) {{\n\
-                             \x20     if (v{a}.data[__i] != v{b}.data[__i]) {{ v{id} = 0; break; }}\n\
-                             \x20   }}\n\
-                             \x20 }}\n"
+                            "  v{id} = (v{a}.len == v{b}.len) ? __VERIFIER_nondet_bool() : 0;\n"
                         ));
                     }
                     "__vow_string_contains" => {
@@ -1111,23 +1106,22 @@ pub fn emit_c_function_full(
                 let id = inst.id.0;
                 if let Some(&(_, cl)) = arg_var_map.iter().find(|(ir, _)| *ir == idx) {
                     if vec_vars.contains(&id) {
+                        let vec_max = limits.vec_max;
                         out.push_str(&format!(
                             "  __vow_vec_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < INT64_MAX);\n\
-                             \x20 v{id}.data = (v{id}.len > 0) ? (int64_t*)malloc(sizeof(int64_t) * (size_t)v{id}.len) : (int64_t*)0;\n"
+                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < {vec_max});\n"
                         ));
                     } else if string_vars.contains(&id) {
+                        let string_max = limits.string_max;
                         out.push_str(&format!(
                             "  __vow_string_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < INT64_MAX);\n\
-                             \x20 v{id}.data = (v{id}.len > 0) ? (int8_t*)malloc((size_t)v{id}.len) : (int8_t*)0;\n"
+                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < {string_max});\n"
                         ));
                     } else if hashmap_vars.contains(&id) {
+                        let hashmap_max = limits.hashmap_max;
                         out.push_str(&format!(
                             "  __vow_hashmap_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < INT64_MAX);\n\
-                             \x20 v{id}.keys = (v{id}.len > 0) ? (int64_t*)malloc(sizeof(int64_t) * (size_t)v{id}.len) : (int64_t*)0;\n\
-                             \x20 v{id}.vals = (v{id}.len > 0) ? (int64_t*)malloc(sizeof(int64_t) * (size_t)v{id}.len) : (int64_t*)0;\n"
+                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < {hashmap_max});\n"
                         ));
                     } else if option_vars.contains(&id) {
                         out.push_str(&format!("  __vow_option_t v{};\n  v{}.tag = 0;\n", id, id));
@@ -2727,12 +2721,8 @@ mod tests {
         );
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
-            c.contains("v4 = (v1.len == v3.len)"),
-            "string eq length check: {c}"
-        );
-        assert!(
-            c.contains("v1.data[__i] != v3.data[__i]"),
-            "string eq byte comparison: {c}"
+            c.contains("v4 = (v1.len == v3.len) ? __VERIFIER_nondet_bool() : 0"),
+            "string eq abstract model: {c}"
         );
     }
 
