@@ -214,38 +214,54 @@ the runtime traps with the same structured OOM error as
 
 ### 3.4. Determinism
 
-All runtime operations MUST be deterministic. Chunk size is fixed
-at 4 KB (with the oversized-allocation exception). No random padding,
-no allocator-dependent layout. Binary fixed point is preserved only
-if the runtime is deterministic.
+The arena **allocation strategy**, the **chunk-size policy**, and
+the **code emitted** for every primitive MUST be deterministic.
+Chunk size is fixed at 4 KB (with the oversized-allocation
+exception). No random padding. No in-chunk layout that varies
+across runs. Binary fixed point is preserved only if the
+compiler's choice of regions, chunk sizes, and generated
+instruction sequences is deterministic.
+
+Raw runtime addresses returned by `malloc` are inherently
+allocator- and OS-dependent, and the model does **not** require
+them to be stable across executions. Programs MUST NOT observe
+addresses in a way that leaks into compiler output or contract
+verification; address values are not semantically observable by
+construction (Vow has no pointer-to-integer casts in source and
+no contract vocabulary for pointer equality beyond structural
+identity). Determinism is therefore a property of what the
+compiler emits, not of what the runtime's pointer values happen
+to be.
 
 ### 3.5. Empty-region elision
 
 A block region with no heap allocations MUST NOT emit any arena
-operations. A block's region is considered **non-empty** if any of
-the following holds:
+operations. A block's region is considered **non-empty** iff at
+least one runtime allocation actually targets it. The three
+sources of such allocations are:
 
 1. The block directly contains a heap-producing instruction `I`
    with `region(I) == Block(B)` for this block.
-2. The block contains a call to a function with a non-empty
-   `store_effects` entry whose target's substituted region is
-   this block.
-3. The block contains a call to a function whose `return_region ==
-   FreshInCaller` where the caller's hidden-region argument
-   routes to this block — i.e., the callee allocates into this
-   block's arena via `target_region`.
-4. The block contains a call whose return is stored or otherwise
-   pinned such that `must_outlive` places the returned value in
-   this block (the return aliases an argument that lives in this
-   block, or a later use transitively requires it).
+2. The block contains a call to a function whose `store_effects`
+   entry writes into a container whose substituted region is
+   this block — the callee allocates fresh elements into the
+   block's arena through that store.
+3. The block contains a call to a function whose `return_region
+   == FreshInCaller` and whose hidden `target_region` argument
+   (§5.2) routes to this block — the callee allocates the return
+   value directly into the block's arena.
 
-Only blocks that meet none of the above are elided. The region
-pass emits `__vow_arena_open` / `__vow_arena_close` for every
-non-empty block region. Criterion (3) is the specifically
-hazardous case: omitting it would leave a block whose only
-allocations are performed by a callee through a hidden
-`target_region` routed to an unopened header, which is undefined
-behavior in the runtime model (§3.3).
+Only blocks that meet none of the above are elided. Criterion
+(3) is the specifically hazardous case: omitting it would leave
+a block whose only allocations are performed by a callee through
+a hidden `target_region` routed to an unopened header, which is
+undefined behavior in §3.3's runtime model.
+
+Pure alias returns (`return_region ∈ {ConstantGlobal, AliasOf,
+AliasOfAny}`) do **not** allocate into the caller's block, so
+they never pin a block as non-empty on their own — they only
+contribute to region inference through the `must_outlive`
+propagation in §4.1.
 
 ## 4. Region inference
 
@@ -632,6 +648,35 @@ fn user_visible(args..., target_region: *VowArena) -> T
 Callers pass the address of whichever region the return should be
 placed into (typically an enclosing block's arena).
 
+**Return materialization.** `FreshInCaller` is a **representation
+promise**, not only an ABI promise: the callee guarantees that
+every heap-typed return value it produces is **already located in
+the arena pointed to by `target_region`** at the moment of
+return. If the body of the function would otherwise return a
+value whose current storage is not `target_region` — for
+example, a `.rodata` literal on one path, a parameter alias on
+another, or a value allocated in some inner block that closes
+before return — the compiler MUST insert a copy of that value
+into `target_region` before the return edge. Concretely:
+
+- A `.rodata` literal returned on a `FreshInCaller` path is
+  lowered as `String::from(literal)` / equivalent explicit copy
+  into `target_region`.
+- A parameter alias returned on a `FreshInCaller` path is
+  lowered as a deep copy (§8.3 deep-copy discipline) into
+  `target_region`.
+- A value allocated in a strictly-inner block and then returned
+  is lowered so its final allocation is in `target_region` from
+  the start — the region pass places such values directly, not
+  in the inner block.
+
+This rule is what makes the §4.3 lattice join `AliasOf(i) ⊔
+ConstantGlobal = FreshInCaller` sound: when a function is
+summarised as `FreshInCaller`, every caller assumes the returned
+pointer refers to storage in the arena they supplied, and the
+function body's lowering honours that assumption regardless of
+which source path the value came from.
+
 ### 5.2. ABI by summary
 
 For each function:
@@ -898,14 +943,30 @@ returns a `.rodata` pointer has `ConstantGlobal`.
 The stdlib MUST provide:
 
 - `pin_to_root(value) -> value` for every heap-typed value type —
-  allocates in the root region and moves the value there.
-  Idempotent on already-root values. Because Vow does not have
-  user-facing generics (see `docs/spec/grammar.md` — only the
-  built-in container types `Vec<T>` / `Option<T>` are
-  parameterized), `pin_to_root` is a **compiler intrinsic**, not
-  a generic function the programmer writes. The type checker
+  places a copy of the value in the root region and returns a
+  descriptor pointing into root storage. Idempotent on
+  already-root values (the intrinsic checks the incoming
+  descriptor's region tag and returns it unchanged if it is
+  already `Root`). Because Vow does not have user-facing
+  generics (see `docs/spec/grammar.md` — only the built-in
+  container types `Vec<T>` / `Option<T>` are parameterized),
+  `pin_to_root` is a **compiler intrinsic**, not a generic
+  function the programmer writes. The type checker
   monomorphises each call site by the argument's concrete type
   (same mechanism used for `Vec::new()` today).
+
+  **Deep-copy obligation.** For pointer-containing values
+  (structs / enums with heap-typed fields, `Vec`s of heap-typed
+  elements, etc.), `pin_to_root` MUST perform a **type-directed
+  deep copy** into the root region, following the same
+  discipline as §8.3's pointer-containing FFI path. A shallow
+  descriptor copy is only sound for flat (POD / byte-buffer)
+  values; for anything richer, shallow-copying would leave
+  inner pointers referring to the source region, and those
+  inner regions may close long before root — producing a
+  silent dangling reference the type checker cannot see. The
+  intrinsic's monomorphisation therefore synthesises a
+  per-type deep-copy walk at each call site.
 - `String::from_raw_parts_copy(ptr: *const u8, len: i64) -> String`
   — copies bytes from a raw C pointer into `target_region` as a
   `String`. `FreshInCaller`. `len` is declared as `i64` to match
@@ -927,29 +988,57 @@ can compose FFI without hand-rolling the region wiring.
 
 After region inference, the compiler MUST run a linear-region
 consistency check. The check verifies, for every `linear` value
-`v`:
+`v`, that the consumption obligation is discharged before the
+region containing `v` closes. The exact obligation depends on
+the kind of region assigned to `v` by §4.1:
 
-```
-consumed_at(v) <= region_close(region(v))
-```
-
-That is, the consumption site of `v` MUST occur at or before the
-close of the region containing `v`. Violation is rejected with
-`RegionLinear` (§13).
+- `region(v) = Block(B)`: `consumed_at(v) <= region_close(B)`.
+  The consumption site MUST lie at or before the block's close.
+  Violation is rejected with `RegionLinear` (§13).
+- `region(v) = Caller(k)`: the obligation transfers outward to
+  the caller; the callee's lowering is not required to consume
+  `v` before return. See §9.3.
+- `region(v) = Root`: the root region never closes, so the
+  deadline is program exit. A program MAY choose to leave a
+  root-region linear value unconsumed — there is no finite
+  close to race against — but doing so silently retains the
+  value for the process lifetime. Because that is rarely
+  intended, the linear-region check emits a
+  **warning-not-error**: `RegionLinear` with a `hint` pointing
+  at `pin_to_root` as the likely cause. Programs that
+  legitimately want program-lifetime retention silence the
+  warning by consuming the value at process shutdown (no
+  semantic effect; purely a linter signal).
+- `region(v) = Rodata`: a linear value MUST NOT be placed in
+  `Rodata`. `.rodata` is read-only storage; a linear obligation
+  is inherently mutable state (the consume operation mutates).
+  Any inference that would assign `Rodata` to a linear value is
+  a compiler bug and the region pass MUST reject the program
+  with `RegionLinear` explaining that linear values cannot have
+  Rodata region.
 
 ### 9.2. Region close does not consume
 
 Arena close reclaims memory. It MUST NOT be treated as a
-consumption site for linear values. A linear value whose region is
-about to close and which has not been explicitly consumed is a
-compile error, not an implicit drop.
+consumption site for linear values. A linear value whose block
+region is about to close and which has not been explicitly
+consumed is a compile error, not an implicit drop. (This rule
+applies to block regions only; `Root` closes at program exit
+and behaves per §9.1's warning discipline, and `Rodata` cannot
+host linear values.)
 
 ### 9.3. Escape transfers the obligation
 
-A linear value returned from a function (or otherwise escaping its
-allocating region) has its linear obligation transferred to the
-caller. The callee's region close is satisfied by the escape; the
-caller inherits the consume-exactly-once requirement.
+A linear value returned from a function (or otherwise escaping
+its allocating region via a `FreshInCaller` return or a
+`store_effect` into caller-owned storage) has its linear
+obligation transferred to the caller. The callee's region close
+is satisfied by the escape; the caller inherits the
+consume-exactly-once requirement. For `Caller(k)`-regioned
+linear values specifically, the obligation is always satisfied
+by the return edge (or an earlier store-into-caller-container)
+— §9.1's `Caller(k)` rule is the compile-time expression of
+this transfer.
 
 ## 10. ESBMC modeling
 
@@ -1317,76 +1406,19 @@ Add `__vow_arena_open`, `__vow_arena_close`, `__vow_arena_alloc`,
 `__vow_arena_try_extend` to `vow-runtime`. Implement the VowArena
 header, chunk-chained bump allocator, 4 KB chunks.
 
-**Symbol-collision note.** The existing `vow-runtime` already
-exports two companion functions in the global-allocator shim
-that share the `__vow_arena_*` prefix with this spec's new
-symbols:
+Rename existing conflicting runtime allocation shims in the same
+commit so the `__vow_arena_*` symbol space is free for this
+spec's new primitives. See **Appendix A** for the concrete rename
+map against the current tree.
 
-- `pub extern "C" fn __vow_arena_alloc(size: usize, align: usize)
-  -> *mut u8` (grep `pub extern "C" fn __vow_arena_alloc` in
-  `vow-runtime/src/lib.rs` — line numbers drift with the file;
-  at the time of writing it is near line 532, but do not rely on
-  the number).
-- `pub unsafe extern "C" fn __vow_arena_free(ptr: *mut u8, size:
-  usize, align: usize)` (grep
-  `pub unsafe extern "C" fn __vow_arena_free` in the same file).
-
-Both are declared as imports in
-`vow-codegen/src/cranelift_backend.rs` and
-`vow-clif-shim/src/lib.rs`. Neither is related to the
-arena-per-scope model; they are generic `malloc`/`free`-style
-entry points whose names happen to collide. The two `_alloc`
-symbols cannot coexist, and leaving `__vow_arena_free` unrenamed
-would produce a confusingly-named companion alongside the new
-`__vow_arena_open` / `__vow_arena_close` / `__vow_arena_alloc`
-primitives in this document. Phase 1 MUST atomically rename both
-shims:
-
-- `__vow_arena_alloc` → `__vow_malloc`
-- `__vow_arena_free`  → `__vow_free`
-
-across every site that references either name, in a single PR
-step bundled with the Phase 1 runtime additions:
-
-- `vow-runtime/src/lib.rs` — both `pub extern "C" fn`
-  definitions.
-- `vow-runtime/src/lib.rs` — every unit test that calls either
-  function directly. At the time of writing:
-  - `arena_alloc_free_roundtrip` — references both old symbols.
-  - `arena_alloc_zero_returns_sentinel` — references
-    `__vow_arena_alloc` only.
-  - `arena_free_null_is_noop` — references `__vow_arena_free`
-    only.
-  - `arena_free_zero_size_is_noop` — references
-    `__vow_arena_free` only.
-
-  Future test additions referring to either old name must follow
-  the rename in the same commit.
-- `vow-codegen/src/cranelift_backend.rs` — the `declare_function`
-  import sites for both symbols.
-- `vow-clif-shim/src/lib.rs` — the `declare_function` import
-  sites for both symbols.
-
-Every occurrence is mechanical. Bundling the rename with Phase 1
-keeps CI green across the rename (tests that referenced the old
-names are renamed in the same commit) and leaves the
-`__vow_arena_*` symbol space entirely free for the spec's new
-primitives at the moment Phase 1 lands.
-
-Standalone C-level tests + ESBMC verification on the primitive in
-isolation (§10.4). Runtime ships unused by the compiler.
+Standalone C-level tests + ESBMC verification on the primitive
+in isolation (§10.4). Runtime ships unused by the compiler.
 
 ### Phase 2 — IR extension (both compilers, atomic)
 
-**Symbol-collision note.** `vow-ir/src/types.rs:15` already
-defines `pub struct RegionId(pub u32)` as a newtype used by the
-pre-arena effects-tracking machinery (`InstData` and
-`AbstractHeap::Region`). Phase 2 MUST atomically rename that
-existing newtype to `AbstractRegionId` across `vow-ir` and every
-downstream consumer, freeing the `RegionId` name for the new
-enum defined in §12.1. Bundle this rename with the Phase 2 IR
-additions so CI stays green through the change (equivalent in
-spirit to Phase 1's `__vow_arena_alloc → __vow_malloc` rename).
+Rename the existing conflicting `RegionId` newtype out of the
+way in the same commit, freeing the `RegionId` name for the new
+enum defined in §12.1. See **Appendix A** for the concrete rename.
 
 **2a (Rust):** after the rename above, `vow-ir` gains the new
 `RegionId` enum (§12.1), a `region: RegionId` field on the
@@ -1496,24 +1528,12 @@ Delete:
   `RegionFree` instance in lowered IR is a no-op, so this
   removal is mechanical — no semantic change from pre-Phase-8
   behavior.
-- PR #181's conservative patch. The patch leaves two identifier
-  signatures behind in the tree, one per compiler side:
+- PR #181's conservative patch (the `// Tag but don't track`
+  comment in both compilers plus the self-hosted
+  `lctx_mark_escaped` call sites). See **Appendix A** for the
+  concrete grep anchors against the current tree.
 
-Both compilers carry a matching `// Tag but don't track: can't
-distinguish owned heap from arena alias without ownership
-annotations.` comment at the conservative-patch site:
-
-- **Rust:** `vow-ir/src/lower/mod.rs` (grep for
-  `Tag but don't track`; comment text is stable, line numbers
-  drift).
-- **Self-hosted:** `compiler/lower.vow` (same grep anchor).
-
-Plus `lctx_mark_escaped` call sites in `compiler/lower.vow`
-that the patch introduces — grep for `lctx_mark_escaped` to
-surface them all for deletion.
-
-Phase 8 MUST delete both the comments and the call sites
-atomically. Close issue #186.
+Close issue #186.
 
 Final binary fixed-point re-verification.
 
@@ -1557,3 +1577,79 @@ during implementation:
 - **Verifier `--unwind` auto-tuning.** The default of 4 may need
   raising for deeply nested calls or accumulating loops. `VerifyLimits`
   exposes the knob; defaults may be revised after Phase 9.
+
+## Appendix A — Current-tree implementation anchors
+
+This appendix is **not normative**. It collects the concrete
+references against today's tree that implementers will need
+while executing Phase 1, Phase 2, and Phase 8. Everything here
+is expected to drift — tests are added or renamed, files are
+reorganised, line numbers move with merges from `main`. When
+Phase 1 lands, the relevant entries here should be deleted;
+likewise for Phases 2 and 8. The durable design is in §15.
+
+**Snapshot basis.** Anchors below were verified against
+`330c6af` (the Phase 0 landing commit). They may be stale by
+the time the corresponding phase executes; implementers should
+re-verify via grep before acting.
+
+### A.1. Phase 1 — Runtime allocation-shim renames
+
+The existing `vow-runtime` exports two companion functions in
+the global-allocator shim that share the `__vow_arena_*` prefix
+with this spec's new Phase 1 symbols. Neither is related to the
+arena-per-scope model; they are generic `malloc`/`free`-style
+entry points. The Phase 1 PR MUST rename them atomically:
+
+| Old symbol                              | New symbol   |
+|-----------------------------------------|--------------|
+| `__vow_arena_alloc(size, align)`        | `__vow_malloc` |
+| `__vow_arena_free(ptr, size, align)`    | `__vow_free`   |
+
+**Call-site anchors** (grep the repo; text is stable, line
+numbers are not):
+
+- `vow-runtime/src/lib.rs` — `pub extern "C" fn __vow_arena_alloc`
+  and `pub unsafe extern "C" fn __vow_arena_free` (function
+  definitions).
+- `vow-runtime/src/lib.rs` — tests `arena_alloc_free_roundtrip`,
+  `arena_alloc_zero_returns_sentinel`, `arena_free_null_is_noop`,
+  `arena_free_zero_size_is_noop` call the old symbols directly.
+  Any test added before Phase 1 lands that mentions either old
+  name must follow the rename in the same commit.
+- `vow-codegen/src/cranelift_backend.rs` — two
+  `declare_function` import sites, one per old symbol.
+- `vow-clif-shim/src/lib.rs` — two `declare_function` import
+  sites, one per old symbol.
+
+### A.2. Phase 2 — IR `RegionId` newtype rename
+
+`vow-ir/src/types.rs` defines `pub struct RegionId(pub u32)` as
+a newtype used by the pre-arena effects-tracking machinery
+(`InstData` and `AbstractHeap::Region`). The Phase 2 PR MUST
+rename this existing newtype to `AbstractRegionId` across
+`vow-ir` and every downstream consumer, freeing the `RegionId`
+name for the new enum defined in §12.1.
+
+The new enum replaces the newtype at the IR-operand slot; the
+rename is bundled with the Phase 2 IR additions so CI stays
+green through the change.
+
+### A.3. Phase 8 — Conservative-patch cleanup
+
+PR #181's conservative patch left the following identifier
+signatures in the tree. Phase 8 MUST delete all of them
+atomically along with the legacy helpers listed in §15.
+
+- `// Tag but don't track: can't distinguish owned heap from
+  arena alias without ownership annotations.` — grep for
+  `Tag but don't track`; the comment text is stable across file
+  growth. Present in both `vow-ir/src/lower/mod.rs` (Rust side)
+  and `compiler/lower.vow` (self-hosted side).
+- `lctx_mark_escaped` call sites — grep for `lctx_mark_escaped`
+  in `compiler/lower.vow` to surface all call sites the patch
+  introduces; the function definition and every call MUST be
+  removed in the same commit.
+
+Close issue #186 once both sets are deleted and the bootstrap
+triple re-verifies to a fixed point.
