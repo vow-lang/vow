@@ -362,11 +362,11 @@ dependencies = [
 
 [[package]]
 name = "cranelift-frontend"
-version = "0.130.1"
+version = "0.131.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14db6b0e0e4994c581092df78d837be2072578f7cb2528f96a6cf895e56dee63"
+checksum = "4dca3df1d107d98d88f159ad1d5eaa2d5cdb678b3d5bcfadc6fc83d8ebb448ea"
 dependencies = [
- "cranelift-codegen 0.130.1",
+ "cranelift-codegen 0.131.0",
  "log",
  "smallvec",
  "target-lexicon",
