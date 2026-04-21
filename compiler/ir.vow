@@ -131,6 +131,27 @@ fn IOP_BITOR_U64() -> i64 vow { ensures: result >= 0 } { 111 }
 fn IOP_SHL_U64() -> i64 vow { ensures: result >= 0 } { 112 }
 fn IOP_SHR_U64() -> i64 vow { ensures: result >= 0 } { 113 }
 
+fn IOP_REGION_OPEN() -> i64 vow { ensures: result >= 0 } { 114 }
+fn IOP_REGION_CLOSE() -> i64 vow { ensures: result >= 0 } { 115 }
+
+fn REGION_KIND_BLOCK()  -> i64 vow { ensures: result >= 0 } { 0 }
+fn REGION_KIND_CALLER() -> i64 vow { ensures: result >= 0 } { 1 }
+fn REGION_KIND_ROOT()   -> i64 vow { ensures: result >= 0 } { 2 }
+fn REGION_KIND_RODATA() -> i64 vow { ensures: result >= 0 } { 3 }
+
+fn region_pack(kind: i64, val: i64) -> i64 vow {
+    requires: kind >= 0,
+    requires: kind <= 3,
+    requires: val >= 0
+} { val * 4 + kind }
+
+fn region_kind(r: i64) -> i64 vow { requires: r >= 0 } { r - (r / 4) * 4 }
+fn region_val(r: i64)  -> i64 vow { requires: r >= 0 } { r / 4 }
+fn region_root()   -> i64 { region_pack(REGION_KIND_ROOT(),   0) }
+fn region_rodata() -> i64 { region_pack(REGION_KIND_RODATA(), 0) }
+
+fn MODULE_VERSION() -> i64 vow { ensures: result > 0 } { 1 }
+
 fn iop_is_terminal(op: i64) -> bool vow {
     requires: op >= 0
 } {
@@ -180,6 +201,7 @@ struct IrInst {
     ds: String,
     ostart: i64,
     olen: i64,
+    rgn: i64,
 }
 
 struct IrBlock {
@@ -197,6 +219,11 @@ struct IrVowEntry {
     offset: i64,
 }
 
+fn RSUM_KIND_FRESH_IN_CALLER() -> i64 vow { ensures: result >= 0 } { 0 }
+fn RSUM_KIND_ALIAS_OF()        -> i64 vow { ensures: result >= 0 } { 1 }
+fn RSUM_KIND_ALIAS_OF_ANY()    -> i64 vow { ensures: result >= 0 } { 2 }
+fn RSUM_KIND_CONSTANT_GLOBAL() -> i64 vow { ensures: result >= 0 } { 3 }
+
 struct IrFunction {
     id: i64,
     name: String,
@@ -208,6 +235,10 @@ struct IrFunction {
     blocks: Vec<IrBlock>,
     local_names_ids: Vec<i64>,
     local_names_strs: Vec<String>,
+    rsum_return_kind: i64,
+    rsum_return_aux: i64,
+    rsum_return_aliases: Vec<i64>,
+    rsum_store_effects: Vec<i64>,
 }
 
 struct IrFieldLayout {
@@ -253,6 +284,25 @@ fn ir_inst_new(id: i64, op: i64, ty: i64, args: Vec<i64>, dk: i64, dv: i64, dv2:
         ds: ds,
         ostart: 0,
         olen: 0,
+        rgn: region_root(),
+    }
+}
+
+fn ir_inst_set_region(inst: IrInst, rgn: i64) -> IrInst vow {
+    requires: rgn >= 0
+} {
+    IrInst {
+        id: inst.id,
+        op: inst.op,
+        ty: inst.ty,
+        args: inst.args,
+        dk: inst.dk,
+        dv: inst.dv,
+        dv2: inst.dv2,
+        ds: inst.ds,
+        ostart: inst.ostart,
+        olen: inst.olen,
+        rgn: rgn,
     }
 }
 
@@ -275,6 +325,10 @@ fn ir_function_new(id: i64, name: String, return_ty: i64, effects: i64) -> IrFun
         blocks: Vec::new(),
         local_names_ids: Vec::new(),
         local_names_strs: Vec::new(),
+        rsum_return_kind: RSUM_KIND_CONSTANT_GLOBAL(),
+        rsum_return_aux: 0,
+        rsum_return_aliases: Vec::new(),
+        rsum_store_effects: Vec::new(),
     }
 }
 

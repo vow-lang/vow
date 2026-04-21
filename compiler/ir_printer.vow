@@ -167,6 +167,8 @@ fn opcode_name(op: i64) -> String {
     if op == IOP_CALL() { return String::from("Call"); }
     if op == IOP_REGION_ALLOC() { return String::from("RegionAlloc"); }
     if op == IOP_REGION_FREE() { return String::from("RegionFree"); }
+    if op == IOP_REGION_OPEN() { return String::from("RegionOpen"); }
+    if op == IOP_REGION_CLOSE() { return String::from("RegionClose"); }
     if op == IOP_LINEAR_CONSUME() { return String::from("LinearConsume"); }
     if op == IOP_LINEAR_BORROW() { return String::from("LinearBorrow"); }
     if op == IOP_FIELD_GET() { return String::from("FieldGet"); }
@@ -332,6 +334,26 @@ fn print_inst(inst: IrInst) -> String {
     out.push_byte(40);
     out.push_str(format_args(inst.args));
     out.push_byte(41);
+    // Region suffix: only for RegionAlloc and only when non-Root, so
+    // existing golden output stays byte-identical in Phase 2. Matches
+    // vow-ir/src/printer.rs region_suffix().
+    if inst.op == IOP_REGION_ALLOC() {
+        let rgn: i64 = inst.rgn;
+        let kind: i64 = region_kind(rgn);
+        if kind != REGION_KIND_ROOT() {
+            out.push_str(String::from("<region="));
+            if kind == REGION_KIND_RODATA() {
+                out.push_str(String::from("rodata"));
+            } else if kind == REGION_KIND_BLOCK() {
+                out.push_str(String::from("block_"));
+                out.push_str(i64_to_str(region_val(rgn)));
+            } else if kind == REGION_KIND_CALLER() {
+                out.push_str(String::from("caller_"));
+                out.push_str(i64_to_str(region_val(rgn)));
+            }
+            out.push_byte(62);
+        }
+    }
     out
 }
 

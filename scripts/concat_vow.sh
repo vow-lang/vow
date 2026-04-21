@@ -18,9 +18,9 @@ echo "module Compiler"
 echo
 
 if [[ "$MODE" == "ir" ]]; then
-    FILES=(span diag token lexer ast parser types env checker ir ir_printer lower frontend main)
+    FILES=(span diag token lexer ast parser types env checker ir module_io ir_printer lower frontend main)
 elif [[ "$MODE" == "clif" ]]; then
-    FILES=(span diag token lexer ast parser types env checker ir ir_printer lower frontend clif c_emitter verifier main)
+    FILES=(span diag token lexer ast parser types env checker ir module_io ir_printer lower frontend clif c_emitter verifier main)
 fi
 
 for f in "${FILES[@]}"; do
