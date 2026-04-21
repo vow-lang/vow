@@ -723,7 +723,11 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                         let vh: i64 = verify_start(vf, ir_mod, t_max_k_step, vfi, false, String::from(""), String::from(""), String::from(""), t_vec_max, t_string_max, t_hashmap_max);
                         if vh != -1 && vh != -2 {
                             let vr: VerifyResult = verify_collect(vh, vf);
-                            if vr.status == VERIFY_FAILED() {
+                            // Under Auto encoding a 30s default timeout now
+                            // applies, so VERIFY_TIMEOUT is reachable and
+                            // must fail the test — otherwise a contract the
+                            // solver can't prove would silently slip through.
+                            if vr.status == VERIFY_FAILED() || vr.status == VERIFY_TIMEOUT() {
                                 verify_failed = true;
                             }
                         }

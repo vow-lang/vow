@@ -4784,21 +4784,20 @@ fn run_verification_sync(
                 }
             });
             // Phase D: if BV lookup misses under Auto encoding and BV solver
-            // isn't Bitwuzla, also probe the IR fallback key — a prior
-            // ProvenIr result lives under (z3, ir). On hit, promote to
-            // ProvenIr so contract reporting stays accurate.
+            // isn't Bitwuzla, probe the IR fallback key for a prior
+            // ProvenIr result. Only promote Proven hits — IR Failed entries
+            // must be ignored because IR doesn't model overflow, so an
+            // IR-only counterexample may be infeasible under BV semantics.
             let cached_result = cached_result.or_else(|| {
                 if func_config.encoding != Encoding::Auto
-                    || matches!(func_config.solver_str(), "bitwuzla")
+                    || matches!(func_config.solver, Solver::Bitwuzla)
                 {
                     return None;
                 }
                 let ir_key = VerifyCache::cache_key(&c_src, limits.max_k_step, "z3", "ir");
-                vc.lookup(&ir_key).map(|c| match c {
-                    CachedVerifyResult::Proven => VerificationResult::ProvenIr,
-                    CachedVerifyResult::Failed { .. } => {
-                        VerificationResult::Failed(c.to_counterexample().unwrap())
-                    }
+                vc.lookup(&ir_key).and_then(|c| match c {
+                    CachedVerifyResult::Proven => Some(VerificationResult::ProvenIr),
+                    CachedVerifyResult::Failed { .. } => None,
                 })
             });
 
@@ -5769,15 +5768,15 @@ fn update_contract_statuses(
             // means a prior run had to fall back to ir; surface as ProvenIr
             // so `contracts --verify` reports "proven-ir".
             let cached_result = cached_result.or_else(|| {
-                if config.encoding != Encoding::Auto || matches!(config.solver_str(), "bitwuzla") {
+                if config.encoding != Encoding::Auto || matches!(config.solver, Solver::Bitwuzla) {
                     return None;
                 }
                 let ir_key = VerifyCache::cache_key(&c_src, limits.max_k_step, "z3", "ir");
-                vc.lookup(&ir_key).map(|c| match c {
-                    CachedVerifyResult::Proven => VerificationResult::ProvenIr,
-                    CachedVerifyResult::Failed { .. } => {
-                        VerificationResult::Failed(c.to_counterexample().unwrap())
-                    }
+                // Ignore IR Failed entries: IR lacks overflow modeling, so
+                // an IR-only counterexample may be infeasible under BV.
+                vc.lookup(&ir_key).and_then(|c| match c {
+                    CachedVerifyResult::Proven => Some(VerificationResult::ProvenIr),
+                    CachedVerifyResult::Failed { .. } => None,
                 })
             });
 
