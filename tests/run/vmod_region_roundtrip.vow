@@ -12,7 +12,9 @@ fn REGION_KIND_RODATA() -> i64 vow { ensures: result >= 0 } { 3 }
 fn region_pack(kind: i64, val: i64) -> i64 vow {
     requires: kind >= 0,
     requires: kind <= 3,
-    requires: val >= 0
+    requires: val >= 0,
+    requires: val <= 4294967295,
+    ensures: result >= 0
 } { val * 4 + kind }
 
 fn region_kind(r: i64) -> i64 vow {

@@ -68,7 +68,9 @@ fn read_u8(buf: Vec<i64>, pos: i64) -> i64 vow {
 
 fn read_u32_le(buf: Vec<i64>, pos: i64) -> i64 vow {
     requires: pos >= 0,
-    requires: pos + 3 < buf.len()
+    requires: pos + 3 < buf.len(),
+    ensures: result >= 0,
+    ensures: result <= 4294967295
 } {
     let b0: i64 = buf[pos];
     let b1: i64 = buf[pos + 1];
@@ -79,8 +81,10 @@ fn read_u32_le(buf: Vec<i64>, pos: i64) -> i64 vow {
 
 // Encode a packed RegionId (low 2 bits = kind, upper 62 = payload) into
 // the wire format used by the Rust side: kind:u8 + payload:u32 LE (5 bytes).
+// The payload upper-bound mirrors the Rust `u32` field it decodes back into.
 fn region_encode(out: Vec<i64>, rgn: i64) vow {
-    requires: rgn >= 0
+    requires: rgn >= 0,
+    requires: region_val(rgn) <= 4294967295
 } {
     let kind: i64 = region_kind(rgn);
     let payload: i64 = region_val(rgn);
@@ -108,6 +112,8 @@ fn region_decode(buf: Vec<i64>, pos: i64) -> i64 vow {
 // Takes the three fields of the summary-style flattened encoding used by
 // IrFunction (rsum_return_kind, rsum_return_aux, rsum_return_aliases).
 // Alias count uses LEB128 to match vow-ir/src/serialize.rs byte-for-byte.
+// Each alias is a parameter index stored as u32 on the Rust side, so both
+// `aux` and every `aliases[i]` must satisfy `write_u32_le`'s bounds.
 fn region_constraint_encode(out: Vec<i64>, kind: i64, aux: i64, aliases: Vec<i64>) vow {
     requires: kind >= 0,
     requires: kind <= 3,
@@ -126,8 +132,14 @@ fn region_constraint_encode(out: Vec<i64>, kind: i64, aux: i64, aliases: Vec<i64
     let n: i64 = aliases.len();
     write_leb(out, n);
     let mut i: i64 = 0;
-    while i < n {
-        write_u32_le(out, aliases[i]);
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
+        let a: i64 = aliases[i];
+        // Each alias is a u32 parameter index on the Rust side.
+        if a < 0 || a > 4294967295 { return; }
+        write_u32_le(out, a);
         i = i + 1;
     }
 }
