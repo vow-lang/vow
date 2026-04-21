@@ -170,27 +170,38 @@ pub unsafe extern "C" fn __vow_unwrap_panic() {
 
 // Arena / rodata runtime-error emitters. Both print a JSON envelope to stderr
 // then exit(1). Not routed through vow-diag (see docs/design/arena_memory.md §13.3).
+//
+// Both helpers are **non-allocating**. They take &'static str operation names
+// and emit to stderr via direct byte writes. oom_trap is called on allocation
+// failure; a heap allocation here would itself fail under memory pressure and
+// mask the structured OOM envelope.
 fn oom_trap(operation: &'static str) -> ! {
-    let json = format!(r#"{{"error":"OutOfMemory","operation":"{operation}"}}"#);
-    let _ = writeln!(std::io::stderr(), "{json}");
+    use std::io::Write;
+    let stderr = std::io::stderr();
+    let mut lock = stderr.lock();
+    let _ = lock.write_all(b"{\"error\":\"OutOfMemory\",\"operation\":\"");
+    let _ = lock.write_all(operation.as_bytes());
+    let _ = lock.write_all(b"\"}\n");
     std::process::exit(1);
 }
 
 fn region_literal_mutation_trap(operation: &'static str) -> ! {
-    let json = format!(
-        r#"{{"error":"RegionLiteralMutation","operation":"{operation}","origin":"rodata"}}"#
-    );
-    let _ = writeln!(std::io::stderr(), "{json}");
-    let hint = if operation.starts_with("String::") {
-        "hint: use String::from(literal) to obtain a mutable copy"
+    use std::io::Write;
+    let hint: &[u8] = if operation.starts_with("String::") {
+        b"hint: use String::from(literal) to obtain a mutable copy\n"
     } else if operation.starts_with("Vec::") {
-        "hint: use Vec::from(literal) to obtain a mutable copy"
+        b"hint: use Vec::from(literal) to obtain a mutable copy\n"
     } else if operation.starts_with("HashMap::") {
-        "hint: construct a mutable HashMap and copy entries before mutating"
+        b"hint: construct a mutable HashMap and copy entries before mutating\n"
     } else {
-        "hint: obtain a mutable copy before mutation"
+        b"hint: obtain a mutable copy before mutation\n"
     };
-    let _ = writeln!(std::io::stderr(), "{hint}");
+    let stderr = std::io::stderr();
+    let mut lock = stderr.lock();
+    let _ = lock.write_all(b"{\"error\":\"RegionLiteralMutation\",\"operation\":\"");
+    let _ = lock.write_all(operation.as_bytes());
+    let _ = lock.write_all(b"\",\"origin\":\"rodata\"}\n");
+    let _ = lock.write_all(hint);
     std::process::exit(1);
 }
 
@@ -674,13 +685,13 @@ pub unsafe extern "C" fn __vow_arena_alloc(
     align: usize,
 ) -> *mut u8 {
     // Overflow guard: all downstream arithmetic in this function
-    // (`align_up`, the fit-check, `oversized_chunk_total`) operates on
-    // `bytes` and `align`. Bounding them below `isize::MAX` (the Rust
-    // allocator's size limit) keeps every `usize` addition within
-    // headroom, so neither the fit check nor the chunk-size selector
-    // can wrap and incorrectly admit an allocation.
+    // (`align_up`, the fit-check, `oversized_chunk_total`) sums `bytes`
+    // and `align`, so both individually AND combined must fit in the
+    // allocator's size limit (`isize::MAX`, Rust convention). Without
+    // the combined check, `bytes == align == isize::MAX` would still
+    // wrap `CHUNK_LINK_BYTES + bytes + (align - 1)` on 64-bit `usize`.
     let size_limit = isize::MAX as usize;
-    if bytes > size_limit || align > size_limit {
+    if bytes > size_limit || align > size_limit || bytes.saturating_add(align) > size_limit {
         oom_trap("arena_alloc");
     }
     let arena = unsafe { &mut *a };
