@@ -305,9 +305,18 @@ fn start_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name
     handle
 }
 
-fn effective_timeout_for(encoding: String, user_timeout: String) -> String {
+fn effective_timeout_for(encoding: String, solver: String, user_timeout: String) -> String {
     if user_timeout.len() > 0 {
         return user_timeout;
+    }
+    // The 30s default only makes sense when the IR fallback can kick in.
+    // Bitwuzla can't run the IR encoding, so applying the default timeout
+    // under --solver bitwuzla would cut it off at 30s with no retry path —
+    // a silent regression for users deliberately picking Bitwuzla for
+    // bitwise-heavy contracts. Leave those runs uncapped.
+    let bv_solver: String = resolve_auto_bv_solver(solver);
+    if bv_solver == String::from("bitwuzla") {
+        return String::from("");
     }
     if encoding.len() == 0 || encoding == String::from("auto") {
         return DEFAULT_AUTO_TIMEOUT_STR();
@@ -641,7 +650,7 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
     let auto_enc: bool = is_auto_encoding(encoding);
     let bv_solver: String = resolve_auto_bv_solver(solver);
     let bv_encoding: String = { if auto_enc { String::from("bv") } else { encoding } };
-    let bv_timeout: String = effective_timeout_for(encoding, timeout_secs);
+    let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
     if use_cache {
         verify_cache_ensure_dir();
         // Lookup under the resolved BV key so cache hits survive Auto→Bv
@@ -834,7 +843,7 @@ fn verify_start(f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_ca
     tmp_path.push_str(i64_to_str(idx));
     tmp_path.push_str(String::from(".c"));
     let fn_name: String = f.name;
-    let bv_timeout: String = effective_timeout_for(encoding, timeout_secs);
+    let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
     let handle: i64 = start_esbmc(c_source, max_k_step, tmp_path, fn_name, solver, encoding, bv_timeout);
     handle
 }

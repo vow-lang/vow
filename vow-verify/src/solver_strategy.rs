@@ -211,11 +211,28 @@ pub fn run_with_fallback(
     }
 
     // Auto mode: run with BV first, fallback to IR on timeout.
-    let timeout = config.timeout_secs.unwrap_or(DEFAULT_AUTO_TIMEOUT_SECS);
+    //
+    // The default 30s cap is only meaningful when the IR fallback is
+    // actually reachable. Bitwuzla can't run the IR encoding, so applying
+    // `DEFAULT_AUTO_TIMEOUT_SECS` when the resolved BV solver is Bitwuzla
+    // would amount to a silent regression — users who pick Bitwuzla for
+    // bitwise-heavy contracts would get cut off at 30s with no retry.
+    // Leave those runs uncapped unless the user set --timeout explicitly.
+    let bv_solver = match config.solver {
+        Solver::Auto => Solver::Boolector,
+        s => s,
+    };
+    let timeout_secs = if config.timeout_secs.is_some() {
+        config.timeout_secs
+    } else if matches!(bv_solver, Solver::Bitwuzla) {
+        None
+    } else {
+        Some(DEFAULT_AUTO_TIMEOUT_SECS)
+    };
     let bv_config = SolverConfig {
         solver: config.solver,
         encoding: Encoding::Bv,
-        timeout_secs: Some(timeout),
+        timeout_secs,
     }
     .resolve();
 
@@ -230,10 +247,13 @@ pub fn run_with_fallback(
                 return (VerificationResult::Timeout, bv_config);
             }
 
+            // Reuse the same timeout policy for the IR retry: user override
+            // if set, else the 30s default (IR is always reachable here).
+            let ir_timeout = config.timeout_secs.or(Some(DEFAULT_AUTO_TIMEOUT_SECS));
             let ir_config = SolverConfig {
                 solver: Solver::Z3,
                 encoding: Encoding::Ir,
-                timeout_secs: Some(timeout),
+                timeout_secs: ir_timeout,
             };
             let ir_result =
                 run_esbmc_with_max_k_step(esbmc, c_src, max_k_step, func_name, &ir_config);
