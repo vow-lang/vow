@@ -1098,31 +1098,29 @@ introduced to ESBMC's model.
 
 ### 10.2. Unwinding
 
-ESBMC unwinds the chunk-chain walk in `__vow_arena_close` bounded
-by the maximum chain length the analysis admits. For **Phase 1
-standalone arena verification** (§10.4), an ESBMC `--unwind`
-depth of 4 is sufficient for most block-local arenas. This is
-an ESBMC command-line parameter used only by the Phase-1 arena-
-primitive verification harness; it is **not** exposed on the
-`vowc build` / `vowc verify` CLI surface and is **not** a field
-on `VerifyLimits`.
+The project uses ESBMC in **incremental BMC mode** (`--incremental-bmc
+--max-k-step N`), matching `vow-verify/src/esbmc.rs`. In this mode
+`--unwind` is unused; iteration bounds are controlled exclusively by
+`--max-k-step`. The Phase 1 standalone arena verification harness
+(§10.4) uses the same convention: `--incremental-bmc --max-k-step 10`
+is sufficient for block-local arenas under the harness's bounded
+symbolic inputs. This is an ESBMC command-line parameter used only
+by the Phase-1 arena-primitive verification harness; it is **not**
+exposed on the `vowc build` / `vowc verify` CLI surface.
 
 `VerifyLimits` is the public-facing verification configuration
 type defined at `vow-verify/src/c_emitter.rs:55`. It carries
 four fields: `max_k_step` (incremental-BMC iteration cap),
 `vec_max`, `string_max`, `hashmap_max` (container size caps for
-the verification model). None of these is an unwind knob.
-`max_k_step` governs incremental BMC step count across the
-whole program and is distinct from ESBMC's `--unwind` parameter.
+the verification model). `max_k_step` governs incremental BMC step
+count across the whole program; the Phase-1 harness uses a locally
+scoped value that does not interact with `VerifyLimits`.
 
-If a future user-program region requires a higher ESBMC unwind
-depth than Phase 1's internal default of 4, exposing that as a
-public knob requires a coordinated update to `VerifyLimits`,
-`docs/spec/cli.md`, and the help-output staleness check
-(`vow/src/main.rs` asserts that `--unwind` is not currently in
-the CLI help JSON). Until that coordinated update lands, the
-`--unwind` value is an internal implementation detail of the
-Phase-1 harness, not a normative user-visible parameter.
+If a future user-program region requires a higher `max_k_step`
+than the harness default, raising the harness default is a local
+change to `vow-runtime/verify/Makefile`. Raising the public-facing
+`VerifyLimits.max_k_step` default would require a coordinated update
+to `docs/spec/cli.md` as well.
 
 ### 10.3. Root region
 
@@ -1663,9 +1661,10 @@ during implementation:
   refers to this policy as "a structured OOM error" on that
   basis; the guarantee is the trap-and-exit semantics, not any
   particular field layout.
-- **Verifier `--unwind` auto-tuning.** The default of 4 may need
-  raising for deeply nested calls or accumulating loops. `VerifyLimits`
-  exposes the knob; defaults may be revised after Phase 9.
+- **Verifier `--max-k-step` auto-tuning.** The harness default (10)
+  and `VerifyLimits.max_k_step` default may need raising for deeply
+  nested calls or accumulating loops. Defaults may be revised after
+  Phase 9.
 
 ## Appendix A — Current-tree implementation anchors
 

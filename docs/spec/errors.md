@@ -260,10 +260,12 @@ The `blame` field indicates who is at fault:
 {"error":"RegionLiteralMutation","operation":"String::push_str","origin":"rodata"}
 ```
 
-A plain-text hint follows on the next line (not a JSON field):
+A plain-text hint follows on the next line (not a JSON field). The hint text is dispatched on the operation's type prefix:
 
 ```
-hint: use String::from(literal) to obtain a mutable copy
+hint: use String::from(literal) to obtain a mutable copy       # for String::* operations
+hint: use Vec::from(literal) to obtain a mutable copy          # for Vec::*    operations
+hint: construct a mutable HashMap and copy entries before mutating  # for HashMap::* operations
 ```
 
 The `operation` field identifies the source-level method that trapped (e.g., `Vec::push`, `Vec::pop`, `HashMap::insert`, `String::clear`). The `origin` field identifies the storage class of the immutable backing; today only `rodata` is emitted.

@@ -181,10 +181,16 @@ fn region_literal_mutation_trap(operation: &'static str) -> ! {
         r#"{{"error":"RegionLiteralMutation","operation":"{operation}","origin":"rodata"}}"#
     );
     let _ = writeln!(std::io::stderr(), "{json}");
-    let _ = writeln!(
-        std::io::stderr(),
+    let hint = if operation.starts_with("String::") {
         "hint: use String::from(literal) to obtain a mutable copy"
-    );
+    } else if operation.starts_with("Vec::") {
+        "hint: use Vec::from(literal) to obtain a mutable copy"
+    } else if operation.starts_with("HashMap::") {
+        "hint: construct a mutable HashMap and copy entries before mutating"
+    } else {
+        "hint: obtain a mutable copy before mutation"
+    };
+    let _ = writeln!(std::io::stderr(), "{hint}");
     std::process::exit(1);
 }
 
@@ -673,14 +679,15 @@ pub unsafe extern "C" fn __vow_arena_alloc(
         arena.last_alloc_size = bytes;
         return aligned_cursor as *mut u8;
     }
-    // Need a new chunk.
-    let (total, payload) = if bytes > OVERSIZED_THRESHOLD {
-        let total = oversized_chunk_total(bytes, align);
-        (total, total - CHUNK_LINK_BYTES)
+    // Need a new chunk. Use the oversized path whenever (a) bytes exceed the
+    // threshold or (b) worst-case alignment padding could push past a normal
+    // chunk's payload. (b) is inert today (all callers use align <= 8) but
+    // keeps the `cursor <= chunk_end` invariant under any alignment.
+    let total = if bytes > OVERSIZED_THRESHOLD || bytes + (align - 1) > CHUNK_PAYLOAD {
+        oversized_chunk_total(bytes, align)
     } else {
-        (normal_chunk_total(), CHUNK_PAYLOAD)
+        normal_chunk_total()
     };
-    let _ = payload; // payload is implicit in `total`; kept for readability.
     let new_base = unsafe { alloc_chunk(total) };
     if new_base.is_null() {
         oom_trap("arena_alloc");
@@ -806,11 +813,14 @@ pub unsafe extern "C" fn __vow_vec_push(
     elem_size: usize,
     elem_align: usize,
 ) {
+    // Sanitizer first — consults the shadow table by pointer value and
+    // diagnoses UseAfterFree without dereferencing. The cap check must
+    // dereference, so it has to run after the sanitizer.
+    sanitize_on_push(vec as usize);
     let v = unsafe { &*(vec as *const VowVec) };
     if v.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("Vec::push");
     }
-    sanitize_on_push(vec as usize);
     unsafe { __vow_vec_reserve(vec, 1, elem_size, elem_align) };
     let v = unsafe { &mut *(vec as *mut VowVec) };
     let dest = unsafe { v.ptr.add(v.len * elem_size) };
@@ -827,10 +837,8 @@ pub unsafe extern "C" fn __vow_vec_len(vec: *const u8) -> usize {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_push_val(vec: *mut u8, value: i64) {
-    let v = unsafe { &*(vec as *const VowVec) };
-    if v.cap == VOW_CAP_RODATA {
-        region_literal_mutation_trap("Vec::push");
-    }
+    // Delegated __vow_vec_push runs the sanitizer and the cap check in the
+    // correct order; no own check needed here.
     let bytes = value.to_ne_bytes();
     unsafe { __vow_vec_push(vec, bytes.as_ptr(), 8, 8) };
 }
@@ -843,11 +851,11 @@ pub unsafe extern "C" fn __vow_vec_get_val(vec: *const u8, index: usize) -> i64 
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_pop(vec: *mut u8) {
+    sanitize_on_pop(vec as usize);
     let v = unsafe { &mut *(vec as *mut VowVec) };
     if v.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("Vec::pop");
     }
-    sanitize_on_pop(vec as usize);
     if v.len > 0 {
         v.len -= 1;
     }
@@ -857,11 +865,11 @@ pub unsafe extern "C" fn __vow_vec_pop(vec: *mut u8) {
 /// The Vec header itself remains valid and can be reused with push().
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_clear(vec: *mut u8) {
+    sanitize_on_clear(vec as usize);
     let v = unsafe { &mut *(vec as *mut VowVec) };
     if v.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("Vec::clear");
     }
-    sanitize_on_clear(vec as usize);
     if v.cap > 0 && !v.ptr.is_null() {
         let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(v.cap * 8, 8) };
         unsafe { std::alloc::dealloc(v.ptr, buf_layout) };
@@ -875,11 +883,11 @@ pub unsafe extern "C" fn __vow_vec_clear(vec: *mut u8) {
 /// If `new_len >= len`, this is a no-op. If `new_len == 0`, equivalent to clear().
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_truncate(vec: *mut u8, new_len: usize) {
+    sanitize_on_truncate(vec as usize, new_len);
     let v = unsafe { &mut *(vec as *mut VowVec) };
     if v.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("Vec::truncate");
     }
-    sanitize_on_truncate(vec as usize, new_len);
     if new_len >= v.len {
         return;
     }
@@ -903,11 +911,11 @@ pub unsafe extern "C" fn __vow_vec_truncate(vec: *mut u8, new_len: usize) {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_set_val(vec: *mut u8, index: usize, value: i64) {
+    sanitize_on_set(vec as usize, index);
     let v = unsafe { &*(vec as *const VowVec) };
     if v.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("Vec::set");
     }
-    sanitize_on_set(vec as usize, index);
     if index >= v.len {
         let json = r#"{"error":"IndexOutOfBounds"}"#;
         let _ = writeln!(std::io::stderr(), "{json}");
@@ -970,11 +978,11 @@ pub unsafe extern "C" fn __vow_string_len(s: *const u8) -> usize {
 /// The String header remains valid and can be reused with push_byte/push_str.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_clear(s: *mut u8) {
+    sanitize_on_read(s as usize, 0);
     let v = unsafe { &mut *(s as *mut VowVec) };
     if v.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("String::clear");
     }
-    sanitize_on_read(s as usize, 0);
     if v.cap > 0 && !v.ptr.is_null() {
         let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(v.cap, 1) };
         unsafe { std::alloc::dealloc(v.ptr, buf_layout) };
@@ -1022,12 +1030,12 @@ pub unsafe extern "C" fn __vow_string_contains(haystack: *const u8, needle: *con
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_push_str(dest: *mut u8, src: *const u8) {
+    sanitize_on_read(dest as usize, 0);
+    sanitize_on_read(src as usize, 0);
     let vd0 = unsafe { &*(dest as *const VowVec) };
     if vd0.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("String::push_str");
     }
-    sanitize_on_read(dest as usize, 0);
-    sanitize_on_read(src as usize, 0);
     let vs = unsafe { &*(src as *const VowVec) };
     if vs.len == 0 {
         return;
@@ -1066,6 +1074,7 @@ pub unsafe extern "C" fn __vow_string_byte_at(s: *const u8, idx: i64) -> i64 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_push_byte(s: *mut u8, byte: i64) {
+    sanitize_on_push(s as usize);
     let v = unsafe { &*(s as *const VowVec) };
     if v.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("String::push_byte");
@@ -2689,6 +2698,21 @@ mod tests {
     }
 
     #[test]
+    fn arena_large_alignment_takes_oversized_path() {
+        // Small `bytes` with large `align` must route to the oversized path,
+        // otherwise alignment padding could push `cursor > chunk_end`.
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        // Force the new-chunk path: bump cursor past first chunk.
+        let _ = unsafe { __vow_arena_alloc(&mut a, 64, 8) };
+        let p = unsafe { __vow_arena_alloc(&mut a, 9, 4096) };
+        assert_eq!(p as usize % 4096, 0, "pointer must be 4096-aligned");
+        assert!(a.cursor <= a.chunk_end, "cursor must not exceed chunk_end");
+        assert!((p as usize) + 9 <= a.chunk_end);
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
     fn arena_close_walks_full_chain() {
         let mut a = empty_arena_header();
         unsafe { __vow_arena_open(&mut a) };
@@ -2793,7 +2817,9 @@ mod tests {
             "stderr missing origin=rodata:\n{stderr}"
         );
         assert!(
-            stderr.contains("hint: use String::from(literal)"),
+            stderr.contains("hint: use String::from(literal)")
+                || stderr.contains("hint: use Vec::from(literal)")
+                || stderr.contains("hint: construct a mutable HashMap"),
             "stderr missing hint line:\n{stderr}"
         );
     }

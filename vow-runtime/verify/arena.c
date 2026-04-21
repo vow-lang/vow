@@ -10,7 +10,8 @@
  *   - try_extend modifies only cursor and (on success) last_alloc_size;
  *     last_alloc_start is never changed; new last_alloc_size == new_size.
  *
- * Run: esbmc arena.c --unwind 4 --no-bounds-check --no-pointer-check --64
+ * Run via `make verify` (uses --incremental-bmc --max-k-step 10), matching
+ * the vow-verify pipeline's ESBMC invocation convention.
  */
 
 #include <assert.h>
@@ -51,6 +52,11 @@ static uintptr_t oversized_total(uintptr_t bytes, uintptr_t align) {
 static void* alloc_chunk(uintptr_t total) {
     void* base = malloc(total);
     if (base != NULL) {
+        /* Real-world malloc returns addresses far below UINTPTR_MAX; no OS
+         * maps the top of the address space. Constrain the abstract pointer
+         * so ESBMC does not consider overflow scenarios that cannot occur
+         * on any real host. */
+        __ESBMC_assume((uintptr_t)base + total <= ((uintptr_t)1 << 62));
         *(void**)base = NULL;  /* next-chunk link */
     }
     return base;
@@ -95,7 +101,7 @@ void* __vow_arena_alloc(struct VowArena* a, uintptr_t bytes, uintptr_t align) {
         a->last_alloc_size = bytes;
         return (void*)aligned;
     }
-    uintptr_t total = (bytes > OVERSIZED_THRESHOLD)
+    uintptr_t total = (bytes > OVERSIZED_THRESHOLD || bytes + (align - 1) > CHUNK_PAYLOAD)
         ? oversized_total(bytes, align)
         : normal_total();
     void* new_base = alloc_chunk(total);
@@ -128,17 +134,25 @@ int main(void) {
     /* Invariant at open: cursor <= chunk_end. */
     assert(a.cursor <= a.chunk_end);
 
-    /* Perform up to three symbolic allocations bounded in size. */
+    /* Perform up to two symbolic allocations bounded in size. With large
+     * symbolic alignments each alloc may take the oversized path (own
+     * chunk), so close iterates up to 1 (first) + 2 (oversized allocs) = 3
+     * chunks — fits comfortably within incremental BMC's step bound. */
     unsigned int n = nondet_uint();
-    __ESBMC_assume(n <= 3);
+    __ESBMC_assume(n <= 2);
 
     for (unsigned int i = 0; i < n; i++) {
         size_t sz = nondet_size();
         __ESBMC_assume(sz >= 1 && sz <= 64);
+        /* Alignment symbolic over the power-of-two spectrum callers may use,
+         * including large values that stress the normal-vs-oversized path
+         * selection. */
+        size_t align = nondet_size();
+        __ESBMC_assume(align == 1 || align == 8 || align == 16 || align == 4096);
         uintptr_t before_end = a.chunk_end;
         void* before_last_start = a.last_alloc_start;
 
-        void* p = __vow_arena_alloc(&a, sz, 8);
+        void* p = __vow_arena_alloc(&a, sz, align);
         __ESBMC_assume(p != NULL);
         /* §10.4: cursor <= chunk_end, always. */
         assert(a.cursor <= a.chunk_end);
