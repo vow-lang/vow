@@ -275,11 +275,6 @@ fn format_data(inst: IrInst) -> String {
         out.push_str(i64_to_str(inst.dv));
         return out;
     }
-    if dk == IDATA_REGION_ID() {
-        let out: String = String::from("region_");
-        out.push_str(i64_to_str(inst.dv));
-        return out;
-    }
     if dk == IDATA_VOW_ID() {
         let out: String = String::from("vow_");
         out.push_str(i64_to_str(inst.dv));

@@ -193,7 +193,9 @@ fn IDATA_CALL_TARGET() -> i64 vow { ensures: result >= 0 } { 9 }
 fn IDATA_CALL_EXTERN() -> i64 vow { ensures: result >= 0 } { 10 }
 fn IDATA_BRANCH_TARGETS() -> i64 vow { ensures: result >= 0 } { 11 }
 fn IDATA_JUMP_TARGET() -> i64 vow { ensures: result >= 0 } { 12 }
-fn IDATA_REGION_ID() -> i64 vow { ensures: result >= 0 } { 13 }
+// Slot 13 (IDATA_REGION_ID) was retired in Phase 2 alongside the Rust
+// `InstData::RegionId` variant; the shim keeps the numeric slot reserved
+// under `#[allow(dead_code)]` for numbering alignment. Do not reuse.
 fn IDATA_VOW_ID() -> i64 vow { ensures: result >= 0 } { 14 }
 fn IDATA_ALLOC_SIZE() -> i64 vow { ensures: result >= 0 } { 15 }
 fn IDATA_FIELD() -> i64 vow { ensures: result >= 0 } { 16 }

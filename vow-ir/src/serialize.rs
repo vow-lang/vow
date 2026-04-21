@@ -31,10 +31,11 @@ pub enum DecodeError {
     BadMagic,
     VersionMismatch(u32),
     Truncated,
-    /// Unknown discriminant for the named enum. Payload is `u16` so opcode
-    /// discriminants above 255 can be reported faithfully once the opcode
-    /// space grows past the current max of 115.
-    InvalidKind(&'static str, u16),
+    /// Unknown discriminant for the named enum. Payload is `u32` to
+    /// faithfully carry `RegionId`'s `u32` payload bytes when they are
+    /// rejected as non-canonical; enum discriminants (Opcode, Ty, etc.)
+    /// fit in this space with room to spare.
+    InvalidKind(&'static str, u32),
     /// Decoder produced a `Module` but the input buffer had trailing bytes
     /// past the last function. Carries the number of unconsumed bytes.
     TrailingBytes(usize),
@@ -180,8 +181,8 @@ fn read_region_id(r: &mut Reader) -> Result<RegionId, DecodeError> {
         // would otherwise round-trip to a different buffer than the input.
         2 if payload == 0 => Ok(RegionId::Root),
         3 if payload == 0 => Ok(RegionId::Rodata),
-        2 | 3 => Err(DecodeError::InvalidKind("RegionId.payload", payload as u16)),
-        _ => Err(DecodeError::InvalidKind("RegionId", kind as u16)),
+        2 | 3 => Err(DecodeError::InvalidKind("RegionId.payload", payload)),
+        _ => Err(DecodeError::InvalidKind("RegionId", kind as u32)),
     }
 }
 
@@ -218,7 +219,7 @@ fn read_region_constraint(r: &mut Reader) -> Result<RegionConstraint, DecodeErro
             Ok(RegionConstraint::AliasOfAny(xs))
         }
         3 => Ok(RegionConstraint::ConstantGlobal),
-        _ => Err(DecodeError::InvalidKind("RegionConstraint", tag as u16)),
+        _ => Err(DecodeError::InvalidKind("RegionConstraint", tag as u32)),
     }
 }
 
@@ -278,7 +279,7 @@ macro_rules! opcode_map {
         fn disc_opcode(d: u16) -> Result<Opcode, DecodeError> {
             match d {
                 $($disc => Ok(Opcode::$op),)*
-                _ => Err(DecodeError::InvalidKind("Opcode", d)),
+                _ => Err(DecodeError::InvalidKind("Opcode", d as u32)),
             }
         }
     };
@@ -350,7 +351,7 @@ fn disc_ty(d: u8) -> Result<Ty, DecodeError> {
         6 => Ok(Ty::Ptr),
         7 => Ok(Ty::LinearPtr),
         8 => Ok(Ty::U64),
-        _ => Err(DecodeError::InvalidKind("Ty", d as u16)),
+        _ => Err(DecodeError::InvalidKind("Ty", d as u32)),
     }
 }
 
@@ -371,7 +372,7 @@ fn disc_effect(d: u8) -> Result<Effect, DecodeError> {
         2 => Ok(Effect::Read),
         3 => Ok(Effect::Unsafe),
         4 => Ok(Effect::Write),
-        _ => Err(DecodeError::InvalidKind("Effect", d as u16)),
+        _ => Err(DecodeError::InvalidKind("Effect", d as u32)),
     }
 }
 
@@ -388,7 +389,7 @@ fn disc_blame(d: u8) -> Result<Blame, DecodeError> {
         0 => Ok(Blame::Caller),
         1 => Ok(Blame::Callee),
         2 => Ok(Blame::None),
-        _ => Err(DecodeError::InvalidKind("Blame", d as u16)),
+        _ => Err(DecodeError::InvalidKind("Blame", d as u32)),
     }
 }
 
@@ -497,7 +498,7 @@ fn read_inst_data(r: &mut Reader) -> Result<InstData, DecodeError> {
             align: r.u32()?,
         }),
         16 => Ok(InstData::FieldIndex(r.u32()?)),
-        _ => Err(DecodeError::InvalidKind("InstData", tag as u16)),
+        _ => Err(DecodeError::InvalidKind("InstData", tag as u32)),
     }
 }
 
@@ -905,10 +906,10 @@ mod tests {
         buf.push(2u8);
         buf.extend_from_slice(&7u32.to_le_bytes());
         let mut r = Reader::new(&buf);
-        assert!(matches!(
+        assert_eq!(
             read_region_id(&mut r),
             Err(DecodeError::InvalidKind("RegionId.payload", 7))
-        ));
+        );
     }
 
     #[test]

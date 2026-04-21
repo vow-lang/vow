@@ -102,11 +102,17 @@ fn region_encode(out: Vec<i64>, rgn: i64) vow {
 // `region_pack`'s own contract enforces this, and we surface it here so
 // a corrupted byte fails on this function's `requires` with a clear
 // caller blame rather than cascading into `region_pack`.
+//
+// Canonicity: Root (2) and Rodata (3) carry no payload on the encoder
+// side, so the four payload bytes must be zero. Mirrors
+// `vow-ir/src/serialize.rs::read_region_id` — same rejection rule on
+// both sides keeps the cross-compiler wire format bit-identical.
 fn region_decode(buf: Vec<i64>, pos: i64) -> i64 vow {
     requires: pos >= 0,
     requires: pos + 4 < buf.len(),
     requires: buf[pos] >= 0,
-    requires: buf[pos] <= 3
+    requires: buf[pos] <= 3,
+    requires: buf[pos] <= 1 || (buf[pos + 1] == 0 && buf[pos + 2] == 0 && buf[pos + 3] == 0 && buf[pos + 4] == 0)
 } {
     let kind: i64 = read_u8(buf, pos);
     let payload: i64 = read_u32_le(buf, pos + 1);
