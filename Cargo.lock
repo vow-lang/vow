@@ -951,7 +951,7 @@ dependencies = [
 name = "vow-clif-shim"
 version = "0.1.0"
 dependencies = [
- "cranelift-codegen 0.130.1",
+ "cranelift-codegen 0.131.0",
  "cranelift-frontend",
  "cranelift-module 0.130.1",
  "cranelift-native",
@@ -962,7 +962,7 @@ dependencies = [
 name = "vow-codegen"
 version = "0.1.0"
 dependencies = [
- "cranelift-codegen 0.130.1",
+ "cranelift-codegen 0.131.0",
  "cranelift-frontend",
  "cranelift-module 0.130.1",
  "cranelift-native",
