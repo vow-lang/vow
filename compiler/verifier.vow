@@ -740,7 +740,11 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
         let cache_status: i64 = {
             if status == VERIFY_PROVEN_IR() { VERIFY_PROVEN() } else { status }
         };
-        if cache_status == VERIFY_PROVEN() || cache_status == VERIFY_FAILED() {
+        // Don't persist FAILED entries under (z3, ir): IR lacks overflow
+        // modeling, so IR-only counterexamples may be infeasible under BV,
+        // and neither secondary lookup retrieves IR-FAILED results anyway.
+        let is_ir_key: bool = resolved_encoding == String::from("ir");
+        if cache_status == VERIFY_PROVEN() || (cache_status == VERIFY_FAILED() && !is_ir_key) {
             let cache_key2: String = verify_cache_key(c_source, max_k_step, resolved_solver, resolved_encoding);
             verify_cache_store(cache_key2, cache_status);
         }
@@ -798,10 +802,13 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
         if raw_status == VERIFY_PROVEN() { VERIFY_PROVEN_IR() } else { raw_status }
     };
     if use_cache {
+        // Only persist PROVEN under (z3, ir). IR counterexamples can be
+        // infeasible under BV, so writing FAILED here would be misleading
+        // and no reader probes the IR key for FAILED anyway.
         let cache_status: i64 = {
             if status == VERIFY_PROVEN_IR() { VERIFY_PROVEN() } else { status }
         };
-        if cache_status == VERIFY_PROVEN() || cache_status == VERIFY_FAILED() {
+        if cache_status == VERIFY_PROVEN() {
             let cache_key: String = verify_cache_key(c_source, max_k_step, ir_solver, ir_encoding);
             verify_cache_store(cache_key, cache_status);
         }
