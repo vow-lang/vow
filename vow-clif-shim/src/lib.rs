@@ -254,6 +254,11 @@ struct ModuleContext {
 // Per-function scratch accumulated via incremental FFI. Buffers are reused
 // across functions — Rust's `Vec::clear()` preserves capacity, so amortized
 // cost converges to the peak function's working set.
+//
+// The `*_ptrs` fields below hold raw VowVec pointers aliased from caller-owned
+// strings (the live `IrModule`). They are only valid within one
+// `fn_begin → fn_end` cycle, since `fn_end` resets the scratch. Do not retain
+// these values across FFI boundaries.
 #[derive(Default)]
 struct FnScratch {
     func_idx: i64,
@@ -269,16 +274,16 @@ struct FnScratch {
     inst_dks: Vec<i64>,
     inst_dvs: Vec<i64>,
     inst_dv2s: Vec<i64>,
-    inst_ds_ptrs: Vec<i64>, // raw VowVec pointers; caller owns the strings
+    inst_ds_ptrs: Vec<i64>, // raw VowVec ptrs — see struct-level doc
     all_args: Vec<i64>,
     arg_offsets: Vec<i64>,
     arg_lengths: Vec<i64>,
     // Per vow entry:
     vow_ids: Vec<i64>,
-    vow_desc_ptrs: Vec<i64>, // raw VowVec pointers
+    vow_desc_ptrs: Vec<i64>, // raw VowVec ptrs — see struct-level doc
     binding_counts: Vec<i64>,
     binding_inst_ids_all: Vec<i64>,
-    binding_names_ptrs: Vec<i64>, // raw VowVec pointers
+    binding_names_ptrs: Vec<i64>, // raw VowVec ptrs — see struct-level doc
 }
 
 impl FnScratch {
@@ -476,6 +481,11 @@ pub unsafe extern "C" fn __vow_clif_declare_function(
 // ---------------------------------------------------------------------------
 
 // Begin accumulating a new function. Clears any prior scratch state.
+//
+// Protocol: each `fn_begin` must be balanced by `fn_end` on success. On any
+// error mid-stream the caller must instead call `__vow_clif_destroy` on the
+// whole context; partial scratch is otherwise left dirty until the next
+// `fn_begin` resets it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_clif_fn_begin(
     ctx_ptr: i64,
