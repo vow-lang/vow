@@ -496,6 +496,10 @@ pub unsafe extern "C" fn __vow_clif_fn_begin(
     param_tys_vec: i64,
 ) -> i64 {
     let ctx = unsafe { &mut *(ctx_ptr as *mut ModuleContext) };
+    if (func_idx as usize) >= ctx.func_decls.len() {
+        eprintln!("clif_shim: func_idx {func_idx} out of range");
+        return -1;
+    }
     ctx.fn_scratch.reset();
     ctx.fn_scratch.func_idx = func_idx;
     ctx.fn_scratch.ret_ty = ret_ty;
