@@ -31,7 +31,13 @@ pub enum DecodeError {
     BadMagic,
     VersionMismatch(u32),
     Truncated,
-    InvalidKind(&'static str, u8),
+    /// Unknown discriminant for the named enum. Payload is `u16` so opcode
+    /// discriminants above 255 can be reported faithfully once the opcode
+    /// space grows past the current max of 115.
+    InvalidKind(&'static str, u16),
+    /// Decoder produced a `Module` but the input buffer had trailing bytes
+    /// past the last function. Carries the number of unconsumed bytes.
+    TrailingBytes(usize),
 }
 
 // ---------------------------------------------------------------------------
@@ -138,7 +144,7 @@ fn read_region_id(r: &mut Reader) -> Result<RegionId, DecodeError> {
         1 => Ok(RegionId::Caller(HiddenRegionIdx(payload))),
         2 => Ok(RegionId::Root),
         3 => Ok(RegionId::Rodata),
-        _ => Err(DecodeError::InvalidKind("RegionId", kind)),
+        _ => Err(DecodeError::InvalidKind("RegionId", kind as u16)),
     }
 }
 
@@ -174,7 +180,7 @@ fn read_region_constraint(r: &mut Reader) -> Result<RegionConstraint, DecodeErro
             Ok(RegionConstraint::AliasOfAny(xs))
         }
         3 => Ok(RegionConstraint::ConstantGlobal),
-        _ => Err(DecodeError::InvalidKind("RegionConstraint", tag)),
+        _ => Err(DecodeError::InvalidKind("RegionConstraint", tag as u16)),
     }
 }
 
@@ -232,7 +238,7 @@ macro_rules! opcode_map {
         fn disc_opcode(d: u16) -> Result<Opcode, DecodeError> {
             match d {
                 $($disc => Ok(Opcode::$op),)*
-                _ => Err(DecodeError::InvalidKind("Opcode", d as u8)),
+                _ => Err(DecodeError::InvalidKind("Opcode", d)),
             }
         }
     };
@@ -304,7 +310,7 @@ fn disc_ty(d: u8) -> Result<Ty, DecodeError> {
         6 => Ok(Ty::Ptr),
         7 => Ok(Ty::LinearPtr),
         8 => Ok(Ty::U64),
-        _ => Err(DecodeError::InvalidKind("Ty", d)),
+        _ => Err(DecodeError::InvalidKind("Ty", d as u16)),
     }
 }
 
@@ -325,7 +331,7 @@ fn disc_effect(d: u8) -> Result<Effect, DecodeError> {
         2 => Ok(Effect::Read),
         3 => Ok(Effect::Unsafe),
         4 => Ok(Effect::Write),
-        _ => Err(DecodeError::InvalidKind("Effect", d)),
+        _ => Err(DecodeError::InvalidKind("Effect", d as u16)),
     }
 }
 
@@ -342,7 +348,7 @@ fn disc_blame(d: u8) -> Result<Blame, DecodeError> {
         0 => Ok(Blame::Caller),
         1 => Ok(Blame::Callee),
         2 => Ok(Blame::None),
-        _ => Err(DecodeError::InvalidKind("Blame", d)),
+        _ => Err(DecodeError::InvalidKind("Blame", d as u16)),
     }
 }
 
@@ -451,7 +457,7 @@ fn read_inst_data(r: &mut Reader) -> Result<InstData, DecodeError> {
             align: r.u32()?,
         }),
         16 => Ok(InstData::FieldIndex(r.u32()?)),
-        _ => Err(DecodeError::InvalidKind("InstData", tag)),
+        _ => Err(DecodeError::InvalidKind("InstData", tag as u16)),
     }
 }
 
@@ -774,6 +780,12 @@ pub fn decode_module(bytes: &[u8]) -> Result<Module, DecodeError> {
     for _ in 0..nf {
         functions.push(read_function(&mut r)?);
     }
+    // Reject trailing bytes so two different buffers can never decode to
+    // the same semantic module — concatenated payloads or trailing
+    // garbage now surface as `TrailingBytes` instead of silent success.
+    if r.pos != bytes.len() {
+        return Err(DecodeError::TrailingBytes(bytes.len() - r.pos));
+    }
     Ok(Module {
         name,
         functions,
@@ -833,6 +845,17 @@ mod tests {
         let mut b = encode_module(&empty_module());
         b[4] = 99;
         assert_eq!(decode_module(&b), Err(DecodeError::VersionMismatch(99)));
+    }
+
+    #[test]
+    fn trailing_bytes_rejected() {
+        let mut b = encode_module(&empty_module());
+        let before = b.len();
+        b.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!(
+            decode_module(&b),
+            Err(DecodeError::TrailingBytes(b.len() - before))
+        );
     }
 
     #[test]

@@ -129,6 +129,9 @@ fn region_constraint_encode(out: Vec<i64>, kind: i64, aux: i64, aliases: Vec<i64
         return;
     }
     // ALIAS_OF_ANY: LEB128 count + u32 parameter indices.
+    // Each alias is a u32 parameter index on the Rust side; the caller
+    // guarantees bounded values, and `write_u32_le`'s own contract will
+    // catch any violation loudly at the call site.
     let n: i64 = aliases.len();
     write_leb(out, n);
     let mut i: i64 = 0;
@@ -136,10 +139,7 @@ fn region_constraint_encode(out: Vec<i64>, kind: i64, aux: i64, aliases: Vec<i64
         invariant: i >= 0,
         invariant: i <= n
     } {
-        let a: i64 = aliases[i];
-        // Each alias is a u32 parameter index on the Rust side.
-        if a < 0 || a > 4294967295 { return; }
-        write_u32_le(out, a);
+        write_u32_le(out, aliases[i]);
         i = i + 1;
     }
 }
