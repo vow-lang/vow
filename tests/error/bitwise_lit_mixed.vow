@@ -1,0 +1,9 @@
+// TEST: stderr "bitwise operator requires matching integer types"
+module BitwiseLitMixed
+
+fn main() -> i32 {
+  let ux: u64 = 8u64;
+  let x: i64 = 2;
+  let r: u64 = ux << (1 + x);
+  0
+}
