@@ -259,6 +259,11 @@ pub fn run_with_fallback(
                 run_esbmc_with_max_k_step(esbmc, c_src, max_k_step, func_name, &ir_config);
             match ir_result {
                 VerificationResult::Proven => (VerificationResult::ProvenIr, ir_config),
+                // IR returned a counterexample, but IR does not model
+                // overflow — a CE found only under IR can be infeasible
+                // under BV. Report Timeout (which is what BV actually
+                // produced) rather than an unsound definitive Failed.
+                VerificationResult::Failed(_) => (VerificationResult::Timeout, ir_config),
                 other => (other, ir_config),
             }
         }

@@ -716,20 +716,32 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
             if timeout_secs.len() > 0 { timeout_secs } else { DEFAULT_AUTO_TIMEOUT_STR() }
         };
         let exit2: i64 = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, ir_solver, ir_encoding, ir_timeout);
-        if exit2 != -1 {
-            let so2: String = process_get_stdout();
-            let se2: String = process_get_stderr();
-            let combined2: String = String::from("");
-            combined2.push_str(so2);
-            combined2.push_str(se2);
-            let s2: i64 = parse_verify_status(combined2);
-            status = {
-                if s2 == VERIFY_PROVEN() { VERIFY_PROVEN_IR() } else { s2 }
+        if exit2 == -1 {
+            // ESBMC disappeared between BV and IR runs; surface consistently with verify_function_ir_fallback.
+            return VerifyResult {
+                status: VERIFY_NOT_FOUND(),
+                vow_id: -1,
+                var_names: Vec::new(),
+                var_values: Vec::new(),
+                block_visits: Vec::new(),
+                raw_output: String::from("esbmc not found"),
             };
-            used_combined = combined2;
-            resolved_solver = ir_solver;
-            resolved_encoding = ir_encoding;
         }
+        let so2: String = process_get_stdout();
+        let se2: String = process_get_stderr();
+        let combined2: String = String::from("");
+        combined2.push_str(so2);
+        combined2.push_str(se2);
+        let s2: i64 = parse_verify_status(combined2);
+        status = {
+            // IR-only counterexamples can be infeasible under BV (no overflow modeling), so a FAILED here is inconclusive — report the original Timeout instead.
+            if s2 == VERIFY_PROVEN() { VERIFY_PROVEN_IR() }
+            else if s2 == VERIFY_FAILED() { VERIFY_TIMEOUT() }
+            else { s2 }
+        };
+        used_combined = combined2;
+        resolved_solver = ir_solver;
+        resolved_encoding = ir_encoding;
     }
 
     if use_cache {
@@ -795,7 +807,10 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
     combined.push_str(stderr);
     let raw_status: i64 = parse_verify_status(combined);
     let status: i64 = {
-        if raw_status == VERIFY_PROVEN() { VERIFY_PROVEN_IR() } else { raw_status }
+        // IR-only CEs can be infeasible under BV — demote FAILED to TIMEOUT (the caller only reaches us because BV already timed out).
+        if raw_status == VERIFY_PROVEN() { VERIFY_PROVEN_IR() }
+        else if raw_status == VERIFY_FAILED() { VERIFY_TIMEOUT() }
+        else { raw_status }
     };
     if use_cache {
         // Only persist PROVEN under (z3, ir). IR counterexamples can be

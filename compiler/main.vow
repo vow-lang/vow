@@ -676,7 +676,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                             if vr.status == VERIFY_FAILED() {
                                 verify_failed = true;
                             } else if vr.status == VERIFY_TIMEOUT() {
-                                // BV timed out; retry with IR before failing the test (mirrors run_build and run_with_fallback).
+                                // BV timed out; retry with IR (no Bitwuzla guard needed — run_test only uses Auto/Boolector).
                                 let vr2: VerifyResult = verify_function_ir_fallback(vf, ir_mod, t_max_k_step, false, String::from(""), t_vec_max, t_string_max, t_hashmap_max);
                                 // Anything other than PROVEN/PROVEN_IR is a test failure, including ERROR and NOT_FOUND.
                                 if vr2.status != VERIFY_PROVEN() && vr2.status != VERIFY_PROVEN_IR() {
