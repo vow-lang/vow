@@ -477,7 +477,8 @@ pub unsafe extern "C" fn __vow_clif_declare_function(
 }
 
 // ---------------------------------------------------------------------------
-// FFI: compile_function — the core: receives flattened IR, produces Cranelift
+// FFI: per-function incremental compilation (fn_begin / fn_block / fn_inst /
+// fn_vow / fn_end)
 // ---------------------------------------------------------------------------
 
 // Begin accumulating a new function. Clears any prior scratch state.
@@ -565,7 +566,7 @@ pub unsafe extern "C" fn __vow_clif_fn_inst(
 
 // Add a vow entry to the current function. The `blame` field (Caller vs
 // Callee) is not a parameter here because the shim derives it from the IR
-// opcode (`IOP_VOW_REQ` → Caller, else Callee) — see line 1563 below.
+// opcode (`IOP_VOW_REQ` → Caller, else Callee) — see `blame_byte` below.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_clif_fn_vow(
     ctx_ptr: i64,
