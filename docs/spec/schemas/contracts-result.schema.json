@@ -51,7 +51,7 @@
           },
           "status": {
             "type": "string",
-            "enum": ["proven", "failed", "unknown", "timeout", "error", "not_verified"],
+            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified"],
             "description": "Verification status"
           }
         },

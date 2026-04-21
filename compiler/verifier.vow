@@ -759,6 +759,15 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
     let ir_timeout: String = {
         if timeout_secs.len() > 0 { timeout_secs } else { DEFAULT_AUTO_TIMEOUT_STR() }
     };
+    // Probe the IR cache first so a repeated BV timeout doesn't re-run Z3.
+    if use_cache {
+        verify_cache_ensure_dir();
+        let ir_probe_key: String = verify_cache_key(c_source, max_k_step, ir_solver, ir_encoding);
+        let cached_ir: i64 = verify_cache_lookup(ir_probe_key);
+        if cached_ir == VERIFY_PROVEN() {
+            return build_verify_result(f, VERIFY_PROVEN_IR(), String::from("(cached)"));
+        }
+    }
     let exit_code: i64 = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, ir_solver, ir_encoding, ir_timeout);
     if exit_code == -1 {
         return VerifyResult {
@@ -798,12 +807,27 @@ fn verify_start(f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_ca
         return -1;
     }
     let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max);
+    let auto_enc: bool = is_auto_encoding(encoding);
+    let bv_solver: String = resolve_auto_bv_solver(solver);
+    let bv_encoding: String = { if auto_enc { String::from("bv") } else { encoding } };
     if use_cache {
         verify_cache_ensure_dir();
-        let cache_key: String = verify_cache_key(c_source, max_k_step, solver, encoding);
+        // Lookup under the resolved BV key so hits produced by the sync
+        // `verify` path (which normalizes keys the same way) are visible
+        // here. Otherwise Auto mode splits the cache namespace.
+        let cache_key: String = verify_cache_key(c_source, max_k_step, bv_solver, bv_encoding);
         let cached: i64 = verify_cache_lookup(cache_key);
         if cached == VERIFY_PROVEN() {
             return -2;
+        }
+        // Also probe the IR fallback key: a prior run may have escalated to
+        // (z3, ir) after a BV timeout.
+        if auto_enc && bv_solver != String::from("bitwuzla") {
+            let ir_key: String = verify_cache_key(c_source, max_k_step, String::from("z3"), String::from("ir"));
+            let cached_ir: i64 = verify_cache_lookup(ir_key);
+            if cached_ir == VERIFY_PROVEN() {
+                return -2;
+            }
         }
     }
     let tmp_path: String = String::from("/tmp/__vow_verify_");
