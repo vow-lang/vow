@@ -11,12 +11,55 @@ on:
     types: [submitted]
 
 jobs:
+  verify-issue-assigner:
+    # The `issues` event payload exposes `author_association` for the issue
+    # opener only. On `assigned`, the trusted actor is the assigner (the
+    # sender), not the opener, so we verify collaborator status explicitly.
+    if: github.event_name == 'issues' && github.event.action == 'assigned'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require sender to be a repository collaborator
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const username = context.payload.sender.login;
+            try {
+              await github.rest.repos.checkCollaborator({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                username,
+              });
+              core.info(`${username} is a repository collaborator.`);
+            } catch (error) {
+              core.setFailed(`${username} is not a trusted collaborator; refusing to invoke Claude.`);
+            }
+
   claude:
+    needs: [verify-issue-assigner]
+    # always() lets this job run when verify-issue-assigner is skipped
+    # (non-assigned events). The per-branch conditions below enforce trust:
+    # every event path either gates on author_association or, for
+    # issues:assigned, requires the verify job to have succeeded.
     if: |
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      always() && (
+      (github.event_name == 'issue_comment' &&
+      contains(github.event.comment.body, '@claude') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
+      (github.event_name == 'pull_request_review_comment' &&
+      contains(github.event.comment.body, '@claude') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
+      (github.event_name == 'pull_request_review' &&
+      contains(github.event.review.body, '@claude') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)) ||
+      (github.event_name == 'issues' && github.event.action == 'opened' &&
+      (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) ||
+      (github.event_name == 'issues' && github.event.action == 'assigned' &&
+      (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) &&
+      needs.verify-issue-assigner.result == 'success')
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -47,4 +90,3 @@ jobs:
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
           # claude_args: '--allowed-tools Bash(gh pr:*)'
-
