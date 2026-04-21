@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 
 use vow_ir::{FuncId, Function, Module, Ty};
 
-use crate::solver_strategy::SolverConfig;
+use crate::solver_strategy::{SolverConfig, run_with_fallback};
 
 use crate::c_emitter::{
     ConstantValue, VerifyLimits, collect_modelable_callees, detect_constant_functions,
@@ -301,7 +301,8 @@ pub fn verify_function_with_module_and_const_fns_configured(
     };
 
     let c_src = emit_verify_c_source(func, module, const_fns, limits);
-    run_esbmc_with_max_k_step(&esbmc, &c_src, max_k_step, &func.name, config)
+    let (result, _resolved) = run_with_fallback(&esbmc, &c_src, max_k_step, &func.name, config);
+    result
 }
 
 fn verify_function_inner(
