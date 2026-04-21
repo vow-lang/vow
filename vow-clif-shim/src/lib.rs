@@ -576,36 +576,29 @@ pub unsafe extern "C" fn __vow_clif_fn_vow(
     binding_names_vec: i64,
 ) -> i64 {
     let ctx = unsafe { &mut *(ctx_ptr as *mut ModuleContext) };
-    let (bids_len, bnames_len) = {
-        let bids_len = if binding_inst_ids_vec != 0 {
-            unsafe { read_i64_slice(binding_inst_ids_vec) }.len()
-        } else {
-            0
-        };
-        let bnames_len = if binding_names_vec != 0 {
-            unsafe { read_i64_slice(binding_names_vec) }.len()
-        } else {
-            0
-        };
-        (bids_len, bnames_len)
+    let bids: &[i64] = if binding_inst_ids_vec != 0 {
+        unsafe { read_i64_slice(binding_inst_ids_vec) }
+    } else {
+        &[]
     };
-    if bids_len != bnames_len {
+    let bnames: &[i64] = if binding_names_vec != 0 {
+        unsafe { read_i64_slice(binding_names_vec) }
+    } else {
+        &[]
+    };
+    if bids.len() != bnames.len() {
         eprintln!(
-            "clif_shim: __vow_clif_fn_vow: binding_inst_ids len ({bids_len}) != binding_names len ({bnames_len})"
+            "clif_shim: __vow_clif_fn_vow: binding_inst_ids len ({}) != binding_names len ({})",
+            bids.len(),
+            bnames.len()
         );
         return -1;
     }
     ctx.fn_scratch.vow_ids.push(id);
     ctx.fn_scratch.vow_desc_ptrs.push(desc_vec);
-    ctx.fn_scratch.binding_counts.push(bids_len as i64);
-    if binding_inst_ids_vec != 0 {
-        let bids = unsafe { read_i64_slice(binding_inst_ids_vec) };
-        ctx.fn_scratch.binding_inst_ids_all.extend_from_slice(bids);
-    }
-    if binding_names_vec != 0 {
-        let bnames = unsafe { read_i64_slice(binding_names_vec) };
-        ctx.fn_scratch.binding_names_ptrs.extend_from_slice(bnames);
-    }
+    ctx.fn_scratch.binding_counts.push(bids.len() as i64);
+    ctx.fn_scratch.binding_inst_ids_all.extend_from_slice(bids);
+    ctx.fn_scratch.binding_names_ptrs.extend_from_slice(bnames);
     0
 }
 
