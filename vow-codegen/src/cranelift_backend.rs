@@ -887,6 +887,12 @@ fn lower_inst(
             ctx.value_map.insert(inst.id, unit);
         }
 
+        Opcode::RegionOpen | Opcode::RegionClose => {
+            // Phase 2: these opcodes are declared but never emitted by the
+            // lowerer. Phase 4 wires them to __vow_arena_open / _close calls.
+            unreachable!("RegionOpen / RegionClose not emitted in Phase 2");
+        }
+
         // ------------------------------------------------------------------
         // Struct / enum field access
         // ------------------------------------------------------------------
@@ -2019,9 +2025,20 @@ impl Backend for CraneliftBackend {
 mod tests {
     use super::*;
     use vow_ir::{
-        BasicBlock, BlockId, FuncId, Function, InstData, InstId, Module, Opcode, Ty, VowEntry,
-        VowId,
-    };
+    BasicBlock,
+    BlockId,
+    FuncId,
+    Function,
+    InstData,
+    InstId,
+    Module,
+    Opcode,
+    RegionId,
+    RegionSummary,
+    Ty,
+    VowEntry,
+    VowId,
+};
     use vow_syntax::span::Span;
 
     fn sp() -> Span {
@@ -2047,6 +2064,7 @@ mod tests {
             args: args.into_iter().map(InstId).collect(),
             data,
             origin: sp(),
+            region: RegionId::Root,
         }
     }
 
@@ -2067,6 +2085,7 @@ mod tests {
                     insts: vec![inst(0, Opcode::Return, Ty::Unit, vec![], InstData::None)],
                 }],
                 local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
             }],
         );
         let result =
@@ -2097,6 +2116,7 @@ mod tests {
                     ],
                 }],
                 local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
             }],
         );
         let result =
@@ -2134,6 +2154,7 @@ mod tests {
                     ],
                 }],
                 local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
             }],
         );
         let result =
@@ -2177,6 +2198,7 @@ mod tests {
                                     else_block: BlockId(2),
                                 },
                                 origin: sp(),
+                                region: RegionId::Root,
                             },
                         ],
                     },
@@ -2228,12 +2250,14 @@ mod tests {
                                 args: vec![],
                                 data: InstData::None,
                                 origin: sp(),
+                                region: RegionId::Root,
                             },
                             inst(9, Opcode::Return, Ty::Unit, vec![6], InstData::None),
                         ],
                     },
                 ],
                 local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
             }],
         );
         let _ = VowId(0); // suppress unused import
@@ -2275,6 +2299,7 @@ mod tests {
             vows: vec![],
             blocks: vec![],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let sig = build_signature(&ir_func, CallConv::SystemV);
         assert_eq!(sig.params.len(), 2);
@@ -2308,6 +2333,7 @@ mod tests {
                 insts,
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         }
     }
 
@@ -2521,6 +2547,7 @@ mod tests {
                     ],
                 }],
                 local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
             }],
         );
         let result =
@@ -2584,6 +2611,7 @@ mod tests {
                     ],
                 }],
                 local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
             }],
         );
         let result =
@@ -2618,6 +2646,7 @@ mod tests {
                     ],
                 }],
                 local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
             }],
         );
         let result =
@@ -2650,6 +2679,7 @@ mod tests {
                     ],
                 }],
                 local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
             }],
         );
         let result =
@@ -2682,6 +2712,7 @@ mod tests {
                     ],
                 }],
                 local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
             }],
         );
         let result =
@@ -2738,6 +2769,7 @@ mod tests {
                     ],
                 }],
                 local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
             }],
         );
         let result =
@@ -2772,6 +2804,7 @@ mod tests {
                     ],
                 }],
                 local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
             }],
         );
         let result =
@@ -2803,6 +2836,7 @@ mod tests {
                     ],
                 }],
                 local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
             }],
         );
         let result =
@@ -2836,6 +2870,7 @@ mod tests {
                     ],
                 }],
                 local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
             }],
         );
         let result =
@@ -2867,6 +2902,7 @@ mod tests {
                     ],
                 }],
                 local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
             }],
         );
         let result =
@@ -2938,6 +2974,7 @@ mod tests {
                     ],
                 }],
                 local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
             }],
         );
         let result =
@@ -2985,6 +3022,7 @@ mod tests {
                     ],
                 }],
                 local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
             }],
         );
         let result =
@@ -3032,6 +3070,7 @@ mod tests {
                     ],
                 }],
                 local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
             }],
         );
         let result =
@@ -3081,6 +3120,7 @@ mod tests {
                     ],
                 }],
                 local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
             }],
         );
         let result =
@@ -3690,6 +3730,7 @@ mod tests {
                         ],
                     }],
                     local_names: std::collections::HashMap::new(),
+                    summary: RegionSummary::default(),
                 },
                 Function {
                     id: FuncId(1),
@@ -3714,6 +3755,7 @@ mod tests {
                         ],
                     }],
                     local_names: std::collections::HashMap::new(),
+                    summary: RegionSummary::default(),
                 },
             ],
         );
@@ -3798,6 +3840,7 @@ mod tests {
                     ],
                 }],
                 local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
             }],
         );
         let result =
@@ -3832,6 +3875,7 @@ mod tests {
                     ],
                 }],
                 local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
             }],
         );
         let result =

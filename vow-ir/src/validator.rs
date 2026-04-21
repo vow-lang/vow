@@ -164,7 +164,8 @@ fn validate_block(block: &BasicBlock, errors: &mut Vec<ValidationError>) {
 mod tests {
     use super::*;
     use crate::types::{
-        BasicBlock, BlockId, FuncId, Function, Inst, InstData, InstId, Module, Opcode, Ty,
+        BasicBlock, BlockId, FuncId, Function, Inst, InstData, InstId, Module, Opcode, RegionId,
+        RegionSummary, Ty,
     };
     use vow_syntax::span::Span;
 
@@ -180,6 +181,7 @@ mod tests {
             args,
             data,
             origin: dummy_span(),
+            region: RegionId::Root,
         }
     }
 
@@ -194,6 +196,7 @@ mod tests {
             vows: vec![],
             blocks,
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         }
     }
 

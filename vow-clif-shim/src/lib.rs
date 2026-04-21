@@ -203,6 +203,14 @@ const IOP_BITAND_U64: i64 = 110;
 const IOP_BITOR_U64: i64 = 111;
 const IOP_SHL_U64: i64 = 112;
 const IOP_SHR_U64: i64 = 113;
+// Phase 2: declared but never emitted. Phase 4 wires arena open/close to
+// __vow_arena_open / __vow_arena_close. If one leaks into the shim today
+// it is a defensive no-op rather than a misdispatch (see compile_function
+// below).
+#[allow(dead_code)]
+const IOP_REGION_OPEN: i64 = 114;
+#[allow(dead_code)]
+const IOP_REGION_CLOSE: i64 = 115;
 
 // InstData kind constants (match compiler/ir.vow IDATA_*)
 #[allow(dead_code)]
@@ -1563,6 +1571,14 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
                     set_val!(iid, unit);
                 }
                 IOP_LINEAR_CONSUME | IOP_LINEAR_BORROW => {
+                    let unit = builder.ins().iconst(types::I32, 0);
+                    set_val!(iid, unit);
+                }
+
+                // Phase 2: RegionOpen / RegionClose are declared but never
+                // emitted. Handled defensively so any accidental Phase-3
+                // emission does not misdispatch silently.
+                IOP_REGION_OPEN | IOP_REGION_CLOSE => {
                     let unit = builder.ins().iconst(types::I32, 0);
                     set_val!(iid, unit);
                 }

@@ -359,6 +359,8 @@ pub fn is_modelable(
                 | Opcode::Store
                 | Opcode::RegionAlloc
                 | Opcode::RegionFree
+                | Opcode::RegionOpen
+                | Opcode::RegionClose
                 | Opcode::LinearConsume
                 | Opcode::LinearBorrow
                 | Opcode::FieldSet => false,
@@ -959,6 +961,8 @@ fn emit_inst(
         | Opcode::Store
         | Opcode::RegionAlloc
         | Opcode::RegionFree
+        | Opcode::RegionOpen
+        | Opcode::RegionClose
         | Opcode::LinearConsume
         | Opcode::LinearBorrow
         | Opcode::FieldSet => {
@@ -1508,7 +1512,9 @@ pub fn emit_c_module_with_callees(
 mod tests {
     use super::*;
     use vow_diag::Blame;
-    use vow_ir::{BasicBlock, BlockId, FuncId, InstId, Module, VowEntry, VowId};
+    use vow_ir::{
+        BasicBlock, BlockId, FuncId, InstId, Module, RegionId, RegionSummary, VowEntry, VowId,
+    };
     use vow_syntax::span::Span;
 
     fn sp() -> Span {
@@ -1523,6 +1529,7 @@ mod tests {
             args: args.into_iter().map(InstId).collect(),
             data,
             origin: sp(),
+            region: RegionId::Root,
         }
     }
 
@@ -1552,6 +1559,7 @@ mod tests {
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("int64_t add("), "signature: {c}");
@@ -1590,6 +1598,7 @@ mod tests {
                         args: vec![InstId(3)],
                         data: InstData::VowId(VowId(0)),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     inst(
                         5,
@@ -1602,6 +1611,7 @@ mod tests {
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("__ESBMC_assume(v3)"), "requires: {c}");
@@ -1646,6 +1656,7 @@ mod tests {
                 insts,
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         }
     }
 
@@ -1996,6 +2007,7 @@ mod tests {
                                 else_block: BlockId(2),
                             },
                             origin: sp(),
+                            region: RegionId::Root,
                         },
                     ],
                 },
@@ -2018,6 +2030,7 @@ mod tests {
                 },
             ],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -2043,6 +2056,7 @@ mod tests {
                     args: vec![],
                     data: InstData::None,
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(42)),
                 Inst {
@@ -2052,6 +2066,7 @@ mod tests {
                     args: vec![InstId(1)],
                     data: InstData::PhiTarget(InstId(0)),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(3, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
@@ -2076,6 +2091,7 @@ mod tests {
                     args: vec![],
                     data: InstData::CallTarget(FuncId(1)),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 Inst {
                     id: InstId(1),
@@ -2084,6 +2100,7 @@ mod tests {
                     args: vec![InstId(0)],
                     data: InstData::FieldIndex(0),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(2, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
@@ -2115,6 +2132,7 @@ mod tests {
                     args: vec![InstId(0)],
                     data: InstData::VowId(VowId(2)),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(2, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
@@ -2196,11 +2214,13 @@ mod tests {
                         args: vec![InstId(0)],
                         data: InstData::VowId(VowId(0)),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     inst(2, Opcode::Return, Ty::Unit, vec![0], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("__ESBMC_assert(v0"), "ensures: {c}");
@@ -2240,6 +2260,7 @@ mod tests {
                     args: vec![InstId(0), InstId(1)],
                     data: InstData::CallExtern("__vow_vec_new".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
@@ -2270,6 +2291,7 @@ mod tests {
                     args: vec![InstId(0), InstId(1)],
                     data: InstData::CallExtern("__vow_vec_new".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(3, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(42)),
                 Inst {
@@ -2279,6 +2301,7 @@ mod tests {
                     args: vec![InstId(2), InstId(3)],
                     data: InstData::CallExtern("__vow_vec_push_val".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(5, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
@@ -2309,6 +2332,7 @@ mod tests {
                     args: vec![InstId(0), InstId(1)],
                     data: InstData::CallExtern("__vow_vec_new".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 Inst {
                     id: InstId(3),
@@ -2317,6 +2341,7 @@ mod tests {
                     args: vec![InstId(2)],
                     data: InstData::CallExtern("__vow_vec_len".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
             ],
@@ -2342,6 +2367,7 @@ mod tests {
                     args: vec![InstId(0), InstId(1)],
                     data: InstData::CallExtern("__vow_vec_new".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(3, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
                 Inst {
@@ -2351,6 +2377,7 @@ mod tests {
                     args: vec![InstId(2), InstId(3)],
                     data: InstData::CallExtern("__vow_vec_get_val".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
             ],
@@ -2380,6 +2407,7 @@ mod tests {
                     args: vec![InstId(0), InstId(1)],
                     data: InstData::CallExtern("__vow_vec_new".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 Inst {
                     id: InstId(3),
@@ -2388,6 +2416,7 @@ mod tests {
                     args: vec![InstId(2)],
                     data: InstData::CallExtern("__vow_vec_pop".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(4, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
@@ -2413,6 +2442,7 @@ mod tests {
                     args: vec![InstId(0), InstId(1)],
                     data: InstData::CallExtern("__vow_vec_new".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(3, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
                 inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(99)),
@@ -2423,6 +2453,7 @@ mod tests {
                     args: vec![InstId(2), InstId(3), InstId(4)],
                     data: InstData::CallExtern("__vow_vec_set_val".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(6, Opcode::Return, Ty::Unit, vec![], InstData::None),
             ],
@@ -2456,6 +2487,7 @@ mod tests {
                         args: vec![],
                         data: InstData::None,
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
                     inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
@@ -2466,6 +2498,7 @@ mod tests {
                         args: vec![InstId(1), InstId(2)],
                         data: InstData::CallExtern("__vow_vec_new".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     Inst {
                         id: InstId(4),
@@ -2474,11 +2507,13 @@ mod tests {
                         args: vec![InstId(3)],
                         data: InstData::PhiTarget(InstId(0)),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     inst(5, Opcode::Return, Ty::Unit, vec![0], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("__vow_vec_t v0;"), "phi uses vec type: {c}");
@@ -2499,6 +2534,7 @@ mod tests {
                     args: vec![],
                     data: InstData::CallExtern("__some_other_func".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
@@ -2550,11 +2586,13 @@ mod tests {
                         args: vec![InstId(0)],
                         data: InstData::CallExtern("__vow_string_len".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let c = emit_c_function(&str_func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -2590,11 +2628,13 @@ mod tests {
                         args: vec![InstId(0)],
                         data: InstData::CallExtern("__vow_vec_len".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let c = emit_c_function(&vec_func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -2623,11 +2663,13 @@ mod tests {
                         args: vec![InstId(0)],
                         data: InstData::CallExtern("__vow_map_len".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let c = emit_c_function(&map_func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -2654,6 +2696,7 @@ mod tests {
                     args: vec![InstId(0)],
                     data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 Inst {
                     id: InstId(2),
@@ -2662,6 +2705,7 @@ mod tests {
                     args: vec![InstId(1), InstId(1)],
                     data: InstData::CallExtern("__vow_string_eq".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
@@ -2693,6 +2737,7 @@ mod tests {
                     args: vec![InstId(0)],
                     data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
             ],
@@ -2729,6 +2774,7 @@ mod tests {
                     args: vec![InstId(0)],
                     data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 Inst {
                     id: InstId(2),
@@ -2737,6 +2783,7 @@ mod tests {
                     args: vec![InstId(1)],
                     data: InstData::CallExtern("__vow_string_len".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
@@ -2761,6 +2808,7 @@ mod tests {
                     args: vec![InstId(0)],
                     data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(65)),
                 Inst {
@@ -2770,6 +2818,7 @@ mod tests {
                     args: vec![InstId(1), InstId(2)],
                     data: InstData::CallExtern("__vow_string_push_byte".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(4, Opcode::Return, Ty::Unit, vec![1], InstData::None),
             ],
@@ -2802,6 +2851,7 @@ mod tests {
                     args: vec![InstId(0)],
                     data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
                 Inst {
@@ -2811,6 +2861,7 @@ mod tests {
                     args: vec![InstId(2)],
                     data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 Inst {
                     id: InstId(4),
@@ -2819,6 +2870,7 @@ mod tests {
                     args: vec![InstId(1), InstId(3)],
                     data: InstData::CallExtern("__vow_string_push_str".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(5, Opcode::Return, Ty::Unit, vec![1], InstData::None),
             ],
@@ -2843,6 +2895,7 @@ mod tests {
                     args: vec![InstId(0)],
                     data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
                 Inst {
@@ -2852,6 +2905,7 @@ mod tests {
                     args: vec![InstId(1), InstId(2)],
                     data: InstData::CallExtern("__vow_string_byte_at".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
             ],
@@ -2887,6 +2941,7 @@ mod tests {
                     args: vec![InstId(0)],
                     data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
                 Inst {
@@ -2896,6 +2951,7 @@ mod tests {
                     args: vec![InstId(2)],
                     data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 Inst {
                     id: InstId(4),
@@ -2904,6 +2960,7 @@ mod tests {
                     args: vec![InstId(1), InstId(3)],
                     data: InstData::CallExtern("__vow_string_eq".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
             ],
@@ -2938,6 +2995,7 @@ mod tests {
                     args: vec![InstId(0)],
                     data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
                 Inst {
@@ -2947,6 +3005,7 @@ mod tests {
                     args: vec![InstId(2)],
                     data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 Inst {
                     id: InstId(4),
@@ -2955,6 +3014,7 @@ mod tests {
                     args: vec![InstId(1), InstId(3)],
                     data: InstData::CallExtern("__vow_string_eq".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 // Second call with swapped arg order — must hash to the same pair.
                 Inst {
@@ -2964,6 +3024,7 @@ mod tests {
                     args: vec![InstId(3), InstId(1)],
                     data: InstData::CallExtern("__vow_string_eq".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
             ],
@@ -3001,6 +3062,7 @@ mod tests {
                     args: vec![InstId(0)],
                     data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
                 Inst {
@@ -3010,6 +3072,7 @@ mod tests {
                     args: vec![InstId(2)],
                     data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 Inst {
                     id: InstId(4),
@@ -3018,6 +3081,7 @@ mod tests {
                     args: vec![InstId(1), InstId(3)],
                     data: InstData::CallExtern("__vow_string_contains".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
             ],
@@ -3051,6 +3115,7 @@ mod tests {
                         args: vec![],
                         data: InstData::None,
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
                     Inst {
@@ -3060,6 +3125,7 @@ mod tests {
                         args: vec![InstId(1)],
                         data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     Inst {
                         id: InstId(3),
@@ -3068,11 +3134,13 @@ mod tests {
                         args: vec![InstId(2)],
                         data: InstData::PhiTarget(InstId(0)),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     inst(4, Opcode::Return, Ty::Unit, vec![0], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -3097,6 +3165,7 @@ mod tests {
                     args: vec![InstId(0)],
                     data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 Inst {
                     id: InstId(2),
@@ -3105,6 +3174,7 @@ mod tests {
                     args: vec![InstId(1)],
                     data: InstData::CallExtern("__vow_string_print".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
             ],
@@ -3133,6 +3203,7 @@ mod tests {
                     args: vec![],
                     data: InstData::CallExtern("__vow_map_new".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
@@ -3161,6 +3232,7 @@ mod tests {
                     args: vec![],
                     data: InstData::CallExtern("__vow_map_new".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 Inst {
                     id: InstId(1),
@@ -3169,6 +3241,7 @@ mod tests {
                     args: vec![InstId(0)],
                     data: InstData::CallExtern("__vow_map_len".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
             ],
@@ -3192,6 +3265,7 @@ mod tests {
                     args: vec![],
                     data: InstData::CallExtern("__vow_map_new".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(10)),
                 inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(20)),
@@ -3202,6 +3276,7 @@ mod tests {
                     args: vec![InstId(0), InstId(1), InstId(2)],
                     data: InstData::CallExtern("__vow_map_insert".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(4, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
@@ -3233,6 +3308,7 @@ mod tests {
                     args: vec![],
                     data: InstData::CallExtern("__vow_map_new".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(5)),
                 Inst {
@@ -3242,6 +3318,7 @@ mod tests {
                     args: vec![InstId(0), InstId(1)],
                     data: InstData::CallExtern("__vow_map_get".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
@@ -3267,6 +3344,7 @@ mod tests {
                     args: vec![],
                     data: InstData::CallExtern("__vow_map_new".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(7)),
                 Inst {
@@ -3276,6 +3354,7 @@ mod tests {
                     args: vec![InstId(0), InstId(1)],
                     data: InstData::CallExtern("__vow_map_contains".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
             ],
@@ -3301,6 +3380,7 @@ mod tests {
                     args: vec![],
                     data: InstData::CallExtern("__vow_map_new".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(3)),
                 Inst {
@@ -3310,6 +3390,7 @@ mod tests {
                     args: vec![InstId(0), InstId(1)],
                     data: InstData::CallExtern("__vow_map_remove".to_string()),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(3, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
@@ -3340,6 +3421,7 @@ mod tests {
                         args: vec![],
                         data: InstData::None,
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     Inst {
                         id: InstId(1),
@@ -3348,6 +3430,7 @@ mod tests {
                         args: vec![],
                         data: InstData::CallExtern("__vow_map_new".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     Inst {
                         id: InstId(2),
@@ -3356,11 +3439,13 @@ mod tests {
                         args: vec![InstId(1)],
                         data: InstData::PhiTarget(InstId(0)),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     inst(3, Opcode::Return, Ty::Unit, vec![0], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -3412,6 +3497,7 @@ mod tests {
                                 else_block: BlockId(2),
                             },
                             origin: sp(),
+                            region: RegionId::Root,
                         },
                     ],
                 },
@@ -3431,6 +3517,7 @@ mod tests {
                 },
             ],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("int __blk_0 = 0;"), "blk_0 decl: {c}");
@@ -3466,6 +3553,7 @@ mod tests {
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         }
     }
 
@@ -3514,6 +3602,7 @@ mod tests {
                 },
             ],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let module = Module {
             name: "test".to_string(),
@@ -3553,6 +3642,7 @@ mod tests {
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let module = Module {
             name: "test".to_string(),
@@ -3577,6 +3667,7 @@ mod tests {
             args: vec![],
             data: InstData::CallTarget(FuncId(1)),
             origin: sp(),
+            region: RegionId::Root,
         };
         let empty_module = Module {
             name: String::new(),
@@ -3619,6 +3710,7 @@ mod tests {
             args: vec![],
             data: InstData::CallTarget(FuncId(99)),
             origin: sp(),
+            region: RegionId::Root,
         };
         let mut out = String::new();
         emit_inst(

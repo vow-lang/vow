@@ -1598,7 +1598,7 @@ Checked operators abort with `ArithmeticOverflow` on overflow.
 
 Bitwise operators require integer operands of the same type. Shift expressions return the left operand's type. `>>` is arithmetic for `i64` and logical for `u64`.
 
-Unsuffixed integer literals are `i64` by default but coerce to the other operand's integer type when used with a bitwise or shift operator. For example, given `let x: u64 = ...`, the expressions `x << 3` and `3 & x` both type-check (the literal coerces to `u64`). This matches the coercion rule already used by arithmetic operators and comparisons. Use a `u64` suffix (`3u64`) to force the `u64` type explicitly.
+Unsuffixed integer literals are `i64` by default but coerce to the other operand's integer type when used with a bitwise or shift operator. The same coercion applies to constant expressions composed entirely of unsuffixed integer literals — including arithmetic (`1 + 1`), bitwise (`1 << 3`), and unary negation (`-5`). For example, given `let x: u64 = ...`, the expressions `x << 3`, `3 & x`, and `x << (1 + 1)` all type-check (the literal-constant side coerces to `u64`). This matches the coercion rule already used by arithmetic operators and comparisons. Use a `u64` suffix (`3u64`) to force the `u64` type explicitly.
 
 ### Logical Operators
 
@@ -3205,6 +3205,26 @@ The `blame` field indicates who is at fault:
 
 **Fix:** Add a bounds check before indexing, or add contracts: `requires: i >= 0, requires: i < v.len()`.
 
+### RegionLiteralMutation
+
+**When:** A `Vec`, `String`, or `HashMap` mutation is attempted on a literal-backed container — one whose descriptor carries the `VOW_CAP_RODATA` sentinel (backing lives in `.rodata` or was pinned to the root region). See `docs/design/arena_memory.md` §6.1, §7.3.
+
+```json
+{"error":"RegionLiteralMutation","operation":"String::push_str","origin":"rodata"}
+```
+
+A plain-text hint follows on the next line (not a JSON field). The hint text is dispatched on the operation's type prefix:
+
+```
+hint: use String::from(literal) to obtain a mutable copy       # for String::* operations
+hint: use Vec::from(literal) to obtain a mutable copy          # for Vec::*    operations
+hint: construct a mutable HashMap and copy entries before mutating  # for HashMap::* operations
+```
+
+The `operation` field identifies the source-level method that trapped (e.g., `Vec::push`, `Vec::pop`, `HashMap::insert`, `String::clear`). The `origin` field identifies the storage class of the immutable backing; today only `rodata` is emitted.
+
+**Fix:** Obtain an explicit mutable copy before mutation: `String::from(literal)`, `Vec::from(literal)`, etc.
+
 ### StackOverflow
 
 **When:** The native call stack is exhausted, typically due to unbounded recursion.
@@ -3222,6 +3242,18 @@ In debug or sanitize mode, the diagnostic includes call depth and the function t
 The signal handler is installed in **all** build modes. The `depth` and `function` fields are only available in debug/sanitize mode where call-depth instrumentation is emitted.
 
 **Fix:** Add a base case to recursive functions, or restructure the algorithm to use iteration instead of recursion.
+
+### OutOfMemory
+
+**When:** A runtime arena operation (`__vow_arena_open` or `__vow_arena_alloc`) failed because the underlying `malloc` returned null. Non-recoverable from within Vow (`docs/design/arena_memory.md` §3.3, §16).
+
+```json
+{"error":"OutOfMemory","operation":"arena_alloc"}
+```
+
+The `operation` field is `arena_open` for the initial chunk allocation or `arena_alloc` for a later fallback chunk allocation.
+
+**Fix:** Reduce working-set size, raise the process memory limit, or run on a machine with more memory. This is not a Vow program error.
 
 ## Warnings
 
@@ -7653,7 +7685,18 @@ fn main() -> i32 {
 
     #[test]
     fn build_c_to_source_name_map_basic() {
-        use vow_ir::{BasicBlock, BlockId, FuncId, Inst, InstData, InstId, Opcode, Ty};
+        use vow_ir::{
+    BasicBlock,
+    BlockId,
+    FuncId,
+    Inst,
+    InstData,
+    InstId,
+    Opcode,
+    RegionId,
+    RegionSummary,
+    Ty,
+};
         use vow_syntax::span::Span;
         let func = vow_ir::Function {
             id: FuncId(0),
@@ -7673,6 +7716,7 @@ fn main() -> i32 {
                         args: vec![],
                         data: InstData::ArgIndex(0),
                         origin: Span::new(0, 0),
+                        region: RegionId::Root,
                     },
                     Inst {
                         id: InstId(1),
@@ -7681,10 +7725,12 @@ fn main() -> i32 {
                         args: vec![],
                         data: InstData::ArgIndex(1),
                         origin: Span::new(0, 0),
+                        region: RegionId::Root,
                     },
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let map = build_c_to_source_name_map(&func);
         assert_eq!(map.get("p0"), Some(&"x".to_string()));
@@ -7695,7 +7741,18 @@ fn main() -> i32 {
 
     #[test]
     fn build_c_to_source_name_map_skips_unit_params() {
-        use vow_ir::{BasicBlock, BlockId, FuncId, Inst, InstData, InstId, Opcode, Ty};
+        use vow_ir::{
+    BasicBlock,
+    BlockId,
+    FuncId,
+    Inst,
+    InstData,
+    InstId,
+    Opcode,
+    RegionId,
+    RegionSummary,
+    Ty,
+};
         use vow_syntax::span::Span;
         let func = vow_ir::Function {
             id: FuncId(0),
@@ -7715,6 +7772,7 @@ fn main() -> i32 {
                         args: vec![],
                         data: InstData::ArgIndex(1),
                         origin: Span::new(0, 0),
+                        region: RegionId::Root,
                     },
                     Inst {
                         id: InstId(1),
@@ -7723,10 +7781,12 @@ fn main() -> i32 {
                         args: vec![],
                         data: InstData::ArgIndex(2),
                         origin: Span::new(0, 0),
+                        region: RegionId::Root,
                     },
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let map = build_c_to_source_name_map(&func);
         // p0 maps to "a" (first non-Unit), p1 maps to "b"
@@ -7756,7 +7816,7 @@ fn main() -> i32 {
 
     #[test]
     fn build_c_to_source_name_map_empty_param_names() {
-        use vow_ir::{BasicBlock, BlockId, FuncId, Ty};
+        use vow_ir::{BasicBlock, BlockId, FuncId, RegionSummary, Ty};
         let func = vow_ir::Function {
             id: FuncId(0),
             name: "f".to_string(),
@@ -7770,6 +7830,7 @@ fn main() -> i32 {
                 insts: vec![],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let map = build_c_to_source_name_map(&func);
         assert!(map.is_empty());
@@ -8212,6 +8273,7 @@ fn main() -> i32 {
                                 args: vec![],
                                 data: InstData::ArgIndex(0),
                                 origin: Span::new(0, 0),
+                                region: RegionId::Root,
                             },
                             Inst {
                                 id: InstId(1),
@@ -8220,10 +8282,12 @@ fn main() -> i32 {
                                 args: vec![InstId(0)],
                                 data: InstData::None,
                                 origin: Span::new(0, 0),
+                                region: RegionId::Root,
                             },
                         ],
                     }],
                     local_names: std::collections::HashMap::new(),
+                    summary: RegionSummary::default(),
                 },
                 Function {
                     id: FuncId(1),
@@ -8243,6 +8307,7 @@ fn main() -> i32 {
                                 args: vec![],
                                 data: InstData::ConstI64(5),
                                 origin: Span::new(0, 0),
+                                region: RegionId::Root,
                             },
                             Inst {
                                 id: InstId(1),
@@ -8251,6 +8316,7 @@ fn main() -> i32 {
                                 args: vec![InstId(0)],
                                 data: InstData::CallTarget(FuncId(0)),
                                 origin: Span::new(100, 10),
+                                region: RegionId::Root,
                             },
                             Inst {
                                 id: InstId(2),
@@ -8259,10 +8325,12 @@ fn main() -> i32 {
                                 args: vec![InstId(1)],
                                 data: InstData::None,
                                 origin: Span::new(0, 0),
+                                region: RegionId::Root,
                             },
                         ],
                     }],
                     local_names: std::collections::HashMap::new(),
+                    summary: RegionSummary::default(),
                 },
                 Function {
                     id: FuncId(2),
@@ -8282,6 +8350,7 @@ fn main() -> i32 {
                                 args: vec![],
                                 data: InstData::ConstI64(10),
                                 origin: Span::new(0, 0),
+                                region: RegionId::Root,
                             },
                             Inst {
                                 id: InstId(1),
@@ -8290,6 +8359,7 @@ fn main() -> i32 {
                                 args: vec![InstId(0)],
                                 data: InstData::CallTarget(FuncId(0)),
                                 origin: Span::new(200, 15),
+                                region: RegionId::Root,
                             },
                             Inst {
                                 id: InstId(2),
@@ -8298,10 +8368,12 @@ fn main() -> i32 {
                                 args: vec![InstId(1)],
                                 data: InstData::None,
                                 origin: Span::new(0, 0),
+                                region: RegionId::Root,
                             },
                         ],
                     }],
                     local_names: std::collections::HashMap::new(),
+                    summary: RegionSummary::default(),
                 },
             ],
             strings: vec![],
@@ -8352,6 +8424,7 @@ fn main() -> i32 {
                         args: vec![],
                         data: InstData::ArgIndex(0),
                         origin: Span::new(0, 0),
+                        region: RegionId::Root,
                     },
                     Inst {
                         id: InstId(1),
@@ -8360,6 +8433,7 @@ fn main() -> i32 {
                         args: vec![],
                         data: InstData::ArgIndex(1),
                         origin: Span::new(0, 0),
+                        region: RegionId::Root,
                     },
                     Inst {
                         id: InstId(2),
@@ -8368,10 +8442,12 @@ fn main() -> i32 {
                         args: vec![InstId(1)],
                         data: InstData::VowId(VowId(0)),
                         origin: Span::new(42, 6),
+                        region: RegionId::Root,
                     },
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
 
         let ce = vow_verify::Counterexample {
@@ -8433,9 +8509,11 @@ fn main() -> i32 {
                     args: vec![],
                     data: InstData::VowId(VowId(0)),
                     origin: Span::new(30, 20),
+                    region: RegionId::Root,
                 }],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
 
         let ce = vow_verify::Counterexample {
@@ -8571,6 +8649,7 @@ fn main() -> i32 {
                         args: vec![],
                         data: InstData::ArgIndex(0),
                         origin: Span::new(10, 1),
+                        region: RegionId::Root,
                     },
                     Inst {
                         id: InstId(1),
@@ -8579,10 +8658,12 @@ fn main() -> i32 {
                         args: vec![InstId(0)],
                         data: InstData::None,
                         origin: Span::new(12, 1),
+                        region: RegionId::Root,
                     },
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let caller = Function {
             id: FuncId(1),
@@ -8602,6 +8683,7 @@ fn main() -> i32 {
                         args: vec![],
                         data: InstData::ConstI64(5),
                         origin: Span::new(100, 1),
+                        region: RegionId::Root,
                     },
                     Inst {
                         id: InstId(11),
@@ -8610,6 +8692,7 @@ fn main() -> i32 {
                         args: vec![],
                         data: InstData::ConstI64(0),
                         origin: Span::new(103, 1),
+                        region: RegionId::Root,
                     },
                     Inst {
                         id: InstId(12),
@@ -8618,6 +8701,7 @@ fn main() -> i32 {
                         args: vec![InstId(10), InstId(11)],
                         data: InstData::CallTarget(FuncId(0)),
                         origin: Span::new(95, 12),
+                        region: RegionId::Root,
                     },
                     Inst {
                         id: InstId(13),
@@ -8626,10 +8710,12 @@ fn main() -> i32 {
                         args: vec![InstId(12)],
                         data: InstData::None,
                         origin: Span::new(110, 1),
+                        region: RegionId::Root,
                     },
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let module = Module {
             name: "test".to_string(),
@@ -8676,6 +8762,7 @@ fn main() -> i32 {
                         args: vec![],
                         data: InstData::ArgIndex(0),
                         origin: Span::new(10, 1),
+                        region: RegionId::Root,
                     },
                     Inst {
                         id: InstId(1),
@@ -8684,6 +8771,7 @@ fn main() -> i32 {
                         args: vec![],
                         data: InstData::ArgIndex(1),
                         origin: Span::new(15, 1),
+                        region: RegionId::Root,
                     },
                     Inst {
                         id: InstId(2),
@@ -8692,10 +8780,12 @@ fn main() -> i32 {
                         args: vec![InstId(0)],
                         data: InstData::None,
                         origin: Span::new(20, 1),
+                        region: RegionId::Root,
                     },
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let ce = vow_verify::Counterexample {
             description: "test".to_string(),
@@ -8757,6 +8847,7 @@ fn main() -> i32 {
                             args: vec![],
                             data: InstData::ArgIndex(0),
                             origin: Span::new(10, 4),
+                            region: RegionId::Root,
                         },
                         Inst {
                             id: InstId(1),
@@ -8768,6 +8859,7 @@ fn main() -> i32 {
                                 else_block: BlockId(2),
                             },
                             origin: Span::new(20, 8),
+                            region: RegionId::Root,
                         },
                     ],
                 },
@@ -8780,6 +8872,7 @@ fn main() -> i32 {
                         args: vec![],
                         data: InstData::ConstI64(1),
                         origin: Span::new(30, 1),
+                        region: RegionId::Root,
                     }],
                 },
                 BasicBlock {
@@ -8791,10 +8884,12 @@ fn main() -> i32 {
                         args: vec![],
                         data: InstData::ConstI64(-1),
                         origin: Span::new(40, 2),
+                        region: RegionId::Root,
                     }],
                 },
             ],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let ce = vow_verify::Counterexample {
             description: "test".to_string(),

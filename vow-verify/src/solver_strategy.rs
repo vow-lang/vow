@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::esbmc::{VerificationResult, run_esbmc_with_max_k_step};
+use crate::esbmc::{run_esbmc_with_max_k_step, VerificationResult};
 
 // ---------------------------------------------------------------------------
 // Solver / Encoding / Config types
@@ -255,7 +255,16 @@ pub fn run_with_fallback(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vow_ir::{BasicBlock, BlockId, FuncId, Inst, InstId, Ty};
+    use vow_ir::{
+    BasicBlock,
+    BlockId,
+    FuncId,
+    Inst,
+    InstId,
+    RegionId,
+    RegionSummary,
+    Ty,
+};
     use vow_syntax::span::Span;
 
     fn inst(id: u32, opcode: Opcode, ty: Ty, args: Vec<u32>, data: InstData) -> Inst {
@@ -266,6 +275,7 @@ mod tests {
             args: args.into_iter().map(InstId).collect(),
             data,
             origin: Span { start: 0, len: 0 },
+            region: RegionId::Root,
         }
     }
 
@@ -283,6 +293,7 @@ mod tests {
                 insts,
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         }
     }
 
