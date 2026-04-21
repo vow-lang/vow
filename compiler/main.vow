@@ -174,6 +174,41 @@ fn frontend_path_from_argv(argv: Vec<String>, sub: bool) -> String [io] {
     path
 }
 
+fn build_ce_from_result(f: IrFunction, vr: VerifyResult, path: String) -> VerifyCE {
+    let vow_id: i64 = vr.vow_id;
+    let ce_violation: String = String::from("");
+    let ce_blame: i64 = DIAG_BLAME_NONE();
+    let vow_entries: Vec<IrVowEntry> = f.vows;
+    let mut vi: i64 = 0;
+    while vi < vow_entries.len() {
+        let ve: IrVowEntry = vow_entries[vi];
+        if ve.id == vow_id {
+            ce_violation = ve.description;
+            ce_blame = ve.blame;
+        }
+        vi = vi + 1;
+    }
+    VerifyCE {
+        function: f.name,
+        var_names: vr.var_names,
+        var_values: vr.var_values,
+        violation: ce_violation,
+        vow_id: vow_id,
+        source: path,
+        blame: ce_blame,
+    }
+}
+
+fn emit_ce_vars(vr: VerifyResult) [io] {
+    let vnames: Vec<String> = vr.var_names;
+    let vvals: Vec<String> = vr.var_values;
+    let mut vi: i64 = 0;
+    while vi < vnames.len() {
+        eprintln_str(str4(String::from("    "), vnames[vi], String::from(" = "), vvals[vi]));
+        vi = vi + 1;
+    }
+}
+
 fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
                    vec_max: i64, string_max: i64, hashmap_max: i64) -> i64 [io] {
     let mut fi: i64 = 0;
@@ -192,36 +227,8 @@ fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, path: String, ces: Ve
             } else if st == VERIFY_FAILED() {
                 all_proven = 0;
                 eprintln_str(str3(String::from("  "), f.name, String::from(": FAILED")));
-                let vnames: Vec<String> = vr.var_names;
-                let vvals: Vec<String> = vr.var_values;
-                let mut vi: i64 = 0;
-                while vi < vnames.len() {
-                    eprintln_str(str4(String::from("    "), vnames[vi], String::from(" = "), vvals[vi]));
-                    vi = vi + 1;
-                }
-                let vow_id: i64 = vr.vow_id;
-                let ce_violation: String = String::from("");
-                let ce_blame: i64 = DIAG_BLAME_NONE();
-                let vow_entries: Vec<IrVowEntry> = f.vows;
-                let mut vi2: i64 = 0;
-                while vi2 < vow_entries.len() {
-                    let ve: IrVowEntry = vow_entries[vi2];
-                    if ve.id == vow_id {
-                        ce_violation = ve.description;
-                        ce_blame = ve.blame;
-                    }
-                    vi2 = vi2 + 1;
-                }
-                let ce: VerifyCE = VerifyCE {
-                    function: f.name,
-                    var_names: vr.var_names,
-                    var_values: vr.var_values,
-                    violation: ce_violation,
-                    vow_id: vow_id,
-                    source: path,
-                    blame: ce_blame,
-                };
-                ces.push(ce);
+                emit_ce_vars(vr);
+                ces.push(build_ce_from_result(f, vr, path));
             } else if st == VERIFY_TIMEOUT() {
                 all_proven = 0;
                 eprintln_str(str3(String::from("  "), f.name, String::from(": TIMEOUT")));
@@ -448,39 +455,10 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
             } else if st == VERIFY_FAILED() {
                 all_proven = 0;
                 eprintln_str(str3(String::from("  "), f.name, String::from(": FAILED")));
-                let vnames: Vec<String> = vr.var_names;
-                let vvals: Vec<String> = vr.var_values;
-                let mut vi: i64 = 0;
-                while vi < vnames.len() {
-                    eprintln_str(str4(String::from("    "), vnames[vi], String::from(" = "), vvals[vi]));
-                    vi = vi + 1;
-                }
-                let vow_id: i64 = vr.vow_id;
-                let ce_violation: String = String::from("");
-                let ce_blame: i64 = DIAG_BLAME_NONE();
-                let vow_entries: Vec<IrVowEntry> = f.vows;
-                let mut vi2: i64 = 0;
-                while vi2 < vow_entries.len() {
-                    let ve: IrVowEntry = vow_entries[vi2];
-                    if ve.id == vow_id {
-                        ce_violation = ve.description;
-                        ce_blame = ve.blame;
-                    }
-                    vi2 = vi2 + 1;
-                }
-                let ce: VerifyCE = VerifyCE {
-                    function: f.name,
-                    var_names: vr.var_names,
-                    var_values: vr.var_values,
-                    violation: ce_violation,
-                    vow_id: vow_id,
-                    source: path,
-                    blame: ce_blame,
-                };
-                ces.push(ce);
+                emit_ce_vars(vr);
+                ces.push(build_ce_from_result(f, vr, path));
             } else if st == VERIFY_TIMEOUT() {
-                // Phase D: if the initial BV run (under Auto encoding, non-Bitwuzla
-                // solver) timed out, retry synchronously with --z3 --ir.
+                // BV timed out; retry with IR before failing (mirrors run_verify_loop and run_with_fallback).
                 let bv_solver: String = resolve_auto_bv_solver(solver);
                 let auto_enc: bool = is_auto_encoding(encoding);
                 if auto_enc && bv_solver != String::from("bitwuzla") {
@@ -492,36 +470,8 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
                     } else if st2 == VERIFY_FAILED() {
                         all_proven = 0;
                         eprintln_str(str3(String::from("  "), f.name, String::from(": FAILED")));
-                        let vnames2: Vec<String> = vr2.var_names;
-                        let vvals2: Vec<String> = vr2.var_values;
-                        let mut vi3: i64 = 0;
-                        while vi3 < vnames2.len() {
-                            eprintln_str(str4(String::from("    "), vnames2[vi3], String::from(" = "), vvals2[vi3]));
-                            vi3 = vi3 + 1;
-                        }
-                        let vow_id2: i64 = vr2.vow_id;
-                        let ce_violation2: String = String::from("");
-                        let ce_blame2: i64 = DIAG_BLAME_NONE();
-                        let vow_entries2: Vec<IrVowEntry> = f.vows;
-                        let mut vi4: i64 = 0;
-                        while vi4 < vow_entries2.len() {
-                            let ve2: IrVowEntry = vow_entries2[vi4];
-                            if ve2.id == vow_id2 {
-                                ce_violation2 = ve2.description;
-                                ce_blame2 = ve2.blame;
-                            }
-                            vi4 = vi4 + 1;
-                        }
-                        let ce2: VerifyCE = VerifyCE {
-                            function: f.name,
-                            var_names: vr2.var_names,
-                            var_values: vr2.var_values,
-                            violation: ce_violation2,
-                            vow_id: vow_id2,
-                            source: path,
-                            blame: ce_blame2,
-                        };
-                        ces.push(ce2);
+                        emit_ce_vars(vr2);
+                        ces.push(build_ce_from_result(f, vr2, path));
                     } else if st2 == VERIFY_TIMEOUT() {
                         all_proven = 0;
                         eprintln_str(str3(String::from("  "), f.name, String::from(": TIMEOUT (BV and IR)")));

@@ -309,11 +309,7 @@ fn effective_timeout_for(encoding: String, solver: String, user_timeout: String)
     if user_timeout.len() > 0 {
         return user_timeout;
     }
-    // The 30s default only makes sense when the IR fallback can kick in.
-    // Bitwuzla can't run the IR encoding, so applying the default timeout
-    // under --solver bitwuzla would cut it off at 30s with no retry path —
-    // a silent regression for users deliberately picking Bitwuzla for
-    // bitwise-heavy contracts. Leave those runs uncapped.
+    // Bitwuzla can't use IR encoding — don't cap it with a timeout that has no retry path.
     let bv_solver: String = resolve_auto_bv_solver(solver);
     if bv_solver == String::from("bitwuzla") {
         return String::from("");
