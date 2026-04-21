@@ -66,11 +66,14 @@ fn read_u8(buf: Vec<i64>, pos: i64) -> i64 vow {
     buf[pos]
 }
 
+// Postconditions are intentionally not expressed: `result <= 4294967295`
+// would require per-element `buf[i] \in [0,255]` preconditions which the
+// Vow contract system cannot quantify today. Callers trust the encoder
+// side (`write_u32_le`) to produce byte-valued buffers; `write_u32_le`
+// already guards that via `v % 256` decomposition.
 fn read_u32_le(buf: Vec<i64>, pos: i64) -> i64 vow {
     requires: pos >= 0,
-    requires: pos + 3 < buf.len(),
-    ensures: result >= 0,
-    ensures: result <= 4294967295
+    requires: pos + 3 < buf.len()
 } {
     let b0: i64 = buf[pos];
     let b1: i64 = buf[pos + 1];

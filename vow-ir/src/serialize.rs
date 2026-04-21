@@ -106,12 +106,23 @@ impl<'a> Reader<'a> {
         let mut shift = 0u32;
         loop {
             let b = self.u8()?;
-            v |= ((b & 0x7f) as u64) << shift;
+            let chunk = (b & 0x7f) as u64;
+            // At shift == 63 the next chunk shift goes past u64. Only bit 0
+            // of `chunk` is valid there; any higher bit is a non-canonical
+            // encoding that would silently drop overflow bits. Reject
+            // rather than decode two different byte streams to the same
+            // value. See LEB128 canonicity rules (WebAssembly binary format
+            // adopts the same check).
+            if shift == 63 && chunk > 1 {
+                return Err(DecodeError::Truncated);
+            }
+            v |= chunk << shift;
             if b & 0x80 == 0 {
                 return Ok(v);
             }
             shift += 7;
             if shift >= 64 {
+                // 11th continuation byte: LEB too long, overflow region.
                 return Err(DecodeError::Truncated);
             }
         }
@@ -879,6 +890,19 @@ mod tests {
         let mut b = encode_module(&empty_module());
         b[0] = b'X';
         assert_eq!(decode_module(&b), Err(DecodeError::BadMagic));
+    }
+
+    #[test]
+    fn leb_overflow_10th_byte_rejected() {
+        // 10-byte LEB where the 10th byte's high bits would shift past u64.
+        // `[0x80 × 9, 0x02]` previously decoded silently to 0 (losing bit
+        // 64). Must now return Truncated.
+        let mut b = encode_module(&empty_module());
+        // Replace the function-count byte (the last zero byte of the empty
+        // module) with a 10-byte overflow-bearing LEB.
+        b.pop();
+        b.extend_from_slice(&[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02]);
+        assert!(matches!(decode_module(&b), Err(DecodeError::Truncated)));
     }
 
     #[test]
