@@ -541,6 +541,14 @@ pub unsafe extern "C" fn __vow_clif_fn_inst(
     let args_start;
     {
         let s = &mut ctx.fn_scratch;
+        // Validate we are inside a block BEFORE touching any inst arrays, so
+        // an out-of-order call leaves the scratch arrays aligned.
+        if let Some(last) = s.block_lengths.last_mut() {
+            *last += 1;
+        } else {
+            eprintln!("clif_shim: __vow_clif_fn_inst before __vow_clif_fn_block");
+            return -1;
+        }
         s.inst_ids.push(id);
         s.inst_ops.push(op);
         s.inst_tys.push(ty);
@@ -549,12 +557,6 @@ pub unsafe extern "C" fn __vow_clif_fn_inst(
         s.inst_dv2s.push(dv2);
         s.inst_ds_ptrs.push(ds_vec);
         args_start = s.all_args.len() as i64;
-        if let Some(last) = s.block_lengths.last_mut() {
-            *last += 1;
-        } else {
-            eprintln!("clif_shim: __vow_clif_fn_inst before __vow_clif_fn_block");
-            return -1;
-        }
     }
     // Copy arg inst IDs into the flat all_args buffer.
     let args_len = if args_vec != 0 {
@@ -622,12 +624,13 @@ pub unsafe extern "C" fn __vow_clif_fn_end(ctx_ptr: i64) -> i64 {
 // entry, now reading its inputs from the per-context scratch instead of
 // rebuilt-per-call parameter arrays.
 fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
-    let fi = ctx.fn_scratch.func_idx as usize;
-    if fi >= ctx.func_decls.len() {
-        eprintln!("clif_shim: func_idx {fi} out of range");
-        return -1;
-    }
+    // `func_idx` was validated on the way in by `__vow_clif_fn_begin`; the
+    // only way to reach here with an out-of-range index is `fn_end` called
+    // without a preceding `fn_begin`, which leaves `func_idx == 0` (valid for
+    // any non-empty module). The check has no work to do in either case.
     let func_idx = ctx.fn_scratch.func_idx;
+    let fi = func_idx as usize;
+    debug_assert!(fi < ctx.func_decls.len(), "fn_begin should have rejected");
     let ret_ty = ctx.fn_scratch.ret_ty;
     // Alias scratch fields into locals so the existing body reads the same names.
     // Rust's field-disjoint borrow checking lets us keep these immutable borrows
