@@ -55,12 +55,34 @@ impl<'a> Reader<'a> {
     }
 
     fn take(&mut self, n: usize) -> Result<&'a [u8], DecodeError> {
-        if self.pos + n > self.buf.len() {
+        // checked_add guards against `usize` overflow on crafted input
+        // where `n` could be near `usize::MAX`.
+        let end = self.pos.checked_add(n).ok_or(DecodeError::Truncated)?;
+        if end > self.buf.len() {
             return Err(DecodeError::Truncated);
         }
-        let slice = &self.buf[self.pos..self.pos + n];
-        self.pos += n;
+        let slice = &self.buf[self.pos..end];
+        self.pos = end;
         Ok(slice)
+    }
+
+    /// Returns the number of unread bytes. Used by length-bounded `read_*`
+    /// helpers to reject LEB counts that cannot possibly fit in the
+    /// remaining buffer — every element decodes ≥1 byte, so any `n`
+    /// exceeding this must be truncation or crafted input.
+    fn remaining(&self) -> usize {
+        self.buf.len() - self.pos
+    }
+
+    /// Validate an LEB-decoded count before using it as a `Vec` capacity.
+    /// Rejects values that exceed the remaining buffer (and fit in
+    /// `usize`), preventing `Vec::with_capacity` DoS on crafted input.
+    fn bounded_count(&self, n: u64) -> Result<usize, DecodeError> {
+        let n = usize::try_from(n).map_err(|_| DecodeError::Truncated)?;
+        if n > self.remaining() {
+            return Err(DecodeError::Truncated);
+        }
+        Ok(n)
     }
 
     fn u8(&mut self) -> Result<u8, DecodeError> {
@@ -172,7 +194,8 @@ fn read_region_constraint(r: &mut Reader) -> Result<RegionConstraint, DecodeErro
         0 => Ok(RegionConstraint::FreshInCaller),
         1 => Ok(RegionConstraint::AliasOf(r.u32()?)),
         2 => {
-            let n = r.leb()? as usize;
+            let _tmp_n = r.leb()?;
+            let n = r.bounded_count(_tmp_n)?;
             let mut xs = Vec::with_capacity(n);
             for _ in 0..n {
                 xs.push(r.u32()?);
@@ -198,13 +221,15 @@ fn write_region_summary(out: &mut Vec<u8>, s: &RegionSummary) {
 }
 
 fn read_region_summary(r: &mut Reader) -> Result<RegionSummary, DecodeError> {
-    let n = r.leb()? as usize;
+    let _tmp_n = r.leb()?;
+    let n = r.bounded_count(_tmp_n)?;
     let mut param_regions = Vec::with_capacity(n);
     for _ in 0..n {
         param_regions.push(RegionVar(r.u32()?));
     }
     let return_region = read_region_constraint(r)?;
-    let m = r.leb()? as usize;
+    let _tmp_m = r.leb()?;
+    let m = r.bounded_count(_tmp_m)?;
     let mut store_effects = Vec::with_capacity(m);
     for _ in 0..m {
         let target = r.u32()?;
@@ -486,7 +511,8 @@ fn read_inst(r: &mut Reader) -> Result<Inst, DecodeError> {
     let op = u16::from_le_bytes([op_bytes[0], op_bytes[1]]);
     let opcode = disc_opcode(op)?;
     let ty = disc_ty(r.u8()?)?;
-    let n = r.leb()? as usize;
+    let _tmp_n = r.leb()?;
+    let n = r.bounded_count(_tmp_n)?;
     let mut args = Vec::with_capacity(n);
     for _ in 0..n {
         args.push(InstId(r.u32()?));
@@ -517,7 +543,8 @@ fn write_block(out: &mut Vec<u8>, b: &BasicBlock) {
 
 fn read_block(r: &mut Reader) -> Result<BasicBlock, DecodeError> {
     let id = BlockId(r.u32()?);
-    let n = r.leb()? as usize;
+    let _tmp_n = r.leb()?;
+    let n = r.bounded_count(_tmp_n)?;
     let mut insts = Vec::with_capacity(n);
     for _ in 0..n {
         insts.push(read_inst(r)?);
@@ -542,7 +569,8 @@ fn read_vow_entry(r: &mut Reader) -> Result<VowEntry, DecodeError> {
     let id = VowId(r.u32()?);
     let description = r.string()?;
     let blame = disc_blame(r.u8()?)?;
-    let n = r.leb()? as usize;
+    let _tmp_n = r.leb()?;
+    let n = r.bounded_count(_tmp_n)?;
     let mut bindings = Vec::with_capacity(n);
     for _ in 0..n {
         let name = r.string()?;
@@ -599,33 +627,39 @@ fn write_function(out: &mut Vec<u8>, f: &Function) {
 fn read_function(r: &mut Reader) -> Result<Function, DecodeError> {
     let id = FuncId(r.u32()?);
     let name = r.string()?;
-    let np = r.leb()? as usize;
+    let _tmp_np = r.leb()?;
+    let np = r.bounded_count(_tmp_np)?;
     let mut params = Vec::with_capacity(np);
     for _ in 0..np {
         params.push(disc_ty(r.u8()?)?);
     }
-    let nn = r.leb()? as usize;
+    let _tmp_nn = r.leb()?;
+    let nn = r.bounded_count(_tmp_nn)?;
     let mut param_names = Vec::with_capacity(nn);
     for _ in 0..nn {
         param_names.push(r.string()?);
     }
     let return_ty = disc_ty(r.u8()?)?;
-    let ne = r.leb()? as usize;
+    let _tmp_ne = r.leb()?;
+    let ne = r.bounded_count(_tmp_ne)?;
     let mut effects = Vec::with_capacity(ne);
     for _ in 0..ne {
         effects.push(disc_effect(r.u8()?)?);
     }
-    let nv = r.leb()? as usize;
+    let _tmp_nv = r.leb()?;
+    let nv = r.bounded_count(_tmp_nv)?;
     let mut vows = Vec::with_capacity(nv);
     for _ in 0..nv {
         vows.push(read_vow_entry(r)?);
     }
-    let nb = r.leb()? as usize;
+    let _tmp_nb = r.leb()?;
+    let nb = r.bounded_count(_tmp_nb)?;
     let mut blocks = Vec::with_capacity(nb);
     for _ in 0..nb {
         blocks.push(read_block(r)?);
     }
-    let nl = r.leb()? as usize;
+    let _tmp_nl = r.leb()?;
+    let nl = r.bounded_count(_tmp_nl)?;
     let mut local_names = std::collections::HashMap::with_capacity(nl);
     for _ in 0..nl {
         let k = r.u32()?;
@@ -669,7 +703,8 @@ fn write_struct_layout(out: &mut Vec<u8>, s: &StructLayout) {
 
 fn read_struct_layout(r: &mut Reader) -> Result<StructLayout, DecodeError> {
     let name = r.string()?;
-    let n = r.leb()? as usize;
+    let _tmp_n = r.leb()?;
+    let n = r.bounded_count(_tmp_n)?;
     let mut fields = Vec::with_capacity(n);
     for _ in 0..n {
         fields.push(read_field(r)?);
@@ -694,7 +729,8 @@ fn write_variant(out: &mut Vec<u8>, v: &VariantLayout) {
 fn read_variant(r: &mut Reader) -> Result<VariantLayout, DecodeError> {
     let name = r.string()?;
     let tag = r.u64()?;
-    let n = r.leb()? as usize;
+    let _tmp_n = r.leb()?;
+    let n = r.bounded_count(_tmp_n)?;
     let mut payload = Vec::with_capacity(n);
     for _ in 0..n {
         payload.push(read_field(r)?);
@@ -712,7 +748,8 @@ fn write_enum_layout(out: &mut Vec<u8>, e: &EnumLayout) {
 
 fn read_enum_layout(r: &mut Reader) -> Result<EnumLayout, DecodeError> {
     let name = r.string()?;
-    let n = r.leb()? as usize;
+    let _tmp_n = r.leb()?;
+    let n = r.bounded_count(_tmp_n)?;
     let mut variants = Vec::with_capacity(n);
     for _ in 0..n {
         variants.push(read_variant(r)?);
@@ -760,22 +797,26 @@ pub fn decode_module(bytes: &[u8]) -> Result<Module, DecodeError> {
         return Err(DecodeError::VersionMismatch(version));
     }
     let name = r.string()?;
-    let ns = r.leb()? as usize;
+    let _tmp_ns = r.leb()?;
+    let ns = r.bounded_count(_tmp_ns)?;
     let mut strings = Vec::with_capacity(ns);
     for _ in 0..ns {
         strings.push(r.string()?);
     }
-    let nsl = r.leb()? as usize;
+    let _tmp_nsl = r.leb()?;
+    let nsl = r.bounded_count(_tmp_nsl)?;
     let mut struct_layouts = Vec::with_capacity(nsl);
     for _ in 0..nsl {
         struct_layouts.push(read_struct_layout(&mut r)?);
     }
-    let nel = r.leb()? as usize;
+    let _tmp_nel = r.leb()?;
+    let nel = r.bounded_count(_tmp_nel)?;
     let mut enum_layouts = Vec::with_capacity(nel);
     for _ in 0..nel {
         enum_layouts.push(read_enum_layout(&mut r)?);
     }
-    let nf = r.leb()? as usize;
+    let _tmp_nf = r.leb()?;
+    let nf = r.bounded_count(_tmp_nf)?;
     let mut functions = Vec::with_capacity(nf);
     for _ in 0..nf {
         functions.push(read_function(&mut r)?);
@@ -838,6 +879,22 @@ mod tests {
         let mut b = encode_module(&empty_module());
         b[0] = b'X';
         assert_eq!(decode_module(&b), Err(DecodeError::BadMagic));
+    }
+
+    #[test]
+    fn crafted_huge_leb_count_rejected() {
+        // Header + name "" + LEB(0 strings) + LEB(0 structs) + LEB(0 enums)
+        // + LEB(HUGE) would normally trip Vec::with_capacity. The
+        // `bounded_count` helper must reject the count before reservation.
+        let mut b = encode_module(&empty_module());
+        // empty_module serialises as: magic(4) + version(4) + name_len(1) +
+        // strings_len(1) + structs_len(1) + enums_len(1) + fns_len(1) = 13.
+        // Replace the trailing `0` (function count) with a 10-byte LEB
+        // encoding of a value exceeding remaining bytes.
+        b.truncate(12);
+        // LEB128 encoding of 2^63 (massive count)
+        b.extend_from_slice(&[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01]);
+        assert!(matches!(decode_module(&b), Err(DecodeError::Truncated)));
     }
 
     #[test]
