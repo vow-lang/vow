@@ -144,44 +144,7 @@ fn region_constraint_encode(out: Vec<i64>, kind: i64, aux: i64, aliases: Vec<i64
     }
 }
 
-fn module_io_test_region_root() -> bool {
-    let out: Vec<i64> = Vec::new();
-    let rgn: i64 = region_root();
-    region_encode(out, rgn);
-    // 5 bytes: kind=2, payload=0, 0, 0, 0
-    let ok: bool =
-        out[0] == REGION_KIND_ROOT()
-        && out[1] == 0 && out[2] == 0 && out[3] == 0 && out[4] == 0;
-    if !ok { return false; }
-    let got: i64 = region_decode(out, 0);
-    got == rgn
-}
-
-fn module_io_test_region_caller_with_hidden_idx() -> bool {
-    let out: Vec<i64> = Vec::new();
-    // Caller(HiddenRegionIdx(7)) — the acceptance target.
-    let rgn: i64 = region_pack(REGION_KIND_CALLER(), 7);
-    region_encode(out, rgn);
-    let ok: bool =
-        out[0] == REGION_KIND_CALLER()
-        && out[1] == 7 && out[2] == 0 && out[3] == 0 && out[4] == 0;
-    if !ok { return false; }
-    let got: i64 = region_decode(out, 0);
-    region_kind(got) == REGION_KIND_CALLER() && region_val(got) == 7
-}
-
-fn module_io_test_region_block_large_payload() -> bool {
-    let out: Vec<i64> = Vec::new();
-    // Block(BlockId(257)) — exercises the upper u8 byte of payload.
-    let rgn: i64 = region_pack(REGION_KIND_BLOCK(), 257);
-    region_encode(out, rgn);
-    let got: i64 = region_decode(out, 0);
-    region_kind(got) == REGION_KIND_BLOCK() && region_val(got) == 257
-}
-
-fn module_io_test_region_rodata() -> bool {
-    let out: Vec<i64> = Vec::new();
-    region_encode(out, region_rodata());
-    let got: i64 = region_decode(out, 0);
-    region_kind(got) == REGION_KIND_RODATA() && region_val(got) == 0
-}
+// Runtime coverage lives in `tests/run/vmod_region_roundtrip.vow`, which
+// exercises the same wire format end-to-end via `build/vowc`. An in-module
+// self-check was previously defined here but had no caller — removed to
+// avoid two parallel implementations drifting silently.

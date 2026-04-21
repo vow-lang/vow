@@ -350,6 +350,13 @@ fn print_inst(inst: IrInst) -> String {
             } else if kind == REGION_KIND_CALLER() {
                 out.push_str(String::from("caller_"));
                 out.push_str(i64_to_str(region_val(rgn)));
+            } else {
+                // Defensive: a packed i64 outside 0..=3 indicates a bug in
+                // whoever assigned `inst.rgn`. Emit the raw kind so the slip
+                // is visible in golden output instead of silently producing
+                // an empty `<region=>`.
+                out.push_str(String::from("unknown_"));
+                out.push_str(i64_to_str(kind));
             }
             out.push_byte(62);
         }
