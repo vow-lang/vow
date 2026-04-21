@@ -175,8 +175,12 @@ fn read_region_id(r: &mut Reader) -> Result<RegionId, DecodeError> {
     match kind {
         0 => Ok(RegionId::Block(BlockId(payload))),
         1 => Ok(RegionId::Caller(HiddenRegionIdx(payload))),
-        2 => Ok(RegionId::Root),
-        3 => Ok(RegionId::Rodata),
+        // Root / Rodata carry no payload on the encoder side, so require
+        // the payload to be zero on read. Non-canonical non-zero bytes
+        // would otherwise round-trip to a different buffer than the input.
+        2 if payload == 0 => Ok(RegionId::Root),
+        3 if payload == 0 => Ok(RegionId::Rodata),
+        2 | 3 => Err(DecodeError::InvalidKind("RegionId.payload", payload as u16)),
         _ => Err(DecodeError::InvalidKind("RegionId", kind as u16)),
     }
 }
@@ -890,6 +894,21 @@ mod tests {
         let mut b = encode_module(&empty_module());
         b[0] = b'X';
         assert_eq!(decode_module(&b), Err(DecodeError::BadMagic));
+    }
+
+    #[test]
+    fn region_id_rejects_nonzero_root_payload() {
+        // Root encodes as kind=2 + payload=0 (5 bytes). Crafting kind=2 +
+        // payload=7 must not silently round-trip to `RegionId::Root` —
+        // otherwise two byte streams would decode to the same module.
+        let mut buf = Vec::new();
+        buf.push(2u8);
+        buf.extend_from_slice(&7u32.to_le_bytes());
+        let mut r = Reader::new(&buf);
+        assert!(matches!(
+            read_region_id(&mut r),
+            Err(DecodeError::InvalidKind("RegionId.payload", 7))
+        ));
     }
 
     #[test]
