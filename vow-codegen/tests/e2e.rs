@@ -5,20 +5,8 @@ use vow_codegen::cranelift_backend::CraneliftBackend;
 use vow_codegen::linker::{find_runtime_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_ir::{
-    BasicBlock,
-    BlockId,
-    FuncId,
-    Function,
-    Inst,
-    InstData,
-    InstId,
-    Module,
-    Opcode,
-    RegionId,
-    RegionSummary,
-    Ty,
-    VowEntry,
-    VowId,
+    BasicBlock, BlockId, FuncId, Function, Inst, InstData, InstId, Module, Opcode, RegionId,
+    RegionSummary, Ty, VowEntry, VowId,
 };
 use vow_syntax::span::Span;
 

@@ -7686,17 +7686,9 @@ fn main() -> i32 {
     #[test]
     fn build_c_to_source_name_map_basic() {
         use vow_ir::{
-    BasicBlock,
-    BlockId,
-    FuncId,
-    Inst,
-    InstData,
-    InstId,
-    Opcode,
-    RegionId,
-    RegionSummary,
-    Ty,
-};
+            BasicBlock, BlockId, FuncId, Inst, InstData, InstId, Opcode, RegionId, RegionSummary,
+            Ty,
+        };
         use vow_syntax::span::Span;
         let func = vow_ir::Function {
             id: FuncId(0),
@@ -7742,17 +7734,9 @@ fn main() -> i32 {
     #[test]
     fn build_c_to_source_name_map_skips_unit_params() {
         use vow_ir::{
-    BasicBlock,
-    BlockId,
-    FuncId,
-    Inst,
-    InstData,
-    InstId,
-    Opcode,
-    RegionId,
-    RegionSummary,
-    Ty,
-};
+            BasicBlock, BlockId, FuncId, Inst, InstData, InstId, Opcode, RegionId, RegionSummary,
+            Ty,
+        };
         use vow_syntax::span::Span;
         let func = vow_ir::Function {
             id: FuncId(0),

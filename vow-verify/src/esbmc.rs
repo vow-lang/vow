@@ -499,18 +499,9 @@ mod tests {
     use super::*;
     use vow_diag::Blame;
     use vow_ir::{
-    BasicBlock,
-    BlockId,
-    FuncId,
-    Inst,
-    InstData,
-    InstId,
-    Opcode,
-    RegionId,
-    RegionSummary,
-    VowEntry,
-    VowId,
-};
+        BasicBlock, BlockId, FuncId, Inst, InstData, InstId, Opcode, RegionId, RegionSummary,
+        VowEntry, VowId,
+    };
     use vow_syntax::span::Span;
 
     fn sp() -> Span {

@@ -2025,20 +2025,9 @@ impl Backend for CraneliftBackend {
 mod tests {
     use super::*;
     use vow_ir::{
-    BasicBlock,
-    BlockId,
-    FuncId,
-    Function,
-    InstData,
-    InstId,
-    Module,
-    Opcode,
-    RegionId,
-    RegionSummary,
-    Ty,
-    VowEntry,
-    VowId,
-};
+        BasicBlock, BlockId, FuncId, Function, InstData, InstId, Module, Opcode, RegionId,
+        RegionSummary, Ty, VowEntry, VowId,
+    };
     use vow_syntax::span::Span;
 
     fn sp() -> Span {
