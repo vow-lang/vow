@@ -873,10 +873,14 @@ pub unsafe extern "C" fn __vow_vec_len(vec: *const u8) -> usize {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_push_val(vec: *mut u8, value: i64) {
-    // Delegated __vow_vec_push runs the sanitizer and the cap check in the
-    // correct order; no own check needed here.
+    // Sanitize + cap-check here with the precise operation name. Delegating
+    // the whole path to __vow_vec_push would (a) double-sanitize and (b)
+    // report the trap as "Vec::push" instead of "Vec::push_val". Delegate
+    // the actual push to the no-sanitize helper so the shadow table records
+    // a single generation per appended element.
+    sanitize_on_push(vec as usize);
     let bytes = value.to_ne_bytes();
-    unsafe { __vow_vec_push(vec, bytes.as_ptr(), 8, 8) };
+    unsafe { vec_push_no_sanitize(vec, bytes.as_ptr(), 8, 8, "Vec::push_val") };
 }
 
 #[unsafe(no_mangle)]
@@ -2895,7 +2899,7 @@ mod tests {
     }
     #[test]
     fn rodata_vec_push_val_traps() {
-        assert_rodata_trap("Vec::push_val", "Vec::push");
+        assert_rodata_trap("Vec::push_val", "Vec::push_val");
     }
     #[test]
     fn rodata_vec_pop_traps() {

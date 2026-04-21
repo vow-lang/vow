@@ -37,6 +37,12 @@ struct VowArena {
 #define CHUNK_PAYLOAD       4096
 #define OVERSIZED_THRESHOLD 2048
 
+/* `addr + align - 1` could wrap uintptr_t for adversarial inputs. Safe here
+ * because the harness constrains `align` to {1, 8, 16, 4096} and bounds
+ * every chunk address via alloc_chunk's `(uintptr_t)base + total <= 1<<62`
+ * assumption. Widening either bound (larger symbolic alignments, or removing
+ * the chunk-base bound) requires a checked-add guard or explicit
+ * __ESBMC_assume on the sum. */
 static uintptr_t align_up(uintptr_t addr, uintptr_t align) {
     return (addr + align - 1) & ~(align - 1);
 }
