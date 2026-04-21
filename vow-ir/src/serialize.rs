@@ -15,9 +15,9 @@
 //! is the acceptance evidence that the two compilers agree on the format.
 
 use crate::types::{
-    AbstractRegionId, BasicBlock, BlockId, EnumLayout, FieldLayout, FuncId, Function,
-    HiddenRegionIdx, Inst, InstData, InstId, Module, Opcode, RegionConstraint, RegionId,
-    RegionSummary, RegionVar, StoreEffect, StructLayout, Ty, VariantLayout, VowEntry, VowId,
+    BasicBlock, BlockId, EnumLayout, FieldLayout, FuncId, Function, HiddenRegionIdx, Inst,
+    InstData, InstId, Module, Opcode, RegionConstraint, RegionId, RegionSummary, RegionVar,
+    StoreEffect, StructLayout, Ty, VariantLayout, VowEntry, VowId,
 };
 use vow_diag::Blame;
 use vow_syntax::ast::Effect;
@@ -784,11 +784,6 @@ pub fn decode_module(bytes: &[u8]) -> Result<Module, DecodeError> {
     })
 }
 
-// Silence unused-import warnings for symbols only referenced in tests.
-#[cfg(not(test))]
-#[allow(dead_code)]
-fn _keep_abstract_region_id_imported(_: AbstractRegionId) {}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -796,6 +791,7 @@ fn _keep_abstract_region_id_imported(_: AbstractRegionId) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::AbstractRegionId;
 
     fn empty_module() -> Module {
         Module {

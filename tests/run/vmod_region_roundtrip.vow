@@ -15,8 +15,15 @@ fn region_pack(kind: i64, val: i64) -> i64 vow {
     requires: val >= 0
 } { val * 4 + kind }
 
-fn region_kind(r: i64) -> i64 vow { requires: r >= 0 } { r - (r / 4) * 4 }
-fn region_val(r: i64)  -> i64 vow { requires: r >= 0 } { r / 4 }
+fn region_kind(r: i64) -> i64 vow {
+    requires: r >= 0,
+    ensures: result >= 0,
+    ensures: result <= 3
+} { r - (r / 4) * 4 }
+fn region_val(r: i64)  -> i64 vow {
+    requires: r >= 0,
+    ensures: result >= 0
+} { r / 4 }
 
 fn region_encode(out: Vec<i64>, rgn: i64) vow {
     requires: rgn >= 0
@@ -31,7 +38,10 @@ fn region_encode(out: Vec<i64>, rgn: i64) vow {
 }
 
 fn region_decode(buf: Vec<i64>, pos: i64) -> i64 vow {
-    requires: pos >= 0
+    requires: pos >= 0,
+    requires: pos + 4 < buf.len(),
+    requires: buf[pos] >= 0,
+    requires: buf[pos] <= 3
 } {
     let kind: i64 = buf[pos];
     let b0: i64 = buf[pos + 1];

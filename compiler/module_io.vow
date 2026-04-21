@@ -11,7 +11,8 @@ module ModuleIo
 // What IS exercised here:
 //   - MODULE_MAGIC / MODULE_VERSION constants (must match Rust side).
 //   - Byte-level region_encode / region_decode (5 bytes: kind:u8 + payload:u32).
-//   - Byte-level region_summary_encode / region_summary_decode.
+//   - region_constraint_encode with LEB128-prefixed AliasOfAny lists
+//     (bit-identical to vow-ir/src/serialize.rs).
 //
 // These are the primitives any future full-module encoder will compose.
 // Bytes are stored in a Vec<i64> with each slot holding a single byte in
@@ -32,7 +33,8 @@ fn write_u8(out: Vec<i64>, v: i64) vow {
 }
 
 fn write_u32_le(out: Vec<i64>, v: i64) vow {
-    requires: v >= 0
+    requires: v >= 0,
+    requires: v <= 4294967295
 } {
     out.push(v % 256);
     out.push((v / 256) % 256);
@@ -40,14 +42,33 @@ fn write_u32_le(out: Vec<i64>, v: i64) vow {
     out.push((v / 16777216) % 256);
 }
 
+// LEB128 (unsigned) writer — matches vow-ir/src/serialize.rs::write_leb so
+// variable-length counts on both sides produce byte-identical output.
+fn write_leb(out: Vec<i64>, v: i64) vow {
+    requires: v >= 0
+} {
+    let mut n: i64 = v;
+    loop {
+        let byte: i64 = n - (n / 128) * 128;
+        n = n / 128;
+        if n == 0 {
+            out.push(byte);
+            return;
+        }
+        out.push(byte + 128);
+    }
+}
+
 fn read_u8(buf: Vec<i64>, pos: i64) -> i64 vow {
-    requires: pos >= 0
+    requires: pos >= 0,
+    requires: pos < buf.len()
 } {
     buf[pos]
 }
 
 fn read_u32_le(buf: Vec<i64>, pos: i64) -> i64 vow {
-    requires: pos >= 0
+    requires: pos >= 0,
+    requires: pos + 3 < buf.len()
 } {
     let b0: i64 = buf[pos];
     let b1: i64 = buf[pos + 1];
@@ -68,9 +89,15 @@ fn region_encode(out: Vec<i64>, rgn: i64) vow {
 }
 
 // Decode 5 bytes starting at `pos` back into a packed RegionId.
-// Returns the packed i64 matching the self-hosted convention.
+// The caller must validate `buf[pos]` is a valid region kind (0..=3);
+// `region_pack`'s own contract enforces this, and we surface it here so
+// a corrupted byte fails on this function's `requires` with a clear
+// caller blame rather than cascading into `region_pack`.
 fn region_decode(buf: Vec<i64>, pos: i64) -> i64 vow {
-    requires: pos >= 0
+    requires: pos >= 0,
+    requires: pos + 4 < buf.len(),
+    requires: buf[pos] >= 0,
+    requires: buf[pos] <= 3
 } {
     let kind: i64 = read_u8(buf, pos);
     let payload: i64 = read_u32_le(buf, pos + 1);
@@ -80,10 +107,12 @@ fn region_decode(buf: Vec<i64>, pos: i64) -> i64 vow {
 // Encode a RegionConstraint (tag:u8 + optional aux:u32 + optional aliases).
 // Takes the three fields of the summary-style flattened encoding used by
 // IrFunction (rsum_return_kind, rsum_return_aux, rsum_return_aliases).
+// Alias count uses LEB128 to match vow-ir/src/serialize.rs byte-for-byte.
 fn region_constraint_encode(out: Vec<i64>, kind: i64, aux: i64, aliases: Vec<i64>) vow {
     requires: kind >= 0,
     requires: kind <= 3,
-    requires: aux >= 0
+    requires: aux >= 0,
+    requires: aux <= 4294967295
 } {
     write_u8(out, kind);
     if kind == RSUM_KIND_FRESH_IN_CALLER() || kind == RSUM_KIND_CONSTANT_GLOBAL() {
@@ -93,22 +122,14 @@ fn region_constraint_encode(out: Vec<i64>, kind: i64, aux: i64, aliases: Vec<i64
         write_u32_le(out, aux);
         return;
     }
-    // ALIAS_OF_ANY: length-prefixed list of u32 parameter indices.
+    // ALIAS_OF_ANY: LEB128 count + u32 parameter indices.
     let n: i64 = aliases.len();
-    write_u32_le(out, n);
+    write_leb(out, n);
     let mut i: i64 = 0;
     while i < n {
         write_u32_le(out, aliases[i]);
         i = i + 1;
     }
-}
-
-// Helpers for the test harness below. Not intended for general use — the
-// assertion machinery is rudimentary in Vow and traps on mismatch.
-fn assert_eq_i64(actual: i64, expected: i64, label: String) vow {
-    requires: actual == expected
-} {
-    // Contract encodes the invariant; body is a no-op checkpoint.
 }
 
 fn module_io_test_region_root() -> bool {
@@ -151,13 +172,4 @@ fn module_io_test_region_rodata() -> bool {
     region_encode(out, region_rodata());
     let got: i64 = region_decode(out, 0);
     region_kind(got) == REGION_KIND_RODATA() && region_val(got) == 0
-}
-
-fn module_io_run_self_tests() -> i64 {
-    let mut failed: i64 = 0;
-    if !module_io_test_region_root()                    { failed = failed + 1; }
-    if !module_io_test_region_caller_with_hidden_idx()  { failed = failed + 1; }
-    if !module_io_test_region_block_large_payload()     { failed = failed + 1; }
-    if !module_io_test_region_rodata()                  { failed = failed + 1; }
-    failed
 }

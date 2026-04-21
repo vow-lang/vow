@@ -1576,11 +1576,12 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
                 }
 
                 // Phase 2: RegionOpen / RegionClose are declared but never
-                // emitted. Handled defensively so any accidental Phase-3
-                // emission does not misdispatch silently.
+                // emitted. Trap at runtime so an accidental Phase-3 slip
+                // fails loudly (symmetric with `vow-codegen`'s
+                // `unreachable!("not emitted in Phase 2")`). User trap code
+                // `3` is reserved for "unimplemented region opcode".
                 IOP_REGION_OPEN | IOP_REGION_CLOSE => {
-                    let unit = builder.ins().iconst(types::I32, 0);
-                    set_val!(iid, unit);
+                    builder.ins().trap(TrapCode::unwrap_user(3));
                 }
 
                 // Struct / enum field access
