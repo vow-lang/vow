@@ -1730,10 +1730,33 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // ret_ty
             sig.params.push(AbiParam::new(types::I64)); // is_main
         }
-        "__vow_clif_compile_function" => {
-            for _ in 0..23 {
+        // Incremental per-function FFI (replaces the batched
+        // __vow_clif_compile_function). Signatures must match
+        // vow-clif-shim/src/lib.rs.
+        "__vow_clif_fn_begin" => {
+            for _ in 0..4 {
                 sig.params.push(AbiParam::new(types::I64));
             }
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_clif_fn_block" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_clif_fn_inst" => {
+            for _ in 0..9 {
+                sig.params.push(AbiParam::new(types::I64));
+            }
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_clif_fn_vow" => {
+            for _ in 0..5 {
+                sig.params.push(AbiParam::new(types::I64));
+            }
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_clif_fn_end" => {
+            sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_clif_finish" => {

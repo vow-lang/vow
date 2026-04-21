@@ -248,6 +248,63 @@ struct ModuleContext {
     extern_func_ids: HashMap<String, CraneliftFuncId>,
     mode: i64,       // 0=release, 1=debug, 2=profile, 3=sanitize
     trace_mode: i64, // 0=off, 1=calls, 2=full
+    fn_scratch: FnScratch,
+}
+
+// Per-function scratch accumulated via incremental FFI. Buffers are reused
+// across functions — Rust's `Vec::clear()` preserves capacity, so amortized
+// cost converges to the peak function's working set.
+#[derive(Default)]
+struct FnScratch {
+    func_idx: i64,
+    ret_ty: i64,
+    param_tys: Vec<i64>,
+    // Per-block:
+    block_starts: Vec<i64>, // offsets into inst_* arrays
+    block_lengths: Vec<i64>,
+    // Per-instruction (flattened across all blocks of this function):
+    inst_ids: Vec<i64>,
+    inst_ops: Vec<i64>,
+    inst_tys: Vec<i64>,
+    inst_dks: Vec<i64>,
+    inst_dvs: Vec<i64>,
+    inst_dv2s: Vec<i64>,
+    inst_ds_ptrs: Vec<i64>, // raw VowVec pointers; caller owns the strings
+    all_args: Vec<i64>,
+    arg_offsets: Vec<i64>,
+    arg_lengths: Vec<i64>,
+    // Per vow entry:
+    vow_ids: Vec<i64>,
+    vow_desc_ptrs: Vec<i64>, // raw VowVec pointers
+    binding_counts: Vec<i64>,
+    binding_inst_ids_all: Vec<i64>,
+    binding_names_ptrs: Vec<i64>, // raw VowVec pointers
+}
+
+impl FnScratch {
+    // Reset len=0 on all fields while preserving each Vec's allocated capacity.
+    fn reset(&mut self) {
+        self.func_idx = 0;
+        self.ret_ty = 0;
+        self.param_tys.clear();
+        self.block_starts.clear();
+        self.block_lengths.clear();
+        self.inst_ids.clear();
+        self.inst_ops.clear();
+        self.inst_tys.clear();
+        self.inst_dks.clear();
+        self.inst_dvs.clear();
+        self.inst_dv2s.clear();
+        self.inst_ds_ptrs.clear();
+        self.all_args.clear();
+        self.arg_offsets.clear();
+        self.arg_lengths.clear();
+        self.vow_ids.clear();
+        self.vow_desc_ptrs.clear();
+        self.binding_counts.clear();
+        self.binding_inst_ids_all.clear();
+        self.binding_names_ptrs.clear();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +364,7 @@ pub extern "C" fn __vow_clif_create(mode: i64, trace_mode: i64) -> i64 {
         extern_func_ids: HashMap::new(),
         mode,
         trace_mode,
+        fn_scratch: FnScratch::default(),
     });
 
     Box::into_raw(ctx) as i64
@@ -417,68 +475,173 @@ pub unsafe extern "C" fn __vow_clif_declare_function(
 // FFI: compile_function — the core: receives flattened IR, produces Cranelift
 // ---------------------------------------------------------------------------
 
-#[allow(clippy::too_many_arguments)]
+// Begin accumulating a new function. Clears any prior scratch state.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_clif_compile_function(
+pub unsafe extern "C" fn __vow_clif_fn_begin(
     ctx_ptr: i64,
     func_idx: i64,
     ret_ty: i64,
     param_tys_vec: i64,
-    n_blocks: i64,
-    block_starts_vec: i64,
-    block_lengths_vec: i64,
-    inst_ids_vec: i64,
-    inst_ops_vec: i64,
-    inst_tys_vec: i64,
-    inst_dks_vec: i64,
-    inst_dvs_vec: i64,
-    inst_dv2s_vec: i64,
-    inst_ds_vec: i64, // Vec<String> (Vec<i64> of VowVec ptrs)
-    all_args_vec: i64,
-    arg_offsets_vec: i64,
-    arg_lengths_vec: i64,
-    vow_ids_vec: i64,
-    vow_blames_vec: i64,
-    vow_descs_vec: i64, // Vec<String> (Vec<i64> of VowVec ptrs)
-    binding_counts_vec: i64,
-    binding_inst_ids_vec: i64,
-    binding_names_vec: i64, // Vec<String> (Vec<i64> of VowVec ptrs)
 ) -> i64 {
     let ctx = unsafe { &mut *(ctx_ptr as *mut ModuleContext) };
-    let fi = func_idx as usize;
+    ctx.fn_scratch.reset();
+    ctx.fn_scratch.func_idx = func_idx;
+    ctx.fn_scratch.ret_ty = ret_ty;
+    if param_tys_vec != 0 {
+        let slice = unsafe { read_i64_slice(param_tys_vec) };
+        ctx.fn_scratch.param_tys.extend_from_slice(slice);
+    }
+    0
+}
+
+// Start a new block in the current function. Must be called before any
+// `__vow_clif_fn_inst` calls for that block.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_clif_fn_block(ctx_ptr: i64) -> i64 {
+    let ctx = unsafe { &mut *(ctx_ptr as *mut ModuleContext) };
+    let s = &mut ctx.fn_scratch;
+    s.block_starts.push(s.inst_ids.len() as i64);
+    s.block_lengths.push(0);
+    0
+}
+
+// Add an instruction to the current block.
+// `ds_vec` / `args_vec` are VowVec pointers owned by the caller (the IrModule)
+// — the shim reads their contents without taking ownership.
+#[allow(clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_clif_fn_inst(
+    ctx_ptr: i64,
+    id: i64,
+    op: i64,
+    ty: i64,
+    dk: i64,
+    dv: i64,
+    dv2: i64,
+    ds_vec: i64,
+    args_vec: i64,
+) -> i64 {
+    let ctx = unsafe { &mut *(ctx_ptr as *mut ModuleContext) };
+    let args_start;
+    {
+        let s = &mut ctx.fn_scratch;
+        s.inst_ids.push(id);
+        s.inst_ops.push(op);
+        s.inst_tys.push(ty);
+        s.inst_dks.push(dk);
+        s.inst_dvs.push(dv);
+        s.inst_dv2s.push(dv2);
+        s.inst_ds_ptrs.push(ds_vec);
+        args_start = s.all_args.len() as i64;
+        if let Some(last) = s.block_lengths.last_mut() {
+            *last += 1;
+        } else {
+            eprintln!("clif_shim: __vow_clif_fn_inst before __vow_clif_fn_block");
+            return -1;
+        }
+    }
+    // Copy arg inst IDs into the flat all_args buffer.
+    let args_len = if args_vec != 0 {
+        let args = unsafe { read_i64_slice(args_vec) };
+        ctx.fn_scratch.all_args.extend_from_slice(args);
+        args.len() as i64
+    } else {
+        0
+    };
+    ctx.fn_scratch.arg_offsets.push(args_start);
+    ctx.fn_scratch.arg_lengths.push(args_len);
+    0
+}
+
+// Add a vow entry to the current function. The `blame` field (Caller vs
+// Callee) is not a parameter here because the shim derives it from the IR
+// opcode (`IOP_VOW_REQ` → Caller, else Callee) — see line 1563 below.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_clif_fn_vow(
+    ctx_ptr: i64,
+    id: i64,
+    desc_vec: i64,
+    binding_inst_ids_vec: i64,
+    binding_names_vec: i64,
+) -> i64 {
+    let ctx = unsafe { &mut *(ctx_ptr as *mut ModuleContext) };
+    let (bids_len, bnames_len) = {
+        let bids_len = if binding_inst_ids_vec != 0 {
+            unsafe { read_i64_slice(binding_inst_ids_vec) }.len()
+        } else {
+            0
+        };
+        let bnames_len = if binding_names_vec != 0 {
+            unsafe { read_i64_slice(binding_names_vec) }.len()
+        } else {
+            0
+        };
+        (bids_len, bnames_len)
+    };
+    if bids_len != bnames_len {
+        eprintln!(
+            "clif_shim: __vow_clif_fn_vow: binding_inst_ids len ({bids_len}) != binding_names len ({bnames_len})"
+        );
+        return -1;
+    }
+    ctx.fn_scratch.vow_ids.push(id);
+    ctx.fn_scratch.vow_desc_ptrs.push(desc_vec);
+    ctx.fn_scratch.binding_counts.push(bids_len as i64);
+    if binding_inst_ids_vec != 0 {
+        let bids = unsafe { read_i64_slice(binding_inst_ids_vec) };
+        ctx.fn_scratch.binding_inst_ids_all.extend_from_slice(bids);
+    }
+    if binding_names_vec != 0 {
+        let bnames = unsafe { read_i64_slice(binding_names_vec) };
+        ctx.fn_scratch.binding_names_ptrs.extend_from_slice(bnames);
+    }
+    0
+}
+
+// Finalize the current function: drive Cranelift codegen using the accumulated
+// scratch, then reset the scratch (preserving allocated capacity for reuse).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_clif_fn_end(ctx_ptr: i64) -> i64 {
+    let ctx = unsafe { &mut *(ctx_ptr as *mut ModuleContext) };
+    let result = compile_current_function(ctx);
+    ctx.fn_scratch.reset();
+    result
+}
+
+// Compiles the function described by `ctx.fn_scratch` via Cranelift.
+// This is the former body of the monolithic `__vow_clif_compile_function` FFI
+// entry, now reading its inputs from the per-context scratch instead of
+// rebuilt-per-call parameter arrays.
+fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
+    let fi = ctx.fn_scratch.func_idx as usize;
     if fi >= ctx.func_decls.len() {
         eprintln!("clif_shim: func_idx {fi} out of range");
         return -1;
     }
-
-    let param_tys = if param_tys_vec != 0 {
-        unsafe { read_i64_slice(param_tys_vec) }.to_vec()
-    } else {
-        Vec::new()
-    };
-
-    let nb = n_blocks as usize;
-    let block_starts = unsafe { read_i64_slice(block_starts_vec) };
-    let block_lengths = unsafe { read_i64_slice(block_lengths_vec) };
-    let inst_ids = unsafe { read_i64_slice(inst_ids_vec) };
-    let inst_ops = unsafe { read_i64_slice(inst_ops_vec) };
-    let inst_tys = unsafe { read_i64_slice(inst_tys_vec) };
-    let inst_dks = unsafe { read_i64_slice(inst_dks_vec) };
-    let inst_dvs = unsafe { read_i64_slice(inst_dvs_vec) };
-    let inst_dv2s = unsafe { read_i64_slice(inst_dv2s_vec) };
-    let inst_ds_ptrs = unsafe { read_i64_slice(inst_ds_vec) };
-    let all_args = unsafe { read_i64_slice(all_args_vec) };
-    let arg_offsets = unsafe { read_i64_slice(arg_offsets_vec) };
-    let arg_lengths = unsafe { read_i64_slice(arg_lengths_vec) };
-
-    let vow_ids = unsafe { read_i64_slice(vow_ids_vec) };
-    let _vow_blames = unsafe { read_i64_slice(vow_blames_vec) };
-    let vow_desc_ptrs = unsafe { read_i64_slice(vow_descs_vec) };
-    let binding_counts = unsafe { read_i64_slice(binding_counts_vec) };
-    let binding_inst_ids_all = unsafe { read_i64_slice(binding_inst_ids_vec) };
-    let binding_names_ptrs = unsafe { read_i64_slice(binding_names_vec) };
-
-    // Reconstruct per-instruction arg slices
+    let func_idx = ctx.fn_scratch.func_idx;
+    let ret_ty = ctx.fn_scratch.ret_ty;
+    // Alias scratch fields into locals so the existing body reads the same names.
+    // Rust's field-disjoint borrow checking lets us keep these immutable borrows
+    // alive alongside mutations of `ctx.obj_module`, `ctx.builder_ctx`, etc.
+    let param_tys: &[i64] = &ctx.fn_scratch.param_tys;
+    let block_starts: &[i64] = &ctx.fn_scratch.block_starts;
+    let block_lengths: &[i64] = &ctx.fn_scratch.block_lengths;
+    let inst_ids: &[i64] = &ctx.fn_scratch.inst_ids;
+    let inst_ops: &[i64] = &ctx.fn_scratch.inst_ops;
+    let inst_tys: &[i64] = &ctx.fn_scratch.inst_tys;
+    let inst_dks: &[i64] = &ctx.fn_scratch.inst_dks;
+    let inst_dvs: &[i64] = &ctx.fn_scratch.inst_dvs;
+    let inst_dv2s: &[i64] = &ctx.fn_scratch.inst_dv2s;
+    let inst_ds_ptrs: &[i64] = &ctx.fn_scratch.inst_ds_ptrs;
+    let all_args: &[i64] = &ctx.fn_scratch.all_args;
+    let arg_offsets: &[i64] = &ctx.fn_scratch.arg_offsets;
+    let arg_lengths: &[i64] = &ctx.fn_scratch.arg_lengths;
+    let vow_ids: &[i64] = &ctx.fn_scratch.vow_ids;
+    let vow_desc_ptrs: &[i64] = &ctx.fn_scratch.vow_desc_ptrs;
+    let binding_counts: &[i64] = &ctx.fn_scratch.binding_counts;
+    let binding_inst_ids_all: &[i64] = &ctx.fn_scratch.binding_inst_ids_all;
+    let binding_names_ptrs: &[i64] = &ctx.fn_scratch.binding_names_ptrs;
+    let nb = block_starts.len();
     let n_insts = inst_ids.len();
 
     // Build inst_id → block_index map
@@ -602,7 +765,7 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
     // Build function signature
     let call_conv = ctx.isa.default_call_conv();
     let mut sig = Signature::new(call_conv);
-    for &pty in &param_tys {
+    for &pty in param_tys {
         if let Some(cl_ty) = ity_to_cranelift(pty) {
             sig.params.push(AbiParam::new(cl_ty));
         }
@@ -2234,10 +2397,35 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
                 sig.params.push(AbiParam::new(types::I64));
             }
         }
-        "__vow_clif_compile_function" => {
-            for _ in 0..23 {
+        "__vow_clif_fn_begin" => {
+            // ctx, func_idx, ret_ty, param_tys_vec
+            for _ in 0..4 {
                 sig.params.push(AbiParam::new(types::I64));
             }
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_clif_fn_block" => {
+            // ctx
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_clif_fn_inst" => {
+            // ctx, id, op, ty, dk, dv, dv2, ds_vec, args_vec
+            for _ in 0..9 {
+                sig.params.push(AbiParam::new(types::I64));
+            }
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_clif_fn_vow" => {
+            // ctx, id, desc_vec, binding_inst_ids_vec, binding_names_vec
+            for _ in 0..5 {
+                sig.params.push(AbiParam::new(types::I64));
+            }
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_clif_fn_end" => {
+            // ctx
+            sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_clif_finish" => {
