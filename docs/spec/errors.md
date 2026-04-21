@@ -252,6 +252,26 @@ The `blame` field indicates who is at fault:
 
 **Fix:** Add a bounds check before indexing, or add contracts: `requires: i >= 0, requires: i < v.len()`.
 
+### RegionLiteralMutation
+
+**When:** A `Vec`, `String`, or `HashMap` mutation is attempted on a literal-backed container — one whose descriptor carries the `VOW_CAP_RODATA` sentinel (backing lives in `.rodata` or was pinned to the root region). See `docs/design/arena_memory.md` §6.1, §7.3.
+
+```json
+{"error":"RegionLiteralMutation","operation":"String::push_str","origin":"rodata"}
+```
+
+A plain-text hint follows on the next line (not a JSON field). The hint text is dispatched on the operation's type prefix:
+
+```
+hint: use String::from(literal) to obtain a mutable copy       # for String::* operations
+hint: use Vec::from(literal) to obtain a mutable copy          # for Vec::*    operations
+hint: construct a mutable HashMap and copy entries before mutating  # for HashMap::* operations
+```
+
+The `operation` field identifies the source-level method that trapped (e.g., `Vec::push`, `Vec::pop`, `HashMap::insert`, `String::clear`). The `origin` field identifies the storage class of the immutable backing; today only `rodata` is emitted.
+
+**Fix:** Obtain an explicit mutable copy before mutation: `String::from(literal)`, `Vec::from(literal)`, etc.
+
 ### StackOverflow
 
 **When:** The native call stack is exhausted, typically due to unbounded recursion.
@@ -269,6 +289,18 @@ In debug or sanitize mode, the diagnostic includes call depth and the function t
 The signal handler is installed in **all** build modes. The `depth` and `function` fields are only available in debug/sanitize mode where call-depth instrumentation is emitted.
 
 **Fix:** Add a base case to recursive functions, or restructure the algorithm to use iteration instead of recursion.
+
+### OutOfMemory
+
+**When:** A runtime arena operation (`__vow_arena_open` or `__vow_arena_alloc`) failed because the underlying `malloc` returned null. Non-recoverable from within Vow (`docs/design/arena_memory.md` §3.3, §16).
+
+```json
+{"error":"OutOfMemory","operation":"arena_alloc"}
+```
+
+The `operation` field is `arena_open` for the initial chunk allocation or `arena_alloc` for a later fallback chunk allocation.
+
+**Fix:** Reduce working-set size, raise the process memory limit, or run on a machine with more memory. This is not a Vow program error.
 
 ## Warnings
 

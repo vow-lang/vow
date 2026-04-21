@@ -491,24 +491,24 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
         }
     }
 
-    // Declare arena runtime functions
-    let mut arena_alloc_sig = ctx.obj_module.make_signature();
-    arena_alloc_sig.params.push(AbiParam::new(types::I64));
-    arena_alloc_sig.params.push(AbiParam::new(types::I64));
-    arena_alloc_sig.returns.push(AbiParam::new(types::I64));
-    let arena_alloc_id = ctx
+    // Declare runtime allocator functions
+    let mut malloc_sig = ctx.obj_module.make_signature();
+    malloc_sig.params.push(AbiParam::new(types::I64));
+    malloc_sig.params.push(AbiParam::new(types::I64));
+    malloc_sig.returns.push(AbiParam::new(types::I64));
+    let malloc_id = ctx
         .obj_module
-        .declare_function("__vow_arena_alloc", Linkage::Import, &arena_alloc_sig)
-        .expect("declare arena_alloc");
+        .declare_function("__vow_malloc", Linkage::Import, &malloc_sig)
+        .expect("declare __vow_malloc");
 
-    let mut arena_free_sig = ctx.obj_module.make_signature();
-    arena_free_sig.params.push(AbiParam::new(types::I64)); // ptr
-    arena_free_sig.params.push(AbiParam::new(types::I64)); // size
-    arena_free_sig.params.push(AbiParam::new(types::I64)); // align
-    let arena_free_id = ctx
+    let mut free_sig = ctx.obj_module.make_signature();
+    free_sig.params.push(AbiParam::new(types::I64)); // ptr
+    free_sig.params.push(AbiParam::new(types::I64)); // size
+    free_sig.params.push(AbiParam::new(types::I64)); // align
+    let free_id = ctx
         .obj_module
-        .declare_function("__vow_arena_free", Linkage::Import, &arena_free_sig)
-        .expect("declare arena_free");
+        .declare_function("__vow_free", Linkage::Import, &free_sig)
+        .expect("declare __vow_free");
 
     // Debug-only runtime functions (debug=1 or sanitize=3)
     let vow_violation_id = if ctx.mode == 1 || ctx.mode == 3 {
@@ -651,12 +651,8 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
         extern_func_refs.insert(sym.clone(), fref);
     }
 
-    let arena_alloc_ref = ctx
-        .obj_module
-        .declare_func_in_func(arena_alloc_id, builder.func);
-    let arena_free_ref = ctx
-        .obj_module
-        .declare_func_in_func(arena_free_id, builder.func);
+    let malloc_ref = ctx.obj_module.declare_func_in_func(malloc_id, builder.func);
+    let free_ref = ctx.obj_module.declare_func_in_func(free_id, builder.func);
     let vow_violation_ref =
         vow_violation_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
     let overflow_ref = overflow_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
@@ -1540,7 +1536,7 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
                     };
                     let size_val = builder.ins().iconst(types::I64, size);
                     let align_val = builder.ins().iconst(types::I64, align);
-                    let call_inst = builder.ins().call(arena_alloc_ref, &[size_val, align_val]);
+                    let call_inst = builder.ins().call(malloc_ref, &[size_val, align_val]);
                     let ptr = builder.inst_results(call_inst)[0];
                     set_val!(iid, ptr);
                 }
@@ -1561,7 +1557,7 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
                         let align_val = builder.ins().iconst(types::I64, align);
                         builder
                             .ins()
-                            .call(arena_free_ref, &[ptr_val, size_val, align_val]);
+                            .call(free_ref, &[ptr_val, size_val, align_val]);
                     }
                     let unit = builder.ins().iconst(types::I32, 0);
                     set_val!(iid, unit);
