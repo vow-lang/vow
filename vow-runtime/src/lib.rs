@@ -656,7 +656,9 @@ pub unsafe extern "C" fn __vow_arena_close(a: *mut VowArena) {
         unsafe { libc::free(chunk as *mut libc::c_void) };
         chunk = next;
     }
-    // Leave *a in an undefined state per spec §3.3.
+    // Zero all fields. Spec §3.3 leaves the post-close state unspecified,
+    // and this zeroing choice makes a double-close a safe no-op (the loop
+    // above walks a null chain) rather than a dangling-pointer walk.
     arena.first_chunk = core::ptr::null_mut();
     arena.current_chunk = core::ptr::null_mut();
     arena.cursor = 0;
@@ -671,6 +673,16 @@ pub unsafe extern "C" fn __vow_arena_alloc(
     bytes: usize,
     align: usize,
 ) -> *mut u8 {
+    // Overflow guard: all downstream arithmetic in this function
+    // (`align_up`, the fit-check, `oversized_chunk_total`) operates on
+    // `bytes` and `align`. Bounding them below `isize::MAX` (the Rust
+    // allocator's size limit) keeps every `usize` addition within
+    // headroom, so neither the fit check nor the chunk-size selector
+    // can wrap and incorrectly admit an allocation.
+    let size_limit = isize::MAX as usize;
+    if bytes > size_limit || align > size_limit {
+        oom_trap("arena_alloc");
+    }
     let arena = unsafe { &mut *a };
     let aligned_cursor = align_up(arena.cursor, align);
     if aligned_cursor + bytes <= arena.chunk_end {
@@ -817,9 +829,22 @@ pub unsafe extern "C" fn __vow_vec_push(
     // diagnoses UseAfterFree without dereferencing. The cap check must
     // dereference, so it has to run after the sanitizer.
     sanitize_on_push(vec as usize);
+    unsafe { vec_push_no_sanitize(vec, elem, elem_size, elem_align, "Vec::push") };
+}
+
+// Inner push that assumes the caller has already run sanitize_on_push for
+// this pointer. Used by delegating wrappers (string_push_byte) that need a
+// type-specific operation name in the rodata trap without double-sanitizing.
+unsafe fn vec_push_no_sanitize(
+    vec: *mut u8,
+    elem: *const u8,
+    elem_size: usize,
+    elem_align: usize,
+    op: &'static str,
+) {
     let v = unsafe { &*(vec as *const VowVec) };
     if v.cap == VOW_CAP_RODATA {
-        region_literal_mutation_trap("Vec::push");
+        region_literal_mutation_trap(op);
     }
     unsafe { __vow_vec_reserve(vec, 1, elem_size, elem_align) };
     let v = unsafe { &mut *(vec as *mut VowVec) };
@@ -1074,13 +1099,13 @@ pub unsafe extern "C" fn __vow_string_byte_at(s: *const u8, idx: i64) -> i64 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_push_byte(s: *mut u8, byte: i64) {
+    // Sanitize once here, then delegate to the no-sanitize inner helper with
+    // a type-specific operation name. This keeps both orderings correct:
+    // sanitizer runs before any dereference (UAF detected first), and the
+    // shadow table records a single generation for the one appended byte.
     sanitize_on_push(s as usize);
-    let v = unsafe { &*(s as *const VowVec) };
-    if v.cap == VOW_CAP_RODATA {
-        region_literal_mutation_trap("String::push_byte");
-    }
     let b = byte as u8;
-    unsafe { __vow_vec_push(s, &b as *const u8, 1, 1) };
+    unsafe { vec_push_no_sanitize(s, &b as *const u8, 1, 1, "String::push_byte") };
 }
 
 // ---------------------------------------------------------------------------
@@ -2756,6 +2781,15 @@ mod tests {
         let Ok(op) = std::env::var("VOW_RODATA_TRAP_OP") else {
             return;
         };
+        // Arena-overflow branch: exercises the size-limit guard in
+        // __vow_arena_alloc without touching descriptor state.
+        if op == "arena_alloc_overflow" {
+            let mut arena = empty_arena_header();
+            unsafe { __vow_arena_open(&mut arena) };
+            let _ = unsafe { __vow_arena_alloc(&mut arena, usize::MAX, 8) };
+            eprintln!("rodata_trap_worker: arena overflow did NOT trap");
+            std::process::exit(42);
+        }
         let mut v = make_rodata_vec_val();
         let vp = &mut v as *mut _ as *mut u8;
         let mut m = make_rodata_map();
@@ -2821,6 +2855,22 @@ mod tests {
                 || stderr.contains("hint: use Vec::from(literal)")
                 || stderr.contains("hint: construct a mutable HashMap"),
             "stderr missing hint line:\n{stderr}"
+        );
+    }
+
+    #[test]
+    fn arena_alloc_rejects_overflow() {
+        // Verifies the isize::MAX size-limit guard: passing bytes=usize::MAX
+        // must trap OutOfMemory rather than wrap and return a garbage
+        // pointer.
+        let (out, stderr) = spawn_trap_worker("arena_alloc_overflow");
+        assert!(
+            !out.status.success(),
+            "worker should have exited non-zero; stderr:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(r#""error":"OutOfMemory""#),
+            "stderr missing OutOfMemory trap:\n{stderr}"
         );
     }
 
