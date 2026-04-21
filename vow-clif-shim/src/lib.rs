@@ -483,11 +483,11 @@ pub unsafe extern "C" fn __vow_clif_declare_function(
 
 // Begin accumulating a new function. Clears any prior scratch state.
 //
-// The scratch is also reset by `fn_end` and by the next `fn_begin`, so a
-// caller that aborts mid-stream after an error from `fn_block`/`fn_inst`/
-// `fn_vow` leaves no invalid state behind as far as this struct is concerned.
-// Cranelift's module state is separate: if a previous `fn_end` failed
-// partway, destroy the context rather than compile more functions into it.
+// The scratch is also reset by `fn_end` and by the next `fn_begin`, so any
+// partial state from a mid-stream `fn_block`/`fn_inst`/`fn_vow` error is
+// discarded at the next `fn_begin`. Cranelift's module state is separate: if
+// a previous `fn_end` failed partway, destroy the context rather than compile
+// more functions into it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_clif_fn_begin(
     ctx_ptr: i64,
