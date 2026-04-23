@@ -219,8 +219,8 @@ fn read_region_constraint(r: &mut Reader) -> Result<RegionConstraint, DecodeErro
         0 => Ok(RegionConstraint::FreshInCaller),
         1 => Ok(RegionConstraint::AliasOf(r.u32()?)),
         2 => {
-            let _tmp_n = r.leb()?;
-            let n = r.bounded_count(_tmp_n)?;
+            let raw_n = r.leb()?;
+            let n = r.bounded_count(raw_n)?;
             let mut xs = Vec::new();
             for _ in 0..n {
                 xs.push(r.u32()?);
@@ -246,15 +246,15 @@ fn write_region_summary(out: &mut Vec<u8>, s: &RegionSummary) {
 }
 
 fn read_region_summary(r: &mut Reader) -> Result<RegionSummary, DecodeError> {
-    let _tmp_n = r.leb()?;
-    let n = r.bounded_count(_tmp_n)?;
+    let raw_n = r.leb()?;
+    let n = r.bounded_count(raw_n)?;
     let mut param_regions = Vec::new();
     for _ in 0..n {
         param_regions.push(RegionVar(r.u32()?));
     }
     let return_region = read_region_constraint(r)?;
-    let _tmp_m = r.leb()?;
-    let m = r.bounded_count(_tmp_m)?;
+    let raw_m = r.leb()?;
+    let m = r.bounded_count(raw_m)?;
     let mut store_effects = Vec::new();
     for _ in 0..m {
         let target = r.u32()?;
@@ -536,8 +536,8 @@ fn read_inst(r: &mut Reader) -> Result<Inst, DecodeError> {
     let op = u16::from_le_bytes([op_bytes[0], op_bytes[1]]);
     let opcode = disc_opcode(op)?;
     let ty = disc_ty(r.u8()?)?;
-    let _tmp_n = r.leb()?;
-    let n = r.bounded_count(_tmp_n)?;
+    let raw_n = r.leb()?;
+    let n = r.bounded_count(raw_n)?;
     let mut args = Vec::new();
     for _ in 0..n {
         args.push(InstId(r.u32()?));
@@ -568,8 +568,8 @@ fn write_block(out: &mut Vec<u8>, b: &BasicBlock) {
 
 fn read_block(r: &mut Reader) -> Result<BasicBlock, DecodeError> {
     let id = BlockId(r.u32()?);
-    let _tmp_n = r.leb()?;
-    let n = r.bounded_count(_tmp_n)?;
+    let raw_n = r.leb()?;
+    let n = r.bounded_count(raw_n)?;
     let mut insts = Vec::new();
     for _ in 0..n {
         insts.push(read_inst(r)?);
@@ -594,8 +594,8 @@ fn read_vow_entry(r: &mut Reader) -> Result<VowEntry, DecodeError> {
     let id = VowId(r.u32()?);
     let description = r.string()?;
     let blame = disc_blame(r.u8()?)?;
-    let _tmp_n = r.leb()?;
-    let n = r.bounded_count(_tmp_n)?;
+    let raw_n = r.leb()?;
+    let n = r.bounded_count(raw_n)?;
     let mut bindings = Vec::new();
     for _ in 0..n {
         let name = r.string()?;
@@ -652,39 +652,39 @@ fn write_function(out: &mut Vec<u8>, f: &Function) {
 fn read_function(r: &mut Reader) -> Result<Function, DecodeError> {
     let id = FuncId(r.u32()?);
     let name = r.string()?;
-    let _tmp_np = r.leb()?;
-    let np = r.bounded_count(_tmp_np)?;
+    let raw_np = r.leb()?;
+    let np = r.bounded_count(raw_np)?;
     let mut params = Vec::new();
     for _ in 0..np {
         params.push(disc_ty(r.u8()?)?);
     }
-    let _tmp_nn = r.leb()?;
-    let nn = r.bounded_count(_tmp_nn)?;
+    let raw_nn = r.leb()?;
+    let nn = r.bounded_count(raw_nn)?;
     let mut param_names = Vec::new();
     for _ in 0..nn {
         param_names.push(r.string()?);
     }
     let return_ty = disc_ty(r.u8()?)?;
-    let _tmp_ne = r.leb()?;
-    let ne = r.bounded_count(_tmp_ne)?;
+    let raw_ne = r.leb()?;
+    let ne = r.bounded_count(raw_ne)?;
     let mut effects = Vec::new();
     for _ in 0..ne {
         effects.push(disc_effect(r.u8()?)?);
     }
-    let _tmp_nv = r.leb()?;
-    let nv = r.bounded_count(_tmp_nv)?;
+    let raw_nv = r.leb()?;
+    let nv = r.bounded_count(raw_nv)?;
     let mut vows = Vec::new();
     for _ in 0..nv {
         vows.push(read_vow_entry(r)?);
     }
-    let _tmp_nb = r.leb()?;
-    let nb = r.bounded_count(_tmp_nb)?;
+    let raw_nb = r.leb()?;
+    let nb = r.bounded_count(raw_nb)?;
     let mut blocks = Vec::new();
     for _ in 0..nb {
         blocks.push(read_block(r)?);
     }
-    let _tmp_nl = r.leb()?;
-    let nl = r.bounded_count(_tmp_nl)?;
+    let raw_nl = r.leb()?;
+    let nl = r.bounded_count(raw_nl)?;
     let mut local_names = std::collections::HashMap::new();
     for _ in 0..nl {
         let k = r.u32()?;
@@ -728,8 +728,8 @@ fn write_struct_layout(out: &mut Vec<u8>, s: &StructLayout) {
 
 fn read_struct_layout(r: &mut Reader) -> Result<StructLayout, DecodeError> {
     let name = r.string()?;
-    let _tmp_n = r.leb()?;
-    let n = r.bounded_count(_tmp_n)?;
+    let raw_n = r.leb()?;
+    let n = r.bounded_count(raw_n)?;
     let mut fields = Vec::new();
     for _ in 0..n {
         fields.push(read_field(r)?);
@@ -754,8 +754,8 @@ fn write_variant(out: &mut Vec<u8>, v: &VariantLayout) {
 fn read_variant(r: &mut Reader) -> Result<VariantLayout, DecodeError> {
     let name = r.string()?;
     let tag = r.u64()?;
-    let _tmp_n = r.leb()?;
-    let n = r.bounded_count(_tmp_n)?;
+    let raw_n = r.leb()?;
+    let n = r.bounded_count(raw_n)?;
     let mut payload = Vec::new();
     for _ in 0..n {
         payload.push(read_field(r)?);
@@ -773,8 +773,8 @@ fn write_enum_layout(out: &mut Vec<u8>, e: &EnumLayout) {
 
 fn read_enum_layout(r: &mut Reader) -> Result<EnumLayout, DecodeError> {
     let name = r.string()?;
-    let _tmp_n = r.leb()?;
-    let n = r.bounded_count(_tmp_n)?;
+    let raw_n = r.leb()?;
+    let n = r.bounded_count(raw_n)?;
     let mut variants = Vec::new();
     for _ in 0..n {
         variants.push(read_variant(r)?);
@@ -822,26 +822,26 @@ pub fn decode_module(bytes: &[u8]) -> Result<Module, DecodeError> {
         return Err(DecodeError::VersionMismatch(version));
     }
     let name = r.string()?;
-    let _tmp_ns = r.leb()?;
-    let ns = r.bounded_count(_tmp_ns)?;
+    let raw_ns = r.leb()?;
+    let ns = r.bounded_count(raw_ns)?;
     let mut strings = Vec::new();
     for _ in 0..ns {
         strings.push(r.string()?);
     }
-    let _tmp_nsl = r.leb()?;
-    let nsl = r.bounded_count(_tmp_nsl)?;
+    let raw_nsl = r.leb()?;
+    let nsl = r.bounded_count(raw_nsl)?;
     let mut struct_layouts = Vec::new();
     for _ in 0..nsl {
         struct_layouts.push(read_struct_layout(&mut r)?);
     }
-    let _tmp_nel = r.leb()?;
-    let nel = r.bounded_count(_tmp_nel)?;
+    let raw_nel = r.leb()?;
+    let nel = r.bounded_count(raw_nel)?;
     let mut enum_layouts = Vec::new();
     for _ in 0..nel {
         enum_layouts.push(read_enum_layout(&mut r)?);
     }
-    let _tmp_nf = r.leb()?;
-    let nf = r.bounded_count(_tmp_nf)?;
+    let raw_nf = r.leb()?;
+    let nf = r.bounded_count(raw_nf)?;
     let mut functions = Vec::new();
     for _ in 0..nf {
         functions.push(read_function(&mut r)?);

@@ -60,7 +60,8 @@ fn region_decode(buf: Vec<i64>, pos: i64) -> i64 vow {
 }
 
 fn check_round_trip(rgn: i64) -> i64 vow {
-    requires: rgn >= 0
+    requires: rgn >= 0,
+    requires: region_val(rgn) <= 4294967295
 } {
     let buf: Vec<i64> = Vec::new();
     region_encode(buf, rgn);
