@@ -39,6 +39,11 @@ pub enum DecodeError {
     /// Decoder produced a `Module` but the input buffer had trailing bytes
     /// past the last function. Carries the number of unconsumed bytes.
     TrailingBytes(usize),
+    /// Structural invariant violated — the decoded shape is internally
+    /// inconsistent (e.g. duplicate map key, parallel-list length mismatch).
+    /// Carries a short label identifying the invariant and, where natural,
+    /// a `u32` witness (e.g. the duplicated key or the mismatched count).
+    Malformed(&'static str, u32),
 }
 
 // ---------------------------------------------------------------------------
@@ -671,6 +676,16 @@ fn read_function(r: &mut Reader) -> Result<Function, DecodeError> {
     }
     let raw_nn = r.leb()?;
     let nn = r.bounded_count(raw_nn)?;
+    // `params` and `param_names` are parallel lists in the in-memory
+    // `Function` — enforce the same parity on decode so crafted buffers
+    // cannot produce a structurally valid `Function` with mismatched
+    // lengths that downstream passes would mishandle.
+    if nn != np {
+        return Err(DecodeError::Malformed(
+            "Function.params_names_mismatch",
+            nn as u32,
+        ));
+    }
     let mut param_names = Vec::new();
     for _ in 0..nn {
         param_names.push(r.string()?);
@@ -705,7 +720,7 @@ fn read_function(r: &mut Reader) -> Result<Function, DecodeError> {
         // order (see write_function) so duplicates can only come from
         // crafted or corrupted input.
         if local_names.insert(k, v).is_some() {
-            return Err(DecodeError::InvalidKind("local_names.duplicate", k));
+            return Err(DecodeError::Malformed("local_names.duplicate_key", k));
         }
     }
     let summary = read_region_summary(r)?;

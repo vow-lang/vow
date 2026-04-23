@@ -1,5 +1,28 @@
 #![allow(clippy::missing_safety_doc)]
 
+// ---------------------------------------------------------------------------
+// User trap code registry
+// ---------------------------------------------------------------------------
+//
+// The shim emits Cranelift user trap codes to signal runtime conditions that
+// should fail loudly. Codes are allocated centrally here so collisions with
+// `vow-codegen` (which emits the same numeric space) are visible at a glance:
+//
+//   1  — VowViolation fallthrough (after `__vow_violation` is called, a trap
+//         prevents execution from continuing; see line ~1906).
+//   2  — `Unreachable` opcode hit at runtime (e.g. pattern-match exhaustion;
+//         line ~1371).
+//   3  — Unimplemented region opcode (Phase 2 `RegionOpen`/`RegionClose`
+//         guard; line ~1584). Intentionally asymmetric with
+//         `vow-codegen/src/cranelift_backend.rs`, which panics via
+//         `unreachable!("not emitted in Phase 2")` at **compile time** for
+//         the same opcodes — the shim cannot panic across the FFI boundary
+//         so it traps at **runtime** instead.
+//
+// When adding a new trap code, update this registry and the corresponding
+// `vow-codegen` site (if any) so agents reading either file see the full
+// picture.
+
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
