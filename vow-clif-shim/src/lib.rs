@@ -624,10 +624,15 @@ pub unsafe extern "C" fn __vow_clif_fn_end(ctx_ptr: i64) -> i64 {
 // entry, now reading its inputs from the per-context scratch instead of
 // rebuilt-per-call parameter arrays.
 fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
-    // `func_idx` was validated on the way in by `__vow_clif_fn_begin`; the
-    // only way to reach here with an out-of-range index is `fn_end` called
-    // without a preceding `fn_begin`, which leaves `func_idx == 0` (valid for
-    // any non-empty module). The check has no work to do in either case.
+    // `fn_end` called without a preceding `fn_begin` leaves scratch empty and
+    // `func_idx == 0` (valid for any non-empty module), so the debug-only
+    // index check can't catch it in release. An empty block list is the
+    // reliable release-visible signal: refuse to hand Cranelift a function
+    // with no entry block rather than letting it panic mid-seal.
+    if ctx.fn_scratch.block_starts.is_empty() {
+        eprintln!("clif_shim: __vow_clif_fn_end with no blocks (missing fn_begin?)");
+        return -1;
+    }
     let func_idx = ctx.fn_scratch.func_idx;
     let fi = func_idx as usize;
     debug_assert!(fi < ctx.func_decls.len(), "fn_begin should have rejected");
