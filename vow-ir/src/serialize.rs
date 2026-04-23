@@ -139,7 +139,8 @@ impl<'a> Reader<'a> {
     }
 
     fn string(&mut self) -> Result<String, DecodeError> {
-        let len = self.leb()? as usize;
+        let raw_len = self.leb()?;
+        let len = self.bounded_count(raw_len)?;
         let bytes = self.take(len)?;
         std::str::from_utf8(bytes)
             .map(str::to_string)

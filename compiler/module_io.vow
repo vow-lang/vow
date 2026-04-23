@@ -162,7 +162,11 @@ fn region_constraint_encode(out: Vec<i64>, kind: i64, aux: i64, aliases: Vec<i64
     }
 }
 
-// Runtime coverage lives in `tests/run/vmod_region_roundtrip.vow`, which
-// exercises the same wire format end-to-end via `build/vowc`. An in-module
-// self-check was previously defined here but had no caller — removed to
-// avoid two parallel implementations drifting silently.
+// `tests/run/vmod_region_roundtrip.vow` validates the same wire-format
+// logic independently (via its own inline re-implementation), not by
+// calling this module. The functions here therefore have no Vow-level
+// execution coverage in Phase 2 — the Rust side's `serialize.rs` unit
+// tests pin the byte-level shape this module mirrors, and a Phase 3
+// caller will be the first to exercise these primitives at runtime.
+// An in-module self-check was previously defined here but had no caller —
+// removed to avoid two parallel implementations drifting silently.
