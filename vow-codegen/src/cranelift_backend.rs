@@ -1612,6 +1612,9 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_time_unix_ms" => {
             sig.returns.push(AbiParam::new(types::I64)); // unix timestamp ms
         }
+        "__vow_num_cpus" => {
+            sig.returns.push(AbiParam::new(types::I64)); // available CPU count
+        }
         "__vow_hex_encode" => {
             sig.params.push(AbiParam::new(types::I64)); // vec ptr
             sig.returns.push(AbiParam::new(types::I64)); // string ptr

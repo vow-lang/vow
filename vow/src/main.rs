@@ -4,6 +4,8 @@ mod module_loader;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 
 use std::collections::BTreeMap;
@@ -15,9 +17,9 @@ use vow_codegen::linker::{find_runtime_lib, find_shim_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
-    Counterexample, DEFAULT_MAX_K_STEP, Encoding, Solver, SolverConfig, VerificationResult,
-    VerifyLimits, detect_constant_functions, emit_verify_c_source, find_esbmc, run_with_fallback,
-    verify_function_with_module_and_const_fns_configured,
+    ConstantValue, Counterexample, DEFAULT_MAX_K_STEP, Encoding, Solver, SolverConfig,
+    VerificationResult, VerifyLimits, detect_constant_functions, emit_verify_c_source, find_esbmc,
+    run_with_fallback, verify_function_with_module_and_const_fns_configured,
 };
 
 use cache::{CachedVerifyResult, VerifyCache};
@@ -124,6 +126,8 @@ struct Args {
     #[arg(long)]
     timeout: Option<u32>,
     #[arg(long)]
+    verify_jobs: Option<u32>,
+    #[arg(long)]
     help: bool,
     #[arg(long)]
     human: bool,
@@ -176,6 +180,8 @@ struct BuildArgs {
     #[arg(long)]
     timeout: Option<u32>,
     #[arg(long)]
+    verify_jobs: Option<u32>,
+    #[arg(long)]
     help: bool,
     #[arg(long)]
     human: bool,
@@ -205,6 +211,8 @@ struct VerifyArgs {
     encoding: EncodingArg,
     #[arg(long)]
     timeout: Option<u32>,
+    #[arg(long)]
+    verify_jobs: Option<u32>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -233,6 +241,8 @@ struct TestArgs {
     string_max: usize,
     #[arg(long, default_value = "64")]
     hashmap_max: usize,
+    #[arg(long)]
+    verify_jobs: Option<u32>,
     #[arg(long)]
     help: bool,
     #[arg(long)]
@@ -273,6 +283,10 @@ struct ContractsArgs {
     encoding: EncodingArg,
     #[arg(long)]
     timeout: Option<u32>,
+    /// Accepted for CLI parity with build/verify/test; ignored because
+    /// `update_contract_statuses` has no pool wiring yet (see #175 follow-ups).
+    #[arg(long)]
+    verify_jobs: Option<u32>,
     #[arg(long)]
     help: bool,
     #[arg(long)]
@@ -479,6 +493,14 @@ fn skill_json() -> String {
           "value_name": "N",
           "value_kind": "integer",
           "default": 64
+        },
+        {
+          "form": "--verify-jobs <N>",
+          "description": "Max concurrent ESBMC verification jobs (default: num_cpus/2)",
+          "long": "--verify-jobs",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": "num_cpus/2"
         }
       ],
       "stdout": {
@@ -584,6 +606,14 @@ fn skill_json() -> String {
           "value_name": "N",
           "value_kind": "integer",
           "default": 64
+        },
+        {
+          "form": "--verify-jobs <N>",
+          "description": "Max concurrent ESBMC verification jobs (default: num_cpus/2)",
+          "long": "--verify-jobs",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": "num_cpus/2"
         }
       ],
       "stdout": {
@@ -675,6 +705,14 @@ fn skill_json() -> String {
           "value_name": "N",
           "value_kind": "integer",
           "default": 64
+        },
+        {
+          "form": "--verify-jobs <N>",
+          "description": "Max concurrent ESBMC verification jobs (with --verify)",
+          "long": "--verify-jobs",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": "num_cpus/2"
         }
       ],
       "stdout": {
@@ -800,6 +838,14 @@ fn skill_json() -> String {
           "value_name": "N",
           "value_kind": "integer",
           "default": 64
+        },
+        {
+          "form": "--verify-jobs <N>",
+          "description": "Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial)",
+          "long": "--verify-jobs",
+          "value_name": "N",
+          "value_kind": "integer",
+          "default": "num_cpus/2"
         }
       ],
       "stdout": {
@@ -825,7 +871,8 @@ fn skill_json() -> String {
     "--timeout <N>": "ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long (default: (none; 30 when encoding is auto))",
     "--vec-max <N>": "Max Vec capacity for verification model (default: 128)",
     "--string-max <N>": "Max String capacity for verification model (default: 256)",
-    "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)"
+    "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)",
+    "--verify-jobs <N>": "Max concurrent ESBMC verification jobs (default: num_cpus/2)"
   },
   "verify_options": {
     "--no-cache": "Disable verification result caching",
@@ -835,7 +882,8 @@ fn skill_json() -> String {
     "--timeout <N>": "ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long (default: (none; 30 when encoding is auto))",
     "--vec-max <N>": "Max Vec capacity for verification model (default: 128)",
     "--string-max <N>": "Max String capacity for verification model (default: 256)",
-    "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)"
+    "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)",
+    "--verify-jobs <N>": "Max concurrent ESBMC verification jobs (default: num_cpus/2)"
   },
   "test_options": {
     "--verify": "Run ESBMC verification on test files",
@@ -845,7 +893,8 @@ fn skill_json() -> String {
     "--max-k-step <N>": "ESBMC incremental BMC max iterations (with --verify)",
     "--vec-max <N>": "Max Vec capacity for verification model (default: 128)",
     "--string-max <N>": "Max String capacity for verification model (default: 256)",
-    "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)"
+    "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)",
+    "--verify-jobs <N>": "Max concurrent ESBMC verification jobs (with --verify)"
   },
   "decl_options": {
     "-o, --output <path>": "Output declaration file path (default: <source>.vow.d)"
@@ -858,7 +907,8 @@ fn skill_json() -> String {
     "--encoding <bv|ir|auto>": "ESBMC encoding mode (with --verify); ir requires z3 (default: auto)",
     "--vec-max <N>": "Max Vec capacity for verification model (default: 128)",
     "--string-max <N>": "Max String capacity for verification model (default: 256)",
-    "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)"
+    "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)",
+    "--verify-jobs <N>": "Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial)"
   },
   "global_options": {
     "--help": "Emit versioned JSON tool-help data",
@@ -996,6 +1046,7 @@ fn skill_json() -> String {
       "vec_sort": "fn(v: Vec<i64>) -> Vec<i64> []",
       "time_unix": "fn() -> i64 [io]",
       "time_unix_ms": "fn() -> i64 [io]",
+      "num_cpus": "fn() -> i64 [io]",
       "hex_encode": "fn(data: Vec<u8>) -> String []",
       "hex_decode": "fn(s: String) -> Vec<u8> []",
       "args": "fn() -> Vec<String> [read]",
@@ -1210,6 +1261,7 @@ BUILD OPTIONS
   --vec-max <N>           Max Vec capacity for verification model (default: 128)
   --string-max <N>        Max String capacity for verification model (default: 256)
   --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)
+  --verify-jobs <N>       Max concurrent ESBMC verification jobs (default: num_cpus/2)
 
 VERIFY OPTIONS
   --no-cache              Disable verification result caching
@@ -1220,6 +1272,7 @@ VERIFY OPTIONS
   --vec-max <N>           Max Vec capacity for verification model (default: 128)
   --string-max <N>        Max String capacity for verification model (default: 256)
   --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)
+  --verify-jobs <N>       Max concurrent ESBMC verification jobs (default: num_cpus/2)
 
 TEST OPTIONS
   --verify                Run ESBMC verification on test files
@@ -1230,6 +1283,7 @@ TEST OPTIONS
   --vec-max <N>           Max Vec capacity for verification model (default: 128)
   --string-max <N>        Max String capacity for verification model (default: 256)
   --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)
+  --verify-jobs <N>       Max concurrent ESBMC verification jobs (with --verify)
 
 CONTRACTS OPTIONS
   --verify                Run ESBMC verification and report per-contract status
@@ -1240,6 +1294,7 @@ CONTRACTS OPTIONS
   --vec-max <N>           Max Vec capacity for verification model (default: 128)
   --string-max <N>        Max String capacity for verification model (default: 256)
   --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)
+  --verify-jobs <N>       Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial)
 
 DECL OPTIONS
   -o, --output <path>     Output declaration file path (default: <source>.vow.d)
@@ -1287,7 +1342,7 @@ LANGUAGE SUMMARY
 TYPES     : i32  i64  u8  u64  f32  f64  bool  ()  !  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>
 EFFECTS   : io  read  write  panic  unsafe
 BUILTINS  : print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [io]   print_u64: fn(v: u64) -> () [io]
-            eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   parse_i64: fn(s: String) -> i64 []   i64_to_string: fn(v: i64) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
+            eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   parse_i64: fn(s: String) -> i64 []   i64_to_string: fn(v: i64) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
 METHODS   : Vec: Vec::new/push/pop/len/clear/truncate/v[i]/v[i] = val   String: String::from/String::new/len/byte_at/push_byte/push_str/clear/contains/eq/substring/parse_i64/parse_u64
             HashMap: HashMap::new/insert/get/contains_key/remove/len   Option: unwrap
 OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! & ?
@@ -2086,6 +2141,14 @@ Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they 
 | `time_unix`      | `fn() -> i64`                              | `[io]`     |
 | `time_unix_ms`   | `fn() -> i64`                              | `[io]`     |
 
+#### System
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `num_cpus`       | `fn() -> i64`                              | `[io]`     |
+
+`num_cpus()` returns the number of available logical CPUs (from `std::thread::available_parallelism`), or `1` if the query fails. Used to size worker pools (e.g. the default `--verify-jobs` value).
+
 #### Encoding
 
 | Function         | Signature                                  | Effects    |
@@ -2190,6 +2253,7 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--vec-max <N>` | `128`       | Max Vec capacity for verification model      |
 | `--string-max <N>` | `256`    | Max String capacity for verification model   |
 | `--hashmap-max <N>` | `64`    | Max HashMap capacity for verification model  |
+| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
 
 ### `vow verify`
 
@@ -2211,6 +2275,7 @@ vow verify [OPTIONS] <source.vow>
 | `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
 | `--string-max <N>`| `256`       | Max String capacity for verification model |
 | `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
+| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
 
 ### `vow contracts`
 
@@ -2232,6 +2297,7 @@ vow contracts [OPTIONS] <source.vow>
 | `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
 | `--string-max <N>`| `256`       | Max String capacity for verification model |
 | `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
+| `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |
 
 ### `vow skill`
 
@@ -2269,6 +2335,7 @@ vow test [OPTIONS] [<path>]
 | `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
 | `--string-max <N>`| `256`       | Max String capacity for verification model |
 | `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
+| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs (with --verify) |
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` in the given directory, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
 
@@ -4783,141 +4850,229 @@ fn compile_frontend(source: &Path) -> Result<FrontendBundle, Box<BuildOutput>> {
 // Verification (synchronous)
 // ---------------------------------------------------------------------------
 
+/// Thread-safe: `verify_cache` writes are content-addressed.
+#[allow(clippy::too_many_arguments)]
+fn verify_one_function(
+    func: &vow_ir::Function,
+    ir_module: &vow_ir::Module,
+    const_fns: &std::collections::HashMap<vow_ir::FuncId, ConstantValue>,
+    file: &str,
+    call_site_index: &std::collections::HashMap<String, Vec<CallSiteInfo>>,
+    verify_cache: Option<&VerifyCache>,
+    limits: &VerifyLimits,
+    config: &SolverConfig,
+) -> Option<VerifyOutcome> {
+    // Resolve Auto solver via heuristic (Phase B).
+    // Skip heuristic when encoding is Ir — that forces Z3 via resolve().
+    let func_config = if config.solver == Solver::Auto && config.encoding != Encoding::Ir {
+        let heuristic = vow_verify::classify_function(func);
+        SolverConfig {
+            solver: heuristic.solver,
+            encoding: config.encoding,
+            timeout_secs: config.timeout_secs,
+        }
+    } else {
+        *config
+    };
+
+    let result = if let Some(vc) = verify_cache {
+        let c_src = emit_verify_c_source(func, ir_module, const_fns, limits);
+        let key = VerifyCache::cache_key(
+            &c_src,
+            limits.max_k_step,
+            func_config.solver_str(),
+            func_config.encoding_str(),
+        );
+
+        let cached_result = vc.lookup(&key).map(|c| match c {
+            CachedVerifyResult::Proven => VerificationResult::Proven,
+            CachedVerifyResult::Failed { .. } => {
+                VerificationResult::Failed(c.to_counterexample().unwrap())
+            }
+        });
+        // Phase D: if BV lookup misses under Auto encoding and BV solver
+        // isn't Bitwuzla, probe the IR fallback key for a prior ProvenIr
+        // result. Only promote Proven hits — IR Failed entries must be
+        // ignored because IR doesn't model overflow.
+        let cached_result = cached_result.or_else(|| {
+            if func_config.encoding != Encoding::Auto
+                || matches!(func_config.solver, Solver::Bitwuzla)
+            {
+                return None;
+            }
+            let ir_key = VerifyCache::cache_key(&c_src, limits.max_k_step, "z3", "ir");
+            vc.lookup(&ir_key).and_then(|c| match c {
+                CachedVerifyResult::Proven => Some(VerificationResult::ProvenIr),
+                CachedVerifyResult::Failed { .. } => None,
+            })
+        });
+
+        if let Some(r) = cached_result {
+            r
+        } else {
+            let esbmc = match find_esbmc() {
+                Some(p) => p,
+                None => return Some(VerifyOutcome::ToolNotFound),
+            };
+            let (res, resolved_config) =
+                run_with_fallback(&esbmc, &c_src, limits.max_k_step, &func.name, &func_config);
+            // Store under the resolved config so ProvenIr results are
+            // keyed by encoding=ir rather than the pre-fallback Auto/Bv.
+            let store_key = VerifyCache::cache_key(
+                &c_src,
+                limits.max_k_step,
+                resolved_config.solver_str(),
+                resolved_config.encoding_str(),
+            );
+            match &res {
+                VerificationResult::Proven | VerificationResult::ProvenIr => {
+                    vc.store(&store_key, &CachedVerifyResult::Proven);
+                }
+                VerificationResult::Failed(ce) => {
+                    vc.store(
+                        &store_key,
+                        &CachedVerifyResult::Failed {
+                            vow_id: ce.vow_id,
+                            description: ce.description.clone(),
+                            values: ce.values.clone(),
+                            block_visits: ce.block_visits.clone(),
+                            raw_output: ce.raw_output.clone(),
+                        },
+                    );
+                }
+                _ => {}
+            }
+            res
+        }
+    } else {
+        verify_function_with_module_and_const_fns_configured(
+            func,
+            ir_module,
+            const_fns,
+            limits.max_k_step,
+            &func_config,
+            limits,
+        )
+    };
+
+    match result {
+        VerificationResult::Failed(ce) => {
+            let sce = build_structured_counterexample(func, &ce, file, call_site_index);
+            Some(VerifyOutcome::Failed {
+                function: func.name.clone(),
+                description: ce.description.clone(),
+                counterexamples: vec![sce],
+            })
+        }
+        VerificationResult::ToolError(e) => Some(VerifyOutcome::Error {
+            function: func.name.clone(),
+            message: e,
+        }),
+        VerificationResult::Timeout => Some(VerifyOutcome::Timeout {
+            function: func.name.clone(),
+        }),
+        VerificationResult::Proven | VerificationResult::ProvenIr => None,
+        VerificationResult::ToolNotFound => Some(VerifyOutcome::ToolNotFound),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_verification_sync(
     ir_module: &vow_ir::Module,
     file: &str,
     call_site_index: &std::collections::HashMap<String, Vec<CallSiteInfo>>,
     verify_cache: Option<&VerifyCache>,
     limits: &VerifyLimits,
+    jobs: usize,
     config: &SolverConfig,
 ) -> VerifyOutcome {
     let const_fns = detect_constant_functions(ir_module);
-    for func in &ir_module.functions {
-        if func.vows.is_empty() {
-            continue;
-        }
 
-        // Resolve Auto solver via heuristic (Phase B).
-        // Skip heuristic when encoding is Ir — that forces Z3 via resolve().
-        let func_config = if config.solver == Solver::Auto && config.encoding != Encoding::Ir {
-            let heuristic = vow_verify::classify_function(func);
-            SolverConfig {
-                solver: heuristic.solver,
-                encoding: config.encoding,
-                timeout_secs: config.timeout_secs,
-            }
-        } else {
-            *config
-        };
+    let vowed: Vec<&vow_ir::Function> = ir_module
+        .functions
+        .iter()
+        .filter(|f| !f.vows.is_empty())
+        .collect();
 
-        let result = if let Some(vc) = verify_cache {
-            let c_src = emit_verify_c_source(func, ir_module, &const_fns, limits);
-            let key = VerifyCache::cache_key(
-                &c_src,
-                limits.max_k_step,
-                func_config.solver_str(),
-                func_config.encoding_str(),
-            );
+    if vowed.is_empty() {
+        return VerifyOutcome::Proven;
+    }
 
-            let cached_result = vc.lookup(&key).map(|c| match c {
-                CachedVerifyResult::Proven => VerificationResult::Proven,
-                CachedVerifyResult::Failed { .. } => {
-                    VerificationResult::Failed(c.to_counterexample().unwrap())
-                }
-            });
-            // Phase D: if BV lookup misses under Auto encoding and BV solver
-            // isn't Bitwuzla, probe the IR fallback key for a prior
-            // ProvenIr result. Only promote Proven hits — IR Failed entries
-            // must be ignored because IR doesn't model overflow, so an
-            // IR-only counterexample may be infeasible under BV semantics.
-            let cached_result = cached_result.or_else(|| {
-                if func_config.encoding != Encoding::Auto
-                    || matches!(func_config.solver, Solver::Bitwuzla)
-                {
-                    return None;
-                }
-                let ir_key = VerifyCache::cache_key(&c_src, limits.max_k_step, "z3", "ir");
-                vc.lookup(&ir_key).and_then(|c| match c {
-                    CachedVerifyResult::Proven => Some(VerificationResult::ProvenIr),
-                    CachedVerifyResult::Failed { .. } => None,
-                })
-            });
-
-            if let Some(r) = cached_result {
-                r
-            } else {
-                let esbmc = match find_esbmc() {
-                    Some(p) => p,
-                    None => return VerifyOutcome::ToolNotFound,
-                };
-                let (res, resolved_config) =
-                    run_with_fallback(&esbmc, &c_src, limits.max_k_step, &func.name, &func_config);
-                // Store under the resolved config so ProvenIr results are
-                // keyed by encoding=ir rather than the pre-fallback Auto/Bv.
-                let store_key = VerifyCache::cache_key(
-                    &c_src,
-                    limits.max_k_step,
-                    resolved_config.solver_str(),
-                    resolved_config.encoding_str(),
-                );
-                match &res {
-                    VerificationResult::Proven | VerificationResult::ProvenIr => {
-                        vc.store(&store_key, &CachedVerifyResult::Proven);
-                    }
-                    VerificationResult::Failed(ce) => {
-                        vc.store(
-                            &store_key,
-                            &CachedVerifyResult::Failed {
-                                vow_id: ce.vow_id,
-                                description: ce.description.clone(),
-                                values: ce.values.clone(),
-                                block_visits: ce.block_visits.clone(),
-                                raw_output: ce.raw_output.clone(),
-                            },
-                        );
-                    }
-                    _ => {}
-                }
-                res
-            }
-        } else {
-            verify_function_with_module_and_const_fns_configured(
+    let jobs = jobs.max(1).min(vowed.len());
+    if jobs == 1 {
+        for func in &vowed {
+            if let Some(outcome) = verify_one_function(
                 func,
                 ir_module,
                 &const_fns,
-                limits.max_k_step,
-                &func_config,
+                file,
+                call_site_index,
+                verify_cache,
                 limits,
-            )
-        };
-
-        match result {
-            VerificationResult::Failed(ce) => {
-                let sce = build_structured_counterexample(func, &ce, file, call_site_index);
-                return VerifyOutcome::Failed {
-                    function: func.name.clone(),
-                    description: ce.description.clone(),
-                    counterexamples: vec![sce],
-                };
-            }
-            VerificationResult::ToolError(e) => {
-                return VerifyOutcome::Error {
-                    function: func.name.clone(),
-                    message: e,
-                };
-            }
-            VerificationResult::Timeout => {
-                return VerifyOutcome::Timeout {
-                    function: func.name.clone(),
-                };
-            }
-            VerificationResult::Proven | VerificationResult::ProvenIr => {}
-            VerificationResult::ToolNotFound => {
-                return VerifyOutcome::ToolNotFound;
+                config,
+            ) {
+                return outcome;
             }
         }
+        return VerifyOutcome::Proven;
     }
-    VerifyOutcome::Proven
+
+    // Stop after first failure; return lowest-indexed outcome for deterministic reporting.
+    let next = AtomicUsize::new(0);
+    let stop = AtomicBool::new(false);
+    let outcomes: StdMutex<Vec<Option<VerifyOutcome>>> =
+        StdMutex::new((0..vowed.len()).map(|_| None).collect());
+
+    thread::scope(|scope| {
+        for _ in 0..jobs {
+            let next = &next;
+            let stop = &stop;
+            let outcomes = &outcomes;
+            let vowed = &vowed;
+            let const_fns = &const_fns;
+            scope.spawn(move || {
+                loop {
+                    if stop.load(Ordering::Acquire) {
+                        break;
+                    }
+                    let idx = next.fetch_add(1, Ordering::AcqRel);
+                    if idx >= vowed.len() {
+                        break;
+                    }
+                    // Always finish what we've claimed so `outcomes[idx]` reflects
+                    // its true verdict — otherwise lowest-index failure reporting
+                    // becomes timing-dependent. The pre-check already avoids claims
+                    // in the common post-failure case.
+                    let outcome = verify_one_function(
+                        vowed[idx],
+                        ir_module,
+                        const_fns,
+                        file,
+                        call_site_index,
+                        verify_cache,
+                        limits,
+                        config,
+                    );
+                    if let Some(out) = outcome {
+                        let mut guard = outcomes.lock().expect("verify outcomes mutex poisoned");
+                        guard[idx] = Some(out);
+                        drop(guard);
+                        // Release pairs with sibling threads' stop.load(Acquire) to propagate early-exit.
+                        stop.store(true, Ordering::Release);
+                    }
+                }
+            });
+        }
+    });
+
+    let results = outcomes
+        .into_inner()
+        .expect("verify outcomes mutex poisoned");
+    results
+        .into_iter()
+        .flatten()
+        .next()
+        .unwrap_or(VerifyOutcome::Proven)
 }
 
 fn blame_to_error_code(blame: &str) -> vow_diag::ErrorCode {
@@ -5080,13 +5235,14 @@ fn verify_outcome_to_output(
 
 pub fn run_verify_only(source: &Path) -> BuildOutput {
     let limits = VerifyLimits::default();
-    run_verify_only_inner(source, false, &limits, &SolverConfig::default_config())
+    run_verify_only_inner(source, false, &limits, 1, &SolverConfig::default_config())
 }
 
 fn run_verify_only_inner(
     source: &Path,
     no_cache: bool,
     limits: &VerifyLimits,
+    jobs: usize,
     config: &SolverConfig,
 ) -> BuildOutput {
     let frontend = match compile_frontend(source) {
@@ -5111,6 +5267,7 @@ fn run_verify_only_inner(
         &call_site_index,
         verify_cache.as_ref(),
         limits,
+        jobs,
         config,
     );
     verify_outcome_to_output(outcome, all_diagnostics, None)
@@ -5158,6 +5315,7 @@ pub fn run_pipeline(
         trace,
         false,
         &limits,
+        1,
         &SolverConfig::default_config(),
     )
 }
@@ -5172,6 +5330,7 @@ fn run_pipeline_inner(
     trace: TraceMode,
     no_cache: bool,
     limits: &VerifyLimits,
+    jobs: usize,
     config: &SolverConfig,
 ) -> BuildOutput {
     let frontend = match compile_frontend(source) {
@@ -5180,7 +5339,7 @@ fn run_pipeline_inner(
     };
 
     run_pipeline_from_frontend(
-        frontend, source, output, mode, no_verify, dump_ir, trace, no_cache, limits, config,
+        frontend, source, output, mode, no_verify, dump_ir, trace, no_cache, limits, jobs, config,
     )
 }
 
@@ -5195,6 +5354,7 @@ fn run_pipeline_from_frontend(
     trace: TraceMode,
     no_cache: bool,
     limits: &VerifyLimits,
+    jobs: usize,
     config: &SolverConfig,
 ) -> BuildOutput {
     let all_diagnostics = frontend.diagnostics().to_vec();
@@ -5241,6 +5401,7 @@ fn run_pipeline_from_frontend(
             &call_site_index,
             verify_cache.as_ref(),
             &verify_limits,
+            jobs,
             &verify_config,
         )
     });
@@ -5367,6 +5528,7 @@ fn count_contract_density(ir_module: &vow_ir::Module) -> ContractDensity {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_test_command(
     path: &Path,
     verify: bool,
@@ -5374,6 +5536,7 @@ fn run_test_command(
     mode: BuildMode,
     timeout_ms: u64,
     limits: &VerifyLimits,
+    jobs: usize,
 ) {
     if !path.exists() {
         let result = TestResult {
@@ -5465,6 +5628,7 @@ fn run_test_command(
             TraceMode::Off,
             true,
             limits,
+            jobs,
             &SolverConfig::default_config(),
         );
 
@@ -5666,6 +5830,23 @@ fn validate_limits(limits: &VerifyLimits) {
     }
 }
 
+/// User value verbatim; rejects 0 with a clear error. None → num_cpus/2 clamped to ≥1.
+fn resolve_verify_jobs(opt: Option<u32>) -> usize {
+    match opt {
+        Some(0) => {
+            eprintln!("error: --verify-jobs must be >= 1");
+            std::process::exit(1);
+        }
+        Some(n) => n as usize,
+        None => {
+            let n = std::thread::available_parallelism()
+                .map(|p| p.get())
+                .unwrap_or(1);
+            (n / 2).max(1)
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_build_command(
     source: &Path,
@@ -5676,10 +5857,11 @@ fn run_build_command(
     trace: TraceMode,
     no_cache: bool,
     limits: &VerifyLimits,
+    jobs: usize,
     config: &SolverConfig,
 ) {
     let result = run_pipeline_inner(
-        source, output, mode, no_verify, dump_ir, trace, no_cache, limits, config,
+        source, output, mode, no_verify, dump_ir, trace, no_cache, limits, jobs, config,
     );
     if !dump_ir {
         result.emit_json();
@@ -5727,8 +5909,14 @@ fn run_decl_command(source: &Path, output: Option<&Path>) {
     eprintln!("wrote {}", out_path.display());
 }
 
-fn run_verify_command(source: &Path, no_cache: bool, limits: &VerifyLimits, config: &SolverConfig) {
-    let result = run_verify_only_inner(source, no_cache, limits, config);
+fn run_verify_command(
+    source: &Path,
+    no_cache: bool,
+    limits: &VerifyLimits,
+    jobs: usize,
+    config: &SolverConfig,
+) {
+    let result = run_verify_only_inner(source, no_cache, limits, jobs, config);
     result.emit_json();
     if matches!(
         &result.status,
@@ -6010,6 +6198,7 @@ fn main() {
                 hashmap_max: b.hashmap_max,
             };
             validate_limits(&limits);
+            let jobs = resolve_verify_jobs(b.verify_jobs);
             let bconfig = make_solver_config(b.solver, b.encoding, b.timeout);
             run_build_command(
                 &source,
@@ -6020,6 +6209,7 @@ fn main() {
                 trace,
                 b.no_cache,
                 &limits,
+                jobs,
                 &bconfig,
             );
         }
@@ -6046,8 +6236,9 @@ fn main() {
                 hashmap_max: v.hashmap_max,
             };
             validate_limits(&limits);
+            let jobs = resolve_verify_jobs(v.verify_jobs);
             let config = make_solver_config(v.solver, v.encoding, v.timeout);
-            run_verify_command(&source, v.no_cache, &limits, &config);
+            run_verify_command(&source, v.no_cache, &limits, jobs, &config);
         }
         Some(Command::Test(t)) => {
             if t.help {
@@ -6075,6 +6266,7 @@ fn main() {
                 hashmap_max: t.hashmap_max,
             };
             validate_limits(&limits);
+            let jobs = resolve_verify_jobs(t.verify_jobs);
             run_test_command(
                 &path,
                 t.verify,
@@ -6082,6 +6274,7 @@ fn main() {
                 mode,
                 t.timeout,
                 &limits,
+                jobs,
             );
         }
         Some(Command::Decl(d)) => {
@@ -6125,6 +6318,10 @@ fn main() {
                 hashmap_max: c.hashmap_max,
             };
             validate_limits(&limits);
+            // Accepted for CLI parity; validates a 0 rejection via the same path
+            // as build/verify/test, then is discarded because update_contract_statuses
+            // has no pool wiring today.
+            let _ = resolve_verify_jobs(c.verify_jobs);
             let config = make_solver_config(c.solver, c.encoding, c.timeout);
             run_contracts_command(&source, c.verify, c.no_cache, &limits, &config);
         }
@@ -6183,6 +6380,7 @@ fn main() {
                 hashmap_max: args.hashmap_max,
             };
             validate_limits(&limits);
+            let jobs = resolve_verify_jobs(args.verify_jobs);
             let config = make_solver_config(args.solver, args.encoding, args.timeout);
             run_build_command(
                 &source,
@@ -6193,6 +6391,7 @@ fn main() {
                 trace,
                 args.no_cache,
                 &limits,
+                jobs,
                 &config,
             );
         }
@@ -8241,6 +8440,107 @@ fn main() -> i32 {
             result.status
         );
         assert!(result.executable.is_none());
+    }
+
+    // Exercises `run_verification_sync`'s threaded pool (`jobs > 1`). The public
+    // `run_pipeline` / `run_verify_only` hardcode jobs=1, so without this test
+    // the parallel code path is only covered via the CLI.
+    #[test]
+    fn verify_only_inner_runs_threaded_pool() {
+        let dir = TempDir::new().unwrap();
+        let src = r#"module MultiVow
+fn a() -> i64 vow {
+  ensures: result == 1
+} {
+  1
+}
+fn b() -> i64 vow {
+  ensures: result == 2
+} {
+  2
+}
+fn c() -> i64 vow {
+  ensures: result == 3
+} {
+  3
+}
+fn d() -> i64 vow {
+  ensures: result == 4
+} {
+  4
+}
+fn main() -> i32 {
+  0
+}"#;
+        let source = write_source(&dir, "multi.vow", src);
+        let limits = VerifyLimits::default();
+        // jobs=4 with 4 vowed functions forces the threaded path.
+        let result =
+            run_verify_only_inner(&source, true, &limits, 4, &SolverConfig::default_config());
+        match &result.status {
+            BuildStatus::Verified => {
+                assert!(result.executable.is_none());
+                assert!(result.counterexamples.is_empty());
+            }
+            BuildStatus::Unverified => {
+                eprintln!("SKIP: esbmc not found");
+            }
+            BuildStatus::CompileFailed { message } => {
+                panic!("unexpected compile failure: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        }
+    }
+
+    // Locks in the lowest-index determinism guarantee on the threaded pool:
+    // two functions are both provably wrong, but `fail_a` appears before
+    // `fail_b` in source order, so it must be reported.
+    #[test]
+    fn verify_only_inner_reports_lowest_index_failure() {
+        let dir = TempDir::new().unwrap();
+        let src = r#"module FailDeterminism
+fn ok_1() -> i64 vow {
+  ensures: result == 1
+} {
+  1
+}
+fn fail_a() -> i64 vow {
+  ensures: result == 99
+} {
+  1
+}
+fn ok_2() -> i64 vow {
+  ensures: result == 2
+} {
+  2
+}
+fn fail_b() -> i64 vow {
+  ensures: result == 99
+} {
+  2
+}
+fn main() -> i32 {
+  0
+}"#;
+        let source = write_source(&dir, "fail_det.vow", src);
+        let limits = VerifyLimits::default();
+        let result =
+            run_verify_only_inner(&source, true, &limits, 4, &SolverConfig::default_config());
+        match &result.status {
+            BuildStatus::VerifyFailed { function, .. } => {
+                assert_eq!(
+                    function, "fail_a",
+                    "expected lowest-index failure fail_a, got {function}"
+                );
+            }
+            BuildStatus::Unverified => {
+                eprintln!("SKIP: esbmc not found");
+            }
+            BuildStatus::CompileFailed { message } => {
+                panic!("unexpected compile failure: {message}");
+            }
+            other => panic!("unexpected status: {other:?}"),
+        }
     }
 
     #[test]

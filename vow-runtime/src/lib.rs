@@ -1421,6 +1421,13 @@ pub extern "C" fn __vow_time_unix_ms() -> i64 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn __vow_num_cpus() -> i64 {
+    std::thread::available_parallelism()
+        .map(|n| n.get() as i64)
+        .unwrap_or(1)
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_hex_encode(vec: *const u8) -> *mut u8 {
     if vec.is_null() {
         return __vow_vec_new(1, 1);

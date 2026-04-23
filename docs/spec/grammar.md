@@ -713,6 +713,14 @@ Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they 
 | `time_unix`      | `fn() -> i64`                              | `[io]`     |
 | `time_unix_ms`   | `fn() -> i64`                              | `[io]`     |
 
+#### System
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `num_cpus`       | `fn() -> i64`                              | `[io]`     |
+
+`num_cpus()` returns the number of available logical CPUs (from `std::thread::available_parallelism`), or `1` if the query fails. Used to size worker pools (e.g. the default `--verify-jobs` value).
+
 #### Encoding
 
 | Function         | Signature                                  | Effects    |

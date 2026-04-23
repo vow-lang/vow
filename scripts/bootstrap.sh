@@ -81,9 +81,12 @@ fi
 
 # ─── Stage 1: Rust compiler -> build/vowc ────────────────────────────
 
+# --verify-jobs 1 keeps bootstrap memory bounded: at most one ESBMC process
+# runs at a time across the ~45 vowed compiler functions, so peak RSS is
+# codegen + one ESBMC instead of codegen + N-fold ESBMC fan-out. See #175.
 printf "${BOLD}Stage 1:${RESET} Rust compiler -> build/vowc\n"
 t0=$(date +%s)
-if ! run_logged "./target/release/vow build compiler/main.vow -o build/vowc"; then
+if ! run_logged "./target/release/vow build --verify-jobs 1 compiler/main.vow -o build/vowc"; then
     printf "  ${RED}FAILED${RESET}\n"
     exit 1
 fi
@@ -94,7 +97,7 @@ printf "  done in %ds\n" $((t1 - t0))
 
 printf "${BOLD}Stage 2:${RESET} build/vowc -> build/vowc2\n"
 t0=$(date +%s)
-if ! run_stage_cmd "build/vowc build compiler/main.vow -o build/vowc2"; then
+if ! run_stage_cmd "build/vowc build --verify-jobs 1 compiler/main.vow -o build/vowc2"; then
     printf "  ${RED}FAILED${RESET}\n"
     if [ "$VMEM_LIMIT_KB" -gt 0 ]; then
         printf "  Hint: rerun with a higher VOW_BOOTSTRAP_VMEM_KB or unset it for no cap.\n"
@@ -108,7 +111,7 @@ printf "  done in %ds\n" $((t1 - t0))
 
 printf "${BOLD}Stage 3:${RESET} build/vowc2 -> build/vowc3\n"
 t0=$(date +%s)
-if ! run_stage_cmd "build/vowc2 build compiler/main.vow -o build/vowc3"; then
+if ! run_stage_cmd "build/vowc2 build --verify-jobs 1 compiler/main.vow -o build/vowc3"; then
     printf "  ${RED}FAILED${RESET}\n"
     if [ "$VMEM_LIMIT_KB" -gt 0 ]; then
         printf "  Hint: rerun with a higher VOW_BOOTSTRAP_VMEM_KB or unset it for no cap.\n"
