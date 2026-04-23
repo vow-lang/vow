@@ -252,7 +252,15 @@ struct IrFunction {
     rsum_return_kind: i64,
     rsum_return_aux: i64,
     rsum_return_aliases: Vec<i64>,
+    // Flat encoding of `Vec<StoreEffect>` mirroring `vow-ir/src/types.rs`:
+    // per effect, [target_u32, constraint_kind, (aux_u32)?, (alias_count,
+    // alias_u32...)?]. Payload shape matches `write_region_constraint` in
+    // `vow-ir/src/serialize.rs`. Empty in Phase 2 (no effectful summaries
+    // produced yet).
     rsum_store_effects: Vec<i64>,
+    // Per-parameter RegionVar indices (u32 on the Rust side). Matches
+    // `RegionSummary.param_regions` in `vow-ir/src/types.rs`. Empty in
+    // Phase 2 (no cross-module summaries produced yet).
     rsum_param_regions: Vec<i64>,
 }
 
