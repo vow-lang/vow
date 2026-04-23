@@ -976,10 +976,12 @@ mod tests {
         // + LEB(HUGE) would normally trip Vec::with_capacity. The
         // `bounded_count` helper must reject the count before reservation.
         let mut b = encode_module(&empty_module());
-        // empty_module serialises as: magic(4) + version(4) + name_len(1) +
-        // strings_len(1) + structs_len(1) + enums_len(1) + fns_len(1) = 13.
-        // Replace the trailing `0` (function count) with a 10-byte LEB
-        // encoding of a value exceeding remaining bytes.
+        // empty_module serialises as: magic(4) + version(4) + name_leb(1) +
+        // name_content(1) + strings_len(1) + structs_len(1) + enums_len(1) +
+        // fns_len(1) = 14 bytes (write_string("m") emits LEB(1)+'m'). After
+        // truncate(12) the last two fields are dropped, so the huge LEB
+        // lands on the enum-layouts count read — still `bounded_count`'s
+        // first chance to reject and the behaviour we want to pin.
         b.truncate(12);
         // LEB128 encoding of 2^63 (massive count)
         b.extend_from_slice(&[0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01]);
