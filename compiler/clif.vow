@@ -41,49 +41,34 @@ fn collect_extern_syms(m: IrModule, mode: i64) -> Vec<String> {
 }
 
 fn clif_compile_function(ctx: i64, func_idx: i64, f: IrFunction) -> i64 [io] {
+    let params: Vec<i64> = f.params;
+    let rc_begin: i64 = __vow_clif_fn_begin(ctx, func_idx, f.return_ty, params);
+    if rc_begin != 0 {
+        return rc_begin;
+    }
+
     let blocks: Vec<IrBlock> = f.blocks;
     let n_blocks: i64 = blocks.len();
-
-    let block_starts: Vec<i64> = Vec::new();
-    let block_lengths: Vec<i64> = Vec::new();
-    let inst_ids: Vec<i64> = Vec::new();
-    let inst_ops: Vec<i64> = Vec::new();
-    let inst_tys: Vec<i64> = Vec::new();
-    let inst_dks: Vec<i64> = Vec::new();
-    let inst_dvs: Vec<i64> = Vec::new();
-    let inst_dv2s: Vec<i64> = Vec::new();
-    let inst_ds: Vec<String> = Vec::new();
-    let all_args: Vec<i64> = Vec::new();
-    let arg_offsets: Vec<i64> = Vec::new();
-    let arg_lengths: Vec<i64> = Vec::new();
-
     let mut bi: i64 = 0;
     while bi < n_blocks {
+        let rc_blk: i64 = __vow_clif_fn_block(ctx);
+        if rc_blk != 0 {
+            return rc_blk;
+        }
         let blk: IrBlock = blocks[bi];
         let insts: Vec<IrInst> = blk.insts;
         let n_insts: i64 = insts.len();
-        block_starts.push(inst_ids.len());
-        block_lengths.push(n_insts);
-
         let mut ii: i64 = 0;
         while ii < n_insts {
             let inst: IrInst = insts[ii];
-            inst_ids.push(inst.id);
-            inst_ops.push(inst.op);
-            inst_tys.push(inst.ty);
-            inst_dks.push(inst.dk);
-            inst_dvs.push(inst.dv);
-            inst_dv2s.push(inst.dv2);
-            inst_ds.push(inst.ds);
-
             let args: Vec<i64> = inst.args;
-            let n_args: i64 = args.len();
-            arg_offsets.push(all_args.len());
-            arg_lengths.push(n_args);
-            let mut ai: i64 = 0;
-            while ai < n_args {
-                all_args.push(args[ai]);
-                ai = ai + 1;
+            let rc_inst: i64 = __vow_clif_fn_inst(
+                ctx, inst.id, inst.op, inst.ty,
+                inst.dk, inst.dv, inst.dv2,
+                inst.ds, args
+            );
+            if rc_inst != 0 {
+                return rc_inst;
             }
             ii = ii + 1;
         }
@@ -92,44 +77,21 @@ fn clif_compile_function(ctx: i64, func_idx: i64, f: IrFunction) -> i64 [io] {
 
     let vows: Vec<IrVowEntry> = f.vows;
     let n_vows: i64 = vows.len();
-    let vow_ids: Vec<i64> = Vec::new();
-    let vow_blames: Vec<i64> = Vec::new();
-    let vow_descs: Vec<String> = Vec::new();
-    let binding_counts: Vec<i64> = Vec::new();
-    let binding_inst_ids: Vec<i64> = Vec::new();
-    let binding_names: Vec<String> = Vec::new();
-
     let mut vi: i64 = 0;
     while vi < n_vows {
         let ve: IrVowEntry = vows[vi];
-        vow_ids.push(ve.id);
-        vow_blames.push(ve.blame);
-        vow_descs.push(ve.description);
-
         let bids: Vec<i64> = ve.binding_ids;
         let bnames: Vec<String> = ve.binding_names;
-        let bc: i64 = bids.len();
-        binding_counts.push(bc);
-        let mut bj: i64 = 0;
-        while bj < bc {
-            binding_inst_ids.push(bids[bj]);
-            binding_names.push(bnames[bj]);
-            bj = bj + 1;
+        let rc_vow: i64 = __vow_clif_fn_vow(
+            ctx, ve.id, ve.description, bids, bnames
+        );
+        if rc_vow != 0 {
+            return rc_vow;
         }
         vi = vi + 1;
     }
 
-    let params: Vec<i64> = f.params;
-
-    __vow_clif_compile_function(
-        ctx, func_idx, f.return_ty, params,
-        n_blocks, block_starts, block_lengths,
-        inst_ids, inst_ops, inst_tys, inst_dks,
-        inst_dvs, inst_dv2s, inst_ds,
-        all_args, arg_offsets, arg_lengths,
-        vow_ids, vow_blames, vow_descs,
-        binding_counts, binding_inst_ids, binding_names
-    )
+    __vow_clif_fn_end(ctx)
 }
 
 fn str_eq_lit(s: String, lit: String) -> bool {
