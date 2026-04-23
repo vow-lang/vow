@@ -58,6 +58,18 @@ fn reader_new(buf: Vec<i64>) -> ModuleReader {
     ModuleReader { buf: buf, pos: 0 }
 }
 
+fn reject_decode_i64() -> i64 {
+    let bad: Vec<i64> = Vec::new();
+    bad[0]
+}
+
+fn reject_decode_module() -> IrModule {
+    let bad: Vec<i64> = Vec::new();
+    let name: String = String::new();
+    name.push_byte(bad[0]);
+    ir_module_new(name)
+}
+
 fn write_u8(out: Vec<i64>, v: i64) vow {
     requires: v >= 0,
     requires: v <= 255
@@ -322,9 +334,17 @@ fn region_encode(out: Vec<i64>, rgn: i64) vow {
     write_u32_le(out, payload);
 }
 
-fn region_decode(r: ModuleReader) -> i64 {
+fn region_decode(r: ModuleReader) -> i64 [panic] {
     let kind: i64 = reader_read_u8(r);
     let payload: i64 = reader_read_u32_le(r);
+    if kind > REGION_KIND_RODATA() {
+        return reject_decode_i64();
+    }
+    if kind == REGION_KIND_ROOT() || kind == REGION_KIND_RODATA() {
+        if payload != 0 {
+            return reject_decode_i64();
+        }
+    }
     region_pack(kind, payload)
 }
 
@@ -537,7 +557,7 @@ fn write_inst_data(out: Vec<i64>, inst: IrInst) {
     write_u8(out, 0);
 }
 
-fn read_inst_data(r: ModuleReader) -> WireInstData {
+fn read_inst_data(r: ModuleReader) -> WireInstData [panic] {
     let tag: i64 = reader_read_u8(r);
     let data: WireInstData = WireInstData { dk: IDATA_NONE(), dv: 0, dv2: 0, ds: String::from("") };
     if tag == 1 {
@@ -613,7 +633,7 @@ fn write_inst(out: Vec<i64>, inst: IrInst) {
     region_encode(out, inst.rgn);
 }
 
-fn read_inst(r: ModuleReader) -> IrInst {
+fn read_inst(r: ModuleReader) -> IrInst [panic] {
     let id: i64 = reader_read_u32_le(r);
     let op: i64 = disc_opcode(reader_read_u16_le(r));
     let ty: i64 = disc_ty(reader_read_u8(r));
@@ -648,7 +668,7 @@ fn write_block(out: Vec<i64>, block: IrBlock) {
     }
 }
 
-fn read_block(r: ModuleReader) -> IrBlock {
+fn read_block(r: ModuleReader) -> IrBlock [panic] {
     let block: IrBlock = ir_block_new(reader_read_u32_le(r));
     let n: i64 = reader_read_leb(r);
     let mut i: i64 = 0;
@@ -705,7 +725,9 @@ fn read_vow_entry(r: ModuleReader) -> IrVowEntry {
     entry
 }
 
-fn sort_local_names(ids: Vec<i64>, names: Vec<String>) -> SortedLocalNames {
+fn sort_local_names(ids: Vec<i64>, names: Vec<String>) -> SortedLocalNames vow {
+    requires: ids.len() == names.len()
+} {
     let used: Vec<i64> = Vec::new();
     let mut i: i64 = 0;
     while i < ids.len() vow {
@@ -717,7 +739,12 @@ fn sort_local_names(ids: Vec<i64>, names: Vec<String>) -> SortedLocalNames {
     }
     let out_ids: Vec<i64> = Vec::new();
     let out_names: Vec<String> = Vec::new();
-    while out_ids.len() < ids.len() {
+    let mut remaining: i64 = ids.len();
+    while remaining > 0 vow {
+        invariant: remaining >= 0,
+        invariant: remaining <= ids.len(),
+        invariant: out_ids.len() <= ids.len()
+    } {
         let mut best_idx: i64 = -1;
         let mut best_id: i64 = 0;
         i = 0;
@@ -734,9 +761,24 @@ fn sort_local_names(ids: Vec<i64>, names: Vec<String>) -> SortedLocalNames {
             }
             i = i + 1;
         }
-        used[best_idx] = 1;
-        out_ids.push(ids[best_idx]);
-        out_names.push(names[best_idx]);
+        // Keep the last name for duplicate ids to mirror Rust's HashMap insert semantics.
+        let mut chosen_idx: i64 = best_idx;
+        i = 0;
+        while i < ids.len() vow {
+            invariant: i >= 0,
+            invariant: i <= ids.len(),
+            invariant: remaining >= 0,
+            invariant: remaining <= ids.len()
+        } {
+            if used[i] == 0 && ids[i] == best_id {
+                used[i] = 1;
+                remaining = remaining - 1;
+                chosen_idx = i;
+            }
+            i = i + 1;
+        }
+        out_ids.push(ids[chosen_idx]);
+        out_names.push(names[chosen_idx]);
     }
     SortedLocalNames { ids: out_ids, names: out_names }
 }
@@ -910,7 +952,7 @@ fn write_function(out: Vec<i64>, f: IrFunction) {
     write_region_summary(out, f);
 }
 
-fn read_function(r: ModuleReader) -> IrFunction {
+fn read_function(r: ModuleReader) -> IrFunction [panic] {
     let id: i64 = reader_read_u32_le(r);
     let name: String = reader_read_string(r);
 
@@ -1035,13 +1077,18 @@ fn module_encode(m: IrModule) -> Vec<i64> {
     out
 }
 
-fn module_decode(buf: Vec<i64>) -> IrModule {
+fn module_decode(buf: Vec<i64>) -> IrModule [panic] {
     let r: ModuleReader = reader_new(buf);
-    let _m0: i64 = reader_read_u8(r);
-    let _m1: i64 = reader_read_u8(r);
-    let _m2: i64 = reader_read_u8(r);
-    let _m3: i64 = reader_read_u8(r);
-    let _version: i64 = reader_read_u32_le(r);
+    let m0: i64 = reader_read_u8(r);
+    let m1: i64 = reader_read_u8(r);
+    let m2: i64 = reader_read_u8(r);
+    let m3: i64 = reader_read_u8(r);
+    let version: i64 = reader_read_u32_le(r);
+    if m0 != MODULE_MAGIC_0() { return reject_decode_module(); }
+    if m1 != MODULE_MAGIC_1() { return reject_decode_module(); }
+    if m2 != MODULE_MAGIC_2() { return reject_decode_module(); }
+    if m3 != MODULE_MAGIC_3() { return reject_decode_module(); }
+    if version != MODULE_VERSION() { return reject_decode_module(); }
 
     let m: IrModule = ir_module_new(reader_read_string(r));
 

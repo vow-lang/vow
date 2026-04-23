@@ -152,7 +152,9 @@ fn make_sample_module() -> IrModule {
 
     f.blocks.push(block);
 
-    // Intentionally unsorted: encoder must sort by id for deterministic wire output.
+    // Intentionally unsorted, with a duplicate id: encoder must sort and deduplicate.
+    f.local_names_ids.push(7);
+    f.local_names_strs.push(String::from("stale_name"));
     f.local_names_ids.push(42);
     f.local_names_strs.push(String::from("tmp_alloc"));
     f.local_names_ids.push(7);
@@ -217,7 +219,7 @@ fn fixture_path() -> String {
     String::from("tests/fixtures/issue197_sample.vmod.hex")
 }
 
-fn main() -> i32 [read, io] {
+fn main() -> i32 [read, io, panic] {
     let mut fail: i64 = 0;
 
     let expected_hex: String = compact_hex(fs_read(fixture_path()));

@@ -1,0 +1,17 @@
+// TEST: exit 1
+module Main
+
+use ir
+use module_io
+
+fn main() -> i32 [panic] {
+    let bytes: Vec<i64> = Vec::new();
+    bytes.push(REGION_KIND_ROOT());
+    bytes.push(1);
+    bytes.push(0);
+    bytes.push(0);
+    bytes.push(0);
+    let r: ModuleReader = reader_new(bytes);
+    let _rgn: i64 = region_decode(r);
+    0
+}
