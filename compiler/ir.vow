@@ -190,6 +190,14 @@ fn ITY_U64() -> i64 vow { ensures: result >= 0 } { 8 }
 // adds full InstData encoding to `compiler/module_io.vow`, it must
 // build an explicit IDATA_* → on-disk-disc translation table rather
 // than reusing these constants as wire-format discriminants.
+//
+// Implementation note for that Phase 3 translation table: the on-disk
+// discriminants are defined as literal `out.push(N)` calls inside
+// `write_inst_data` (not derived from any named constant), so the
+// self-hosted encoder should mirror them with an explicit match on
+// `IDATA_*` → fixed byte, not via any `dk + offset` formula. That
+// keeps the mapping visible in one place and fails loudly if either
+// numbering space shifts.
 fn IDATA_NONE() -> i64 vow { ensures: result >= 0 } { 0 }
 fn IDATA_CONST_I32() -> i64 vow { ensures: result >= 0 } { 1 }
 fn IDATA_CONST_I64() -> i64 vow { ensures: result >= 0 } { 2 }

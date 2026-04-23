@@ -136,6 +136,12 @@ fn region_decode(buf: Vec<i64>, pos: i64) -> i64 vow {
 // Alias count uses LEB128 to match vow-ir/src/serialize.rs byte-for-byte.
 // Each alias is a parameter index stored as u32 on the Rust side, so both
 // `aux` and every `aliases[i]` must satisfy `write_u32_le`'s bounds.
+//
+// Side-by-side reference: this function is the self-hosted mirror of
+// `vow-ir/src/serialize.rs::write_region_constraint`. The `ALIAS_OF_ANY`
+// branch below (LEB count + u32 loop) is the most complex path here and
+// the one most likely to drift from the Rust side; diff them directly
+// when touching either file.
 fn region_constraint_encode(out: Vec<i64>, kind: i64, aux: i64, aliases: Vec<i64>) vow {
     requires: kind >= 0,
     requires: kind <= 3,
