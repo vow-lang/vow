@@ -177,3 +177,9 @@ fn region_constraint_encode(out: Vec<i64>, kind: i64, aux: i64, aliases: Vec<i64
 // caller will be the first to exercise these primitives at runtime.
 // An in-module self-check was previously defined here but had no caller —
 // removed to avoid two parallel implementations drifting silently.
+//
+// Phase 3 wire-up: when adding a self-hosted `.vmod` producer/consumer,
+// switch `tests/run/vmod_region_roundtrip.vow` to `use module_io` and
+// call `region_encode` / `region_decode` / `region_constraint_encode`
+// directly instead of keeping inline copies of those functions. That
+// closes the divergence window between the two implementations.
