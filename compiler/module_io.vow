@@ -153,10 +153,13 @@ fn region_constraint_encode(out: Vec<i64>, kind: i64, aux: i64, aliases: Vec<i64
     // ALIAS_OF_ANY: LEB128 count + u32 parameter indices.
     // Each alias is a u32 parameter index on the Rust side; the caller
     // guarantees bounded values. Vow cannot express per-element Vec
-    // preconditions today, so a violation of `write_u32_le`'s
-    // `requires: v <= 4294967295` blames this function (as Caller) rather
-    // than the ultimate `region_constraint_encode` caller. Revisit when
-    // the contract system gains per-element quantifiers.
+    // preconditions today, so a violation of `write_u32_le`'s contract
+    // (`requires: v >= 0`, `requires: v <= 4294967295`) blames this
+    // function (as Caller) rather than the ultimate
+    // `region_constraint_encode` caller. Revisit when the contract
+    // system gains per-element quantifiers — this function should then
+    // carry `requires: forall i in 0..aliases.len(). aliases[i] >= 0 &&
+    // aliases[i] <= 4294967295` to push blame to the true caller.
     let n: i64 = aliases.len();
     write_leb(out, n);
     let mut i: i64 = 0;
