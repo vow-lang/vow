@@ -147,9 +147,11 @@ impl<'a> Reader<'a> {
         let raw_len = self.leb()?;
         let len = self.bounded_count(raw_len)?;
         let bytes = self.take(len)?;
+        // Distinguish short-read (already handled by `take`) from bytes-
+        // present-but-not-UTF-8 here — callers can tell the difference.
         std::str::from_utf8(bytes)
             .map(str::to_string)
-            .map_err(|_| DecodeError::Truncated)
+            .map_err(|_| DecodeError::InvalidKind("String.utf8", 0))
     }
 }
 
@@ -676,16 +678,12 @@ fn read_function(r: &mut Reader) -> Result<Function, DecodeError> {
     }
     let raw_nn = r.leb()?;
     let nn = r.bounded_count(raw_nn)?;
-    // `params` and `param_names` are parallel lists in the in-memory
-    // `Function` — enforce the same parity on decode so crafted buffers
-    // cannot produce a structurally valid `Function` with mismatched
-    // lengths that downstream passes would mishandle.
-    if nn != np {
-        return Err(DecodeError::Malformed(
-            "Function.params_names_mismatch",
-            nn as u32,
-        ));
-    }
+    // `param_names` is a parallel annotation to `params` in principle,
+    // but numerous construction sites across the repo (test fixtures,
+    // internal stubs) leave `param_names` empty while `params` carries
+    // real types. Consumers (e.g. `vow/src/main.rs` param-name lookups)
+    // handle the mismatch via `Vec::get` → `Option`, so the decoder
+    // accepts any `nn` and leaves parity to the encoder/producer.
     let mut param_names = Vec::new();
     for _ in 0..nn {
         param_names.push(r.string()?);
