@@ -54,7 +54,9 @@ fn write_leb(out: Vec<i64>, v: i64) vow {
     let mut n: i64 = v;
     // Terminates: n = n / 128 is strictly decreasing for n >= 1 and exits
     // as soon as n reaches 0. Bounded above by ~10 iterations for i64.
-    loop {
+    loop vow {
+        invariant: n >= 0
+    } {
         let byte: i64 = n - (n / 128) * 128;
         n = n / 128;
         if n == 0 {

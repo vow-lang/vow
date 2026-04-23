@@ -490,7 +490,17 @@ fn read_inst_data(r: &mut Reader) -> Result<InstData, DecodeError> {
         2 => Ok(InstData::ConstI64(r.u64()? as i64)),
         3 => Ok(InstData::ConstF32(f32::from_bits(r.u32()?))),
         4 => Ok(InstData::ConstF64(f64::from_bits(r.u64()?))),
-        5 => Ok(InstData::ConstBool(r.u8()? != 0)),
+        5 => {
+            // Reject non-canonical bool bytes so `[5, 2]` doesn't round-trip
+            // to `[5, 1]` — distinct byte streams must not decode to the
+            // same module.
+            let b = r.u8()?;
+            match b {
+                0 => Ok(InstData::ConstBool(false)),
+                1 => Ok(InstData::ConstBool(true)),
+                _ => Err(DecodeError::InvalidKind("ConstBool", b as u32)),
+            }
+        }
         6 => Ok(InstData::ArgIndex(r.u32()?)),
         7 => Ok(InstData::PhiTarget(InstId(r.u32()?))),
         8 => Ok(InstData::ConstU64(r.u64()?)),
@@ -690,7 +700,13 @@ fn read_function(r: &mut Reader) -> Result<Function, DecodeError> {
     for _ in 0..nl {
         let k = r.u32()?;
         let v = r.string()?;
-        local_names.insert(k, v);
+        // Reject duplicate keys so distinct wire payloads cannot collapse
+        // to the same decoded function. The encoder emits keys in sorted
+        // order (see write_function) so duplicates can only come from
+        // crafted or corrupted input.
+        if local_names.insert(k, v).is_some() {
+            return Err(DecodeError::InvalidKind("local_names.duplicate", k));
+        }
     }
     let summary = read_region_summary(r)?;
     Ok(Function {
@@ -735,7 +751,11 @@ fn read_struct_layout(r: &mut Reader) -> Result<StructLayout, DecodeError> {
     for _ in 0..n {
         fields.push(read_field(r)?);
     }
-    let is_linear = r.u8()? != 0;
+    let is_linear = match r.u8()? {
+        0 => false,
+        1 => true,
+        b => return Err(DecodeError::InvalidKind("StructLayout.is_linear", b as u32)),
+    };
     Ok(StructLayout {
         name,
         fields,

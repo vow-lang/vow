@@ -180,6 +180,16 @@ fn ITY_PTR() -> i64 vow { ensures: result >= 0 } { 6 }
 fn ITY_LPTR() -> i64 vow { ensures: result >= 0 } { 7 }
 fn ITY_U64() -> i64 vow { ensures: result >= 0 } { 8 }
 
+// IDATA_* are the **in-memory** data-kind tags for the self-hosted IR
+// (`IrInst.dk`). They are a separate numbering space from the on-disk
+// `.vmod` discriminants in `vow-ir/src/serialize.rs::read_inst_data`
+// — the two partially overlap by accident but drift after slot 7
+// (e.g. IDATA_CONST_STR=8 in-memory maps to on-disk disc 9,
+// IDATA_CALL_TARGET=9 in-memory maps to on-disk disc 10, and
+// IDATA_CONST_U64=17 in-memory maps to on-disk disc 8). When Phase 3
+// adds full InstData encoding to `compiler/module_io.vow`, it must
+// build an explicit IDATA_* → on-disk-disc translation table rather
+// than reusing these constants as wire-format discriminants.
 fn IDATA_NONE() -> i64 vow { ensures: result >= 0 } { 0 }
 fn IDATA_CONST_I32() -> i64 vow { ensures: result >= 0 } { 1 }
 fn IDATA_CONST_I64() -> i64 vow { ensures: result >= 0 } { 2 }
