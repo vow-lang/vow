@@ -9,6 +9,7 @@ fn VERIFY_FAILED() -> i64 vow { ensures: result >= 0 } { 1 }
 fn VERIFY_TIMEOUT() -> i64 vow { ensures: result >= 0 } { 2 }
 fn VERIFY_ERROR() -> i64 vow { ensures: result >= 0 } { 3 }
 fn VERIFY_NOT_FOUND() -> i64 vow { ensures: result >= 0 } { 4 }
+fn VERIFY_PROVEN_IR() -> i64 vow { ensures: result >= 0 } { 5 }
 
 struct VerifyResult {
     status: i64,
@@ -252,6 +253,8 @@ fn save_esbmc_debug(c_source: String, tmp_path: String, max_k_step: String, func
     fs_write(cmd_path, cmd);
 }
 
+fn DEFAULT_AUTO_TIMEOUT_STR() -> String { String::from("30") }
+
 fn append_solver_args(args: Vec<String>, solver: String, encoding: String) {
     if solver.len() > 0 && solver != String::from("boolector") && solver != String::from("auto") {
         args.push(str2(String::from("--"), solver));
@@ -261,7 +264,14 @@ fn append_solver_args(args: Vec<String>, solver: String, encoding: String) {
     }
 }
 
-fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: String, solver: String, encoding: String) -> i64 [io] {
+fn append_timeout_arg(args: Vec<String>, timeout_secs: String) {
+    if timeout_secs.len() > 0 {
+        args.push(String::from("--timeout"));
+        args.push(str2(timeout_secs, String::from("s")));
+    }
+}
+
+fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: String, solver: String, encoding: String, timeout_secs: String) -> i64 [io] {
     fs_write(tmp_path, c_source);
     save_esbmc_debug(c_source, tmp_path, max_k_step, func_name, false);
     let esbmc_args: Vec<String> = Vec::new();
@@ -273,11 +283,12 @@ fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: 
     esbmc_args.push(max_k_step);
     esbmc_args.push(String::from("--64"));
     append_solver_args(esbmc_args, solver, encoding);
+    append_timeout_arg(esbmc_args, timeout_secs);
     let exit_code: i64 = process_run(esbmc_path(), esbmc_args);
     exit_code
 }
 
-fn start_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: String, solver: String, encoding: String) -> i64 [io] {
+fn start_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: String, solver: String, encoding: String, timeout_secs: String) -> i64 [io] {
     fs_write(tmp_path, c_source);
     save_esbmc_debug(c_source, tmp_path, max_k_step, func_name, false);
     let esbmc_args: Vec<String> = Vec::new();
@@ -289,8 +300,24 @@ fn start_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name
     esbmc_args.push(max_k_step);
     esbmc_args.push(String::from("--64"));
     append_solver_args(esbmc_args, solver, encoding);
+    append_timeout_arg(esbmc_args, timeout_secs);
     let handle: i64 = process_start(esbmc_path(), esbmc_args);
     handle
+}
+
+fn effective_timeout_for(encoding: String, solver: String, user_timeout: String) -> String {
+    if user_timeout.len() > 0 {
+        return user_timeout;
+    }
+    // Bitwuzla can't use IR encoding — don't cap it with a timeout that has no retry path.
+    let bv_solver: String = resolve_auto_bv_solver(solver);
+    if bv_solver == String::from("bitwuzla") {
+        return String::from("");
+    }
+    if encoding.len() == 0 || encoding == String::from("auto") {
+        return DEFAULT_AUTO_TIMEOUT_STR();
+    }
+    String::from("")
 }
 
 fn parse_verify_status(combined: String) -> i64 {
@@ -304,6 +331,9 @@ fn parse_verify_status(combined: String) -> i64 {
         return VERIFY_TIMEOUT();
     }
     if str_find_str(combined, String::from("Timeout")) >= 0 {
+        return VERIFY_TIMEOUT();
+    }
+    if str_find_str(combined, String::from("Timed out")) >= 0 {
         return VERIFY_TIMEOUT();
     }
     VERIFY_ERROR()
@@ -556,59 +586,18 @@ fn verify_cache_store(key: String, status: i64) [io] {
     fs_write(path, content);
 }
 
-fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cache: bool, solver: String, encoding: String,
-                        vec_max: i64, string_max: i64, hashmap_max: i64) -> VerifyResult [io] {
-    let vows: Vec<IrVowEntry> = f.vows;
-    if vows.len() == 0 {
-        return VerifyResult {
-            status: VERIFY_PROVEN(),
-            vow_id: -1,
-            var_names: Vec::new(),
-            var_values: Vec::new(),
-            block_visits: Vec::new(),
-            raw_output: String::from(""),
-        };
+fn resolve_auto_bv_solver(solver: String) -> String {
+    if solver.len() == 0 || solver == String::from("auto") {
+        return String::from("boolector");
     }
-    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max);
-    if use_cache {
-        verify_cache_ensure_dir();
-        let cache_key: String = verify_cache_key(c_source, max_k_step, solver, encoding);
-        let cached: i64 = verify_cache_lookup(cache_key);
-        if cached == VERIFY_PROVEN() {
-            return VerifyResult {
-                status: VERIFY_PROVEN(),
-                vow_id: -1,
-                var_names: Vec::new(),
-                var_values: Vec::new(),
-                block_visits: Vec::new(),
-                raw_output: String::from("(cached)"),
-            };
-        }
-    }
-    let fn_name: String = f.name;
-    let exit_code: i64 = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, solver, encoding);
-    if exit_code == -1 {
-        return VerifyResult {
-            status: VERIFY_NOT_FOUND(),
-            vow_id: -1,
-            var_names: Vec::new(),
-            var_values: Vec::new(),
-            block_visits: Vec::new(),
-            raw_output: String::from("esbmc not found"),
-        };
-    }
-    let stdout: String = process_get_stdout();
-    let stderr: String = process_get_stderr();
-    let combined: String = String::from("");
-    combined.push_str(stdout);
-    combined.push_str(stderr);
-    let status: i64 = parse_verify_status(combined);
-    if use_cache {
-        if status == VERIFY_PROVEN() || status == VERIFY_FAILED() {
-            let cache_key2: String = verify_cache_key(c_source, max_k_step, solver, encoding);
-            verify_cache_store(cache_key2, status);
-        }
-    }
+    solver
+}
+
+fn is_auto_encoding(encoding: String) -> bool {
+    encoding.len() == 0 || encoding == String::from("auto")
+}
+
+fn build_verify_result(f: IrFunction, status: i64, combined: String) -> VerifyResult {
     let vow_id: i64 = {
         if status == VERIFY_FAILED() {
             parse_vow_id(combined)
@@ -639,26 +628,241 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
     }
 }
 
-fn verify_start(f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_cache: bool, solver: String, encoding: String,
+fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
+                        vec_max: i64, string_max: i64, hashmap_max: i64) -> VerifyResult [io] {
+    let vows: Vec<IrVowEntry> = f.vows;
+    if vows.len() == 0 {
+        return VerifyResult {
+            status: VERIFY_PROVEN(),
+            vow_id: -1,
+            var_names: Vec::new(),
+            var_values: Vec::new(),
+            block_visits: Vec::new(),
+            raw_output: String::from(""),
+        };
+    }
+    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max);
+    let fn_name: String = f.name;
+    let auto_enc: bool = is_auto_encoding(encoding);
+    let bv_solver: String = resolve_auto_bv_solver(solver);
+    let bv_encoding: String = { if auto_enc { String::from("bv") } else { encoding } };
+    let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
+    if use_cache {
+        verify_cache_ensure_dir();
+        // Lookup under the resolved BV key so cache hits survive Auto→Bv
+        // resolution. The BV-Proven store path uses the same key below.
+        let cache_key: String = verify_cache_key(c_source, max_k_step, bv_solver, bv_encoding);
+        let cached: i64 = verify_cache_lookup(cache_key);
+        if cached == VERIFY_PROVEN() {
+            return VerifyResult {
+                status: VERIFY_PROVEN(),
+                vow_id: -1,
+                var_names: Vec::new(),
+                var_values: Vec::new(),
+                block_visits: Vec::new(),
+                raw_output: String::from("(cached)"),
+            };
+        }
+        // Phase D: if previous run fell back to IR under Auto encoding, the
+        // result was stored under (z3, ir). Probe that key too so re-verify
+        // doesn't have to rerun the BV timeout.
+        if auto_enc && bv_solver != String::from("bitwuzla") {
+            let ir_key: String = verify_cache_key(c_source, max_k_step, String::from("z3"), String::from("ir"));
+            let cached_ir: i64 = verify_cache_lookup(ir_key);
+            if cached_ir == VERIFY_PROVEN() {
+                return VerifyResult {
+                    status: VERIFY_PROVEN_IR(),
+                    vow_id: -1,
+                    var_names: Vec::new(),
+                    var_values: Vec::new(),
+                    block_visits: Vec::new(),
+                    raw_output: String::from("(cached)"),
+                };
+            }
+        }
+    }
+
+    let exit_code: i64 = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, solver, encoding, bv_timeout);
+    if exit_code == -1 {
+        return VerifyResult {
+            status: VERIFY_NOT_FOUND(),
+            vow_id: -1,
+            var_names: Vec::new(),
+            var_values: Vec::new(),
+            block_visits: Vec::new(),
+            raw_output: String::from("esbmc not found"),
+        };
+    }
+    let stdout: String = process_get_stdout();
+    let stderr: String = process_get_stderr();
+    let combined: String = String::from("");
+    combined.push_str(stdout);
+    combined.push_str(stderr);
+    let mut status: i64 = parse_verify_status(combined);
+    let mut used_combined: String = combined;
+    let mut resolved_solver: String = {
+        if solver.len() == 0 || solver == String::from("auto") { bv_solver } else { solver }
+    };
+    let mut resolved_encoding: String = {
+        if auto_enc { String::from("bv") } else { encoding }
+    };
+
+    // Phase D: if BV timed out under Auto encoding and the BV solver is not
+    // Bitwuzla, retry once with --z3 --ir (integer encoding).
+    if status == VERIFY_TIMEOUT() && auto_enc && bv_solver != String::from("bitwuzla") {
+        let ir_solver: String = String::from("z3");
+        let ir_encoding: String = String::from("ir");
+        let ir_timeout: String = {
+            if timeout_secs.len() > 0 { timeout_secs } else { DEFAULT_AUTO_TIMEOUT_STR() }
+        };
+        let exit2: i64 = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, ir_solver, ir_encoding, ir_timeout);
+        if exit2 == -1 {
+            // ESBMC disappeared between BV and IR runs; surface consistently with verify_function_ir_fallback.
+            return VerifyResult {
+                status: VERIFY_NOT_FOUND(),
+                vow_id: -1,
+                var_names: Vec::new(),
+                var_values: Vec::new(),
+                block_visits: Vec::new(),
+                raw_output: String::from("esbmc not found"),
+            };
+        }
+        let so2: String = process_get_stdout();
+        let se2: String = process_get_stderr();
+        let combined2: String = String::from("");
+        combined2.push_str(so2);
+        combined2.push_str(se2);
+        let s2: i64 = parse_verify_status(combined2);
+        status = {
+            // IR-only counterexamples can be infeasible under BV (no overflow modeling), so a FAILED here is inconclusive — report the original Timeout instead.
+            if s2 == VERIFY_PROVEN() { VERIFY_PROVEN_IR() }
+            else if s2 == VERIFY_FAILED() { VERIFY_TIMEOUT() }
+            else { s2 }
+        };
+        used_combined = combined2;
+        resolved_solver = ir_solver;
+        resolved_encoding = ir_encoding;
+    }
+
+    if use_cache {
+        let cache_status: i64 = {
+            if status == VERIFY_PROVEN_IR() { VERIFY_PROVEN() } else { status }
+        };
+        // Don't persist FAILED entries under (z3, ir): IR lacks overflow
+        // modeling, so IR-only counterexamples may be infeasible under BV,
+        // and neither secondary lookup retrieves IR-FAILED results anyway.
+        let is_ir_key: bool = resolved_encoding == String::from("ir");
+        if cache_status == VERIFY_PROVEN() || (cache_status == VERIFY_FAILED() && !is_ir_key) {
+            let cache_key2: String = verify_cache_key(c_source, max_k_step, resolved_solver, resolved_encoding);
+            verify_cache_store(cache_key2, cache_status);
+        }
+    }
+    build_verify_result(f, status, used_combined)
+}
+
+fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, use_cache: bool, timeout_secs: String,
+                               vec_max: i64, string_max: i64, hashmap_max: i64) -> VerifyResult [io] {
+    let vows: Vec<IrVowEntry> = f.vows;
+    if vows.len() == 0 {
+        return VerifyResult {
+            status: VERIFY_PROVEN(),
+            vow_id: -1,
+            var_names: Vec::new(),
+            var_values: Vec::new(),
+            block_visits: Vec::new(),
+            raw_output: String::from(""),
+        };
+    }
+    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max);
+    let fn_name: String = f.name;
+    let ir_solver: String = String::from("z3");
+    let ir_encoding: String = String::from("ir");
+    let ir_timeout: String = {
+        if timeout_secs.len() > 0 { timeout_secs } else { DEFAULT_AUTO_TIMEOUT_STR() }
+    };
+    // Probe the IR cache first so a repeated BV timeout doesn't re-run Z3.
+    if use_cache {
+        verify_cache_ensure_dir();
+        let ir_probe_key: String = verify_cache_key(c_source, max_k_step, ir_solver, ir_encoding);
+        let cached_ir: i64 = verify_cache_lookup(ir_probe_key);
+        if cached_ir == VERIFY_PROVEN() {
+            return build_verify_result(f, VERIFY_PROVEN_IR(), String::from("(cached)"));
+        }
+    }
+    let exit_code: i64 = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, ir_solver, ir_encoding, ir_timeout);
+    if exit_code == -1 {
+        return VerifyResult {
+            status: VERIFY_NOT_FOUND(),
+            vow_id: -1,
+            var_names: Vec::new(),
+            var_values: Vec::new(),
+            block_visits: Vec::new(),
+            raw_output: String::from("esbmc not found"),
+        };
+    }
+    let stdout: String = process_get_stdout();
+    let stderr: String = process_get_stderr();
+    let combined: String = String::from("");
+    combined.push_str(stdout);
+    combined.push_str(stderr);
+    let raw_status: i64 = parse_verify_status(combined);
+    let status: i64 = {
+        // IR-only CEs can be infeasible under BV — demote FAILED to TIMEOUT (the caller only reaches us because BV already timed out).
+        if raw_status == VERIFY_PROVEN() { VERIFY_PROVEN_IR() }
+        else if raw_status == VERIFY_FAILED() { VERIFY_TIMEOUT() }
+        else { raw_status }
+    };
+    if use_cache {
+        // Only persist PROVEN under (z3, ir). IR counterexamples can be
+        // infeasible under BV, so writing FAILED here would be misleading
+        // and no reader probes the IR key for FAILED anyway.
+        let cache_status: i64 = {
+            if status == VERIFY_PROVEN_IR() { VERIFY_PROVEN() } else { status }
+        };
+        if cache_status == VERIFY_PROVEN() {
+            let cache_key: String = verify_cache_key(c_source, max_k_step, ir_solver, ir_encoding);
+            verify_cache_store(cache_key, cache_status);
+        }
+    }
+    build_verify_result(f, status, combined)
+}
+
+fn verify_start(f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
                 vec_max: i64, string_max: i64, hashmap_max: i64) -> i64 [io] {
     let vows: Vec<IrVowEntry> = f.vows;
     if vows.len() == 0 {
         return -1;
     }
     let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max);
+    let auto_enc: bool = is_auto_encoding(encoding);
+    let bv_solver: String = resolve_auto_bv_solver(solver);
+    let bv_encoding: String = { if auto_enc { String::from("bv") } else { encoding } };
     if use_cache {
         verify_cache_ensure_dir();
-        let cache_key: String = verify_cache_key(c_source, max_k_step, solver, encoding);
+        // Lookup under the resolved BV key so hits produced by the sync
+        // `verify` path (which normalizes keys the same way) are visible
+        // here. Otherwise Auto mode splits the cache namespace.
+        let cache_key: String = verify_cache_key(c_source, max_k_step, bv_solver, bv_encoding);
         let cached: i64 = verify_cache_lookup(cache_key);
         if cached == VERIFY_PROVEN() {
             return -2;
+        }
+        // Also probe the IR fallback key: a prior run may have escalated to
+        // (z3, ir) after a BV timeout.
+        if auto_enc && bv_solver != String::from("bitwuzla") {
+            let ir_key: String = verify_cache_key(c_source, max_k_step, String::from("z3"), String::from("ir"));
+            let cached_ir: i64 = verify_cache_lookup(ir_key);
+            if cached_ir == VERIFY_PROVEN() {
+                return -2;
+            }
         }
     }
     let tmp_path: String = String::from("/tmp/__vow_verify_");
     tmp_path.push_str(i64_to_str(idx));
     tmp_path.push_str(String::from(".c"));
     let fn_name: String = f.name;
-    let handle: i64 = start_esbmc(c_source, max_k_step, tmp_path, fn_name, solver, encoding);
+    let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
+    let handle: i64 = start_esbmc(c_source, max_k_step, tmp_path, fn_name, solver, encoding, bv_timeout);
     handle
 }
 

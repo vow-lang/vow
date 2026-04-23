@@ -16,8 +16,8 @@ use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
     Counterexample, DEFAULT_MAX_K_STEP, Encoding, Solver, SolverConfig, VerificationResult,
-    VerifyLimits, detect_constant_functions, emit_verify_c_source, find_esbmc,
-    run_esbmc_with_max_k_step, verify_function_with_module_and_const_fns_configured,
+    VerifyLimits, detect_constant_functions, emit_verify_c_source, find_esbmc, run_with_fallback,
+    verify_function_with_module_and_const_fns_configured,
 };
 
 use cache::{CachedVerifyResult, VerifyCache};
@@ -450,11 +450,11 @@ fn skill_json() -> String {
         },
         {
           "form": "--timeout <N>",
-          "description": "ESBMC per-function timeout in seconds (default: (none))",
+          "description": "ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long (default: (none; 30 when encoding is auto))",
           "long": "--timeout",
           "value_name": "N",
           "value_kind": "integer",
-          "default": "(none)"
+          "default": "(none; 30 when encoding is auto)"
         },
         {
           "form": "--vec-max <N>",
@@ -555,11 +555,11 @@ fn skill_json() -> String {
         },
         {
           "form": "--timeout <N>",
-          "description": "ESBMC per-function timeout in seconds (default: (none))",
+          "description": "ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long (default: (none; 30 when encoding is auto))",
           "long": "--timeout",
           "value_name": "N",
           "value_kind": "integer",
-          "default": "(none)"
+          "default": "(none; 30 when encoding is auto)"
         },
         {
           "form": "--vec-max <N>",
@@ -822,7 +822,7 @@ fn skill_json() -> String {
     "--max-k-step <N>": "ESBMC incremental BMC max iterations (default: 50)",
     "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
     "--encoding <bv|ir|auto>": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
-    "--timeout <N>": "ESBMC per-function timeout in seconds (default: (none))",
+    "--timeout <N>": "ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long (default: (none; 30 when encoding is auto))",
     "--vec-max <N>": "Max Vec capacity for verification model (default: 128)",
     "--string-max <N>": "Max String capacity for verification model (default: 256)",
     "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)"
@@ -832,7 +832,7 @@ fn skill_json() -> String {
     "--max-k-step <N>": "ESBMC incremental BMC max iterations (default: 50)",
     "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
     "--encoding <bv|ir|auto>": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
-    "--timeout <N>": "ESBMC per-function timeout in seconds (default: (none))",
+    "--timeout <N>": "ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long (default: (none; 30 when encoding is auto))",
     "--vec-max <N>": "Max Vec capacity for verification model (default: 128)",
     "--string-max <N>": "Max String capacity for verification model (default: 256)",
     "--hashmap-max <N>": "Max HashMap capacity for verification model (default: 64)"
@@ -1206,7 +1206,7 @@ BUILD OPTIONS
   --max-k-step <N>        ESBMC incremental BMC max iterations (default: 50)
   --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)
   --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)
-  --timeout <N>           ESBMC per-function timeout in seconds (default: (none))
+  --timeout <N>           ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long (default: (none; 30 when encoding is auto))
   --vec-max <N>           Max Vec capacity for verification model (default: 128)
   --string-max <N>        Max String capacity for verification model (default: 256)
   --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)
@@ -1216,7 +1216,7 @@ VERIFY OPTIONS
   --max-k-step <N>        ESBMC incremental BMC max iterations (default: 50)
   --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)
   --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)
-  --timeout <N>           ESBMC per-function timeout in seconds (default: (none))
+  --timeout <N>           ESBMC per-function timeout in seconds. Under --encoding auto, a 30s default is applied so the BV-timeout fallback to --encoding ir --solver z3 can trigger when bit-vector solving takes too long (default: (none; 30 when encoding is auto))
   --vec-max <N>           Max Vec capacity for verification model (default: 128)
   --string-max <N>        Max String capacity for verification model (default: 256)
   --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)
@@ -2186,7 +2186,7 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--max-k-step <N>` | `50`     | ESBMC incremental BMC max iterations          |
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
-| `--timeout <N>` | (none)      | ESBMC per-function timeout in seconds        |
+| `--timeout <N>` | (none; `30` when encoding is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long |
 | `--vec-max <N>` | `128`       | Max Vec capacity for verification model      |
 | `--string-max <N>` | `256`    | Max String capacity for verification model   |
 | `--hashmap-max <N>` | `64`    | Max HashMap capacity for verification model  |
@@ -2207,7 +2207,7 @@ vow verify [OPTIONS] <source.vow>
 | `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations       |
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
-| `--timeout <N>` | (none)      | ESBMC per-function timeout in seconds        |
+| `--timeout <N>` | (none; `30` when encoding is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long |
 | `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
 | `--string-max <N>`| `256`       | Max String capacity for verification model |
 | `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
@@ -2483,17 +2483,18 @@ vow verify --help --human  # same legacy text (works on all subcommands)
 | `description` | string  | Full contract text                                       |
 | `blame`       | string  | `"Caller"` (requires) or `"Callee"` (ensures/invariant)  |
 | `source`      | object  | `{ "file": string, "offset": integer }`                  |
-| `status`      | string  | `"proven"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, or `"not_verified"` |
+| `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, or `"not_verified"` |
 
 ### Status Values
 
 | Status          | Meaning                                              |
 |-----------------|------------------------------------------------------|
 | `not_verified`  | Verification not requested (no `--verify` flag)      |
-| `proven`        | ESBMC proved this contract holds for all inputs      |
+| `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |
+| `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
 | `failed`        | ESBMC found a counterexample violating this contract |
 | `unknown`       | Another contract in the same function failed; this one was not individually checked |
-| `timeout`       | ESBMC timed out on the containing function           |
+| `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
 
 ## Trace Output (stderr, --debug-trace)
@@ -3767,7 +3768,7 @@ When stdin is exhausted, `stdin_read_line()` returns `""` (length 0), the `while
           },
           "status": {
             "type": "string",
-            "enum": ["proven", "failed", "unknown", "timeout", "error", "not_verified"],
+            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified"],
             "description": "Verification status"
           }
         },
@@ -4818,32 +4819,54 @@ fn run_verification_sync(
                 func_config.encoding_str(),
             );
 
-            if let Some(cached) = vc.lookup(&key) {
-                match cached {
-                    CachedVerifyResult::Proven => VerificationResult::Proven,
-                    CachedVerifyResult::Failed { .. } => {
-                        VerificationResult::Failed(cached.to_counterexample().unwrap())
-                    }
+            let cached_result = vc.lookup(&key).map(|c| match c {
+                CachedVerifyResult::Proven => VerificationResult::Proven,
+                CachedVerifyResult::Failed { .. } => {
+                    VerificationResult::Failed(c.to_counterexample().unwrap())
                 }
+            });
+            // Phase D: if BV lookup misses under Auto encoding and BV solver
+            // isn't Bitwuzla, probe the IR fallback key for a prior
+            // ProvenIr result. Only promote Proven hits — IR Failed entries
+            // must be ignored because IR doesn't model overflow, so an
+            // IR-only counterexample may be infeasible under BV semantics.
+            let cached_result = cached_result.or_else(|| {
+                if func_config.encoding != Encoding::Auto
+                    || matches!(func_config.solver, Solver::Bitwuzla)
+                {
+                    return None;
+                }
+                let ir_key = VerifyCache::cache_key(&c_src, limits.max_k_step, "z3", "ir");
+                vc.lookup(&ir_key).and_then(|c| match c {
+                    CachedVerifyResult::Proven => Some(VerificationResult::ProvenIr),
+                    CachedVerifyResult::Failed { .. } => None,
+                })
+            });
+
+            if let Some(r) = cached_result {
+                r
             } else {
                 let esbmc = match find_esbmc() {
                     Some(p) => p,
                     None => return VerifyOutcome::ToolNotFound,
                 };
-                let res = run_esbmc_with_max_k_step(
-                    &esbmc,
+                let (res, resolved_config) =
+                    run_with_fallback(&esbmc, &c_src, limits.max_k_step, &func.name, &func_config);
+                // Store under the resolved config so ProvenIr results are
+                // keyed by encoding=ir rather than the pre-fallback Auto/Bv.
+                let store_key = VerifyCache::cache_key(
                     &c_src,
                     limits.max_k_step,
-                    &func.name,
-                    &func_config,
+                    resolved_config.solver_str(),
+                    resolved_config.encoding_str(),
                 );
                 match &res {
                     VerificationResult::Proven | VerificationResult::ProvenIr => {
-                        vc.store(&key, &CachedVerifyResult::Proven);
+                        vc.store(&store_key, &CachedVerifyResult::Proven);
                     }
                     VerificationResult::Failed(ce) => {
                         vc.store(
-                            &key,
+                            &store_key,
                             &CachedVerifyResult::Failed {
                                 vow_id: ce.vow_id,
                                 description: ce.description.clone(),
@@ -5743,7 +5766,7 @@ fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJso
     };
     for e in entries {
         match e.status.as_str() {
-            "proven" => summary.proven += 1,
+            "proven" | "proven-ir" => summary.proven += 1,
             "failed" => summary.failed += 1,
             "unknown" => summary.unknown += 1,
             "timeout" => summary.timeout += 1,
@@ -5776,13 +5799,31 @@ fn update_contract_statuses(
                 config.encoding_str(),
             );
 
-            if let Some(cached) = vc.lookup(&key) {
-                match cached {
-                    CachedVerifyResult::Proven => VerificationResult::Proven,
-                    CachedVerifyResult::Failed { .. } => {
-                        VerificationResult::Failed(cached.to_counterexample().unwrap())
-                    }
+            let cached_result = vc.lookup(&key).map(|c| match c {
+                CachedVerifyResult::Proven => VerificationResult::Proven,
+                CachedVerifyResult::Failed { .. } => {
+                    VerificationResult::Failed(c.to_counterexample().unwrap())
                 }
+            });
+            // Phase D: if BV lookup misses under Auto encoding and BV solver
+            // isn't Bitwuzla, also probe the IR fallback key. A hit there
+            // means a prior run had to fall back to ir; surface as ProvenIr
+            // so `contracts --verify` reports "proven-ir".
+            let cached_result = cached_result.or_else(|| {
+                if config.encoding != Encoding::Auto || matches!(config.solver, Solver::Bitwuzla) {
+                    return None;
+                }
+                let ir_key = VerifyCache::cache_key(&c_src, limits.max_k_step, "z3", "ir");
+                // Ignore IR Failed entries: IR lacks overflow modeling, so
+                // an IR-only counterexample may be infeasible under BV.
+                vc.lookup(&ir_key).and_then(|c| match c {
+                    CachedVerifyResult::Proven => Some(VerificationResult::ProvenIr),
+                    CachedVerifyResult::Failed { .. } => None,
+                })
+            });
+
+            if let Some(r) = cached_result {
+                r
             } else {
                 let esbmc = match find_esbmc() {
                     Some(p) => p,
@@ -5795,20 +5836,21 @@ fn update_contract_statuses(
                         continue;
                     }
                 };
-                let res = run_esbmc_with_max_k_step(
-                    &esbmc,
+                let (res, resolved_config) =
+                    run_with_fallback(&esbmc, &c_src, limits.max_k_step, &func.name, config);
+                let store_key = VerifyCache::cache_key(
                     &c_src,
                     limits.max_k_step,
-                    &func.name,
-                    config,
+                    resolved_config.solver_str(),
+                    resolved_config.encoding_str(),
                 );
                 match &res {
                     VerificationResult::Proven | VerificationResult::ProvenIr => {
-                        vc.store(&key, &CachedVerifyResult::Proven);
+                        vc.store(&store_key, &CachedVerifyResult::Proven);
                     }
                     VerificationResult::Failed(ce) => {
                         vc.store(
-                            &key,
+                            &store_key,
                             &CachedVerifyResult::Failed {
                                 vow_id: ce.vow_id,
                                 description: ce.description.clone(),
