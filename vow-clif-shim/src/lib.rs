@@ -261,6 +261,11 @@ struct ModuleContext {
 // these values across FFI boundaries.
 #[derive(Default)]
 struct FnScratch {
+    // True between a successful `fn_begin` and the matching `fn_end`. Gates
+    // `fn_block`/`fn_inst`/`fn_vow`/`fn_end` so an out-of-order caller hits a
+    // clean `-1` return instead of silently accumulating into `func_idx == 0`
+    // or panicking Cranelift mid-seal.
+    began: bool,
     func_idx: i64,
     ret_ty: i64,
     param_tys: Vec<i64>,
@@ -289,6 +294,7 @@ struct FnScratch {
 impl FnScratch {
     // Reset len=0 on all fields while preserving each Vec's allocated capacity.
     fn reset(&mut self) {
+        self.began = false;
         self.func_idx = 0;
         self.ret_ty = 0;
         self.param_tys.clear();
@@ -501,6 +507,7 @@ pub unsafe extern "C" fn __vow_clif_fn_begin(
         return -1;
     }
     ctx.fn_scratch.reset();
+    ctx.fn_scratch.began = true;
     ctx.fn_scratch.func_idx = func_idx;
     ctx.fn_scratch.ret_ty = ret_ty;
     if param_tys_vec != 0 {
@@ -516,6 +523,10 @@ pub unsafe extern "C" fn __vow_clif_fn_begin(
 pub unsafe extern "C" fn __vow_clif_fn_block(ctx_ptr: i64) -> i64 {
     let ctx = unsafe { &mut *(ctx_ptr as *mut ModuleContext) };
     let s = &mut ctx.fn_scratch;
+    if !s.began {
+        eprintln!("clif_shim: __vow_clif_fn_block without matching fn_begin");
+        return -1;
+    }
     s.block_starts.push(s.inst_ids.len() as i64);
     s.block_lengths.push(0);
     0
@@ -541,6 +552,10 @@ pub unsafe extern "C" fn __vow_clif_fn_inst(
     let args_start;
     {
         let s = &mut ctx.fn_scratch;
+        if !s.began {
+            eprintln!("clif_shim: __vow_clif_fn_inst without matching fn_begin");
+            return -1;
+        }
         // Validate we are inside a block BEFORE touching any inst arrays, so
         // an out-of-order call leaves the scratch arrays aligned.
         if let Some(last) = s.block_lengths.last_mut() {
@@ -583,6 +598,10 @@ pub unsafe extern "C" fn __vow_clif_fn_vow(
     binding_names_vec: i64,
 ) -> i64 {
     let ctx = unsafe { &mut *(ctx_ptr as *mut ModuleContext) };
+    if !ctx.fn_scratch.began {
+        eprintln!("clif_shim: __vow_clif_fn_vow without matching fn_begin");
+        return -1;
+    }
     let bids: &[i64] = if binding_inst_ids_vec != 0 {
         unsafe { read_i64_slice(binding_inst_ids_vec) }
     } else {
@@ -624,13 +643,11 @@ pub unsafe extern "C" fn __vow_clif_fn_end(ctx_ptr: i64) -> i64 {
 // entry, now reading its inputs from the per-context scratch instead of
 // rebuilt-per-call parameter arrays.
 fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
-    // `fn_end` called without a preceding `fn_begin` leaves scratch empty and
-    // `func_idx == 0` (valid for any non-empty module), so the debug-only
-    // index check can't catch it in release. An empty block list is the
-    // reliable release-visible signal: refuse to hand Cranelift a function
-    // with no entry block rather than letting it panic mid-seal.
-    if ctx.fn_scratch.block_starts.is_empty() {
-        eprintln!("clif_shim: __vow_clif_fn_end with no blocks (missing fn_begin?)");
+    // Guarded by `began` so an fn_end without a matching fn_begin (or a
+    // duplicate fn_end) returns a clean FFI error rather than silently
+    // compiling into func_idx 0 or panicking Cranelift on an unsealed block.
+    if !ctx.fn_scratch.began {
+        eprintln!("clif_shim: __vow_clif_fn_end without matching fn_begin");
         return -1;
     }
     let func_idx = ctx.fn_scratch.func_idx;
