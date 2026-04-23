@@ -498,7 +498,10 @@ fn force_kill(child: &mut std::process::Child) {
 mod tests {
     use super::*;
     use vow_diag::Blame;
-    use vow_ir::{BasicBlock, BlockId, FuncId, Inst, InstData, InstId, Opcode, VowEntry, VowId};
+    use vow_ir::{
+        BasicBlock, BlockId, FuncId, Inst, InstData, InstId, Opcode, RegionId, RegionSummary,
+        VowEntry, VowId,
+    };
     use vow_syntax::span::Span;
 
     fn sp() -> Span {
@@ -513,6 +516,7 @@ mod tests {
             args: args.into_iter().map(InstId).collect(),
             data,
             origin: sp(),
+            region: RegionId::Root,
         }
     }
 
@@ -550,12 +554,14 @@ mod tests {
                         args: vec![InstId(0)],
                         data: InstData::VowId(VowId(0)),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     inst(2, Opcode::ConstI32, Ty::I32, vec![], InstData::ConstI32(42)),
                     inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         }
     }
 
@@ -593,12 +599,14 @@ mod tests {
                         args: vec![InstId(0)],
                         data: InstData::VowId(VowId(0)),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     inst(2, Opcode::ConstI32, Ty::I32, vec![], InstData::ConstI32(42)),
                     inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         }
     }
 
@@ -657,6 +665,7 @@ mod tests {
                         args: vec![InstId(3)],
                         data: InstData::VowId(VowId(0)),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     inst(
                         5,
@@ -669,6 +678,7 @@ mod tests {
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Proven | VerificationResult::ToolNotFound => {}
@@ -880,6 +890,7 @@ VERIFICATION FAILED";
                         args: vec![InstId(0), InstId(1)],
                         data: InstData::CallExtern("__vow_vec_new".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     // v3 = 42
                     inst(3, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(42)),
@@ -891,6 +902,7 @@ VERIFICATION FAILED";
                         args: vec![InstId(2), InstId(3)],
                         data: InstData::CallExtern("__vow_vec_push_val".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     // v5 = v.len()
                     Inst {
@@ -900,6 +912,7 @@ VERIFICATION FAILED";
                         args: vec![InstId(2)],
                         data: InstData::CallExtern("__vow_vec_len".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     // v6 = 1
                     inst(6, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
@@ -913,11 +926,13 @@ VERIFICATION FAILED";
                         args: vec![InstId(7)],
                         data: InstData::VowId(VowId(0)),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     inst(9, Opcode::Return, Ty::Unit, vec![2], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         }
     }
 
@@ -952,6 +967,7 @@ VERIFICATION FAILED";
                         args: vec![InstId(0), InstId(1)],
                         data: InstData::CallExtern("__vow_vec_new".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     // v3 = v.len()
                     Inst {
@@ -961,6 +977,7 @@ VERIFICATION FAILED";
                         args: vec![InstId(2)],
                         data: InstData::CallExtern("__vow_vec_len".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
                     inst(5, Opcode::EqI64, Ty::Bool, vec![3, 4], InstData::None),
@@ -971,11 +988,13 @@ VERIFICATION FAILED";
                         args: vec![InstId(5)],
                         data: InstData::VowId(VowId(0)),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     inst(7, Opcode::Return, Ty::Unit, vec![2], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         }
     }
 
@@ -1041,6 +1060,7 @@ VERIFICATION FAILED";
                         args: vec![InstId(0)],
                         data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     // v2 = 65 (byte 'A')
                     inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(65)),
@@ -1052,6 +1072,7 @@ VERIFICATION FAILED";
                         args: vec![InstId(1), InstId(2)],
                         data: InstData::CallExtern("__vow_string_push_byte".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     // v4 = s.len()
                     Inst {
@@ -1061,6 +1082,7 @@ VERIFICATION FAILED";
                         args: vec![InstId(1)],
                         data: InstData::CallExtern("__vow_string_len".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     // v5 = 0
                     inst(5, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
@@ -1074,11 +1096,13 @@ VERIFICATION FAILED";
                         args: vec![InstId(6)],
                         data: InstData::VowId(VowId(0)),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     inst(8, Opcode::Return, Ty::Unit, vec![1], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         }
     }
 
@@ -1112,6 +1136,7 @@ VERIFICATION FAILED";
                         args: vec![InstId(0)],
                         data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     // v2 = s.len()
                     Inst {
@@ -1121,6 +1146,7 @@ VERIFICATION FAILED";
                         args: vec![InstId(1)],
                         data: InstData::CallExtern("__vow_string_len".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     inst(3, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
                     inst(4, Opcode::GtI64, Ty::Bool, vec![2, 3], InstData::None),
@@ -1131,11 +1157,13 @@ VERIFICATION FAILED";
                         args: vec![InstId(4)],
                         data: InstData::VowId(VowId(0)),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     inst(6, Opcode::Return, Ty::Unit, vec![1], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         }
     }
 
@@ -1197,6 +1225,7 @@ VERIFICATION FAILED";
                         args: vec![],
                         data: InstData::CallExtern("__vow_map_new".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     // v1 = 42 (key)
                     inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(42)),
@@ -1216,6 +1245,7 @@ VERIFICATION FAILED";
                         args: vec![InstId(0), InstId(1), InstId(2)],
                         data: InstData::CallExtern("__vow_map_insert".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     // v4 = 42 (key for contains_key)
                     inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(42)),
@@ -1227,6 +1257,7 @@ VERIFICATION FAILED";
                         args: vec![InstId(0), InstId(4)],
                         data: InstData::CallExtern("__vow_map_contains".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     // v6 = true
                     inst(
@@ -1246,11 +1277,13 @@ VERIFICATION FAILED";
                         args: vec![InstId(7)],
                         data: InstData::VowId(VowId(0)),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     inst(9, Opcode::Return, Ty::Unit, vec![5], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         }
     }
 
@@ -1284,6 +1317,7 @@ VERIFICATION FAILED";
                         args: vec![],
                         data: InstData::CallExtern("__vow_map_new".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     // v1 = 10 (key)
                     inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(10)),
@@ -1297,6 +1331,7 @@ VERIFICATION FAILED";
                         args: vec![InstId(0), InstId(1), InstId(2)],
                         data: InstData::CallExtern("__vow_map_insert".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     // v4 = m.len()
                     Inst {
@@ -1306,6 +1341,7 @@ VERIFICATION FAILED";
                         args: vec![InstId(0)],
                         data: InstData::CallExtern("__vow_map_len".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     // v5 = 1
                     inst(5, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
@@ -1319,11 +1355,13 @@ VERIFICATION FAILED";
                         args: vec![InstId(6)],
                         data: InstData::VowId(VowId(0)),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     inst(8, Opcode::Return, Ty::Unit, vec![4], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         }
     }
 
@@ -1357,6 +1395,7 @@ VERIFICATION FAILED";
                         args: vec![],
                         data: InstData::CallExtern("__vow_map_new".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     // v1 = m.len()
                     Inst {
@@ -1366,6 +1405,7 @@ VERIFICATION FAILED";
                         args: vec![InstId(0)],
                         data: InstData::CallExtern("__vow_map_len".to_string()),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     // v2 = 1
                     inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
@@ -1379,11 +1419,13 @@ VERIFICATION FAILED";
                         args: vec![InstId(3)],
                         data: InstData::VowId(VowId(0)),
                         origin: sp(),
+                        region: RegionId::Root,
                     },
                     inst(5, Opcode::Return, Ty::Unit, vec![1], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         }
     }
 

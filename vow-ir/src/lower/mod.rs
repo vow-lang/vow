@@ -13,7 +13,7 @@ use vow_syntax::span::Span;
 
 use crate::types::{
     BasicBlock, BlockId, EnumLayout, FieldLayout, FuncId, Function, Inst, InstData, InstId, Module,
-    Opcode, StructLayout, Ty, VariantLayout, VowEntry, VowId,
+    Opcode, RegionId, RegionSummary, StructLayout, Ty, VariantLayout, VowEntry, VowId,
 };
 
 fn builtin_alloc_tag(sym: &str) -> &'static str {
@@ -252,6 +252,7 @@ impl LowerCtx {
             vows: vec![],
             blocks: vec![entry],
             local_names: HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let mut enum_variant_map = enum_variant_map;
         enum_variant_map
@@ -575,6 +576,7 @@ impl LowerCtx {
             args,
             data,
             origin,
+            region: RegionId::Root,
         };
         self.inst_ty_cache.insert(id, ty);
         let block_idx = self.current_block.0 as usize;

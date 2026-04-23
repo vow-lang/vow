@@ -1,5 +1,28 @@
 #![allow(clippy::missing_safety_doc)]
 
+// ---------------------------------------------------------------------------
+// User trap code registry
+// ---------------------------------------------------------------------------
+//
+// The shim emits Cranelift user trap codes to signal runtime conditions that
+// should fail loudly. Codes are allocated centrally here so collisions with
+// `vow-codegen` (which emits the same numeric space) are visible at a glance:
+//
+//   1  — VowViolation fallthrough (after `__vow_violation` is called, a trap
+//         prevents execution from continuing; see line ~1906).
+//   2  — `Unreachable` opcode hit at runtime (e.g. pattern-match exhaustion;
+//         line ~1371).
+//   3  — Unimplemented region opcode (Phase 2 `RegionOpen`/`RegionClose`
+//         guard; line ~1584). Intentionally asymmetric with
+//         `vow-codegen/src/cranelift_backend.rs`, which panics via
+//         `unreachable!("not emitted in Phase 2")` at **compile time** for
+//         the same opcodes — the shim cannot panic across the FFI boundary
+//         so it traps at **runtime** instead.
+//
+// When adding a new trap code, update this registry and the corresponding
+// `vow-codegen` site (if any) so agents reading either file see the full
+// picture.
+
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
@@ -203,6 +226,14 @@ const IOP_BITAND_U64: i64 = 110;
 const IOP_BITOR_U64: i64 = 111;
 const IOP_SHL_U64: i64 = 112;
 const IOP_SHR_U64: i64 = 113;
+// Phase 2: declared but never emitted. Phase 4 wires arena open/close to
+// __vow_arena_open / __vow_arena_close. If one leaks into the shim today
+// it is a defensive no-op rather than a misdispatch (see compile_function
+// below).
+#[allow(dead_code)]
+const IOP_REGION_OPEN: i64 = 114;
+#[allow(dead_code)]
+const IOP_REGION_CLOSE: i64 = 115;
 
 // InstData kind constants (match compiler/ir.vow IDATA_*)
 #[allow(dead_code)]
@@ -1565,6 +1596,15 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
                 IOP_LINEAR_CONSUME | IOP_LINEAR_BORROW => {
                     let unit = builder.ins().iconst(types::I32, 0);
                     set_val!(iid, unit);
+                }
+
+                // Phase 2: RegionOpen / RegionClose are declared but never
+                // emitted. Trap at runtime so an accidental Phase-3 slip
+                // fails loudly (symmetric with `vow-codegen`'s
+                // `unreachable!("not emitted in Phase 2")`). User trap code
+                // `3` is reserved for "unimplemented region opcode".
+                IOP_REGION_OPEN | IOP_REGION_CLOSE => {
+                    builder.ins().trap(TrapCode::unwrap_user(3));
                 }
 
                 // Struct / enum field access

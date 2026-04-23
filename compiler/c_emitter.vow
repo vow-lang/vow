@@ -204,6 +204,7 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
                 } else if op == IOP_REM_F32() || op == IOP_REM_F64()
                    || op == IOP_LOAD() || op == IOP_STORE()
                    || op == IOP_REGION_ALLOC() || op == IOP_REGION_FREE()
+                   || op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE()
                    || op == IOP_LINEAR_CONSUME() || op == IOP_LINEAR_BORROW()
                    || op == IOP_FIELD_SET() {
                     false
@@ -813,6 +814,7 @@ fn emit_inst(out: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64
     }
 
     if op == IOP_LOAD() || op == IOP_STORE() || op == IOP_REGION_ALLOC() || op == IOP_REGION_FREE()
+       || op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE()
        || op == IOP_LINEAR_CONSUME() || op == IOP_LINEAR_BORROW() || op == IOP_FIELD_SET() {
         emit_unmodelled(out, inst);
         return;

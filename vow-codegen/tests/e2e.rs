@@ -5,8 +5,8 @@ use vow_codegen::cranelift_backend::CraneliftBackend;
 use vow_codegen::linker::{find_runtime_lib, link};
 use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_ir::{
-    BasicBlock, BlockId, FuncId, Function, Inst, InstData, InstId, Module, Opcode, Ty, VowEntry,
-    VowId,
+    BasicBlock, BlockId, FuncId, Function, Inst, InstData, InstId, Module, Opcode, RegionId,
+    RegionSummary, Ty, VowEntry, VowId,
 };
 use vow_syntax::span::Span;
 
@@ -22,6 +22,7 @@ fn inst(id: u32, op: Opcode, ty: Ty, args: Vec<u32>, data: InstData) -> Inst {
         args: args.into_iter().map(InstId).collect(),
         data,
         origin: sp(),
+        region: RegionId::Root,
     }
 }
 
@@ -73,6 +74,7 @@ fn make_main_returns_42() -> Module {
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         }],
     }
 }
@@ -153,6 +155,7 @@ fn vow_violation_exits_with_code_1_and_blames_caller() {
                     args: vec![InstId(3)],
                     data: InstData::VowId(vow_ir::VowId(0)),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(
                     5,
@@ -165,6 +168,7 @@ fn vow_violation_exits_with_code_1_and_blames_caller() {
             ],
         }],
         local_names: std::collections::HashMap::new(),
+        summary: RegionSummary::default(),
     };
 
     // main: call divide(10, 0), return 0
@@ -194,12 +198,14 @@ fn vow_violation_exits_with_code_1_and_blames_caller() {
                     args: vec![InstId(10), InstId(11)],
                     data: InstData::CallTarget(FuncId(0)),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(13, Opcode::ConstI32, Ty::I32, vec![], InstData::ConstI32(0)),
                 inst(14, Opcode::Return, Ty::Unit, vec![13], InstData::None),
             ],
         }],
         local_names: std::collections::HashMap::new(),
+        summary: RegionSummary::default(),
     };
 
     let module = Module {
@@ -277,11 +283,13 @@ fn vow_violation_reports_variable_values() {
                     args: vec![InstId(2)],
                     data: InstData::VowId(VowId(0)),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(4, Opcode::Return, Ty::Unit, vec![0], InstData::None),
             ],
         }],
         local_names: std::collections::HashMap::new(),
+        summary: RegionSummary::default(),
     };
 
     let main_fn = Function {
@@ -309,12 +317,14 @@ fn vow_violation_reports_variable_values() {
                     args: vec![InstId(10)],
                     data: InstData::CallTarget(FuncId(0)),
                     origin: sp(),
+                    region: RegionId::Root,
                 },
                 inst(12, Opcode::ConstI32, Ty::I32, vec![], InstData::ConstI32(0)),
                 inst(13, Opcode::Return, Ty::Unit, vec![12], InstData::None),
             ],
         }],
         local_names: std::collections::HashMap::new(),
+        summary: RegionSummary::default(),
     };
 
     let module = Module {

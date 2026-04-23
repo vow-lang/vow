@@ -1,6 +1,15 @@
-use crate::types::{BasicBlock, Function, Inst, InstData, Module, Opcode, Ty};
+use crate::types::{BasicBlock, Function, Inst, InstData, Module, Opcode, RegionId, Ty};
 use std::fmt;
 use vow_syntax::ast::Effect;
+
+fn region_suffix(r: RegionId) -> Option<String> {
+    match r {
+        RegionId::Root => None,
+        RegionId::Rodata => Some("<region=rodata>".to_string()),
+        RegionId::Block(b) => Some(format!("<region=block_{}>", b.0)),
+        RegionId::Caller(i) => Some(format!("<region=caller_{}>", i.0)),
+    }
+}
 
 impl fmt::Display for Ty {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -130,6 +139,8 @@ fn opcode_name(opcode: &Opcode) -> &'static str {
         Opcode::Call => "Call",
         Opcode::RegionAlloc => "RegionAlloc",
         Opcode::RegionFree => "RegionFree",
+        Opcode::RegionOpen => "RegionOpen",
+        Opcode::RegionClose => "RegionClose",
         Opcode::LinearConsume => "LinearConsume",
         Opcode::LinearBorrow => "LinearBorrow",
         Opcode::FieldGet => "FieldGet",
@@ -157,7 +168,6 @@ fn format_data(data: &InstData) -> Option<String> {
             else_block,
         } => Some(format!("block_{}, block_{}", then_block.0, else_block.0)),
         InstData::JumpTarget(bid) => Some(format!("block_{}", bid.0)),
-        InstData::RegionId(rid) => Some(format!("region_{}", rid.0)),
         InstData::VowId(vid) => Some(format!("vow_{}", vid.0)),
         InstData::AllocSize { size, align } => Some(format!("size={size},align={align}")),
         InstData::FieldIndex(idx) => Some(format!("field_{idx}")),
@@ -171,12 +181,20 @@ fn print_inst(inst: &Inst) -> String {
         Some(d) => format!("{}[{}]", opcode_name(&inst.opcode), d),
         None => opcode_name(&inst.opcode).to_string(),
     };
+    // Only append the region suffix for RegionAlloc and only when non-Root,
+    // so existing golden output (all Root in Phase 2) is byte-for-byte stable.
+    let region = if matches!(inst.opcode, Opcode::RegionAlloc) {
+        region_suffix(inst.region).unwrap_or_default()
+    } else {
+        String::new()
+    };
     format!(
-        "    {:<10}  %{} = {}({})",
+        "    {:<10}  %{} = {}({}){}",
         inst.ty.to_string(),
         inst.id.0,
         name,
-        args_str
+        args_str,
+        region,
     )
 }
 
@@ -264,8 +282,9 @@ fn effect_str(e: &Effect) -> &'static str {
 mod tests {
     use super::*;
     use crate::types::{
-        BasicBlock, BlockId, EnumLayout, FieldLayout, FuncId, Function, Inst, InstData, InstId,
-        Module, Opcode, RegionId, StructLayout, Ty, VariantLayout, VowId,
+        BasicBlock, BlockId, EnumLayout, FieldLayout, FuncId, Function, HiddenRegionIdx, Inst,
+        InstData, InstId, Module, Opcode, RegionId, RegionSummary, StructLayout, Ty, VariantLayout,
+        VowId,
     };
     use vow_syntax::span::Span;
 
@@ -281,6 +300,7 @@ mod tests {
             args,
             data,
             origin: dummy_span(),
+            region: RegionId::Root,
         }
     }
 
@@ -302,7 +322,71 @@ mod tests {
             vows: vec![],
             blocks,
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         }
+    }
+
+    fn make_alloc_with_region(region: RegionId) -> Inst {
+        Inst {
+            id: InstId(0),
+            opcode: Opcode::RegionAlloc,
+            ty: Ty::Ptr,
+            args: vec![],
+            data: InstData::AllocSize { size: 24, align: 8 },
+            origin: dummy_span(),
+            region,
+        }
+    }
+
+    #[test]
+    fn region_suffix_rendering_variants() {
+        assert_eq!(region_suffix(RegionId::Root), None);
+        assert_eq!(
+            region_suffix(RegionId::Rodata),
+            Some("<region=rodata>".to_string())
+        );
+        assert_eq!(
+            region_suffix(RegionId::Block(BlockId(3))),
+            Some("<region=block_3>".to_string())
+        );
+        assert_eq!(
+            region_suffix(RegionId::Caller(HiddenRegionIdx(7))),
+            Some("<region=caller_7>".to_string())
+        );
+    }
+
+    #[test]
+    fn region_alloc_with_root_region_prints_without_suffix() {
+        let s = print_inst(&make_alloc_with_region(RegionId::Root));
+        assert!(
+            !s.contains("<region="),
+            "Phase 2 default must not print suffix: {s}"
+        );
+    }
+
+    #[test]
+    fn region_alloc_with_caller_region_prints_suffix() {
+        let s = print_inst(&make_alloc_with_region(RegionId::Caller(HiddenRegionIdx(
+            2,
+        ))));
+        assert!(s.ends_with("<region=caller_2>"), "got: {s}");
+    }
+
+    #[test]
+    fn non_regionalloc_inst_never_prints_suffix_even_with_nonroot_region() {
+        // Even if a future pass leaks a non-Root region onto a non-RegionAlloc
+        // inst, the printer must keep the old output shape.
+        let inst = Inst {
+            id: InstId(0),
+            opcode: Opcode::ConstI32,
+            ty: Ty::I32,
+            args: vec![],
+            data: InstData::ConstI32(0),
+            origin: dummy_span(),
+            region: RegionId::Caller(HiddenRegionIdx(0)),
+        };
+        let s = print_inst(&inst);
+        assert!(!s.contains("<region="), "got: {s}");
     }
 
     #[test]
@@ -522,6 +606,8 @@ mod tests {
             (Opcode::Call, "Call"),
             (Opcode::RegionAlloc, "RegionAlloc"),
             (Opcode::RegionFree, "RegionFree"),
+            (Opcode::RegionOpen, "RegionOpen"),
+            (Opcode::RegionClose, "RegionClose"),
             (Opcode::LinearConsume, "LinearConsume"),
             (Opcode::LinearBorrow, "LinearBorrow"),
             (Opcode::FieldGet, "FieldGet"),
@@ -596,10 +682,6 @@ mod tests {
         assert_eq!(
             format_data(&InstData::JumpTarget(BlockId(4))),
             Some("block_4".to_string())
-        );
-        assert_eq!(
-            format_data(&InstData::RegionId(RegionId(0))),
-            Some("region_0".to_string())
         );
         assert_eq!(
             format_data(&InstData::VowId(VowId(1))),

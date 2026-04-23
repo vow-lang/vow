@@ -12,7 +12,22 @@ pub struct BlockId(pub u32);
 pub struct FuncId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct RegionId(pub u32);
+pub struct AbstractRegionId(pub u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct HiddenRegionIdx(pub u32);
+
+/// Compile-time region tag on heap-producing instructions (spec §12.1).
+/// Distinct from [`AbstractRegionId`], which is the pre-arena effects-tracking
+/// handle. Phase 2 defaults every heap allocation to [`RegionId::Root`];
+/// Phase 3 replaces that with inferred values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum RegionId {
+    Block(BlockId),
+    Caller(HiddenRegionIdx),
+    Root,
+    Rodata,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct VowId(pub u32);
@@ -144,6 +159,12 @@ pub enum Opcode {
 
     RegionAlloc,
     RegionFree,
+    /// Block-region open marker (spec §12.3). Declared in Phase 2 but not
+    /// emitted anywhere yet; Phase 4 wires lowering to emit it.
+    RegionOpen,
+    /// Block-region close marker (spec §12.3). Declared in Phase 2 but not
+    /// emitted anywhere yet; Phase 4 wires lowering to emit it.
+    RegionClose,
 
     LinearConsume,
     LinearBorrow,
@@ -182,7 +203,6 @@ pub enum InstData {
         else_block: BlockId,
     },
     JumpTarget(BlockId),
-    RegionId(RegionId),
     VowId(VowId),
     AllocSize {
         size: u32,
@@ -212,6 +232,11 @@ pub struct Inst {
     pub args: Vec<InstId>,
     pub data: InstData,
     pub origin: Span,
+    /// Region tag for heap-producing instructions (spec §12.1).
+    /// Meaningful only when `opcode == Opcode::RegionAlloc`; other opcodes
+    /// carry `RegionId::Root` as a benign placeholder until Phase 3 infers
+    /// real values.
+    pub region: RegionId,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -230,6 +255,39 @@ pub struct VowEntry {
     pub offset: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RegionVar(pub u32);
+
+/// Region constraint variants (spec §4.2). Forms a semilattice with
+/// `FreshInCaller` as top and `ConstantGlobal` as the benign public default
+/// (spec §4.3 step 5). The internal `Uninit` seed (spec §4.3) is a Phase-3
+/// concern and MUST NOT appear in any published summary.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum RegionConstraint {
+    FreshInCaller,
+    AliasOf(u32),
+    AliasOfAny(Vec<u32>),
+    #[default]
+    ConstantGlobal,
+}
+
+/// Escape-via-store effect (spec §4.2). `target` is the parameter index
+/// being written into; `source` constrains the region of stored values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreEffect {
+    pub target: u32,
+    pub source: RegionConstraint,
+}
+
+/// Per-function region summary (spec §4.2). Inferred by the Phase-3 region
+/// pass; defaults to an all-permissive summary in Phase 2.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RegionSummary {
+    pub param_regions: Vec<RegionVar>,
+    pub return_region: RegionConstraint,
+    pub store_effects: Vec<StoreEffect>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
     pub id: FuncId,
@@ -241,6 +299,9 @@ pub struct Function {
     pub vows: Vec<VowEntry>,
     pub blocks: Vec<BasicBlock>,
     pub local_names: std::collections::HashMap<u32, String>,
+    /// Region summary (spec §4.2 / §12.4). Default is the benign all-
+    /// `ConstantGlobal` summary; Phase 3 replaces it with inferred values.
+    pub summary: RegionSummary,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -356,6 +417,7 @@ mod tests {
             args: vec![],
             data: InstData::ConstI32(42),
             origin: dummy_span(),
+            region: RegionId::Root,
         };
         assert_eq!(inst.id, InstId(0));
         assert_eq!(inst.opcode, Opcode::ConstI32);
@@ -375,6 +437,7 @@ mod tests {
                 args: vec![],
                 data: InstData::None,
                 origin: dummy_span(),
+                region: RegionId::Root,
             }],
         };
         let func = Function {
@@ -387,6 +450,7 @@ mod tests {
             vows: vec![],
             blocks: vec![block],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let module = Module {
             name: "test_module".to_string(),
@@ -410,6 +474,7 @@ mod tests {
             args: vec![],
             data: InstData::ConstI32(10),
             origin: dummy_span(),
+            region: RegionId::Root,
         };
         let return_inst = Inst {
             id: InstId(1),
@@ -418,6 +483,7 @@ mod tests {
             args: vec![InstId(0)],
             data: InstData::None,
             origin: dummy_span(),
+            region: RegionId::Root,
         };
         let block = BasicBlock {
             id: BlockId(0),
@@ -433,6 +499,7 @@ mod tests {
             vows: vec![],
             blocks: vec![block],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         assert_eq!(func.blocks[0].insts[0].data, InstData::ConstI32(10));
         assert_eq!(func.blocks[0].insts[1].args, vec![InstId(0)]);
@@ -533,6 +600,7 @@ mod tests {
                 else_block: BlockId(2),
             },
             origin: dummy_span(),
+            region: RegionId::Root,
         };
         match branch.data {
             InstData::BranchTargets {

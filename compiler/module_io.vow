@@ -1,0 +1,194 @@
+module ModuleIo
+
+// Phase 2 self-hosted .vmod helpers.
+//
+// Mirrors the wire format of vow-ir/src/serialize.rs for the region-related
+// primitives the issue #197 Tests section calls out ("HiddenRegionIdx carried
+// by Caller"). Full IrModule encode/decode is deferred: nothing produces or
+// consumes .vmod files in Phase 2, and the Rust side's serializer already
+// carries 10 passing round-trip tests covering every field.
+//
+// What IS defined/exercised here:
+//   - MODULE_MAGIC_* constants — declared to match the Rust side (verified
+//     by inspection against vow-ir/src/serialize.rs::MODULE_MAGIC); no
+//     self-hosted caller yet, so not machine-checked until Phase 3 wires
+//     in a full module encoder.
+//   - Byte-level region_encode / region_decode (5 bytes: kind:u8 + payload:u32),
+//     exercised end-to-end via tests/run/vmod_region_roundtrip.vow.
+//   - region_constraint_encode with LEB128-prefixed AliasOfAny lists
+//     (bit-identical to vow-ir/src/serialize.rs).
+//
+// These are the primitives any future full-module encoder will compose.
+// Bytes are stored in a Vec<i64> with each slot holding a single byte in
+// 0..=255, matching the Rust side's Vec<u8> shape.
+
+use ir
+
+fn MODULE_MAGIC_0() -> i64 vow { ensures: result >= 0 } { 86 }   // 'V'
+fn MODULE_MAGIC_1() -> i64 vow { ensures: result >= 0 } { 77 }   // 'M'
+fn MODULE_MAGIC_2() -> i64 vow { ensures: result >= 0 } { 79 }   // 'O'
+fn MODULE_MAGIC_3() -> i64 vow { ensures: result >= 0 } { 68 }   // 'D'
+
+fn write_u8(out: Vec<i64>, v: i64) vow {
+    requires: v >= 0,
+    requires: v <= 255
+} {
+    out.push(v);
+}
+
+fn write_u32_le(out: Vec<i64>, v: i64) vow {
+    requires: v >= 0,
+    requires: v <= 4294967295
+} {
+    out.push(v % 256);
+    out.push((v / 256) % 256);
+    out.push((v / 65536) % 256);
+    out.push((v / 16777216) % 256);
+}
+
+// LEB128 (unsigned) writer — matches vow-ir/src/serialize.rs::write_leb so
+// variable-length counts on both sides produce byte-identical output.
+fn write_leb(out: Vec<i64>, v: i64) vow {
+    requires: v >= 0
+} {
+    let mut n: i64 = v;
+    // Terminates: n = n / 128 is strictly decreasing for n >= 1 and exits
+    // as soon as n reaches 0. Bounded above by ~10 iterations for i64.
+    loop vow {
+        invariant: n >= 0
+    } {
+        let byte: i64 = n - (n / 128) * 128;
+        n = n / 128;
+        if n == 0 {
+            out.push(byte);
+            return;
+        }
+        out.push(byte + 128);
+    }
+}
+
+fn read_u8(buf: Vec<i64>, pos: i64) -> i64 vow {
+    requires: pos >= 0,
+    requires: pos < buf.len()
+} {
+    buf[pos]
+}
+
+// Postconditions are intentionally not expressed: `result <= 4294967295`
+// would require per-element `buf[i] \in [0,255]` preconditions which the
+// Vow contract system cannot quantify today. Callers trust the encoder
+// side (`write_u32_le`) to produce byte-valued buffers; `write_u32_le`
+// already guards that via `v % 256` decomposition.
+fn read_u32_le(buf: Vec<i64>, pos: i64) -> i64 vow {
+    requires: pos >= 0,
+    requires: pos + 3 < buf.len()
+} {
+    let b0: i64 = buf[pos];
+    let b1: i64 = buf[pos + 1];
+    let b2: i64 = buf[pos + 2];
+    let b3: i64 = buf[pos + 3];
+    b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
+}
+
+// Encode a packed RegionId (low 2 bits = kind, upper 62 = payload) into
+// the wire format used by the Rust side: kind:u8 + payload:u32 LE (5 bytes).
+// The payload upper-bound mirrors the Rust `u32` field it decodes back into.
+// Canonicity: Root (2) and Rodata (3) carry no payload on the wire, so the
+// encoder refuses to emit a byte stream `region_decode` (or Rust
+// `read_region_id`) would reject as non-canonical. Keeping the rule on
+// both sides closes the encode-decode round-trip contract.
+fn region_encode(out: Vec<i64>, rgn: i64) vow {
+    requires: rgn >= 0,
+    requires: region_val(rgn) <= 4294967295,
+    requires: region_kind(rgn) <= 1 || region_val(rgn) == 0
+} {
+    let kind: i64 = region_kind(rgn);
+    let payload: i64 = region_val(rgn);
+    write_u8(out, kind);
+    write_u32_le(out, payload);
+}
+
+// Decode 5 bytes starting at `pos` back into a packed RegionId.
+// The caller must validate `buf[pos]` is a valid region kind (0..=3);
+// `region_pack`'s own contract enforces this, and we surface it here so
+// a corrupted byte fails on this function's `requires` with a clear
+// caller blame rather than cascading into `region_pack`.
+//
+// Canonicity: Root (2) and Rodata (3) carry no payload on the encoder
+// side, so the four payload bytes must be zero. Mirrors
+// `vow-ir/src/serialize.rs::read_region_id` — same rejection rule on
+// both sides keeps the cross-compiler wire format bit-identical.
+fn region_decode(buf: Vec<i64>, pos: i64) -> i64 vow {
+    requires: pos >= 0,
+    requires: pos + 4 < buf.len(),
+    requires: buf[pos] >= 0,
+    requires: buf[pos] <= 3,
+    requires: buf[pos] <= 1 || (buf[pos + 1] == 0 && buf[pos + 2] == 0 && buf[pos + 3] == 0 && buf[pos + 4] == 0)
+} {
+    let kind: i64 = read_u8(buf, pos);
+    let payload: i64 = read_u32_le(buf, pos + 1);
+    region_pack(kind, payload)
+}
+
+// Encode a RegionConstraint (tag:u8 + optional aux:u32 + optional aliases).
+// Takes the three fields of the summary-style flattened encoding used by
+// IrFunction (rsum_return_kind, rsum_return_aux, rsum_return_aliases).
+// Alias count uses LEB128 to match vow-ir/src/serialize.rs byte-for-byte.
+// Each alias is a parameter index stored as u32 on the Rust side, so both
+// `aux` and every `aliases[i]` must satisfy `write_u32_le`'s bounds.
+//
+// Side-by-side reference: this function is the self-hosted mirror of
+// `vow-ir/src/serialize.rs::write_region_constraint`. The `ALIAS_OF_ANY`
+// branch below (LEB count + u32 loop) is the most complex path here and
+// the one most likely to drift from the Rust side; diff them directly
+// when touching either file.
+fn region_constraint_encode(out: Vec<i64>, kind: i64, aux: i64, aliases: Vec<i64>) vow {
+    requires: kind >= 0,
+    requires: kind <= 3,
+    requires: aux >= 0,
+    requires: aux <= 4294967295
+} {
+    write_u8(out, kind);
+    if kind == RSUM_KIND_FRESH_IN_CALLER() || kind == RSUM_KIND_CONSTANT_GLOBAL() {
+        return;
+    }
+    if kind == RSUM_KIND_ALIAS_OF() {
+        write_u32_le(out, aux);
+        return;
+    }
+    // ALIAS_OF_ANY: LEB128 count + u32 parameter indices.
+    // Each alias is a u32 parameter index on the Rust side; the caller
+    // guarantees bounded values. Vow cannot express per-element Vec
+    // preconditions today, so a violation of `write_u32_le`'s contract
+    // (`requires: v >= 0`, `requires: v <= 4294967295`) blames this
+    // function (as Caller) rather than the ultimate
+    // `region_constraint_encode` caller. Revisit when the contract
+    // system gains per-element quantifiers — this function should then
+    // carry `requires: forall i in 0..aliases.len(). aliases[i] >= 0 &&
+    // aliases[i] <= 4294967295` to push blame to the true caller.
+    let n: i64 = aliases.len();
+    write_leb(out, n);
+    let mut i: i64 = 0;
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
+        write_u32_le(out, aliases[i]);
+        i = i + 1;
+    }
+}
+
+// `tests/run/vmod_region_roundtrip.vow` validates the same wire-format
+// logic independently (via its own inline re-implementation), not by
+// calling this module. The functions here therefore have no Vow-level
+// execution coverage in Phase 2 — the Rust side's `serialize.rs` unit
+// tests pin the byte-level shape this module mirrors, and a Phase 3
+// caller will be the first to exercise these primitives at runtime.
+// An in-module self-check was previously defined here but had no caller —
+// removed to avoid two parallel implementations drifting silently.
+//
+// Phase 3 wire-up: when adding a self-hosted `.vmod` producer/consumer,
+// switch `tests/run/vmod_region_roundtrip.vow` to `use module_io` and
+// call `region_encode` / `region_decode` / `region_constraint_encode`
+// directly instead of keeping inline copies of those functions. That
+// closes the divergence window between the two implementations.
