@@ -602,12 +602,14 @@ mod tests {
                         args: vec![InstId(0)],
                         data: InstData::VowId(VowId(0)),
                         origin: Span { start: 0, len: 0 },
+                        region: RegionId::Root,
                     },
                     inst(2, Opcode::ConstI32, Ty::I32, vec![], InstData::ConstI32(42)),
                     inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         }
     }
 
