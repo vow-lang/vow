@@ -93,9 +93,14 @@ fn read_u32_le(buf: Vec<i64>, pos: i64) -> i64 vow {
 // Encode a packed RegionId (low 2 bits = kind, upper 62 = payload) into
 // the wire format used by the Rust side: kind:u8 + payload:u32 LE (5 bytes).
 // The payload upper-bound mirrors the Rust `u32` field it decodes back into.
+// Canonicity: Root (2) and Rodata (3) carry no payload on the wire, so the
+// encoder refuses to emit a byte stream `region_decode` (or Rust
+// `read_region_id`) would reject as non-canonical. Keeping the rule on
+// both sides closes the encode-decode round-trip contract.
 fn region_encode(out: Vec<i64>, rgn: i64) vow {
     requires: rgn >= 0,
-    requires: region_val(rgn) <= 4294967295
+    requires: region_val(rgn) <= 4294967295,
+    requires: region_kind(rgn) <= 1 || region_val(rgn) == 0
 } {
     let kind: i64 = region_kind(rgn);
     let payload: i64 = region_val(rgn);
