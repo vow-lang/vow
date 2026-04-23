@@ -28,6 +28,7 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--vec-max <N>` | `128`       | Max Vec capacity for verification model      |
 | `--string-max <N>` | `256`    | Max String capacity for verification model   |
 | `--hashmap-max <N>` | `64`    | Max HashMap capacity for verification model  |
+| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
 
 ### `vow verify`
 
@@ -49,6 +50,7 @@ vow verify [OPTIONS] <source.vow>
 | `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
 | `--string-max <N>`| `256`       | Max String capacity for verification model |
 | `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
+| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
 
 ### `vow contracts`
 
@@ -70,6 +72,7 @@ vow contracts [OPTIONS] <source.vow>
 | `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
 | `--string-max <N>`| `256`       | Max String capacity for verification model |
 | `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
+| `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |
 
 ### `vow skill`
 
@@ -107,6 +110,7 @@ vow test [OPTIONS] [<path>]
 | `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
 | `--string-max <N>`| `256`       | Max String capacity for verification model |
 | `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
+| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs (with --verify) |
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` in the given directory, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
 

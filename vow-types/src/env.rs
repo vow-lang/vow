@@ -306,6 +306,14 @@ impl TypeEnv {
             },
         );
         env.define_fn(
+            "num_cpus",
+            FnSig {
+                params: vec![],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
             "hex_encode",
             FnSig {
                 params: vec![Ty::Applied(
