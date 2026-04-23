@@ -1208,10 +1208,7 @@ mod tests {
                     id: VowId(9),
                     description: "n positive".to_string(),
                     blame: Blame::Caller,
-                    bindings: vec![
-                        ("dst".to_string(), InstId(0)),
-                        ("n".to_string(), InstId(1)),
-                    ],
+                    bindings: vec![("dst".to_string(), InstId(0)), ("n".to_string(), InstId(1))],
                     file: "sample.vow".to_string(),
                     offset: 17,
                 }],
