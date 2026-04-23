@@ -8,9 +8,13 @@ module ModuleIo
 // consumes .vmod files in Phase 2, and the Rust side's serializer already
 // carries 10 passing round-trip tests covering every field.
 //
-// What IS exercised here:
-//   - MODULE_MAGIC / MODULE_VERSION constants (must match Rust side).
-//   - Byte-level region_encode / region_decode (5 bytes: kind:u8 + payload:u32).
+// What IS defined/exercised here:
+//   - MODULE_MAGIC_* constants — declared to match the Rust side (verified
+//     by inspection against vow-ir/src/serialize.rs::MODULE_MAGIC); no
+//     self-hosted caller yet, so not machine-checked until Phase 3 wires
+//     in a full module encoder.
+//   - Byte-level region_encode / region_decode (5 bytes: kind:u8 + payload:u32),
+//     exercised end-to-end via tests/run/vmod_region_roundtrip.vow.
 //   - region_constraint_encode with LEB128-prefixed AliasOfAny lists
 //     (bit-identical to vow-ir/src/serialize.rs).
 //

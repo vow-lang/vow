@@ -31,7 +31,8 @@ fn region_val(r: i64)  -> i64 vow {
 } { r / 4 }
 
 fn region_encode(out: Vec<i64>, rgn: i64) vow {
-    requires: rgn >= 0
+    requires: rgn >= 0,
+    requires: region_val(rgn) <= 4294967295
 } {
     let kind: i64 = region_kind(rgn);
     let payload: i64 = region_val(rgn);

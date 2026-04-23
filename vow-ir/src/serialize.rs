@@ -119,6 +119,15 @@ impl<'a> Reader<'a> {
             }
             v |= chunk << shift;
             if b & 0x80 == 0 {
+                // Reject overlong (non-minimal) encodings: a terminator
+                // byte carrying chunk==0 at shift > 0 means the value
+                // could have been encoded in fewer bytes (e.g. 0 as
+                // [0x80, 0x00]). Canonical LEB128 requires the shortest
+                // form so distinct byte streams can't decode to the same
+                // value.
+                if shift > 0 && chunk == 0 {
+                    return Err(DecodeError::Truncated);
+                }
                 return Ok(v);
             }
             shift += 7;
@@ -1070,7 +1079,26 @@ mod tests {
 
     #[test]
     fn abstract_region_id_type_is_reachable() {
-        // Phase-2 rename sanity check.
-        let _a = AbstractRegionId(0);
+        // Phase-2 rename sanity check — guards the inner u32 field name
+        // at runtime. A rename or removal of the field would fail to
+        // compile here rather than disappearing silently with the
+        // compile-error-only check a `let _ = AbstractRegionId(0);`
+        // would give.
+        let a = AbstractRegionId(7);
+        assert_eq!(a.0, 7);
+    }
+
+    #[test]
+    fn leb_overlong_form_rejected() {
+        // `[0x80, 0x00]` decodes to 0 under a naive LEB reader but is
+        // non-minimal — the encoding could have been `[0x00]`. Canonical
+        // LEB128 requires the shortest form, so distinct byte streams
+        // cannot decode to the same value. Must return Truncated.
+        let mut b = encode_module(&empty_module());
+        // Replace the trailing function-count byte (0) with a 2-byte
+        // overlong encoding of 0.
+        b.pop();
+        b.extend_from_slice(&[0x80, 0x00]);
+        assert!(matches!(decode_module(&b), Err(DecodeError::Truncated)));
     }
 }
