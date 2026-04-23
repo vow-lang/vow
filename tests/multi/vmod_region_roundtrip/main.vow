@@ -1,0 +1,241 @@
+// TEST: stdout "0"
+module Main
+
+use ir
+use module_io
+
+fn hex_digit(n: i64) -> i64 vow {
+    requires: n >= 0,
+    requires: n < 16
+} {
+    if n < 10 { return 48 + n; }
+    97 + (n - 10)
+}
+
+fn hex_value(b: i64) -> i64 vow {
+    requires: (b >= 48 && b <= 57) || (b >= 97 && b <= 102) || (b >= 65 && b <= 70)
+} {
+    if b >= 48 && b <= 57 { return b - 48; }
+    if b >= 97 && b <= 102 { return 10 + (b - 97); }
+    10 + (b - 65)
+}
+
+fn compact_hex(s: String) -> String {
+    let out: String = String::new();
+    let mut i: i64 = 0;
+    let n: i64 = s.len();
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
+        let b: i64 = s.byte_at(i);
+        if b != 10 && b != 13 && b != 32 && b != 9 {
+            out.push_byte(b);
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn hex_encode_bytes(bytes: Vec<i64>) -> String {
+    let out: String = String::new();
+    let mut i: i64 = 0;
+    let n: i64 = bytes.len();
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
+        let b: i64 = bytes[i];
+        out.push_byte(hex_digit(b / 16));
+        out.push_byte(hex_digit(b - (b / 16) * 16));
+        i = i + 1;
+    }
+    out
+}
+
+fn hex_decode_bytes(hex: String) -> Vec<i64> {
+    let clean: String = compact_hex(hex);
+    let out: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    let n: i64 = clean.len();
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
+        let hi: i64 = hex_value(clean.byte_at(i));
+        let lo: i64 = hex_value(clean.byte_at(i + 1));
+        out.push(hi * 16 + lo);
+        i = i + 2;
+    }
+    out
+}
+
+fn make_sample_module() -> IrModule {
+    let m: IrModule = ir_module_new(String::from("phase2_sample"));
+
+    m.strings.push(String::from("literal"));
+    m.strings.push(String::from("extern_symbol"));
+
+    let pair_fields: Vec<IrFieldLayout> = Vec::new();
+    pair_fields.push(IrFieldLayout { name: String::from("x"), ty: ITY_I64() });
+    pair_fields.push(IrFieldLayout { name: String::from("flag"), ty: ITY_BOOL() });
+    m.struct_layouts.push(IrStructLayout {
+        name: String::from("Pair"),
+        fields: pair_fields,
+        is_linear: 1,
+    });
+
+    let none_payload: Vec<IrFieldLayout> = Vec::new();
+    let some_payload: Vec<IrFieldLayout> = Vec::new();
+    some_payload.push(IrFieldLayout { name: String::from("value"), ty: ITY_U64() });
+    let variants: Vec<IrVariantLayout> = Vec::new();
+    variants.push(IrVariantLayout { name: String::from("None"), tag: 0, payload: none_payload });
+    variants.push(IrVariantLayout { name: String::from("Some"), tag: 1, payload: some_payload });
+    m.enum_layouts.push(IrEnumLayout { name: String::from("MaybeU64"), variants: variants });
+
+    let f: IrFunction = ir_function_new(3, String::from("alloc_caller"), ITY_PTR(), EFFECT_READ() + EFFECT_WRITE());
+    f.params.push(ITY_PTR());
+    f.params.push(ITY_U64());
+    f.param_names.push(String::from("dst"));
+    f.param_names.push(String::from("n"));
+
+    let bind_ids: Vec<i64> = Vec::new();
+    let bind_names: Vec<String> = Vec::new();
+    bind_ids.push(0);
+    bind_names.push(String::from("dst"));
+    bind_ids.push(1);
+    bind_names.push(String::from("n"));
+    f.vows.push(IrVowEntry {
+        id: 9,
+        description: String::from("n positive"),
+        blame: BLAME_CALLER(),
+        binding_ids: bind_ids,
+        binding_names: bind_names,
+        file: String::from("sample.vow"),
+        offset: 17,
+    });
+
+    let block: IrBlock = ir_block_new(0);
+
+    let no_args0: Vec<i64> = Vec::new();
+    let inst0: IrInst = ir_inst_new(0, IOP_CONST_U64(), ITY_U64(), no_args0, IDATA_CONST_U64(), 9, 0, String::from(""));
+    inst0.ostart = 1;
+    inst0.olen = 1;
+    block.insts.push(inst0);
+
+    let no_args1: Vec<i64> = Vec::new();
+    let inst1: IrInst = ir_inst_new(1, IOP_CONST_STR(), ITY_PTR(), no_args1, IDATA_CONST_STR(), 0, 0, String::from(""));
+    inst1.ostart = 2;
+    inst1.olen = 5;
+    block.insts.push(inst1);
+
+    let call_args: Vec<i64> = Vec::new();
+    call_args.push(1);
+    let inst2: IrInst = ir_inst_new(2, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_from_cstr"));
+    inst2.ostart = 7;
+    inst2.olen = 4;
+    block.insts.push(inst2);
+
+    let alloc_args: Vec<i64> = Vec::new();
+    let inst3: IrInst = ir_inst_new(3, IOP_REGION_ALLOC(), ITY_PTR(), alloc_args, IDATA_ALLOC_SIZE(), 24, 8, String::from(""));
+    inst3.ostart = 12;
+    inst3.olen = 3;
+    inst3.rgn = region_pack(REGION_KIND_CALLER(), 2);
+    block.insts.push(inst3);
+
+    let ret_args: Vec<i64> = Vec::new();
+    ret_args.push(3);
+    let inst4: IrInst = ir_inst_new(4, IOP_RETURN(), ITY_UNIT(), ret_args, IDATA_NONE(), 0, 0, String::from(""));
+    inst4.ostart = 16;
+    inst4.olen = 1;
+    block.insts.push(inst4);
+
+    f.blocks.push(block);
+
+    // Intentionally unsorted: encoder must sort by id for deterministic wire output.
+    f.local_names_ids.push(42);
+    f.local_names_strs.push(String::from("tmp_alloc"));
+    f.local_names_ids.push(7);
+    f.local_names_strs.push(String::from("arg_n"));
+
+    f.rsum_param_regions.push(7);
+    f.rsum_param_regions.push(9);
+    f.rsum_return_kind = RSUM_KIND_ALIAS_OF_ANY();
+    f.rsum_return_aliases.push(0);
+    f.rsum_return_aliases.push(1);
+
+    f.rsum_store_effects.push(0);
+    f.rsum_store_effects.push(RSUM_KIND_FRESH_IN_CALLER());
+
+    f.rsum_store_effects.push(1);
+    f.rsum_store_effects.push(RSUM_KIND_ALIAS_OF());
+    f.rsum_store_effects.push(0);
+
+    f.rsum_store_effects.push(1);
+    f.rsum_store_effects.push(RSUM_KIND_CONSTANT_GLOBAL());
+
+    m.functions.push(f);
+    m
+}
+
+fn check_module_shape(m: IrModule) -> i64 {
+    let mut fail: i64 = 0;
+    if m.name != String::from("phase2_sample") { fail = fail + 1; }
+    if m.strings.len() != 2 { fail = fail + 1; }
+    if m.struct_layouts.len() != 1 { fail = fail + 1; }
+    if m.enum_layouts.len() != 1 { fail = fail + 1; }
+    if m.functions.len() != 1 { fail = fail + 1; }
+    if fail != 0 { return fail; }
+
+    let f: IrFunction = m.functions[0];
+    if f.effects != EFFECT_READ() + EFFECT_WRITE() { fail = fail + 1; }
+    if f.params.len() != 2 { fail = fail + 1; }
+    if f.param_names.len() != 2 { fail = fail + 1; }
+    if f.vows.len() != 1 { fail = fail + 1; }
+    if f.local_names_ids.len() != 2 { fail = fail + 1; }
+    if f.rsum_param_regions.len() != 2 { fail = fail + 1; }
+    if f.rsum_return_kind != RSUM_KIND_ALIAS_OF_ANY() { fail = fail + 1; }
+    if f.rsum_return_aliases.len() != 2 { fail = fail + 1; }
+    if f.rsum_store_effects.len() != 7 { fail = fail + 1; }
+    if f.local_names_ids[0] != 7 || f.local_names_strs[0] != String::from("arg_n") { fail = fail + 1; }
+    if f.local_names_ids[1] != 42 || f.local_names_strs[1] != String::from("tmp_alloc") { fail = fail + 1; }
+
+    if f.blocks.len() != 1 { return fail + 1; }
+    let block: IrBlock = f.blocks[0];
+    if block.insts.len() != 5 { return fail + 1; }
+
+    let alloc: IrInst = block.insts[3];
+    if alloc.op != IOP_REGION_ALLOC() { fail = fail + 1; }
+    if alloc.dk != IDATA_ALLOC_SIZE() { fail = fail + 1; }
+    if alloc.dv != 24 || alloc.dv2 != 8 { fail = fail + 1; }
+    if alloc.rgn != region_pack(REGION_KIND_CALLER(), 2) { fail = fail + 1; }
+
+    fail
+}
+
+fn fixture_path() -> String {
+    String::from("tests/fixtures/issue197_sample.vmod.hex")
+}
+
+fn main() -> i32 [read, io] {
+    let mut fail: i64 = 0;
+
+    let expected_hex: String = compact_hex(fs_read(fixture_path()));
+
+    let sample: IrModule = make_sample_module();
+    let actual_hex: String = hex_encode_bytes(module_encode(sample));
+    if actual_hex != expected_hex {
+        fail = fail + 1;
+    }
+
+    let decoded: IrModule = module_decode(hex_decode_bytes(expected_hex));
+    fail = fail + check_module_shape(decoded);
+
+    let roundtrip_hex: String = hex_encode_bytes(module_encode(decoded));
+    if roundtrip_hex != expected_hex {
+        fail = fail + 1;
+    }
+
+    print_i64(fail);
+    0
+}

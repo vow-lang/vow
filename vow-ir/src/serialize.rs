@@ -904,6 +904,8 @@ pub fn decode_module(bytes: &[u8]) -> Result<Module, DecodeError> {
 mod tests {
     use super::*;
     use crate::types::AbstractRegionId;
+    use std::collections::HashMap;
+    use vow_syntax::ast::Effect;
 
     fn empty_module() -> Module {
         Module {
@@ -1136,5 +1138,167 @@ mod tests {
         b.pop();
         b.extend_from_slice(&[0x80, 0x00]);
         assert!(matches!(decode_module(&b), Err(DecodeError::Truncated)));
+    }
+
+    fn issue197_fixture_bytes() -> Vec<u8> {
+        let hex: String = include_str!("../../tests/fixtures/issue197_sample.vmod.hex")
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        assert_eq!(hex.len() % 2, 0, "fixture hex must have even length");
+        let mut out = Vec::with_capacity(hex.len() / 2);
+        let bytes = hex.as_bytes();
+        let mut i = 0usize;
+        while i < bytes.len() {
+            let pair = std::str::from_utf8(&bytes[i..i + 2]).unwrap();
+            out.push(u8::from_str_radix(pair, 16).unwrap());
+            i += 2;
+        }
+        out
+    }
+
+    fn issue197_expected_module() -> Module {
+        let mut local_names = HashMap::new();
+        local_names.insert(42, "tmp_alloc".to_string());
+        local_names.insert(7, "arg_n".to_string());
+
+        Module {
+            name: "phase2_sample".to_string(),
+            strings: vec!["literal".to_string(), "extern_symbol".to_string()],
+            struct_layouts: vec![StructLayout {
+                name: "Pair".to_string(),
+                fields: vec![
+                    FieldLayout {
+                        name: "x".to_string(),
+                        ty: Ty::I64,
+                    },
+                    FieldLayout {
+                        name: "flag".to_string(),
+                        ty: Ty::Bool,
+                    },
+                ],
+                is_linear: true,
+            }],
+            enum_layouts: vec![EnumLayout {
+                name: "MaybeU64".to_string(),
+                variants: vec![
+                    VariantLayout {
+                        name: "None".to_string(),
+                        tag: 0,
+                        payload: vec![],
+                    },
+                    VariantLayout {
+                        name: "Some".to_string(),
+                        tag: 1,
+                        payload: vec![FieldLayout {
+                            name: "value".to_string(),
+                            ty: Ty::U64,
+                        }],
+                    },
+                ],
+            }],
+            functions: vec![Function {
+                id: FuncId(3),
+                name: "alloc_caller".to_string(),
+                params: vec![Ty::Ptr, Ty::U64],
+                param_names: vec!["dst".to_string(), "n".to_string()],
+                return_ty: Ty::Ptr,
+                effects: vec![Effect::Read, Effect::Write],
+                vows: vec![VowEntry {
+                    id: VowId(9),
+                    description: "n positive".to_string(),
+                    blame: Blame::Caller,
+                    bindings: vec![
+                        ("dst".to_string(), InstId(0)),
+                        ("n".to_string(), InstId(1)),
+                    ],
+                    file: "sample.vow".to_string(),
+                    offset: 17,
+                }],
+                blocks: vec![BasicBlock {
+                    id: BlockId(0),
+                    insts: vec![
+                        Inst {
+                            id: InstId(0),
+                            opcode: Opcode::ConstU64,
+                            ty: Ty::U64,
+                            args: vec![],
+                            data: InstData::ConstU64(9),
+                            origin: Span::new(1, 1),
+                            region: RegionId::Root,
+                        },
+                        Inst {
+                            id: InstId(1),
+                            opcode: Opcode::ConstStr,
+                            ty: Ty::Ptr,
+                            args: vec![],
+                            data: InstData::ConstStr(0),
+                            origin: Span::new(2, 5),
+                            region: RegionId::Root,
+                        },
+                        Inst {
+                            id: InstId(2),
+                            opcode: Opcode::Call,
+                            ty: Ty::Ptr,
+                            args: vec![InstId(1)],
+                            data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                            origin: Span::new(7, 4),
+                            region: RegionId::Root,
+                        },
+                        Inst {
+                            id: InstId(3),
+                            opcode: Opcode::RegionAlloc,
+                            ty: Ty::Ptr,
+                            args: vec![],
+                            data: InstData::AllocSize { size: 24, align: 8 },
+                            origin: Span::new(12, 3),
+                            region: RegionId::Caller(HiddenRegionIdx(2)),
+                        },
+                        Inst {
+                            id: InstId(4),
+                            opcode: Opcode::Return,
+                            ty: Ty::Unit,
+                            args: vec![InstId(3)],
+                            data: InstData::None,
+                            origin: Span::new(16, 1),
+                            region: RegionId::Root,
+                        },
+                    ],
+                }],
+                local_names,
+                summary: RegionSummary {
+                    param_regions: vec![RegionVar(7), RegionVar(9)],
+                    return_region: RegionConstraint::AliasOfAny(vec![0, 1]),
+                    store_effects: vec![
+                        StoreEffect {
+                            target: 0,
+                            source: RegionConstraint::FreshInCaller,
+                        },
+                        StoreEffect {
+                            target: 1,
+                            source: RegionConstraint::AliasOf(0),
+                        },
+                        StoreEffect {
+                            target: 1,
+                            source: RegionConstraint::ConstantGlobal,
+                        },
+                    ],
+                },
+            }],
+            warnings: vec![],
+        }
+    }
+
+    #[test]
+    fn issue197_self_hosted_fixture_decodes_in_rust() {
+        let got = decode_module(&issue197_fixture_bytes()).unwrap();
+        assert_eq!(got, issue197_expected_module());
+    }
+
+    #[test]
+    fn issue197_self_hosted_fixture_matches_rust_encoder() {
+        let expected = issue197_fixture_bytes();
+        let got = encode_module(&issue197_expected_module());
+        assert_eq!(got, expected);
     }
 }
