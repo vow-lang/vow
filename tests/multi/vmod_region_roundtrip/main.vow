@@ -53,8 +53,18 @@ fn hex_encode_bytes(bytes: Vec<i64>) -> String {
     out
 }
 
-fn hex_decode_bytes(hex: String) -> Vec<i64> {
+fn reject_hex_decode() -> Vec<i64> {
+    let bad: Vec<i64> = Vec::new();
+    let out: Vec<i64> = Vec::new();
+    out.push(bad[0]);
+    out
+}
+
+fn hex_decode_bytes(hex: String) -> Vec<i64> [panic] {
     let clean: String = compact_hex(hex);
+    if clean.len() % 2 != 0 {
+        return reject_hex_decode();
+    }
     let out: Vec<i64> = Vec::new();
     let mut i: i64 = 0;
     let n: i64 = clean.len();

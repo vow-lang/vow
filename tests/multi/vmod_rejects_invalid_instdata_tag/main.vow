@@ -1,0 +1,13 @@
+// TEST: exit 1
+module Main
+
+use ir
+use module_io
+
+fn main() -> i32 [panic] {
+    let bytes: Vec<i64> = Vec::new();
+    bytes.push(99);
+    let r: ModuleReader = reader_new(bytes);
+    let _data: WireInstData = read_inst_data(r);
+    0
+}

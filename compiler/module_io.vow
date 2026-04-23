@@ -63,6 +63,11 @@ fn reject_decode_i64() -> i64 {
     bad[0]
 }
 
+fn reject_encode_u8() -> i64 {
+    let bad: Vec<i64> = Vec::new();
+    bad[0]
+}
+
 fn reject_decode_module() -> IrModule {
     let bad: Vec<i64> = Vec::new();
     let name: String = String::new();
@@ -374,7 +379,7 @@ fn region_constraint_encode(out: Vec<i64>, kind: i64, aux: i64, aliases: Vec<i64
     }
 }
 
-fn region_constraint_decode(r: ModuleReader) -> WireRegionConstraint {
+fn region_constraint_decode(r: ModuleReader) -> WireRegionConstraint [panic] {
     let kind: i64 = reader_read_u8(r);
     if kind == RSUM_KIND_FRESH_IN_CALLER() || kind == RSUM_KIND_CONSTANT_GLOBAL() {
         return WireRegionConstraint { kind: kind, aux: 0, aliases: Vec::new() };
@@ -385,6 +390,9 @@ fn region_constraint_decode(r: ModuleReader) -> WireRegionConstraint {
             aux: reader_read_u32_le(r),
             aliases: Vec::new(),
         };
+    }
+    if kind != RSUM_KIND_ALIAS_OF_ANY() {
+        return WireRegionConstraint { kind: reject_decode_i64(), aux: 0, aliases: Vec::new() };
     }
     let n: i64 = reader_read_leb(r);
     let aliases: Vec<i64> = Vec::new();
@@ -415,8 +423,7 @@ fn store_effect_count(flat: Vec<i64>) -> i64 {
     let mut i: i64 = 0;
     let n: i64 = flat.len();
     while i < n vow {
-        invariant: i >= 0,
-        invariant: i <= n
+        invariant: i >= 0
     } {
         i = store_effect_flat_advance(flat, i);
         count = count + 1;
@@ -471,7 +478,7 @@ fn write_region_summary(out: Vec<i64>, f: IrFunction) {
     }
 }
 
-fn read_region_summary(r: ModuleReader) -> WireRegionSummary {
+fn read_region_summary(r: ModuleReader) -> WireRegionSummary [panic] {
     let param_n: i64 = reader_read_leb(r);
     let param_regions: Vec<i64> = Vec::new();
     let mut i: i64 = 0;
@@ -554,13 +561,14 @@ fn write_inst_data(out: Vec<i64>, inst: IrInst) {
         return;
     }
     if dk == IDATA_FIELD() { write_u8(out, 16); write_u32_le(out, inst.dv); return; }
-    write_u8(out, 0);
+    write_u8(out, reject_encode_u8());
 }
 
 fn read_inst_data(r: ModuleReader) -> WireInstData [panic] {
     let tag: i64 = reader_read_u8(r);
     let data: WireInstData = WireInstData { dk: IDATA_NONE(), dv: 0, dv2: 0, ds: String::from("") };
-    if tag == 1 {
+    if tag == 0 {
+    } else if tag == 1 {
         data.dk = IDATA_CONST_I32();
         data.dv = read_i32_bits(r);
     } else if tag == 2 {
@@ -610,6 +618,8 @@ fn read_inst_data(r: ModuleReader) -> WireInstData [panic] {
     } else if tag == 16 {
         data.dk = IDATA_FIELD();
         data.dv = reader_read_u32_le(r);
+    } else {
+        return WireInstData { dk: reject_decode_i64(), dv: 0, dv2: 0, ds: String::from("") };
     }
     data
 }
@@ -1130,6 +1140,10 @@ fn module_decode(buf: Vec<i64>) -> IrModule [panic] {
     } {
         m.functions.push(read_function(r));
         i = i + 1;
+    }
+
+    if r.pos != r.buf.len() {
+        return reject_decode_module();
     }
 
     m
