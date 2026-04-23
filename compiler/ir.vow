@@ -253,6 +253,7 @@ struct IrFunction {
     rsum_return_aux: i64,
     rsum_return_aliases: Vec<i64>,
     rsum_store_effects: Vec<i64>,
+    rsum_param_regions: Vec<i64>,
 }
 
 struct IrFieldLayout {
@@ -343,6 +344,7 @@ fn ir_function_new(id: i64, name: String, return_ty: i64, effects: i64) -> IrFun
         rsum_return_aux: 0,
         rsum_return_aliases: Vec::new(),
         rsum_store_effects: Vec::new(),
+        rsum_param_regions: Vec::new(),
     }
 }
 
