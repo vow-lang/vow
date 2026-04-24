@@ -376,13 +376,26 @@ fn analyze_function(
     }
 
     // Tag RegionAlloc instructions that escape to virtual caller.
-    let escaping: Vec<i64> = collect_escaping_allocs(m, f);
-    let mut esc_i: i64 = 0;
-    while esc_i < escaping.len() {
-        let inst_id: i64 = escaping[esc_i];
-        put_inst_region(region_keys[fidx], region_vals[fidx], inst_id, region_caller0());
-        esc_i = esc_i + 1;
-    }
+    //
+    // Phase 3 minimum: the self-hosted Cranelift shim in
+    // `vow-clif-shim/src/lib.rs` (IOP_REGION_ALLOC path) currently only
+    // accepts `REGION_KIND_ROOT`; any `Caller` or `Block` region makes
+    // `fn_end` return -1 ("hidden-arena routing lands in a follow-up").
+    // Emitting `region_caller0()` here would break self-hosted codegen for
+    // any program with an escaping allocation. We therefore leave escaping
+    // allocations at their Phase-2 default (Root) in self-hosted IR until
+    // the shim learns hidden-arena plumbing. The summary itself is still
+    // set to FreshInCaller where appropriate so the metadata remains
+    // correct for downstream consumers; only the per-inst region tag is
+    // degraded for codegen compatibility.
+    //
+    // Rust codegen accepts Caller(0) via `cranelift_backend.rs` + Phase 4's
+    // hidden-arena projection, so the Rust pass emits `Caller(0)` on
+    // escaping allocs. This is an intentional divergence between the two
+    // compilers until the self-hosted shim catches up. Helpers
+    // `collect_escaping_allocs` and `region_caller0` remain in this module
+    // so the port is ready to drop in as a one-line change once the shim
+    // supports hidden-arena routing.
 
     let new_kind: i64 = acc_kind;
     let new_aux: i64 = acc_aux;
