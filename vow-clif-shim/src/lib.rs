@@ -188,6 +188,14 @@ const IOP_CALL: i64 = 76;
 const IOP_REGION_ALLOC: i64 = 77;
 const IOP_REGION_FREE: i64 = 78;
 
+// Region-kind discriminants. Mirror `compiler/ir.vow::REGION_KIND_*` and
+// `RegionId` in `vow-ir/src/types.rs`. The packed i64 is `val * 4 + kind`
+// (see `region_pack`).
+const REGION_KIND_BLOCK: i64 = 0;
+const REGION_KIND_CALLER: i64 = 1;
+const REGION_KIND_ROOT: i64 = 2;
+const REGION_KIND_RODATA: i64 = 3;
+
 const IOP_LINEAR_CONSUME: i64 = 79;
 const IOP_LINEAR_BORROW: i64 = 80;
 
@@ -311,6 +319,13 @@ struct FnScratch {
     inst_dvs: Vec<i64>,
     inst_dv2s: Vec<i64>,
     inst_ds_ptrs: Vec<i64>, // raw VowVec ptrs — see struct-level doc
+    // Region tag per instruction, packed as (val * 4 + kind) — mirrors
+    // `region_pack` in `compiler/ir.vow` and `RegionId` in `vow-ir`. Today
+    // only the kind byte matters for codegen; the payload is read so
+    // `.vmod`-produced `Caller(idx)` regions carry through for error
+    // reporting when the shim refuses them (see REGION_KIND_ROOT check
+    // in IOP_REGION_ALLOC).
+    inst_rgns: Vec<i64>,
     all_args: Vec<i64>,
     arg_offsets: Vec<i64>,
     arg_lengths: Vec<i64>,
@@ -338,6 +353,7 @@ impl FnScratch {
         self.inst_dvs.clear();
         self.inst_dv2s.clear();
         self.inst_ds_ptrs.clear();
+        self.inst_rgns.clear();
         self.all_args.clear();
         self.arg_offsets.clear();
         self.arg_lengths.clear();
@@ -578,6 +594,7 @@ pub unsafe extern "C" fn __vow_clif_fn_inst(
     dv2: i64,
     ds_vec: i64,
     args_vec: i64,
+    rgn: i64,
 ) -> i64 {
     let ctx = unsafe { &mut *(ctx_ptr as *mut ModuleContext) };
     let args_start;
@@ -602,6 +619,7 @@ pub unsafe extern "C" fn __vow_clif_fn_inst(
         s.inst_dvs.push(dv);
         s.inst_dv2s.push(dv2);
         s.inst_ds_ptrs.push(ds_vec);
+        s.inst_rgns.push(rgn);
         args_start = s.all_args.len() as i64;
     }
     // Copy arg inst IDs into the flat all_args buffer.
@@ -698,6 +716,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     let inst_dvs: &[i64] = &ctx.fn_scratch.inst_dvs;
     let inst_dv2s: &[i64] = &ctx.fn_scratch.inst_dv2s;
     let inst_ds_ptrs: &[i64] = &ctx.fn_scratch.inst_ds_ptrs;
+    let inst_rgns: &[i64] = &ctx.fn_scratch.inst_rgns;
     let all_args: &[i64] = &ctx.fn_scratch.all_args;
     let arg_offsets: &[i64] = &ctx.fn_scratch.arg_offsets;
     let arg_lengths: &[i64] = &ctx.fn_scratch.arg_lengths;
@@ -1768,6 +1787,34 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
 
                 // Region / linear
                 IOP_REGION_ALLOC => {
+                    // Region-kind gating. The Rust backend routes
+                    // `RegionId::Caller(idx)` through a hidden arena
+                    // parameter and rejects `Block`/`Rodata`. The shim
+                    // has not yet grown the hidden-arena plumbing, so
+                    // we refuse anything that isn't `Root` rather than
+                    // silently allocating into the root arena — which
+                    // would violate the caller's region lifetime when
+                    // a `.vmod` produced by the Rust compiler is fed
+                    // back through the self-hosted pipeline.
+                    let rgn = inst_rgns[ii];
+                    let kind = rgn & 3;
+                    if kind != REGION_KIND_ROOT {
+                        let label = match kind {
+                            REGION_KIND_BLOCK => "Block",
+                            REGION_KIND_CALLER => "Caller",
+                            REGION_KIND_RODATA => "Rodata",
+                            _ => "Unknown",
+                        };
+                        eprintln!(
+                            "clif_shim: IOP_REGION_ALLOC with region kind {} (payload {}) \
+                             is not supported yet — only Root is wired; \
+                             hidden-arena routing for Caller and block-scoped arenas \
+                             lands in a follow-up",
+                            label,
+                            rgn >> 2,
+                        );
+                        return -1;
+                    }
                     let (size, align) = if dk == IDATA_ALLOC_SIZE {
                         (dv, dv2)
                     } else {
@@ -2479,8 +2526,8 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_clif_fn_inst" => {
-            // ctx, id, op, ty, dk, dv, dv2, ds_vec, args_vec
-            for _ in 0..9 {
+            // ctx, id, op, ty, dk, dv, dv2, ds_vec, args_vec, rgn
+            for _ in 0..10 {
                 sig.params.push(AbiParam::new(types::I64));
             }
             sig.returns.push(AbiParam::new(types::I64));
