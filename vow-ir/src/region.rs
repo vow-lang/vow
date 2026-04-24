@@ -36,8 +36,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use vow_diag::{Blame, Diagnostic, ErrorCode, Severity, SourceLocation};
 
 use crate::types::{
-    BasicBlock, BlockId, Function, HiddenRegionIdx, Inst, InstData, InstId, Module, Opcode,
-    RegionConstraint, RegionId, RegionSummary, RegionVar, StoreEffect, Ty,
+    BlockId, Function, HiddenRegionIdx, Inst, InstData, InstId, Module, Opcode, RegionConstraint,
+    RegionId, RegionSummary, RegionVar, StoreEffect, Ty,
 };
 
 // ---------------------------------------------------------------------------
@@ -1017,17 +1017,6 @@ fn tarjan_sccs(graph: &[Vec<u32>]) -> Vec<Vec<u32>> {
     // That's what we want.
     sccs
 }
-
-// ---------------------------------------------------------------------------
-// Wrap-up: BasicBlock unused suppression for now
-// ---------------------------------------------------------------------------
-
-// Intentionally unused import suppression: BasicBlock is re-exported from
-// crate::types but we access blocks directly through Function. Keeping the
-// import clear-eyed for future block-tree work.
-const _: fn() = || {
-    let _: Option<BasicBlock> = None;
-};
 
 // ---------------------------------------------------------------------------
 // Tests

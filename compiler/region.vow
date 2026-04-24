@@ -509,8 +509,13 @@ fn deep_kind_inner(
                 if ck == RSUM_KIND_ALIAS_OF() {
                     let p_idx: i64 = int_auxs[callee_idx];
                     if p_idx >= 0 && p_idx < inst.args.len() {
+                        // `visiting` is the shared cycle-detection stack.
+                        // Vow Vec has reference semantics, so every sibling
+                        // recursion sees the same vec — pop before returning
+                        // so stale ids don't leak into subsequent arms.
                         visiting.push(id);
                         let r: i64 = deep_kind_inner(m, f, inst.args[p_idx], int_kinds, int_auxs, int_aliases_list, visiting);
+                        visiting.pop();
                         return r;
                     }
                     return RSUM_KIND_ALIAS_OF();
@@ -536,6 +541,7 @@ fn deep_kind_inner(
                         }
                         ai = ai + 1;
                     }
+                    visiting.pop();
                     return acc;
                 }
                 return ck;
@@ -562,6 +568,7 @@ fn deep_kind_inner(
             acc = joined;
             ai = ai + 1;
         }
+        visiting.pop();
         return acc;
     }
     RSUM_KIND_CONSTANT_GLOBAL()
@@ -593,6 +600,7 @@ fn deep_aux_inner(
                 if p_idx >= 0 && p_idx < inst.args.len() {
                     visiting.push(id);
                     let r: i64 = deep_aux_inner(m, f, inst.args[p_idx], int_kinds, int_auxs, int_aliases_list, visiting);
+                    visiting.pop();
                     return r;
                 }
             }
@@ -802,9 +810,9 @@ fn region_vec_contains_i64(v: Vec<i64>, x: i64) -> bool {
 }
 
 fn find_inst_index(f: IrFunction, id: i64) -> i64 {
-    // Encoded as block_idx * (1 << 32) + inst_idx — actually return -1 / -2
-    // and a single i64 packed value via block_idx_low / inst_idx.
-    // To keep it simple, return only the global linear index (counting across blocks).
+    // Linear scan across all blocks. Returns a global position counter
+    // (0, 1, 2, ...) of the inst with matching `id`, or -1 if not found.
+    // The counter is re-derived from position by `get_inst_by_pos`.
     let bks: Vec<IrBlock> = f.blocks;
     let mut counter: i64 = 0;
     let mut bi: i64 = 0;
