@@ -335,7 +335,7 @@ fn analyze_function(
     //    through Pizlo Phi/Upsilon arms and Call summaries.
     let mut acc_kind: i64 = RSUM_INTERNAL_UNINIT();
     let mut acc_aux: i64 = 0;
-    let acc_aliases: Vec<i64> = Vec::new();
+    let mut acc_aliases: Vec<i64> = Vec::new();
 
     let mut bi: i64 = 0;
     while bi < n_bks {
@@ -422,6 +422,13 @@ fn analyze_function(
             k = k + 1;
         }
     }
+    // TODO(Phase 5 / issue #200): when self-hosted gains store_effects
+    // inference, also compare int_se_targets[fidx] / int_se_src_kinds[fidx]
+    // / int_se_src_aux[fidx] / int_se_src_aliases[fidx] here — otherwise
+    // a round in which only store_effects grow will not set `changed`
+    // and the SCC fixed-point will miss the update. Harmless in Phase 3
+    // (both compilers produce empty store_effects), but latent once
+    // Phase 5 wires inference.
     false
 }
 
@@ -526,7 +533,7 @@ fn deep_kind_inner(
                     let als: Vec<i64> = int_aliases_list[callee_idx];
                     let mut acc: i64 = RSUM_INTERNAL_UNINIT();
                     let mut acc_aux: i64 = 0;
-                    let acc_aliases: Vec<i64> = Vec::new();
+                    let mut acc_aliases: Vec<i64> = Vec::new();
                     let mut ai: i64 = 0;
                     while ai < als.len() {
                         let p_idx: i64 = als[ai];
@@ -555,7 +562,7 @@ fn deep_kind_inner(
         let arms: Vec<i64> = collect_upsilon_arms(f, id);
         let mut acc: i64 = RSUM_INTERNAL_UNINIT();
         let mut acc_aux: i64 = 0;
-        let acc_aliases: Vec<i64> = Vec::new();
+        let mut acc_aliases: Vec<i64> = Vec::new();
         let mut ai: i64 = 0;
         while ai < arms.len() {
             let arm_id: i64 = arms[ai];

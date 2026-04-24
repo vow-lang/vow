@@ -33,39 +33,6 @@ use std::process::Command;
 use vow_diag::Severity;
 use vow_ir::{RegionConstraint, decode_module, encode_module};
 
-/// Locate the self-hosted compiler source directory.
-fn compiler_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("compiler")
-}
-
-/// Run `scripts/concat_vow.sh ir` to produce a single-source concat of
-/// `compiler/*.vow` (excluding clif/c_emitter/verifier — they reference
-/// runtime symbols not visible from the IR-mode subset). Returns the
-/// path to the temp-file output.
-fn concat_self_hosted_ir() -> PathBuf {
-    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let script = workspace.join("scripts").join("concat_vow.sh");
-    let out_path = std::env::temp_dir().join("region_gate_concat_ir.vow");
-    let output = Command::new("bash")
-        .arg(&script)
-        .arg("ir")
-        .output()
-        .expect("failed to invoke concat_vow.sh");
-    assert!(
-        output.status.success(),
-        "concat_vow.sh failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    std::fs::write(&out_path, &output.stdout).expect("failed to write concat output");
-    out_path
-}
-
 /// Assert canonical-form invariants on every function's summary.
 fn assert_canonical_summaries(module: &vow_ir::Module) {
     for f in &module.functions {
@@ -112,49 +79,62 @@ fn assert_canonical_summaries(module: &vow_ir::Module) {
 }
 
 #[test]
-fn rust_region_pass_runs_on_self_hosted_compiler_source() {
-    // Skip silently if the concat script can't run (CI on Windows, etc.).
-    if !PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+fn rust_region_pass_runs_on_small_example() {
+    // Run the Rust frontend (which calls infer_regions internally per the
+    // Phase 3 wiring in vow/src/frontend.rs) against a small well-formed
+    // example. Assert (a) the build succeeds — which guarantees
+    // infer_regions did not emit any RegionConflict error (the frontend
+    // bails on Severity::Error diagnostics); and (b) no RegionConflict
+    // string appears anywhere in stdout/stderr.
+    //
+    // Previously this test ran against the concat'd self-hosted compiler
+    // source in IR mode, but that source references verifier/c_emitter
+    // symbols not available in IR mode and always failed with TypeMismatch
+    // errors — making the happy-path assertions unreachable. A small
+    // well-formed example reliably hits the infer_regions code path in the
+    // frontend and makes the assertions load-bearing.
+    let examples_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
-        .join("scripts")
-        .join("concat_vow.sh")
-        .exists()
-    {
-        eprintln!("SKIP: scripts/concat_vow.sh not present");
-        return;
-    }
-    if !compiler_dir().exists() {
-        eprintln!("SKIP: compiler/ source dir not present");
+        .join("examples");
+    let hello = examples_dir.join("hello.vow");
+    if !hello.exists() {
+        eprintln!("SKIP: examples/hello.vow not present");
         return;
     }
 
-    let concat_path = concat_self_hosted_ir();
-
-    // Run the Rust frontend (which calls infer_regions internally per the
-    // Phase 3 wiring in vow/src/frontend.rs).
     let out = Command::new(env!("CARGO_BIN_EXE_vow"))
-        .args(["build", "--no-verify", "--dump-ir"])
-        .arg(&concat_path)
+        .args(["build", "--no-verify"])
+        .arg(&hello)
         .output()
         .expect("failed to run vow");
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        // The IR-mode concat references some functions only present in
-        // clif-mode (verifier / c_emitter functions called by main.vow).
-        // The frontend will report TypeMismatch errors — those are
-        // pre-existing and unrelated to region inference. Skip in that
-        // case after asserting no RegionConflict appeared.
-        assert!(
-            !stdout.contains("\"RegionConflict\"") && !stderr.contains("RegionConflict"),
-            "unexpected RegionConflict on self-hosted compiler source\nstdout: {stdout}\nstderr: {stderr}"
-        );
-        eprintln!(
-            "SKIP: pre-existing IR-mode concat type errors (not a region-inference regression)"
-        );
-        return;
-    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // No RegionConflict on valid examples — the frontend must not surface
+    // the code on well-formed input regardless of whether the build
+    // succeeds or fails for an unrelated reason (link, runtime lib, etc.).
+    assert!(
+        !stdout.contains("\"RegionConflict\"") && !stderr.contains("RegionConflict"),
+        "unexpected RegionConflict on examples/hello.vow\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    // Build should report Unverified (it succeeded through region
+    // inference; we passed --no-verify so ESBMC was skipped). Parse the
+    // JSON status to assert the frontend (including infer_regions) ran to
+    // completion. If the runtime library isn't linked in the test
+    // environment, the downstream link step may still set executable=null
+    // — that's unrelated to the region pass.
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("failed to parse vow stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let status = parsed["status"].as_str().unwrap_or("");
+    assert!(
+        status == "Verified" || status == "Unverified",
+        "expected Verified/Unverified (region pass did not reject valid hello.vow), \
+         got status={status}\nstdout: {stdout}"
+    );
+    // Compiler-fail on the hello.vow happy path would surface here; if it
+    // ever does, this assertion is the signal that infer_regions became
+    // over-eager.
 }
 
 #[test]
