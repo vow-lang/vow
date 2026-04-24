@@ -821,7 +821,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             };
             let call_info = ctx.func_index.get(&callee_name).cloned();
             if let Some(call_info) = call_info {
-let result = ctx.emit(
+                let result = ctx.emit(
                     Opcode::Call,
                     call_info.ret_ty,
                     arg_ids,
@@ -845,7 +845,7 @@ let result = ctx.emit(
                     span,
                 )
             } else if let Some((sym, ret_ty)) = vow_builtin_to_runtime(&callee_name) {
-let result = ctx.emit(
+                let result = ctx.emit(
                     Opcode::Call,
                     ret_ty,
                     arg_ids,
@@ -860,7 +860,7 @@ let result = ctx.emit(
                 }
                 result
             } else {
-ctx.emit(
+                ctx.emit(
                     Opcode::Call,
                     Ty::Unit,
                     arg_ids,
