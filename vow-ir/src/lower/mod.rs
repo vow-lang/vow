@@ -222,7 +222,6 @@ pub(crate) struct LowerCtx {
     // Scope-based deallocation: stack of alloc scopes, each tracking (InstId, tag).
     // Push on entering a branch/loop/match arm, pop (with frees) on exit.
     alloc_scopes: Vec<Vec<(InstId, String)>>,
-    escaped_allocs: HashSet<InstId>,
     // Alloc scope depth at each loop body entry (for break/continue frees).
     loop_alloc_scope_depth: Vec<usize>,
 }
@@ -294,163 +293,24 @@ impl LowerCtx {
             struct_field_vec_elems,
             warnings: Vec::new(),
             alloc_scopes: vec![Vec::new()],
-            escaped_allocs: HashSet::new(),
             loop_alloc_scope_depth: Vec::new(),
         }
     }
 
     pub(super) fn track_heap_alloc(&mut self, id: InstId, tag: &str) {
-        self.alloc_scopes
-            .last_mut()
-            .expect("alloc_scopes must have at least one scope")
-            .push((id, tag.to_string()));
-    }
-
-    pub(super) fn mark_escaped(&mut self, id: InstId) {
-        self.escaped_allocs.insert(id);
+        let _ = (id, tag);
     }
 
     pub(super) fn push_alloc_scope(&mut self) {
         self.alloc_scopes.push(Vec::new());
     }
 
-    /// Pop the current alloc scope and emit frees for non-escaped allocations.
-    /// `live_out` contains InstIds that flow out of this scope (e.g. via Upsilon)
-    /// and must not be freed.
-    pub(super) fn pop_alloc_scope_frees(&mut self, live_out: &[InstId], span: Span) {
-        let scope = self.alloc_scopes.pop().expect("alloc_scopes underflow");
-        for (id, tag) in &scope {
-            if self.escaped_allocs.contains(id) || live_out.contains(id) {
-                continue;
-            }
-            if let Some(size_str) = tag.strip_prefix("region:") {
-                let size: u32 = size_str.parse().unwrap_or(0);
-                self.emit(
-                    Opcode::RegionFree,
-                    Ty::Unit,
-                    vec![*id],
-                    InstData::AllocSize { size, align: 8 },
-                    span,
-                );
-                continue;
-            }
-            let sym = match tag.as_str() {
-                "String" => "__vow_string_free",
-                "Vec" => "__vow_vec_free_val",
-                "HashMap" => "__vow_map_free",
-                _ => continue,
-            };
-            self.emit(
-                Opcode::Call,
-                Ty::Unit,
-                vec![*id],
-                InstData::CallExtern(sym.to_string()),
-                span,
-            );
-        }
-    }
-
-    /// Emit frees for allocations from the innermost scope down to (and including)
-    /// the scope at `target_depth`. Does NOT pop any scopes.
-    /// Used by break/continue to free loop body temporaries before jumping.
-    pub(super) fn emit_alloc_frees_to_depth(
-        &mut self,
-        target_depth: usize,
-        live_out: &[InstId],
-        span: Span,
-    ) {
-        let allocs: Vec<(InstId, String)> = self.alloc_scopes[target_depth..]
-            .iter()
-            .flat_map(|scope| scope.iter().cloned())
-            .collect();
-        for (id, tag) in allocs {
-            if self.escaped_allocs.contains(&id) || live_out.contains(&id) {
-                continue;
-            }
-            if let Some(size_str) = tag.strip_prefix("region:") {
-                let size: u32 = size_str.parse().unwrap_or(0);
-                self.emit(
-                    Opcode::RegionFree,
-                    Ty::Unit,
-                    vec![id],
-                    InstData::AllocSize { size, align: 8 },
-                    span,
-                );
-                continue;
-            }
-            let sym = match tag.as_str() {
-                "String" => "__vow_string_free",
-                "Vec" => "__vow_vec_free_val",
-                "HashMap" => "__vow_map_free",
-                _ => continue,
-            };
-            self.emit(
-                Opcode::Call,
-                Ty::Unit,
-                vec![id],
-                InstData::CallExtern(sym.to_string()),
-                span,
-            );
-        }
-    }
-
-    fn collect_return_sources(&self, return_val: InstId) -> HashSet<InstId> {
-        let mut sources = HashSet::new();
-        sources.insert(return_val);
-        let mut worklist = vec![return_val];
-        while let Some(val) = worklist.pop() {
-            for block in &self.func.blocks {
-                for inst in &block.insts {
-                    if inst.opcode == Opcode::Upsilon
-                        && let InstData::PhiTarget(target) = inst.data
-                        && target == val
-                        && let Some(&src) = inst.args.first()
-                        && sources.insert(src)
-                    {
-                        worklist.push(src);
-                    }
-                }
-            }
-        }
-        sources
+    pub(super) fn pop_alloc_scope_frees(&mut self) {
+        self.alloc_scopes.pop().expect("alloc_scopes underflow");
     }
 
     pub(super) fn emit_return_frees(&mut self, return_val: InstId, span: Span) {
-        let return_sources = self.collect_return_sources(return_val);
-        let all_allocs: Vec<(InstId, String)> = self
-            .alloc_scopes
-            .iter()
-            .flat_map(|scope| scope.iter().cloned())
-            .collect();
-        for (id, tag) in all_allocs {
-            if self.escaped_allocs.contains(&id) || return_sources.contains(&id) {
-                continue;
-            }
-            if let Some(size_str) = tag.strip_prefix("region:") {
-                let size: u32 = size_str.parse().unwrap_or(0);
-                self.emit(
-                    Opcode::RegionFree,
-                    Ty::Unit,
-                    vec![id],
-                    InstData::AllocSize { size, align: 8 },
-                    span,
-                );
-                continue;
-            }
-            let sym = match tag.as_str() {
-                "String" => "__vow_string_free",
-                "Vec" => "__vow_vec_free_val",
-                "HashMap" => "__vow_map_free",
-                _ => continue,
-            };
-            self.emit(
-                Opcode::Call,
-                Ty::Unit,
-                vec![id],
-                InstData::CallExtern(sym.to_string()),
-                span,
-            );
-        }
+        let _ = (return_val, span);
     }
 
     pub(super) fn intern_str(&mut self, s: &str) -> u32 {
@@ -472,14 +332,7 @@ impl LowerCtx {
     }
 
     pub(super) fn emit_string_free(&mut self, id: InstId, span: Span) {
-        self.escaped_allocs.insert(id);
-        self.emit(
-            Opcode::Call,
-            Ty::Unit,
-            vec![id],
-            InstData::CallExtern("__vow_string_free".to_string()),
-            span,
-        );
+        let _ = (id, span);
     }
 
     pub(super) fn define(&mut self, name: String, id: InstId) {
@@ -843,7 +696,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ctx.switch_to_block(rhs_block);
                 ctx.push_alloc_scope();
                 let rhs_id = lower_expr(ctx, rhs);
-                ctx.pop_alloc_scope_frees(&[rhs_id], span);
+                ctx.pop_alloc_scope_frees();
                 let rhs_upsilon = ctx.emit(
                     Opcode::Upsilon,
                     Ty::Unit,
@@ -968,9 +821,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             };
             let call_info = ctx.func_index.get(&callee_name).cloned();
             if let Some(call_info) = call_info {
-                for &aid in &arg_ids {
-                    ctx.mark_escaped(aid);
-                }
                 let result = ctx.emit(
                     Opcode::Call,
                     call_info.ret_ty,
@@ -995,9 +845,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 )
             } else if let Some((sym, ret_ty)) = vow_builtin_to_runtime(&callee_name) {
-                for &aid in &arg_ids {
-                    ctx.mark_escaped(aid);
-                }
                 let result = ctx.emit(
                     Opcode::Call,
                     ret_ty,
@@ -1013,9 +860,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 }
                 result
             } else {
-                for &aid in &arg_ids {
-                    ctx.mark_escaped(aid);
-                }
                 ctx.emit(
                     Opcode::Call,
                     Ty::Unit,
@@ -1064,19 +908,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .iter()
                 .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                 .collect();
-            // Free branch temporaries (keep result and transitive sources alive).
             if !then_terminated {
-                let mut live_out: Vec<InstId> = then_mut_vals.clone();
-                live_out.push(then_val);
-                for src in ctx.collect_return_sources(then_val) {
-                    live_out.push(src);
-                }
-                for mv in &then_mut_vals {
-                    for src in ctx.collect_return_sources(*mv) {
-                        live_out.push(src);
-                    }
-                }
-                ctx.pop_alloc_scope_frees(&live_out, span);
+                ctx.pop_alloc_scope_frees();
             } else {
                 ctx.alloc_scopes.pop();
             }
@@ -1117,19 +950,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .iter()
                 .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                 .collect();
-            // Free branch temporaries (keep result and transitive sources alive).
             if !else_terminated {
-                let mut live_out: Vec<InstId> = else_mut_vals.clone();
-                live_out.push(else_val);
-                for src in ctx.collect_return_sources(else_val) {
-                    live_out.push(src);
-                }
-                for mv in &else_mut_vals {
-                    for src in ctx.collect_return_sources(*mv) {
-                        live_out.push(src);
-                    }
-                }
-                ctx.pop_alloc_scope_frees(&live_out, span);
+                ctx.pop_alloc_scope_frees();
             } else {
                 ctx.alloc_scopes.pop();
             }
@@ -1286,7 +1108,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         FIELD_IDX_SENTINEL
                     } as u32;
                     if field_idx != FIELD_IDX_SENTINEL as u32 {
-                        ctx.mark_escaped(new_val);
                         ctx.emit(
                             Opcode::FieldSet,
                             Ty::Unit,
@@ -1299,7 +1120,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ExprKind::Index { base, index } => {
                     let vec_ptr = lower_expr(ctx, base);
                     let idx_id = lower_expr(ctx, index);
-                    ctx.mark_escaped(new_val);
                     ctx.emit(
                         Opcode::Call,
                         Ty::Unit,
@@ -1436,18 +1256,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.loop_header_blocks.pop();
             ctx.loop_exit_blocks.pop();
 
-            // Free loop-body temporaries before back-edge.
-            // Include transitive sources so Phi/Upsilon aliases aren't freed.
             if !ctx.is_terminated() {
-                let mut loop_live_out: Vec<InstId> = Vec::new();
-                for (name, _) in &phi_ids {
-                    if let Some(val) = ctx.lookup(name) {
-                        for src in ctx.collect_return_sources(val) {
-                            loop_live_out.push(src);
-                        }
-                    }
-                }
-                ctx.pop_alloc_scope_frees(&loop_live_out, span);
+                ctx.pop_alloc_scope_frees();
             } else {
                 ctx.alloc_scopes.pop();
             }
@@ -1664,18 +1474,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             ctx.pop_scope();
 
-            // Free loop-body temporaries before back-edge.
-            // Include transitive sources so Phi/Upsilon aliases aren't freed.
             if !ctx.is_terminated() {
-                let mut loop_live_out: Vec<InstId> = Vec::new();
-                for (name, _) in &phi_ids {
-                    if let Some(val) = ctx.lookup(name) {
-                        for src in ctx.collect_return_sources(val) {
-                            loop_live_out.push(src);
-                        }
-                    }
-                }
-                ctx.pop_alloc_scope_frees(&loop_live_out, span);
+                ctx.pop_alloc_scope_frees();
             } else {
                 ctx.alloc_scopes.pop();
             }
@@ -1815,13 +1615,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.loop_header_blocks.pop();
             ctx.loop_exit_blocks.pop();
 
-            // Free loop-body temporaries before back-edge.
             if !ctx.is_terminated() {
-                let loop_live_out: Vec<InstId> = phi_ids
-                    .iter()
-                    .filter_map(|(name, _)| ctx.lookup(name))
-                    .collect();
-                ctx.pop_alloc_scope_frees(&loop_live_out, span);
+                ctx.pop_alloc_scope_frees();
             } else {
                 ctx.alloc_scopes.pop();
             }
@@ -1878,7 +1673,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .copied()
                 .expect("break outside of loop");
 
-            let break_val = if let Some(val_expr) = value {
+            if let Some(val_expr) = value {
                 let val_id = lower_expr(ctx, val_expr);
                 // If inside a `loop` (Some), emit Upsilon for the break-value Phi.
                 let is_loop = matches!(ctx.loop_break_upsilons.last(), Some(Some(_)));
@@ -1896,10 +1691,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         ups.push((block, up_id, val_ty));
                     }
                 }
-                Some(val_id)
-            } else {
-                None
-            };
+            }
 
             // Emit Upsilons for loop mutation variables targeting the
             // exit-block Phis so the exit block receives updated values.
@@ -1917,24 +1709,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         span,
                     );
                 }
-            }
-
-            // Free loop body allocations before jumping to exit.
-            // Use collect_return_sources to trace through Phi/Upsilon chains —
-            // break_val and mutation variables may alias heap allocations.
-            // Resolve mutation vars at loop header scope depth.
-            if let Some(&depth) = ctx.loop_alloc_scope_depth.last() {
-                let mut live_out: Vec<InstId> = if let Some(bv) = break_val {
-                    ctx.collect_return_sources(bv).into_iter().collect()
-                } else {
-                    vec![]
-                };
-                for (name, _) in &exit_phis {
-                    if let Some(cur_val) = ctx.lookup_at_depth(name, scope_depth) {
-                        live_out.extend(ctx.collect_return_sources(cur_val));
-                    }
-                }
-                ctx.emit_alloc_frees_to_depth(depth, &live_out, span);
             }
 
             ctx.emit(
@@ -1958,20 +1732,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .last()
                 .copied()
                 .expect("continue outside of loop");
-
-            // Free loop body allocations before jumping back to header.
-            // Include transitive sources so Phi/Upsilon aliases aren't freed.
-            if let Some(&depth) = ctx.loop_alloc_scope_depth.last() {
-                let mut live_out: Vec<InstId> = Vec::new();
-                for (name, _) in &phis {
-                    if let Some(val) = ctx.lookup_at_depth(name, scope_depth) {
-                        for src in ctx.collect_return_sources(val) {
-                            live_out.push(src);
-                        }
-                    }
-                }
-                ctx.emit_alloc_frees_to_depth(depth, &live_out, span);
-            }
 
             // Emit back-edge Upsilons for mutation variables.
             // Use lookup_at_depth to resolve from the loop header scope, not the
@@ -2139,7 +1899,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 } as u32;
                 let val_id = lower_expr(ctx, field_expr);
                 if idx != FIELD_IDX_SENTINEL as u32 {
-                    ctx.mark_escaped(val_id);
                     ctx.emit(
                         Opcode::FieldSet,
                         Ty::Unit,
@@ -2261,7 +2020,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             );
             for (i, field_expr) in fields.iter().enumerate() {
                 let val_id = lower_expr(ctx, field_expr);
-                ctx.mark_escaped(val_id);
                 ctx.emit(
                     Opcode::FieldSet,
                     Ty::Unit,
@@ -2368,19 +2126,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                             .collect();
 
-                        // Free match arm temporaries (keep transitive sources alive).
                         if !arm_terminated {
-                            let mut live_out: Vec<InstId> = arm_mut_vals.clone();
-                            live_out.push(arm_result);
-                            for src in ctx.collect_return_sources(arm_result) {
-                                live_out.push(src);
-                            }
-                            for mv in &arm_mut_vals {
-                                for src in ctx.collect_return_sources(*mv) {
-                                    live_out.push(src);
-                                }
-                            }
-                            ctx.pop_alloc_scope_frees(&live_out, span);
+                            ctx.pop_alloc_scope_frees();
                         } else {
                             ctx.alloc_scopes.pop();
                         }
@@ -2427,19 +2174,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                             .collect();
 
-                        // Free match arm temporaries (keep transitive sources alive).
                         if !arm_terminated {
-                            let mut live_out: Vec<InstId> = arm_mut_vals.clone();
-                            live_out.push(arm_result);
-                            for src in ctx.collect_return_sources(arm_result) {
-                                live_out.push(src);
-                            }
-                            for mv in &arm_mut_vals {
-                                for src in ctx.collect_return_sources(*mv) {
-                                    live_out.push(src);
-                                }
-                            }
-                            ctx.pop_alloc_scope_frees(&live_out, span);
+                            ctx.pop_alloc_scope_frees();
                         } else {
                             ctx.alloc_scopes.pop();
                         }
@@ -2687,8 +2423,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     let v_id = args.get(1).map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
                         ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
                     });
-                    ctx.mark_escaped(k_id);
-                    ctx.mark_escaped(v_id);
                     ctx.emit(
                         Opcode::Call,
                         Ty::Unit,
@@ -2744,7 +2478,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     let elem_id = args.first().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
                         ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
                     });
-                    ctx.mark_escaped(elem_id);
                     ctx.emit(
                         Opcode::Call,
                         Ty::Unit,
@@ -4482,7 +4215,7 @@ mod tests {
     }
 
     #[test]
-    fn region_free_emitted_for_unused_struct() {
+    fn no_region_free_for_unused_struct_after_arena_cutover() {
         // fn f() -> i64 { let p = Pair{a:1, b:2}; 42 }
         let body = Block {
             stmts: vec![let_stmt("p", Some(pair_ty()), pair_literal(1, 2))],
@@ -4497,7 +4230,10 @@ mod tests {
             .iter()
             .flat_map(|b| b.insts.iter())
             .any(|i| i.opcode == Opcode::RegionFree);
-        assert!(has_region_free, "expected RegionFree for unused struct");
+        assert!(
+            !has_region_free,
+            "arena lowering must not emit per-value RegionFree for unused structs"
+        );
     }
 
     #[test]
@@ -4606,7 +4342,7 @@ mod tests {
     }
 
     #[test]
-    fn string_free_emitted_for_unused_string() {
+    fn no_string_free_for_unused_string_after_arena_cutover() {
         // fn f() -> i64 { let s = String::from("hello"); 42 }
         let body = Block {
             stmts: vec![let_stmt(
@@ -4647,14 +4383,14 @@ mod tests {
                 && i.data == InstData::CallExtern("__vow_string_free".to_string())
         });
         assert!(
-            has_string_free,
-            "expected __vow_string_free for unused string"
+            !has_string_free,
+            "arena lowering must not emit per-value __vow_string_free for unused strings"
         );
     }
 
     #[test]
-    fn region_free_has_correct_size() {
-        // Verify RegionFree carries the same AllocSize as RegionAlloc
+    fn region_allocs_do_not_get_matching_region_frees() {
+        // Arena close, not per-object free, owns reclamation after the cutover.
         let body = Block {
             stmts: vec![let_stmt("p", Some(pair_ty()), pair_literal(1, 2))],
             trailing_expr: Some(Box::new(int_expr(0))),
@@ -4670,16 +4406,13 @@ mod tests {
             .find(|i| i.opcode == Opcode::RegionAlloc)
             .map(|i| i.data.clone())
             .expect("expected RegionAlloc");
-        let free_data = func
-            .blocks
-            .iter()
-            .flat_map(|b| b.insts.iter())
-            .find(|i| i.opcode == Opcode::RegionFree)
-            .map(|i| i.data.clone())
-            .expect("expected RegionFree");
-        assert_eq!(
-            alloc_data, free_data,
-            "RegionFree size must match RegionAlloc size"
+        assert!(
+            func.blocks
+                .iter()
+                .flat_map(|b| b.insts.iter())
+                .all(|i| i.opcode != Opcode::RegionFree),
+            "arena lowering must not emit RegionFree after allocation {:?}",
+            alloc_data
         );
     }
 
@@ -4737,7 +4470,7 @@ mod tests {
     }
 
     #[test]
-    fn receiver_method_does_not_prevent_free() {
+    fn receiver_method_does_not_emit_free_after_arena_cutover() {
         // fn f() -> i64 { let s = String::from("x"); s.len() }
         // s.len() is read-only — s must still be freed (#71)
         let body = Block {
@@ -4786,8 +4519,8 @@ mod tests {
                 && i.data == InstData::CallExtern("__vow_string_free".to_string())
         });
         assert!(
-            has_string_free,
-            "method call on receiver must not prevent deallocation (#71)"
+            !has_string_free,
+            "arena lowering must not emit __vow_string_free after receiver method calls"
         );
     }
 
@@ -4867,9 +4600,9 @@ mod tests {
     }
 
     #[test]
-    fn string_freed_after_method_call() {
+    fn string_method_call_emits_no_string_free_after_arena_cutover() {
         // fn f() -> i64 { let s: String = String::from("hello"); s.len() }
-        // s.len() is read-only — s must still be freed
+        // s.len() is read-only, but arena close owns reclamation after cutover.
         let string_from = Expr {
             kind: ExprKind::EnumConstruct {
                 path: vec!["String".to_string(), "from".to_string()],
@@ -4918,15 +4651,15 @@ mod tests {
                 && i.data == InstData::CallExtern("__vow_string_free".to_string())
         });
         assert!(
-            has_string_free,
-            "String used via .len() must still be freed at function exit"
+            !has_string_free,
+            "String used via .len() must not emit per-value free after arena cutover"
         );
     }
 
     #[test]
-    fn vec_freed_after_method_call() {
+    fn vec_method_call_emits_no_vec_free_after_arena_cutover() {
         // fn f() -> i64 { let v: Vec<i64> = Vec::new(); v.len() }
-        // v.len() is read-only — v must still be freed
+        // v.len() is read-only, but arena close owns reclamation after cutover.
         let vec_new = Expr {
             kind: ExprKind::EnumConstruct {
                 path: vec!["Vec".to_string(), "new".to_string()],
@@ -4972,15 +4705,15 @@ mod tests {
                 && i.data == InstData::CallExtern("__vow_vec_free_val".to_string())
         });
         assert!(
-            has_vec_free,
-            "Vec used via .len() must still be freed at function exit"
+            !has_vec_free,
+            "Vec used via .len() must not emit per-value free after arena cutover"
         );
     }
 
     #[test]
-    fn hashmap_freed_after_method_call() {
+    fn hashmap_method_call_emits_no_map_free_after_arena_cutover() {
         // fn f() -> i64 { let m: HashMap = HashMap::new(); m.len() }
-        // m.len() is read-only — m must still be freed
+        // m.len() is read-only, but arena close owns reclamation after cutover.
         let map_new = Expr {
             kind: ExprKind::EnumConstruct {
                 path: vec!["HashMap".to_string(), "new".to_string()],
@@ -5025,8 +4758,8 @@ mod tests {
             i.opcode == Opcode::Call && i.data == InstData::CallExtern("__vow_map_free".to_string())
         });
         assert!(
-            has_map_free,
-            "HashMap used via .len() must still be freed at function exit"
+            !has_map_free,
+            "HashMap used via .len() must not emit per-value free after arena cutover"
         );
     }
 }

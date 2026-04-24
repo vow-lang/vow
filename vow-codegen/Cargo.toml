@@ -18,3 +18,4 @@ vow-types = { path = "../vow-types" }
 vow-diag = { path = "../vow-diag" }
 proptest = "1"
 tempfile = "3"
+object = "0.39"

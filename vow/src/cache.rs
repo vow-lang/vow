@@ -7,6 +7,11 @@ use vow_verify::Counterexample;
 
 use crate::frontend::DependencyManifest;
 
+// Bump this whenever generated object files are no longer ABI-compatible with
+// existing cached artifacts. Phase 4 adds the root-arena argument to
+// __vow_arena_alloc, so pre-cutover objects must not be reused.
+const COMPILE_CACHE_ABI_VERSION: &str = "arena-phase4-region-alloc-v1";
+
 pub struct CompileCache {
     dir: PathBuf,
 }
@@ -25,7 +30,17 @@ impl CompileCache {
     }
 
     pub fn cache_key(deps: &DependencyManifest, mode: &str, trace: &str) -> String {
+        Self::cache_key_with_abi_seed(deps, mode, trace, COMPILE_CACHE_ABI_VERSION)
+    }
+
+    fn cache_key_with_abi_seed(
+        deps: &DependencyManifest,
+        mode: &str,
+        trace: &str,
+        abi_seed: &str,
+    ) -> String {
         let mut hasher = DefaultHasher::new();
+        abi_seed.hash(&mut hasher);
         let mut entries: Vec<(String, u64)> = deps
             .paths()
             .iter()
@@ -328,5 +343,19 @@ mod tests {
         let k2 = CompileCache::cache_key(&deps_ab, "Release", "Off");
 
         assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn compile_cache_key_includes_codegen_abi_seed() {
+        let dir = TempDir::new().unwrap();
+        let a = dir.path().join("a.vow");
+        std::fs::write(&a, "module A").unwrap();
+
+        let deps = DependencyManifest::from_paths(vec![a]);
+
+        let old_key = CompileCache::cache_key_with_abi_seed(&deps, "Release", "Off", "old-abi");
+        let new_key = CompileCache::cache_key_with_abi_seed(&deps, "Release", "Off", "new-abi");
+
+        assert_ne!(old_key, new_key);
     }
 }

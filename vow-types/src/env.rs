@@ -540,6 +540,7 @@ impl TypeEnv {
                     Ty::I64,
                     Ty::Str,
                     Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
+                    Ty::I64,
                 ],
                 return_ty: Ty::I64,
                 effects: [Effect::IO].into_iter().collect(),
