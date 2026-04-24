@@ -168,8 +168,31 @@ pub(crate) fn prepare_frontend(
         FrontendGoal::MergedAst => None,
         FrontendGoal::LoweredIr => {
             let string_exprs = string_exprs.expect("LoweredIr goal must preserve string exprs");
-            let module = vow_ir::lower_module(&ast, &source.to_string_lossy(), &string_exprs);
+            let mut module = vow_ir::lower_module(&ast, &source.to_string_lossy(), &string_exprs);
+            // Track lower-warning count so region inference does not see them
+            // as its own (and the post-pass error check below only reacts to
+            // newly-added Severity::Error diagnostics from infer_regions).
+            let lower_warn_count = module.warnings.len();
+            // Phase 3: region inference (arena-per-scope). Runs after type/
+            // effect/linear checks (above) and before any consumer of region
+            // metadata. Pushes any RegionConflict diagnostics into
+            // `module.warnings`.
+            vow_ir::infer_regions(&mut module);
             diagnostics.extend(module.warnings.iter().cloned());
+            // If region inference emitted any errors, fail compilation here so
+            // the build pipeline reports CompileFailed (spec §4.4 — rejection,
+            // not over-approximation).
+            let region_has_errors = module
+                .warnings
+                .iter()
+                .skip(lower_warn_count)
+                .any(|d| d.severity == Severity::Error);
+            if region_has_errors {
+                return Err(FrontendError::Diagnostics {
+                    stage: FrontendStage::TypeCheck,
+                    diagnostics,
+                });
+            }
             Some(Arc::new(module))
         }
     };

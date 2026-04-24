@@ -3225,6 +3225,21 @@ fn add(a: i64, b: i64) -> i64 vow {
 
 **Fix:** Install ESBMC, or use `--no-verify` to skip verification: `vowc build --no-verify <file>`.
 
+### RegionConflict
+
+**Phase:** Region Inference (arena-per-scope, Phase 3)
+**Meaning:** A heap-typed value's required lifetime cannot be satisfied by the regions the surrounding code provides. This fires when an interprocedural store-effect constraint is unsatisfiable — for example, a value allocated in an inner block is stored into a container that outlives that block.
+
+```vow
+fn store_into(out: Vec<String>, prefix: String) [io] {
+    let s: String = String::from(prefix);
+    s.push_str(String::from(" world"));
+    out.push(s);  // s is allocated in this function's scope but escapes into out's region
+}
+```
+
+**Fix:** Move the allocation to a wider scope, or copy the value into the target region (e.g., `String::from(s)` into the outer arena). The compiler does NOT silently promote values to the root region — see `docs/design/arena_memory.md` §4.4.
+
 ## Runtime Errors
 
 These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).
@@ -7820,6 +7835,59 @@ fn main() -> i32 {
         assert_eq!(d["span"]["file"], "test.vow");
         assert_eq!(d["span"]["offset"], 42);
         assert_eq!(d["span"]["length"], 4);
+    }
+
+    #[test]
+    fn region_conflict_diagnostic_matches_external_schema() {
+        // Spec §13.1: a RegionConflict diagnostic emitted on the build output
+        // MUST serialise to {error_code, message, severity, span:{file,
+        // offset, length}}. The error_code MUST be the string "RegionConflict".
+        use vow_diag::{ErrorCode, SourceLocation};
+        let diag = Diagnostic {
+            severity: Severity::Error,
+            code: ErrorCode::RegionConflict,
+            message: "value `v` is placed in region(b) which closes before \
+                      region(a), the container it is stored into; move the \
+                      allocation to a wider scope"
+                .to_string(),
+            primary: SourceLocation {
+                file: "f.vow".to_string(),
+                byte_offset: 1024,
+                byte_len: 3,
+            },
+            secondary: vec![],
+            blame: vow_diag::Blame::None,
+            hints: vec![],
+        };
+        let out = BuildOutput {
+            status: BuildStatus::CompileFailed {
+                message: "region error".to_string(),
+            },
+            executable: None,
+            diagnostics: vec![diag],
+            counterexamples: vec![],
+            verify_status: None,
+            verify_message: None,
+        };
+        let result = out.to_build_result();
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["status"], "CompileFailed");
+        let d = &parsed["diagnostics"][0];
+        assert_eq!(d["error_code"], "RegionConflict");
+        assert_eq!(d["severity"], "error");
+        assert_eq!(d["span"]["file"], "f.vow");
+        assert_eq!(d["span"]["offset"], 1024);
+        assert_eq!(d["span"]["length"], 3);
+        // Exactly the keys spec §13.1 prescribes — no extra fields surface
+        // beyond the optional `secondary`/`hints`/`blame` (omitted here).
+        let d_obj = d.as_object().unwrap();
+        for required in &["error_code", "message", "severity", "span"] {
+            assert!(
+                d_obj.contains_key(*required),
+                "missing required key {required}"
+            );
+        }
     }
 
     #[test]

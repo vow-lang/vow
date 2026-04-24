@@ -262,7 +262,7 @@ pub struct RegionVar(pub u32);
 /// `FreshInCaller` as top and `ConstantGlobal` as the benign public default
 /// (spec §4.3 step 5). The internal `Uninit` seed (spec §4.3) is a Phase-3
 /// concern and MUST NOT appear in any published summary.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RegionConstraint {
     FreshInCaller,
     AliasOf(u32),
