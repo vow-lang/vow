@@ -596,6 +596,14 @@ fn deep_aliases_inner(
     // For Phase 3 minimal we don't compute aliases recursively here;
     // they're built up via the join_aliases helper called at each Phi/Call merge
     // in deep_kind_inner. For non-merging origins, return empty.
+    //
+    // DIVERGENCE (tracked for the byte-identical summary diff deferred in
+    // the PR description): the Rust `origin_to_internal_inner` computes
+    // `AliasOfAny` by joining aliased arg origins when a callee returns
+    // `AliasOfAny(s)` or when a Phi merges multiple param aliases. This
+    // port mirrors that only via `join_aliases` at explicit join points,
+    // not through the deep-origin walk. Align this with the Rust pass
+    // before the differential gate can turn on.
     Vec::new()
 }
 
