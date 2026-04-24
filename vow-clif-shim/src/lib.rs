@@ -886,9 +886,6 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     let root_arena_gv = ctx
         .obj_module
         .declare_data_in_func(root_arena_id, builder.func);
-    let runtime_start_ref = ctx
-        .obj_module
-        .declare_func_in_func(runtime_start_id, builder.func);
     let vow_violation_ref =
         vow_violation_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
     let overflow_ref = overflow_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
@@ -1100,6 +1097,9 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
         }
         // Emit stack_guard_init at main entry (all modes)
         if ctx.func_decls[fi].is_main {
+            let runtime_start_ref = ctx
+                .obj_module
+                .declare_func_in_func(runtime_start_id, builder.func);
             builder.ins().call(runtime_start_ref, &[]);
         }
         if let Some(init_ref) = stack_guard_init_ref {

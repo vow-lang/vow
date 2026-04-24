@@ -859,6 +859,15 @@ fn lower_inst(
                 })
                 .collect();
             if internal_call {
+                // Pad missing hidden-region parameters with the root arena. This is sound
+                // today because every callee has `RegionSummary::default()` (see
+                // `LowerCtx::finalize` in `vow-ir/src/lower/mod.rs`), so the callee expects
+                // zero hidden region arguments and this loop body is never executed.
+                // TODO(arena-phase3): once region inference produces `FreshInCaller` /
+                // `AliasOf` constraints, the caller must forward `ctx.hidden_region_values`
+                // (or a specific parameter's arena) per the callee's `RegionSummary`
+                // instead of hardcoding root, otherwise callee allocations will escape
+                // the caller's region lifetime.
                 while call_args.len() < expected_types.len() {
                     call_args.push(builder.ins().global_value(types::I64, ctx.root_arena_gv));
                 }
@@ -1236,7 +1245,6 @@ fn compile_ir_function(
         vow_violation_id.map(|id| obj_module.declare_func_in_func(id, builder.func));
     let overflow_ref = overflow_id.map(|id| obj_module.declare_func_in_func(id, builder.func));
     let arena_alloc_ref = obj_module.declare_func_in_func(runtime.arena_alloc_id, builder.func);
-    let runtime_start_ref = obj_module.declare_func_in_func(runtime.runtime_start_id, builder.func);
     let root_arena_gv = obj_module.declare_data_in_func(runtime.root_arena_id, builder.func);
 
     let mut ir_func_id_to_ref: HashMap<IrFuncId, FuncRef> = HashMap::new();
@@ -1372,6 +1380,8 @@ fn compile_ir_function(
         }
         hidden_region_values.extend(entry_params[cl_idx..].iter().copied());
         if ir_func.name == "main" {
+            let runtime_start_ref =
+                obj_module.declare_func_in_func(runtime.runtime_start_id, builder.func);
             builder.ins().call(runtime_start_ref, &[]);
             let guard_ref =
                 obj_module.declare_func_in_func(runtime.stack_guard_init_id, builder.func);
