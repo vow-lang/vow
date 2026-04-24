@@ -301,53 +301,12 @@ impl LowerCtx {
         let _ = (id, tag);
     }
 
-    pub(super) fn mark_escaped(&mut self, id: InstId) {
-        let _ = id;
-    }
-
     pub(super) fn push_alloc_scope(&mut self) {
         self.alloc_scopes.push(Vec::new());
     }
 
-    /// Pop the current alloc scope and emit frees for non-escaped allocations.
-    /// `live_out` contains InstIds that flow out of this scope (e.g. via Upsilon)
-    /// and must not be freed.
-    pub(super) fn pop_alloc_scope_frees(&mut self, live_out: &[InstId], span: Span) {
-        let _ = (live_out, span);
+    pub(super) fn pop_alloc_scope_frees(&mut self) {
         self.alloc_scopes.pop().expect("alloc_scopes underflow");
-    }
-
-    /// Emit frees for allocations from the innermost scope down to (and including)
-    /// the scope at `target_depth`. Does NOT pop any scopes.
-    /// Used by break/continue to free loop body temporaries before jumping.
-    pub(super) fn emit_alloc_frees_to_depth(
-        &mut self,
-        target_depth: usize,
-        live_out: &[InstId],
-        span: Span,
-    ) {
-        let _ = (target_depth, live_out, span);
-    }
-
-    fn collect_return_sources(&self, return_val: InstId) -> HashSet<InstId> {
-        let mut sources = HashSet::new();
-        sources.insert(return_val);
-        let mut worklist = vec![return_val];
-        while let Some(val) = worklist.pop() {
-            for block in &self.func.blocks {
-                for inst in &block.insts {
-                    if inst.opcode == Opcode::Upsilon
-                        && let InstData::PhiTarget(target) = inst.data
-                        && target == val
-                        && let Some(&src) = inst.args.first()
-                        && sources.insert(src)
-                    {
-                        worklist.push(src);
-                    }
-                }
-            }
-        }
-        sources
     }
 
     pub(super) fn emit_return_frees(&mut self, return_val: InstId, span: Span) {
@@ -737,7 +696,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ctx.switch_to_block(rhs_block);
                 ctx.push_alloc_scope();
                 let rhs_id = lower_expr(ctx, rhs);
-                ctx.pop_alloc_scope_frees(&[rhs_id], span);
+                ctx.pop_alloc_scope_frees();
                 let rhs_upsilon = ctx.emit(
                     Opcode::Upsilon,
                     Ty::Unit,
@@ -862,10 +821,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             };
             let call_info = ctx.func_index.get(&callee_name).cloned();
             if let Some(call_info) = call_info {
-                for &aid in &arg_ids {
-                    ctx.mark_escaped(aid);
-                }
-                let result = ctx.emit(
+let result = ctx.emit(
                     Opcode::Call,
                     call_info.ret_ty,
                     arg_ids,
@@ -889,10 +845,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 )
             } else if let Some((sym, ret_ty)) = vow_builtin_to_runtime(&callee_name) {
-                for &aid in &arg_ids {
-                    ctx.mark_escaped(aid);
-                }
-                let result = ctx.emit(
+let result = ctx.emit(
                     Opcode::Call,
                     ret_ty,
                     arg_ids,
@@ -907,10 +860,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 }
                 result
             } else {
-                for &aid in &arg_ids {
-                    ctx.mark_escaped(aid);
-                }
-                ctx.emit(
+ctx.emit(
                     Opcode::Call,
                     Ty::Unit,
                     arg_ids,
@@ -958,19 +908,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .iter()
                 .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                 .collect();
-            // Free branch temporaries (keep result and transitive sources alive).
             if !then_terminated {
-                let mut live_out: Vec<InstId> = then_mut_vals.clone();
-                live_out.push(then_val);
-                for src in ctx.collect_return_sources(then_val) {
-                    live_out.push(src);
-                }
-                for mv in &then_mut_vals {
-                    for src in ctx.collect_return_sources(*mv) {
-                        live_out.push(src);
-                    }
-                }
-                ctx.pop_alloc_scope_frees(&live_out, span);
+                ctx.pop_alloc_scope_frees();
             } else {
                 ctx.alloc_scopes.pop();
             }
@@ -1011,19 +950,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .iter()
                 .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                 .collect();
-            // Free branch temporaries (keep result and transitive sources alive).
             if !else_terminated {
-                let mut live_out: Vec<InstId> = else_mut_vals.clone();
-                live_out.push(else_val);
-                for src in ctx.collect_return_sources(else_val) {
-                    live_out.push(src);
-                }
-                for mv in &else_mut_vals {
-                    for src in ctx.collect_return_sources(*mv) {
-                        live_out.push(src);
-                    }
-                }
-                ctx.pop_alloc_scope_frees(&live_out, span);
+                ctx.pop_alloc_scope_frees();
             } else {
                 ctx.alloc_scopes.pop();
             }
@@ -1180,7 +1108,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         FIELD_IDX_SENTINEL
                     } as u32;
                     if field_idx != FIELD_IDX_SENTINEL as u32 {
-                        ctx.mark_escaped(new_val);
                         ctx.emit(
                             Opcode::FieldSet,
                             Ty::Unit,
@@ -1193,7 +1120,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ExprKind::Index { base, index } => {
                     let vec_ptr = lower_expr(ctx, base);
                     let idx_id = lower_expr(ctx, index);
-                    ctx.mark_escaped(new_val);
                     ctx.emit(
                         Opcode::Call,
                         Ty::Unit,
@@ -1330,18 +1256,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.loop_header_blocks.pop();
             ctx.loop_exit_blocks.pop();
 
-            // Free loop-body temporaries before back-edge.
-            // Include transitive sources so Phi/Upsilon aliases aren't freed.
             if !ctx.is_terminated() {
-                let mut loop_live_out: Vec<InstId> = Vec::new();
-                for (name, _) in &phi_ids {
-                    if let Some(val) = ctx.lookup(name) {
-                        for src in ctx.collect_return_sources(val) {
-                            loop_live_out.push(src);
-                        }
-                    }
-                }
-                ctx.pop_alloc_scope_frees(&loop_live_out, span);
+                ctx.pop_alloc_scope_frees();
             } else {
                 ctx.alloc_scopes.pop();
             }
@@ -1558,18 +1474,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             ctx.pop_scope();
 
-            // Free loop-body temporaries before back-edge.
-            // Include transitive sources so Phi/Upsilon aliases aren't freed.
             if !ctx.is_terminated() {
-                let mut loop_live_out: Vec<InstId> = Vec::new();
-                for (name, _) in &phi_ids {
-                    if let Some(val) = ctx.lookup(name) {
-                        for src in ctx.collect_return_sources(val) {
-                            loop_live_out.push(src);
-                        }
-                    }
-                }
-                ctx.pop_alloc_scope_frees(&loop_live_out, span);
+                ctx.pop_alloc_scope_frees();
             } else {
                 ctx.alloc_scopes.pop();
             }
@@ -1709,13 +1615,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.loop_header_blocks.pop();
             ctx.loop_exit_blocks.pop();
 
-            // Free loop-body temporaries before back-edge.
             if !ctx.is_terminated() {
-                let loop_live_out: Vec<InstId> = phi_ids
-                    .iter()
-                    .filter_map(|(name, _)| ctx.lookup(name))
-                    .collect();
-                ctx.pop_alloc_scope_frees(&loop_live_out, span);
+                ctx.pop_alloc_scope_frees();
             } else {
                 ctx.alloc_scopes.pop();
             }
@@ -1772,7 +1673,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .copied()
                 .expect("break outside of loop");
 
-            let break_val = if let Some(val_expr) = value {
+            if let Some(val_expr) = value {
                 let val_id = lower_expr(ctx, val_expr);
                 // If inside a `loop` (Some), emit Upsilon for the break-value Phi.
                 let is_loop = matches!(ctx.loop_break_upsilons.last(), Some(Some(_)));
@@ -1790,10 +1691,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         ups.push((block, up_id, val_ty));
                     }
                 }
-                Some(val_id)
-            } else {
-                None
-            };
+            }
 
             // Emit Upsilons for loop mutation variables targeting the
             // exit-block Phis so the exit block receives updated values.
@@ -1811,24 +1709,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         span,
                     );
                 }
-            }
-
-            // Free loop body allocations before jumping to exit.
-            // Use collect_return_sources to trace through Phi/Upsilon chains —
-            // break_val and mutation variables may alias heap allocations.
-            // Resolve mutation vars at loop header scope depth.
-            if let Some(&depth) = ctx.loop_alloc_scope_depth.last() {
-                let mut live_out: Vec<InstId> = if let Some(bv) = break_val {
-                    ctx.collect_return_sources(bv).into_iter().collect()
-                } else {
-                    vec![]
-                };
-                for (name, _) in &exit_phis {
-                    if let Some(cur_val) = ctx.lookup_at_depth(name, scope_depth) {
-                        live_out.extend(ctx.collect_return_sources(cur_val));
-                    }
-                }
-                ctx.emit_alloc_frees_to_depth(depth, &live_out, span);
             }
 
             ctx.emit(
@@ -1852,20 +1732,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .last()
                 .copied()
                 .expect("continue outside of loop");
-
-            // Free loop body allocations before jumping back to header.
-            // Include transitive sources so Phi/Upsilon aliases aren't freed.
-            if let Some(&depth) = ctx.loop_alloc_scope_depth.last() {
-                let mut live_out: Vec<InstId> = Vec::new();
-                for (name, _) in &phis {
-                    if let Some(val) = ctx.lookup_at_depth(name, scope_depth) {
-                        for src in ctx.collect_return_sources(val) {
-                            live_out.push(src);
-                        }
-                    }
-                }
-                ctx.emit_alloc_frees_to_depth(depth, &live_out, span);
-            }
 
             // Emit back-edge Upsilons for mutation variables.
             // Use lookup_at_depth to resolve from the loop header scope, not the
@@ -2033,7 +1899,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 } as u32;
                 let val_id = lower_expr(ctx, field_expr);
                 if idx != FIELD_IDX_SENTINEL as u32 {
-                    ctx.mark_escaped(val_id);
                     ctx.emit(
                         Opcode::FieldSet,
                         Ty::Unit,
@@ -2155,7 +2020,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             );
             for (i, field_expr) in fields.iter().enumerate() {
                 let val_id = lower_expr(ctx, field_expr);
-                ctx.mark_escaped(val_id);
                 ctx.emit(
                     Opcode::FieldSet,
                     Ty::Unit,
@@ -2262,19 +2126,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                             .collect();
 
-                        // Free match arm temporaries (keep transitive sources alive).
                         if !arm_terminated {
-                            let mut live_out: Vec<InstId> = arm_mut_vals.clone();
-                            live_out.push(arm_result);
-                            for src in ctx.collect_return_sources(arm_result) {
-                                live_out.push(src);
-                            }
-                            for mv in &arm_mut_vals {
-                                for src in ctx.collect_return_sources(*mv) {
-                                    live_out.push(src);
-                                }
-                            }
-                            ctx.pop_alloc_scope_frees(&live_out, span);
+                            ctx.pop_alloc_scope_frees();
                         } else {
                             ctx.alloc_scopes.pop();
                         }
@@ -2321,19 +2174,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                             .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                             .collect();
 
-                        // Free match arm temporaries (keep transitive sources alive).
                         if !arm_terminated {
-                            let mut live_out: Vec<InstId> = arm_mut_vals.clone();
-                            live_out.push(arm_result);
-                            for src in ctx.collect_return_sources(arm_result) {
-                                live_out.push(src);
-                            }
-                            for mv in &arm_mut_vals {
-                                for src in ctx.collect_return_sources(*mv) {
-                                    live_out.push(src);
-                                }
-                            }
-                            ctx.pop_alloc_scope_frees(&live_out, span);
+                            ctx.pop_alloc_scope_frees();
                         } else {
                             ctx.alloc_scopes.pop();
                         }
@@ -2581,8 +2423,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     let v_id = args.get(1).map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
                         ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
                     });
-                    ctx.mark_escaped(k_id);
-                    ctx.mark_escaped(v_id);
                     ctx.emit(
                         Opcode::Call,
                         Ty::Unit,
@@ -2638,7 +2478,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     let elem_id = args.first().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
                         ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
                     });
-                    ctx.mark_escaped(elem_id);
                     ctx.emit(
                         Opcode::Call,
                         Ty::Unit,
