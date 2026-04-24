@@ -3924,6 +3924,12 @@ fn skill_full() -> String {
     r.push_str(String::from("**Phase:** Region Inference (arena-per-scope, Phase 3)\n"));
     r.push_str(String::from("**Meaning:** A heap-typed value's required lifetime cannot be satisfied by the regions the surrounding code provides. This fires when an interprocedural store-effect constraint is unsatisfiable -- for example, a value allocated in an inner block is stored into a container that outlives that block.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("> **Deferred emission note (as of Phase 3):** the full interprocedural\n"));
+    r.push_str(String::from("> store-effect check is deferred to Phase 5 (issue #200). Today this\n"));
+    r.push_str(String::from("> code is reachable only via an internal compiler error on SCC\n"));
+    r.push_str(String::from("> iteration-bound exceeded, not via user code. The spec shape below is\n"));
+    r.push_str(String::from("> stable; only the source-level detection is pending.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn store_into(out: Vec<String>, prefix: String) [io] {\n"));
     r.push_str(String::from("    let s: String = String::from(prefix);\n"));

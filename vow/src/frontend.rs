@@ -90,6 +90,7 @@ pub(crate) enum FrontendStage {
     Parse,
     ModuleLoad,
     TypeCheck,
+    RegionInference,
 }
 
 impl FrontendStage {
@@ -98,6 +99,7 @@ impl FrontendStage {
             Self::Parse => "parse error",
             Self::ModuleLoad => "module load error",
             Self::TypeCheck => "type error",
+            Self::RegionInference => "region error",
         }
     }
 }
@@ -189,7 +191,7 @@ pub(crate) fn prepare_frontend(
                 .any(|d| d.severity == Severity::Error);
             if region_has_errors {
                 return Err(FrontendError::Diagnostics {
-                    stage: FrontendStage::TypeCheck,
+                    stage: FrontendStage::RegionInference,
                     diagnostics,
                 });
             }

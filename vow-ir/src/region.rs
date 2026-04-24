@@ -562,11 +562,17 @@ fn lub_to_region_id(markers: &BTreeSet<MustOutliveMarker>) -> RegionId {
     if has_caller {
         return RegionId::Caller(HiddenRegionIdx(0));
     }
-    // Pure block markers — pick the first (Phase 3 conservative); Phase 4
-    // will refine via dominator tree.
-    if let Some(&b) = blocks.first() {
-        return RegionId::Block(b);
-    }
+    // Pure block markers: Phase 4 codegen explicitly rejects
+    // `RegionId::Block(_)` on `RegionAlloc` ("RegionAlloc with Block(..) is
+    // not wired until block arena routing lands" — see
+    // `vow-codegen/src/cranelift_backend.rs` and the Phase 4 clif-shim
+    // check). Phase 3 therefore MUST NOT emit `Block(_)` for heap-producing
+    // insts until block-arena routing lands (spec §12.3 RegionOpen/Close).
+    // Fall back to `Root` as the Phase-2 default — conservatively safe
+    // (process-lifetime storage) and keeps codegen within its supported
+    // surface. Emitting `Block(_)` would break every program that allocates
+    // without escaping.
+    let _ = blocks;
     RegionId::Root
 }
 
@@ -810,6 +816,7 @@ fn origin_to_constraint(origin: &ValueOrigin) -> RegionConstraint {
 // Conflict detection
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)] // TODO(Phase 5): populate with real detection logic.
 fn check_store_conflict(
     _func: &Function,
     _target_arg_id: InstId,
@@ -818,13 +825,15 @@ fn check_store_conflict(
     _inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
     _diagnostics: &mut Vec<Diagnostic>,
 ) {
-    // Phase 3 minimum: detect the easy conflict — source is a fresh alloc in
-    // a strictly inner block, target traces to a parameter.
-    //
-    // The full block-tree LUB conflict check requires the dominator tree;
-    // it's deferred to a follow-up so this initial commit stays focused.
-    // Tests that should fire RegionConflict use synthetic patterns wired
-    // directly into the test harness (see #[cfg(test)] mod tests).
+    // TODO(Phase 5 / issue #200): emit `RegionConflict` when an
+    // interprocedural store-effect is unsatisfiable. The full block-tree
+    // LUB check needs the dominator tree (deferred with `Block(_)` region
+    // materialisation in `lub_to_region_id`); until that lands, this stub
+    // is the reason `RegionConflict` is reachable only via the SCC
+    // iteration-bound internal compiler error, not via real user code.
+    // See `docs/spec/errors.md` § RegionConflict for the deferral note
+    // and `docs/design/arena_memory.md` §4.4 for the rejection
+    // requirement this will satisfy.
 }
 
 // ---------------------------------------------------------------------------

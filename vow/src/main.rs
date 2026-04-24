@@ -3230,6 +3230,12 @@ fn add(a: i64, b: i64) -> i64 vow {
 **Phase:** Region Inference (arena-per-scope, Phase 3)
 **Meaning:** A heap-typed value's required lifetime cannot be satisfied by the regions the surrounding code provides. This fires when an interprocedural store-effect constraint is unsatisfiable — for example, a value allocated in an inner block is stored into a container that outlives that block.
 
+> **Deferred emission note (as of Phase 3):** the full interprocedural
+> store-effect check is deferred to Phase 5 (issue #200). Today this
+> code is reachable only via an internal compiler error on SCC
+> iteration-bound exceeded, not via user code. The spec shape below is
+> stable; only the source-level detection is pending.
+
 ```vow
 fn store_into(out: Vec<String>, prefix: String) [io] {
     let s: String = String::from(prefix);
