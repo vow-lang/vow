@@ -761,9 +761,61 @@ pub static mut __vow_root_arena: VowArena = VowArena {
     last_alloc_size: 0,
 };
 
+static ROOT_ARENA_INITIALIZED: AtomicBool = AtomicBool::new(false);
+static ROOT_ARENA_LOCK: Mutex<()> = Mutex::new(());
+
+unsafe fn ensure_root_arena() {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+}
+
+unsafe fn ensure_root_arena_locked() {
+    if !ROOT_ARENA_INITIALIZED.load(Ordering::SeqCst) {
+        unsafe { __vow_arena_open(&raw mut __vow_root_arena) };
+        ROOT_ARENA_INITIALIZED.store(true, Ordering::SeqCst);
+    }
+}
+
+unsafe fn root_arena_alloc(bytes: usize, align: usize) -> *mut u8 {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { __vow_arena_alloc(&raw mut __vow_root_arena, bytes, align) }
+}
+
+unsafe fn root_arena_alloc_zeroed(bytes: usize, align: usize) -> *mut u8 {
+    let ptr = unsafe { root_arena_alloc(bytes, align) };
+    unsafe { std::ptr::write_bytes(ptr, 0, bytes) };
+    ptr
+}
+
+unsafe fn root_arena_grow_backing(
+    ptr: *mut u8,
+    old_size: usize,
+    new_size: usize,
+    align: usize,
+) -> *mut u8 {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    if old_size > 0
+        && unsafe {
+            __vow_arena_try_extend(&raw mut __vow_root_arena, ptr, old_size, new_size) != 0
+        }
+    {
+        unsafe { std::ptr::write_bytes(ptr.add(old_size), 0, new_size - old_size) };
+        return ptr;
+    }
+
+    let new_ptr = unsafe { __vow_arena_alloc(&raw mut __vow_root_arena, new_size, align) };
+    if old_size > 0 {
+        unsafe { std::ptr::copy_nonoverlapping(ptr, new_ptr, old_size) };
+    }
+    unsafe { std::ptr::write_bytes(new_ptr.add(old_size), 0, new_size - old_size) };
+    new_ptr
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_runtime_start() {
-    unsafe { __vow_arena_open(&raw mut __vow_root_arena) };
+    unsafe { ensure_root_arena() };
 }
 
 #[repr(C)]
@@ -778,11 +830,7 @@ const VEC_INITIAL_CAP: usize = 8;
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_vec_new(elem_size: usize, align: usize) -> *mut u8 {
     let _ = elem_size;
-    let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
-    let header_ptr = unsafe { std::alloc::alloc_zeroed(header_layout) } as *mut VowVec;
-    if header_ptr.is_null() {
-        std::process::abort();
-    }
+    let header_ptr = unsafe { root_arena_alloc_zeroed(24, 8) } as *mut VowVec;
     // Lazy allocation: don't allocate buffer until first push.
     // Use a dangling aligned pointer so from_raw_parts with len=0 is safe.
     unsafe {
@@ -814,17 +862,7 @@ unsafe fn __vow_vec_reserve(vec: *mut u8, additional: usize, elem_size: usize, e
     }
     let old_size = v.cap * elem_size;
     let new_size = new_cap * elem_size;
-    let new_ptr = if old_size == 0 {
-        let layout = unsafe { std::alloc::Layout::from_size_align_unchecked(new_size, elem_align) };
-        unsafe { std::alloc::alloc_zeroed(layout) }
-    } else {
-        let old_layout =
-            unsafe { std::alloc::Layout::from_size_align_unchecked(old_size, elem_align) };
-        unsafe { std::alloc::realloc(v.ptr, old_layout, new_size) }
-    };
-    if new_ptr.is_null() {
-        std::process::abort();
-    }
+    let new_ptr = unsafe { root_arena_grow_backing(v.ptr, old_size, new_size, elem_align) };
     v.ptr = new_ptr;
     v.cap = new_cap;
 }
@@ -901,8 +939,8 @@ pub unsafe extern "C" fn __vow_vec_pop(vec: *mut u8) {
     }
 }
 
-/// Frees the data buffer and resets the Vec to an empty state (len=0, cap=0).
-/// The Vec header itself remains valid and can be reused with push().
+/// Resets the Vec to an empty state. Arena-backed buffers are retained until
+/// the region closes; the header remains valid and can be reused with push().
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_clear(vec: *mut u8) {
     sanitize_on_clear(vec as usize);
@@ -910,17 +948,11 @@ pub unsafe extern "C" fn __vow_vec_clear(vec: *mut u8) {
     if v.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("Vec::clear");
     }
-    if v.cap > 0 && !v.ptr.is_null() {
-        let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(v.cap * 8, 8) };
-        unsafe { std::alloc::dealloc(v.ptr, buf_layout) };
-    }
-    v.ptr = std::ptr::dangling_mut::<u64>() as *mut u8;
     v.len = 0;
-    v.cap = 0;
 }
 
-/// Truncates the Vec to `new_len` elements and shrinks the buffer to fit.
-/// If `new_len >= len`, this is a no-op. If `new_len == 0`, equivalent to clear().
+/// Truncates the Vec to `new_len` elements. Arena-backed buffers are not
+/// shrunk; their storage is reclaimed when the containing region closes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_truncate(vec: *mut u8, new_len: usize) {
     sanitize_on_truncate(vec as usize, new_len);
@@ -931,22 +963,7 @@ pub unsafe extern "C" fn __vow_vec_truncate(vec: *mut u8, new_len: usize) {
     if new_len >= v.len {
         return;
     }
-    if new_len == 0 {
-        unsafe { __vow_vec_clear(vec) };
-        return;
-    }
     v.len = new_len;
-    // Shrink buffer: reallocate to exactly new_len capacity (rounded up to next power of 2)
-    let new_cap = new_len.next_power_of_two().max(VEC_INITIAL_CAP);
-    if new_cap < v.cap {
-        let old_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(v.cap * 8, 8) };
-        let new_ptr = unsafe { std::alloc::realloc(v.ptr, old_layout, new_cap * 8) };
-        if new_ptr.is_null() {
-            std::process::abort();
-        }
-        v.ptr = new_ptr;
-        v.cap = new_cap;
-    }
 }
 
 #[unsafe(no_mangle)]
@@ -1014,8 +1031,8 @@ pub unsafe extern "C" fn __vow_string_len(s: *const u8) -> usize {
     unsafe { __vow_vec_len(s) }
 }
 
-/// Frees the String's byte buffer and resets to empty (len=0, cap=0).
-/// The String header remains valid and can be reused with push_byte/push_str.
+/// Resets the String to empty. Arena-backed storage is retained until the
+/// region closes; the header remains valid and can be reused.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_clear(s: *mut u8) {
     sanitize_on_read(s as usize, 0);
@@ -1023,13 +1040,7 @@ pub unsafe extern "C" fn __vow_string_clear(s: *mut u8) {
     if v.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("String::clear");
     }
-    if v.cap > 0 && !v.ptr.is_null() {
-        let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(v.cap, 1) };
-        unsafe { std::alloc::dealloc(v.ptr, buf_layout) };
-    }
-    v.ptr = std::ptr::dangling_mut::<u8>();
     v.len = 0;
-    v.cap = 0;
 }
 
 #[unsafe(no_mangle)]
@@ -1997,17 +2008,9 @@ const MAP_INITIAL_CAP: usize = 8;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_map_new() -> *mut u8 {
-    let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
-    let header_ptr = unsafe { std::alloc::alloc_zeroed(header_layout) } as *mut VowMap;
-    if header_ptr.is_null() {
-        std::process::abort();
-    }
+    let header_ptr = unsafe { root_arena_alloc_zeroed(24, 8) } as *mut VowMap;
     let buf_size = MAP_INITIAL_CAP * MAP_ENTRY_BYTES;
-    let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(buf_size, 8) };
-    let buf_ptr = unsafe { std::alloc::alloc_zeroed(buf_layout) };
-    if buf_ptr.is_null() {
-        std::process::abort();
-    }
+    let buf_ptr = unsafe { root_arena_alloc_zeroed(buf_size, 8) };
     unsafe {
         (*header_ptr).ptr = buf_ptr;
         (*header_ptr).len = 0;
@@ -2033,17 +2036,9 @@ pub unsafe extern "C" fn __vow_map_insert(map: *mut u8, key: i64, val: i64) {
         let old_size = m.cap * MAP_ENTRY_BYTES;
         let new_cap = m.cap * 2;
         let new_size = new_cap * MAP_ENTRY_BYTES;
-        let old_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(old_size, 8) };
-        let new_ptr = unsafe { std::alloc::realloc(m.ptr, old_layout, new_size) };
-        if new_ptr.is_null() {
-            std::process::abort();
-        }
+        let new_ptr = unsafe { root_arena_grow_backing(m.ptr, old_size, new_size, 8) };
         m.ptr = new_ptr;
         m.cap = new_cap;
-        unsafe {
-            let extra = new_ptr.add(old_size);
-            std::ptr::write_bytes(extra, 0, new_size - old_size);
-        }
     }
     let entries = unsafe { std::slice::from_raw_parts_mut(m.ptr as *mut i64, (m.len + 1) * 2) };
     entries[m.len * 2] = key;
@@ -2107,49 +2102,17 @@ pub unsafe extern "C" fn __vow_map_len(map: *const u8) -> usize {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_free(s: *mut u8) {
-    if s.is_null() {
-        return;
-    }
-    sanitize_on_free(s as usize);
-    let v = unsafe { &*(s as *const VowVec) };
-    // Rodata-backed: buffer lives in .rodata; never free it. Header is still
-    // a heap allocation that must be released.
-    if v.cap != VOW_CAP_RODATA && v.cap > 0 && !v.ptr.is_null() {
-        let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(v.cap, 1) };
-        unsafe { std::alloc::dealloc(v.ptr, buf_layout) };
-    }
-    let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
-    unsafe { std::alloc::dealloc(s, header_layout) };
+    let _ = s;
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_free_val(v: *mut u8) {
-    if v.is_null() {
-        return;
-    }
-    sanitize_on_free(v as usize);
-    let vec = unsafe { &*(v as *const VowVec) };
-    if vec.cap != VOW_CAP_RODATA && vec.cap > 0 && !vec.ptr.is_null() {
-        let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(vec.cap * 8, 8) };
-        unsafe { std::alloc::dealloc(vec.ptr, buf_layout) };
-    }
-    let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
-    unsafe { std::alloc::dealloc(v, header_layout) };
+    let _ = v;
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_map_free(m: *mut u8) {
-    if m.is_null() {
-        return;
-    }
-    let map = unsafe { &*(m as *const VowMap) };
-    if map.cap != VOW_CAP_RODATA && map.cap > 0 && !map.ptr.is_null() {
-        let buf_layout =
-            unsafe { std::alloc::Layout::from_size_align_unchecked(map.cap * MAP_ENTRY_BYTES, 8) };
-        unsafe { std::alloc::dealloc(map.ptr, buf_layout) };
-    }
-    let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
-    unsafe { std::alloc::dealloc(m, header_layout) };
+    let _ = m;
 }
 
 // ---------------------------------------------------------------------------
@@ -2273,30 +2236,6 @@ fn sanitize_on_clear(vec_addr: usize) {
             );
         }
         shadow.generations.clear();
-    }
-}
-
-fn sanitize_on_free(vec_addr: usize) {
-    if !sanitize_is_enabled() {
-        return;
-    }
-    let already_freed = {
-        let mut table = SHADOW_TABLE.lock().unwrap();
-        let map = shadow_table_get_or_init(&mut table);
-        if let Some(shadow) = map.get_mut(&vec_addr) {
-            if shadow.freed {
-                true
-            } else {
-                shadow.freed = true;
-                shadow.generations.clear();
-                false
-            }
-        } else {
-            false
-        }
-    };
-    if already_freed {
-        sanitize_emit_error("DoubleFree", &format!("\"vec\":\"0x{vec_addr:x}\""));
     }
 }
 
@@ -2770,6 +2709,40 @@ mod tests {
         // If close fails to walk the chain, leak detectors (ASan/Miri) will flag;
         // functional success is that close completes without UB.
         unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn legacy_typed_free_noop_worker() {
+        if std::env::var("VOW_LEGACY_FREE_NOOP_WORKER").is_err() {
+            return;
+        }
+        __vow_sanitize_init();
+        let v = __vow_vec_new_val();
+        unsafe { __vow_vec_push_val(v, 1) };
+        unsafe { __vow_vec_free_val(v) };
+        unsafe { __vow_vec_free_val(v) };
+        unsafe { __vow_vec_push_val(v, 2) };
+        assert_eq!(unsafe { __vow_vec_len(v) }, 2);
+    }
+
+    #[test]
+    fn legacy_typed_free_symbols_are_noops() {
+        let exe = std::env::current_exe().expect("current test exe");
+        let output = std::process::Command::new(exe)
+            .env("VOW_LEGACY_FREE_NOOP_WORKER", "1")
+            .args([
+                "tests::legacy_typed_free_noop_worker",
+                "--exact",
+                "--nocapture",
+            ])
+            .output()
+            .expect("spawn legacy free worker");
+        assert!(
+            output.status.success(),
+            "legacy free worker failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     // -----------------------------------------------------------------------

@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use vow_ir::{
     BlockId, FuncId as IrFuncId, Function as IrFunction, Inst, InstData, InstId,
-    Module as IrModule, Opcode, Ty as IrTy,
+    Module as IrModule, Opcode, RegionConstraint, RegionId, Ty as IrTy,
 };
 
 use crate::{Backend, BuildMode, CodegenError, CompiledObject, TraceMode};
@@ -176,10 +176,36 @@ fn build_signature(ir_func: &IrFunction, call_conv: cranelift_codegen::isa::Call
             sig.params.push(AbiParam::new(cl_ty));
         }
     }
+    for _ in 0..hidden_region_param_count(ir_func) {
+        sig.params.push(AbiParam::new(types::I64));
+    }
     if let Some(cl_ty) = ir_ty_to_cranelift(ir_func.return_ty) {
         sig.returns.push(AbiParam::new(cl_ty));
     }
     sig
+}
+
+fn hidden_region_store_targets(ir_func: &IrFunction) -> Vec<u32> {
+    let mut targets: Vec<u32> = ir_func
+        .summary
+        .store_effects
+        .iter()
+        .map(|effect| effect.target)
+        .collect();
+    targets.sort_unstable();
+    targets.dedup();
+    targets
+}
+
+fn hidden_region_param_count(ir_func: &IrFunction) -> usize {
+    if ir_func.name == "main" {
+        return 0;
+    }
+    let mut count = 0;
+    if ir_func.summary.return_region == RegionConstraint::FreshInCaller {
+        count += 1;
+    }
+    count + hidden_region_store_targets(ir_func).len()
 }
 
 fn coerce_return_value(builder: &mut FunctionBuilder<'_>, val: Value, return_ty: IrTy) -> Value {
@@ -200,12 +226,12 @@ struct LowerCtx<'a> {
     block_map: &'a HashMap<BlockId, Block>,
     phi_data: &'a PhiUpsilonData,
     arg_values: &'a HashMap<u32, Value>,
+    hidden_region_values: &'a [Value],
     return_ty: IrTy,
     ir_func_id_to_ref: &'a HashMap<IrFuncId, FuncRef>,
     vow_violation_ref: Option<FuncRef>,
     overflow_ref: Option<FuncRef>,
-    malloc_ref: FuncRef,
-    free_ref: FuncRef,
+    arena_alloc_ref: FuncRef,
     mode: BuildMode,
     trace: TraceMode,
     current_ir_block: BlockId,
@@ -220,6 +246,7 @@ struct LowerCtx<'a> {
     trace_vow_ref: Option<FuncRef>,
     fn_name_gv: Option<GlobalValue>,
     stack_exit_ref: Option<FuncRef>,
+    root_arena_gv: GlobalValue,
 }
 
 fn lower_inst(
@@ -776,8 +803,10 @@ fn lower_inst(
         // Function calls
         // ------------------------------------------------------------------
         Opcode::Call => {
+            let mut internal_call = false;
             let func_ref = match &inst.data {
                 InstData::CallTarget(f) => {
+                    internal_call = true;
                     let Some(&fr) = ctx.ir_func_id_to_ref.get(f) else {
                         return Err(CodegenError::UnsupportedOpcode(format!(
                             "unknown call target FuncId({:?})",
@@ -806,7 +835,7 @@ fn lower_inst(
                 .iter()
                 .map(|p| p.value_type)
                 .collect();
-            let call_args: Vec<Value> = inst
+            let mut call_args: Vec<Value> = inst
                 .args
                 .iter()
                 .enumerate()
@@ -829,6 +858,11 @@ fn lower_inst(
                     v
                 })
                 .collect();
+            if internal_call {
+                while call_args.len() < expected_types.len() {
+                    call_args.push(builder.ins().global_value(types::I64, ctx.root_arena_gv));
+                }
+            }
             let call_inst = builder.ins().call(func_ref, &call_args);
             let results = builder.inst_results(call_inst);
             if results.is_empty() {
@@ -855,30 +889,38 @@ fn lower_inst(
             } else {
                 (0, 8)
             };
+            let arena = match inst.region {
+                RegionId::Root => builder.ins().global_value(types::I64, ctx.root_arena_gv),
+                RegionId::Caller(idx) => {
+                    let Some(&arena) = ctx.hidden_region_values.get(idx.0 as usize) else {
+                        return Err(CodegenError::UnsupportedOpcode(format!(
+                            "missing hidden arena parameter {:?} for RegionAlloc",
+                            idx
+                        )));
+                    };
+                    arena
+                }
+                RegionId::Block(_) => {
+                    return Err(CodegenError::UnsupportedOpcode(format!(
+                        "RegionAlloc with {:?} is not wired until block arena routing lands",
+                        inst.region
+                    )));
+                }
+                RegionId::Rodata => {
+                    return Err(CodegenError::UnsupportedOpcode(
+                        "RegionAlloc cannot target rodata".to_string(),
+                    ));
+                }
+            };
             let size_val = builder.ins().iconst(types::I64, size);
             let align_val = builder.ins().iconst(types::I64, align);
-            let call_inst = builder.ins().call(ctx.malloc_ref, &[size_val, align_val]);
+            let call_inst = builder
+                .ins()
+                .call(ctx.arena_alloc_ref, &[arena, size_val, align_val]);
             let ptr = builder.inst_results(call_inst)[0];
             ctx.value_map.insert(inst.id, ptr);
         }
         Opcode::RegionFree => {
-            let ptr_id = *inst.args.first().expect("RegionFree missing arg");
-            let ptr_val = *ctx.value_map.get(&ptr_id).unwrap_or_else(|| {
-                panic!(
-                    "cranelift backend: RegionFree value_map miss for {:?}",
-                    inst.id
-                )
-            });
-            let (size, align) = if let InstData::AllocSize { size, align } = inst.data {
-                (size as i64, align as i64)
-            } else {
-                (0, 8)
-            };
-            let size_val = builder.ins().iconst(types::I64, size);
-            let align_val = builder.ins().iconst(types::I64, align);
-            builder
-                .ins()
-                .call(ctx.free_ref, &[ptr_val, size_val, align_val]);
             let unit = builder.ins().iconst(types::I32, 0);
             ctx.value_map.insert(inst.id, unit);
         }
@@ -1130,8 +1172,9 @@ fn emit_vow_violation_body(
 struct RuntimeIds {
     vow_violation_id: Option<CraneliftFuncId>,
     overflow_id: Option<CraneliftFuncId>,
-    malloc_id: CraneliftFuncId,
-    free_id: CraneliftFuncId,
+    arena_alloc_id: CraneliftFuncId,
+    runtime_start_id: CraneliftFuncId,
+    root_arena_id: DataId,
     trace_enter_id: Option<CraneliftFuncId>,
     trace_exit_id: Option<CraneliftFuncId>,
     trace_vow_id: Option<CraneliftFuncId>,
@@ -1192,8 +1235,9 @@ fn compile_ir_function(
     let vow_violation_ref =
         vow_violation_id.map(|id| obj_module.declare_func_in_func(id, builder.func));
     let overflow_ref = overflow_id.map(|id| obj_module.declare_func_in_func(id, builder.func));
-    let malloc_ref = obj_module.declare_func_in_func(runtime.malloc_id, builder.func);
-    let free_ref = obj_module.declare_func_in_func(runtime.free_id, builder.func);
+    let arena_alloc_ref = obj_module.declare_func_in_func(runtime.arena_alloc_id, builder.func);
+    let runtime_start_ref = obj_module.declare_func_in_func(runtime.runtime_start_id, builder.func);
+    let root_arena_gv = obj_module.declare_data_in_func(runtime.root_arena_id, builder.func);
 
     let mut ir_func_id_to_ref: HashMap<IrFuncId, FuncRef> = HashMap::new();
     for &(ir_id, cl_id) in ir_to_cl {
@@ -1314,6 +1358,7 @@ fn compile_ir_function(
 
     // Collect entry block arg Values → ArgIndex map
     let mut arg_values: HashMap<u32, Value> = HashMap::new();
+    let mut hidden_region_values: Vec<Value> = Vec::new();
     if let Some(first) = ir_func.blocks.first() {
         let entry_cl = block_map[&first.id];
         builder.switch_to_block(entry_cl);
@@ -1325,7 +1370,9 @@ fn compile_ir_function(
                 cl_idx += 1;
             }
         }
+        hidden_region_values.extend(entry_params[cl_idx..].iter().copied());
         if ir_func.name == "main" {
+            builder.ins().call(runtime_start_ref, &[]);
             let guard_ref =
                 obj_module.declare_func_in_func(runtime.stack_guard_init_id, builder.func);
             builder.ins().call(guard_ref, &[]);
@@ -1383,12 +1430,12 @@ fn compile_ir_function(
             block_map: &block_map,
             phi_data: &phi_data,
             arg_values: &arg_values,
+            hidden_region_values: &hidden_region_values,
             return_ty: ir_func.return_ty,
             ir_func_id_to_ref: &ir_func_id_to_ref,
             vow_violation_ref,
             overflow_ref,
-            malloc_ref,
-            free_ref,
+            arena_alloc_ref,
             mode,
             trace,
             current_ir_block: ir_block.id,
@@ -1403,6 +1450,7 @@ fn compile_ir_function(
             trace_vow_ref,
             fn_name_gv,
             stack_exit_ref,
+            root_arena_gv,
         };
 
         for inst in &ir_block.insts {
@@ -1877,21 +1925,23 @@ impl Backend for CraneliftBackend {
             ir_to_cl.push((ir_func.id, cl_id));
         }
 
-        // Declare arena runtime functions (always needed)
-        let mut malloc_sig = obj_module.make_signature();
-        malloc_sig.params.push(AbiParam::new(types::I64)); // size
-        malloc_sig.params.push(AbiParam::new(types::I64)); // align
-        malloc_sig.returns.push(AbiParam::new(types::I64)); // *mut u8
-        let malloc_id = obj_module
-            .declare_function("__vow_malloc", Linkage::Import, &malloc_sig)
+        // Declare arena runtime functions (always needed by RegionAlloc and main startup).
+        let mut arena_alloc_sig = obj_module.make_signature();
+        arena_alloc_sig.params.push(AbiParam::new(types::I64)); // *VowArena
+        arena_alloc_sig.params.push(AbiParam::new(types::I64)); // size
+        arena_alloc_sig.params.push(AbiParam::new(types::I64)); // align
+        arena_alloc_sig.returns.push(AbiParam::new(types::I64)); // *mut u8
+        let arena_alloc_id = obj_module
+            .declare_function("__vow_arena_alloc", Linkage::Import, &arena_alloc_sig)
             .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
 
-        let mut free_sig = obj_module.make_signature();
-        free_sig.params.push(AbiParam::new(types::I64)); // *mut u8
-        free_sig.params.push(AbiParam::new(types::I64)); // size
-        free_sig.params.push(AbiParam::new(types::I64)); // align
-        let free_id = obj_module
-            .declare_function("__vow_free", Linkage::Import, &free_sig)
+        let runtime_start_sig = obj_module.make_signature();
+        let runtime_start_id = obj_module
+            .declare_function("__vow_runtime_start", Linkage::Import, &runtime_start_sig)
+            .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+
+        let root_arena_id = obj_module
+            .declare_data("__vow_root_arena", Linkage::Import, true, false)
             .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
 
         // Declare external runtime functions (debug/sanitize mode only)
@@ -2009,8 +2059,9 @@ impl Backend for CraneliftBackend {
                 &RuntimeIds {
                     vow_violation_id,
                     overflow_id,
-                    malloc_id,
-                    free_id,
+                    arena_alloc_id,
+                    runtime_start_id,
+                    root_arena_id,
                     trace_enter_id,
                     trace_exit_id,
                     trace_vow_id,
@@ -2051,8 +2102,8 @@ impl Backend for CraneliftBackend {
 mod tests {
     use super::*;
     use vow_ir::{
-        BasicBlock, BlockId, FuncId, Function, InstData, InstId, Module, Opcode, RegionId,
-        RegionSummary, Ty, VowEntry, VowId,
+        BasicBlock, BlockId, FuncId, Function, InstData, InstId, Module, Opcode, RegionConstraint,
+        RegionId, RegionSummary, StoreEffect, Ty, VowEntry, VowId,
     };
     use vow_syntax::span::Span;
 
@@ -2321,6 +2372,74 @@ mod tests {
         assert_eq!(sig.returns.len(), 1);
         assert_eq!(sig.params[0].value_type, types::I64);
         assert_eq!(sig.returns[0].value_type, types::I64);
+    }
+
+    #[test]
+    fn signature_projects_hidden_regions_from_full_summary() {
+        use cranelift_codegen::isa::CallConv;
+        let ir_func = Function {
+            id: FuncId(0),
+            name: "mutating_builder".to_string(),
+            params: vec![Ty::Ptr, Ty::I64],
+            param_names: vec![],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary {
+                param_regions: vec![],
+                return_region: RegionConstraint::FreshInCaller,
+                store_effects: vec![StoreEffect {
+                    target: 0,
+                    source: RegionConstraint::FreshInCaller,
+                }],
+            },
+        };
+
+        let sig = build_signature(&ir_func, CallConv::SystemV);
+
+        assert_eq!(
+            sig.params.len(),
+            4,
+            "two user params plus target_region and one store-target hidden region"
+        );
+        assert_eq!(sig.params[2].value_type, types::I64);
+        assert_eq!(sig.params[3].value_type, types::I64);
+        assert_eq!(sig.returns.len(), 1);
+    }
+
+    #[test]
+    fn signature_omits_hidden_regions_for_exported_main() {
+        use cranelift_codegen::isa::CallConv;
+        let ir_func = Function {
+            id: FuncId(0),
+            name: "main".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::I32,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary {
+                param_regions: vec![],
+                return_region: RegionConstraint::FreshInCaller,
+                store_effects: vec![StoreEffect {
+                    target: 0,
+                    source: RegionConstraint::FreshInCaller,
+                }],
+            },
+        };
+
+        let sig = build_signature(&ir_func, CallConv::SystemV);
+
+        assert_eq!(
+            sig.params.len(),
+            0,
+            "C ABI main must not take hidden regions"
+        );
+        assert_eq!(sig.returns.len(), 1);
     }
 
     #[test]
@@ -3231,6 +3350,21 @@ mod tests {
         let result =
             CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(
+            symbols.contains("__vow_arena_alloc"),
+            "RegionAlloc must lower through __vow_arena_alloc"
+        );
+        assert!(
+            !symbols.contains("__vow_malloc"),
+            "RegionAlloc must not import the legacy __vow_malloc shim"
+        );
     }
 
     #[test]

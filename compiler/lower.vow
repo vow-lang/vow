@@ -275,9 +275,6 @@ fn lctx_get_tag(ctx: LowerCtx, inst_id: i64) -> String {
 }
 
 fn lctx_track_alloc(ctx: LowerCtx, id: i64, tag: String, alloc_size: i64) {
-    ctx.alloc_ids.push(id);
-    ctx.alloc_tags.push(tag);
-    ctx.alloc_sizes.push(alloc_size);
 }
 
 fn lctx_push_alloc_scope(ctx: LowerCtx) {
@@ -287,47 +284,6 @@ fn lctx_push_alloc_scope(ctx: LowerCtx) {
 fn lctx_pop_alloc_scope_frees(ctx: LowerCtx, live_out: Vec<i64>) {
     let scope_start: i64 = ctx.alloc_scope_starts[ctx.alloc_scope_starts.len() - 1];
     ctx.alloc_scope_starts.pop();
-    let n: i64 = ctx.alloc_ids.len();
-    let mut i: i64 = scope_start;
-    while i < n {
-        let id: i64 = ctx.alloc_ids[i];
-        let tag: String = ctx.alloc_tags[i];
-        let mut skip: bool = lctx_is_escaped(ctx, id);
-        if !skip {
-            let mut li: i64 = 0;
-            while li < live_out.len() {
-                if live_out[li] == id {
-                    skip = true;
-                }
-                li = li + 1;
-            }
-        }
-        if !skip {
-            if lower_str_starts_with(tag, String::from("region:")) {
-                let size: i64 = ctx.alloc_sizes[i];
-                let free_args: Vec<i64> = Vec::new();
-                free_args.push(id);
-                lctx_emit(ctx, IOP_REGION_FREE(), ITY_UNIT(), free_args, IDATA_ALLOC_SIZE(), size, 8, String::from(""));
-            }
-            if tag == String::from("String") {
-                let free_args: Vec<i64> = Vec::new();
-                free_args.push(id);
-                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_free"));
-            }
-            if tag == String::from("Vec") {
-                let free_args: Vec<i64> = Vec::new();
-                free_args.push(id);
-                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_free_val"));
-            }
-            if tag == String::from("HashMap") {
-                let free_args: Vec<i64> = Vec::new();
-                free_args.push(id);
-                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_map_free"));
-            }
-        }
-        i = i + 1;
-    }
-    // Truncate the alloc arrays back to the scope start.
     while ctx.alloc_ids.len() > scope_start {
         ctx.alloc_ids.pop();
         ctx.alloc_tags.pop();
@@ -346,50 +302,9 @@ fn lctx_discard_alloc_scope(ctx: LowerCtx) {
 }
 
 fn lctx_emit_alloc_frees_to_depth(ctx: LowerCtx, target_depth: i64, live_out: Vec<i64>) {
-    let n: i64 = ctx.alloc_ids.len();
-    let mut i: i64 = target_depth;
-    while i < n {
-        let id: i64 = ctx.alloc_ids[i];
-        let tag: String = ctx.alloc_tags[i];
-        let mut skip: bool = lctx_is_escaped(ctx, id);
-        if !skip {
-            let mut li: i64 = 0;
-            while li < live_out.len() {
-                if live_out[li] == id {
-                    skip = true;
-                }
-                li = li + 1;
-            }
-        }
-        if !skip {
-            if lower_str_starts_with(tag, String::from("region:")) {
-                let size: i64 = ctx.alloc_sizes[i];
-                let free_args: Vec<i64> = Vec::new();
-                free_args.push(id);
-                lctx_emit(ctx, IOP_REGION_FREE(), ITY_UNIT(), free_args, IDATA_ALLOC_SIZE(), size, 8, String::from(""));
-            }
-            if tag == String::from("String") {
-                let free_args: Vec<i64> = Vec::new();
-                free_args.push(id);
-                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_free"));
-            }
-            if tag == String::from("Vec") {
-                let free_args: Vec<i64> = Vec::new();
-                free_args.push(id);
-                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_free_val"));
-            }
-            if tag == String::from("HashMap") {
-                let free_args: Vec<i64> = Vec::new();
-                free_args.push(id);
-                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_map_free"));
-            }
-        }
-        i = i + 1;
-    }
 }
 
 fn lctx_mark_escaped(ctx: LowerCtx, id: i64) {
-    ctx.escaped_ids.push(id);
 }
 
 fn lctx_is_escaped(ctx: LowerCtx, id: i64) -> bool {
@@ -455,47 +370,6 @@ fn lctx_collect_return_sources(ctx: LowerCtx, return_val: i64) -> Vec<i64> {
 }
 
 fn lctx_emit_return_frees(ctx: LowerCtx, return_val: i64) {
-    let sources: Vec<i64> = lctx_collect_return_sources(ctx, return_val);
-    let n: i64 = ctx.alloc_ids.len();
-    let mut i: i64 = 0;
-    while i < n {
-        let id: i64 = ctx.alloc_ids[i];
-        let tag: String = ctx.alloc_tags[i];
-        let mut skip: bool = lctx_is_escaped(ctx, id);
-        if !skip {
-            let mut si: i64 = 0;
-            while si < sources.len() {
-                if sources[si] == id {
-                    skip = true;
-                }
-                si = si + 1;
-            }
-        }
-        if !skip {
-            if lower_str_starts_with(tag, String::from("region:")) {
-                let size: i64 = ctx.alloc_sizes[i];
-                let free_args: Vec<i64> = Vec::new();
-                free_args.push(id);
-                lctx_emit(ctx, IOP_REGION_FREE(), ITY_UNIT(), free_args, IDATA_ALLOC_SIZE(), size, 8, String::from(""));
-            }
-            if tag == String::from("String") {
-                let free_args: Vec<i64> = Vec::new();
-                free_args.push(id);
-                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_free"));
-            }
-            if tag == String::from("Vec") {
-                let free_args: Vec<i64> = Vec::new();
-                free_args.push(id);
-                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_free_val"));
-            }
-            if tag == String::from("HashMap") {
-                let free_args: Vec<i64> = Vec::new();
-                free_args.push(id);
-                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_map_free"));
-            }
-        }
-        i = i + 1;
-    }
 }
 
 fn lctx_is_str_eid(ctx: LowerCtx, eid: i64) -> bool {
@@ -1141,16 +1015,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let lhs_tag: i64 = expr_tag(a, lhs_eid);
             if lhs_tag == EXPR_LIT_STR() {
                 lctx_mark_escaped(ctx, lhs_id);
-                let free_args: Vec<i64> = Vec::new();
-                free_args.push(lhs_id);
-                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_free"));
             }
             let rhs_tag: i64 = expr_tag(a, rhs_eid);
             if rhs_tag == EXPR_LIT_STR() {
                 lctx_mark_escaped(ctx, rhs_id);
-                let free_args: Vec<i64> = Vec::new();
-                free_args.push(rhs_id);
-                lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_free"));
             }
             if op == BINOP_NE() {
                 let not_args: Vec<i64> = Vec::new();
@@ -2477,9 +2345,6 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     let ae: i64 = list_get(a, args_lid, 0);
                     let ae_tag: i64 = expr_tag(a, ae);
                     if ae_tag == EXPR_LIT_STR() {
-                        let free_args: Vec<i64> = Vec::new();
-                        free_args.push(arg_id);
-                        lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), free_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_free"));
                     }
                 }
                 return contains_result;

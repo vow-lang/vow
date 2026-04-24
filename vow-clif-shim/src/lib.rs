@@ -719,24 +719,25 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
         }
     }
 
-    // Declare runtime allocator functions
-    let mut malloc_sig = ctx.obj_module.make_signature();
-    malloc_sig.params.push(AbiParam::new(types::I64));
-    malloc_sig.params.push(AbiParam::new(types::I64));
-    malloc_sig.returns.push(AbiParam::new(types::I64));
-    let malloc_id = ctx
+    // Declare arena runtime functions.
+    let mut arena_alloc_sig = ctx.obj_module.make_signature();
+    arena_alloc_sig.params.push(AbiParam::new(types::I64)); // *VowArena
+    arena_alloc_sig.params.push(AbiParam::new(types::I64)); // size
+    arena_alloc_sig.params.push(AbiParam::new(types::I64)); // align
+    arena_alloc_sig.returns.push(AbiParam::new(types::I64));
+    let arena_alloc_id = ctx
         .obj_module
-        .declare_function("__vow_malloc", Linkage::Import, &malloc_sig)
-        .expect("declare __vow_malloc");
-
-    let mut free_sig = ctx.obj_module.make_signature();
-    free_sig.params.push(AbiParam::new(types::I64)); // ptr
-    free_sig.params.push(AbiParam::new(types::I64)); // size
-    free_sig.params.push(AbiParam::new(types::I64)); // align
-    let free_id = ctx
+        .declare_function("__vow_arena_alloc", Linkage::Import, &arena_alloc_sig)
+        .expect("declare __vow_arena_alloc");
+    let root_arena_id = ctx
         .obj_module
-        .declare_function("__vow_free", Linkage::Import, &free_sig)
-        .expect("declare __vow_free");
+        .declare_data("__vow_root_arena", Linkage::Import, true, false)
+        .expect("declare __vow_root_arena");
+    let runtime_start_sig = ctx.obj_module.make_signature();
+    let runtime_start_id = ctx
+        .obj_module
+        .declare_function("__vow_runtime_start", Linkage::Import, &runtime_start_sig)
+        .expect("declare __vow_runtime_start");
 
     // Debug-only runtime functions (debug=1 or sanitize=3)
     let vow_violation_id = if ctx.mode == 1 || ctx.mode == 3 {
@@ -879,8 +880,15 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
         extern_func_refs.insert(sym.clone(), fref);
     }
 
-    let malloc_ref = ctx.obj_module.declare_func_in_func(malloc_id, builder.func);
-    let free_ref = ctx.obj_module.declare_func_in_func(free_id, builder.func);
+    let arena_alloc_ref = ctx
+        .obj_module
+        .declare_func_in_func(arena_alloc_id, builder.func);
+    let root_arena_gv = ctx
+        .obj_module
+        .declare_data_in_func(root_arena_id, builder.func);
+    let runtime_start_ref = ctx
+        .obj_module
+        .declare_func_in_func(runtime_start_id, builder.func);
     let vow_violation_ref =
         vow_violation_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
     let overflow_ref = overflow_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
@@ -1091,6 +1099,9 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
             builder.ins().stack_store(zero, slot, 0);
         }
         // Emit stack_guard_init at main entry (all modes)
+        if ctx.func_decls[fi].is_main {
+            builder.ins().call(runtime_start_ref, &[]);
+        }
         if let Some(init_ref) = stack_guard_init_ref {
             builder.ins().call(init_ref, &[]);
         }
@@ -1762,31 +1773,16 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     } else {
                         (0, 8)
                     };
+                    let arena = builder.ins().global_value(types::I64, root_arena_gv);
                     let size_val = builder.ins().iconst(types::I64, size);
                     let align_val = builder.ins().iconst(types::I64, align);
-                    let call_inst = builder.ins().call(malloc_ref, &[size_val, align_val]);
+                    let call_inst = builder
+                        .ins()
+                        .call(arena_alloc_ref, &[arena, size_val, align_val]);
                     let ptr = builder.inst_results(call_inst)[0];
                     set_val!(iid, ptr);
                 }
                 IOP_REGION_FREE => {
-                    if alen > 0 {
-                        let ptr_id = all_args[aoff];
-                        let ptr_val = *value_map.get(&ptr_id).unwrap_or_else(|| {
-                            panic!(
-                                "clif shim: IOP_REGION_FREE value_map miss: inst_id={iid} ptr_id={ptr_id} (block={bi}, inst_idx={ii}, func_idx={func_idx})"
-                            )
-                        });
-                        let (size, align) = if dk == IDATA_ALLOC_SIZE {
-                            (dv, dv2)
-                        } else {
-                            (0, 8)
-                        };
-                        let size_val = builder.ins().iconst(types::I64, size);
-                        let align_val = builder.ins().iconst(types::I64, align);
-                        builder
-                            .ins()
-                            .call(free_ref, &[ptr_val, size_val, align_val]);
-                    }
                     let unit = builder.ins().iconst(types::I32, 0);
                     set_val!(iid, unit);
                 }

@@ -222,7 +222,6 @@ pub(crate) struct LowerCtx {
     // Scope-based deallocation: stack of alloc scopes, each tracking (InstId, tag).
     // Push on entering a branch/loop/match arm, pop (with frees) on exit.
     alloc_scopes: Vec<Vec<(InstId, String)>>,
-    escaped_allocs: HashSet<InstId>,
     // Alloc scope depth at each loop body entry (for break/continue frees).
     loop_alloc_scope_depth: Vec<usize>,
 }
@@ -294,20 +293,16 @@ impl LowerCtx {
             struct_field_vec_elems,
             warnings: Vec::new(),
             alloc_scopes: vec![Vec::new()],
-            escaped_allocs: HashSet::new(),
             loop_alloc_scope_depth: Vec::new(),
         }
     }
 
     pub(super) fn track_heap_alloc(&mut self, id: InstId, tag: &str) {
-        self.alloc_scopes
-            .last_mut()
-            .expect("alloc_scopes must have at least one scope")
-            .push((id, tag.to_string()));
+        let _ = (id, tag);
     }
 
     pub(super) fn mark_escaped(&mut self, id: InstId) {
-        self.escaped_allocs.insert(id);
+        let _ = id;
     }
 
     pub(super) fn push_alloc_scope(&mut self) {
@@ -318,36 +313,8 @@ impl LowerCtx {
     /// `live_out` contains InstIds that flow out of this scope (e.g. via Upsilon)
     /// and must not be freed.
     pub(super) fn pop_alloc_scope_frees(&mut self, live_out: &[InstId], span: Span) {
-        let scope = self.alloc_scopes.pop().expect("alloc_scopes underflow");
-        for (id, tag) in &scope {
-            if self.escaped_allocs.contains(id) || live_out.contains(id) {
-                continue;
-            }
-            if let Some(size_str) = tag.strip_prefix("region:") {
-                let size: u32 = size_str.parse().unwrap_or(0);
-                self.emit(
-                    Opcode::RegionFree,
-                    Ty::Unit,
-                    vec![*id],
-                    InstData::AllocSize { size, align: 8 },
-                    span,
-                );
-                continue;
-            }
-            let sym = match tag.as_str() {
-                "String" => "__vow_string_free",
-                "Vec" => "__vow_vec_free_val",
-                "HashMap" => "__vow_map_free",
-                _ => continue,
-            };
-            self.emit(
-                Opcode::Call,
-                Ty::Unit,
-                vec![*id],
-                InstData::CallExtern(sym.to_string()),
-                span,
-            );
-        }
+        let _ = (live_out, span);
+        self.alloc_scopes.pop().expect("alloc_scopes underflow");
     }
 
     /// Emit frees for allocations from the innermost scope down to (and including)
@@ -359,39 +326,7 @@ impl LowerCtx {
         live_out: &[InstId],
         span: Span,
     ) {
-        let allocs: Vec<(InstId, String)> = self.alloc_scopes[target_depth..]
-            .iter()
-            .flat_map(|scope| scope.iter().cloned())
-            .collect();
-        for (id, tag) in allocs {
-            if self.escaped_allocs.contains(&id) || live_out.contains(&id) {
-                continue;
-            }
-            if let Some(size_str) = tag.strip_prefix("region:") {
-                let size: u32 = size_str.parse().unwrap_or(0);
-                self.emit(
-                    Opcode::RegionFree,
-                    Ty::Unit,
-                    vec![id],
-                    InstData::AllocSize { size, align: 8 },
-                    span,
-                );
-                continue;
-            }
-            let sym = match tag.as_str() {
-                "String" => "__vow_string_free",
-                "Vec" => "__vow_vec_free_val",
-                "HashMap" => "__vow_map_free",
-                _ => continue,
-            };
-            self.emit(
-                Opcode::Call,
-                Ty::Unit,
-                vec![id],
-                InstData::CallExtern(sym.to_string()),
-                span,
-            );
-        }
+        let _ = (target_depth, live_out, span);
     }
 
     fn collect_return_sources(&self, return_val: InstId) -> HashSet<InstId> {
@@ -416,41 +351,7 @@ impl LowerCtx {
     }
 
     pub(super) fn emit_return_frees(&mut self, return_val: InstId, span: Span) {
-        let return_sources = self.collect_return_sources(return_val);
-        let all_allocs: Vec<(InstId, String)> = self
-            .alloc_scopes
-            .iter()
-            .flat_map(|scope| scope.iter().cloned())
-            .collect();
-        for (id, tag) in all_allocs {
-            if self.escaped_allocs.contains(&id) || return_sources.contains(&id) {
-                continue;
-            }
-            if let Some(size_str) = tag.strip_prefix("region:") {
-                let size: u32 = size_str.parse().unwrap_or(0);
-                self.emit(
-                    Opcode::RegionFree,
-                    Ty::Unit,
-                    vec![id],
-                    InstData::AllocSize { size, align: 8 },
-                    span,
-                );
-                continue;
-            }
-            let sym = match tag.as_str() {
-                "String" => "__vow_string_free",
-                "Vec" => "__vow_vec_free_val",
-                "HashMap" => "__vow_map_free",
-                _ => continue,
-            };
-            self.emit(
-                Opcode::Call,
-                Ty::Unit,
-                vec![id],
-                InstData::CallExtern(sym.to_string()),
-                span,
-            );
-        }
+        let _ = (return_val, span);
     }
 
     pub(super) fn intern_str(&mut self, s: &str) -> u32 {
@@ -472,14 +373,7 @@ impl LowerCtx {
     }
 
     pub(super) fn emit_string_free(&mut self, id: InstId, span: Span) {
-        self.escaped_allocs.insert(id);
-        self.emit(
-            Opcode::Call,
-            Ty::Unit,
-            vec![id],
-            InstData::CallExtern("__vow_string_free".to_string()),
-            span,
-        );
+        let _ = (id, span);
     }
 
     pub(super) fn define(&mut self, name: String, id: InstId) {
@@ -4482,7 +4376,7 @@ mod tests {
     }
 
     #[test]
-    fn region_free_emitted_for_unused_struct() {
+    fn no_region_free_for_unused_struct_after_arena_cutover() {
         // fn f() -> i64 { let p = Pair{a:1, b:2}; 42 }
         let body = Block {
             stmts: vec![let_stmt("p", Some(pair_ty()), pair_literal(1, 2))],
@@ -4497,7 +4391,10 @@ mod tests {
             .iter()
             .flat_map(|b| b.insts.iter())
             .any(|i| i.opcode == Opcode::RegionFree);
-        assert!(has_region_free, "expected RegionFree for unused struct");
+        assert!(
+            !has_region_free,
+            "arena lowering must not emit per-value RegionFree for unused structs"
+        );
     }
 
     #[test]
@@ -4606,7 +4503,7 @@ mod tests {
     }
 
     #[test]
-    fn string_free_emitted_for_unused_string() {
+    fn no_string_free_for_unused_string_after_arena_cutover() {
         // fn f() -> i64 { let s = String::from("hello"); 42 }
         let body = Block {
             stmts: vec![let_stmt(
@@ -4647,14 +4544,14 @@ mod tests {
                 && i.data == InstData::CallExtern("__vow_string_free".to_string())
         });
         assert!(
-            has_string_free,
-            "expected __vow_string_free for unused string"
+            !has_string_free,
+            "arena lowering must not emit per-value __vow_string_free for unused strings"
         );
     }
 
     #[test]
-    fn region_free_has_correct_size() {
-        // Verify RegionFree carries the same AllocSize as RegionAlloc
+    fn region_allocs_do_not_get_matching_region_frees() {
+        // Arena close, not per-object free, owns reclamation after the cutover.
         let body = Block {
             stmts: vec![let_stmt("p", Some(pair_ty()), pair_literal(1, 2))],
             trailing_expr: Some(Box::new(int_expr(0))),
@@ -4670,16 +4567,13 @@ mod tests {
             .find(|i| i.opcode == Opcode::RegionAlloc)
             .map(|i| i.data.clone())
             .expect("expected RegionAlloc");
-        let free_data = func
-            .blocks
-            .iter()
-            .flat_map(|b| b.insts.iter())
-            .find(|i| i.opcode == Opcode::RegionFree)
-            .map(|i| i.data.clone())
-            .expect("expected RegionFree");
-        assert_eq!(
-            alloc_data, free_data,
-            "RegionFree size must match RegionAlloc size"
+        assert!(
+            func.blocks
+                .iter()
+                .flat_map(|b| b.insts.iter())
+                .all(|i| i.opcode != Opcode::RegionFree),
+            "arena lowering must not emit RegionFree after allocation {:?}",
+            alloc_data
         );
     }
 
@@ -4737,7 +4631,7 @@ mod tests {
     }
 
     #[test]
-    fn receiver_method_does_not_prevent_free() {
+    fn receiver_method_does_not_emit_free_after_arena_cutover() {
         // fn f() -> i64 { let s = String::from("x"); s.len() }
         // s.len() is read-only — s must still be freed (#71)
         let body = Block {
@@ -4786,8 +4680,8 @@ mod tests {
                 && i.data == InstData::CallExtern("__vow_string_free".to_string())
         });
         assert!(
-            has_string_free,
-            "method call on receiver must not prevent deallocation (#71)"
+            !has_string_free,
+            "arena lowering must not emit __vow_string_free after receiver method calls"
         );
     }
 
@@ -4867,9 +4761,9 @@ mod tests {
     }
 
     #[test]
-    fn string_freed_after_method_call() {
+    fn string_method_call_emits_no_string_free_after_arena_cutover() {
         // fn f() -> i64 { let s: String = String::from("hello"); s.len() }
-        // s.len() is read-only — s must still be freed
+        // s.len() is read-only, but arena close owns reclamation after cutover.
         let string_from = Expr {
             kind: ExprKind::EnumConstruct {
                 path: vec!["String".to_string(), "from".to_string()],
@@ -4918,15 +4812,15 @@ mod tests {
                 && i.data == InstData::CallExtern("__vow_string_free".to_string())
         });
         assert!(
-            has_string_free,
-            "String used via .len() must still be freed at function exit"
+            !has_string_free,
+            "String used via .len() must not emit per-value free after arena cutover"
         );
     }
 
     #[test]
-    fn vec_freed_after_method_call() {
+    fn vec_method_call_emits_no_vec_free_after_arena_cutover() {
         // fn f() -> i64 { let v: Vec<i64> = Vec::new(); v.len() }
-        // v.len() is read-only — v must still be freed
+        // v.len() is read-only, but arena close owns reclamation after cutover.
         let vec_new = Expr {
             kind: ExprKind::EnumConstruct {
                 path: vec!["Vec".to_string(), "new".to_string()],
@@ -4972,15 +4866,15 @@ mod tests {
                 && i.data == InstData::CallExtern("__vow_vec_free_val".to_string())
         });
         assert!(
-            has_vec_free,
-            "Vec used via .len() must still be freed at function exit"
+            !has_vec_free,
+            "Vec used via .len() must not emit per-value free after arena cutover"
         );
     }
 
     #[test]
-    fn hashmap_freed_after_method_call() {
+    fn hashmap_method_call_emits_no_map_free_after_arena_cutover() {
         // fn f() -> i64 { let m: HashMap = HashMap::new(); m.len() }
-        // m.len() is read-only — m must still be freed
+        // m.len() is read-only, but arena close owns reclamation after cutover.
         let map_new = Expr {
             kind: ExprKind::EnumConstruct {
                 path: vec!["HashMap".to_string(), "new".to_string()],
@@ -5025,8 +4919,8 @@ mod tests {
             i.opcode == Opcode::Call && i.data == InstData::CallExtern("__vow_map_free".to_string())
         });
         assert!(
-            has_map_free,
-            "HashMap used via .len() must still be freed at function exit"
+            !has_map_free,
+            "HashMap used via .len() must not emit per-value free after arena cutover"
         );
     }
 }
