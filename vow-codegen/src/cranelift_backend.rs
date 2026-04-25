@@ -427,8 +427,21 @@ fn return_source_needs_materialization(
             Opcode::Phi => {
                 // Walk every Upsilon arm that targets this Phi. Upsilons
                 // can live in any block, so we iterate the whole function
-                // here (O(n) rather than O(n²) thanks to the index above
-                // — the loop body is constant-time per inst).
+                // looking for matching `PhiTarget(id)` writes.
+                //
+                // Complexity: O(n_insts) per visited Phi. `inst_index`
+                // doesn't help (it's keyed by InstId, not by PhiTarget),
+                // and the existing `PhiUpsilonData` pre-pass indexes
+                // Upsilons by source block, not by Phi ID, so it can't
+                // be reused either. Phase 7 / #202 — when materialisation
+                // becomes load-bearing on synthesised functions with
+                // deeper Phi chains — should add a `phi_id → [arm_ids]`
+                // inverted index (either inside `PhiUpsilonData` or as a
+                // standalone helper) to bring this to O(k_arms) per Phi.
+                // For Phase 4 this scan rarely fires (materialisation
+                // requires a `FreshInCaller` summary AND a
+                // `__vow_string_from_cstr` leaf, which only String-literal
+                // returns produce).
                 for block in &func.blocks {
                     for inst in &block.insts {
                         if inst.opcode == Opcode::Upsilon

@@ -1054,6 +1054,17 @@ pub unsafe extern "C" fn __vow_string_clone_into_arena(
     arena: *mut VowArena,
     source: *const u8,
 ) -> *mut u8 {
+    // A null `source` here is anomalous: well-formed compilation never
+    // produces it. The only path that does is the codegen `ConstStr`
+    // fallback to `iconst(0)` when a string global is missing — which
+    // is itself an upstream compiler error. Surface it loudly in
+    // debug builds; release falls through to a benign empty descriptor
+    // (allocated on the arena) so a buggy build doesn't crash.
+    debug_assert!(
+        !source.is_null(),
+        "__vow_string_clone_into_arena: null source — indicates a missing \
+         ConstStr global (upstream codegen bug)"
+    );
     let header = unsafe { __vow_arena_alloc(arena, 24, 8) } as *mut VowVec;
     if source.is_null() {
         unsafe {
