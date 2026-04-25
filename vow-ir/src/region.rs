@@ -34,6 +34,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use vow_diag::{Blame, Diagnostic, ErrorCode, Severity, SourceLocation};
+use vow_syntax::span::Span;
 
 use crate::types::{
     BlockId, Function, HiddenRegionIdx, Inst, InstData, InstId, Module, Opcode, RegionConstraint,
@@ -151,6 +152,99 @@ pub fn infer_regions(module: &mut Module) {
     }
 
     module.warnings.extend(diagnostics);
+}
+
+/// Insert `RegionOpen` / `RegionClose` markers around basic blocks whose
+/// region is non-empty (spec §3.5). Must run AFTER `infer_regions` so that
+/// every `RegionAlloc` inst carries its inferred `region: RegionId`.
+///
+/// Emission rules (Phase 4 / S3, criterion 1 of §3.5):
+/// - For each function, collect every distinct `BlockId B` appearing as
+///   `RegionId::Block(B)` on any inst's `region` field within the function.
+/// - For each such `B`, prepend `RegionOpen { region: Block(B) }` to basic
+///   block `B`'s instruction list and insert `RegionClose { region:
+///   Block(B) }` immediately before the block's terminator.
+///
+/// Spec §3.5 criteria 2 (call store-effects) and 3 (call FreshInCaller
+/// hidden `target_region` routing) are wired in S4 alongside the call-site
+/// hidden-region substitution; until then, those allocations still resolve
+/// to `Caller(_)` and never pin a caller block as non-empty.
+pub fn insert_region_markers(module: &mut Module) {
+    for func in &mut module.functions {
+        // Collect all distinct block IDs that participate as a region.
+        let mut block_regions: BTreeSet<BlockId> = BTreeSet::new();
+        for block in &func.blocks {
+            for inst in &block.insts {
+                if let RegionId::Block(b) = inst.region {
+                    block_regions.insert(b);
+                }
+            }
+        }
+        if block_regions.is_empty() {
+            continue;
+        }
+
+        let mut next_id = next_inst_id(func);
+        for block in &mut func.blocks {
+            if !block_regions.contains(&block.id) {
+                continue;
+            }
+            // Pick a span for the synthesised markers from a real inst in
+            // the block, falling back to the empty span.
+            let span = block
+                .insts
+                .first()
+                .map(|i| i.origin)
+                .unwrap_or(Span { start: 0, len: 0 });
+
+            let open = Inst {
+                id: InstId(next_id),
+                opcode: Opcode::RegionOpen,
+                ty: Ty::Unit,
+                args: vec![],
+                data: InstData::None,
+                origin: span,
+                region: RegionId::Block(block.id),
+            };
+            next_id += 1;
+            let close = Inst {
+                id: InstId(next_id),
+                opcode: Opcode::RegionClose,
+                ty: Ty::Unit,
+                args: vec![],
+                data: InstData::None,
+                origin: span,
+                region: RegionId::Block(block.id),
+            };
+            next_id += 1;
+
+            // Insert RegionClose just before the terminator. Every
+            // well-formed block ends with a terminal opcode; spec §12.3
+            // requires close on every exit edge, which inside a single
+            // basic block reduces to "right before the terminator."
+            let term_pos = block
+                .insts
+                .iter()
+                .position(|i| i.opcode.is_terminal())
+                .unwrap_or(block.insts.len());
+            block.insts.insert(term_pos, close);
+            // RegionOpen at the very start of the block.
+            block.insts.insert(0, open);
+        }
+    }
+}
+
+/// Smallest unused `InstId` value across `func`'s blocks.
+fn next_inst_id(func: &Function) -> u32 {
+    let mut max_id = 0u32;
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.id.0 > max_id {
+                max_id = inst.id.0;
+            }
+        }
+    }
+    max_id.saturating_add(1)
 }
 
 fn internal_compiler_error(message: &str) -> Diagnostic {
@@ -352,7 +446,7 @@ fn analyze_function(
                 continue;
             }
             let markers = must_outlive.get(&inst.id).cloned().unwrap_or_default();
-            let region_id = lub_to_region_id(&markers);
+            let region_id = lub_to_region_id(&markers, block.id);
             region_map.insert(inst.id, region_id);
         }
     }
@@ -552,10 +646,11 @@ enum MustOutliveMarker {
 }
 
 /// LUB of marker set per spec §4.1 coercions.
-fn lub_to_region_id(markers: &BTreeSet<MustOutliveMarker>) -> RegionId {
-    if markers.is_empty() {
-        return RegionId::Root;
-    }
+///
+/// `defining_block` is the basic block where the allocation lives — used as
+/// the default region when the marker set yields no narrower constraint
+/// (empty set, or pure block markers reducible to the defining block).
+fn lub_to_region_id(markers: &BTreeSet<MustOutliveMarker>, defining_block: BlockId) -> RegionId {
     let mut has_caller = false;
     let mut has_root = false;
     let mut has_rodata = false;
@@ -582,17 +677,25 @@ fn lub_to_region_id(markers: &BTreeSet<MustOutliveMarker>) -> RegionId {
     if has_caller {
         return RegionId::Caller(HiddenRegionIdx(0));
     }
-    // Pure block markers: Phase 4 codegen explicitly rejects
-    // `RegionId::Block(_)` on `RegionAlloc` ("RegionAlloc with Block(..) is
-    // not wired until block arena routing lands" — see
-    // `vow-codegen/src/cranelift_backend.rs` and the Phase 4 clif-shim
-    // check). Phase 3 therefore MUST NOT emit `Block(_)` for heap-producing
-    // insts until block-arena routing lands (spec §12.3 RegionOpen/Close).
-    // Fall back to `Root` as the Phase-2 default — conservatively safe
-    // (process-lifetime storage) and keeps codegen within its supported
-    // surface. Emitting `Block(_)` would break every program that allocates
-    // without escaping.
-    let _ = blocks;
+    // Pure block markers (or empty marker set):
+    // - Empty set → defining block (its narrowest possible region).
+    // - Single marker == defining block → that block.
+    // - Anything else (different single block, or multiple blocks) → fall
+    //   back to `Root`. Without block-tree dominance info (a §4.1 step 3
+    //   enhancement) we cannot pick a correct enclosing block: returning
+    //   `Block(other)` for an alloc defined in a different basic block
+    //   risks the alloc executing after `other`'s arena has closed
+    //   (use-after-free). `Root` is conservatively safe — process-lifetime
+    //   storage strictly outlives any concrete block LUB.
+    // Phase 4 / S3 deferred: even when markers are confined to the
+    // defining block, we cannot safely emit `Block(_)` until the
+    // `must_outlive` pass tracks every use of the value (regular
+    // `FieldGet`/`Load`, non-store-effect call args, Pizlo-Phi uses). An
+    // untracked read in a sibling block would consume freed memory after
+    // `RegionClose`. Phase 9 (#204) extends `must_outlive` and re-enables
+    // `Block(_)` emission. Until then, all non-escaping allocations are
+    // routed to `Root` — correct, but with process-lifetime memory cost.
+    let _ = (blocks, defining_block);
     RegionId::Root
 }
 
@@ -1527,6 +1630,110 @@ mod tests {
             RegionConstraint::ConstantGlobal,
             "scalar return must be ConstantGlobal even when function allocates"
         );
+    }
+
+    #[test]
+    fn markers_inserted_for_non_empty_block_region() {
+        // The marker insertion pass keys off `inst.region == Block(_)`. We
+        // hand-tag the alloc to exercise the marker pass directly — the
+        // region pass's own `Block(_)` emission is currently disabled (see
+        // `local_alloc_assigned_to_root_until_use_set_is_complete`).
+        let mut alloc = inst(
+            0,
+            Opcode::RegionAlloc,
+            Ty::Ptr,
+            vec![],
+            InstData::AllocSize { size: 16, align: 8 },
+        );
+        alloc.region = RegionId::Block(BlockId(0));
+        let insts = vec![
+            alloc,
+            inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+        ];
+        let f = function(0, "local", vec![], Ty::I64, vec![block(0, insts)]);
+        let mut m = module(vec![f]);
+        // Skip infer_regions — it would overwrite the hand-set region with
+        // `Root` while Block emission is deferred.
+        insert_region_markers(&mut m);
+
+        let block_insts = &m.functions[0].blocks[0].insts;
+        let opens: Vec<_> = block_insts
+            .iter()
+            .filter(|i| i.opcode == Opcode::RegionOpen)
+            .collect();
+        let closes: Vec<_> = block_insts
+            .iter()
+            .filter(|i| i.opcode == Opcode::RegionClose)
+            .collect();
+        assert_eq!(opens.len(), 1, "exactly one RegionOpen for Block(0)");
+        assert_eq!(closes.len(), 1, "exactly one RegionClose for Block(0)");
+        assert_eq!(opens[0].region, RegionId::Block(BlockId(0)));
+        assert_eq!(closes[0].region, RegionId::Block(BlockId(0)));
+        assert_eq!(
+            block_insts.first().unwrap().opcode,
+            Opcode::RegionOpen,
+            "RegionOpen must be the first instruction of the block"
+        );
+        let close_pos = block_insts
+            .iter()
+            .position(|i| i.opcode == Opcode::RegionClose)
+            .unwrap();
+        let term_pos = block_insts
+            .iter()
+            .position(|i| i.opcode.is_terminal())
+            .unwrap();
+        assert_eq!(
+            close_pos + 1,
+            term_pos,
+            "RegionClose must immediately precede the block's terminator"
+        );
+    }
+
+    #[test]
+    fn no_markers_for_empty_block_region() {
+        // Empty-region elision (spec §3.5): a function whose only alloc
+        // escapes (`Caller(0)` summary) has no `Block(_)` region in itself,
+        // so no RegionOpen/Close must be inserted.
+        let f = build_returning_alloc();
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+        insert_region_markers(&mut m);
+        let any_marker = m.functions[0]
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .any(|i| matches!(i.opcode, Opcode::RegionOpen | Opcode::RegionClose));
+        assert!(
+            !any_marker,
+            "function with no Block(_) regions must not gain Open/Close markers"
+        );
+    }
+
+    #[test]
+    fn local_alloc_assigned_to_root_until_use_set_is_complete() {
+        // Phase 4 / S3 (deferred to Phase 9 / #204): non-escaping local
+        // allocs would ideally land in `Block(defining_block)`, but
+        // `must_outlive` currently misses `FieldGet` / `Load` / non-store-
+        // effect call args. Without a complete use-set we cannot safely
+        // close the block's arena while uses might survive. The pass falls
+        // back to `Root` until `must_outlive` is extended.
+        let insts = vec![
+            inst(
+                0,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+        ];
+        let f = function(0, "local", vec![], Ty::I64, vec![block(0, insts)]);
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+        let inst0 = &m.functions[0].blocks[0].insts[0];
+        assert_eq!(inst0.region, RegionId::Root);
     }
 
     #[test]

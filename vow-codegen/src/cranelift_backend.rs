@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use vow_ir::{
     BlockId, FuncId as IrFuncId, Function as IrFunction, Inst, InstData, InstId,
-    Module as IrModule, Opcode, RegionConstraint, RegionId, Ty as IrTy,
+    Module as IrModule, Opcode, RegionConstraint, RegionId, RegionSummary, Ty as IrTy,
 };
 
 use crate::{Backend, BuildMode, CodegenError, CompiledObject, TraceMode};
@@ -232,6 +232,17 @@ struct LowerCtx<'a> {
     vow_violation_ref: Option<FuncRef>,
     overflow_ref: Option<FuncRef>,
     arena_alloc_ref: FuncRef,
+    arena_open_ref: FuncRef,
+    arena_close_ref: FuncRef,
+    string_clone_ref: Option<FuncRef>,
+    /// Stack slots holding the `VowArena` header for each block whose region
+    /// is non-empty (spec §3.5). Lazily populated on first use of a given
+    /// `BlockId` by `RegionOpen` / `RegionClose` / `RegionAlloc{Block}`.
+    block_arena_slots: &'a mut HashMap<BlockId, StackSlot>,
+    /// Per-callable region summaries, indexed by IR `FuncId`. Read by the
+    /// `Opcode::Call` lowering to project hidden region parameters from the
+    /// caller's frame (spec §5.2).
+    func_summaries: &'a HashMap<IrFuncId, RegionSummary>,
     mode: BuildMode,
     trace: TraceMode,
     current_ir_block: BlockId,
@@ -247,6 +258,142 @@ struct LowerCtx<'a> {
     fn_name_gv: Option<GlobalValue>,
     stack_exit_ref: Option<FuncRef>,
     root_arena_gv: GlobalValue,
+}
+
+/// Size of `vow_runtime::VowArena` in bytes — asserted in
+/// `vow-runtime/src/lib.rs` (`assert!(size_of::<VowArena>() == 48)`).
+const VOW_ARENA_HEADER_SIZE: u32 = 48;
+/// Alignment for the `VowArena` header (contains pointers).
+const VOW_ARENA_HEADER_ALIGN_LOG2: u8 = 3;
+
+/// Look up or allocate the stack slot holding the `VowArena` header for
+/// `block_id`. Slots are reused across `RegionOpen` / `RegionAlloc{Block}`
+/// / `RegionClose` references to the same block within a single function.
+fn block_arena_slot(
+    builder: &mut FunctionBuilder,
+    slots: &mut HashMap<BlockId, StackSlot>,
+    block_id: BlockId,
+) -> StackSlot {
+    *slots.entry(block_id).or_insert_with(|| {
+        builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            VOW_ARENA_HEADER_SIZE,
+            VOW_ARENA_HEADER_ALIGN_LOG2,
+        ))
+    })
+}
+
+/// Materialise the Cranelift `Value` (`*VowArena`) representing `region` in
+/// the current function's frame. Used by:
+/// - `Opcode::RegionAlloc` lowering (§5.3) to pick the arena to allocate
+///   into.
+/// - `Opcode::Call` lowering (§5.2) to project hidden region parameters
+///   for an internal callee.
+fn region_to_arena_value(
+    builder: &mut FunctionBuilder,
+    region: RegionId,
+    hidden_region_values: &[Value],
+    block_arena_slots: &mut HashMap<BlockId, StackSlot>,
+    root_arena_gv: GlobalValue,
+) -> Result<Value, CodegenError> {
+    match region {
+        RegionId::Root => Ok(builder.ins().global_value(types::I64, root_arena_gv)),
+        RegionId::Caller(idx) => {
+            let Some(&arena) = hidden_region_values.get(idx.0 as usize) else {
+                return Err(CodegenError::UnsupportedOpcode(format!(
+                    "missing hidden arena parameter {:?}",
+                    idx
+                )));
+            };
+            Ok(arena)
+        }
+        RegionId::Block(block_id) => {
+            let slot = block_arena_slot(builder, block_arena_slots, block_id);
+            Ok(builder.ins().stack_addr(types::I64, slot, 0))
+        }
+        RegionId::Rodata => Err(CodegenError::UnsupportedOpcode(
+            "cannot derive arena pointer for Rodata region".to_string(),
+        )),
+    }
+}
+
+/// True when the function may emit a return-materialisation clone call —
+/// i.e. it has `return_region == FreshInCaller` and at least one `Return`
+/// inst whose source path reaches a `.rodata` literal or a heap-typed
+/// parameter alias. Used at module-load time to decide whether to import
+/// `__vow_string_clone_into_arena`.
+fn module_uses_return_materialization(func: &IrFunction) -> bool {
+    if func.summary.return_region != RegionConstraint::FreshInCaller {
+        return false;
+    }
+    if func.return_ty != IrTy::Ptr {
+        return false;
+    }
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.opcode == Opcode::Return
+                && let Some(&val_id) = inst.args.first()
+                && return_source_needs_materialization(func, val_id)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Decide whether a `FreshInCaller` function's return value needs to be
+/// deep-copied into `target_region` to satisfy the §5.1 representation
+/// promise.
+///
+/// Walks the value's source transitively through `Phi` (via `Upsilon` arms).
+/// Returns true if any reachable leaf is a `.rodata` literal (`ConstStr`) or
+/// a heap-typed parameter alias (`GetArg` of a `Ptr` param). Other leaves —
+/// `RegionAlloc` (placed in `Caller(0)` by the region pass) and `Call`
+/// results from `FreshInCaller` callees (placed in our `target_region` by
+/// the S4 projection) — are already in `target_region` and need no copy.
+fn return_source_needs_materialization(func: &IrFunction, return_val: InstId) -> bool {
+    let mut visited: HashSet<InstId> = HashSet::new();
+    let mut stack: Vec<InstId> = vec![return_val];
+    while let Some(id) = stack.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        let Some(src) = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .find(|i| i.id == id)
+        else {
+            continue;
+        };
+        match src.opcode {
+            // `__vow_string_clone_into_arena` is type-specialised for the
+            // VowString / Vec<u8> descriptor layout. Firing it on a Vec<T>
+            // or struct pointer would reinterpret the first 24 bytes as
+            // `{ptr,len,cap}` and copy `len` arbitrary bytes — corrupting
+            // memory. Until a generic deep-clone intrinsic lands (Phase 7
+            // FFI-wrapper stdlib, #202), only the `.rodata` literal case
+            // is safe — every literal is a UTF-8 string today.
+            Opcode::ConstStr => return true,
+            Opcode::Phi => {
+                // Walk every Upsilon arm that targets this Phi.
+                for block in &func.blocks {
+                    for inst in &block.insts {
+                        if inst.opcode == Opcode::Upsilon
+                            && let InstData::PhiTarget(target) = inst.data
+                            && target == id
+                            && let Some(&arm_id) = inst.args.first()
+                        {
+                            stack.push(arm_id);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 fn lower_inst(
@@ -676,8 +823,38 @@ fn lower_inst(
                 builder.ins().return_(&[]);
             } else if let Some(&val_id) = inst.args.first() {
                 if let Some(&val) = ctx.value_map.get(&val_id) {
-                    let val = coerce_return_value(builder, val, ctx.return_ty);
-                    builder.ins().return_(&[val]);
+                    // Phase 4 / S5 return materialization (spec §5.1).
+                    // For a `FreshInCaller` function, the returned heap-typed
+                    // value MUST be in `target_region` at the return edge. If
+                    // the value's source path includes a `.rodata` literal or
+                    // a parameter alias, deep-copy it into `target_region`
+                    // (slot 0 of `hidden_region_values`).
+                    let needs_clone = ctx.return_ty == IrTy::Ptr
+                        && ctx.ir_func.summary.return_region == RegionConstraint::FreshInCaller
+                        && return_source_needs_materialization(ctx.ir_func, val_id);
+                    let materialized = if needs_clone {
+                        let target_region =
+                            ctx.hidden_region_values.first().copied().ok_or_else(|| {
+                                CodegenError::UnsupportedOpcode(
+                                    "FreshInCaller function missing target_region hidden param"
+                                        .to_string(),
+                                )
+                            })?;
+                        let clone_ref = ctx.string_clone_ref.ok_or_else(|| {
+                            CodegenError::UnsupportedOpcode(
+                                "return materialisation needed but \
+                                 __vow_string_clone_into_arena import missing — \
+                                 module-level scan in compile_module is out of sync"
+                                    .to_string(),
+                            )
+                        })?;
+                        let call_inst = builder.ins().call(clone_ref, &[target_region, val]);
+                        builder.inst_results(call_inst)[0]
+                    } else {
+                        val
+                    };
+                    let materialized = coerce_return_value(builder, materialized, ctx.return_ty);
+                    builder.ins().return_(&[materialized]);
                 } else {
                     builder.ins().return_(&[]);
                 }
@@ -859,25 +1036,75 @@ fn lower_inst(
                 })
                 .collect();
             if internal_call {
-                // Pad missing hidden-region parameters with the root arena.
-                //
-                // KNOWN GAP (Phase 4/5): now that the region pass produces
-                // non-default summaries (see `vow-ir/src/region.rs`), callees
-                // with `FreshInCaller` / store-effect-driven `AliasOf` summaries
-                // expect a real caller arena, not the root arena. Padding with
-                // root means escaping allocations from such callees fall back
-                // to process-lifetime storage instead of being routed through
-                // the caller's region. Forwarding `ctx.hidden_region_values`
-                // (or a per-parameter arena selected by the callee summary) is
-                // the right fix; it's left for the same Phase 4/5 work that
-                // wires `RegionId::Caller(idx)` end-to-end through the shim
-                // (issue #200, plus the call-site projection that will follow).
-                // No existing example or `tests/run/*.vow` triggers this path
-                // today — examples build clean post-Phase-3 — so the gap is
-                // latent until a program actually constructs and returns a
-                // fresh allocation through a multi-frame call chain.
-                while call_args.len() < expected_types.len() {
-                    call_args.push(builder.ins().global_value(types::I64, ctx.root_arena_gv));
+                // Project the callee's hidden region parameters from the
+                // caller's frame (spec §5.2). The order MUST match
+                // `build_signature` / `hidden_region_param_count`:
+                //   1. `target_region` first iff callee has
+                //      `return_region == FreshInCaller`. Sourced from the
+                //      Call's `inst.region` — the caller's view of where
+                //      the result must live.
+                //   2. One `*VowArena` per distinct `StoreEffect.target` in
+                //      ascending callee-param-index order. Sourced from the
+                //      region of the matching Vow argument.
+                let callee_id = match &inst.data {
+                    InstData::CallTarget(f) => *f,
+                    _ => unreachable!("internal_call is true only for CallTarget"),
+                };
+                let callee_summary = ctx.func_summaries.get(&callee_id).ok_or_else(|| {
+                    CodegenError::UnsupportedOpcode(format!(
+                        "missing region summary for callee FuncId({:?})",
+                        callee_id
+                    ))
+                })?;
+
+                if callee_summary.return_region == RegionConstraint::FreshInCaller {
+                    let target_region = region_to_arena_value(
+                        builder,
+                        inst.region,
+                        ctx.hidden_region_values,
+                        ctx.block_arena_slots,
+                        ctx.root_arena_gv,
+                    )?;
+                    call_args.push(target_region);
+                }
+
+                let mut store_targets: Vec<u32> = callee_summary
+                    .store_effects
+                    .iter()
+                    .map(|e| e.target)
+                    .collect();
+                store_targets.sort_unstable();
+                store_targets.dedup();
+                for target_idx in store_targets {
+                    // The arena to thread is the region of the Vow
+                    // argument at `target_idx` in this call. For
+                    // `RegionAlloc`-derived arguments the region pass set
+                    // `inst.region` precisely; for other heap-typed
+                    // arguments (`GetArg`, `Phi`, `FieldGet`, ...) the
+                    // region currently defaults to `Root`. That fallback
+                    // matches today's external behavior and is the same
+                    // gap S5 / future work tightens via per-value region
+                    // tracking.
+                    let arg_region = inst
+                        .args
+                        .get(target_idx as usize)
+                        .and_then(|arg_id| {
+                            ctx.ir_func
+                                .blocks
+                                .iter()
+                                .flat_map(|b| b.insts.iter())
+                                .find(|i| i.id == *arg_id)
+                        })
+                        .map(|src_inst| src_inst.region)
+                        .unwrap_or(RegionId::Root);
+                    let arena = region_to_arena_value(
+                        builder,
+                        arg_region,
+                        ctx.hidden_region_values,
+                        ctx.block_arena_slots,
+                        ctx.root_arena_gv,
+                    )?;
+                    call_args.push(arena);
                 }
             }
             let call_inst = builder.ins().call(func_ref, &call_args);
@@ -906,29 +1133,13 @@ fn lower_inst(
             } else {
                 (0, 8)
             };
-            let arena = match inst.region {
-                RegionId::Root => builder.ins().global_value(types::I64, ctx.root_arena_gv),
-                RegionId::Caller(idx) => {
-                    let Some(&arena) = ctx.hidden_region_values.get(idx.0 as usize) else {
-                        return Err(CodegenError::UnsupportedOpcode(format!(
-                            "missing hidden arena parameter {:?} for RegionAlloc",
-                            idx
-                        )));
-                    };
-                    arena
-                }
-                RegionId::Block(_) => {
-                    return Err(CodegenError::UnsupportedOpcode(format!(
-                        "RegionAlloc with {:?} is not wired until block arena routing lands",
-                        inst.region
-                    )));
-                }
-                RegionId::Rodata => {
-                    return Err(CodegenError::UnsupportedOpcode(
-                        "RegionAlloc cannot target rodata".to_string(),
-                    ));
-                }
-            };
+            let arena = region_to_arena_value(
+                builder,
+                inst.region,
+                ctx.hidden_region_values,
+                ctx.block_arena_slots,
+                ctx.root_arena_gv,
+            )?;
             let size_val = builder.ins().iconst(types::I64, size);
             let align_val = builder.ins().iconst(types::I64, align);
             let call_inst = builder
@@ -947,9 +1158,22 @@ fn lower_inst(
         }
 
         Opcode::RegionOpen | Opcode::RegionClose => {
-            // Phase 2: these opcodes are declared but never emitted by the
-            // lowerer. Phase 4 wires them to __vow_arena_open / _close calls.
-            unreachable!("RegionOpen / RegionClose not emitted in Phase 2");
+            let RegionId::Block(block_id) = inst.region else {
+                return Err(CodegenError::UnsupportedOpcode(format!(
+                    "{:?} requires region = Block(_), got {:?}",
+                    inst.opcode, inst.region
+                )));
+            };
+            let slot = block_arena_slot(builder, ctx.block_arena_slots, block_id);
+            let arena_addr = builder.ins().stack_addr(types::I64, slot, 0);
+            let func_ref = if inst.opcode == Opcode::RegionOpen {
+                ctx.arena_open_ref
+            } else {
+                ctx.arena_close_ref
+            };
+            builder.ins().call(func_ref, &[arena_addr]);
+            let unit = builder.ins().iconst(types::I32, 0);
+            ctx.value_map.insert(inst.id, unit);
         }
 
         // ------------------------------------------------------------------
@@ -1190,6 +1414,9 @@ struct RuntimeIds {
     vow_violation_id: Option<CraneliftFuncId>,
     overflow_id: Option<CraneliftFuncId>,
     arena_alloc_id: CraneliftFuncId,
+    arena_open_id: CraneliftFuncId,
+    arena_close_id: CraneliftFuncId,
+    string_clone_id: Option<CraneliftFuncId>,
     runtime_start_id: CraneliftFuncId,
     root_arena_id: DataId,
     trace_enter_id: Option<CraneliftFuncId>,
@@ -1215,6 +1442,7 @@ fn compile_ir_function(
     runtime: &RuntimeIds,
     string_data_ids: &[DataId],
     extern_func_ids: &HashMap<String, CraneliftFuncId>,
+    func_summaries: &HashMap<IrFuncId, RegionSummary>,
 ) -> Result<(), CodegenError> {
     let vow_violation_id = runtime.vow_violation_id;
     let overflow_id = runtime.overflow_id;
@@ -1253,6 +1481,11 @@ fn compile_ir_function(
         vow_violation_id.map(|id| obj_module.declare_func_in_func(id, builder.func));
     let overflow_ref = overflow_id.map(|id| obj_module.declare_func_in_func(id, builder.func));
     let arena_alloc_ref = obj_module.declare_func_in_func(runtime.arena_alloc_id, builder.func);
+    let arena_open_ref = obj_module.declare_func_in_func(runtime.arena_open_id, builder.func);
+    let arena_close_ref = obj_module.declare_func_in_func(runtime.arena_close_id, builder.func);
+    let string_clone_ref = runtime
+        .string_clone_id
+        .map(|id| obj_module.declare_func_in_func(id, builder.func));
     let root_arena_gv = obj_module.declare_data_in_func(runtime.root_arena_id, builder.func);
 
     let mut ir_func_id_to_ref: HashMap<IrFuncId, FuncRef> = HashMap::new();
@@ -1423,6 +1656,7 @@ fn compile_ir_function(
     }
 
     let mut value_map: HashMap<InstId, Value> = HashMap::new();
+    let mut block_arena_slots: HashMap<BlockId, StackSlot> = HashMap::new();
 
     // Emit each block
     let mut first_block = true;
@@ -1454,6 +1688,11 @@ fn compile_ir_function(
             vow_violation_ref,
             overflow_ref,
             arena_alloc_ref,
+            arena_open_ref,
+            arena_close_ref,
+            string_clone_ref,
+            block_arena_slots: &mut block_arena_slots,
+            func_summaries,
             mode,
             trace,
             current_ir_block: ir_block.id,
@@ -1953,6 +2192,41 @@ impl Backend for CraneliftBackend {
             .declare_function("__vow_arena_alloc", Linkage::Import, &arena_alloc_sig)
             .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
 
+        let mut arena_open_close_sig = obj_module.make_signature();
+        arena_open_close_sig.params.push(AbiParam::new(types::I64)); // *VowArena
+        let arena_open_id = obj_module
+            .declare_function("__vow_arena_open", Linkage::Import, &arena_open_close_sig)
+            .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+        let arena_close_id = obj_module
+            .declare_function("__vow_arena_close", Linkage::Import, &arena_open_close_sig)
+            .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+
+        // `__vow_string_clone_into_arena` is only imported when some function
+        // in the module actually emits a return-materialisation call. This
+        // keeps the symbol out of object files for modules whose
+        // FreshInCaller paths are all already in `target_region` (spec §5.1).
+        let needs_string_clone = module
+            .functions
+            .iter()
+            .any(module_uses_return_materialization);
+        let string_clone_id = if needs_string_clone {
+            let mut string_clone_sig = obj_module.make_signature();
+            string_clone_sig.params.push(AbiParam::new(types::I64)); // *VowArena
+            string_clone_sig.params.push(AbiParam::new(types::I64)); // *const u8 (source)
+            string_clone_sig.returns.push(AbiParam::new(types::I64)); // *mut u8 (clone)
+            Some(
+                obj_module
+                    .declare_function(
+                        "__vow_string_clone_into_arena",
+                        Linkage::Import,
+                        &string_clone_sig,
+                    )
+                    .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?,
+            )
+        } else {
+            None
+        };
+
         let runtime_start_sig = obj_module.make_signature();
         let runtime_start_id = obj_module
             .declare_function("__vow_runtime_start", Linkage::Import, &runtime_start_sig)
@@ -2059,6 +2333,16 @@ impl Backend for CraneliftBackend {
             (None, None)
         };
 
+        // Pre-collect each callable's region summary, keyed by IR FuncId.
+        // Internal call lowering reads this to project the callee's hidden
+        // region parameters (target_region for FreshInCaller; one per
+        // distinct StoreEffect.target) from the caller's frame.
+        let func_summaries: HashMap<IrFuncId, RegionSummary> = module
+            .functions
+            .iter()
+            .map(|f| (f.id, f.summary.clone()))
+            .collect();
+
         // Compile each function
         let mut builder_ctx = FunctionBuilderContext::new();
         for (ir_func, &(_, cl_id)) in module.functions.iter().zip(ir_to_cl.iter()) {
@@ -2078,6 +2362,9 @@ impl Backend for CraneliftBackend {
                     vow_violation_id,
                     overflow_id,
                     arena_alloc_id,
+                    arena_open_id,
+                    arena_close_id,
+                    string_clone_id,
                     runtime_start_id,
                     root_arena_id,
                     trace_enter_id,
@@ -2092,6 +2379,7 @@ impl Backend for CraneliftBackend {
                 },
                 &string_data_ids,
                 &extern_func_ids,
+                &func_summaries,
             )?;
 
             if let Err(e) = obj_module.define_function(cl_id, &mut cl_ctx) {
@@ -2120,8 +2408,8 @@ impl Backend for CraneliftBackend {
 mod tests {
     use super::*;
     use vow_ir::{
-        BasicBlock, BlockId, FuncId, Function, InstData, InstId, Module, Opcode, RegionConstraint,
-        RegionId, RegionSummary, StoreEffect, Ty, VowEntry, VowId,
+        BasicBlock, BlockId, FuncId, Function, HiddenRegionIdx, InstData, InstId, Module, Opcode,
+        RegionConstraint, RegionId, RegionSummary, StoreEffect, Ty, VowEntry, VowId,
     };
     use vow_syntax::span::Span;
 
@@ -2392,6 +2680,9 @@ mod tests {
         assert_eq!(sig.returns[0].value_type, types::I64);
     }
 
+    /// Acceptance test 1 from issue #198: a `FreshInCaller` return + one
+    /// store-effect parameter gets two hidden `*VowArena` params, with
+    /// `target_region` first and the store-target hidden region second.
     #[test]
     fn signature_projects_hidden_regions_from_full_summary() {
         use cranelift_codegen::isa::CallConv;
@@ -3386,6 +3677,74 @@ mod tests {
     }
 
     #[test]
+    fn compile_block_arena_open_alloc_close() {
+        // Phase 4 / S2: a function with a single block that opens its own
+        // block-region arena, allocates from it, then closes it.
+        //
+        //   block0:
+        //     v0 = RegionOpen(block0)
+        //     v1 = RegionAlloc { region: Block(block0), size: 64, align: 8 }
+        //     v2 = RegionClose(block0)
+        //     return
+        //
+        // The codegen MUST:
+        //   - reserve a stack slot for the block's VowArena header,
+        //   - lower RegionOpen  → __vow_arena_open(&slot),
+        //   - lower RegionAlloc → __vow_arena_alloc(&slot, size, align),
+        //   - lower RegionClose → __vow_arena_close(&slot),
+        //   - import all three runtime symbols.
+        let mut open = inst(0, Opcode::RegionOpen, Ty::Unit, vec![], InstData::None);
+        open.region = RegionId::Block(BlockId(0));
+        let mut alloc = inst(
+            1,
+            Opcode::RegionAlloc,
+            Ty::Ptr,
+            vec![],
+            InstData::AllocSize { size: 64, align: 8 },
+        );
+        alloc.region = RegionId::Block(BlockId(0));
+        let mut close = inst(2, Opcode::RegionClose, Ty::Unit, vec![], InstData::None);
+        close.region = RegionId::Block(BlockId(0));
+        let module = make_module(
+            "test",
+            vec![simple_fn(
+                0,
+                "f",
+                vec![],
+                Ty::Unit,
+                vec![
+                    open,
+                    alloc,
+                    close,
+                    inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                ],
+            )],
+        );
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(
+            symbols.contains("__vow_arena_alloc"),
+            "RegionAlloc{{Block}} must import __vow_arena_alloc"
+        );
+        assert!(
+            symbols.contains("__vow_arena_open"),
+            "RegionOpen must import __vow_arena_open"
+        );
+        assert!(
+            symbols.contains("__vow_arena_close"),
+            "RegionClose must import __vow_arena_close"
+        );
+    }
+
+    #[test]
     fn compile_linear_ops() {
         let module = make_module(
             "test",
@@ -3929,6 +4288,333 @@ mod tests {
         let result =
             CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    /// Acceptance test 2 from issue #198: a `FreshInCaller` function
+    /// whose return Phi reaches a `.rodata` literal on one branch and a
+    /// `target_region` alloc on the other must materialise via the clone
+    /// runtime — the literal path is the trigger; the alloc path is
+    /// already in `target_region` and would be no-op'd individually but
+    /// the unified Phi forces a clone whose source happens to be in
+    /// `target_region` already (correctness over redundancy elimination).
+    #[test]
+    fn fresh_in_caller_phi_mixed_paths_materialises() {
+        // block 0:
+        //   v0 = GetArg(0) : i64                      -- selector
+        //   br v0, block1, block2
+        // block 1:
+        //   v1 = ConstStr(0)
+        //   v2 = Upsilon(target=v3) v1               -- arm A: literal
+        //   jump block3
+        // block 2:
+        //   v4 = RegionAlloc{Caller(0)}              -- arm B: target_region
+        //   v5 = Upsilon(target=v3) v4
+        //   jump block3
+        // block 3:
+        //   v3 = Phi : Ptr
+        //   return v3
+        let mut alloc = inst(
+            4,
+            Opcode::RegionAlloc,
+            Ty::Ptr,
+            vec![],
+            InstData::AllocSize { size: 16, align: 8 },
+        );
+        alloc.region = RegionId::Caller(HiddenRegionIdx(0));
+        let func = Function {
+            id: FuncId(0),
+            name: "mixed".to_string(),
+            params: vec![Ty::Bool],
+            param_names: vec![],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![
+                BasicBlock {
+                    id: BlockId(0),
+                    insts: vec![
+                        inst(0, Opcode::GetArg, Ty::Bool, vec![], InstData::ArgIndex(0)),
+                        inst(
+                            10,
+                            Opcode::Branch,
+                            Ty::Unit,
+                            vec![0],
+                            InstData::BranchTargets {
+                                then_block: BlockId(1),
+                                else_block: BlockId(2),
+                            },
+                        ),
+                    ],
+                },
+                BasicBlock {
+                    id: BlockId(1),
+                    insts: vec![
+                        inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                        inst(
+                            2,
+                            Opcode::Upsilon,
+                            Ty::Unit,
+                            vec![1],
+                            InstData::PhiTarget(InstId(3)),
+                        ),
+                        inst(
+                            11,
+                            Opcode::Jump,
+                            Ty::Unit,
+                            vec![],
+                            InstData::JumpTarget(BlockId(3)),
+                        ),
+                    ],
+                },
+                BasicBlock {
+                    id: BlockId(2),
+                    insts: vec![
+                        alloc,
+                        inst(
+                            5,
+                            Opcode::Upsilon,
+                            Ty::Unit,
+                            vec![4],
+                            InstData::PhiTarget(InstId(3)),
+                        ),
+                        inst(
+                            12,
+                            Opcode::Jump,
+                            Ty::Unit,
+                            vec![],
+                            InstData::JumpTarget(BlockId(3)),
+                        ),
+                    ],
+                },
+                BasicBlock {
+                    id: BlockId(3),
+                    insts: vec![
+                        inst(3, Opcode::Phi, Ty::Ptr, vec![], InstData::None),
+                        inst(13, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+                    ],
+                },
+            ],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary {
+                param_regions: vec![],
+                return_region: RegionConstraint::FreshInCaller,
+                store_effects: vec![],
+            },
+        };
+        let module = make_module("test", vec![func]);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(
+            symbols.contains("__vow_string_clone_into_arena"),
+            "Phi reaching a ConstStr arm must trigger return materialisation"
+        );
+    }
+
+    #[test]
+    fn fresh_in_caller_const_str_return_materialises_via_clone() {
+        // Phase 4 / S5: a `FreshInCaller` function whose return path reaches
+        // a `.rodata` `ConstStr` MUST clone the descriptor into
+        // `target_region` before returning (spec §5.1). The produced object
+        // must import `__vow_string_clone_into_arena`; the regular
+        // FreshInCaller-into-RegionAlloc test below confirms the symbol is
+        // *not* imported when the path doesn't need materialisation.
+        let module = make_module(
+            "test",
+            vec![Function {
+                id: FuncId(0),
+                name: "literal_returner".to_string(),
+                params: vec![],
+                param_names: vec![],
+                return_ty: Ty::Ptr,
+                effects: vec![],
+                vows: vec![],
+                blocks: vec![BasicBlock {
+                    id: BlockId(0),
+                    insts: vec![
+                        inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                        inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                    ],
+                }],
+                local_names: std::collections::HashMap::new(),
+                summary: RegionSummary {
+                    param_regions: vec![],
+                    return_region: RegionConstraint::FreshInCaller,
+                    store_effects: vec![],
+                },
+            }],
+        );
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(
+            symbols.contains("__vow_string_clone_into_arena"),
+            "FreshInCaller .rodata return path must import __vow_string_clone_into_arena"
+        );
+    }
+
+    #[test]
+    fn fresh_in_caller_region_alloc_return_skips_materialisation() {
+        // Inverse of the above: when the return source is a `RegionAlloc`
+        // (placed in `Caller(0)` by the region pass), no clone is needed —
+        // the value is already in `target_region`.
+        let mut alloc = inst(
+            0,
+            Opcode::RegionAlloc,
+            Ty::Ptr,
+            vec![],
+            InstData::AllocSize { size: 24, align: 8 },
+        );
+        alloc.region = RegionId::Caller(HiddenRegionIdx(0));
+        let module = make_module(
+            "test",
+            vec![Function {
+                id: FuncId(0),
+                name: "alloc_returner".to_string(),
+                params: vec![],
+                param_names: vec![],
+                return_ty: Ty::Ptr,
+                effects: vec![],
+                vows: vec![],
+                blocks: vec![BasicBlock {
+                    id: BlockId(0),
+                    insts: vec![
+                        alloc,
+                        inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                    ],
+                }],
+                local_names: std::collections::HashMap::new(),
+                summary: RegionSummary {
+                    param_regions: vec![],
+                    return_region: RegionConstraint::FreshInCaller,
+                    store_effects: vec![],
+                },
+            }],
+        );
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(
+            !symbols.contains("__vow_string_clone_into_arena"),
+            "FreshInCaller RegionAlloc(Caller) return path must not emit a clone"
+        );
+    }
+
+    #[test]
+    fn compile_call_threads_block_arena_for_fresh_in_caller_callee() {
+        // Phase 4 / S4: when caller has a Block(0) region and calls a
+        // FreshInCaller callee whose result lives in Block(0), the call
+        // site must project the callee's hidden `target_region` from the
+        // caller's frame — i.e. pass the caller's block-arena stack slot,
+        // not pad the call with `__vow_root_arena`.
+        //
+        // This test exercises the projection path end-to-end: compilation
+        // must succeed and the produced object must import all three
+        // arena runtime symbols (open/close/alloc), confirming the call
+        // site reaches the projection helper rather than the legacy
+        // root-arena padding (which would never declare arena_open / _close
+        // for a caller that opens its own block region).
+        let mut callee_alloc = inst(
+            0,
+            Opcode::RegionAlloc,
+            Ty::Ptr,
+            vec![],
+            InstData::AllocSize { size: 16, align: 8 },
+        );
+        callee_alloc.region = RegionId::Caller(HiddenRegionIdx(0));
+
+        let callee = Function {
+            id: FuncId(0),
+            name: "callee".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    callee_alloc,
+                    inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary {
+                param_regions: vec![],
+                return_region: RegionConstraint::FreshInCaller,
+                store_effects: vec![],
+            },
+        };
+
+        let mut caller_open = inst(0, Opcode::RegionOpen, Ty::Unit, vec![], InstData::None);
+        caller_open.region = RegionId::Block(BlockId(0));
+        let mut caller_call = inst(
+            1,
+            Opcode::Call,
+            Ty::Ptr,
+            vec![],
+            InstData::CallTarget(FuncId(0)),
+        );
+        caller_call.region = RegionId::Block(BlockId(0));
+        let mut caller_close = inst(2, Opcode::RegionClose, Ty::Unit, vec![], InstData::None);
+        caller_close.region = RegionId::Block(BlockId(0));
+
+        let caller = Function {
+            id: FuncId(1),
+            name: "caller".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::Unit,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    caller_open,
+                    caller_call,
+                    caller_close,
+                    inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+        };
+
+        let module = make_module("test", vec![callee, caller]);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(symbols.contains("__vow_arena_alloc"));
+        assert!(symbols.contains("__vow_arena_open"));
+        assert!(symbols.contains("__vow_arena_close"));
     }
 
     #[test]

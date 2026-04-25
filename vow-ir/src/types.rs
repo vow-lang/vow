@@ -232,10 +232,14 @@ pub struct Inst {
     pub args: Vec<InstId>,
     pub data: InstData,
     pub origin: Span,
-    /// Region tag for heap-producing instructions (spec §12.1).
-    /// Meaningful only when `opcode == Opcode::RegionAlloc`; other opcodes
-    /// carry `RegionId::Root` as a benign placeholder until Phase 3 infers
-    /// real values.
+    /// Region tag (spec §12.1). Carries:
+    /// - For `RegionAlloc`: the region the allocation targets, as inferred
+    ///   by the Phase 3 region pass (`Block(_)`, `Root`, `Rodata`, or
+    ///   `Caller(idx)`).
+    /// - For `RegionOpen` / `RegionClose`: `Block(B)` naming the block
+    ///   region opened/closed by this marker (spec §12.3).
+    /// - For all other opcodes: `RegionId::Root` as a benign placeholder
+    ///   (the field is present but ignored).
     pub region: RegionId,
 }
 

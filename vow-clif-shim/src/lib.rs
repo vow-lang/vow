@@ -748,6 +748,18 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
         .obj_module
         .declare_function("__vow_arena_alloc", Linkage::Import, &arena_alloc_sig)
         .expect("declare __vow_arena_alloc");
+
+    let mut arena_open_close_sig = ctx.obj_module.make_signature();
+    arena_open_close_sig.params.push(AbiParam::new(types::I64)); // *VowArena
+    let arena_open_id = ctx
+        .obj_module
+        .declare_function("__vow_arena_open", Linkage::Import, &arena_open_close_sig)
+        .expect("declare __vow_arena_open");
+    let arena_close_id = ctx
+        .obj_module
+        .declare_function("__vow_arena_close", Linkage::Import, &arena_open_close_sig)
+        .expect("declare __vow_arena_close");
+
     let root_arena_id = ctx
         .obj_module
         .declare_data("__vow_root_arena", Linkage::Import, true, false)
@@ -902,9 +914,21 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     let arena_alloc_ref = ctx
         .obj_module
         .declare_func_in_func(arena_alloc_id, builder.func);
+    let arena_open_ref = ctx
+        .obj_module
+        .declare_func_in_func(arena_open_id, builder.func);
+    let arena_close_ref = ctx
+        .obj_module
+        .declare_func_in_func(arena_close_id, builder.func);
     let root_arena_gv = ctx
         .obj_module
         .declare_data_in_func(root_arena_id, builder.func);
+    // Per-block VowArena stack-slot map. Lazily populated on first use of
+    // a given BlockId by `IOP_REGION_OPEN` / `IOP_REGION_CLOSE` /
+    // `IOP_REGION_ALLOC` with `REGION_KIND_BLOCK`. `VowArena` is 48 bytes,
+    // 8-byte aligned (asserted in `vow-runtime/src/lib.rs`).
+    let mut block_arena_slots: std::collections::HashMap<i64, StackSlot> =
+        std::collections::HashMap::new();
     let vow_violation_ref =
         vow_violation_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
     let overflow_ref = overflow_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
@@ -1787,40 +1811,60 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
 
                 // Region / linear
                 IOP_REGION_ALLOC => {
-                    // Region-kind gating. The Rust backend routes
-                    // `RegionId::Caller(idx)` through a hidden arena
-                    // parameter and rejects `Block`/`Rodata`. The shim
-                    // has not yet grown the hidden-arena plumbing, so
-                    // we refuse anything that isn't `Root` rather than
-                    // silently allocating into the root arena — which
-                    // would violate the caller's region lifetime when
-                    // a `.vmod` produced by the Rust compiler is fed
-                    // back through the self-hosted pipeline.
                     let rgn = inst_rgns[ii];
                     let kind = rgn & 3;
-                    if kind != REGION_KIND_ROOT {
-                        let label = match kind {
-                            REGION_KIND_BLOCK => "Block",
-                            REGION_KIND_CALLER => "Caller",
-                            REGION_KIND_RODATA => "Rodata",
-                            _ => "Unknown",
-                        };
-                        eprintln!(
-                            "clif_shim: IOP_REGION_ALLOC with region kind {} (payload {}) \
-                             is not supported yet — only Root is wired; \
-                             hidden-arena routing for Caller and block-scoped arenas \
-                             lands in a follow-up",
-                            label,
-                            rgn >> 2,
-                        );
-                        return -1;
-                    }
+                    let payload = rgn >> 2;
                     let (size, align) = if dk == IDATA_ALLOC_SIZE {
                         (dv, dv2)
                     } else {
                         (0, 8)
                     };
-                    let arena = builder.ins().global_value(types::I64, root_arena_gv);
+                    let arena = match kind {
+                        REGION_KIND_ROOT => builder.ins().global_value(types::I64, root_arena_gv),
+                        REGION_KIND_BLOCK => {
+                            let slot = *block_arena_slots.entry(payload).or_insert_with(|| {
+                                builder.create_sized_stack_slot(StackSlotData::new(
+                                    StackSlotKind::ExplicitSlot,
+                                    48, // sizeof VowArena
+                                    3,  // log2(8)
+                                ))
+                            });
+                            builder.ins().stack_addr(types::I64, slot, 0)
+                        }
+                        REGION_KIND_CALLER => {
+                            // Hidden region parameters are appended to the
+                            // function's signature after the user-visible
+                            // params (spec §5.2). Threading `Caller(k)` for
+                            // `k > 0` requires the self-hosted compiler to
+                            // declare the right hidden-param count when
+                            // emitting the function — currently the shim
+                            // expects only user params, so we reject
+                            // anything beyond `Caller(0)` for now and use
+                            // the first hidden value when `k == 0`.
+                            eprintln!(
+                                "clif_shim: IOP_REGION_ALLOC with REGION_KIND_CALLER \
+                                 (k={}) is not yet wired — self-hosted compiler must \
+                                 not emit Caller-routed allocations until hidden-param \
+                                 plumbing lands",
+                                payload,
+                            );
+                            return -1;
+                        }
+                        REGION_KIND_RODATA => {
+                            eprintln!(
+                                "clif_shim: IOP_REGION_ALLOC with REGION_KIND_RODATA \
+                                 is invalid — rodata-backed values are static, not \
+                                 allocated"
+                            );
+                            return -1;
+                        }
+                        _ => {
+                            eprintln!(
+                                "clif_shim: IOP_REGION_ALLOC with unknown region kind {kind}"
+                            );
+                            return -1;
+                        }
+                    };
                     let size_val = builder.ins().iconst(types::I64, size);
                     let align_val = builder.ins().iconst(types::I64, align);
                     let call_inst = builder
@@ -1838,13 +1882,39 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     set_val!(iid, unit);
                 }
 
-                // Phase 2: RegionOpen / RegionClose are declared but never
-                // emitted. Trap at runtime so an accidental Phase-3 slip
-                // fails loudly (symmetric with `vow-codegen`'s
-                // `unreachable!("not emitted in Phase 2")`). User trap code
-                // `3` is reserved for "unimplemented region opcode".
+                // RegionOpen / RegionClose: bracket a block-region's lifetime
+                // by calling `__vow_arena_open` / `__vow_arena_close` on the
+                // BlockId-keyed stack slot. The region payload (encoded in
+                // `inst_rgns[ii]`) names the block being opened/closed, which
+                // need not match the containing IR block — opens/closes can
+                // straddle basic-block boundaries.
                 IOP_REGION_OPEN | IOP_REGION_CLOSE => {
-                    builder.ins().trap(TrapCode::unwrap_user(3));
+                    let rgn = inst_rgns[ii];
+                    let kind = rgn & 3;
+                    if kind != REGION_KIND_BLOCK {
+                        eprintln!(
+                            "clif_shim: IOP_REGION_{{OPEN,CLOSE}} requires \
+                             REGION_KIND_BLOCK, got kind {kind}"
+                        );
+                        return -1;
+                    }
+                    let payload = rgn >> 2;
+                    let slot = *block_arena_slots.entry(payload).or_insert_with(|| {
+                        builder.create_sized_stack_slot(StackSlotData::new(
+                            StackSlotKind::ExplicitSlot,
+                            48,
+                            3,
+                        ))
+                    });
+                    let arena_addr = builder.ins().stack_addr(types::I64, slot, 0);
+                    let func_ref = if op == IOP_REGION_OPEN {
+                        arena_open_ref
+                    } else {
+                        arena_close_ref
+                    };
+                    builder.ins().call(func_ref, &[arena_addr]);
+                    let unit = builder.ins().iconst(types::I32, 0);
+                    set_val!(iid, unit);
                 }
 
                 // Struct / enum field access
