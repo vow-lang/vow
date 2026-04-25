@@ -511,9 +511,22 @@ fn add_marker(
 
 /// After a call returns AliasOf(j), the result inst is *the same value* as
 /// arg[j] from the must_outlive standpoint: any marker on the result must
-/// also apply to arg[j], and vice versa. We model this by linking them in
-/// a follow-up sweep — for Phase 3's sufficiency we copy the result's
-/// existing markers to the arg.
+/// also apply to arg[j], and vice versa.
+///
+/// **Currently inert in the forward sweep.** `handle_inst` invokes this at
+/// the point a `Call` is processed, but no downstream consumer (e.g., a
+/// `Return` that marks the call result `VirtualCaller`) has run yet — so
+/// `must_outlive[result_id]` is always empty here and the function returns
+/// without doing anything. The return-region summary is correctly
+/// computed by the separate `compute_return_region` deep pass below, so
+/// this no-op does not affect Phase 3 outputs.
+///
+/// TODO(Phase 5 / issue #200): once store-effect propagation lands, run
+/// `propagate_alias` either as a backward sweep after the must_outlive
+/// forward pass completes, or as a dedicated pass that walks
+/// `Opcode::Call` results once their downstream uses are visible. Either
+/// approach makes the function load-bearing for AliasOf-driven
+/// arena-routing decisions on call results.
 fn propagate_alias(
     must_outlive: &mut BTreeMap<InstId, BTreeSet<MustOutliveMarker>>,
     result_id: InstId,

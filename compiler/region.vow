@@ -153,12 +153,24 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx, path: String) -> IrModule {
     // explicitly map -1 → ConstantGlobal as a defensive fallback (the
     // §4.3 step 5 resolution above must always have run, so this fallback
     // is dead code on a correct iteration, but provides a structural guard).
+    //
+    // Canonical-form guard: AliasOfAny MUST never carry an empty alias
+    // vec (Rust side asserts the same in `vow-ir/src/region.rs`). The
+    // §4.3 step 5 path can produce ALIAS_OF_ANY via `join_kinds` without
+    // populating `int_aliases_list[fidx]` because `resolve_uninit_return_kind`
+    // returns just the kind today (see DIVERGENCE comment on
+    // `deep_aliases_inner`). Downgrade an empty AliasOfAny to FreshInCaller
+    // — the conservative "any of multiple AliasOf" join — so the published
+    // summary stays in canonical shape until self-hosted gains the full
+    // recursive aliases pipeline.
     let mut fi: i64 = 0;
     while fi < n_funcs {
         let kind: i64 = int_kinds[fi];
         let safe_kind: i64 = {
             if kind == RSUM_INTERNAL_UNINIT() {
                 RSUM_KIND_CONSTANT_GLOBAL()
+            } else if kind == RSUM_KIND_ALIAS_OF_ANY() && int_aliases_list[fi].len() == 0 {
+                RSUM_KIND_FRESH_IN_CALLER()
             } else {
                 kind
             }
