@@ -196,6 +196,15 @@ const REGION_KIND_CALLER: i64 = 1;
 const REGION_KIND_ROOT: i64 = 2;
 const REGION_KIND_RODATA: i64 = 3;
 
+/// Size of `vow_runtime::VowArena` in bytes — asserted in
+/// `vow-runtime/src/lib.rs` (`assert!(size_of::<VowArena>() == 48)`).
+/// Mirrors the same constant in `vow-codegen/src/cranelift_backend.rs`
+/// so a future `VowArena` resize updates both backends in lockstep.
+const VOW_ARENA_HEADER_SIZE: u32 = 48;
+/// Log₂ of the `VowArena` header alignment (8 bytes — contains
+/// pointers). Mirrors `vow-codegen`.
+const VOW_ARENA_HEADER_ALIGN_LOG2: u8 = 3;
+
 const IOP_LINEAR_CONSUME: i64 = 79;
 const IOP_LINEAR_BORROW: i64 = 80;
 
@@ -1832,8 +1841,8 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                             let slot = *block_arena_slots.entry(payload).or_insert_with(|| {
                                 builder.create_sized_stack_slot(StackSlotData::new(
                                     StackSlotKind::ExplicitSlot,
-                                    48, // sizeof VowArena
-                                    3,  // log2(8)
+                                    VOW_ARENA_HEADER_SIZE,
+                                    VOW_ARENA_HEADER_ALIGN_LOG2,
                                 ))
                             });
                             builder.ins().stack_addr(types::I64, slot, 0)
@@ -1908,8 +1917,8 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     let slot = *block_arena_slots.entry(payload).or_insert_with(|| {
                         builder.create_sized_stack_slot(StackSlotData::new(
                             StackSlotKind::ExplicitSlot,
-                            48,
-                            3,
+                            VOW_ARENA_HEADER_SIZE,
+                            VOW_ARENA_HEADER_ALIGN_LOG2,
                         ))
                     });
                     let arena_addr = builder.ins().stack_addr(types::I64, slot, 0);
