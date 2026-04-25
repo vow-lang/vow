@@ -422,16 +422,38 @@ fn analyze_function(
             k = k + 1;
         }
     }
-    // TODO(Phase 5 / issue #200): when self-hosted gains store_effects
-    // inference, also compare int_se_targets[fidx] / int_se_src_kinds[fidx]
-    // / int_se_src_aux[fidx] / int_se_src_aliases[fidx] here — otherwise
-    // a round in which only store_effects grow will not set `changed`
-    // and the SCC fixed-point will miss the update. Harmless in Phase 3
-    // (both compilers produce empty store_effects), but latent once
-    // Phase 5 wires inference.
+    // TODO(Phase 5 / issue #200): self-hosted needs TWO additions here,
+    // not just the convergence check.
+    //
+    // (1) Store-effect INFERENCE itself is missing. The Rust pass'
+    // `handle_inst` (vow-ir/src/region.rs `Opcode::Store | Opcode::FieldSet`
+    // arm) calls `trace_origin` + `origin_to_constraint` and inserts
+    // into `summary.store_effects`. The self-hosted port has no
+    // equivalent — `int_se_targets[fidx]` etc. are always left empty.
+    // Functions that store one parameter into another currently
+    // produce empty `store_effects` from the self-hosted compiler
+    // even when the Rust compiler produces a non-empty result.
+    //
+    // (2) Once (1) lands, add the convergence comparison here so a
+    // round where only store_effects grow will set `changed = true`:
+    // compare int_se_targets[fidx] / int_se_src_kinds[fidx] /
+    // int_se_src_aux[fidx] / int_se_src_aliases[fidx] against their
+    // prev_* snapshots. Without this, the SCC fixed-point will
+    // declare convergence one iteration too early.
+    //
+    // Both gaps are harmless today (both compilers produce empty
+    // store_effects), but both must land together to keep the
+    // differential gate working.
     false
 }
 
+// Currently unused (intentional scaffolding). Becomes live once the
+// `vow-clif-shim` learns hidden-arena routing for `IOP_REGION_ALLOC`
+// (tracked alongside Phase 5 wiring, issue #200). Keeping this and
+// `collect_escaping_allocs` ready avoids a second touch of the file
+// when the shim is updated. Until then, escaping allocations stay at
+// the Phase-2 default (Root) — see the comment in `analyze_function`
+// where these would otherwise be wired.
 fn region_caller0() -> i64 {
     // RegionId::Caller(HiddenRegionIdx(0)) packed: kind=CALLER, val=0.
     region_pack(REGION_KIND_CALLER(), 0)
@@ -621,17 +643,31 @@ fn deep_aliases_inner(
     int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
     visiting: Vec<i64>
 ) -> Vec<i64> {
-    // For Phase 3 minimal we don't compute aliases recursively here;
-    // they're built up via the join_aliases helper called at each Phi/Call merge
-    // in deep_kind_inner. For non-merging origins, return empty.
+    // DIVERGENCE (tracked for the byte-identical summary diff deferred
+    // in the PR description): AliasOfAny call-site resolution is
+    // ENTIRELY ABSENT in the self-hosted pass — not just non-recursive.
     //
-    // DIVERGENCE (tracked for the byte-identical summary diff deferred in
-    // the PR description): the Rust `origin_to_internal_inner` computes
-    // `AliasOfAny` by joining aliased arg origins when a callee returns
-    // `AliasOfAny(s)` or when a Phi merges multiple param aliases. This
-    // port mirrors that only via `join_aliases` at explicit join points,
-    // not through the deep-origin walk. Align this with the Rust pass
-    // before the differential gate can turn on.
+    // This function always returns an empty vec. `deep_kind_inner` then
+    // calls `join_aliases` with `a_aliases = []` for every arm of a
+    // Phi/Call merge, so the join only ever sees the singleton aux
+    // index of `RSUM_KIND_ALIAS_OF` arms; `RSUM_KIND_ALIAS_OF_ANY` arm
+    // contents are silently dropped. The accumulated `acc_aliases`
+    // therefore loses all transitively-aliased indices.
+    //
+    // Concretely: if a callee summary is `AliasOfAny([0, 2])` and the
+    // call's result flows into a Return, `deep_kind_inner` enters the
+    // `ck == RSUM_KIND_ALIAS_OF_ANY()` branch, but every recursive
+    // `deep_aliases_inner` call returns `[]`, so the join never sees
+    // {0, 2} and the function's published summary loses the full alias
+    // set. The Rust `origin_to_internal_inner` does the recursive join
+    // correctly; this port only mirrors `join_aliases` at explicit
+    // join points and does not chase through callee-summary expansions.
+    //
+    // Align this with the Rust pass before the differential gate can
+    // turn on. Phase 3 lowering ignores summaries (spec §4) so the
+    // divergence does not affect codegen today; Phase 4's hidden-arena
+    // projection on the Rust side already consumes summaries, but the
+    // self-hosted shim doesn't yet (per `aeafab7`'s deferral note).
     Vec::new()
 }
 
@@ -741,6 +777,13 @@ fn resolve_uninit_return_kind(m: IrModule, fidx: i64) -> i64 {
     let mut found: bool = false;
     let mut acc: i64 = RSUM_INTERNAL_UNINIT();
     let mut acc_aux: i64 = 0;
+    // Tracks the AliasOfAny indices accumulated across multiple Return arms.
+    // Currently only read by `join_kinds` for shape inspection; the join's
+    // alias output is not captured back into `acc_aliases` because this
+    // function returns just the kind (Phase 3 minimal). When self-hosted
+    // gains full AliasOfAny resolution alongside `deep_aliases_inner`
+    // (see DIVERGENCE comment), update this to `let mut` and feed the
+    // joined aliases into `int_aliases_list[fidx]` via the caller.
     let acc_aliases: Vec<i64> = Vec::new();
     let int_kinds_empty: Vec<i64> = Vec::new();
     let int_auxs_empty: Vec<i64> = Vec::new();
@@ -816,6 +859,26 @@ fn region_vec_contains_i64(v: Vec<i64>, x: i64) -> bool {
     false
 }
 
+// PERFORMANCE TODO (issue #200, Phase 5 perf pass): this helper plus
+// `get_inst_by_pos` together do TWO O(n) scans across all instructions
+// per `deep_kind_inner` / `deep_aux_inner` call. The deep-walk recursion
+// invokes them many times per Phi/Call merge, giving O(n²) behaviour
+// on functions with large basic blocks.
+//
+// The Rust pass avoids this by building `BTreeMap<InstId, (BlockId,
+// &Inst)>` once per function in `analyze_function` and looking up in
+// O(log n). The self-hosted port should mirror that — likely as a
+// sorted `Vec<i64>` of inst ids built once at the top of
+// `analyze_function`, plus a parallel `Vec<IrInst>` indexed by the
+// returned position, threaded through `deep_kind_inner` and friends
+// as additional parameters.
+//
+// Acceptable for the Phase 3 commit because (a) the CI side scan
+// completes in reasonable time on the current ~16k-line self-hosted
+// source, (b) the fix is mechanical and orthogonal to correctness,
+// and (c) Phase 5 already needs to revisit this code for store-effect
+// inference. CLAUDE.md asymptotics rule applies — fix this in the
+// next touch of the file, do not let it survive to Phase 6.
 fn find_inst_index(f: IrFunction, id: i64) -> i64 {
     // Linear scan across all blocks. Returns a global position counter
     // (0, 1, 2, ...) of the inst with matching `id`, or -1 if not found.
@@ -877,6 +940,9 @@ fn collect_upsilon_arms(f: IrFunction, phi_id: i64) -> Vec<i64> {
     arms
 }
 
+// Currently unused — same scaffolding rationale as `region_caller0` above.
+// Becomes live once the clif-shim accepts non-Root regions on
+// `IOP_REGION_ALLOC` (issue #200, Phase 5).
 fn collect_escaping_allocs(m: IrModule, f: IrFunction) -> Vec<i64> {
     // Phase 3 minimal: a RegionAlloc inst escapes if its id appears as the
     // sole arg of any Return in the same function (transitively through

@@ -402,8 +402,15 @@ fn handle_inst(
             // RegionConflict only when the source's region statically
             // strictly outlives the target.
             if inst.args.len() >= 2 => {
-                let source_id = inst.args[0];
-                let target_id = inst.args[1];
+                // IR convention for Store / FieldSet: args = [target, source].
+                // - Store: codegen emits `store(value=arg!(1), address=arg!(0))`
+                //   (see `vow-codegen/src/cranelift_backend.rs::Opcode::Store`).
+                // - FieldSet: lowering emits `vec![ptr_id, new_val]`
+                //   (see `vow-ir/src/lower/mod.rs::ExprKind::Assign` field path).
+                // So `args[0]` is the target (container) and `args[1]` is the
+                // source (value being stored).
+                let target_id = inst.args[0];
+                let source_id = inst.args[1];
                 if let Some(target_block) = trace_target_block(target_id, inst_lookup) {
                     add_marker(must_outlive, source_id, MustOutliveMarker::Block(target_block));
                 }

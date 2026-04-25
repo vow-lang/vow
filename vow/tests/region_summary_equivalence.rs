@@ -1,18 +1,25 @@
 //! Region-inference gate test (arenas Phase 3, issue #199).
 //!
-//! Runs the Rust region-inference pass on the concatenated self-hosted
-//! compiler source (`compiler/*.vow`) and asserts the gate properties
-//! demanded by spec §4 + the issue's acceptance criteria:
+//! Asserts the gate properties demanded by spec §4 + the issue's
+//! acceptance criteria across two complementary tests:
 //!
-//! - **No `Uninit` leaks.** After `infer_regions` returns, every
-//!   function's `summary.return_region` is one of the four published
-//!   `RegionConstraint` variants. Encoded + decoded round-trip preserves
-//!   this invariant.
-//! - **Canonical `AliasOfAny`.** Aliases vec is ascending and
-//!   deduplicated.
-//! - **Canonical `store_effects`.** Sorted by `target` ascending.
-//! - **The pass terminates** on a real-world program of non-trivial
-//!   size (~16k lines of Vow source, ~13 modules concatenated).
+//! - `rust_region_pass_runs_on_small_example` runs the Rust frontend
+//!   end-to-end on `examples/hello.vow` and asserts the build status is
+//!   `Verified`/`Unverified` and that no `RegionConflict` leaks for a
+//!   well-formed program. (The originally-intended ~16k-line concat'd
+//!   compiler source is blocked on cross-module symbol resolution in
+//!   IR mode — verifier/c_emitter symbols aren't visible there — so the
+//!   smaller load-bearing test was substituted; see the inline comment
+//!   inside the test function.)
+//! - `small_module_uninit_never_leaks_after_round_trip` builds a
+//!   3-function module exercising every published `RegionConstraint`
+//!   variant, runs `infer_regions`, encodes + decodes via `.vmod`, and
+//!   asserts the canonical-form invariants survive the round trip:
+//!     * No `Uninit` leaks. Every function's `summary.return_region` is
+//!       one of the four published `RegionConstraint` variants.
+//!     * Canonical `AliasOfAny`: aliases vec is ascending and
+//!       deduplicated.
+//!     * Canonical `store_effects`: sorted by `target` ascending.
 //!
 //! ## Scope deferral (follow-up PR)
 //!
