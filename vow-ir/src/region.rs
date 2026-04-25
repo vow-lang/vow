@@ -171,6 +171,22 @@ pub fn infer_regions(module: &mut Module) {
 /// to `Caller(_)` and never pin a caller block as non-empty.
 pub fn insert_region_markers(module: &mut Module) {
     for func in &mut module.functions {
+        // Idempotency tripwire: this pass is non-idempotent — calling it
+        // twice would insert duplicate `RegionOpen` / `RegionClose` pairs
+        // because the scan only sees `RegionId::Block(_)` on existing alloc
+        // insts and won't recognise its own previously-inserted markers.
+        // The current pipeline calls it exactly once. If a future
+        // reorder accidentally runs it twice, this assertion catches it
+        // in debug builds before codegen produces a malformed module.
+        debug_assert!(
+            !func
+                .blocks
+                .iter()
+                .flat_map(|b| b.insts.iter())
+                .any(|i| { matches!(i.opcode, Opcode::RegionOpen | Opcode::RegionClose) }),
+            "insert_region_markers called twice on function `{}`",
+            func.name,
+        );
         // Collect all distinct block IDs that participate as a region.
         let mut block_regions: BTreeSet<BlockId> = BTreeSet::new();
         for block in &func.blocks {

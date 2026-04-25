@@ -4779,6 +4779,16 @@ mod tests {
         // site reaches the projection helper rather than the legacy
         // root-arena padding (which would never declare arena_open / _close
         // for a caller that opens its own block region).
+        //
+        // PIPELINE NOTE: the test hand-sets `caller_call.region =
+        // Block(BlockId(0))`. The IR lowerer in Phase 4 does NOT tag
+        // `Call` insts with non-Root regions — the region pass only
+        // touches `RegionAlloc` (`vow-ir/src/types.rs` `Inst.region`
+        // doc, `vow-ir/src/region.rs::is_heap_producing`). Phase 9
+        // (#204) wires the lowerer to tag `Call` insts whose result
+        // lives in a block arena; this test pre-validates that the
+        // codegen projection consumes that tag correctly when it
+        // arrives.
         let mut callee_alloc = inst(
             0,
             Opcode::RegionAlloc,
