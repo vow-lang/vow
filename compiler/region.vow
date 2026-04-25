@@ -85,14 +85,17 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx, path: String) -> IrModule {
         let scc: Vec<i64> = sccs[scc_i];
         let scc_n: i64 = scc.len();
 
-        // Loose iteration bound: |members| * (max_params + 4) — finite
-        // lattice; if exceeded, emit ICE diagnostic (no panic).
+        // Loose iteration bound, mirrors vow-ir/src/region.rs:79-86:
+        // lattice height per function is |params|+2
+        // (Uninit → AliasOf → AliasOfAny → FreshInCaller); store_effects
+        // bound is |params|; total bound for the SCC is sum * 2 for monotone
+        // slack. Finite lattice; if exceeded, emit ICE diagnostic (no panic).
         let mut bound: i64 = 0;
         let mut bi: i64 = 0;
         while bi < scc_n {
             let fidx: i64 = scc[bi];
             let nparams: i64 = m.functions[fidx].params.len();
-            bound = bound + (nparams + 4) * 2;
+            bound = bound + (nparams + 2) * 2;
             bi = bi + 1;
         }
         if bound < 8 { bound = 8; }
@@ -1010,14 +1013,14 @@ fn build_call_graph(m: IrModule) -> Vec<Vec<i64>> {
             bi = bi + 1;
         }
         // Sort row ascending for determinism.
-        canonical_aliases_vec_inplace(row);
+        sort_i64_vec_inplace(row);
         cg.push(row);
         i = i + 1;
     }
     cg
 }
 
-fn canonical_aliases_vec_inplace(xs: Vec<i64>) {
+fn sort_i64_vec_inplace(xs: Vec<i64>) {
     let n: i64 = xs.len();
     let mut a: i64 = 1;
     while a < n {
@@ -1106,7 +1109,7 @@ fn tarjan_sccs(cg: Vec<Vec<i64>>, n: i64) -> Vec<Vec<i64>> {
                                     popping = false;
                                 }
                             }
-                            canonical_aliases_vec_inplace(component);
+                            sort_i64_vec_inplace(component);
                             sccs.push(component);
                         }
                         work_node.pop();

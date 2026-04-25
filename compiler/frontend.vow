@@ -159,13 +159,27 @@ fn frontend_lower_path(path: String) -> LoweredFrontend [io] {
     };
     // Refresh n_errors so any region diagnostics emitted above propagate to
     // the n_errors > 0 gates in compiler/main.vow (CompileFailed bail-out).
+    // diag_ctx_emit takes DiagCtx by value, so its error_count++ does not
+    // propagate (struct value semantics). diags is a Vec — its push DOES
+    // propagate via shared backing — so recount errors from the diags Vec
+    // directly. Latent in Phase 3 (RegionConflict only fires via the
+    // unreachable SCC-bound ICE), but Phase 5 will surface real conflicts.
     let dctx_after: DiagCtx = checked.dctx;
+    let all_diags: Vec<Diagnostic> = dctx_after.diags;
+    let mut region_n_errors: i64 = 0;
+    let mut di: i64 = 0;
+    while di < all_diags.len() {
+        if all_diags[di].severity == SEV_ERROR() {
+            region_n_errors = region_n_errors + 1;
+        }
+        di = di + 1;
+    }
     let updated_checked: CheckedFrontend = CheckedFrontend {
         path: checked.path,
         dctx: dctx_after,
         sources: checked.sources,
         n_items: checked.n_items,
-        n_errors: dctx_after.error_count,
+        n_errors: region_n_errors,
     };
     LoweredFrontend {
         checked: updated_checked,
