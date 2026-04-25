@@ -11,7 +11,7 @@ pub use effects::{AbstractHeap, Effects, HeapSet, inst_effects};
 pub use insertion_set::InsertionSet;
 pub use lower::{StringExprSet, lower_module};
 pub use printer::{print_function, print_module};
-pub use region::infer_regions;
+pub use region::{infer_regions, insert_region_markers};
 pub use serialize::{DecodeError, MODULE_MAGIC, MODULE_VERSION, decode_module, encode_module};
 pub use types::{
     AbstractRegionId, BasicBlock, BlockId, EnumLayout, FieldLayout, FuncId, Function,

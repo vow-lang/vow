@@ -788,6 +788,19 @@ unsafe fn root_arena_alloc_zeroed(bytes: usize, align: usize) -> *mut u8 {
     ptr
 }
 
+/// Grow a backing buffer that lives in `__vow_root_arena`. Implements the
+/// spec §7.2 zero-copy fast path: try `__vow_arena_try_extend` first; if
+/// the backing is the most recent allocation in the chunk and the new
+/// size still fits, growth is O(1) with no copy and no orphaned backing.
+/// Otherwise fall back to a fresh allocation + memcpy of the prefix.
+///
+/// Phase 4 / S6 status: this fast path is wired for **root-arena-backed**
+/// containers — the only kind today, since `__vow_vec_new` /
+/// `__vow_string_new` / `__vow_map_new` all allocate from
+/// `__vow_root_arena`. Threading a per-container arena pointer through
+/// the descriptor (so block-arena-backed `Vec`/`String`/`HashMap` also
+/// benefit from try_extend) is a much larger API change deferred to
+/// Phase 9 (performance), per `docs/design/arena_memory.md` §15.
 unsafe fn root_arena_grow_backing(
     ptr: *mut u8,
     old_size: usize,
@@ -1024,6 +1037,58 @@ pub unsafe extern "C" fn __vow_string_from_cstr(ptr: *const i8) -> *mut u8 {
     let s = unsafe { CStr::from_ptr(ptr) };
     let bytes = s.to_bytes();
     unsafe { __vow_string_new(ptr, bytes.len()) }
+}
+
+/// Deep-copy `source` (a `VowString` / `Vec<u8>` descriptor) into `arena`,
+/// returning a freshly-allocated descriptor whose backing also lives in
+/// `arena`. Used by Phase 4 / S5 return materialization (spec §5.1) to
+/// satisfy the `FreshInCaller` representation promise when the source path
+/// is a `.rodata` literal or a parameter alias whose backing is not in
+/// `target_region`.
+///
+/// The new descriptor has `cap = len`; growth is up to the caller. The
+/// source's `cap` is irrelevant — `VOW_CAP_RODATA` (read-only literal) is
+/// handled transparently because we only read `source.ptr` / `source.len`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_clone_into_arena(
+    arena: *mut VowArena,
+    source: *const u8,
+) -> *mut u8 {
+    // A null `source` here is anomalous: well-formed compilation never
+    // produces it. The only path that does is the codegen `ConstStr`
+    // fallback to `iconst(0)` when a string global is missing — which
+    // is itself an upstream compiler error. Surface it loudly in
+    // debug builds; release falls through to a benign empty descriptor
+    // (allocated on the arena) so a buggy build doesn't crash.
+    debug_assert!(
+        !source.is_null(),
+        "__vow_string_clone_into_arena: null source — indicates a missing \
+         ConstStr global (upstream codegen bug)"
+    );
+    let header = unsafe { __vow_arena_alloc(arena, 24, 8) } as *mut VowVec;
+    if source.is_null() {
+        unsafe {
+            (*header).ptr = std::ptr::dangling_mut::<u8>(); // len=0
+            (*header).len = 0;
+            (*header).cap = 0;
+        }
+        return header as *mut u8;
+    }
+    let src = unsafe { &*(source as *const VowVec) };
+    let len = src.len;
+    let data_ptr = if len == 0 {
+        std::ptr::dangling_mut::<u8>() // len=0 — same convention as __vow_vec_new
+    } else {
+        let p = unsafe { __vow_arena_alloc(arena, len, 1) };
+        unsafe { std::ptr::copy_nonoverlapping(src.ptr, p, len) };
+        p
+    };
+    unsafe {
+        (*header).ptr = data_ptr;
+        (*header).len = len;
+        (*header).cap = len;
+    }
+    header as *mut u8
 }
 
 #[unsafe(no_mangle)]
@@ -2673,6 +2738,58 @@ mod tests {
     }
 
     #[test]
+    fn string_clone_into_arena_copies_bytes() {
+        // Phase 4 / S5 return materialization: clones a String descriptor's
+        // backing into the supplied arena, returning a fresh, mutable
+        // descriptor (cap == len, not VOW_CAP_RODATA).
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        // Source is a rodata-backed descriptor — exercises the spec §5.1
+        // ".rodata literal returned on a FreshInCaller path" case.
+        let bytes: &[u8] = b"hello";
+        let source = VowVec {
+            ptr: bytes.as_ptr() as *mut u8,
+            len: bytes.len(),
+            cap: VOW_CAP_RODATA,
+        };
+        let cloned =
+            unsafe { __vow_string_clone_into_arena(&mut a, &source as *const VowVec as *const u8) };
+        let cv = unsafe { &*(cloned as *const VowVec) };
+        assert_eq!(cv.len, 5);
+        assert_eq!(cv.cap, 5, "clone must not inherit VOW_CAP_RODATA");
+        let cloned_bytes = unsafe { std::slice::from_raw_parts(cv.ptr, cv.len) };
+        assert_eq!(cloned_bytes, b"hello");
+        // The clone's backing must live in the arena, not in .rodata.
+        // `chunk_end` is an absolute address (`base + total`), not a size
+        // offset, so the upper bound is just `chunk_end` directly.
+        let cv_data = cv.ptr as usize;
+        let arena_start = a.first_chunk.cast::<u8>() as usize;
+        let arena_end = a.chunk_end;
+        assert!(
+            cv_data >= arena_start && cv_data < arena_end,
+            "cloned data must live inside the arena chunk"
+        );
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn string_clone_into_arena_handles_empty() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        let source = VowVec {
+            ptr: 1 as *mut u8,
+            len: 0,
+            cap: VOW_CAP_RODATA,
+        };
+        let cloned =
+            unsafe { __vow_string_clone_into_arena(&mut a, &source as *const VowVec as *const u8) };
+        let cv = unsafe { &*(cloned as *const VowVec) };
+        assert_eq!(cv.len, 0);
+        assert_eq!(cv.cap, 0);
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
     fn arena_alignment_respected() {
         let mut a = empty_arena_header();
         unsafe { __vow_arena_open(&mut a) };
@@ -2873,6 +2990,10 @@ mod tests {
     fn rodata_vec_reserve_traps() {
         assert_rodata_trap("Vec::reserve", "Vec::reserve");
     }
+    /// Acceptance test 4 from issue #198: `VOW_CAP_RODATA` mutation via
+    /// `Vec::push` on a literal-backed descriptor traps with
+    /// `RegionLiteralMutation` before the allocation logic is reached
+    /// (spec §6.1, §7.3).
     #[test]
     fn rodata_vec_push_traps() {
         assert_rodata_trap("Vec::push", "Vec::push");

@@ -195,6 +195,9 @@ pub(crate) fn prepare_frontend(
                     diagnostics,
                 });
             }
+            // Phase 4 / S3: insert RegionOpen / RegionClose markers around
+            // every block whose region is non-empty (spec §3.5).
+            vow_ir::insert_region_markers(&mut module);
             Some(Arc::new(module))
         }
     };

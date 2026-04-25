@@ -1139,3 +1139,156 @@ fn tarjan_sccs(cg: Vec<Vec<i64>>, n: i64) -> Vec<Vec<i64>> {
     }
     sccs
 }
+
+// ---------------------------------------------------------------------------
+// Block-region marker insertion (mirror of vow-ir/src/region.rs
+// `insert_region_markers`). Tags every non-escaping `IOP_REGION_ALLOC` with
+// `Block(defining_block)` and brackets the containing block with
+// `IOP_REGION_OPEN` / `IOP_REGION_CLOSE` markers per spec §3.5 criterion 1.
+//
+// Phase 4 status: this function is a NO-OP (the body returns the module
+// unchanged) because:
+//   1. The Rust pass equivalent (`vow-ir/src/region.rs::lub_to_region_id`)
+//      defers `Block(_)` emission to Phase 9 (#204) until `must_outlive`
+//      tracks every use of a heap-typed value (regular `FieldGet`/`Load`,
+//      non-store-effect call args, Phi-merged values).
+//   2. To stay aligned with the Rust pass, the self-hosted equivalent must
+//      defer the same way. The implementation below remains as scaffolding
+//      so Phase 9 can flip a single switch.
+//   3. The shim rejects `REGION_KIND_CALLER` with `k > 0` (S1
+//      vow-clif-shim/src/lib.rs); escaping allocs continue to route to
+//      `Root` until full hidden-region plumbing lands.
+//
+// `frontend.vow` therefore does NOT call this function in Phase 4. The
+// body below is unreachable (the early `return m;` short-circuits it) and
+// remains only as Phase 9 scaffolding — it is NOT exercised by any test
+// today. When Phase 9 lifts the `Block(_)` deferral in `region.rs`, drop
+// the early return here, wire the call from `frontend.vow`, and add a
+// differential test against the Rust pass.
+// ---------------------------------------------------------------------------
+
+fn insert_region_markers_module(m: IrModule) -> IrModule {
+    // No-op for Phase 4 — see header comment for rationale.
+    return m;
+    let n_funcs: i64 = m.functions.len();
+    let mut fi: i64 = 0;
+    while fi < n_funcs {
+        let f: IrFunction = m.functions[fi];
+        let escaping_ids: Vec<i64> = collect_escaping_allocs(m, f);
+
+        // Find the largest existing inst id so we can mint fresh ones.
+        let mut max_id: i64 = 0;
+        let mut bi: i64 = 0;
+        while bi < f.blocks.len() {
+            let blk_scan: IrBlock = f.blocks[bi];
+            let mut ii: i64 = 0;
+            while ii < blk_scan.insts.len() {
+                if blk_scan.insts[ii].id > max_id {
+                    max_id = blk_scan.insts[ii].id;
+                }
+                ii = ii + 1;
+            }
+            bi = bi + 1;
+        }
+        let mut next_id: i64 = max_id + 1;
+
+        // Pass 1: tag non-escaping RegionAlloc insts with Block(defining_block).
+        let mut bi2: i64 = 0;
+        while bi2 < f.blocks.len() {
+            let blk: IrBlock = f.blocks[bi2];
+            let mut ii2: i64 = 0;
+            while ii2 < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii2];
+                if inst.op == IOP_REGION_ALLOC()
+                    && !region_vec_contains_i64(escaping_ids, inst.id)
+                {
+                    let block_region: i64 = region_pack(REGION_KIND_BLOCK(), blk.id);
+                    blk.insts[ii2] = ir_inst_set_region(inst, block_region);
+                }
+                ii2 = ii2 + 1;
+            }
+            f.blocks[bi2] = blk;
+            bi2 = bi2 + 1;
+        }
+
+        // Pass 2: collect blocks that now contain a Block-tagged alloc.
+        let block_regions: Vec<i64> = Vec::new();
+        let mut bi3: i64 = 0;
+        while bi3 < f.blocks.len() {
+            let blk2: IrBlock = f.blocks[bi3];
+            let mut ii3: i64 = 0;
+            let mut found: bool = false;
+            while ii3 < blk2.insts.len() {
+                let inst3: IrInst = blk2.insts[ii3];
+                if region_kind(inst3.rgn) == REGION_KIND_BLOCK() {
+                    found = true;
+                }
+                ii3 = ii3 + 1;
+            }
+            if found {
+                block_regions.push(blk2.id);
+            }
+            bi3 = bi3 + 1;
+        }
+
+        // Pass 3: insert RegionOpen at start of marked blocks and
+        // RegionClose just before the terminator.
+        let mut bi4: i64 = 0;
+        while bi4 < f.blocks.len() {
+            let blk3: IrBlock = f.blocks[bi4];
+            if region_vec_contains_i64(block_regions, blk3.id) {
+                let block_rgn: i64 = region_pack(REGION_KIND_BLOCK(), blk3.id);
+
+                let mut open_inst: IrInst = ir_inst_new(
+                    next_id, IOP_REGION_OPEN(), ITY_UNIT(),
+                    Vec::new(), 0, 0, 0, String::from(""),
+                );
+                open_inst = ir_inst_set_region(open_inst, block_rgn);
+                next_id = next_id + 1;
+
+                let mut close_inst: IrInst = ir_inst_new(
+                    next_id, IOP_REGION_CLOSE(), ITY_UNIT(),
+                    Vec::new(), 0, 0, 0, String::from(""),
+                );
+                close_inst = ir_inst_set_region(close_inst, block_rgn);
+                next_id = next_id + 1;
+
+                // Find terminator position. The block always has one terminal
+                // inst at the tail; defensive scan covers a missing terminator.
+                let mut term_pos: i64 = blk3.insts.len();
+                let mut k: i64 = 0;
+                while k < blk3.insts.len() {
+                    if iop_is_terminal(blk3.insts[k].op) {
+                        term_pos = k;
+                        k = blk3.insts.len();
+                    } else {
+                        k = k + 1;
+                    }
+                }
+
+                // Splice: insert close before terminator first (so the open
+                // insertion at index 0 doesn't shift term_pos).
+                let mut new_insts: Vec<IrInst> = Vec::new();
+                new_insts.push(open_inst);
+                let mut copy_i: i64 = 0;
+                while copy_i < blk3.insts.len() {
+                    if copy_i == term_pos {
+                        new_insts.push(close_inst);
+                    }
+                    new_insts.push(blk3.insts[copy_i]);
+                    copy_i = copy_i + 1;
+                }
+                if term_pos == blk3.insts.len() {
+                    new_insts.push(close_inst);
+                }
+                blk3.insts = new_insts;
+                f.blocks[bi4] = blk3;
+            }
+            bi4 = bi4 + 1;
+        }
+
+        m.functions[fi] = f;
+        fi = fi + 1;
+    }
+    m
+}
