@@ -1160,8 +1160,11 @@ fn tarjan_sccs(cg: Vec<Vec<i64>>, n: i64) -> Vec<Vec<i64>> {
 //      `Root` until full hidden-region plumbing lands.
 //
 // `frontend.vow` therefore does NOT call this function in Phase 4. The
-// scaffolding below is exercised by `compile_test` in CI but not by the
-// production pipeline.
+// body below is unreachable (the early `return m;` short-circuits it) and
+// remains only as Phase 9 scaffolding — it is NOT exercised by any test
+// today. When Phase 9 lifts the `Block(_)` deferral in `region.rs`, drop
+// the early return here, wire the call from `frontend.vow`, and add a
+// differential test against the Rust pass.
 // ---------------------------------------------------------------------------
 
 fn insert_region_markers_module(m: IrModule) -> IrModule {

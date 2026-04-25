@@ -1157,13 +1157,7 @@ fn lower_inst(
                     let arg_region = inst
                         .args
                         .get(target_idx as usize)
-                        .and_then(|arg_id| {
-                            ctx.ir_func
-                                .blocks
-                                .iter()
-                                .flat_map(|b| b.insts.iter())
-                                .find(|i| i.id == *arg_id)
-                        })
+                        .and_then(|arg_id| ctx.inst_index.get(arg_id))
                         .map(|src_inst| src_inst.region)
                         .unwrap_or(RegionId::Root);
                     push_hidden(builder, &mut call_args, arg_region)?;
