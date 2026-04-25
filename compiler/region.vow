@@ -659,12 +659,17 @@ fn deep_aliases_inner(
     //
     // Concretely: if a callee summary is `AliasOfAny([0, 2])` and the
     // call's result flows into a Return, `deep_kind_inner` enters the
-    // `ck == RSUM_KIND_ALIAS_OF_ANY()` branch, but every recursive
-    // `deep_aliases_inner` call returns `[]`, so the join never sees
-    // {0, 2} and the function's published summary loses the full alias
-    // set. The Rust `origin_to_internal_inner` does the recursive join
+    // `ck == RSUM_KIND_ALIAS_OF_ANY()` branch (line 555 above), then the
+    // inner loop at line 568 calls THIS function for each aliased arg,
+    // gets `[]` back, and `join_aliases` (the Phi join at line 596 also
+    // hits the same path) accumulates from empty `a_aliases`. The
+    // function's published summary therefore loses {0, 2} entirely.
+    // The Rust `origin_to_internal_inner` does the recursive join
     // correctly; this port only mirrors `join_aliases` at explicit
     // join points and does not chase through callee-summary expansions.
+    // Phase 5 fix target: this function body — replicate the Rust
+    // recursion structure so the call sites at line 568 and 596 see
+    // the full transitive alias set.
     //
     // Align this with the Rust pass before the differential gate can
     // turn on. Phase 3 lowering ignores summaries (spec §4) so the

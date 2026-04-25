@@ -859,15 +859,23 @@ fn lower_inst(
                 })
                 .collect();
             if internal_call {
-                // Pad missing hidden-region parameters with the root arena. This is sound
-                // today because every callee has `RegionSummary::default()` (see
-                // `LowerCtx::finalize` in `vow-ir/src/lower/mod.rs`), so the callee expects
-                // zero hidden region arguments and this loop body is never executed.
-                // TODO(arena-phase3): once region inference produces `FreshInCaller` /
-                // `AliasOf` constraints, the caller must forward `ctx.hidden_region_values`
-                // (or a specific parameter's arena) per the callee's `RegionSummary`
-                // instead of hardcoding root, otherwise callee allocations will escape
-                // the caller's region lifetime.
+                // Pad missing hidden-region parameters with the root arena.
+                //
+                // KNOWN GAP (Phase 4/5): now that the region pass produces
+                // non-default summaries (see `vow-ir/src/region.rs`), callees
+                // with `FreshInCaller` / store-effect-driven `AliasOf` summaries
+                // expect a real caller arena, not the root arena. Padding with
+                // root means escaping allocations from such callees fall back
+                // to process-lifetime storage instead of being routed through
+                // the caller's region. Forwarding `ctx.hidden_region_values`
+                // (or a per-parameter arena selected by the callee summary) is
+                // the right fix; it's left for the same Phase 4/5 work that
+                // wires `RegionId::Caller(idx)` end-to-end through the shim
+                // (issue #200, plus the call-site projection that will follow).
+                // No existing example or `tests/run/*.vow` triggers this path
+                // today — examples build clean post-Phase-3 — so the gap is
+                // latent until a program actually constructs and returns a
+                // fresh allocation through a multi-frame call chain.
                 while call_args.len() < expected_types.len() {
                     call_args.push(builder.ins().global_value(types::I64, ctx.root_arena_gv));
                 }

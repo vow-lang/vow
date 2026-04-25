@@ -644,6 +644,14 @@ fn origin_to_internal(
     origin_to_internal_inner(id, inst_lookup, phi_arms, summaries, &mut visiting)
 }
 
+// PERFORMANCE TODO (Phase 5 perf pass, issue #200): `visiting.contains(&id)`
+// is O(n). On Phi-heavy IR with deep call resolution, the recursive walk
+// makes `origin_to_internal_inner` O(n²) in the visiting-stack depth.
+// Fix: keep `VecDeque` for push/pop ordering but maintain a parallel
+// `BTreeSet<InstId>` for the membership test (BTreeSet is already imported
+// elsewhere in this file). Same shape as the self-hosted port's
+// `find_inst_index` perf TODO in `compiler/region.vow`. Acceptable today
+// because the integration tests stay well under the quadratic knee.
 fn origin_to_internal_inner(
     id: InstId,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
