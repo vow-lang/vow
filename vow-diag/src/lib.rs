@@ -63,6 +63,8 @@ pub enum ErrorCode {
     EsbmcNotFound,
     // IO errors
     IoError,
+    // Region inference (arena-per-scope, Phase 3)
+    RegionConflict,
 }
 
 pub trait DiagnosticEmitter {
@@ -248,6 +250,14 @@ mod tests {
         let hints = arr[0]["hints"].as_array().unwrap();
         assert_eq!(hints.len(), 1);
         assert_eq!(hints[0], "did you mean `counter`?");
+    }
+
+    #[test]
+    fn region_conflict_debug_format_is_pascalcase() {
+        // Spec §13.1 mandates the external JSON `error_code` is "RegionConflict".
+        // The DiagnosticJson layer in `vow/src/main.rs` derives this string via
+        // `format!("{:?}", code)`, so the Debug format MUST stay PascalCase.
+        assert_eq!(format!("{:?}", ErrorCode::RegionConflict), "RegionConflict");
     }
 
     #[test]

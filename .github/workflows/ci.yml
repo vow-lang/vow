@@ -35,6 +35,23 @@ jobs:
       - run: cargo llvm-cov --all --lcov --output-path lcov.info
       - run: cargo clippy --all -- -D warnings
       - run: cargo fmt --all -- --check
+      # Phase 3 (issue #199) — non-blocking region-pass surface scan against
+      # `compiler/*.vow`. Surfaces RegionConflict diagnostics for the
+      # Phase 5 source fix-ups without failing the build (per the issue's
+      # "non-blocking warnings" requirement). Spec §4.4 is still strict —
+      # the rejection happens in actual builds, just not in this informational
+      # scan.
+      - name: Region inference surface scan (non-blocking)
+        continue-on-error: true
+        run: |
+          bash scripts/concat_vow.sh ir > /tmp/region_scan.vow
+          ./target/debug/vow build --no-verify --dump-ir /tmp/region_scan.vow > /tmp/region_scan.out 2> /tmp/region_scan.err || true
+          if grep -q "RegionConflict" /tmp/region_scan.out /tmp/region_scan.err 2>/dev/null; then
+            echo "::warning::RegionConflict diagnostics detected in compiler/*.vow (Phase 5 source fix-ups needed)"
+            grep -A2 "RegionConflict" /tmp/region_scan.out /tmp/region_scan.err | head -40
+          else
+            echo "no RegionConflict warnings in compiler/*.vow"
+          fi
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v6
         with:
