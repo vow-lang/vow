@@ -2749,9 +2749,11 @@ mod tests {
         let cloned_bytes = unsafe { std::slice::from_raw_parts(cv.ptr, cv.len) };
         assert_eq!(cloned_bytes, b"hello");
         // The clone's backing must live in the arena, not in .rodata.
+        // `chunk_end` is an absolute address (`base + total`), not a size
+        // offset, so the upper bound is just `chunk_end` directly.
         let cv_data = cv.ptr as usize;
         let arena_start = a.first_chunk.cast::<u8>() as usize;
-        let arena_end = arena_start + a.chunk_end - arena_start;
+        let arena_end = a.chunk_end;
         assert!(
             cv_data >= arena_start && cv_data < arena_end,
             "cloned data must live inside the arena chunk"

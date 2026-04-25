@@ -255,6 +255,10 @@ struct LowerCtx<'a> {
     vow_file_global_values: &'a HashMap<u32, GlobalValue>,
     vow_binding_name_gvs: &'a HashMap<(u32, u32), GlobalValue>,
     inst_ty_map: &'a HashMap<InstId, IrTy>,
+    /// `InstId → &Inst` lookup used by return-materialisation analysis to
+    /// stay O(n) per `Return` rather than O(n²). Built once per function
+    /// in `compile_ir_function`.
+    inst_index: &'a HashMap<InstId, &'a Inst>,
     ir_func: &'a IrFunction,
     trace_exit_ref: Option<FuncRef>,
     trace_vow_ref: Option<FuncRef>,
@@ -332,17 +336,34 @@ fn module_uses_return_materialization(func: &IrFunction) -> bool {
     if func.return_ty != IrTy::Ptr {
         return false;
     }
+    let inst_index = build_inst_index(func);
     for block in &func.blocks {
         for inst in &block.insts {
             if inst.opcode == Opcode::Return
                 && let Some(&val_id) = inst.args.first()
-                && return_source_needs_materialization(func, val_id)
+                && return_source_needs_materialization(func, &inst_index, val_id)
             {
                 return true;
             }
         }
     }
     false
+}
+
+/// Build an `InstId → &Inst` lookup for a function. Used by
+/// `return_source_needs_materialization` (and its module-level scan) to
+/// avoid an O(insts) `find` per visited value: the materialization walk
+/// is called both at module-load time and per `Return` during lowering,
+/// so the linear-scan version was O(n²) in functions with many
+/// `Return`-reachable Phi arms.
+fn build_inst_index(func: &IrFunction) -> HashMap<InstId, &Inst> {
+    let mut index: HashMap<InstId, &Inst> = HashMap::new();
+    for block in &func.blocks {
+        for inst in &block.insts {
+            index.insert(inst.id, inst);
+        }
+    }
+    index
 }
 
 /// Decide whether a `FreshInCaller` function's return value needs to be
@@ -365,19 +386,18 @@ fn module_uses_return_materialization(func: &IrFunction) -> bool {
 /// pass) and `Call` results from `FreshInCaller` callees (placed in
 /// our `target_region` by the S4 projection) — are already in
 /// `target_region` and need no copy.
-fn return_source_needs_materialization(func: &IrFunction, return_val: InstId) -> bool {
+fn return_source_needs_materialization(
+    func: &IrFunction,
+    inst_index: &HashMap<InstId, &Inst>,
+    return_val: InstId,
+) -> bool {
     let mut visited: HashSet<InstId> = HashSet::new();
     let mut stack: Vec<InstId> = vec![return_val];
     while let Some(id) = stack.pop() {
         if !visited.insert(id) {
             continue;
         }
-        let Some(src) = func
-            .blocks
-            .iter()
-            .flat_map(|b| b.insts.iter())
-            .find(|i| i.id == id)
-        else {
+        let Some(&src) = inst_index.get(&id) else {
             continue;
         };
         match src.opcode {
@@ -390,7 +410,10 @@ fn return_source_needs_materialization(func: &IrFunction, return_val: InstId) ->
             // is safe — every literal is a UTF-8 string today.
             Opcode::ConstStr => return true,
             Opcode::Phi => {
-                // Walk every Upsilon arm that targets this Phi.
+                // Walk every Upsilon arm that targets this Phi. Upsilons
+                // can live in any block, so we iterate the whole function
+                // here (O(n) rather than O(n²) thanks to the index above
+                // — the loop body is constant-time per inst).
                 for block in &func.blocks {
                     for inst in &block.insts {
                         if inst.opcode == Opcode::Upsilon
@@ -844,7 +867,7 @@ fn lower_inst(
                     // (slot 0 of `hidden_region_values`).
                     let needs_clone = ctx.return_ty == IrTy::Ptr
                         && ctx.ir_func.summary.return_region == RegionConstraint::FreshInCaller
-                        && return_source_needs_materialization(ctx.ir_func, val_id);
+                        && return_source_needs_materialization(ctx.ir_func, ctx.inst_index, val_id);
                     let materialized = if needs_clone {
                         let target_region =
                             ctx.hidden_region_values.first().copied().ok_or_else(|| {
@@ -1535,6 +1558,11 @@ fn compile_ir_function(
         }
     }
 
+    // Build InstId → &Inst map for return-materialisation analysis.
+    // Reused per `Return` to keep the walk O(n) (see
+    // `return_source_needs_materialization`).
+    let inst_index: HashMap<InstId, &Inst> = build_inst_index(ir_func);
+
     // Create data sections for vow description strings and map VowId → GlobalValue
     let mut vow_desc_global_values: HashMap<u32, GlobalValue> = HashMap::new();
     let mut vow_file_global_values: HashMap<u32, GlobalValue> = HashMap::new();
@@ -1728,6 +1756,7 @@ fn compile_ir_function(
             vow_file_global_values: &vow_file_global_values,
             vow_binding_name_gvs: &vow_binding_name_gvs,
             inst_ty_map: &inst_ty_map,
+            inst_index: &inst_index,
             ir_func,
             trace_exit_ref,
             trace_vow_ref,
@@ -2795,7 +2824,11 @@ mod tests {
         // main(): summary says FreshInCaller + store_effect on param 0,
         //   but signature is 0-arg per the §5.4 / `hidden_region_param_count`
         //   exception. The call site MUST NOT push hidden args.
-        let mut main_fn = Function {
+        // `main`'s summary deliberately mixes `FreshInCaller` AND a
+        // `store_effect` — region inference wouldn't normally produce both
+        // for `main`, but the codegen MUST be robust to whatever summary
+        // it sees, since the caller's projection reads from the summary.
+        let main_fn = Function {
             id: FuncId(0),
             name: "main".to_string(),
             params: vec![],
@@ -2820,13 +2853,6 @@ mod tests {
                 }],
             },
         };
-        // Force the summary fields to coexist (region inference would
-        // normally not produce both for `main`, but the codegen MUST be
-        // robust to whatever summary it sees).
-        main_fn.summary.store_effects = vec![StoreEffect {
-            target: 0,
-            source: RegionConstraint::FreshInCaller,
-        }];
 
         let helper = Function {
             id: FuncId(1),
