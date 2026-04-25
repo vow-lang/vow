@@ -371,21 +371,33 @@ fn build_inst_index(func: &IrFunction) -> HashMap<InstId, &Inst> {
 /// promise.
 ///
 /// Walks the value's source transitively through `Phi` (via `Upsilon` arms).
-/// Returns true if any reachable leaf is a `.rodata` literal (`ConstStr`).
+/// Returns true iff:
+///   - At least one reachable leaf is a `.rodata` literal (`ConstStr`)
+///     that needs copying into `target_region`, AND
+///   - **EVERY** reachable leaf is `ConstStr` (so the runtime clone
+///     primitive will see a `VowString` / `Vec<u8>` descriptor on every
+///     execution path).
 ///
-/// `GetArg` of a `Ptr` param is intentionally **excluded** —
+/// The "every leaf is `ConstStr`" condition is the safety guard:
 /// `__vow_string_clone_into_arena` is type-specialised for the
-/// VowString / Vec<u8> descriptor layout, so firing it on an arbitrary
-/// heap pointer (struct, `Vec<T>` for `T != u8`, `HashMap`) would
-/// reinterpret 24 bytes of unrelated data as `{ptr,len,cap}` and copy
-/// `len` arbitrary bytes — corrupting memory. The generic deep-clone
-/// intrinsic that lifts this restriction lands in Phase 7 (#202, FFI
-/// wrapper stdlib).
+/// VowString / `Vec<u8>` descriptor layout. Firing it on an arbitrary
+/// heap pointer (a struct, a `Vec<T>` for `T != u8`, a `HashMap`, …)
+/// would reinterpret 24 bytes of unrelated data as `{ptr, len, cap}`
+/// and copy `len` arbitrary bytes — corrupting memory. So if a Phi
+/// mixes `ConstStr` arms with `RegionAlloc` / `GetArg` / `Call` arms
+/// of unknown layout, we cannot safely emit a clone — return `false`
+/// and let the value escape un-cloned. (The escape-without-clone
+/// case is itself non-§5.1-compliant for the literal arm, but it's
+/// strictly safer than memory corruption; a generic deep-clone
+/// intrinsic in Phase 7 / #202 lifts this restriction.)
 ///
-/// Other leaves — `RegionAlloc` (placed in `Caller(0)` by the region
-/// pass) and `Call` results from `FreshInCaller` callees (placed in
-/// our `target_region` by the S4 projection) — are already in
-/// `target_region` and need no copy.
+/// `GetArg` of a `Ptr` param is intentionally **excluded** for the
+/// same layout-safety reason. `RegionAlloc` (placed in `Caller(0)` by
+/// the region pass) and `Call` results from `FreshInCaller` callees
+/// (placed in our `target_region` by the S4 projection) are already
+/// in `target_region` and need no copy — but their layout isn't
+/// `VowString`-shaped, so they also disqualify a Phi from
+/// materialisation.
 fn return_source_needs_materialization(
     func: &IrFunction,
     inst_index: &HashMap<InstId, &Inst>,
@@ -393,22 +405,20 @@ fn return_source_needs_materialization(
 ) -> bool {
     let mut visited: HashSet<InstId> = HashSet::new();
     let mut stack: Vec<InstId> = vec![return_val];
+    let mut saw_const_str = false;
     while let Some(id) = stack.pop() {
         if !visited.insert(id) {
             continue;
         }
         let Some(&src) = inst_index.get(&id) else {
-            continue;
+            // Unknown source — be conservative: treat as a non-`ConstStr`
+            // leaf, which disqualifies materialisation.
+            return false;
         };
         match src.opcode {
-            // `__vow_string_clone_into_arena` is type-specialised for the
-            // VowString / Vec<u8> descriptor layout. Firing it on a Vec<T>
-            // or struct pointer would reinterpret the first 24 bytes as
-            // `{ptr,len,cap}` and copy `len` arbitrary bytes — corrupting
-            // memory. Until a generic deep-clone intrinsic lands (Phase 7
-            // FFI-wrapper stdlib, #202), only the `.rodata` literal case
-            // is safe — every literal is a UTF-8 string today.
-            Opcode::ConstStr => return true,
+            Opcode::ConstStr => {
+                saw_const_str = true;
+            }
             Opcode::Phi => {
                 // Walk every Upsilon arm that targets this Phi. Upsilons
                 // can live in any block, so we iterate the whole function
@@ -426,10 +436,13 @@ fn return_source_needs_materialization(
                     }
                 }
             }
-            _ => {}
+            // Any non-Phi, non-ConstStr leaf disqualifies the whole
+            // walk: we cannot safely clone via the VowString-typed
+            // primitive when one path produces a non-VowString value.
+            _ => return false,
         }
     }
-    false
+    saw_const_str
 }
 
 fn lower_inst(
@@ -4423,40 +4436,17 @@ mod tests {
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
-    /// Acceptance test 2 from issue #198: a `FreshInCaller` function
-    /// whose return Phi reaches a `.rodata` literal on one branch and a
-    /// `target_region` alloc on the other must materialise via the clone
-    /// runtime — the literal path is the trigger; the alloc path is
-    /// already in `target_region` and would be no-op'd individually but
-    /// the unified Phi forces a clone whose source happens to be in
-    /// `target_region` already (correctness over redundancy elimination).
-    #[test]
-    fn fresh_in_caller_phi_mixed_paths_materialises() {
-        // block 0:
-        //   v0 = GetArg(0) : i64                      -- selector
-        //   br v0, block1, block2
-        // block 1:
-        //   v1 = ConstStr(0)
-        //   v2 = Upsilon(target=v3) v1               -- arm A: literal
-        //   jump block3
-        // block 2:
-        //   v4 = RegionAlloc{Caller(0)}              -- arm B: target_region
-        //   v5 = Upsilon(target=v3) v4
-        //   jump block3
-        // block 3:
-        //   v3 = Phi : Ptr
-        //   return v3
-        let mut alloc = inst(
-            4,
-            Opcode::RegionAlloc,
-            Ty::Ptr,
-            vec![],
-            InstData::AllocSize { size: 16, align: 8 },
-        );
-        alloc.region = RegionId::Caller(HiddenRegionIdx(0));
-        let func = Function {
+    /// Build a 4-block FreshInCaller function whose return is a Phi
+    /// merging the two given arm sources. Helper for the two
+    /// Phi-materialisation tests below.
+    fn fresh_in_caller_phi_function(arm_a: Inst, arm_b: Inst) -> Function {
+        // block 0:                   selector + Branch
+        // block 1: arm_a + Upsilon → Phi
+        // block 2: arm_b + Upsilon → Phi
+        // block 3: Phi + Return
+        Function {
             id: FuncId(0),
-            name: "mixed".to_string(),
+            name: "phi_test".to_string(),
             params: vec![Ty::Bool],
             param_names: vec![],
             return_ty: Ty::Ptr,
@@ -4482,12 +4472,12 @@ mod tests {
                 BasicBlock {
                     id: BlockId(1),
                     insts: vec![
-                        inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                        arm_a.clone(),
                         inst(
                             2,
                             Opcode::Upsilon,
                             Ty::Unit,
-                            vec![1],
+                            vec![arm_a.id.0],
                             InstData::PhiTarget(InstId(3)),
                         ),
                         inst(
@@ -4502,12 +4492,12 @@ mod tests {
                 BasicBlock {
                     id: BlockId(2),
                     insts: vec![
-                        alloc,
+                        arm_b.clone(),
                         inst(
                             5,
                             Opcode::Upsilon,
                             Ty::Unit,
-                            vec![4],
+                            vec![arm_b.id.0],
                             InstData::PhiTarget(InstId(3)),
                         ),
                         inst(
@@ -4533,21 +4523,73 @@ mod tests {
                 return_region: RegionConstraint::FreshInCaller,
                 store_effects: vec![],
             },
-        };
+        }
+    }
+
+    fn module_imports_string_clone(bytes: &[u8]) -> bool {
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes).expect("compiled object should parse");
+        object
+            .symbols()
+            .filter_map(|s| s.name().ok().map(str::to_string))
+            .any(|n| n == "__vow_string_clone_into_arena")
+    }
+
+    /// Acceptance test 2 from issue #198 (safe variant): a Phi whose
+    /// arms are both `.rodata` literals (`ConstStr`) is fully
+    /// `VowString`-shaped, so materialising via
+    /// `__vow_string_clone_into_arena` is sound. The clone runtime is
+    /// imported and called.
+    #[test]
+    fn fresh_in_caller_phi_all_const_str_arms_materialises() {
+        let arm_a = inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0));
+        let arm_b = inst(4, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0));
+        let func = fresh_in_caller_phi_function(arm_a, arm_b);
         let module = make_module("test", vec![func]);
         let result =
             CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
-        let bytes = result.unwrap().bytes;
-        use object::{Object, ObjectSymbol};
-        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
-        let symbols: HashSet<String> = object
-            .symbols()
-            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
-            .collect();
         assert!(
-            symbols.contains("__vow_string_clone_into_arena"),
-            "Phi reaching a ConstStr arm must trigger return materialisation"
+            module_imports_string_clone(&result.unwrap().bytes),
+            "Phi with all-ConstStr arms must materialise"
+        );
+    }
+
+    /// Defense-in-depth (codex P1 from PR #230 round-2 review): a Phi
+    /// mixing a `.rodata` literal arm with a `RegionAlloc` arm has at
+    /// least one path producing a non-`VowString` descriptor. The clone
+    /// runtime is type-specialised for `VowString` / `Vec<u8>`, so
+    /// firing it on the `RegionAlloc` arm at runtime would reinterpret
+    /// the struct's first 24 bytes as `{ptr, len, cap}` and copy
+    /// arbitrary bytes — corrupting memory. Materialisation MUST NOT
+    /// fire; the clone primitive MUST NOT be imported.
+    ///
+    /// (In well-typed Vow, the type checker forbids mixed-kind Phi —
+    /// but this analysis stays sound under any IR a future pass might
+    /// synthesise. A generic deep-clone intrinsic in Phase 7 / #202
+    /// lifts this restriction.)
+    #[test]
+    fn fresh_in_caller_phi_mixed_arms_skips_materialisation() {
+        let arm_a = inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0));
+        let mut arm_b = inst(
+            4,
+            Opcode::RegionAlloc,
+            Ty::Ptr,
+            vec![],
+            InstData::AllocSize { size: 16, align: 8 },
+        );
+        arm_b.region = RegionId::Caller(HiddenRegionIdx(0));
+        let func = fresh_in_caller_phi_function(arm_a, arm_b);
+        let module = make_module("test", vec![func]);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+        assert!(
+            !module_imports_string_clone(&result.unwrap().bytes),
+            "Phi mixing ConstStr with non-string-layout arms must NOT \
+             trigger materialisation — the clone primitive only handles \
+             VowString descriptors and would corrupt memory on the \
+             non-string arm"
         );
     }
 
