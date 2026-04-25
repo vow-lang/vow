@@ -370,34 +370,35 @@ fn build_inst_index(func: &IrFunction) -> HashMap<InstId, &Inst> {
 /// deep-copied into `target_region` to satisfy the §5.1 representation
 /// promise.
 ///
-/// Walks the value's source transitively through `Phi` (via `Upsilon` arms).
-/// Returns true iff:
-///   - At least one reachable leaf is a `.rodata` literal (`ConstStr`)
-///     that needs copying into `target_region`, AND
-///   - **EVERY** reachable leaf is `ConstStr` (so the runtime clone
-///     primitive will see a `VowString` / `Vec<u8>` descriptor on every
-///     execution path).
+/// Walks the value's source transitively through `Phi` (via `Upsilon`
+/// arms). Returns true iff at least one reachable leaf is a
+/// `__vow_string_from_cstr(literal)` call AND every reachable leaf is
+/// the same shape (a known-safe `VowString` / `Vec<u8>` descriptor
+/// producer).
 ///
-/// The "every leaf is `ConstStr`" condition is the safety guard:
-/// `__vow_string_clone_into_arena` is type-specialised for the
-/// VowString / `Vec<u8>` descriptor layout. Firing it on an arbitrary
-/// heap pointer (a struct, a `Vec<T>` for `T != u8`, a `HashMap`, …)
-/// would reinterpret 24 bytes of unrelated data as `{ptr, len, cap}`
-/// and copy `len` arbitrary bytes — corrupting memory. So if a Phi
-/// mixes `ConstStr` arms with `RegionAlloc` / `GetArg` / `Call` arms
-/// of unknown layout, we cannot safely emit a clone — return `false`
-/// and let the value escape un-cloned. (The escape-without-clone
-/// case is itself non-§5.1-compliant for the literal arm, but it's
-/// strictly safer than memory corruption; a generic deep-clone
-/// intrinsic in Phase 7 / #202 lifts this restriction.)
+/// **Why `__vow_string_from_cstr`, not `ConstStr` directly.**
+/// `ConstStr` lowers to a pointer to a NUL-terminated byte blob in a
+/// `.rodata` data section — it is *not* a `VowVec` descriptor.
+/// `__vow_string_clone_into_arena` reads `(ptr, len, cap)` from its
+/// source and copies `len` bytes; firing it on a raw `ConstStr` would
+/// reinterpret arbitrary literal bytes as `{ptr, len, cap}` and corrupt
+/// memory. The Vow lowerer wraps every `String` literal in
+/// `Call __vow_string_from_cstr(ConstStr)` (`vow-ir/src/lower/mod.rs`
+/// `Lit::String`), and that Call's *result* is the actual `VowVec`
+/// descriptor — that's the shape we recognise here.
 ///
-/// `GetArg` of a `Ptr` param is intentionally **excluded** for the
-/// same layout-safety reason. `RegionAlloc` (placed in `Caller(0)` by
-/// the region pass) and `Call` results from `FreshInCaller` callees
-/// (placed in our `target_region` by the S4 projection) are already
-/// in `target_region` and need no copy — but their layout isn't
-/// `VowString`-shaped, so they also disqualify a Phi from
-/// materialisation.
+/// **Why the all-leaves rule still applies.** A Phi mixing a
+/// `__vow_string_from_cstr` arm with any other leaf shape (a
+/// `RegionAlloc`, a `GetArg` of a heap-typed param, a generic call,
+/// …) cannot be safely cloned via the `VowString`-typed primitive: at
+/// runtime the Phi-selected value might not have descriptor layout.
+/// Mixed Phis fall back to no-clone; correctness over §5.1
+/// compliance for those paths. A generic deep-clone intrinsic in
+/// Phase 7 / #202 lifts the restriction.
+///
+/// `GetArg`, `RegionAlloc`, plain `Call`s, and other leaves disqualify
+/// the walk for the same reason — their layout isn't statically
+/// known to be `VowString`-shaped.
 fn return_source_needs_materialization(
     func: &IrFunction,
     inst_index: &HashMap<InstId, &Inst>,
@@ -405,19 +406,23 @@ fn return_source_needs_materialization(
 ) -> bool {
     let mut visited: HashSet<InstId> = HashSet::new();
     let mut stack: Vec<InstId> = vec![return_val];
-    let mut saw_const_str = false;
+    let mut saw_safe_leaf = false;
     while let Some(id) = stack.pop() {
         if !visited.insert(id) {
             continue;
         }
         let Some(&src) = inst_index.get(&id) else {
-            // Unknown source — be conservative: treat as a non-`ConstStr`
-            // leaf, which disqualifies materialisation.
+            // Unknown source — be conservative.
             return false;
         };
         match src.opcode {
-            Opcode::ConstStr => {
-                saw_const_str = true;
+            Opcode::Call
+                if matches!(
+                    &src.data,
+                    InstData::CallExtern(sym) if sym == "__vow_string_from_cstr"
+                ) =>
+            {
+                saw_safe_leaf = true;
             }
             Opcode::Phi => {
                 // Walk every Upsilon arm that targets this Phi. Upsilons
@@ -436,13 +441,14 @@ fn return_source_needs_materialization(
                     }
                 }
             }
-            // Any non-Phi, non-ConstStr leaf disqualifies the whole
-            // walk: we cannot safely clone via the VowString-typed
-            // primitive when one path produces a non-VowString value.
+            // Any other leaf shape disqualifies the walk. This includes
+            // raw `ConstStr` (a `.rodata` byte blob, NOT a `VowVec`
+            // descriptor — running the clone runtime on it would
+            // corrupt memory).
             _ => return false,
         }
     }
-    saw_const_str
+    saw_safe_leaf
 }
 
 fn lower_inst(
@@ -4431,13 +4437,47 @@ mod tests {
     }
 
     /// Build a 4-block FreshInCaller function whose return is a Phi
-    /// merging the two given arm sources. Helper for the two
-    /// Phi-materialisation tests below.
-    fn fresh_in_caller_phi_function(arm_a: Inst, arm_b: Inst) -> Function {
-        // block 0:                   selector + Branch
-        // block 1: arm_a + Upsilon → Phi
-        // block 2: arm_b + Upsilon → Phi
-        // block 3: Phi + Return
+    /// merging two arm sources. Each arm is a `Vec<Inst>` (so multi-step
+    /// arms like `ConstStr → Call __vow_string_from_cstr(cstr)` can be
+    /// modelled); the source value fed into the Upsilon is the LAST
+    /// inst's id.
+    fn fresh_in_caller_phi_function(arm_a: Vec<Inst>, arm_b: Vec<Inst>) -> Function {
+        let arm_a_src = arm_a.last().unwrap().id.0;
+        let arm_b_src = arm_b.last().unwrap().id.0;
+        let mut block1 = arm_a;
+        block1.extend([
+            inst(
+                100,
+                Opcode::Upsilon,
+                Ty::Unit,
+                vec![arm_a_src],
+                InstData::PhiTarget(InstId(3)),
+            ),
+            inst(
+                101,
+                Opcode::Jump,
+                Ty::Unit,
+                vec![],
+                InstData::JumpTarget(BlockId(3)),
+            ),
+        ]);
+        let mut block2 = arm_b;
+        block2.extend([
+            inst(
+                102,
+                Opcode::Upsilon,
+                Ty::Unit,
+                vec![arm_b_src],
+                InstData::PhiTarget(InstId(3)),
+            ),
+            inst(
+                103,
+                Opcode::Jump,
+                Ty::Unit,
+                vec![],
+                InstData::JumpTarget(BlockId(3)),
+            ),
+        ]);
         Function {
             id: FuncId(0),
             name: "phi_test".to_string(),
@@ -4465,43 +4505,11 @@ mod tests {
                 },
                 BasicBlock {
                     id: BlockId(1),
-                    insts: vec![
-                        arm_a.clone(),
-                        inst(
-                            2,
-                            Opcode::Upsilon,
-                            Ty::Unit,
-                            vec![arm_a.id.0],
-                            InstData::PhiTarget(InstId(3)),
-                        ),
-                        inst(
-                            11,
-                            Opcode::Jump,
-                            Ty::Unit,
-                            vec![],
-                            InstData::JumpTarget(BlockId(3)),
-                        ),
-                    ],
+                    insts: block1,
                 },
                 BasicBlock {
                     id: BlockId(2),
-                    insts: vec![
-                        arm_b.clone(),
-                        inst(
-                            5,
-                            Opcode::Upsilon,
-                            Ty::Unit,
-                            vec![arm_b.id.0],
-                            InstData::PhiTarget(InstId(3)),
-                        ),
-                        inst(
-                            12,
-                            Opcode::Jump,
-                            Ty::Unit,
-                            vec![],
-                            InstData::JumpTarget(BlockId(3)),
-                        ),
-                    ],
+                    insts: block2,
                 },
                 BasicBlock {
                     id: BlockId(3),
@@ -4520,6 +4528,29 @@ mod tests {
         }
     }
 
+    /// Build a `__vow_string_from_cstr(ConstStr)` arm — the actual shape
+    /// the Vow lowerer produces for a String literal (see
+    /// `vow-ir/src/lower/mod.rs` `Lit::String`). The Call's result is a
+    /// `VowVec` descriptor and is the only kind of leaf the
+    /// materialisation analysis treats as clone-safe.
+    fn string_literal_arm(base_id: u32) -> Vec<Inst> {
+        let cstr = inst(
+            base_id,
+            Opcode::ConstStr,
+            Ty::Ptr,
+            vec![],
+            InstData::ConstStr(0),
+        );
+        let call = inst(
+            base_id + 1,
+            Opcode::Call,
+            Ty::Ptr,
+            vec![base_id],
+            InstData::CallExtern("__vow_string_from_cstr".to_string()),
+        );
+        vec![cstr, call]
+    }
+
     fn module_imports_string_clone(bytes: &[u8]) -> bool {
         use object::{Object, ObjectSymbol};
         let object = object::File::parse(bytes).expect("compiled object should parse");
@@ -4530,27 +4561,27 @@ mod tests {
     }
 
     /// Acceptance test 2 from issue #198 (safe variant): a Phi whose
-    /// arms are both `.rodata` literals (`ConstStr`) is fully
-    /// `VowString`-shaped, so materialising via
-    /// `__vow_string_clone_into_arena` is sound. The clone runtime is
-    /// imported and called.
+    /// arms are both `__vow_string_from_cstr(literal)` — the actual
+    /// lowered shape of a Vow String literal — produces `VowVec`
+    /// descriptors on every path. Materialising via
+    /// `__vow_string_clone_into_arena` is sound; the clone runtime is
+    /// imported.
     #[test]
-    fn fresh_in_caller_phi_all_const_str_arms_materialises() {
-        let arm_a = inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0));
-        let arm_b = inst(4, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0));
-        let func = fresh_in_caller_phi_function(arm_a, arm_b);
-        let module = make_module("test", vec![func]);
+    fn fresh_in_caller_phi_all_string_literal_arms_materialises() {
+        let func = fresh_in_caller_phi_function(string_literal_arm(20), string_literal_arm(40));
+        let mut module = make_module("test", vec![func]);
+        module.strings.push("hello".to_string());
         let result =
             CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
         assert!(
             module_imports_string_clone(&result.unwrap().bytes),
-            "Phi with all-ConstStr arms must materialise"
+            "Phi with all `__vow_string_from_cstr` arms must materialise"
         );
     }
 
     /// Defense-in-depth (codex P1 from PR #230 round-2 review): a Phi
-    /// mixing a `.rodata` literal arm with a `RegionAlloc` arm has at
+    /// mixing a string-literal arm with a `RegionAlloc` arm has at
     /// least one path producing a non-`VowString` descriptor. The clone
     /// runtime is type-specialised for `VowString` / `Vec<u8>`, so
     /// firing it on the `RegionAlloc` arm at runtime would reinterpret
@@ -4564,38 +4595,68 @@ mod tests {
     /// lifts this restriction.)
     #[test]
     fn fresh_in_caller_phi_mixed_arms_skips_materialisation() {
-        let arm_a = inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0));
         let mut arm_b = inst(
-            4,
+            40,
             Opcode::RegionAlloc,
             Ty::Ptr,
             vec![],
             InstData::AllocSize { size: 16, align: 8 },
         );
         arm_b.region = RegionId::Caller(HiddenRegionIdx(0));
-        let func = fresh_in_caller_phi_function(arm_a, arm_b);
-        let module = make_module("test", vec![func]);
+        let func = fresh_in_caller_phi_function(string_literal_arm(20), vec![arm_b]);
+        let mut module = make_module("test", vec![func]);
+        module.strings.push("hello".to_string());
         let result =
             CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
         assert!(
             !module_imports_string_clone(&result.unwrap().bytes),
-            "Phi mixing ConstStr with non-string-layout arms must NOT \
-             trigger materialisation — the clone primitive only handles \
-             VowString descriptors and would corrupt memory on the \
-             non-string arm"
+            "Phi mixing string literal with non-string-layout arms must \
+             NOT trigger materialisation — the clone primitive only \
+             handles VowString descriptors and would corrupt memory on \
+             the non-string arm"
+        );
+    }
+
+    /// Defense-in-depth (codex P1 from PR #230 round-3 review): a Phi
+    /// arm that is a *raw* `ConstStr` (not wrapped in
+    /// `__vow_string_from_cstr`) is a c-string pointer, not a `VowVec`
+    /// descriptor. Treating it as clone-safe would corrupt memory.
+    /// The well-formed Vow lowerer never produces this shape — every
+    /// String literal is wrapped in the `from_cstr` Call — but the
+    /// analysis must reject it under any IR a future pass might
+    /// synthesise.
+    #[test]
+    fn fresh_in_caller_raw_const_str_arm_skips_materialisation() {
+        let cstr_arm = vec![inst(
+            20,
+            Opcode::ConstStr,
+            Ty::Ptr,
+            vec![],
+            InstData::ConstStr(0),
+        )];
+        let func = fresh_in_caller_phi_function(cstr_arm, string_literal_arm(40));
+        let mut module = make_module("test", vec![func]);
+        module.strings.push("hello".to_string());
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+        assert!(
+            !module_imports_string_clone(&result.unwrap().bytes),
+            "Raw ConstStr arm (c-string, not VowVec descriptor) must NOT \
+             trigger materialisation"
         );
     }
 
     #[test]
-    fn fresh_in_caller_const_str_return_materialises_via_clone() {
-        // Phase 4 / S5: a `FreshInCaller` function whose return path reaches
-        // a `.rodata` `ConstStr` MUST clone the descriptor into
-        // `target_region` before returning (spec §5.1). The produced object
-        // must import `__vow_string_clone_into_arena`; the regular
-        // FreshInCaller-into-RegionAlloc test below confirms the symbol is
-        // *not* imported when the path doesn't need materialisation.
-        let module = make_module(
+    fn fresh_in_caller_string_literal_return_materialises_via_clone() {
+        // Phase 4 / S5: a `FreshInCaller` function whose return path is the
+        // lowered shape of a Vow String literal —
+        // `Call __vow_string_from_cstr(ConstStr)` — produces a `VowVec`
+        // descriptor that must be cloned into `target_region` to satisfy
+        // §5.1. The produced object must import
+        // `__vow_string_clone_into_arena`.
+        let mut module = make_module(
             "test",
             vec![Function {
                 id: FuncId(0),
@@ -4609,7 +4670,14 @@ mod tests {
                     id: BlockId(0),
                     insts: vec![
                         inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
-                        inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                        inst(
+                            1,
+                            Opcode::Call,
+                            Ty::Ptr,
+                            vec![0],
+                            InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                        ),
+                        inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
                     ],
                 }],
                 local_names: std::collections::HashMap::new(),
@@ -4620,19 +4688,13 @@ mod tests {
                 },
             }],
         );
+        module.strings.push("hello".to_string());
         let result =
             CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
-        let bytes = result.unwrap().bytes;
-        use object::{Object, ObjectSymbol};
-        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
-        let symbols: HashSet<String> = object
-            .symbols()
-            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
-            .collect();
         assert!(
-            symbols.contains("__vow_string_clone_into_arena"),
-            "FreshInCaller .rodata return path must import __vow_string_clone_into_arena"
+            module_imports_string_clone(&result.unwrap().bytes),
+            "FreshInCaller String-literal return path must import __vow_string_clone_into_arena"
         );
     }
 
