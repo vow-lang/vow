@@ -2286,6 +2286,16 @@ impl Backend for CraneliftBackend {
         // in the module actually emits a return-materialisation call. This
         // keeps the symbol out of object files for modules whose
         // FreshInCaller paths are all already in `target_region` (spec §5.1).
+        //
+        // Phase 7 / #202 follow-up: this scan builds a fresh `inst_index`
+        // per qualifying function (inside `module_uses_return_materialization`),
+        // and `compile_ir_function` builds another `inst_index` for the
+        // same function during lowering. A `Vec<bool>` parallel to
+        // `module.functions` recording the per-function flag — populated
+        // here once and threaded through to `compile_ir_function` — would
+        // skip the second scan. Negligible at Phase 4 scale (few functions
+        // qualify); becomes worth doing once the FFI-wrapper stdlib lands
+        // and synthesised functions exercise materialisation more broadly.
         let needs_string_clone = module
             .functions
             .iter()

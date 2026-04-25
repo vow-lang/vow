@@ -250,7 +250,10 @@ pub fn insert_region_markers(module: &mut Module) {
     }
 }
 
-/// Smallest unused `InstId` value across `func`'s blocks.
+/// Smallest unused `InstId` value across `func`'s blocks. Panics on the
+/// (4 billion-inst) overflow case rather than silently returning
+/// `u32::MAX` — a duplicate ID would corrupt the IR. CLAUDE.md
+/// "no shortcuts": impossible cases fail loudly.
 fn next_inst_id(func: &Function) -> u32 {
     let mut max_id = 0u32;
     for block in &func.blocks {
@@ -260,7 +263,9 @@ fn next_inst_id(func: &Function) -> u32 {
             }
         }
     }
-    max_id.saturating_add(1)
+    max_id
+        .checked_add(1)
+        .expect("InstId overflow in insert_region_markers — function too large")
 }
 
 fn internal_compiler_error(message: &str) -> Diagnostic {
@@ -693,24 +698,29 @@ fn lub_to_region_id(markers: &BTreeSet<MustOutliveMarker>, defining_block: Block
     if has_caller {
         return RegionId::Caller(HiddenRegionIdx(0));
     }
-    // Pure block markers (or empty marker set):
-    // - Empty set → defining block (its narrowest possible region).
-    // - Single marker == defining block → that block.
-    // - Anything else (different single block, or multiple blocks) → fall
-    //   back to `Root`. Without block-tree dominance info (a §4.1 step 3
-    //   enhancement) we cannot pick a correct enclosing block: returning
-    //   `Block(other)` for an alloc defined in a different basic block
-    //   risks the alloc executing after `other`'s arena has closed
-    //   (use-after-free). `Root` is conservatively safe — process-lifetime
-    //   storage strictly outlives any concrete block LUB.
-    // Phase 4 / S3 deferred: even when markers are confined to the
-    // defining block, we cannot safely emit `Block(_)` until the
-    // `must_outlive` pass tracks every use of the value (regular
-    // `FieldGet`/`Load`, non-store-effect call args, Pizlo-Phi uses). An
-    // untracked read in a sibling block would consume freed memory after
-    // `RegionClose`. Phase 9 (#204) extends `must_outlive` and re-enables
-    // `Block(_)` emission. Until then, all non-escaping allocations are
-    // routed to `Root` — correct, but with process-lifetime memory cost.
+    // ── Phase 4 (CURRENT BEHAVIOUR) ────────────────────────────────────
+    // All pure-block-marker / empty-set cases are routed to `Root`.
+    // The classification logic below (Phase 9 target) is NOT active
+    // yet — we cannot safely emit `Block(_)` until the `must_outlive`
+    // pass tracks every use of the value (regular `FieldGet`/`Load`,
+    // non-store-effect call args, Pizlo-Phi uses). An untracked read
+    // in a sibling block would consume freed memory after
+    // `RegionClose`. `Root` is conservatively safe — process-lifetime
+    // storage strictly outlives any concrete block LUB.
+    //
+    // ── Phase 9 (#204) target classification, FOR REFERENCE ────────────
+    // Once `must_outlive` is complete, the bullets below describe the
+    // intended behaviour:
+    //   - Empty set → defining block (its narrowest possible region).
+    //   - Single marker == defining block → that block.
+    //   - Anything else (different single block, multiple blocks) →
+    //     `Root` (no block-tree dominance info; returning
+    //     `Block(other)` for an alloc in a different basic block
+    //     would risk use-after-free when `other`'s arena closes).
+    //
+    // The match below is the Phase 9 dispatch, retained as a
+    // structural placeholder; for now we discard `blocks` and return
+    // `Root` unconditionally.
     let _ = (blocks, defining_block);
     RegionId::Root
 }
