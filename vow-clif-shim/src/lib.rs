@@ -927,8 +927,15 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     // a given BlockId by `IOP_REGION_OPEN` / `IOP_REGION_CLOSE` /
     // `IOP_REGION_ALLOC` with `REGION_KIND_BLOCK`. `VowArena` is 48 bytes,
     // 8-byte aligned (asserted in `vow-runtime/src/lib.rs`).
-    let mut block_arena_slots: std::collections::HashMap<i64, StackSlot> =
-        std::collections::HashMap::new();
+    //
+    // BTreeMap (not HashMap) for the same reason `slot_map` below uses one
+    // (CLAUDE.md): deterministic iteration order is required for binary
+    // fixed-point reproducibility under the bootstrap triple. Today the
+    // map is only accessed via `.entry()` so the codegen order is
+    // incidentally deterministic, but any future iteration over it
+    // (diagnostics, init pass) MUST preserve that property by default.
+    let mut block_arena_slots: std::collections::BTreeMap<i64, StackSlot> =
+        std::collections::BTreeMap::new();
     let vow_violation_ref =
         vow_violation_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
     let overflow_ref = overflow_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
@@ -1832,15 +1839,14 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                             builder.ins().stack_addr(types::I64, slot, 0)
                         }
                         REGION_KIND_CALLER => {
-                            // Hidden region parameters are appended to the
-                            // function's signature after the user-visible
-                            // params (spec §5.2). Threading `Caller(k)` for
-                            // `k > 0` requires the self-hosted compiler to
-                            // declare the right hidden-param count when
-                            // emitting the function — currently the shim
-                            // expects only user params, so we reject
-                            // anything beyond `Caller(0)` for now and use
-                            // the first hidden value when `k == 0`.
+                            // Hidden-region plumbing (spec §5.2) is not yet
+                            // wired in the shim — `__vow_clif_declare_function`
+                            // does not accept a hidden-param count, so the
+                            // self-hosted compiler cannot emit any
+                            // `Caller`-routed allocation regardless of `k`.
+                            // Reject all `k` values rather than silently
+                            // routing into the root arena. Phase 5 (#200)
+                            // extends the declare API and lifts this reject.
                             eprintln!(
                                 "clif_shim: IOP_REGION_ALLOC with REGION_KIND_CALLER \
                                  (k={}) is not yet wired — self-hosted compiler must \

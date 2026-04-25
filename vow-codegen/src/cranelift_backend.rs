@@ -11,7 +11,7 @@ use cranelift_module::{
     DataDescription, DataId, FuncId as CraneliftFuncId, Linkage, Module as CraneliftModule,
 };
 use cranelift_object::{ObjectBuilder, ObjectModule};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use vow_ir::{
     BlockId, FuncId as IrFuncId, Function as IrFunction, Inst, InstData, InstId,
@@ -238,7 +238,10 @@ struct LowerCtx<'a> {
     /// Stack slots holding the `VowArena` header for each block whose region
     /// is non-empty (spec §3.5). Lazily populated on first use of a given
     /// `BlockId` by `RegionOpen` / `RegionClose` / `RegionAlloc{Block}`.
-    block_arena_slots: &'a mut HashMap<BlockId, StackSlot>,
+    /// `BTreeMap` (not `HashMap`) for deterministic iteration order — the
+    /// same rule the existing `slot_map` follows (see CLAUDE.md). Required
+    /// for binary fixed-point reproducibility under the bootstrap triple.
+    block_arena_slots: &'a mut BTreeMap<BlockId, StackSlot>,
     /// Per-callable region summaries, indexed by IR `FuncId`. Read by the
     /// `Opcode::Call` lowering to project hidden region parameters from the
     /// caller's frame (spec §5.2).
@@ -271,7 +274,7 @@ const VOW_ARENA_HEADER_ALIGN_LOG2: u8 = 3;
 /// / `RegionClose` references to the same block within a single function.
 fn block_arena_slot(
     builder: &mut FunctionBuilder,
-    slots: &mut HashMap<BlockId, StackSlot>,
+    slots: &mut BTreeMap<BlockId, StackSlot>,
     block_id: BlockId,
 ) -> StackSlot {
     *slots.entry(block_id).or_insert_with(|| {
@@ -293,7 +296,7 @@ fn region_to_arena_value(
     builder: &mut FunctionBuilder,
     region: RegionId,
     hidden_region_values: &[Value],
-    block_arena_slots: &mut HashMap<BlockId, StackSlot>,
+    block_arena_slots: &mut BTreeMap<BlockId, StackSlot>,
     root_arena_gv: GlobalValue,
 ) -> Result<Value, CodegenError> {
     match region {
@@ -347,11 +350,21 @@ fn module_uses_return_materialization(func: &IrFunction) -> bool {
 /// promise.
 ///
 /// Walks the value's source transitively through `Phi` (via `Upsilon` arms).
-/// Returns true if any reachable leaf is a `.rodata` literal (`ConstStr`) or
-/// a heap-typed parameter alias (`GetArg` of a `Ptr` param). Other leaves —
-/// `RegionAlloc` (placed in `Caller(0)` by the region pass) and `Call`
-/// results from `FreshInCaller` callees (placed in our `target_region` by
-/// the S4 projection) — are already in `target_region` and need no copy.
+/// Returns true if any reachable leaf is a `.rodata` literal (`ConstStr`).
+///
+/// `GetArg` of a `Ptr` param is intentionally **excluded** —
+/// `__vow_string_clone_into_arena` is type-specialised for the
+/// VowString / Vec<u8> descriptor layout, so firing it on an arbitrary
+/// heap pointer (struct, `Vec<T>` for `T != u8`, `HashMap`) would
+/// reinterpret 24 bytes of unrelated data as `{ptr,len,cap}` and copy
+/// `len` arbitrary bytes — corrupting memory. The generic deep-clone
+/// intrinsic that lifts this restriction lands in Phase 7 (#202, FFI
+/// wrapper stdlib).
+///
+/// Other leaves — `RegionAlloc` (placed in `Caller(0)` by the region
+/// pass) and `Call` results from `FreshInCaller` callees (placed in
+/// our `target_region` by the S4 projection) — are already in
+/// `target_region` and need no copy.
 fn return_source_needs_materialization(func: &IrFunction, return_val: InstId) -> bool {
     let mut visited: HashSet<InstId> = HashSet::new();
     let mut stack: Vec<InstId> = vec![return_val];
@@ -1046,6 +1059,15 @@ fn lower_inst(
                 //   2. One `*VowArena` per distinct `StoreEffect.target` in
                 //      ascending callee-param-index order. Sourced from the
                 //      region of the matching Vow argument.
+                //
+                // The projection MUST NOT overshoot the callee's declared
+                // signature. `hidden_region_param_count` special-cases
+                // `main` to 0 hidden params (C ABI), so the summary's
+                // `FreshInCaller` / `store_effects` may say "two hidden
+                // args" while the signature has none. Bound the loop by
+                // `expected_types.len()` (the callee's actual signature
+                // arity) so a call to `main` with a non-empty summary
+                // doesn't push extra args and break Cranelift verification.
                 let callee_id = match &inst.data {
                     InstData::CallTarget(f) => *f,
                     _ => unreachable!("internal_call is true only for CallTarget"),
@@ -1057,15 +1079,26 @@ fn lower_inst(
                     ))
                 })?;
 
-                if callee_summary.return_region == RegionConstraint::FreshInCaller {
-                    let target_region = region_to_arena_value(
+                let mut push_hidden = |builder: &mut FunctionBuilder<'_>,
+                                       call_args: &mut Vec<Value>,
+                                       region: RegionId|
+                 -> Result<(), CodegenError> {
+                    if call_args.len() >= expected_types.len() {
+                        return Ok(());
+                    }
+                    let arena = region_to_arena_value(
                         builder,
-                        inst.region,
+                        region,
                         ctx.hidden_region_values,
                         ctx.block_arena_slots,
                         ctx.root_arena_gv,
                     )?;
-                    call_args.push(target_region);
+                    call_args.push(arena);
+                    Ok(())
+                };
+
+                if callee_summary.return_region == RegionConstraint::FreshInCaller {
+                    push_hidden(builder, &mut call_args, inst.region)?;
                 }
 
                 let mut store_targets: Vec<u32> = callee_summary
@@ -1097,14 +1130,7 @@ fn lower_inst(
                         })
                         .map(|src_inst| src_inst.region)
                         .unwrap_or(RegionId::Root);
-                    let arena = region_to_arena_value(
-                        builder,
-                        arg_region,
-                        ctx.hidden_region_values,
-                        ctx.block_arena_slots,
-                        ctx.root_arena_gv,
-                    )?;
-                    call_args.push(arena);
+                    push_hidden(builder, &mut call_args, arg_region)?;
                 }
             }
             let call_inst = builder.ins().call(func_ref, &call_args);
@@ -1656,7 +1682,7 @@ fn compile_ir_function(
     }
 
     let mut value_map: HashMap<InstId, Value> = HashMap::new();
-    let mut block_arena_slots: HashMap<BlockId, StackSlot> = HashMap::new();
+    let mut block_arena_slots: BTreeMap<BlockId, StackSlot> = BTreeMap::new();
 
     // Emit each block
     let mut first_block = true;
@@ -2754,6 +2780,87 @@ mod tests {
     #[test]
     fn cranelift_backend_default_impl() {
         let _ = CraneliftBackend::default();
+    }
+
+    /// Regression for the Codex review on PR #230: `build_signature`
+    /// special-cases `main` to 0 hidden region params (C ABI), so a call
+    /// site that targets `main` must not project hidden args from
+    /// `main`'s summary — even when the summary says `FreshInCaller` or
+    /// has non-empty `store_effects`. Otherwise the caller's call args
+    /// overshoot `main`'s declared signature and Cranelift verification
+    /// fails.
+    #[test]
+    fn call_to_main_with_nonempty_summary_does_not_overshoot_signature() {
+        // helper(): calls main(); returns i32.
+        // main(): summary says FreshInCaller + store_effect on param 0,
+        //   but signature is 0-arg per the §5.4 / `hidden_region_param_count`
+        //   exception. The call site MUST NOT push hidden args.
+        let mut main_fn = Function {
+            id: FuncId(0),
+            name: "main".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::I32,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::ConstI32, Ty::I32, vec![], InstData::ConstI32(0)),
+                    inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary {
+                param_regions: vec![],
+                return_region: RegionConstraint::FreshInCaller,
+                store_effects: vec![StoreEffect {
+                    target: 0,
+                    source: RegionConstraint::FreshInCaller,
+                }],
+            },
+        };
+        // Force the summary fields to coexist (region inference would
+        // normally not produce both for `main`, but the codegen MUST be
+        // robust to whatever summary it sees).
+        main_fn.summary.store_effects = vec![StoreEffect {
+            target: 0,
+            source: RegionConstraint::FreshInCaller,
+        }];
+
+        let helper = Function {
+            id: FuncId(1),
+            name: "helper".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::I32,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(
+                        0,
+                        Opcode::Call,
+                        Ty::I32,
+                        vec![],
+                        InstData::CallTarget(FuncId(0)),
+                    ),
+                    inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+        };
+
+        let module = make_module("test", vec![main_fn, helper]);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(
+            result.is_ok(),
+            "calling main with a non-empty summary must not break codegen: {:?}",
+            result.err()
+        );
     }
 
     fn simple_fn(
