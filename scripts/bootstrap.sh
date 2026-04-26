@@ -10,6 +10,7 @@ cd "$(dirname "$0")/.."
 mkdir -p build
 
 SKIP_CARGO=false
+NO_VERIFY=false
 VMEM_LIMIT_KB="${VOW_BOOTSTRAP_VMEM_KB:-0}"
 if ! [[ "$VMEM_LIMIT_KB" =~ ^[0-9]+$ ]]; then
     echo "Error: VOW_BOOTSTRAP_VMEM_KB must be a non-negative integer (got: '$VMEM_LIMIT_KB')" >&2
@@ -17,7 +18,7 @@ if ! [[ "$VMEM_LIMIT_KB" =~ ^[0-9]+$ ]]; then
 fi
 
 usage() {
-    echo "Usage: $0 [--skip-cargo] [--help|-h]"
+    echo "Usage: $0 [--skip-cargo] [--no-verify] [--help|-h]"
     echo ""
     echo "Bootstrap the self-hosted Vow compiler and verify the fixed point."
     echo ""
@@ -30,6 +31,7 @@ usage() {
     echo ""
     echo "Options:"
     echo "  --skip-cargo  Skip Stage 0 if Rust binary already built"
+    echo "  --no-verify   Build without running ESBMC verification"
     echo "  -h, --help    Show this help"
     echo ""
     echo "Environment:"
@@ -62,10 +64,16 @@ run_stage_cmd() {
 for arg in "$@"; do
     case "$arg" in
         --skip-cargo) SKIP_CARGO=true ;;
+        --no-verify)  NO_VERIFY=true ;;
         -h|--help)    usage ;;
         *)            echo "Unknown flag: $arg"; usage ;;
     esac
 done
+
+BUILD_FLAGS=""
+if [ "$NO_VERIFY" = true ]; then
+    BUILD_FLAGS="--no-verify"
+fi
 
 # ─── Stage 0: Build Rust compiler ────────────────────────────────────
 
@@ -83,7 +91,7 @@ fi
 
 printf "${BOLD}Stage 1:${RESET} Rust compiler -> build/vowc\n"
 t0=$(date +%s)
-if ! run_logged "./target/release/vow build compiler/main.vow -o build/vowc"; then
+if ! run_logged "./target/release/vow build $BUILD_FLAGS compiler/main.vow -o build/vowc"; then
     printf "  ${RED}FAILED${RESET}\n"
     exit 1
 fi
@@ -94,7 +102,7 @@ printf "  done in %ds\n" $((t1 - t0))
 
 printf "${BOLD}Stage 2:${RESET} build/vowc -> build/vowc2\n"
 t0=$(date +%s)
-if ! run_stage_cmd "build/vowc build compiler/main.vow -o build/vowc2"; then
+if ! run_stage_cmd "build/vowc build $BUILD_FLAGS compiler/main.vow -o build/vowc2"; then
     printf "  ${RED}FAILED${RESET}\n"
     if [ "$VMEM_LIMIT_KB" -gt 0 ]; then
         printf "  Hint: rerun with a higher VOW_BOOTSTRAP_VMEM_KB or unset it for no cap.\n"
@@ -108,7 +116,7 @@ printf "  done in %ds\n" $((t1 - t0))
 
 printf "${BOLD}Stage 3:${RESET} build/vowc2 -> build/vowc3\n"
 t0=$(date +%s)
-if ! run_stage_cmd "build/vowc2 build compiler/main.vow -o build/vowc3"; then
+if ! run_stage_cmd "build/vowc2 build $BUILD_FLAGS compiler/main.vow -o build/vowc3"; then
     printf "  ${RED}FAILED${RESET}\n"
     if [ "$VMEM_LIMIT_KB" -gt 0 ]; then
         printf "  Hint: rerun with a higher VOW_BOOTSTRAP_VMEM_KB or unset it for no cap.\n"

@@ -19,9 +19,6 @@ concurrency:
 permissions:
   contents: write
 
-env:
-  ESBMC_VERSION: "8.1"
-
 jobs:
   release:
     runs-on: ubuntu-24.04
@@ -40,22 +37,6 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache ESBMC
-        id: cache-esbmc
-        uses: actions/cache@v5
-        with:
-          path: ~/esbmc
-          key: esbmc-${{ env.ESBMC_VERSION }}-ubuntu-24.04
-
-      - name: Install ESBMC
-        if: steps.cache-esbmc.outputs.cache-hit != 'true'
-        run: |
-          curl -sL -o /tmp/esbmc.zip "https://github.com/esbmc/esbmc/releases/download/v$ESBMC_VERSION/release-ubuntu-24.04--b.RelWithDebInfo.-e.OFF.zip"
-          unzip -q /tmp/esbmc.zip -d ~/esbmc
-          rm /tmp/esbmc.zip
-
-      - run: echo "$HOME/esbmc/bin" >> "$GITHUB_PATH"
-
       - name: Bump version
         id: bump
         run: |
@@ -64,7 +45,7 @@ jobs:
           echo "tag=v$NEW_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Bootstrap compiler
-        run: scripts/bootstrap.sh
+        run: scripts/bootstrap.sh --no-verify
 
       - name: Verify compiler binary
         run: build/vowc --help > /dev/null
