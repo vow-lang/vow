@@ -973,24 +973,96 @@ fn origin_to_constraint(origin: &ValueOrigin) -> RegionConstraint {
 // Conflict detection
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)] // TODO(Phase 5): populate with real detection logic.
+/// Phase 5 partial conflict detection (spec §4.4).
+///
+/// Called during the forward sweep when an `Opcode::Call` site processes
+/// a callee store-effect of shape `(target_param, AliasOf(p))`: the callee
+/// writes its arg[p] into its arg[target_param]. In the caller's frame,
+/// `target_arg_id = inst.args[target_param]` and `source_arg_id =
+/// inst.args[p]`.
+///
+/// The constraint per spec §4.4 is `region(target) ⊇ region(source)`. The
+/// clearest unsatisfiable shape we can detect with current data:
+///
+/// * `source_origin = RegionAlloc` (block-local fresh allocation in the
+///   caller) and `target_origin = Param(_)` (caller's parameter region,
+///   which strictly outlives any caller block). Storing a block-local
+///   value into a parameter container is a use-after-free in the
+///   caller's caller after the caller returns, unless the caller's own
+///   summary lifts the allocation via a `(target, FreshInCaller)` entry.
+///   The lift only materialises if the caller separately publishes that
+///   effect (via a direct `Store`/`FieldSet` of a fresh value into the
+///   same param), which is its own visible source-level pattern; we
+///   reject this call shape unconditionally — the user fix is either to
+///   hoist the alloc, copy via `pin_to_root`, or restructure the return
+///   flow per §4.4 + issue #200.
+///
+/// Deferred to Phase 9 (#204):
+///   * Full block-tree LUB requires a dominator tree (`lub_to_region_id`
+///     currently routes undecidable block-marker sets to `Root` — the
+///     pre-existing §4.4 compliance gap shipped with Phase 4).
+///   * Cross-param without published spanning effect (`source = Param(p)`,
+///     `target = Param(q)`, `p != q`): needs the caller's full summary,
+///     which is built up forward through this same pass.
+///   * Phi-of-mixed-origins: descend into upsilon arms and reject when
+///     the joined origin set spans incompatible regions.
 fn check_store_conflict(
     _func: &Function,
-    _target_arg_id: InstId,
-    _source_arg_id: InstId,
-    _call_inst: &Inst,
-    _inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
-    _diagnostics: &mut Vec<Diagnostic>,
+    target_arg_id: InstId,
+    source_arg_id: InstId,
+    call_inst: &Inst,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+    diagnostics: &mut Vec<Diagnostic>,
 ) {
-    // TODO(Phase 5 / issue #200): emit `RegionConflict` when an
-    // interprocedural store-effect is unsatisfiable. The full block-tree
-    // LUB check needs the dominator tree (deferred with `Block(_)` region
-    // materialisation in `lub_to_region_id`); until that lands, this stub
-    // is the reason `RegionConflict` is reachable only via the SCC
-    // iteration-bound internal compiler error, not via real user code.
-    // See `docs/spec/errors.md` § RegionConflict for the deferral note
-    // and `docs/design/arena_memory.md` §4.4 for the rejection
-    // requirement this will satisfy.
+    let source_origin = trace_origin(source_arg_id, inst_lookup);
+    let target_origin = trace_origin(target_arg_id, inst_lookup);
+
+    if !matches!(source_origin, ValueOrigin::RegionAlloc) {
+        return;
+    }
+    let ValueOrigin::Param(_) = target_origin else {
+        return;
+    };
+
+    let source_span = inst_lookup
+        .get(&source_arg_id)
+        .map(|(_, i)| i.origin)
+        .unwrap_or(call_inst.origin);
+    let target_span = inst_lookup
+        .get(&target_arg_id)
+        .map(|(_, i)| i.origin)
+        .unwrap_or(call_inst.origin);
+
+    diagnostics.push(Diagnostic {
+        severity: Severity::Error,
+        code: ErrorCode::RegionConflict,
+        message: "value's region cannot satisfy target container's region: \
+                  block-local allocation stored into a parameter region"
+            .to_string(),
+        primary: SourceLocation {
+            file: String::new(),
+            byte_offset: source_span.start,
+            byte_len: source_span.len,
+        },
+        secondary: vec![
+            SourceLocation {
+                file: String::new(),
+                byte_offset: target_span.start,
+                byte_len: target_span.len,
+            },
+            SourceLocation {
+                file: String::new(),
+                byte_offset: call_inst.origin.start,
+                byte_len: call_inst.origin.len,
+            },
+        ],
+        blame: Blame::Callee,
+        hints: vec![
+            "hoist the allocation to a wider scope, copy via `pin_to_root`, \
+             or restructure return flow so the value escapes to the caller"
+                .to_string(),
+        ],
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1776,5 +1848,182 @@ mod tests {
         infer_regions(&mut m);
         assert!(m.functions.is_empty());
         assert!(m.warnings.is_empty());
+    }
+
+    /// A callee that stores its second arg into its first arg publishes
+    /// `(0, AliasOf(1))` store-effect. A caller passing `(some_param,
+    /// fresh_alloc)` exhibits the alloc→param-via-callee shape that
+    /// `check_store_conflict` rejects (Phase 5 partial detection).
+    #[test]
+    fn region_conflict_alloc_into_param_via_callee_store_effect() {
+        let f0_insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(2, Opcode::Store, Ty::Unit, vec![0, 1], InstData::None),
+            inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f0 = function(
+            0,
+            "copy_param",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, f0_insts)],
+        );
+
+        let f1_insts = vec![
+            inst(4, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(
+                5,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                6,
+                Opcode::Call,
+                Ty::Unit,
+                vec![4, 5],
+                InstData::CallTarget(FuncId(0)),
+            ),
+            inst(7, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f1 = function(
+            1,
+            "caller",
+            vec![Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, f1_insts)],
+        );
+
+        let mut m = module(vec![f0, f1]);
+        infer_regions(&mut m);
+
+        let conflicts: Vec<_> = m
+            .warnings
+            .iter()
+            .filter(|d| d.code == ErrorCode::RegionConflict)
+            .filter(|d| !d.message.starts_with("internal compiler error"))
+            .collect();
+        assert!(
+            !conflicts.is_empty(),
+            "expected RegionConflict on alloc→param via callee store-effect, \
+             got warnings: {:?}",
+            m.warnings
+        );
+        let c = conflicts[0];
+        assert_eq!(c.severity, Severity::Error);
+        assert_eq!(c.blame, Blame::Callee);
+        assert!(!c.hints.is_empty(), "expected at least one hint");
+    }
+
+    /// Same callee shape as the conflict test, but caller passes two
+    /// parameters (no fresh alloc). Cross-param store stays Phase-5-deferred,
+    /// so no diagnostic should fire.
+    #[test]
+    fn region_conflict_not_emitted_for_param_to_param_store() {
+        let f0_insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(2, Opcode::Store, Ty::Unit, vec![0, 1], InstData::None),
+            inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f0 = function(
+            0,
+            "copy_param",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, f0_insts)],
+        );
+
+        let f1_insts = vec![
+            inst(4, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(5, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(
+                6,
+                Opcode::Call,
+                Ty::Unit,
+                vec![4, 5],
+                InstData::CallTarget(FuncId(0)),
+            ),
+            inst(7, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f1 = function(
+            1,
+            "caller",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, f1_insts)],
+        );
+
+        let mut m = module(vec![f0, f1]);
+        infer_regions(&mut m);
+
+        let conflicts: Vec<_> = m
+            .warnings
+            .iter()
+            .filter(|d| d.code == ErrorCode::RegionConflict)
+            .filter(|d| !d.message.starts_with("internal compiler error"))
+            .collect();
+        assert!(
+            conflicts.is_empty(),
+            "did not expect RegionConflict for param→param store, got: {:?}",
+            conflicts
+        );
+    }
+
+    /// Boundary: source is `ConstStr` (ConstantGlobal). Even when target is a
+    /// param, this must not emit — `.rodata`-backed values outlive any
+    /// caller-frame region.
+    #[test]
+    fn region_conflict_not_emitted_for_constant_into_param() {
+        let f0_insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(2, Opcode::Store, Ty::Unit, vec![0, 1], InstData::None),
+            inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f0 = function(
+            0,
+            "copy_param",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, f0_insts)],
+        );
+
+        let f1_insts = vec![
+            inst(4, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(5, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+            inst(
+                6,
+                Opcode::Call,
+                Ty::Unit,
+                vec![4, 5],
+                InstData::CallTarget(FuncId(0)),
+            ),
+            inst(7, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f1 = function(
+            1,
+            "caller",
+            vec![Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, f1_insts)],
+        );
+
+        let mut m = module(vec![f0, f1]);
+        infer_regions(&mut m);
+
+        let conflicts: Vec<_> = m
+            .warnings
+            .iter()
+            .filter(|d| d.code == ErrorCode::RegionConflict)
+            .filter(|d| !d.message.starts_with("internal compiler error"))
+            .collect();
+        assert!(
+            conflicts.is_empty(),
+            "did not expect RegionConflict for ConstStr→param store, got: {:?}",
+            conflicts
+        );
     }
 }

@@ -658,36 +658,91 @@ fn deep_aliases_inner(
     int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
     visiting: Vec<i64>
 ) -> Vec<i64> {
-    // DIVERGENCE (tracked for the byte-identical summary diff deferred
-    // in the PR description): AliasOfAny call-site resolution is
-    // ENTIRELY ABSENT in the self-hosted pass — not just non-recursive.
-    //
-    // This function always returns an empty vec. `deep_kind_inner` then
-    // calls `join_aliases` with `a_aliases = []` for every arm of a
-    // Phi/Call merge, so the join only ever sees the singleton aux
-    // index of `RSUM_KIND_ALIAS_OF` arms; `RSUM_KIND_ALIAS_OF_ANY` arm
-    // contents are silently dropped. The accumulated `acc_aliases`
-    // therefore loses all transitively-aliased indices.
-    //
-    // Concretely: if a callee summary is `AliasOfAny([0, 2])` and the
-    // call's result flows into a Return, `deep_kind_inner` enters the
-    // `ck == RSUM_KIND_ALIAS_OF_ANY()` branch (line 555 above), then the
-    // inner loop at line 568 calls THIS function for each aliased arg,
-    // gets `[]` back, and `join_aliases` (the Phi join at line 596 also
-    // hits the same path) accumulates from empty `a_aliases`. The
-    // function's published summary therefore loses {0, 2} entirely.
-    // The Rust `origin_to_internal_inner` does the recursive join
-    // correctly; this port only mirrors `join_aliases` at explicit
-    // join points and does not chase through callee-summary expansions.
-    // Phase 5 fix target: this function body — replicate the Rust
-    // recursion structure so the call sites at line 568 and 596 see
-    // the full transitive alias set.
-    //
-    // Align this with the Rust pass before the differential gate can
-    // turn on. Phase 3 lowering ignores summaries (spec §4) so the
-    // divergence does not affect codegen today; Phase 4's hidden-arena
-    // projection on the Rust side already consumes summaries, but the
-    // self-hosted shim doesn't yet (per `aeafab7`'s deferral note).
+    // Mirrors `origin_to_internal_inner` in `vow-ir/src/region.rs` for the
+    // alias-set component. Returns the AliasOfAny indices that the value
+    // transitively aliases. Empty for kinds other than ALIAS_OF_ANY (single
+    // ALIAS_OF carries its index in `aux`, not here).
+    if region_vec_contains_i64(visiting, id) {
+        return Vec::new();
+    }
+    let inst_opt: i64 = find_inst_index(f, id);
+    if inst_opt < 0 {
+        return Vec::new();
+    }
+    let inst: IrInst = get_inst_by_pos(f, inst_opt);
+    if inst.op == IOP_GET_ARG() {
+        return Vec::new();
+    }
+    if inst.op == IOP_REGION_ALLOC() {
+        return Vec::new();
+    }
+    if is_const_op(inst.op) {
+        return Vec::new();
+    }
+    if inst.op == IOP_CALL() {
+        if inst.dk == IDATA_CALL_TARGET() {
+            let callee_idx: i64 = inst.dv;
+            if callee_idx >= 0 && callee_idx < int_kinds.len() {
+                let ck: i64 = int_kinds[callee_idx];
+                if ck == RSUM_KIND_ALIAS_OF() {
+                    let p_idx: i64 = int_auxs[callee_idx];
+                    if p_idx >= 0 && p_idx < inst.args.len() {
+                        visiting.push(id);
+                        let r: Vec<i64> = deep_aliases_inner(m, f, inst.args[p_idx], int_kinds, int_auxs, int_aliases_list, visiting);
+                        visiting.pop();
+                        return r;
+                    }
+                    return Vec::new();
+                }
+                if ck == RSUM_KIND_ALIAS_OF_ANY() {
+                    visiting.push(id);
+                    let als: Vec<i64> = int_aliases_list[callee_idx];
+                    let mut acc_kind: i64 = RSUM_INTERNAL_UNINIT();
+                    let mut acc_aux: i64 = 0;
+                    let mut acc_aliases: Vec<i64> = Vec::new();
+                    let mut ai: i64 = 0;
+                    while ai < als.len() {
+                        let p_idx: i64 = als[ai];
+                        if p_idx >= 0 && p_idx < inst.args.len() {
+                            let a_kind: i64 = deep_kind_inner(m, f, inst.args[p_idx], int_kinds, int_auxs, int_aliases_list, visiting);
+                            let a_aux: i64 = deep_aux_inner(m, f, inst.args[p_idx], int_kinds, int_auxs, int_aliases_list, visiting);
+                            let a_aliases: Vec<i64> = deep_aliases_inner(m, f, inst.args[p_idx], int_kinds, int_auxs, int_aliases_list, visiting);
+                            let joined: i64 = join_kinds(acc_kind, acc_aux, acc_aliases, a_kind, a_aux, a_aliases);
+                            acc_aliases = join_aliases(acc_kind, acc_aux, acc_aliases, a_kind, a_aux, a_aliases, joined);
+                            acc_aux = join_aux(acc_kind, acc_aux, a_kind, a_aux, joined);
+                            acc_kind = joined;
+                        }
+                        ai = ai + 1;
+                    }
+                    visiting.pop();
+                    return acc_aliases;
+                }
+                return Vec::new();
+            }
+        }
+        return Vec::new();
+    }
+    if inst.op == IOP_PHI() {
+        visiting.push(id);
+        let arms: Vec<i64> = collect_upsilon_arms(f, id);
+        let mut acc_kind: i64 = RSUM_INTERNAL_UNINIT();
+        let mut acc_aux: i64 = 0;
+        let mut acc_aliases: Vec<i64> = Vec::new();
+        let mut ai: i64 = 0;
+        while ai < arms.len() {
+            let arm_id: i64 = arms[ai];
+            let a_kind: i64 = deep_kind_inner(m, f, arm_id, int_kinds, int_auxs, int_aliases_list, visiting);
+            let a_aux: i64 = deep_aux_inner(m, f, arm_id, int_kinds, int_auxs, int_aliases_list, visiting);
+            let a_aliases: Vec<i64> = deep_aliases_inner(m, f, arm_id, int_kinds, int_auxs, int_aliases_list, visiting);
+            let joined: i64 = join_kinds(acc_kind, acc_aux, acc_aliases, a_kind, a_aux, a_aliases);
+            acc_aliases = join_aliases(acc_kind, acc_aux, acc_aliases, a_kind, a_aux, a_aliases, joined);
+            acc_aux = join_aux(acc_kind, acc_aux, a_kind, a_aux, joined);
+            acc_kind = joined;
+            ai = ai + 1;
+        }
+        visiting.pop();
+        return acc_aliases;
+    }
     Vec::new()
 }
 
