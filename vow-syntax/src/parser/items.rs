@@ -331,6 +331,7 @@ impl Parser {
 mod tests {
     use crate::ast::{Item, VariantKind, Visibility};
     use crate::parser::parse_item_source;
+    use vow_diag::Diagnostic;
 
     fn parse_item(src: &str) -> Item {
         let (item, diags) = parse_item_source(src, "<test>");
@@ -340,6 +341,11 @@ mod tests {
             diags.iter().map(|e| &e.message).collect::<Vec<_>>()
         );
         item.expect("no item parsed")
+    }
+
+    fn parse_item_with_diags(src: &str) -> (Item, Vec<Diagnostic>) {
+        let (item, diags) = parse_item_source(src, "<test>");
+        (item.expect("no item parsed"), diags)
     }
 
     #[test]
@@ -476,5 +482,29 @@ mod tests {
         assert_eq!(e.vis, Visibility::Public);
         assert_eq!(e.name, "Color");
         assert_eq!(e.variants.len(), 3);
+    }
+
+    #[test]
+    fn parse_trait_recovers_after_missing_method_params() {
+        let src = "trait T { fn broken<T>(); fn ok(self: Self) -> (); }";
+        let (item, diags) = parse_item_with_diags(src);
+        let t = match item {
+            Item::Trait(t) => t,
+            other => panic!("expected trait, got {:?}", other),
+        };
+        assert!(!diags.is_empty());
+        assert!(t.methods.iter().any(|m| m.name == "ok"));
+    }
+
+    #[test]
+    fn parse_impl_recovers_after_missing_method_params() {
+        let src = "impl S { fn broken<T>() { } fn ok(self: S) -> () { } }";
+        let (item, diags) = parse_item_with_diags(src);
+        let i = match item {
+            Item::Impl(i) => i,
+            other => panic!("expected impl, got {:?}", other),
+        };
+        assert!(!diags.is_empty());
+        assert!(i.methods.iter().any(|m| m.name == "ok"));
     }
 }
