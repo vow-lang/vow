@@ -996,7 +996,7 @@ fn emit_inst(
         | Opcode::LinearConsume
         | Opcode::LinearBorrow
         | Opcode::FieldSet => {
-            emit_unmodelled(inst, out);
+            emit_unsupported_for_verification(inst, out);
         }
         Opcode::FieldGet => {
             if vec_vars.contains(&id) {
@@ -1037,6 +1037,21 @@ fn emit_inst(
 fn emit_unmodelled(inst: &Inst, out: &mut String) {
     let id = inst.id.0;
     out.push_str(&format!("  /* opcode {:?} not modelled */\n", inst.opcode));
+    if inst.ty != Ty::Unit {
+        out.push_str(&format!(
+            "  v{} = __VERIFIER_nondet_{}();\n",
+            id,
+            c_nondet_suffix(inst.ty)
+        ));
+    }
+}
+
+fn emit_unsupported_for_verification(inst: &Inst, out: &mut String) {
+    let id = inst.id.0;
+    out.push_str(&format!(
+        "  __ESBMC_assert(0, \"unsupported opcode in verifier model: {:?}\");\n",
+        inst.opcode
+    ));
     if inst.ty != Ty::Unit {
         out.push_str(&format!(
             "  v{} = __VERIFIER_nondet_{}();\n",
@@ -2107,7 +2122,7 @@ mod tests {
     }
 
     #[test]
-    fn emit_not_modelled_ops_produce_nondet() {
+    fn emit_unsupported_ops_fail_closed() {
         use vow_ir::InstId;
         let func = make_func(
             "nd",
@@ -2136,7 +2151,10 @@ mod tests {
             ],
         );
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
-        assert!(c.contains("not modelled"), "not modelled comment: {c}");
+        assert!(
+            c.contains("unsupported opcode in verifier model"),
+            "fail-closed assert: {c}"
+        );
         assert!(c.contains("__VERIFIER_nondet_long"), "nondet for I64: {c}");
     }
 
@@ -2553,7 +2571,7 @@ mod tests {
     }
 
     #[test]
-    fn emit_non_vec_call_still_nondet() {
+    fn emit_non_vec_call_is_unsupported_for_verification() {
         use vow_ir::InstId;
         let func = make_func(
             "other",
@@ -2573,7 +2591,10 @@ mod tests {
             ],
         );
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
-        assert!(c.contains("not modelled"), "non-vec call still nondet: {c}");
+        assert!(
+            c.contains("unsupported opcode in verifier model: Call"),
+            "non-vec call must fail closed: {c}"
+        );
         assert!(
             c.contains("__VERIFIER_nondet_long"),
             "nondet for non-vec: {c}"
