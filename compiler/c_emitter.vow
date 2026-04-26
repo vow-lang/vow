@@ -944,17 +944,12 @@ fn emit_string_op(out: String, inst: IrInst, string_max: i64) {
         if a == b {
             out.push_str(str3(String::from("  v"), ids, String::from(" = 1;\n")));
         } else {
-            let lo: i64 = if a < b { a } else { b };
-            let hi: i64 = if a < b { b } else { a };
             let as_: String = i64_to_str(a);
             let bs: String = i64_to_str(b);
-            let los: String = i64_to_str(lo);
-            let his: String = i64_to_str(hi);
             out.push_str(str5(String::from("  v"), ids,
                 String::from(" = (v"), as_, str3(String::from(".len == v"),
                 bs, String::from(".len)"))));
-            out.push_str(str5(String::from(" ? __str_eq_"), los,
-                String::from("_"), his, String::from(" : 0;\n")));
+            out.push_str(String::from(" ? __VERIFIER_nondet_bool() : 0;\n"));
         }
         return;
     }
@@ -1255,52 +1250,6 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
     while ui < ups_sources.len() {
         out.push_str(str3(String::from("  int64_t __ups_"), i64_to_str(ups_sources[ui]), String::from(";\n")));
         ui = ui + 1;
-    }
-
-    // Per-pair nondet cache for abstract __vow_string_eq. Mirrors the Rust
-    // emitter: one shared _Bool per unordered (a, b) pair ensures repeated
-    // comparisons of the same pair agree.
-    let eq_lo: Vec<i64> = Vec::new();
-    let eq_hi: Vec<i64> = Vec::new();
-    bi = 0;
-    while bi < n_blocks {
-        let blk: IrBlock = blocks[bi];
-        let insts: Vec<IrInst> = blk.insts;
-        let mut ii: i64 = 0;
-        while ii < insts.len() {
-            let inst: IrInst = insts[ii];
-            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
-                && inst.ds == String::from("__vow_string_eq") {
-                let ea: Vec<i64> = inst.args;
-                if ea.len() == 2 {
-                    let a: i64 = ea[0];
-                    let b: i64 = ea[1];
-                    if a != b {
-                        let lo: i64 = if a < b { a } else { b };
-                        let hi: i64 = if a < b { b } else { a };
-                        let mut found: bool = false;
-                        let mut pi: i64 = 0;
-                        while pi < eq_lo.len() {
-                            if eq_lo[pi] == lo && eq_hi[pi] == hi { found = true; }
-                            pi = pi + 1;
-                        }
-                        if !found {
-                            eq_lo.push(lo);
-                            eq_hi.push(hi);
-                        }
-                    }
-                }
-            }
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    let mut ei: i64 = 0;
-    while ei < eq_lo.len() {
-        out.push_str(str5(String::from("  _Bool __str_eq_"), i64_to_str(eq_lo[ei]),
-            String::from("_"), i64_to_str(eq_hi[ei]),
-            String::from(" = __VERIFIER_nondet_bool();\n")));
-        ei = ei + 1;
     }
 
     bi = 0;
