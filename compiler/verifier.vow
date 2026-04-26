@@ -238,6 +238,21 @@ fn esbmc_exists() -> bool [io] {
     fs_exists(esbmc_path()) != 0
 }
 
+fn verify_tmp_dir() -> String {
+    String::from(".vow-verify-tmp")
+}
+
+fn verify_tmp_path(idx: i64) -> String [io] {
+    fs_mkdir(verify_tmp_dir());
+    let path: String = verify_tmp_dir();
+    path.push_str(String::from("/esbmc_"));
+    path.push_str(i64_to_str(time_unix_ms()));
+    path.push_str(String::from("_"));
+    path.push_str(i64_to_str(idx));
+    path.push_str(String::from(".c"));
+    path
+}
+
 fn save_esbmc_debug(c_source: String, tmp_path: String, max_k_step: String, func_name: String, debug: bool) [io] {
     if !debug {
         return;
@@ -643,7 +658,8 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
     let auto_enc: bool = is_auto_encoding(encoding);
     let bv_solver: String = resolve_auto_bv_solver(solver);
     let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
-    let r: EsbmcRun = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, solver, encoding, bv_timeout);
+    let tmp_path: String = verify_tmp_path(0);
+    let r: EsbmcRun = run_esbmc(c_source, max_k_step, tmp_path, fn_name, solver, encoding, bv_timeout);
     if r.exit_code == -1 {
         return VerifyResult {
             status: VERIFY_NOT_FOUND(),
@@ -668,7 +684,8 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
         let ir_timeout: String = {
             if timeout_secs.len() > 0 { timeout_secs } else { DEFAULT_AUTO_TIMEOUT_STR() }
         };
-        let r2: EsbmcRun = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, ir_solver, ir_encoding, ir_timeout);
+        let tmp_path2: String = verify_tmp_path(1);
+        let r2: EsbmcRun = run_esbmc(c_source, max_k_step, tmp_path2, fn_name, ir_solver, ir_encoding, ir_timeout);
         if r2.exit_code == -1 {
             // ESBMC disappeared between BV and IR runs; surface consistently with verify_function_ir_fallback.
             return VerifyResult {
@@ -720,7 +737,8 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
     // No cache lookup or write — see the note above resolve_auto_bv_solver.
     // `use_cache` stays on the signature for caller-side symmetry with the
     // Rust toolchain but has no effect.
-    let r: EsbmcRun = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, ir_solver, ir_encoding, ir_timeout);
+    let tmp_path: String = verify_tmp_path(0);
+    let r: EsbmcRun = run_esbmc(c_source, max_k_step, tmp_path, fn_name, ir_solver, ir_encoding, ir_timeout);
     if r.exit_code == -1 {
         return VerifyResult {
             status: VERIFY_NOT_FOUND(),
@@ -755,9 +773,7 @@ fn verify_start(f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_ca
     // No cache lookup or write — see the note above resolve_auto_bv_solver.
     // `use_cache` stays on the signature for caller-side symmetry with the
     // Rust toolchain but has no effect.
-    let tmp_path: String = String::from("/tmp/__vow_verify_");
-    tmp_path.push_str(i64_to_str(idx));
-    tmp_path.push_str(String::from(".c"));
+    let tmp_path: String = verify_tmp_path(idx);
     let fn_name: String = f.name;
     let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
     let handle: i64 = start_esbmc(c_source, max_k_step, tmp_path, fn_name, solver, encoding, bv_timeout);
