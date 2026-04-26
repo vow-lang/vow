@@ -1,5 +1,5 @@
 use crate::types::Ty;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use vow_syntax::ast::{Effect, Type as AstType};
 
 /// Signature of a function or method known to the type checker.
@@ -649,20 +649,32 @@ impl TypeEnv {
         self.type_aliases.insert(name.into(), ty);
     }
 
-    pub fn all_var_names(&self) -> Vec<String> {
-        let mut names = Vec::new();
-        for scope in &self.scopes {
+    pub fn all_var_names(&self, max_names: usize, max_len: usize) -> Vec<String> {
+        let mut names = Vec::with_capacity(max_names.min(32));
+        let mut seen = HashSet::with_capacity(max_names.min(32));
+        for scope in self.scopes.iter().rev() {
             for key in scope.keys() {
-                if !names.contains(key) {
+                if key.len() > max_len {
+                    continue;
+                }
+                if seen.insert(key) {
                     names.push(key.clone());
+                    if names.len() >= max_names {
+                        return names;
+                    }
                 }
             }
         }
         names
     }
 
-    pub fn all_fn_names(&self) -> Vec<String> {
-        self.fn_sigs.keys().cloned().collect()
+    pub fn all_fn_names(&self, max_names: usize, max_len: usize) -> Vec<String> {
+        self.fn_sigs
+            .keys()
+            .filter(|name| name.len() <= max_len)
+            .take(max_names)
+            .cloned()
+            .collect()
     }
 
     pub fn all_struct_names(&self) -> Vec<String> {
