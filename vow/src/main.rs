@@ -23,6 +23,8 @@ use vow_verify::{
 use cache::{CachedVerifyResult, VerifyCache};
 use frontend::{FrontendBundle, FrontendError, FrontendGoal, prepare_frontend};
 
+const MAX_ALLOWED_MAX_K_STEP: u32 = 1_000;
+
 // ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
@@ -5607,6 +5609,13 @@ fn run_test_command(
 fn validate_limits(limits: &VerifyLimits) {
     if limits.vec_max == 0 || limits.string_max == 0 || limits.hashmap_max == 0 {
         eprintln!("error: --vec-max, --string-max, and --hashmap-max must be >= 1");
+        std::process::exit(1);
+    }
+    if limits.max_k_step == 0 || limits.max_k_step > MAX_ALLOWED_MAX_K_STEP {
+        eprintln!(
+            "error: --max-k-step must be in the range 1..={MAX_ALLOWED_MAX_K_STEP} (got {})",
+            limits.max_k_step
+        );
         std::process::exit(1);
     }
 }

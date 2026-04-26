@@ -247,9 +247,15 @@ fn emit_ir_warnings(ir_mod: IrModule, dctx: DiagCtx) [io] {
     }
 }
 
-fn validate_limits(vec_max: i64, string_max: i64, hashmap_max: i64) [io] {
+const MAX_ALLOWED_MAX_K_STEP: i64 = 1000;
+
+fn validate_limits(max_k_step: i64, vec_max: i64, string_max: i64, hashmap_max: i64) [io] {
     if vec_max <= 0 || string_max <= 0 || hashmap_max <= 0 {
         eprintln_str(String::from("error: --vec-max, --string-max, and --hashmap-max must be >= 1"));
+        process_exit(1);
+    }
+    if max_k_step <= 0 || max_k_step > MAX_ALLOWED_MAX_K_STEP {
+        eprintln_str(str3(String::from("error: --max-k-step must be in the range 1..=1000 (got "), i64_to_str(max_k_step), String::from(")")));
         process_exit(1);
     }
 }
@@ -278,7 +284,7 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
     let string_max: i64 = { if string_max_str.len() > 0 { parse_i64(string_max_str) } else { 256 } };
     let hashmap_max_str: String = get_flag_arg(argv, String::from("--hashmap-max"));
     let hashmap_max: i64 = { if hashmap_max_str.len() > 0 { parse_i64(hashmap_max_str) } else { 64 } };
-    validate_limits(vec_max, string_max, hashmap_max);
+    validate_limits(parse_i64(max_k_step), vec_max, string_max, hashmap_max);
     let use_cache: bool = !has_flag(argv, String::from("--no-cache"));
     let mut solver: String = get_flag_arg(argv, String::from("--solver"));
     let encoding: String = get_flag_arg(argv, String::from("--encoding"));
@@ -381,7 +387,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
     let string_max: i64 = { if string_max_str.len() > 0 { parse_i64(string_max_str) } else { 256 } };
     let hashmap_max_str: String = get_flag_arg(argv, String::from("--hashmap-max"));
     let hashmap_max: i64 = { if hashmap_max_str.len() > 0 { parse_i64(hashmap_max_str) } else { 64 } };
-    validate_limits(vec_max, string_max, hashmap_max);
+    validate_limits(parse_i64(max_k_step), vec_max, string_max, hashmap_max);
     let fns: Vec<IrFunction> = ir_mod.functions;
     let handles: Vec<i64> = Vec::new();
     let vow_fn_indices: Vec<i64> = Vec::new();
@@ -569,7 +575,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
     let t_string_max: i64 = { if t_sm_str.len() > 0 { parse_i64(t_sm_str) } else { 256 } };
     let t_hm_str: String = get_flag_arg(argv, String::from("--hashmap-max"));
     let t_hashmap_max: i64 = { if t_hm_str.len() > 0 { parse_i64(t_hm_str) } else { 64 } };
-    validate_limits(t_vec_max, t_string_max, t_hashmap_max);
+    validate_limits(parse_i64(t_max_k_step), t_vec_max, t_string_max, t_hashmap_max);
 
     // Validate path exists
     if fs_exists(path) == 0 {
@@ -821,7 +827,7 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
             let vec_max_leg: i64 = { let s: String = get_flag_arg(argv, String::from("--vec-max")); if s.len() > 0 { parse_i64(s) } else { 128 } };
             let string_max_leg: i64 = { let s: String = get_flag_arg(argv, String::from("--string-max")); if s.len() > 0 { parse_i64(s) } else { 256 } };
             let hashmap_max_leg: i64 = { let s: String = get_flag_arg(argv, String::from("--hashmap-max")); if s.len() > 0 { parse_i64(s) } else { 64 } };
-            validate_limits(vec_max_leg, string_max_leg, hashmap_max_leg);
+            validate_limits(parse_i64(max_k_step), vec_max_leg, string_max_leg, hashmap_max_leg);
             emit_ir_warnings(ir_mod, dctx);
             let fns: Vec<IrFunction> = ir_mod.functions;
             let ces: Vec<VerifyCE> = Vec::new();
@@ -4659,7 +4665,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     let vec_max_c: i64 = { let s: String = get_flag_arg(argv, String::from("--vec-max")); if s.len() > 0 { parse_i64(s) } else { 128 } };
     let string_max_c: i64 = { let s: String = get_flag_arg(argv, String::from("--string-max")); if s.len() > 0 { parse_i64(s) } else { 256 } };
     let hashmap_max_c: i64 = { let s: String = get_flag_arg(argv, String::from("--hashmap-max")); if s.len() > 0 { parse_i64(s) } else { 64 } };
-    validate_limits(vec_max_c, string_max_c, hashmap_max_c);
+    validate_limits(parse_i64(max_k_step), vec_max_c, string_max_c, hashmap_max_c);
 
     // Collect per-contract entries into parallel arrays
     let e_vow_ids: Vec<i64> = Vec::new();
