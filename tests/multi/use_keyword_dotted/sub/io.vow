@@ -1,0 +1,5 @@
+module SubIo
+
+fn dotted_value() -> i64 {
+    11
+}

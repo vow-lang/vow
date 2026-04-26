@@ -80,6 +80,29 @@ fn expect_ident(p: Parser) -> i64 {
     }
 }
 
+// Accepts an identifier OR any keyword as a path segment, mirroring the
+// Rust parser's `expect_name_or_keyword`. Required so that `use` paths
+// can name modules whose final component is a Vow keyword (e.g.
+// `use region`, `use std.io`). Without this, the keyword token's empty
+// `str_val` propagates as sid -1 through `parse_path` and triggers an
+// IndexOutOfBounds when the frontend later reads `arena.strs[-1]`.
+fn expect_ident_or_keyword(p: Parser) -> i64 {
+    let t: Token = peek(p);
+    if t.tag == tok_ident() {
+        let _adv: Token = advance(p);
+        arena_intern_str(p.arena, t.str_val)
+    } else {
+        let kw: String = keyword_text(t.tag);
+        if kw.len() > 0 {
+            let _adv: Token = advance(p);
+            arena_intern_str(p.arena, kw)
+        } else {
+            push_error(p, String::from("expected identifier"));
+            -1
+        }
+    }
+}
+
 fn span_pack(start: i64, len: i64) -> i64 vow {
     requires: start >= 0,
     requires: len >= 0,
@@ -115,7 +138,9 @@ fn parse_module_into(tokens: Vec<Token>, arena: AstArena, dctx: DiagCtx, file: S
     while at(p, tok_kw_use()) {
         let _kw: Token = advance(p);
         let path: i64 = parse_path(p);
-        uses.push(path);
+        if path != -1 {
+            uses.push(path);
+        }
     }
 
     let items: Vec<i64> = Vec::new();
@@ -139,11 +164,17 @@ fn parse_module_into(tokens: Vec<Token>, arena: AstArena, dctx: DiagCtx, file: S
 
 fn parse_path(p: Parser) -> i64 {
     let items: Vec<i64> = Vec::new();
-    let sid: i64 = expect_ident(p);
+    let sid: i64 = expect_ident_or_keyword(p);
+    if sid == -1 {
+        return -1;
+    }
     items.push(sid);
     while at(p, tok_dot()) {
         let _dot: Token = advance(p);
-        let s: i64 = expect_ident(p);
+        let s: i64 = expect_ident_or_keyword(p);
+        if s == -1 {
+            return -1;
+        }
         items.push(s);
     }
     arena_add_list(p.arena, items)

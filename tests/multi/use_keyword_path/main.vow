@@ -1,0 +1,10 @@
+// TEST: stdout "7\n"
+module Main
+
+use region
+
+fn main() -> i32 [io] {
+    print_i64(region_value());
+    print_str(String::from("\n"));
+    0
+}
