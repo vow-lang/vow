@@ -566,9 +566,8 @@ fn verify_cache_lookup(key: String) -> i64 [io] {
     if exists == 0 { return -1; }
     let content: String = fs_read(path);
     if content.len() == 0 { return -1; }
-    if str_find_str(content, String::from("PROVEN")) >= 0 {
-        return VERIFY_PROVEN();
-    }
+    // Security: never trust cached PROVEN results from disk.
+    // A forged cache entry must not be able to bypass ESBMC.
     if str_find_str(content, String::from("FAILED")) >= 0 {
         return VERIFY_FAILED();
     }
