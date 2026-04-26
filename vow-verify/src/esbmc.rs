@@ -258,6 +258,7 @@ pub fn emit_verify_c_source(
 }
 
 pub const DEFAULT_MAX_K_STEP: u32 = 50;
+const DEFAULT_ESBMC_TIMEOUT_SECS: u32 = 300;
 
 pub fn verify_function_with_module_and_const_fns(
     func: &Function,
@@ -421,43 +422,34 @@ pub fn run_esbmc_with_max_k_step(
         buf
     });
 
-    // If a timeout is configured, poll with deadline; otherwise block on wait().
-    // PR_SET_PDEATHSIG handles orphan cleanup in both cases.
-    if let Some(timeout_secs) = config.timeout_secs {
-        let deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs as u64);
-        let timed_out = loop {
-            match child.try_wait() {
-                Ok(Some(_)) => break false,
-                Ok(None) => {
-                    if std::time::Instant::now() >= deadline {
-                        force_kill(&mut child);
-                        let _ = child.wait();
-                        break true;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                }
-                Err(e) => {
+    // Always enforce a timeout to avoid unbounded ESBMC runs.
+    // When callers do not provide one, use a conservative safety default.
+    let timeout_secs = config.timeout_secs.unwrap_or(DEFAULT_ESBMC_TIMEOUT_SECS);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs as u64);
+    let timed_out = loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break false,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
                     force_kill(&mut child);
                     let _ = child.wait();
-                    let _ = stdout_thread.join();
-                    let _ = stderr_thread.join();
-                    return VerificationResult::ToolError(format!("wait error: {e}"));
+                    break true;
                 }
+                std::thread::sleep(std::time::Duration::from_millis(50));
             }
-        };
-        if timed_out {
-            let _ = stdout_thread.join();
-            let _ = stderr_thread.join();
-            return VerificationResult::Timeout;
+            Err(e) => {
+                force_kill(&mut child);
+                let _ = child.wait();
+                let _ = stdout_thread.join();
+                let _ = stderr_thread.join();
+                return VerificationResult::ToolError(format!("wait error: {e}"));
+            }
         }
-    } else {
-        // No timeout: block until ESBMC finishes.
-        if let Err(e) = child.wait() {
-            let _ = stdout_thread.join();
-            let _ = stderr_thread.join();
-            return VerificationResult::ToolError(format!("wait error: {e}"));
-        }
+    };
+    if timed_out {
+        let _ = stdout_thread.join();
+        let _ = stderr_thread.join();
+        return VerificationResult::Timeout;
     }
 
     let stdout = stdout_thread.join().unwrap_or_default();
