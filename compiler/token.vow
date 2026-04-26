@@ -115,9 +115,7 @@ fn make_token(tag: i64, int_val: i64, int_val2: i64, str_val: String, span_start
     }
 }
 
-// Returns the source spelling of a keyword tag, or an empty string for
-// non-keyword tags. Used by the parser to accept keywords as path
-// segments in `use` declarations (e.g. `use std.io`, `use region`).
+// Maps a keyword tag to its source spelling; empty string for non-keyword tags.
 fn keyword_text(tag: i64) -> String {
     if tag == tok_kw_fn() { String::from("fn") }
     else if tag == tok_kw_let() { String::from("let") }

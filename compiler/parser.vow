@@ -80,12 +80,7 @@ fn expect_ident(p: Parser) -> i64 {
     }
 }
 
-// Accepts an identifier OR any keyword as a path segment, mirroring the
-// Rust parser's `expect_name_or_keyword`. Required so that `use` paths
-// can name modules whose final component is a Vow keyword (e.g.
-// `use region`, `use std.io`). Without this, the keyword token's empty
-// `str_val` propagates as sid -1 through `parse_path` and triggers an
-// IndexOutOfBounds when the frontend later reads `arena.strs[-1]`.
+// Mirrors Rust's `expect_name_or_keyword`; keywords are valid use-path segments (e.g. `use region`, `use std.io`).
 fn expect_ident_or_keyword(p: Parser) -> i64 {
     let t: Token = peek(p);
     if t.tag == tok_ident() {
@@ -97,7 +92,7 @@ fn expect_ident_or_keyword(p: Parser) -> i64 {
             let _adv: Token = advance(p);
             arena_intern_str(p.arena, kw)
         } else {
-            push_error(p, String::from("expected identifier"));
+            push_error(p, String::from("expected identifier or keyword"));
             -1
         }
     }
