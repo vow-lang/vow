@@ -27,9 +27,17 @@ jobs:
       - name: Install ESBMC
         if: steps.cache-esbmc.outputs.cache-hit != 'true'
         run: |
-          curl -sL -o /tmp/esbmc.zip "https://github.com/esbmc/esbmc/releases/download/v$ESBMC_VERSION/release-ubuntu-24.04--b.RelWithDebInfo.-e.OFF.zip"
+          ESBMC_ZIP="release-ubuntu-24.04--b.RelWithDebInfo.-e.OFF.zip"
+          ESBMC_BASE_URL="https://github.com/esbmc/esbmc/releases/download/v$ESBMC_VERSION"
+
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            -o /tmp/esbmc.zip "$ESBMC_BASE_URL/$ESBMC_ZIP"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            -o /tmp/esbmc.zip.sha256 "$ESBMC_BASE_URL/$ESBMC_ZIP.sha256"
+
+          (cd /tmp && sha256sum --check esbmc.zip.sha256)
           unzip -q /tmp/esbmc.zip -d ~/esbmc
-          rm /tmp/esbmc.zip
+          rm /tmp/esbmc.zip /tmp/esbmc.zip.sha256
       - run: echo "$HOME/esbmc/bin" >> "$GITHUB_PATH"
       - run: cargo build --all
       - run: cargo llvm-cov --all --lcov --output-path lcov.info
