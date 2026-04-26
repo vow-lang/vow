@@ -5460,7 +5460,9 @@ fn run_pipeline_from_frontend(
     // Cache lookup
     let mode_str = format!("{mode:?}");
     let trace_str = format!("{trace:?}");
-    let compile_cache = if no_cache {
+    // Object cache reuse is disabled when verification is enabled so the linked
+    // binary always comes from the same codegen run as the verified IR.
+    let compile_cache = if no_cache || !no_verify {
         None
     } else {
         cache::CompileCache::new()

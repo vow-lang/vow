@@ -46,20 +46,15 @@ impl CompileCache {
             .iter()
             .filter_map(|p| {
                 let canon = p.canonicalize().ok()?;
-                let mtime = std::fs::metadata(&canon)
-                    .ok()?
-                    .modified()
-                    .ok()?
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .ok()?
-                    .as_secs();
-                Some((canon.to_string_lossy().to_string(), mtime))
+                let content = std::fs::read(&canon).ok()?;
+                let content_hash = fnv1a_hash(&content);
+                Some((canon.to_string_lossy().to_string(), content_hash))
             })
             .collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
-        for (path, mtime) in &entries {
+        for (path, content_hash) in &entries {
             path.hash(&mut hasher);
-            mtime.hash(&mut hasher);
+            content_hash.hash(&mut hasher);
         }
         mode.hash(&mut hasher);
         trace.hash(&mut hasher);
@@ -68,7 +63,11 @@ impl CompileCache {
 
     pub fn lookup(&self, key: &str) -> Option<PathBuf> {
         let cached = self.dir.join(format!("{key}.o"));
-        if cached.exists() { Some(cached) } else { None }
+        if cached.exists() {
+            Some(cached)
+        } else {
+            None
+        }
     }
 
     pub fn store(&self, key: &str, obj: &Path) -> PathBuf {
@@ -334,5 +333,19 @@ mod tests {
         let new_key = CompileCache::cache_key_with_abi_seed(&deps, "Release", "Off", "new-abi");
 
         assert_ne!(old_key, new_key);
+    }
+
+    #[test]
+    fn compile_cache_key_changes_when_dependency_content_changes() {
+        let dir = TempDir::new().unwrap();
+        let a = dir.path().join("a.vow");
+        std::fs::write(&a, "module A").unwrap();
+        let deps = DependencyManifest::from_paths(vec![a.clone()]);
+
+        let k1 = CompileCache::cache_key(&deps, "Release", "Off");
+        std::fs::write(&a, "module A updated").unwrap();
+        let k2 = CompileCache::cache_key(&deps, "Release", "Off");
+
+        assert_ne!(k1, k2);
     }
 }
