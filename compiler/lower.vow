@@ -1,6 +1,7 @@
 module Lower
 
 use ast
+use diag
 use ir
 
 struct LowerCtx {

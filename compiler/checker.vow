@@ -686,6 +686,10 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
             let name: String = arena_str(a, name_sid);
             let fidx: i64 = env_lookup_fn(e, name);
             if fidx == -1 {
+                let msg: String = String::from("undefined function `");
+                msg.push_str(name);
+                msg.push_str(String::from("`"));
+                env_emit_error(e, msg, expr_span(a, eid));
                 return CTY_NEVER();
             }
             if e.fn_param_count[fidx] != n_args {

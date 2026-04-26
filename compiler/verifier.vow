@@ -1,8 +1,9 @@
 module Verifier
 
+use c_emitter
+use clif
 use ir
 use ir_printer
-use c_emitter
 
 fn VERIFY_PROVEN() -> i64 vow { ensures: result >= 0 } { 0 }
 fn VERIFY_FAILED() -> i64 vow { ensures: result >= 0 } { 1 }
