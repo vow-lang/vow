@@ -116,6 +116,12 @@ fn is_known_builtin(name: String) -> bool {
     || name == String::from("__vow_map_remove")
 }
 
+fn is_reserved_verifier_symbol(name: String) -> bool {
+    name == String::from("__ESBMC_assume")
+    || name == String::from("__ESBMC_assert")
+    || str_starts_with(name, String::from("__VERIFIER_nondet_"))
+}
+
 fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelable_cache_ids: Vec<i64>, modelable_cache_vals: Vec<i64>) -> bool {
     let fid: i64 = f.id;
     let nc: i64 = modelable_cache_ids.len();
@@ -128,6 +134,10 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
     }
     modelable_cache_ids.push(fid);
     modelable_cache_vals.push(0);
+
+    if is_reserved_verifier_symbol(f.name) {
+        return false;
+    }
 
     if f.effects != 0 {
         return false;
@@ -255,7 +265,8 @@ fn collect_callees_dfs(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>,
                     while fi < fns.len() {
                         let callee: IrFunction = fns[fi];
                         if callee.id == target_fi {
-                            if is_modelable(callee, m, const_fn_indices, modelable_cache_ids, modelable_cache_vals) {
+                            if !is_reserved_verifier_symbol(callee.name)
+                               && is_modelable(callee, m, const_fn_indices, modelable_cache_ids, modelable_cache_vals) {
                                 visited.push(target_fi);
                                 collect_callees_dfs(callee, m, const_fn_indices, modelable_cache_ids, modelable_cache_vals, visited, order);
                                 order.push(target_fi);
