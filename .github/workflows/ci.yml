@@ -8,6 +8,10 @@ on:
 
 env:
   ESBMC_VERSION: "8.1"
+  # SHA-256 of the ESBMC release artifact. Must be updated in lockstep with
+  # ESBMC_VERSION; it is also part of the cache key so a rotation forces
+  # a fresh download + verify even if the version is unchanged.
+  ESBMC_SHA256: daec35870fdee07e1298676646ae6cf1d631c6272594e7e86479cdb9caa67ec5
 
 jobs:
   build-and-test:
@@ -23,12 +27,11 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/esbmc
-          key: esbmc-${{ env.ESBMC_VERSION }}-ubuntu-24.04
+          key: esbmc-${{ env.ESBMC_VERSION }}-${{ env.ESBMC_SHA256 }}-ubuntu-24.04
       - name: Install ESBMC
         if: steps.cache-esbmc.outputs.cache-hit != 'true'
         env:
           ESBMC_ZIP: release-ubuntu-24.04--b.RelWithDebInfo.-e.OFF.zip
-          ESBMC_SHA256: daec35870fdee07e1298676646ae6cf1d631c6272594e7e86479cdb9caa67ec5
         run: |
           ESBMC_URL="https://github.com/esbmc/esbmc/releases/download/v$ESBMC_VERSION/$ESBMC_ZIP"
 
