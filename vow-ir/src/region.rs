@@ -1033,6 +1033,14 @@ fn origin_to_constraint(origin: &ValueOrigin) -> RegionConstraint {
 ///     which is built up forward through this same pass.
 ///   * Phi-of-mixed-origins: descend into upsilon arms and reject when
 ///     the joined origin set spans incompatible regions.
+// Multi-module limitation (#254): `source_file` is the *root* file path,
+// not the per-function source. `module_loader::merge_modules` collects
+// items from every imported module into a single AST without rebasing
+// spans, and `lower_module` tags the whole merged IR with the root path,
+// so a function from `lib.vow` whose span points into `lib.vow` gets
+// labelled as `main.vow` here. Tracked in #254 for the structural fix
+// (per-Function `source_file` field). Single-module builds — including
+// every test on the corpus today — get the correct file label.
 fn check_store_conflict(
     source_file: &str,
     target_arg_id: InstId,
