@@ -226,17 +226,15 @@ else:
     rm -f "$rust_f" "$self_f"
 }
 
-# ─── Section 0: Setup ───────────────────────────────────────────────
-
 echo -e "${BOLD}=== Phase 20.1: Full Test Suite ===${RESET}"
 echo ""
 
+section_begin "Section 0: Setup"
 echo -e "${BOLD}Building Rust compiler...${RESET}"
 cargo build --all --release 2>&1 | tail -1
 echo -e "${BOLD}Building self-hosted compiler...${RESET}"
 $RUST --no-verify compiler/main.vow -o "$TMPDIR/vowc_self" >/dev/null 2>/dev/null
 SELF="$TMPDIR/vowc_self"
-echo ""
 
 # ─── Section 1: Build --no-verify ─────────────────────────────────
 

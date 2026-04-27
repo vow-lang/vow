@@ -87,9 +87,20 @@ pub fn infer_regions(module: &mut Module) {
         }
         bound = bound.max(8); // ensure SCCs of size 1 still get a few rounds
 
+        // Diagnostics-per-iteration buffer. The SCC fixed-point loop calls
+        // `analyze_function` once per round; `check_store_conflict` pushes
+        // a Diagnostic per violating call site each round, so a real
+        // conflict would be reported `iters` times if we accumulated
+        // straight into `diagnostics`. We keep only the *last* iteration's
+        // emissions — at convergence the published summaries are final, so
+        // the conflict set is canonical. Intermediate emissions can be
+        // stale (a callee summary upgrades from Uninit → AliasOf mid-loop
+        // and changes which arg pairs are checked).
         let mut iters = 0;
+        let mut last_iter_diagnostics: Vec<Diagnostic>;
         loop {
             iters += 1;
+            let mut iter_diagnostics: Vec<Diagnostic> = Vec::new();
             let mut changed = false;
             for &fidx in scc {
                 let func = &module.functions[fidx as usize];
@@ -98,13 +109,14 @@ pub fn infer_regions(module: &mut Module) {
                     fidx,
                     &summaries,
                     &mut region_maps[fidx as usize],
-                    &mut diagnostics,
+                    &mut iter_diagnostics,
                 );
                 if !summaries[fidx as usize].equals(&new_summary) {
                     summaries[fidx as usize] = new_summary;
                     changed = true;
                 }
             }
+            last_iter_diagnostics = iter_diagnostics;
             if !changed {
                 break;
             }
@@ -112,12 +124,13 @@ pub fn infer_regions(module: &mut Module) {
                 // Should never happen — the lattice is finite and joins are
                 // monotone. Emit a structured ICE diagnostic; do NOT panic
                 // (CLAUDE.md production-quality rule).
-                diagnostics.push(internal_compiler_error(
+                last_iter_diagnostics.push(internal_compiler_error(
                     "region inference SCC exceeded monotone iteration bound",
                 ));
                 break;
             }
         }
+        diagnostics.extend(last_iter_diagnostics);
 
         // §4.3 step 5: resolve any function in this SCC still at Uninit.
         for &fidx in scc {
@@ -974,6 +987,16 @@ fn origin_to_constraint(origin: &ValueOrigin) -> RegionConstraint {
 // ---------------------------------------------------------------------------
 
 /// Phase 5 partial conflict detection (spec §4.4).
+///
+/// **Self-hosted gap (#204):** the self-hosted `compiler/region.vow` has
+/// no equivalent of this function today. The gap is currently masked
+/// because the self-hosted port also defers store-effect *inference*
+/// (see `compiler/region.vow` `analyze_function`'s "Phase 3 minimal"
+/// note), so `store_effects` is always empty on the self-hosted path
+/// and no call site reaches this check. Both pieces — the inference
+/// and the conflict emission — must land together on the self-hosted
+/// side before the differential gate stays meaningful for programs
+/// that exercise this diagnostic.
 ///
 /// Called during the forward sweep when an `Opcode::Call` site processes
 /// a callee store-effect of shape `(target_param, AliasOf(p))`: the callee
@@ -1905,10 +1928,17 @@ mod tests {
             .filter(|d| d.code == ErrorCode::RegionConflict)
             .filter(|d| !d.message.starts_with("internal compiler error"))
             .collect();
-        assert!(
-            !conflicts.is_empty(),
-            "expected RegionConflict on alloc→param via callee store-effect, \
-             got warnings: {:?}",
+        // Exactly one diagnostic per violating call site — `infer_regions`
+        // runs `analyze_function` in an SCC fixed-point loop and would
+        // accumulate one Diagnostic per round without per-iteration
+        // bucketing. See the `last_iter_diagnostics` mechanism in
+        // `infer_regions`.
+        assert_eq!(
+            conflicts.len(),
+            1,
+            "expected exactly one RegionConflict (no SCC-iteration dupes), \
+             got {} from warnings: {:?}",
+            conflicts.len(),
             m.warnings
         );
         let c = conflicts[0];

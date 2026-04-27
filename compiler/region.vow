@@ -599,13 +599,6 @@ fn deep_ret_uninit() -> DeepRet {
     DeepRet { kind: RSUM_INTERNAL_UNINIT(), aux: 0, aliases: Vec::new() }
 }
 
-fn join_deep_ret(a: DeepRet, b: DeepRet) -> DeepRet {
-    let joined_kind: i64 = join_kinds(a.kind, a.aux, a.aliases, b.kind, b.aux, b.aliases);
-    let joined_aux: i64 = join_aux(a.kind, a.aux, b.kind, b.aux, joined_kind);
-    let joined_aliases: Vec<i64> = join_aliases(a.kind, a.aux, a.aliases, b.kind, b.aux, b.aliases, joined_kind);
-    DeepRet { kind: joined_kind, aux: joined_aux, aliases: joined_aliases }
-}
-
 fn deep_origin(
     id_to_inst: Vec<IrInst>, phi_arms: Vec<Vec<i64>>, ret_inst: IrInst,
     int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>
@@ -911,87 +904,6 @@ fn region_vec_contains_i64(v: Vec<i64>, x: i64) -> bool {
         i = i + 1;
     }
     false
-}
-
-// PERFORMANCE TODO (issue #200, Phase 5 perf pass): this helper plus
-// `get_inst_by_pos` together do TWO O(n) scans across all instructions
-// per `deep_kind_inner` / `deep_aux_inner` call. The deep-walk recursion
-// invokes them many times per Phi/Call merge, giving O(n²) behaviour
-// on functions with large basic blocks.
-//
-// The Rust pass avoids this by building `BTreeMap<InstId, (BlockId,
-// &Inst)>` once per function in `analyze_function` and looking up in
-// O(log n). The self-hosted port should mirror that — likely as a
-// sorted `Vec<i64>` of inst ids built once at the top of
-// `analyze_function`, plus a parallel `Vec<IrInst>` indexed by the
-// returned position, threaded through `deep_kind_inner` and friends
-// as additional parameters.
-//
-// Acceptable for the Phase 3 commit because (a) the CI side scan
-// completes in reasonable time on the current ~16k-line self-hosted
-// source, (b) the fix is mechanical and orthogonal to correctness,
-// and (c) Phase 5 already needs to revisit this code for store-effect
-// inference. CLAUDE.md asymptotics rule applies — fix this in the
-// next touch of the file, do not let it survive to Phase 6.
-fn find_inst_index(f: IrFunction, id: i64) -> i64 {
-    // Linear scan across all blocks. Returns a global position counter
-    // (0, 1, 2, ...) of the inst with matching `id`, or -1 if not found.
-    // The counter is re-derived from position by `get_inst_by_pos`.
-    let bks: Vec<IrBlock> = f.blocks;
-    let mut counter: i64 = 0;
-    let mut bi: i64 = 0;
-    while bi < bks.len() {
-        let blk: IrBlock = bks[bi];
-        let mut ii: i64 = 0;
-        while ii < blk.insts.len() {
-            if blk.insts[ii].id == id {
-                return counter;
-            }
-            counter = counter + 1;
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    -1
-}
-
-fn get_inst_by_pos(f: IrFunction, pos: i64) -> IrInst {
-    let bks: Vec<IrBlock> = f.blocks;
-    let mut counter: i64 = 0;
-    let mut bi: i64 = 0;
-    while bi < bks.len() {
-        let blk: IrBlock = bks[bi];
-        let mut ii: i64 = 0;
-        while ii < blk.insts.len() {
-            if counter == pos {
-                return blk.insts[ii];
-            }
-            counter = counter + 1;
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    // Should never reach here; return a synthetic placeholder.
-    ir_inst_new(0, 0, 0, Vec::new(), 0, 0, 0, String::from(""))
-}
-
-fn collect_upsilon_arms(f: IrFunction, phi_id: i64) -> Vec<i64> {
-    let arms: Vec<i64> = Vec::new();
-    let bks: Vec<IrBlock> = f.blocks;
-    let mut bi: i64 = 0;
-    while bi < bks.len() {
-        let blk: IrBlock = bks[bi];
-        let mut ii: i64 = 0;
-        while ii < blk.insts.len() {
-            let inst: IrInst = blk.insts[ii];
-            if inst.op == IOP_UPSILON() && inst.dk == IDATA_PHI_TARGET() && inst.dv == phi_id && inst.args.len() > 0 {
-                arms.push(inst.args[0]);
-            }
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    arms
 }
 
 // Currently unused — same scaffolding rationale as `region_caller0` above.
