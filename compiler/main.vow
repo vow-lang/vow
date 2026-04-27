@@ -599,8 +599,6 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
         }
     }
 
-    // Ensure the build/ output directory exists before emitting test binaries.
-    // Mirrors the Rust runner's std::fs::create_dir_all guard.
     fs_mkdir(String::from("build"));
 
     let entries_json: Vec<String> = Vec::new();
