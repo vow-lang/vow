@@ -323,7 +323,13 @@ fn check_linear_regions_function(f: IrFunction, id_to_inst: Vec<IrInst>, dctx: D
     let mut bi2: i64 = 0;
     while bi2 < n_blocks {
         let blk: IrBlock = f.blocks[bi2];
-        let live: Vec<i64> = block_in[bi2];
+        // Vow's Vec<i64> is reference-typed (header copy shares the heap
+        // allocation). Mirror the Rust pass at vow-ir/src/region.rs:233-234
+        // by copying contents into a fresh vec — without this, the
+        // `live.clear()` and `linear_remove_origins` mutations below would
+        // also corrupt block_in[bi2], breaking any future rerun of the loop.
+        let live: Vec<i64> = Vec::new();
+        linear_union_into(live, block_in[bi2]);
         let mut ii: i64 = 0;
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
