@@ -443,9 +443,26 @@ for f in "$SCRIPT_DIR"/error/*.vow; do
   fi
 
   if [[ -n "$TEST_ERROR_CODE" ]]; then
-    actual_error_code="$(python3 -c "import json,sys; d=json.loads(sys.stdin.read()); xs=d.get('diagnostics', []); print(xs[0].get('error_code', '') if xs else '')" <<< "$build_json")"
-    if [[ "$actual_error_code" != "$TEST_ERROR_CODE" ]]; then
-      fail "$name" "error_code=$actual_error_code (expected $TEST_ERROR_CODE)"
+    # Scan all error-severity diagnostics, not just the first — a compiler
+    # may legitimately emit several errors for a single bug (e.g. AST
+    # backstop + region pass), and the harness should treat the test as
+    # passing if the expected code is anywhere in the output.
+    has_expected="$(EXPECTED="$TEST_ERROR_CODE" python3 -c "
+import json, sys, os
+expected = os.environ['EXPECTED']
+try:
+    d = json.loads(sys.stdin.read())
+except Exception:
+    print('false'); sys.exit(0)
+xs = d.get('diagnostics', []) or []
+codes = [x.get('error_code', '') for x in xs if x.get('severity', 'error') == 'error']
+print('true' if expected in codes else 'false')
+print('|'.join(codes))
+" <<< "$build_json")"
+    found="$(echo "$has_expected" | head -1)"
+    actual_codes="$(echo "$has_expected" | tail -1)"
+    if [[ "$found" != "true" ]]; then
+      fail "$name" "error_code=$actual_codes (expected $TEST_ERROR_CODE)"
       continue
     fi
   fi
