@@ -445,6 +445,16 @@ fn analyze_function(
     // same touch. Inference without conflict emission would let the
     // self-hosted compiler silently accept programs the Rust compiler
     // rejects, breaking the differential gate without any visible signal.
+    //
+    // The Phase-9 implementation must also mirror the per-iteration
+    // diagnostics buffering pattern from `vow-ir/src/region.rs`'s
+    // `iter_diagnostics` (the SCC fixed-point loop runs `analyze_function`
+    // multiple times, so a diagnostic emitted directly via `diag_ctx_emit`
+    // would fire once per round). The Rust pass keeps a Vec per iteration
+    // and extends `diagnostics` only on convergence (or alongside the ICE
+    // marker on iteration-bound exceeded). Without this, a single real
+    // conflict will be reported `iters` times, breaking the
+    // `conflicts.len() == 1` invariant the Rust tests assert.
 
     // Return whether the summary changed.
     if new_kind != prev_kind { return true; }
@@ -868,6 +878,15 @@ fn resolve_uninit_return_kind(m: IrModule, fidx: i64, id_to_inst: Vec<IrInst>, p
     acc_kind
 }
 
+// TODO(#204): Pre-existing limitation — bails on the *first* `IOP_RETURN`
+// it finds and returns its `aux`. If a function has multiple Return sites
+// both typed `AliasOf` but aliasing different parameters,
+// `resolve_uninit_return_kind` (which joins across all Returns) can settle
+// on `AliasOf(N)` while this returns `aux` from whichever Return appears
+// first in block order — potentially a different index. Today this is
+// unreachable (the only callers feed in functions whose internal kind is
+// already `Uninit`, which is rare on the corpus), but Phase 9 should join
+// across all Returns the same way `resolve_uninit_return_kind` does.
 fn resolve_uninit_return_aux(m: IrModule, fidx: i64, kind: i64, id_to_inst: Vec<IrInst>, phi_arms: Vec<Vec<i64>>) -> i64 {
     if kind != RSUM_KIND_ALIAS_OF() {
         return 0;

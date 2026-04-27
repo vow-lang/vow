@@ -105,7 +105,6 @@ pub fn infer_regions(module: &mut Module, source_file: &str) {
                 let func = &module.functions[fidx as usize];
                 let new_summary = analyze_function(
                     func,
-                    fidx,
                     source_file,
                     &summaries,
                     &mut region_maps[fidx as usize],
@@ -430,7 +429,6 @@ fn canonical_aliases(xs: &[u32]) -> Vec<u32> {
 /// `region_map` with per-inst regions.
 fn analyze_function(
     func: &Function,
-    func_idx: u32,
     source_file: &str,
     summaries: &[InternalSummary],
     region_map: &mut BTreeMap<InstId, RegionId>,
@@ -458,7 +456,6 @@ fn analyze_function(
     for block in &func.blocks {
         for inst in &block.insts {
             handle_inst(
-                func_idx,
                 source_file,
                 inst,
                 block.id,
@@ -500,7 +497,6 @@ fn is_heap_producing(inst: &Inst) -> bool {
 /// function's tightening `summary`.
 #[allow(clippy::too_many_arguments)]
 fn handle_inst(
-    _func_idx: u32,
     source_file: &str,
     inst: &Inst,
     _block_id: BlockId,
@@ -1091,6 +1087,10 @@ fn check_store_conflict(
                 byte_len: call_inst.origin.len,
             },
         ],
+        // Fault is in the analysing function's body: it passes a block-local
+        // alloc where the callee's store-effect demands a longer-lived
+        // region. `Blame::Caller` would implicate the *caller of the
+        // analysing function*, which isn't right here.
         blame: Blame::Callee,
         hints: vec![
             "hoist the allocation to a wider scope, copy the value into the \
