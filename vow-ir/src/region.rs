@@ -458,7 +458,6 @@ fn analyze_function(
     for block in &func.blocks {
         for inst in &block.insts {
             handle_inst(
-                func,
                 func_idx,
                 source_file,
                 inst,
@@ -501,7 +500,6 @@ fn is_heap_producing(inst: &Inst) -> bool {
 /// function's tightening `summary`.
 #[allow(clippy::too_many_arguments)]
 fn handle_inst(
-    func: &Function,
     _func_idx: u32,
     source_file: &str,
     inst: &Inst,
@@ -587,7 +585,6 @@ fn handle_inst(
                                 let source_arg_id = inst.args[p_idx];
                                 // target must outlive source — if conflict, emit.
                                 check_store_conflict(
-                                    func,
                                     source_file,
                                     target_arg_id,
                                     source_arg_id,
@@ -1037,11 +1034,6 @@ fn origin_to_constraint(origin: &ValueOrigin) -> RegionConstraint {
 ///   * Phi-of-mixed-origins: descend into upsilon arms and reject when
 ///     the joined origin set spans incompatible regions.
 fn check_store_conflict(
-    // Underscore-prefixed because it's unused today, but kept in the
-    // signature so the Phase-9 deferred cases (cross-param,
-    // Phi-of-mixed-origins) can reach the function body without a
-    // signature churn at the call site.
-    _func: &Function,
     source_file: &str,
     target_arg_id: InstId,
     source_arg_id: InstId,
@@ -1093,8 +1085,9 @@ fn check_store_conflict(
         ],
         blame: Blame::Callee,
         hints: vec![
-            "hoist the allocation to a wider scope, copy via `pin_to_root`, \
-             or restructure return flow so the value escapes to the caller"
+            "hoist the allocation to a wider scope, copy the value into the \
+             outer arena, or restructure the return flow so the value \
+             escapes to the caller"
                 .to_string(),
         ],
     });
