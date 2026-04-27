@@ -1,5 +1,6 @@
 module CEmitter
 
+use clif
 use ir
 use ir_printer
 

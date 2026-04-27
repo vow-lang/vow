@@ -1,6 +1,7 @@
 module Clif
 
 use ir
+use lower
 
 fn str2(a: String, b: String) -> String {
     let r: String = String::from("");
