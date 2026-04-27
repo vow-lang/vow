@@ -78,6 +78,24 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx, path: String) -> IrModule {
         ri = ri + 1;
     }
 
+    // Per-function inst lookup tables (built once, reused across SCC
+    // iterations and §4.3-step-5 resolution). The IR doesn't mutate during
+    // inference, so caching is safe. Without this, the original O(n) helpers
+    // multiplied by the three-component deep walk made bootstrap >180s; with
+    // this cache it drops to ~2s. See #252 for the BTreeMap stdlib that
+    // would replace this Vec<IrInst>-indexed-by-id workaround.
+    let id_to_inst_per_fn: Vec<Vec<IrInst>> = Vec::new();
+    let phi_arms_per_fn: Vec<Vec<Vec<i64>>> = Vec::new();
+    let mut bxi: i64 = 0;
+    while bxi < n_funcs {
+        let f0: IrFunction = m.functions[bxi];
+        let it: Vec<IrInst> = build_id_to_inst(f0);
+        let pa: Vec<Vec<i64>> = build_phi_arms(f0, it.len());
+        id_to_inst_per_fn.push(it);
+        phi_arms_per_fn.push(pa);
+        bxi = bxi + 1;
+    }
+
     // Iterate SCCs in reverse-topo order (Tarjan emits this naturally).
     let n_sccs: i64 = sccs.len();
     let mut scc_i: i64 = 0;
@@ -110,6 +128,7 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx, path: String) -> IrModule {
                 let fidx: i64 = scc[ii];
                 let did_change: bool = analyze_function(
                     m, fidx,
+                    id_to_inst_per_fn[fidx], phi_arms_per_fn[fidx],
                     int_kinds, int_auxs, int_aliases_list,
                     int_se_targets, int_se_src_kinds, int_se_src_aux, int_se_src_aliases,
                     region_keys, region_vals,
@@ -137,8 +156,8 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx, path: String) -> IrModule {
         while ri2 < scc_n {
             let fidx: i64 = scc[ri2];
             if int_kinds[fidx] == RSUM_INTERNAL_UNINIT() {
-                let resolved_kind: i64 = resolve_uninit_return_kind(m, fidx);
-                let resolved_aux: i64 = resolve_uninit_return_aux(m, fidx, resolved_kind);
+                let resolved_kind: i64 = resolve_uninit_return_kind(m, fidx, id_to_inst_per_fn[fidx], phi_arms_per_fn[fidx]);
+                let resolved_aux: i64 = resolve_uninit_return_aux(m, fidx, resolved_kind, id_to_inst_per_fn[fidx], phi_arms_per_fn[fidx]);
                 int_kinds[fidx] = resolved_kind;
                 int_auxs[fidx] = resolved_aux;
                 // AliasOfAny resolution is rare via this path; leave aliases empty.
@@ -333,6 +352,7 @@ fn canonicalize_store_effects(
 // Returns true if the function's internal summary changed.
 fn analyze_function(
     m: IrModule, fidx: i64,
+    id_to_inst: Vec<IrInst>, phi_arms: Vec<Vec<i64>>,
     int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
     int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>,
     int_se_src_aux: Vec<Vec<i64>>, int_se_src_aliases: Vec<Vec<Vec<i64>>>,
@@ -361,21 +381,14 @@ fn analyze_function(
         while ii < n_in {
             let inst: IrInst = insts[ii];
             if inst.op == IOP_RETURN() {
-                let ret_kind: i64 = if is_scalar_ity(f.return_ty) {
-                    RSUM_KIND_CONSTANT_GLOBAL()
+                let ret_dr: DeepRet = if is_scalar_ity(f.return_ty) {
+                    deep_ret_const_global()
                 } else {
-                    deep_origin_kind(m, f, inst, int_kinds, int_auxs, int_aliases_list)
+                    deep_origin(id_to_inst, phi_arms, inst, int_kinds, int_auxs, int_aliases_list)
                 };
-                let ret_aux: i64 = if is_scalar_ity(f.return_ty) {
-                    0
-                } else {
-                    deep_origin_aux(m, f, inst, int_kinds, int_auxs, int_aliases_list)
-                };
-                let ret_aliases: Vec<i64> = if is_scalar_ity(f.return_ty) || ret_kind != RSUM_KIND_ALIAS_OF_ANY() {
-                    Vec::new()
-                } else {
-                    deep_origin_aliases(m, f, inst, int_kinds, int_auxs, int_aliases_list)
-                };
+                let ret_kind: i64 = ret_dr.kind;
+                let ret_aux: i64 = ret_dr.aux;
+                let ret_aliases: Vec<i64> = ret_dr.aliases;
                 let joined_kind: i64 = join_kinds(acc_kind, acc_aux, acc_aliases, ret_kind, ret_aux, ret_aliases);
                 acc_aliases = join_aliases(acc_kind, acc_aux, acc_aliases, ret_kind, ret_aux, ret_aliases, joined_kind);
                 acc_aux = join_aux(acc_kind, acc_aux, ret_kind, ret_aux, joined_kind);
@@ -425,6 +438,23 @@ fn analyze_function(
     // "Phase 3 minimum" comment in vow-ir/src/region.rs). Both compilers
     // converge on empty store_effects for now, satisfying the differential
     // gate.
+    //
+    // TODO(#204, Phase 9): when store-effect INFERENCE lands here, the
+    // companion `check_store_conflict` equivalent (currently Rust-only,
+    // see `vow-ir/src/region.rs::check_store_conflict`) MUST land in the
+    // same touch. Inference without conflict emission would let the
+    // self-hosted compiler silently accept programs the Rust compiler
+    // rejects, breaking the differential gate without any visible signal.
+    //
+    // The Phase-9 implementation must also mirror the per-iteration
+    // diagnostics buffering pattern from `vow-ir/src/region.rs`'s
+    // `iter_diagnostics` (the SCC fixed-point loop runs `analyze_function`
+    // multiple times, so a diagnostic emitted directly via `diag_ctx_emit`
+    // would fire once per round). The Rust pass keeps a Vec per iteration
+    // and extends `diagnostics` only on convergence (or alongside the ICE
+    // marker on iteration-bound exceeded). Without this, a single real
+    // conflict will be reported `iters` times, breaking the
+    // `conflicts.len() == 1` invariant the Rust tests assert.
 
     // Return whether the summary changed.
     if new_kind != prev_kind { return true; }
@@ -481,69 +511,146 @@ fn is_scalar_ity(ty: i64) -> bool {
     // Ptr / LinearPtr are heap-typed — they fall through.
 }
 
-// ---- Deep origin walk: returns published-kind discriminant ----
+// ---- Per-function lookup tables ----
+//
+// The deep walk used to call `find_inst_index` / `get_inst_by_pos` /
+// `collect_upsilon_arms` per node, each an O(n) scan across all blocks.
+// On `compiler/main.vow` (~50 functions, hundreds of insts each) the
+// recursion across three components — kind / aux / aliases — multiplied
+// the constant factor enough to make a self-hosted bootstrap of the
+// compiler take >180 s vs. 1.8 s on the Rust frontend.
+//
+// These helpers build O(1)-lookup tables once per function. See #252
+// for the BTreeMap stdlib that would let this collapse into a single
+// declaration.
+//
+// `id_to_inst[id]` is the inst with `inst.id == id`, or a sentinel
+// (`inst.id < 0`) when no such inst exists in the function.
+// `phi_arms[id]` is the list of upsilon-arm value ids targeting the
+// phi with `phi.id == id`; empty for non-phi ids.
+fn build_id_to_inst(f: IrFunction) -> Vec<IrInst> {
+    let bks: Vec<IrBlock> = f.blocks;
+    let mut max_id: i64 = -1;
+    let mut bi: i64 = 0;
+    while bi < bks.len() {
+        let blk: IrBlock = bks[bi];
+        let mut ii: i64 = 0;
+        while ii < blk.insts.len() {
+            let id: i64 = blk.insts[ii].id;
+            if id > max_id { max_id = id; }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    let sentinel: IrInst = ir_inst_new(-1, 0, 0, Vec::new(), 0, 0, 0, String::from(""));
+    let mut tbl: Vec<IrInst> = Vec::new();
+    let mut i: i64 = 0;
+    while i <= max_id {
+        tbl.push(sentinel);
+        i = i + 1;
+    }
+    let mut bi2: i64 = 0;
+    while bi2 < bks.len() {
+        let blk: IrBlock = bks[bi2];
+        let mut ii: i64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.id >= 0 {
+                tbl[inst.id] = inst;
+            }
+            ii = ii + 1;
+        }
+        bi2 = bi2 + 1;
+    }
+    tbl
+}
 
-// Each helper computes one component of the published constraint.
-// We keep them split (kind / aux / aliases) so the join can compose them
-// without allocating intermediate structs.
+fn build_phi_arms(f: IrFunction, n_ids: i64) -> Vec<Vec<i64>> {
+    let mut arms: Vec<Vec<i64>> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n_ids {
+        arms.push(Vec::new());
+        i = i + 1;
+    }
+    let bks: Vec<IrBlock> = f.blocks;
+    let mut bi: i64 = 0;
+    while bi < bks.len() {
+        let blk: IrBlock = bks[bi];
+        let mut ii: i64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_UPSILON() && inst.dk == IDATA_PHI_TARGET() && inst.args.len() > 0 {
+                let phi_id: i64 = inst.dv;
+                if phi_id >= 0 && phi_id < n_ids {
+                    arms[phi_id].push(inst.args[0]);
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    arms
+}
 
-fn deep_origin_kind(
-    m: IrModule, f: IrFunction, ret_inst: IrInst,
+// ---- Deep origin walk ----
+//
+// Mirrors `vow-ir/src/region.rs::origin_to_internal_inner`. ONE recursion
+// returns the full (kind, aux, aliases) tuple. Splitting the three
+// components into separate walks (which an earlier draft did) re-traversed
+// the IR three times per call; on phi-heavy code the overhead compounds
+// exponentially in arena allocations and blows past the bootstrap memory
+// cap. See #252 for the BTreeMap that would let us drop this struct in
+// favour of borrowed-arg style.
+
+struct DeepRet {
+    kind: i64,
+    aux: i64,
+    aliases: Vec<i64>,
+}
+
+fn deep_ret_const_global() -> DeepRet {
+    DeepRet { kind: RSUM_KIND_CONSTANT_GLOBAL(), aux: 0, aliases: Vec::new() }
+}
+
+fn deep_ret_uninit() -> DeepRet {
+    DeepRet { kind: RSUM_INTERNAL_UNINIT(), aux: 0, aliases: Vec::new() }
+}
+
+fn deep_origin(
+    id_to_inst: Vec<IrInst>, phi_arms: Vec<Vec<i64>>, ret_inst: IrInst,
     int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>
-) -> i64 {
+) -> DeepRet {
     if ret_inst.args.len() == 0 {
-        return RSUM_KIND_CONSTANT_GLOBAL();
+        return deep_ret_const_global();
     }
     let arg: i64 = ret_inst.args[0];
     let visiting: Vec<i64> = Vec::new();
-    deep_kind_inner(m, f, arg, int_kinds, int_auxs, int_aliases_list, visiting)
+    deep_origin_inner(id_to_inst, phi_arms, arg, int_kinds, int_auxs, int_aliases_list, visiting)
 }
 
-fn deep_origin_aux(
-    m: IrModule, f: IrFunction, ret_inst: IrInst,
-    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>
-) -> i64 {
-    if ret_inst.args.len() == 0 {
-        return 0;
-    }
-    let arg: i64 = ret_inst.args[0];
-    let visiting: Vec<i64> = Vec::new();
-    deep_aux_inner(m, f, arg, int_kinds, int_auxs, int_aliases_list, visiting)
-}
-
-fn deep_origin_aliases(
-    m: IrModule, f: IrFunction, ret_inst: IrInst,
-    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>
-) -> Vec<i64> {
-    if ret_inst.args.len() == 0 {
-        return Vec::new();
-    }
-    let arg: i64 = ret_inst.args[0];
-    let visiting: Vec<i64> = Vec::new();
-    deep_aliases_inner(m, f, arg, int_kinds, int_auxs, int_aliases_list, visiting)
-}
-
-fn deep_kind_inner(
-    m: IrModule, f: IrFunction, id: i64,
+fn deep_origin_inner(
+    id_to_inst: Vec<IrInst>, phi_arms: Vec<Vec<i64>>, id: i64,
     int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
     visiting: Vec<i64>
-) -> i64 {
+) -> DeepRet {
     if region_vec_contains_i64(visiting, id) {
-        return RSUM_INTERNAL_UNINIT();
+        return deep_ret_uninit();
     }
-    let inst_opt: i64 = find_inst_index(f, id);
-    if inst_opt < 0 {
-        return RSUM_KIND_CONSTANT_GLOBAL();
+    if id < 0 || id >= id_to_inst.len() {
+        return deep_ret_const_global();
     }
-    let inst: IrInst = get_inst_by_pos(f, inst_opt);
+    let inst: IrInst = id_to_inst[id];
+    if inst.id < 0 {
+        return deep_ret_const_global();
+    }
     if inst.op == IOP_GET_ARG() {
-        return RSUM_KIND_ALIAS_OF();
+        return DeepRet { kind: RSUM_KIND_ALIAS_OF(), aux: inst.dv, aliases: Vec::new() };
     }
     if inst.op == IOP_REGION_ALLOC() {
-        return RSUM_KIND_FRESH_IN_CALLER();
+        return DeepRet { kind: RSUM_KIND_FRESH_IN_CALLER(), aux: 0, aliases: Vec::new() };
     }
     if is_const_op(inst.op) {
-        return RSUM_KIND_CONSTANT_GLOBAL();
+        return deep_ret_const_global();
     }
     if inst.op == IOP_CALL() {
         if inst.dk == IDATA_CALL_TARGET() {
@@ -558,137 +665,75 @@ fn deep_kind_inner(
                         // recursion sees the same vec — pop before returning
                         // so stale ids don't leak into subsequent arms.
                         visiting.push(id);
-                        let r: i64 = deep_kind_inner(m, f, inst.args[p_idx], int_kinds, int_auxs, int_aliases_list, visiting);
+                        let r: DeepRet = deep_origin_inner(id_to_inst, phi_arms, inst.args[p_idx], int_kinds, int_auxs, int_aliases_list, visiting);
                         visiting.pop();
                         return r;
                     }
-                    return RSUM_KIND_ALIAS_OF();
+                    return DeepRet { kind: RSUM_KIND_ALIAS_OF(), aux: 0, aliases: Vec::new() };
                 }
                 if ck == RSUM_KIND_ALIAS_OF_ANY() {
-                    // Join all aliased arg origins.
+                    // Join all aliased arg origins. Use parallel scalars
+                    // (kind/aux/aliases) instead of a `let mut acc: DeepRet`
+                    // because the lowerer doesn't track struct tag through
+                    // reassignment yet (would emit FieldGet ICE warnings).
                     visiting.push(id);
                     let als: Vec<i64> = int_aliases_list[callee_idx];
-                    let mut acc: i64 = RSUM_INTERNAL_UNINIT();
+                    let mut acc_kind: i64 = RSUM_INTERNAL_UNINIT();
                     let mut acc_aux: i64 = 0;
                     let mut acc_aliases: Vec<i64> = Vec::new();
                     let mut ai: i64 = 0;
                     while ai < als.len() {
                         let p_idx: i64 = als[ai];
                         if p_idx >= 0 && p_idx < inst.args.len() {
-                            let a_kind: i64 = deep_kind_inner(m, f, inst.args[p_idx], int_kinds, int_auxs, int_aliases_list, visiting);
-                            let a_aux: i64 = deep_aux_inner(m, f, inst.args[p_idx], int_kinds, int_auxs, int_aliases_list, visiting);
-                            let a_aliases: Vec<i64> = deep_aliases_inner(m, f, inst.args[p_idx], int_kinds, int_auxs, int_aliases_list, visiting);
-                            let joined: i64 = join_kinds(acc, acc_aux, acc_aliases, a_kind, a_aux, a_aliases);
-                            acc_aliases = join_aliases(acc, acc_aux, acc_aliases, a_kind, a_aux, a_aliases, joined);
-                            acc_aux = join_aux(acc, acc_aux, a_kind, a_aux, joined);
-                            acc = joined;
+                            let arm: DeepRet = deep_origin_inner(id_to_inst, phi_arms, inst.args[p_idx], int_kinds, int_auxs, int_aliases_list, visiting);
+                            let arm_kind: i64 = arm.kind;
+                            let arm_aux: i64 = arm.aux;
+                            let arm_aliases: Vec<i64> = arm.aliases;
+                            let nk: i64 = join_kinds(acc_kind, acc_aux, acc_aliases, arm_kind, arm_aux, arm_aliases);
+                            let nl: Vec<i64> = join_aliases(acc_kind, acc_aux, acc_aliases, arm_kind, arm_aux, arm_aliases, nk);
+                            let na: i64 = join_aux(acc_kind, acc_aux, arm_kind, arm_aux, nk);
+                            acc_kind = nk;
+                            acc_aux = na;
+                            acc_aliases = nl;
                         }
                         ai = ai + 1;
                     }
                     visiting.pop();
-                    return acc;
+                    return DeepRet { kind: acc_kind, aux: acc_aux, aliases: acc_aliases };
                 }
-                return ck;
+                // Other published kinds (FreshInCaller, ConstantGlobal, Uninit):
+                // pass through with no aux/aliases.
+                return DeepRet { kind: ck, aux: 0, aliases: Vec::new() };
             }
         }
-        return RSUM_KIND_CONSTANT_GLOBAL();
+        return deep_ret_const_global();
     }
     if inst.op == IOP_PHI() {
-        // Pizlo SSA: scan upsilons that target this phi.
+        // Pizlo SSA: join all upsilon arms targeting this phi.
         visiting.push(id);
-        let arms: Vec<i64> = collect_upsilon_arms(f, id);
-        let mut acc: i64 = RSUM_INTERNAL_UNINIT();
+        let arms: Vec<i64> = phi_arms[id];
+        let mut acc_kind: i64 = RSUM_INTERNAL_UNINIT();
         let mut acc_aux: i64 = 0;
         let mut acc_aliases: Vec<i64> = Vec::new();
         let mut ai: i64 = 0;
         while ai < arms.len() {
             let arm_id: i64 = arms[ai];
-            let a_kind: i64 = deep_kind_inner(m, f, arm_id, int_kinds, int_auxs, int_aliases_list, visiting);
-            let a_aux: i64 = deep_aux_inner(m, f, arm_id, int_kinds, int_auxs, int_aliases_list, visiting);
-            let a_aliases: Vec<i64> = deep_aliases_inner(m, f, arm_id, int_kinds, int_auxs, int_aliases_list, visiting);
-            let joined: i64 = join_kinds(acc, acc_aux, acc_aliases, a_kind, a_aux, a_aliases);
-            acc_aliases = join_aliases(acc, acc_aux, acc_aliases, a_kind, a_aux, a_aliases, joined);
-            acc_aux = join_aux(acc, acc_aux, a_kind, a_aux, joined);
-            acc = joined;
+            let arm: DeepRet = deep_origin_inner(id_to_inst, phi_arms, arm_id, int_kinds, int_auxs, int_aliases_list, visiting);
+            let arm_kind: i64 = arm.kind;
+            let arm_aux: i64 = arm.aux;
+            let arm_aliases: Vec<i64> = arm.aliases;
+            let nk: i64 = join_kinds(acc_kind, acc_aux, acc_aliases, arm_kind, arm_aux, arm_aliases);
+            let nl: Vec<i64> = join_aliases(acc_kind, acc_aux, acc_aliases, arm_kind, arm_aux, arm_aliases, nk);
+            let na: i64 = join_aux(acc_kind, acc_aux, arm_kind, arm_aux, nk);
+            acc_kind = nk;
+            acc_aux = na;
+            acc_aliases = nl;
             ai = ai + 1;
         }
         visiting.pop();
-        return acc;
+        return DeepRet { kind: acc_kind, aux: acc_aux, aliases: acc_aliases };
     }
-    RSUM_KIND_CONSTANT_GLOBAL()
-}
-
-fn deep_aux_inner(
-    m: IrModule, f: IrFunction, id: i64,
-    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
-    visiting: Vec<i64>
-) -> i64 {
-    if region_vec_contains_i64(visiting, id) {
-        return 0;
-    }
-    let inst_opt: i64 = find_inst_index(f, id);
-    if inst_opt < 0 {
-        return 0;
-    }
-    let inst: IrInst = get_inst_by_pos(f, inst_opt);
-    if inst.op == IOP_GET_ARG() {
-        // ArgIndex is in inst.dv (IDATA_ARG_INDEX).
-        return inst.dv;
-    }
-    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
-        let callee_idx: i64 = inst.dv;
-        if callee_idx >= 0 && callee_idx < int_kinds.len() {
-            let ck: i64 = int_kinds[callee_idx];
-            if ck == RSUM_KIND_ALIAS_OF() {
-                let p_idx: i64 = int_auxs[callee_idx];
-                if p_idx >= 0 && p_idx < inst.args.len() {
-                    visiting.push(id);
-                    let r: i64 = deep_aux_inner(m, f, inst.args[p_idx], int_kinds, int_auxs, int_aliases_list, visiting);
-                    visiting.pop();
-                    return r;
-                }
-            }
-        }
-    }
-    0
-}
-
-fn deep_aliases_inner(
-    m: IrModule, f: IrFunction, id: i64,
-    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
-    visiting: Vec<i64>
-) -> Vec<i64> {
-    // DIVERGENCE (tracked for the byte-identical summary diff deferred
-    // in the PR description): AliasOfAny call-site resolution is
-    // ENTIRELY ABSENT in the self-hosted pass — not just non-recursive.
-    //
-    // This function always returns an empty vec. `deep_kind_inner` then
-    // calls `join_aliases` with `a_aliases = []` for every arm of a
-    // Phi/Call merge, so the join only ever sees the singleton aux
-    // index of `RSUM_KIND_ALIAS_OF` arms; `RSUM_KIND_ALIAS_OF_ANY` arm
-    // contents are silently dropped. The accumulated `acc_aliases`
-    // therefore loses all transitively-aliased indices.
-    //
-    // Concretely: if a callee summary is `AliasOfAny([0, 2])` and the
-    // call's result flows into a Return, `deep_kind_inner` enters the
-    // `ck == RSUM_KIND_ALIAS_OF_ANY()` branch (line 555 above), then the
-    // inner loop at line 568 calls THIS function for each aliased arg,
-    // gets `[]` back, and `join_aliases` (the Phi join at line 596 also
-    // hits the same path) accumulates from empty `a_aliases`. The
-    // function's published summary therefore loses {0, 2} entirely.
-    // The Rust `origin_to_internal_inner` does the recursive join
-    // correctly; this port only mirrors `join_aliases` at explicit
-    // join points and does not chase through callee-summary expansions.
-    // Phase 5 fix target: this function body — replicate the Rust
-    // recursion structure so the call sites at line 568 and 596 see
-    // the full transitive alias set.
-    //
-    // Align this with the Rust pass before the differential gate can
-    // turn on. Phase 3 lowering ignores summaries (spec §4) so the
-    // divergence does not affect codegen today; Phase 4's hidden-arena
-    // projection on the Rust side already consumes summaries, but the
-    // self-hosted shim doesn't yet (per `aeafab7`'s deferral note).
-    Vec::new()
+    deep_ret_const_global()
 }
 
 // ---- Join helpers ----
@@ -787,7 +832,7 @@ fn canonical_aliases_vec(xs: Vec<i64>) -> Vec<i64> {
 
 // ---- §4.3 step 5 termination resolution ----
 
-fn resolve_uninit_return_kind(m: IrModule, fidx: i64) -> i64 {
+fn resolve_uninit_return_kind(m: IrModule, fidx: i64, id_to_inst: Vec<IrInst>, phi_arms: Vec<Vec<i64>>) -> i64 {
     let f: IrFunction = m.functions[fidx];
     if is_scalar_ity(f.return_ty) {
         return RSUM_KIND_CONSTANT_GLOBAL();
@@ -795,16 +840,11 @@ fn resolve_uninit_return_kind(m: IrModule, fidx: i64) -> i64 {
     // Walk every Return; benign default if none.
     let bks: Vec<IrBlock> = f.blocks;
     let mut found: bool = false;
-    let mut acc: i64 = RSUM_INTERNAL_UNINIT();
+    // Parallel scalars instead of `let mut acc: DeepRet` to keep the
+    // lowerer's struct tag tracking happy across mut reassignment.
+    let mut acc_kind: i64 = RSUM_INTERNAL_UNINIT();
     let mut acc_aux: i64 = 0;
-    // Tracks the AliasOfAny indices accumulated across multiple Return arms.
-    // Currently only read by `join_kinds` for shape inspection; the join's
-    // alias output is not captured back into `acc_aliases` because this
-    // function returns just the kind (Phase 3 minimal). When self-hosted
-    // gains full AliasOfAny resolution alongside `deep_aliases_inner`
-    // (see DIVERGENCE comment), update this to `let mut` and feed the
-    // joined aliases into `int_aliases_list[fidx]` via the caller.
-    let acc_aliases: Vec<i64> = Vec::new();
+    let mut acc_aliases: Vec<i64> = Vec::new();
     let int_kinds_empty: Vec<i64> = Vec::new();
     let int_auxs_empty: Vec<i64> = Vec::new();
     let int_aliases_empty: Vec<Vec<i64>> = Vec::new();
@@ -817,24 +857,37 @@ fn resolve_uninit_return_kind(m: IrModule, fidx: i64) -> i64 {
             if inst.op == IOP_RETURN() && inst.args.len() > 0 {
                 found = true;
                 let visiting: Vec<i64> = Vec::new();
-                let k: i64 = deep_kind_inner(m, f, inst.args[0], int_kinds_empty, int_auxs_empty, int_aliases_empty, visiting);
-                let aux: i64 = deep_aux_inner(m, f, inst.args[0], int_kinds_empty, int_auxs_empty, int_aliases_empty, visiting);
-                let als: Vec<i64> = Vec::new();
-                let joined: i64 = join_kinds(acc, acc_aux, acc_aliases, k, aux, als);
-                acc_aux = join_aux(acc, acc_aux, k, aux, joined);
-                acc = joined;
+                let arm: DeepRet = deep_origin_inner(id_to_inst, phi_arms, inst.args[0], int_kinds_empty, int_auxs_empty, int_aliases_empty, visiting);
+                let arm_kind: i64 = arm.kind;
+                let arm_aux: i64 = arm.aux;
+                let arm_aliases: Vec<i64> = arm.aliases;
+                let nk: i64 = join_kinds(acc_kind, acc_aux, acc_aliases, arm_kind, arm_aux, arm_aliases);
+                let nl: Vec<i64> = join_aliases(acc_kind, acc_aux, acc_aliases, arm_kind, arm_aux, arm_aliases, nk);
+                let na: i64 = join_aux(acc_kind, acc_aux, arm_kind, arm_aux, nk);
+                acc_kind = nk;
+                acc_aux = na;
+                acc_aliases = nl;
             }
             ii = ii + 1;
         }
         bi = bi + 1;
     }
-    if !found || acc == RSUM_INTERNAL_UNINIT() {
+    if !found || acc_kind == RSUM_INTERNAL_UNINIT() {
         return RSUM_KIND_CONSTANT_GLOBAL();
     }
-    acc
+    acc_kind
 }
 
-fn resolve_uninit_return_aux(m: IrModule, fidx: i64, kind: i64) -> i64 {
+// TODO(#204): Pre-existing limitation — bails on the *first* `IOP_RETURN`
+// it finds and returns its `aux`. If a function has multiple Return sites
+// both typed `AliasOf` but aliasing different parameters,
+// `resolve_uninit_return_kind` (which joins across all Returns) can settle
+// on `AliasOf(N)` while this returns `aux` from whichever Return appears
+// first in block order — potentially a different index. Today this is
+// unreachable (the only callers feed in functions whose internal kind is
+// already `Uninit`, which is rare on the corpus), but Phase 9 should join
+// across all Returns the same way `resolve_uninit_return_kind` does.
+fn resolve_uninit_return_aux(m: IrModule, fidx: i64, kind: i64, id_to_inst: Vec<IrInst>, phi_arms: Vec<Vec<i64>>) -> i64 {
     if kind != RSUM_KIND_ALIAS_OF() {
         return 0;
     }
@@ -851,8 +904,8 @@ fn resolve_uninit_return_aux(m: IrModule, fidx: i64, kind: i64) -> i64 {
             let inst: IrInst = blk.insts[ii];
             if inst.op == IOP_RETURN() && inst.args.len() > 0 {
                 let visiting: Vec<i64> = Vec::new();
-                let aux: i64 = deep_aux_inner(m, f, inst.args[0], int_kinds_empty, int_auxs_empty, int_aliases_empty, visiting);
-                return aux;
+                let dr: DeepRet = deep_origin_inner(id_to_inst, phi_arms, inst.args[0], int_kinds_empty, int_auxs_empty, int_aliases_empty, visiting);
+                return dr.aux;
             }
             ii = ii + 1;
         }
@@ -877,87 +930,6 @@ fn region_vec_contains_i64(v: Vec<i64>, x: i64) -> bool {
         i = i + 1;
     }
     false
-}
-
-// PERFORMANCE TODO (issue #200, Phase 5 perf pass): this helper plus
-// `get_inst_by_pos` together do TWO O(n) scans across all instructions
-// per `deep_kind_inner` / `deep_aux_inner` call. The deep-walk recursion
-// invokes them many times per Phi/Call merge, giving O(n²) behaviour
-// on functions with large basic blocks.
-//
-// The Rust pass avoids this by building `BTreeMap<InstId, (BlockId,
-// &Inst)>` once per function in `analyze_function` and looking up in
-// O(log n). The self-hosted port should mirror that — likely as a
-// sorted `Vec<i64>` of inst ids built once at the top of
-// `analyze_function`, plus a parallel `Vec<IrInst>` indexed by the
-// returned position, threaded through `deep_kind_inner` and friends
-// as additional parameters.
-//
-// Acceptable for the Phase 3 commit because (a) the CI side scan
-// completes in reasonable time on the current ~16k-line self-hosted
-// source, (b) the fix is mechanical and orthogonal to correctness,
-// and (c) Phase 5 already needs to revisit this code for store-effect
-// inference. CLAUDE.md asymptotics rule applies — fix this in the
-// next touch of the file, do not let it survive to Phase 6.
-fn find_inst_index(f: IrFunction, id: i64) -> i64 {
-    // Linear scan across all blocks. Returns a global position counter
-    // (0, 1, 2, ...) of the inst with matching `id`, or -1 if not found.
-    // The counter is re-derived from position by `get_inst_by_pos`.
-    let bks: Vec<IrBlock> = f.blocks;
-    let mut counter: i64 = 0;
-    let mut bi: i64 = 0;
-    while bi < bks.len() {
-        let blk: IrBlock = bks[bi];
-        let mut ii: i64 = 0;
-        while ii < blk.insts.len() {
-            if blk.insts[ii].id == id {
-                return counter;
-            }
-            counter = counter + 1;
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    -1
-}
-
-fn get_inst_by_pos(f: IrFunction, pos: i64) -> IrInst {
-    let bks: Vec<IrBlock> = f.blocks;
-    let mut counter: i64 = 0;
-    let mut bi: i64 = 0;
-    while bi < bks.len() {
-        let blk: IrBlock = bks[bi];
-        let mut ii: i64 = 0;
-        while ii < blk.insts.len() {
-            if counter == pos {
-                return blk.insts[ii];
-            }
-            counter = counter + 1;
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    // Should never reach here; return a synthetic placeholder.
-    ir_inst_new(0, 0, 0, Vec::new(), 0, 0, 0, String::from(""))
-}
-
-fn collect_upsilon_arms(f: IrFunction, phi_id: i64) -> Vec<i64> {
-    let arms: Vec<i64> = Vec::new();
-    let bks: Vec<IrBlock> = f.blocks;
-    let mut bi: i64 = 0;
-    while bi < bks.len() {
-        let blk: IrBlock = bks[bi];
-        let mut ii: i64 = 0;
-        while ii < blk.insts.len() {
-            let inst: IrInst = blk.insts[ii];
-            if inst.op == IOP_UPSILON() && inst.dk == IDATA_PHI_TARGET() && inst.dv == phi_id && inst.args.len() > 0 {
-                arms.push(inst.args[0]);
-            }
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
-    arms
 }
 
 // Currently unused — same scaffolding rationale as `region_caller0` above.

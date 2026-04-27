@@ -255,7 +255,7 @@ fn small_module_uninit_never_leaks_after_round_trip() {
         enum_layouts: vec![],
         warnings: vec![],
     };
-    infer_regions(&mut m);
+    infer_regions(&mut m, "test.vow");
     assert_canonical_summaries(&m);
     assert!(
         m.warnings.iter().all(|d| d.severity != Severity::Error),
@@ -285,4 +285,52 @@ fn small_module_uninit_never_leaks_after_round_trip() {
             orig.name
         );
     }
+}
+
+/// Documents the **Rust ↔ self-hosted divergence** on the
+/// alloc→param-via-callee shape (Phase 5 partial RegionConflict
+/// detection, issue #200).
+///
+/// Today's behaviour:
+/// - `vow-ir/src/region.rs::check_store_conflict` (the Rust frontend)
+///   emits `RegionConflict { blame: Callee }` for this shape.
+/// - `compiler/region.vow` has no equivalent. The gap is masked
+///   because the self-hosted side also defers store-effect *inference*
+///   (`compiler/region.vow:436`-style "Phase 3 minimal" comment), so
+///   `store_effects` is always empty and no call site reaches the
+///   conflict check.
+///
+/// The differential gate in `scripts/full_test.sh` therefore can't
+/// validate this code path: both sides emit no `RegionConflict` (Rust
+/// because the input doesn't trigger it on today's corpus,
+/// self-hosted because it can never trigger).
+///
+/// **This `#[ignore]` test makes that gap visibly load-bearing in the
+/// suite.** When #204 lands store-effect inference + the
+/// `check_store_conflict` equivalent on the self-hosted path, this
+/// test must:
+/// 1. drop the `#[ignore]` annotation;
+/// 2. construct a `.vow` program exercising the alloc→param-via-callee
+///    shape (the same logical shape the inline
+///    `region_conflict_alloc_into_param_via_callee_store_effect` test
+///    in `vow-ir/src/region.rs` exercises at the IR level);
+/// 3. assert both compilers emit exactly one `RegionConflict` with
+///    `blame: Callee` on the same source span;
+/// 4. fail loudly if only one side emits.
+///
+/// Until #204 lands, this test fails with `todo!()` if accidentally
+/// run, preventing #204 from merging without implementing the parity
+/// check it's tracking.
+#[test]
+#[ignore = "tracks #204 (Phase 9): self-hosted check_store_conflict equivalent"]
+fn parity_alloc_into_param_via_callee_emits_region_conflict() {
+    todo!(
+        "Implement when #204 (Phase 9 self-hosted store-effect inference + \
+         check_store_conflict equivalent) lands. Construct a .vow program \
+         exercising the alloc→param-via-callee shape (mirrors the inline \
+         region_conflict_alloc_into_param_via_callee_store_effect test in \
+         vow-ir/src/region.rs::tests), run it through both ./target/release/vow \
+         and build/vowc, and assert both emit exactly one RegionConflict \
+         with blame: Callee on the same source span."
+    )
 }

@@ -17,6 +17,35 @@ SELF=""
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
+# ─── Section timing ────────────────────────────────────────────────
+#
+# Each `section_begin "Name"` records a wall-clock start; the next
+# `section_begin` call (or the final summary) prints the elapsed time
+# for the previous section. This makes slow sections visible without
+# needing to retroactively bisect a 50-minute run.
+SCRIPT_START=$(date +%s)
+SECTION_NAME=""
+SECTION_START=0
+
+section_begin() {
+    local name="$1"
+    if [ -n "$SECTION_NAME" ]; then
+        local now=$(date +%s)
+        printf "  ${BOLD}>${RESET} %s done in %ds\n\n" "$SECTION_NAME" $((now - SECTION_START))
+    fi
+    SECTION_NAME="$name"
+    SECTION_START=$(date +%s)
+    echo -e "${BOLD}--- ${name} ---${RESET}"
+}
+
+section_finalize() {
+    if [ -n "$SECTION_NAME" ]; then
+        local now=$(date +%s)
+        printf "  ${BOLD}>${RESET} %s done in %ds\n" "$SECTION_NAME" $((now - SECTION_START))
+        SECTION_NAME=""
+    fi
+}
+
 # ─── Helpers ────────────────────────────────────────────────────────
 
 run_self() {
@@ -47,6 +76,14 @@ skip() {
 compare_json() {
     local label="$1" rust_json="$2" self_json="$3" rust_exit="$4" self_exit="$5"
 
+    # Counterexample JSON can blow past ARG_MAX (~128 KiB on Linux), so
+    # write to temp files and pass paths instead of passing the JSON
+    # itself as command-line arguments.
+    local rust_f="$TMPDIR/cmp_rust_$$.json"
+    local self_f="$TMPDIR/cmp_self_$$.json"
+    printf '%s' "$rust_json" > "$rust_f"
+    printf '%s' "$self_json" > "$self_f"
+
     local result
     if result=$(python3 -c "
 import json, sys
@@ -54,9 +91,9 @@ import json, sys
 rust_exit = int(sys.argv[1])
 self_exit = int(sys.argv[2])
 try:
-    r = json.loads(sys.argv[3])
-    s = json.loads(sys.argv[4])
-except json.JSONDecodeError as e:
+    with open(sys.argv[3]) as f: r = json.load(f)
+    with open(sys.argv[4]) as f: s = json.load(f)
+except (json.JSONDecodeError, OSError) as e:
     print(f'FAIL: JSON parse error: {e}')
     sys.exit(1)
 
@@ -108,11 +145,12 @@ if errors:
 else:
     print('OK')
     sys.exit(0)
-" "$rust_exit" "$self_exit" "$rust_json" "$self_json" 2>&1); then
+" "$rust_exit" "$self_exit" "$rust_f" "$self_f" 2>&1); then
         pass "$label"
     else
         fail "$label" "$result"
     fi
+    rm -f "$rust_f" "$self_f"
 }
 
 compare_runtime() {
@@ -145,6 +183,11 @@ compare_runtime() {
 compare_error() {
     local label="$1" rust_json="$2" self_json="$3" rust_exit="$4" self_exit="$5"
 
+    local rust_f="$TMPDIR/cmp_err_rust_$$.json"
+    local self_f="$TMPDIR/cmp_err_self_$$.json"
+    printf '%s' "$rust_json" > "$rust_f"
+    printf '%s' "$self_json" > "$self_f"
+
     local result
     if result=$(python3 -c "
 import json, sys
@@ -152,9 +195,9 @@ import json, sys
 rust_exit = int(sys.argv[1])
 self_exit = int(sys.argv[2])
 try:
-    r = json.loads(sys.argv[3])
-    s = json.loads(sys.argv[4])
-except json.JSONDecodeError as e:
+    with open(sys.argv[3]) as f: r = json.load(f)
+    with open(sys.argv[4]) as f: s = json.load(f)
+except (json.JSONDecodeError, OSError) as e:
     print(f'FAIL: JSON parse error: {e}')
     sys.exit(1)
 
@@ -175,28 +218,27 @@ if errors:
 else:
     print('OK')
     sys.exit(0)
-" "$rust_exit" "$self_exit" "$rust_json" "$self_json" 2>&1); then
+" "$rust_exit" "$self_exit" "$rust_f" "$self_f" 2>&1); then
         pass "$label"
     else
         fail "$label" "$result"
     fi
+    rm -f "$rust_f" "$self_f"
 }
-
-# ─── Section 0: Setup ───────────────────────────────────────────────
 
 echo -e "${BOLD}=== Phase 20.1: Full Test Suite ===${RESET}"
 echo ""
 
+section_begin "Section 0: Setup"
 echo -e "${BOLD}Building Rust compiler...${RESET}"
 cargo build --all --release 2>&1 | tail -1
 echo -e "${BOLD}Building self-hosted compiler...${RESET}"
 $RUST --no-verify compiler/main.vow -o "$TMPDIR/vowc_self" >/dev/null 2>/dev/null
 SELF="$TMPDIR/vowc_self"
-echo ""
 
 # ─── Section 1: Build --no-verify ─────────────────────────────────
 
-echo -e "${BOLD}--- Section 1: Build --no-verify ---${RESET}"
+section_begin "Section 1: Build --no-verify"
 for vow_file in examples/*.vow; do
     name=$(basename "$vow_file" .vow)
 
@@ -219,7 +261,7 @@ echo ""
 
 # ─── Section 2: Verify ─────────────────────────────────────────────
 
-echo -e "${BOLD}--- Section 2: Verify ---${RESET}"
+section_begin "Section 2: Verify"
 for vow_file in examples/*.vow; do
     name=$(basename "$vow_file" .vow)
     if ! grep -q 'vow {' "$vow_file"; then
@@ -241,7 +283,7 @@ echo ""
 
 # ─── Section 3: Runtime Execution ──────────────────────────────────
 
-echo -e "${BOLD}--- Section 3: Runtime Execution ---${RESET}"
+section_begin "Section 3: Runtime Execution"
 for vow_file in examples/*.vow; do
     name=$(basename "$vow_file" .vow)
     if [ "$name" = "divide" ]; then
@@ -268,7 +310,7 @@ echo ""
 
 # ─── Section 4: Run Tests (tests/run/) ────────────────────────────
 
-echo -e "${BOLD}--- Section 4: Run Tests ---${RESET}"
+section_begin "Section 4: Run Tests"
 for vow_file in tests/run/*.vow; do
     name=$(basename "$vow_file" .vow)
 
@@ -329,7 +371,7 @@ echo ""
 
 # ─── Section 4b: Verify Tests (tests/verify/) ─────────────────────
 
-echo -e "${BOLD}--- Section 4b: Verify Tests ---${RESET}"
+section_begin "Section 4b: Verify Tests"
 for vow_file in tests/verify/*.vow; do
     name=$(basename "$vow_file" .vow)
 
@@ -352,7 +394,7 @@ echo ""
 
 # ─── Section 4c: Verify-Fail Tests (tests/verify-fail/) ───────────
 
-echo -e "${BOLD}--- Section 4c: Verify-Fail Tests ---${RESET}"
+section_begin "Section 4c: Verify-Fail Tests"
 for vow_file in tests/verify-fail/*.vow; do
     name=$(basename "$vow_file" .vow)
 
@@ -375,7 +417,7 @@ echo ""
 
 # ─── Section 5: Debug Mode ─────────────────────────────────────────
 
-echo -e "${BOLD}--- Section 5: Debug Mode ---${RESET}"
+section_begin "Section 5: Debug Mode"
 
 # divide.vow: VowViolation at runtime
 $RUST build --mode debug --no-verify examples/divide.vow -o "$TMPDIR/rust_divide_debug" >/dev/null 2>/dev/null
@@ -410,7 +452,7 @@ echo ""
 
 # ─── Section 5b: Profile Mode ─────────────────────────────────────
 
-echo -e "${BOLD}--- Section 5b: Profile Mode ---${RESET}"
+section_begin "Section 5b: Profile Mode"
 
 # Build profile_mode.vow with both compilers
 $RUST build --mode profile --no-verify tests/run/profile_mode.vow -o "$TMPDIR/rust_profile_mode" >/dev/null 2>/dev/null
@@ -450,7 +492,7 @@ echo ""
 
 # ─── Section 5c: Sanitize Mode ────────────────────────────────────
 
-echo -e "${BOLD}--- Section 5c: Sanitize Mode ---${RESET}"
+section_begin "Section 5c: Sanitize Mode"
 
 # sanitize_vec.vow: Vec operations with sanitize instrumentation
 $RUST build --mode sanitize --no-verify tests/debug/sanitize_vec.vow -o "$TMPDIR/rust_sanitize_vec" >/dev/null 2>/dev/null
@@ -460,7 +502,7 @@ compare_runtime "sanitize_vec/sanitize" "$TMPDIR/rust_sanitize_vec" "$TMPDIR/sel
 echo ""
 # ─── Section 6: Multi-Module ───────────────────────────────────────
 
-echo -e "${BOLD}--- Section 6: Multi-Module ---${RESET}"
+section_begin "Section 6: Multi-Module"
 
 for multi in stack geometry bignum gc math; do
     case "$multi" in
@@ -498,7 +540,7 @@ echo ""
 
 # ─── Section 7: Error Handling ─────────────────────────────────────
 
-echo -e "${BOLD}--- Section 7: Error Handling ---${RESET}"
+section_begin "Section 7: Error Handling"
 
 cat > "$TMPDIR/parse_error.vow" <<'EOF'
 module M 123
@@ -537,7 +579,7 @@ echo ""
 
 # ─── Section 8: Help Output ────────────────────────────────────────
 
-echo -e "${BOLD}--- Section 8: Help Output ---${RESET}"
+section_begin "Section 8: Help Output"
 
 # --help → valid JSON with "tool" key
 rust_help=$($RUST --help 2>/dev/null) || true
@@ -591,7 +633,7 @@ echo ""
 
 # ─── Section 9: Bootstrap Triple Test ──────────────────────────────
 
-echo -e "${BOLD}--- Section 9: Bootstrap Triple Test ---${RESET}"
+section_begin "Section 9: Bootstrap Triple Test"
 
 scripts/concat_vow.sh clif > "$TMPDIR/compiler_clif.vow"
 
@@ -616,7 +658,7 @@ echo ""
 
 # ─── Section 10: Build + Verify Default Mode ───────────────────────
 
-echo -e "${BOLD}--- Section 10: Build + Verify Default Mode ---${RESET}"
+section_begin "Section 10: Build + Verify Default Mode"
 
 for name in clamp max callee_blame cegis_broken; do
     vow_file="examples/${name}.vow"
@@ -634,9 +676,9 @@ for name in clamp max callee_blame cegis_broken; do
 done
 echo ""
 
-# ─── Section 10: Test Subcommand ────────────────────────────────────
+# ─── Section 10b: Test Subcommand ───────────────────────────────────
 
-echo -e "${BOLD}--- Section 10: Test Subcommand ---${RESET}"
+section_begin "Section 10b: Test Subcommand"
 
 # Run vowc test with both compilers on compiler/ directory
 rust_test_json=$($RUST test compiler/ 2>/dev/null) || true
@@ -689,7 +731,7 @@ echo ""
 
 # ─── Section 11: Arena Primitive ESBMC Verification ────────────────
 
-echo -e "${BOLD}--- Section 11: Arena Primitive Verification ---${RESET}"
+section_begin "Section 11: Arena Primitive Verification"
 if command -v esbmc >/dev/null 2>&1; then
     if (cd vow-runtime/verify && make verify) >"$TMPDIR/arena_verify.log" 2>&1; then
         pass "arena/esbmc"
@@ -703,8 +745,13 @@ echo ""
 
 # ─── Summary ────────────────────────────────────────────────────────
 
+section_finalize
+echo ""
+
 echo -e "${BOLD}=== Summary ===${RESET}"
-echo -e "  ${GREEN}${PASS} passed${RESET}, ${RED}${FAIL} failed${RESET}, ${YELLOW}${SKIP} skipped${RESET}"
+SCRIPT_END=$(date +%s)
+TOTAL=$((SCRIPT_END - SCRIPT_START))
+echo -e "  ${GREEN}${PASS} passed${RESET}, ${RED}${FAIL} failed${RESET}, ${YELLOW}${SKIP} skipped${RESET} in ${TOTAL}s"
 
 if [ ${#FAILURES[@]} -gt 0 ]; then
     echo ""
