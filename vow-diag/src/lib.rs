@@ -262,6 +262,13 @@ mod tests {
     }
 
     #[test]
+    fn region_linear_debug_format_is_pascalcase() {
+        // Same contract as `region_conflict_debug_format_is_pascalcase`: the JSON
+        // `error_code` for the post-region linear-obligation check is "RegionLinear".
+        assert_eq!(format!("{:?}", ErrorCode::RegionLinear), "RegionLinear");
+    }
+
+    #[test]
     fn human_emitter_prints_hints() {
         let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
         let mut emitter = HumanEmitter::new(Box::new(SharedBuf(Arc::clone(&buf))));

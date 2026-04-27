@@ -178,6 +178,20 @@ fn lctx_emit(ctx: LowerCtx, op: i64, ty: i64, args: Vec<i64>, dk: i64, dv: i64, 
 fn lctx_set_inst_span(ctx: LowerCtx, inst_id: i64, span: i64) {
     let start: i64 = span_unpack_start(span);
     let len: i64 = span_unpack_len(span);
+    // Fast path: callers patch the just-emitted inst, which is the last entry
+    // in the current block. Avoids an O(n) per-call scan that turns into
+    // O(n^2) over the function (called per param, alloc, let, and call).
+    let cur_blk: IrBlock = ctx.func.blocks[ctx.current_block];
+    let cur_n: i64 = cur_blk.insts.len();
+    if cur_n > 0 {
+        let last: IrInst = cur_blk.insts[cur_n - 1];
+        if last.id == inst_id {
+            last.ostart = start;
+            last.olen = len;
+            cur_blk.insts[cur_n - 1] = last;
+            return;
+        }
+    }
     let nb: i64 = ctx.func.blocks.len();
     let mut bi: i64 = 0;
     while bi < nb {
@@ -1839,7 +1853,6 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         if ctx.cur_vow_lid != -1 {
             lower_ensures_clauses(ctx, ctx.cur_vow_lid, val_id);
         }
-        lctx_emit_linear_consume_if_needed(ctx, val_id);
         lctx_emit_return_frees(ctx, val_id);
         let ret_args: Vec<i64> = Vec::new();
         ret_args.push(val_id);
@@ -2658,7 +2671,6 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let val_eid: i64 = expr_a(a, eid);
             if val_eid != -1 {
                 let val_id: i64 = lower_expr(ctx, val_eid);
-                lctx_emit_linear_consume_if_needed(ctx, val_id);
                 let is_loop_idx: i64 = ctx.loop_is_loop.len() - 1;
                 let is_loop: i64 = ctx.loop_is_loop[is_loop_idx];
                 if is_loop == 1 {
@@ -3292,7 +3304,6 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
         if vow_lid != -1 {
             lower_ensures_clauses(ctx, vow_lid, trailing);
         }
-        lctx_emit_linear_consume_if_needed(ctx, trailing);
         lctx_emit_return_frees(ctx, trailing);
         let ret_args: Vec<i64> = Vec::new();
         ret_args.push(trailing);

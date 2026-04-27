@@ -1071,7 +1071,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 if let Some(vow_block) = ctx.vow_block.clone() {
                     vow::lower_ensures(ctx, &vow_block, val);
                 }
-                ctx.emit_linear_consume_if_needed(val, span);
                 ctx.emit_return_frees(val, span);
                 ctx.emit(Opcode::Return, Ty::Unit, vec![val], InstData::None, span)
             } else {
@@ -1692,7 +1691,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             if let Some(val_expr) = value {
                 let val_id = lower_expr(ctx, val_expr);
-                ctx.emit_linear_consume_if_needed(val_id, val_expr.span);
                 // If inside a `loop` (Some), emit Upsilon for the break-value Phi.
                 let is_loop = matches!(ctx.loop_break_upsilons.last(), Some(Some(_)));
                 if is_loop {
@@ -3100,7 +3098,6 @@ pub(crate) fn lower_function(
         if let Some(vow_block) = &fn_def.vow {
             vow::lower_ensures(&mut ctx, vow_block, trailing);
         }
-        ctx.emit_linear_consume_if_needed(trailing, span);
         ctx.emit_return_frees(trailing, span);
         ctx.emit(
             Opcode::Return,

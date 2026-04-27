@@ -1,0 +1,11 @@
+// TEST: error-code RegionLinear
+module LinearRegionLoopBreak
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn main() -> i32 {
+    let x: Handle = loop { break Handle { fd: 1 }; };
+    0
+}
