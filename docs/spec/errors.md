@@ -86,17 +86,35 @@ fn f() -> () {
 ### LinearTypeViolation
 
 **Phase:** Type Checker
-**Meaning:** A value of a `linear struct` type was not consumed exactly once.
+**Meaning:** A value of a `linear struct` type is used in a way that is immediately invalid before region inference runs, such as consuming it twice, consuming it inside a loop that may execute more than once, or consuming it after only some control-flow paths already consumed it.
 
 ```vow
 linear struct Handle { fd: i64 }
 
-fn f() -> () {
-    let h: Handle = Handle { fd: 1 };
+fn f(h: Handle) -> Handle {
+    let h2: Handle = h;
+    let h3: Handle = h;  // h was already consumed
+    h2
 }
 ```
 
-**Fix:** Ensure every linear value is consumed (passed to a function, returned, or destructured) exactly once.
+**Fix:** Restructure ownership so each path uses a consumed linear value at most once. Obligations that are simply left live at scope exit are reported later as `RegionLinear`.
+
+### RegionLinear
+
+**Phase:** Region Inference
+**Meaning:** A `linear struct` value can remain live when its owning region closes. Returning the value transfers the linear obligation to the caller; consuming it before the close satisfies the obligation. A true root-pinned linear value may be reported as a warning with a `pin_to_root` hint, while a rodata linear value is an error.
+
+```vow
+linear struct Handle { fd: i64 }
+
+fn f() -> i64 {
+    let h: Handle = Handle { fd: 1 };
+    0
+}
+```
+
+**Fix:** Consume the value before the region closes, or return it so the caller receives the obligation.
 
 ### NonExhaustiveMatch
 

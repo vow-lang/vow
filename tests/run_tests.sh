@@ -118,6 +118,7 @@ parse_annotations() {
   TEST_STATUS=""
   TEST_CX_FN=""
   TEST_CX_BLAME=""
+  TEST_ERROR_CODE=""
   TEST_SKIP=""
   TEST_STDIN=""
   TEST_STDIN_FILE=""
@@ -139,6 +140,8 @@ parse_annotations() {
       TEST_CX_FN="${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ counterexample-blame\ (.+) ]]; then
       TEST_CX_BLAME="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^//\ TEST:\ error-code\ (.+) ]]; then
+      TEST_ERROR_CODE="${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ stdin\ \"(.*)\" ]]; then
       TEST_STDIN="${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ stdin-file\ (.+) ]]; then
@@ -437,6 +440,14 @@ for f in "$SCRIPT_DIR"/error/*.vow; do
   if [[ "$actual_status" != "$expected_status" ]]; then
     fail "$name" "status=$actual_status (expected $expected_status)"
     continue
+  fi
+
+  if [[ -n "$TEST_ERROR_CODE" ]]; then
+    actual_error_code="$(python3 -c "import json,sys; d=json.loads(sys.stdin.read()); xs=d.get('diagnostics', []); print(xs[0].get('error_code', '') if xs else '')" <<< "$build_json")"
+    if [[ "$actual_error_code" != "$TEST_ERROR_CODE" ]]; then
+      fail "$name" "error_code=$actual_error_code (expected $TEST_ERROR_CODE)"
+      continue
+    fi
   fi
 
   # Check stderr substring if annotated

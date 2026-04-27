@@ -1,0 +1,13 @@
+// TEST: error-code RegionLinear
+module LinearRegionBranchPartial
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn choose(h: Handle, c: bool) -> Handle {
+    if c {
+        return h;
+    }
+    Handle { fd: 2 }
+}

@@ -530,7 +530,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
             "where_clauses": "fn f(x: i64 where x >= 0) -> i64 \u2014 refinement types on parameters",
             "structs": {
                 "definition": "struct Name { field: Type, ... }",
-                "linear": "linear struct Name { field: Type, ... } \u2014 must be consumed exactly once",
+                "linear": "linear struct Name { field: Type, ... } \u2014 linear obligation must be consumed or returned before region close",
                 "literal": "Name { field: value, ... }",
                 "field_access": "value.field",
             },

@@ -65,6 +65,7 @@ pub enum ErrorCode {
     IoError,
     // Region inference (arena-per-scope, Phase 3)
     RegionConflict,
+    RegionLinear,
 }
 
 pub trait DiagnosticEmitter {

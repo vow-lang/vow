@@ -259,7 +259,275 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx, path: String) -> IrModule {
         fi2 = fi2 + 1;
     }
 
+    check_linear_regions_module(m, dctx, path);
+
     m
+}
+
+fn check_linear_regions_module(m: IrModule, dctx: DiagCtx, path: String) {
+    let n: i64 = m.functions.len();
+    let mut fi: i64 = 0;
+    while fi < n {
+        let f: IrFunction = m.functions[fi];
+        let id_to_inst: Vec<IrInst> = build_id_to_inst(f);
+        let phi_arms: Vec<Vec<i64>> = build_phi_arms(f, id_to_inst.len());
+        check_linear_regions_function(f, id_to_inst, phi_arms, dctx, path);
+        fi = fi + 1;
+    }
+}
+
+fn check_linear_regions_function(f: IrFunction, id_to_inst: Vec<IrInst>, phi_arms: Vec<Vec<i64>>, dctx: DiagCtx, path: String) {
+    let n_blocks: i64 = f.blocks.len();
+    let preds: Vec<Vec<i64>> = linear_predecessors(f);
+    let block_in: Vec<Vec<i64>> = Vec::new();
+    let block_out: Vec<Vec<i64>> = Vec::new();
+    let mut bi0: i64 = 0;
+    while bi0 < n_blocks {
+        block_in.push(Vec::new());
+        block_out.push(Vec::new());
+        bi0 = bi0 + 1;
+    }
+
+    let mut changed: bool = true;
+    let mut iters: i64 = 0;
+    let mut bound: i64 = n_blocks * (n_blocks + 1);
+    if bound < 8 { bound = 8; }
+    while changed && iters <= bound {
+        changed = false;
+        iters = iters + 1;
+        let mut bi: i64 = 0;
+        while bi < n_blocks {
+            let incoming: Vec<i64> = Vec::new();
+            let ps: Vec<i64> = preds[bi];
+            let mut pi: i64 = 0;
+            while pi < ps.len() {
+                let pred_idx: i64 = ps[pi];
+                linear_union_into(incoming, block_out[pred_idx]);
+                pi = pi + 1;
+            }
+            sort_i64_vec_inplace(incoming);
+            if !linear_vec_eq(block_in[bi], incoming) {
+                block_in[bi] = incoming;
+                changed = true;
+            }
+            let out: Vec<i64> = linear_transfer_block(f.blocks[bi], block_in[bi], id_to_inst, phi_arms);
+            sort_i64_vec_inplace(out);
+            if !linear_vec_eq(block_out[bi], out) {
+                block_out[bi] = out;
+                changed = true;
+            }
+            bi = bi + 1;
+        }
+    }
+
+    let emitted: Vec<i64> = Vec::new();
+    let mut bi2: i64 = 0;
+    while bi2 < n_blocks {
+        let blk: IrBlock = f.blocks[bi2];
+        let live: Vec<i64> = block_in[bi2];
+        let mut ii: i64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_RETURN() {
+                if inst.args.len() > 0 {
+                    linear_remove_origins(live, inst.args[0], id_to_inst, phi_arms);
+                }
+                linear_emit_live_errors(f, live, id_to_inst, emitted, dctx, path);
+                live.clear();
+            } else if inst.op == IOP_UNREACHABLE() {
+                live.clear();
+            } else {
+                linear_apply_inst(inst, live, id_to_inst, phi_arms);
+            }
+            ii = ii + 1;
+        }
+        bi2 = bi2 + 1;
+    }
+}
+
+fn linear_transfer_block(blk: IrBlock, incoming: Vec<i64>, id_to_inst: Vec<IrInst>, phi_arms: Vec<Vec<i64>>) -> Vec<i64> {
+    let live: Vec<i64> = Vec::new();
+    linear_union_into(live, incoming);
+    let mut ii: i64 = 0;
+    while ii < blk.insts.len() {
+        let inst: IrInst = blk.insts[ii];
+        if inst.op == IOP_RETURN() {
+            if inst.args.len() > 0 {
+                linear_remove_origins(live, inst.args[0], id_to_inst, phi_arms);
+            }
+            live.clear();
+        } else if inst.op == IOP_UNREACHABLE() {
+            live.clear();
+        } else {
+            linear_apply_inst(inst, live, id_to_inst, phi_arms);
+        }
+        ii = ii + 1;
+    }
+    live
+}
+
+fn linear_apply_inst(inst: IrInst, live: Vec<i64>, id_to_inst: Vec<IrInst>, phi_arms: Vec<Vec<i64>>) {
+    if inst.ty == ITY_LPTR() && (inst.op == IOP_GET_ARG() || inst.op == IOP_REGION_ALLOC() || inst.op == IOP_CALL()) {
+        linear_insert_i64(live, inst.id);
+    }
+    if inst.op == IOP_LINEAR_CONSUME() && inst.args.len() > 0 {
+        linear_remove_origins(live, inst.args[0], id_to_inst, phi_arms);
+    }
+}
+
+fn linear_remove_origins(live: Vec<i64>, id: i64, id_to_inst: Vec<IrInst>, phi_arms: Vec<Vec<i64>>) {
+    let origins: Vec<i64> = linear_origins(id, id_to_inst, phi_arms);
+    let mut i: i64 = 0;
+    while i < origins.len() {
+        linear_remove_i64(live, origins[i]);
+        i = i + 1;
+    }
+}
+
+fn linear_origins(id: i64, id_to_inst: Vec<IrInst>, phi_arms: Vec<Vec<i64>>) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let stack: Vec<i64> = Vec::new();
+    let seen: Vec<i64> = Vec::new();
+    stack.push(id);
+    while stack.len() > 0 {
+        let cur: i64 = stack[stack.len() - 1];
+        stack.pop();
+        if region_vec_contains_i64(seen, cur) {
+            continue;
+        }
+        seen.push(cur);
+        if cur >= 0 && cur < phi_arms.len() && phi_arms[cur].len() > 0 {
+            let arms: Vec<i64> = phi_arms[cur];
+            let mut ai: i64 = 0;
+            while ai < arms.len() {
+                stack.push(arms[ai]);
+                ai = ai + 1;
+            }
+        } else if cur >= 0 && cur < id_to_inst.len() {
+            let inst: IrInst = id_to_inst[cur];
+            if inst.id >= 0 {
+                if inst.op == IOP_UPSILON() && inst.args.len() > 0 {
+                    stack.push(inst.args[0]);
+                } else if inst.ty == ITY_LPTR() {
+                    linear_insert_i64(out, cur);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn linear_predecessors(f: IrFunction) -> Vec<Vec<i64>> {
+    let preds: Vec<Vec<i64>> = Vec::new();
+    let n: i64 = f.blocks.len();
+    let mut i: i64 = 0;
+    while i < n {
+        preds.push(Vec::new());
+        i = i + 1;
+    }
+    let mut bi: i64 = 0;
+    while bi < n {
+        let succs: Vec<i64> = linear_successors(f.blocks[bi]);
+        let mut si: i64 = 0;
+        while si < succs.len() {
+            let s: i64 = succs[si];
+            if s >= 0 && s < n {
+                preds[s].push(bi);
+            }
+            si = si + 1;
+        }
+        bi = bi + 1;
+    }
+    preds
+}
+
+fn linear_successors(blk: IrBlock) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let n: i64 = blk.insts.len();
+    if n == 0 { return out; }
+    let inst: IrInst = blk.insts[n - 1];
+    if inst.op == IOP_BRANCH() && inst.dk == IDATA_BRANCH_TARGETS() {
+        out.push(inst.dv);
+        out.push(inst.dv2);
+    } else if inst.op == IOP_JUMP() && inst.dk == IDATA_JUMP_TARGET() {
+        out.push(inst.dv);
+    }
+    out
+}
+
+fn linear_emit_live_errors(f: IrFunction, live: Vec<i64>, id_to_inst: Vec<IrInst>, emitted: Vec<i64>, dctx: DiagCtx, path: String) {
+    let mut i: i64 = 0;
+    while i < live.len() {
+        let id: i64 = live[i];
+        if !region_vec_contains_i64(emitted, id) {
+            emitted.push(id);
+            let name: String = linear_local_name(f, id);
+            let inst: IrInst = {
+                if id >= 0 && id < id_to_inst.len() {
+                    id_to_inst[id]
+                } else {
+                    ir_inst_new(-1, 0, 0, Vec::new(), 0, 0, 0, String::from(""))
+                }
+            };
+            let msg: String = String::from("linear value `");
+            msg.push_str(name);
+            msg.push_str(String::from("` is not consumed before its region closes"));
+            let d: Diagnostic = diag_error(EC_REGION_LINEAR(), msg, path, inst.ostart, inst.olen);
+            diag_add_hint(d, String::from("consume the linear value before this scope exits, or return it to transfer the obligation to the caller"));
+            diag_ctx_emit(dctx, d);
+        }
+        i = i + 1;
+    }
+}
+
+fn linear_local_name(f: IrFunction, id: i64) -> String {
+    let mut i: i64 = 0;
+    while i < f.local_names_ids.len() {
+        if f.local_names_ids[i] == id {
+            return f.local_names_strs[i];
+        }
+        i = i + 1;
+    }
+    let s: String = String::from("%");
+    s.push_str(i64_to_string(id));
+    s
+}
+
+fn linear_union_into(dst: Vec<i64>, src: Vec<i64>) {
+    let mut i: i64 = 0;
+    while i < src.len() {
+        linear_insert_i64(dst, src[i]);
+        i = i + 1;
+    }
+}
+
+fn linear_insert_i64(v: Vec<i64>, val: i64) {
+    if !region_vec_contains_i64(v, val) {
+        v.push(val);
+    }
+}
+
+fn linear_remove_i64(v: Vec<i64>, val: i64) {
+    let mut i: i64 = 0;
+    while i < v.len() {
+        if v[i] == val {
+            let last: i64 = v[v.len() - 1];
+            v[i] = last;
+            v.pop();
+            return;
+        }
+        i = i + 1;
+    }
+}
+
+fn linear_vec_eq(a: Vec<i64>, b: Vec<i64>) -> bool {
+    if a.len() != b.len() { return false; }
+    let mut i: i64 = 0;
+    while i < a.len() {
+        if a[i] != b[i] { return false; }
+        i = i + 1;
+    }
+    true
 }
 
 // ---- Lookup helper for parallel inst-region arrays ----

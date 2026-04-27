@@ -17,6 +17,7 @@ struct LowerCtx {
     func_ret_tags: Vec<String>,
     func_ret_vec_elems: Vec<String>,
     struct_names: Vec<String>,
+    linear_struct_names: Vec<String>,
     struct_field_lists: Vec<Vec<String>>,
     struct_field_type_names: Vec<Vec<String>>,
     struct_field_vec_elems: Vec<Vec<String>>,
@@ -77,6 +78,7 @@ fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eid
         func_ret_tags: Vec::new(),
         func_ret_vec_elems: Vec::new(),
         struct_names: Vec::new(),
+        linear_struct_names: Vec::new(),
         struct_field_lists: Vec::new(),
         struct_field_type_names: Vec::new(),
         struct_field_vec_elems: Vec::new(),
@@ -171,6 +173,37 @@ fn lctx_emit(ctx: LowerCtx, op: i64, ty: i64, args: Vec<i64>, dk: i64, dv: i64, 
     let blk: IrBlock = ctx.func.blocks[ctx.current_block];
     blk.insts.push(inst);
     id
+}
+
+fn lctx_set_inst_span(ctx: LowerCtx, inst_id: i64, span: i64) {
+    let start: i64 = span_unpack_start(span);
+    let len: i64 = span_unpack_len(span);
+    let nb: i64 = ctx.func.blocks.len();
+    let mut bi: i64 = 0;
+    while bi < nb {
+        let blk: IrBlock = ctx.func.blocks[bi];
+        let ni: i64 = blk.insts.len();
+        let mut ii: i64 = 0;
+        while ii < ni {
+            let inst: IrInst = blk.insts[ii];
+            if inst.id == inst_id {
+                inst.ostart = start;
+                inst.olen = len;
+                blk.insts[ii] = inst;
+                return;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+}
+
+fn lctx_emit_linear_consume_if_needed(ctx: LowerCtx, inst_id: i64) {
+    if lctx_inst_ty(ctx, inst_id) == ITY_LPTR() {
+        let args: Vec<i64> = Vec::new();
+        args.push(inst_id);
+        lctx_emit(ctx, IOP_LINEAR_CONSUME(), ITY_UNIT(), args, IDATA_NONE(), 0, 0, String::from(""));
+    }
 }
 
 fn lctx_push_scope(ctx: LowerCtx) {
@@ -465,6 +498,10 @@ fn lctx_alloc_vow(ctx: LowerCtx, desc: String, blame: i64, binding_ids: Vec<i64>
 }
 
 fn lower_ast_ty(a: AstArena, tid: i64) -> i64 {
+    lower_ast_ty_linear(a, tid, Vec::new())
+}
+
+fn lower_ast_ty_linear(a: AstArena, tid: i64, linear_names: Vec<String>) -> i64 {
     if tid == -1 { return ITY_UNIT(); }
     let tag: i64 = type_tag(a, tid);
     if tag == TY_UNIT() { return ITY_UNIT(); }
@@ -480,6 +517,7 @@ fn lower_ast_ty(a: AstArena, tid: i64) -> i64 {
         if name == String::from("bool") { return ITY_BOOL(); }
         if name == String::from("String") { return ITY_PTR(); }
         if name == String::from("str") { return ITY_PTR(); }
+        if vec_contains_str(linear_names, name) { return ITY_LPTR(); }
         return ITY_PTR();
     }
     if tag == TY_GENERIC() { return ITY_PTR(); }
@@ -487,6 +525,10 @@ fn lower_ast_ty(a: AstArena, tid: i64) -> i64 {
     if tag == TY_SLICE() { return ITY_PTR(); }
     if tag == TY_TUPLE() { return ITY_PTR(); }
     -1
+}
+
+fn lctx_lower_ast_ty(ctx: LowerCtx, tid: i64) -> i64 {
+    lower_ast_ty_linear(ctx.arena, tid, ctx.linear_struct_names)
 }
 
 fn lower_ast_type_tag_name(a: AstArena, tid: i64) -> String {
@@ -1000,7 +1042,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let mut ai: i64 = 0;
             while ai < nargs {
                 let arg_eid: i64 = list_get(a, args_lid, ai);
-                let arg_id: i64 = lower_expr(ctx, arg_eid);
+                let arg_id: i64 = lower_consumed_expr(ctx, arg_eid);
                 call_args.push(arg_id);
                 ai = ai + 1;
             }
@@ -1014,7 +1056,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let mut ai: i64 = 0;
             while ai < nargs {
                 let arg_eid: i64 = list_get(a, args_lid, ai);
-                let arg_id: i64 = lower_expr(ctx, arg_eid);
+                let arg_id: i64 = lower_consumed_expr(ctx, arg_eid);
                 call_args.push(arg_id);
                 ai = ai + 1;
             }
@@ -1056,12 +1098,13 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let mut ai: i64 = 0;
             while ai < nargs {
                 let arg_eid: i64 = list_get(a, args_lid, ai);
-                let arg_id: i64 = lower_expr(ctx, arg_eid);
+                let arg_id: i64 = lower_consumed_expr(ctx, arg_eid);
                 call_args.push(arg_id);
                 ai = ai + 1;
             }
             let ret_ty: i64 = ctx.func_ret_tys[fidx];
             let result: i64 = lctx_emit(ctx, IOP_CALL(), ret_ty, call_args, IDATA_CALL_TARGET(), fidx, 0, String::from(""));
+            lctx_set_inst_span(ctx, result, expr_span(a, eid));
             // Tag but don't track: can't distinguish owned heap from arena alias without ownership annotations.
             let ret_tag: String = ctx.func_ret_tags[fidx];
             if ret_tag.len() > 0 {
@@ -1078,7 +1121,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let mut ai: i64 = 0;
         while ai < nargs {
             let arg_eid: i64 = list_get(a, args_lid, ai);
-            let arg_id: i64 = lower_expr(ctx, arg_eid);
+            let arg_id: i64 = lower_consumed_expr(ctx, arg_eid);
             call_args.push(arg_id);
             ai = ai + 1;
         }
@@ -1796,6 +1839,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         if ctx.cur_vow_lid != -1 {
             lower_ensures_clauses(ctx, ctx.cur_vow_lid, val_id);
         }
+        lctx_emit_linear_consume_if_needed(ctx, val_id);
         lctx_emit_return_frees(ctx, val_id);
         let ret_args: Vec<i64> = Vec::new();
         ret_args.push(val_id);
@@ -1905,7 +1949,15 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         };
         let alloc_size: i64 = (actual_n + 1) * 8;
         let alloc_args: Vec<i64> = Vec::new();
-        let ptr_id: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), ITY_PTR(), alloc_args, IDATA_ALLOC_SIZE(), alloc_size, 8, String::from(""));
+        let alloc_ty: i64 = {
+            if vec_contains_str(ctx.linear_struct_names, struct_name) {
+                ITY_LPTR()
+            } else {
+                ITY_PTR()
+            }
+        };
+        let ptr_id: i64 = lctx_emit(ctx, IOP_REGION_ALLOC(), alloc_ty, alloc_args, IDATA_ALLOC_SIZE(), alloc_size, 8, String::from(""));
+        lctx_set_inst_span(ctx, ptr_id, expr_span(a, eid));
         lctx_tag(ctx, ptr_id, struct_name);
         let mut region_tag: String = String::from("region:");
         region_tag.push_str(i64_to_string(alloc_size));
@@ -1916,7 +1968,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let fval_eid: i64 = list_get(a, fields_lid, fi * 2 + 1);
             let fname: String = arena_str(a, fname_sid);
             let fidx: i64 = lctx_struct_field_index(ctx, struct_name, fname);
-            let val_id: i64 = lower_expr(ctx, fval_eid);
+            let val_id: i64 = lower_consumed_expr(ctx, fval_eid);
             if fidx != -1 {
                 let fs_args: Vec<i64> = Vec::new();
                 fs_args.push(ptr_id);
@@ -2014,7 +2066,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let mut pi: i64 = 0;
         while pi < n_payload {
             let payload_eid: i64 = list_get(a, fields_lid, pi);
-            let val_id: i64 = lower_expr(ctx, payload_eid);
+            let val_id: i64 = lower_consumed_expr(ctx, payload_eid);
             let pfs_args: Vec<i64> = Vec::new();
             pfs_args.push(ptr_id);
             pfs_args.push(val_id);
@@ -2186,11 +2238,11 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             if method_name == String::from("insert") {
                 let k_id: i64 = {
                     let ae: i64 = list_get(a, args_lid, 0);
-                    lower_expr(ctx, ae)
+                    lower_consumed_expr(ctx, ae)
                 };
                 let v_id: i64 = {
                     let ae: i64 = list_get(a, args_lid, 1);
-                    lower_expr(ctx, ae)
+                    lower_consumed_expr(ctx, ae)
                 };
                 let call_args: Vec<i64> = Vec::new();
                 call_args.push(recv_id);
@@ -2240,7 +2292,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let elem_id: i64 = {
                 if nargs > 0 {
                     let ae: i64 = list_get(a, args_lid, 0);
-                    lower_expr(ctx, ae)
+                    lower_consumed_expr(ctx, ae)
                 } else {
                     let u_args: Vec<i64> = Vec::new();
                     lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
@@ -2606,6 +2658,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let val_eid: i64 = expr_a(a, eid);
             if val_eid != -1 {
                 let val_id: i64 = lower_expr(ctx, val_eid);
+                lctx_emit_linear_consume_if_needed(ctx, val_id);
                 let is_loop_idx: i64 = ctx.loop_is_loop.len() - 1;
                 let is_loop: i64 = ctx.loop_is_loop[is_loop_idx];
                 if is_loop == 1 {
@@ -2695,7 +2748,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let target_ast_tid: i64 = expr_b(a, eid);
         let val_id: i64 = lower_expr(ctx, inner_eid);
         let src_ty: i64 = lctx_inst_ty(ctx, val_id);
-        let tgt_ty: i64 = lower_ast_ty(a, target_ast_tid);
+        let tgt_ty: i64 = lctx_lower_ast_ty(ctx, target_ast_tid);
         if src_ty == ITY_I64() && tgt_ty == ITY_U64() {
             let inner_tag: i64 = expr_tag(a, inner_eid);
             if inner_tag == EXPR_LIT_INT() {
@@ -2730,6 +2783,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
     lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
 }
 
+fn lower_consumed_expr(ctx: LowerCtx, eid: i64) -> i64 {
+    let id: i64 = lower_expr(ctx, eid);
+    lctx_emit_linear_consume_if_needed(ctx, id);
+    id
+}
+
 fn lower_stmt(ctx: LowerCtx, sid: i64) {
     let a: AstArena = ctx.arena;
     let tag: i64 = stmt_tag(a, sid);
@@ -2738,6 +2797,7 @@ fn lower_stmt(ctx: LowerCtx, sid: i64) {
         let ann_tid: i64 = stmt_b(a, sid);
         let init_eid: i64 = stmt_c(a, sid);
         let mut val: i64 = lower_expr(ctx, init_eid);
+        lctx_set_inst_span(ctx, val, stmt_span(a, sid));
         let ptag: i64 = pat_tag(a, pat_id);
         if ptag == PAT_IDENT() {
             let name_sid: i64 = pat_a(a, pat_id);
@@ -3114,7 +3174,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     let vow_lid: i64 = fn_vow_lid(a, fid);
     let params_lid: i64 = fn_params_lid(a, fid);
 
-    let ir_ret: i64 = lower_ast_ty(a, ret_tid);
+    let ir_ret: i64 = lctx_lower_ast_ty(ctx, ret_tid);
     let func: IrFunction = ir_function_new(0, name, ir_ret, eff);
     let entry: IrBlock = ir_block_new(0);
     func.blocks.push(entry);
@@ -3146,10 +3206,11 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     while pi < nparams {
         let pname_sid: i64 = list_get(a, params_lid, pi * 3);
         let ptid: i64 = list_get(a, params_lid, pi * 3 + 1);
-        let pty: i64 = lower_ast_ty(a, ptid);
+        let pty: i64 = lctx_lower_ast_ty(ctx, ptid);
         func.params.push(pty);
         let arg_args: Vec<i64> = Vec::new();
         let arg_id: i64 = lctx_emit(ctx, IOP_GET_ARG(), pty, arg_args, IDATA_ARG_INDEX(), pi, 0, String::from(""));
+        lctx_set_inst_span(ctx, arg_id, fn_span(a, fid));
         let pname: String = arena_str(a, pname_sid);
         func.param_names.push(pname);
 
@@ -3187,6 +3248,8 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
             }
         }
 
+        ctx.func.local_names_ids.push(arg_id);
+        ctx.func.local_names_strs.push(pname);
         lctx_define(ctx, pname, arg_id);
         pi = pi + 1;
     }
@@ -3229,6 +3292,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
         if vow_lid != -1 {
             lower_ensures_clauses(ctx, vow_lid, trailing);
         }
+        lctx_emit_linear_consume_if_needed(ctx, trailing);
         lctx_emit_return_frees(ctx, trailing);
         let ret_args: Vec<i64> = Vec::new();
         ret_args.push(trailing);
@@ -3249,6 +3313,7 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>, file_path: String) -> IrModul
     let func_ret_tags: Vec<String> = Vec::new();
     let func_ret_vec_elems: Vec<String> = Vec::new();
     let struct_names: Vec<String> = Vec::new();
+    let linear_struct_names: Vec<String> = Vec::new();
     let struct_field_lists: Vec<Vec<String>> = Vec::new();
     let struct_field_type_names: Vec<Vec<String>> = Vec::new();
     let struct_field_vec_elems: Vec<Vec<String>> = Vec::new();
@@ -3256,6 +3321,20 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>, file_path: String) -> IrModul
     let enum_variant_lists: Vec<Vec<String>> = Vec::new();
 
     let n_items: i64 = m.items.len();
+    let mut lsi: i64 = 0;
+    while lsi < n_items {
+        let item0: i64 = m.items[lsi];
+        if item_kind(item0) == ITEM_STRUCT() {
+            let sid0: i64 = item_id(item0);
+            let is_linear0: i64 = a.sdef_data[sid0 * 4 + 2];
+            if is_linear0 == 1 {
+                let sname_sid0: i64 = sdef_name_sid(a, sid0);
+                linear_struct_names.push(arena_str(a, sname_sid0));
+            }
+        }
+        lsi = lsi + 1;
+    }
+
     let mut ii: i64 = 0;
     while ii < n_items {
         let item: i64 = m.items[ii];
@@ -3265,7 +3344,7 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>, file_path: String) -> IrModul
             let name_sid: i64 = fn_name_sid(a, iid);
             let name: String = arena_str(a, name_sid);
             let ret_tid: i64 = fn_ret_ast_tid(a, iid);
-            let ir_ret: i64 = lower_ast_ty(a, ret_tid);
+            let ir_ret: i64 = lower_ast_ty_linear(a, ret_tid, linear_struct_names);
             func_names.push(name);
             func_ret_tys.push(ir_ret);
             func_ret_tags.push(lower_ast_type_tag_name(a, ret_tid));
@@ -3335,7 +3414,7 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>, file_path: String) -> IrModul
                     }
                 };
                 fvec_elems.push(fve);
-                let ir_ty: i64 = lower_ast_ty(a, ftid);
+                let ir_ty: i64 = lower_ast_ty_linear(a, ftid, linear_struct_names);
                 let fl: IrFieldLayout = IrFieldLayout { name: fname, ty: ir_ty };
                 ir_fields.push(fl);
                 fi = fi + 1;
@@ -3366,7 +3445,7 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>, file_path: String) -> IrModul
                 let mut pi: i64 = 0;
                 while pi < n_payload {
                     let p_ast_tid: i64 = list_get(a, payload_lid, pi);
-                    let p_ir_ty: i64 = lower_ast_ty(a, p_ast_tid);
+                    let p_ir_ty: i64 = lower_ast_ty_linear(a, p_ast_tid, linear_struct_names);
                     let fl: IrFieldLayout = IrFieldLayout { name: String::from(""), ty: p_ir_ty };
                     payload.push(fl);
                     pi = pi + 1;
@@ -3446,6 +3525,7 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>, file_path: String) -> IrModul
     ctx.func_ret_tags = func_ret_tags;
     ctx.func_ret_vec_elems = func_ret_vec_elems;
     ctx.struct_names = struct_names;
+    ctx.linear_struct_names = linear_struct_names;
     ctx.struct_field_lists = struct_field_lists;
     ctx.struct_field_type_names = struct_field_type_names;
     ctx.struct_field_vec_elems = struct_field_vec_elems;

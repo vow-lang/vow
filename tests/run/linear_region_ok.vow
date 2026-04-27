@@ -1,0 +1,39 @@
+module LinearRegionOk
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn same_block() -> i64 {
+    let h: Handle = Handle { fd: 1 };
+    let v: Vec<Handle> = Vec::new();
+    v.push(h);
+    0
+}
+
+fn nested_block() -> i64 {
+    let h: Handle = Handle { fd: 2 };
+    let v: Vec<Handle> = Vec::new();
+    {
+        v.push(h);
+    }
+    0
+}
+
+fn transfer_return(h: Handle, c: bool) -> Handle {
+    if c {
+        h
+    } else {
+        h
+    }
+}
+
+fn main() -> i32 {
+    same_block();
+    nested_block();
+    let h: Handle = Handle { fd: 3 };
+    let h2: Handle = transfer_return(h, true);
+    let v: Vec<Handle> = Vec::new();
+    v.push(h2);
+    0
+}
