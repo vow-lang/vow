@@ -20,6 +20,10 @@ fn nested_block() -> i64 {
     0
 }
 
+// Both arms reference `h`; this is *not* a double-consume because the
+// branches are mutually exclusive at runtime. Each branch's Upsilon
+// transfers the same `GetArg(h)` origin to the if-Phi on its own path,
+// so the analysis sees `h` discharged exactly once per execution path.
 fn transfer_return(h: Handle, c: bool) -> Handle {
     if c {
         h
