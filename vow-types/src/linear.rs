@@ -46,9 +46,28 @@ pub fn check_linear_usage(
 
     check_block(&fn_def.body, &mut tracker, env, file, emitter);
 
-    // Region-linear checking runs after region inference and reports obligations
-    // that remain live at a region close. This pass only rejects uses that are
-    // immediately invalid before region placement is known.
+    // Backstop for linear-typed values that the AST tracker can see but the
+    // post-region pass cannot. The region pass only seeds `live` from
+    // instructions whose IR type is `LinearPtr`, but several producers (e.g.
+    // `FieldGet`/`Index` on `Vec<Linear>`) currently lower as `i64`, so
+    // programs like `let x: Handle = v[0]; 0` would otherwise compile
+    // silently. The branch logic above defers partial-consume cases to the
+    // region pass via `MaybeConsumed`; this scan only flags values that are
+    // unambiguously `Available` (i.e. never touched on any path).
+    for (name, state) in &tracker.vars {
+        if let ConsumeState::Available(def_span) = state {
+            emit_violation(
+                file,
+                emitter,
+                format!("linear value `{name}` is never consumed"),
+                *def_span,
+                Blame::Callee,
+                vec![format!(
+                    "consume `{name}` by passing it to a function or using drop()"
+                )],
+            );
+        }
+    }
 }
 
 fn is_linear_ast_type(ast_ty: &vow_syntax::ast::Type, env: &TypeEnv) -> bool {
@@ -551,19 +570,6 @@ mod tests {
     }
 
     #[test]
-    fn test_linear_never_consumed_deferred_to_region_check() {
-        let env = make_env_with_linear_struct("FileHandle");
-        let params = vec![make_param("h", named_type("FileHandle"))];
-        let body = empty_block();
-        let fn_def = make_fn_def(params, body);
-
-        let mut emitter = TestEmitter(vec![]);
-        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
-
-        assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
-    }
-
-    #[test]
     fn test_linear_consumed_twice_error() {
         let env = make_env_with_linear_struct("FileHandle");
         let params = vec![make_param("h", named_type("FileHandle"))];
@@ -753,35 +759,6 @@ mod tests {
     }
 
     #[test]
-    fn test_let_stmt_linear_never_consumed_deferred_to_region_check() {
-        let env = make_env_with_linear_struct("FileHandle");
-        let params = vec![];
-        let let_stmt = Stmt::Let {
-            pattern: Pat {
-                kind: PatKind::Ident {
-                    name: "h".to_string(),
-                    is_mut: false,
-                },
-                span: dummy_span(),
-            },
-            ty: Some(named_type("FileHandle")),
-            init: Box::new(ident_expr("open")),
-            span: dummy_span(),
-        };
-        let body = Block {
-            stmts: vec![let_stmt],
-            trailing_expr: None,
-            span: dummy_span(),
-        };
-        let fn_def = make_fn_def(params, body);
-
-        let mut emitter = TestEmitter(vec![]);
-        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
-
-        assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
-    }
-
-    #[test]
     fn test_let_stmt_non_linear_type_not_tracked() {
         let env = TypeEnv::new();
         let params = vec![];
@@ -882,7 +859,9 @@ mod tests {
         let mut emitter = TestEmitter(vec![]);
         check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
 
-        assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
+        // `return;` doesn't consume `h`; the end-of-function scan still flags it.
+        assert_eq!(emitter.0.len(), 1);
+        assert!(emitter.0[0].message.contains("never consumed"));
     }
 
     // --- While ---
@@ -1021,6 +1000,51 @@ mod tests {
         check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
 
         assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
+    }
+
+    #[test]
+    fn test_linear_never_consumed_error() {
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![make_param("h", named_type("FileHandle"))];
+        let body = empty_block();
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert_eq!(emitter.0.len(), 1);
+        assert!(emitter.0[0].message.contains("never consumed"));
+        assert_eq!(emitter.0[0].code, ErrorCode::LinearTypeViolation);
+    }
+
+    #[test]
+    fn test_let_stmt_linear_never_consumed_error() {
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![];
+        let let_stmt = Stmt::Let {
+            pattern: Pat {
+                kind: PatKind::Ident {
+                    name: "h".to_string(),
+                    is_mut: false,
+                },
+                span: dummy_span(),
+            },
+            ty: Some(named_type("FileHandle")),
+            init: Box::new(ident_expr("open")),
+            span: dummy_span(),
+        };
+        let body = Block {
+            stmts: vec![let_stmt],
+            trailing_expr: None,
+            span: dummy_span(),
+        };
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert_eq!(emitter.0.len(), 1);
+        assert!(emitter.0[0].message.contains("never consumed"));
     }
 
     #[test]
