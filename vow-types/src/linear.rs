@@ -46,14 +46,18 @@ pub fn check_linear_usage(
 
     check_block(&fn_def.body, &mut tracker, env, file, emitter);
 
-    // Backstop for linear let-bindings whose IR producer lowers as i64 (FieldGet/Index of Vec<Linear>); params skip because the region pass already covers GetArg(LinearPtr).
-    let param_names: std::collections::HashSet<&str> =
-        fn_def.params.iter().map(|p| p.name.as_str()).collect();
+    // Backstop for linear let-bindings whose IR producer lowers as i64 (FieldGet/Index of Vec<Linear>); params skip via span (not name) so a shadowing `let h = v[0]` is still flagged.
+    let param_spans: std::collections::HashSet<Span> = fn_def
+        .params
+        .iter()
+        .filter(|p| is_linear_ast_type(&p.ty, env))
+        .map(|p| p.span)
+        .collect();
     for (name, state) in &tracker.vars {
-        if param_names.contains(name.as_str()) {
-            continue;
-        }
         if let ConsumeState::Available(def_span) = state {
+            if param_spans.contains(def_span) {
+                continue;
+            }
             emit_violation(
                 file,
                 emitter,
@@ -1012,6 +1016,41 @@ mod tests {
         check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
 
         assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
+    }
+
+    #[test]
+    fn test_shadowed_param_let_still_flagged() {
+        // `fn(h: Handle) { let h: Handle = ...; 0 }` — the let binding shadows
+        // the param; the backstop must still report the shadowing let by span,
+        // not skip the entry just because its name matches a param name.
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![make_param("h", named_type("FileHandle"))];
+        let let_stmt = Stmt::Let {
+            pattern: Pat {
+                kind: PatKind::Ident {
+                    name: "h".to_string(),
+                    is_mut: false,
+                },
+                span: Span::new(100, 1),
+            },
+            ty: Some(named_type("FileHandle")),
+            init: Box::new(ident_expr("open")),
+            span: Span::new(100, 1),
+        };
+        let body = Block {
+            stmts: vec![let_stmt],
+            trailing_expr: None,
+            span: dummy_span(),
+        };
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert_eq!(emitter.0.len(), 1, "Got: {:?}", emitter.0);
+        assert!(emitter.0[0].message.contains("never consumed"));
+        // The diagnostic must point at the let span, not the param span.
+        assert_eq!(emitter.0[0].primary.byte_offset, 100);
     }
 
     #[test]

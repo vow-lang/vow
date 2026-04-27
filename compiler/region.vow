@@ -449,13 +449,20 @@ fn linear_predecessors(f: IrFunction) -> Vec<Vec<i64>> {
 fn linear_successors(blk: IrBlock) -> Vec<i64> {
     let out: Vec<i64> = Vec::new();
     let n: i64 = blk.insts.len();
-    if n == 0 { return out; }
-    let inst: IrInst = blk.insts[n - 1];
-    if inst.op == IOP_BRANCH() && inst.dk == IDATA_BRANCH_TARGETS() {
-        out.push(inst.dv);
-        out.push(inst.dv2);
-    } else if inst.op == IOP_JUMP() && inst.dk == IDATA_JUMP_TARGET() {
-        out.push(inst.dv);
+    // Scan backward for the last terminal — lowering appends Upsilons after Jump/Branch for phi wiring, so the final inst is not necessarily the terminator.
+    let mut i: i64 = n;
+    while i > 0 {
+        i = i - 1;
+        let inst: IrInst = blk.insts[i];
+        if iop_is_terminal(inst.op) {
+            if inst.op == IOP_BRANCH() && inst.dk == IDATA_BRANCH_TARGETS() {
+                out.push(inst.dv);
+                out.push(inst.dv2);
+            } else if inst.op == IOP_JUMP() && inst.dk == IDATA_JUMP_TARGET() {
+                out.push(inst.dv);
+            }
+            return out;
+        }
     }
     out
 }
