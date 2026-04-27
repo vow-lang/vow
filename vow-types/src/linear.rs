@@ -46,7 +46,7 @@ pub fn check_linear_usage(
 
     check_block(&fn_def.body, &mut tracker, env, file, emitter);
 
-    // Backstop for linear let-bindings whose IR producer lowers as i64 (FieldGet/Index of Vec<Linear>); params skip via span (not name) so a shadowing `let h = v[0]` is still flagged.
+    // Backstop for linear let-bindings whose IR producer lowers as i64 (FieldGet/Index of Vec<Linear>); flags both Available (never consumed) and MaybeConsumed (consumed on some paths) since the region pass can't see those origins. Params skip via span (not name) so a shadowing `let h = v[0]` is still flagged.
     let param_spans: std::collections::HashSet<Span> = fn_def
         .params
         .iter()
@@ -54,21 +54,25 @@ pub fn check_linear_usage(
         .map(|p| p.span)
         .collect();
     for (name, state) in &tracker.vars {
-        if let ConsumeState::Available(def_span) = state {
-            if param_spans.contains(def_span) {
-                continue;
-            }
-            emit_violation(
-                file,
-                emitter,
+        let (def_span, message, hint) = match state {
+            ConsumeState::Available(s) => (
+                *s,
                 format!("linear value `{name}` is never consumed"),
-                *def_span,
-                Blame::Callee,
-                vec![format!(
-                    "consume `{name}` by passing it to a function or using drop()"
-                )],
-            );
+                format!("consume `{name}` by passing it to a function or using drop()"),
+            ),
+            ConsumeState::MaybeConsumed(s) => (
+                *s,
+                format!("linear value `{name}` may not be consumed on every path"),
+                format!(
+                    "ensure `{name}` is consumed on every control-flow path before the function returns"
+                ),
+            ),
+            ConsumeState::Consumed(_) => continue,
+        };
+        if param_spans.contains(&def_span) {
+            continue;
         }
+        emit_violation(file, emitter, message, def_span, Blame::Callee, vec![hint]);
     }
 }
 
