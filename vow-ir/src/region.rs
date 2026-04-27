@@ -288,10 +288,28 @@ fn apply_linear_transfer(
     if inst.ty == Ty::LinearPtr
         && matches!(
             inst.opcode,
-            Opcode::GetArg | Opcode::RegionAlloc | Opcode::Call
+            Opcode::GetArg | Opcode::RegionAlloc | Opcode::Call | Opcode::Phi
         )
     {
+        // A LinearPtr-typed Phi is its own fresh origin: each predecessor
+        // arm transferred its origin into the Phi via Upsilon (handled below),
+        // so leaks must be reported against the merged Phi value rather than
+        // the per-arm origins.
         live.insert(inst.id);
+    }
+    if inst.opcode == Opcode::Upsilon
+        && let Some(&arg) = inst.args.first()
+        && inst_lookup
+            .get(&arg)
+            .is_some_and(|(_, a)| a.ty == Ty::LinearPtr)
+    {
+        // Path-local transfer: the Upsilon hands the arm's origin to the
+        // target Phi. Removing it here keeps the analysis path-conservative —
+        // if a sibling arm fails to transfer, the unmatched origin survives
+        // the merge and is reported as RegionLinear. Note: the Upsilon's
+        // own `ty` is `Ty::Unit` (it produces no value), so we test the
+        // arg's type instead.
+        remove_linear_origins(live, arg, inst_lookup, phi_arms);
     }
     if inst.opcode == Opcode::LinearConsume
         && let Some(&arg) = inst.args.first()
@@ -314,8 +332,14 @@ fn remove_linear_origins(
 fn linear_origins(
     id: InstId,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
-    phi_arms: &BTreeMap<InstId, Vec<InstId>>,
+    _phi_arms: &BTreeMap<InstId, Vec<InstId>>,
 ) -> BTreeSet<InstId> {
+    // A LinearPtr Phi is treated as its own leaf origin (see
+    // `apply_linear_transfer`): per-arm origins are transferred into the Phi
+    // by their Upsilons, and only the Phi itself is left in `live`. Tracing
+    // back through Phi/Upsilon arms here would re-introduce the
+    // path-insensitive double-removal bug (returning a Phi would consume
+    // every possible source origin, masking a leak on the unselected arm).
     let mut out = BTreeSet::new();
     let mut stack = vec![id];
     let mut seen = BTreeSet::new();
@@ -323,18 +347,11 @@ fn linear_origins(
         if !seen.insert(cur) {
             continue;
         }
-        if let Some(arms) = phi_arms.get(&cur) {
-            stack.extend(arms.iter().copied());
-            continue;
-        }
         let Some((_, inst)) = inst_lookup.get(&cur) else {
             continue;
         };
         match inst.opcode {
             Opcode::Upsilon => stack.extend(inst.args.iter().copied()),
-            Opcode::Phi if inst.ty == Ty::LinearPtr => {
-                out.insert(cur);
-            }
             _ if inst.ty == Ty::LinearPtr => {
                 out.insert(cur);
             }

@@ -3818,7 +3818,7 @@ fn skill_full() -> String {
     r.push_str(String::from("### RegionLinear\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Phase:** Region Inference\n"));
-    r.push_str(String::from("**Meaning:** A `linear struct` value can remain live when its owning region closes. Returning the value transfers the linear obligation to the caller; consuming it before the close satisfies the obligation. A true root-pinned linear value may be reported as a warning with a `pin_to_root` hint, while a rodata linear value is an error.\n"));
+    r.push_str(String::from("**Meaning:** A `linear struct` value can remain live when its owning region closes. Returning the value transfers the linear obligation to the caller; consuming it before the close satisfies the obligation.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("linear struct Handle { fd: i64 }\n"));

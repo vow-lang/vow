@@ -103,7 +103,7 @@ fn f(h: Handle) -> Handle {
 ### RegionLinear
 
 **Phase:** Region Inference
-**Meaning:** A `linear struct` value can remain live when its owning region closes. Returning the value transfers the linear obligation to the caller; consuming it before the close satisfies the obligation. A true root-pinned linear value may be reported as a warning with a `pin_to_root` hint, while a rodata linear value is an error.
+**Meaning:** A `linear struct` value can remain live when its owning region closes. Returning the value transfers the linear obligation to the caller; consuming it before the close satisfies the obligation.
 
 ```vow
 linear struct Handle { fd: i64 }
