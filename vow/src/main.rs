@@ -5359,6 +5359,8 @@ fn run_test_command(
         density_pct: 0.0,
     };
 
+    let _ = std::fs::create_dir_all("build");
+
     for test_file in &test_files {
         let start = std::time::Instant::now();
         let file_str = test_file.to_string_lossy().to_string();
