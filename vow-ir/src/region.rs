@@ -188,7 +188,6 @@ fn check_function_linear_regions(
             inst_lookup.insert(inst.id, (block.id, inst));
         }
     }
-    let phi_arms = collect_phi_arms(func);
     let predecessors = predecessor_map(func);
 
     let mut block_in: BTreeMap<BlockId, BTreeSet<InstId>> = BTreeMap::new();
@@ -222,7 +221,7 @@ fn check_function_linear_regions(
                 changed = true;
             }
 
-            let out = transfer_linear_block(&incoming, block, &inst_lookup, &phi_arms);
+            let out = transfer_linear_block(&incoming, block, &inst_lookup);
             if block_out.insert(block.id, out.clone()) != Some(out) {
                 changed = true;
             }
@@ -237,7 +236,7 @@ fn check_function_linear_regions(
             match inst.opcode {
                 Opcode::Return => {
                     if let Some(&arg) = inst.args.first() {
-                        remove_linear_origins(&mut live, arg, &inst_lookup, &phi_arms);
+                        remove_linear_origins(&mut live, arg, &inst_lookup);
                     }
                     emit_live_linear_errors(
                         func,
@@ -251,7 +250,7 @@ fn check_function_linear_regions(
                 Opcode::Unreachable => {
                     live.clear();
                 }
-                _ => apply_linear_transfer(inst, &mut live, &inst_lookup, &phi_arms),
+                _ => apply_linear_transfer(inst, &mut live, &inst_lookup),
             }
         }
     }
@@ -261,19 +260,18 @@ fn transfer_linear_block(
     incoming: &BTreeSet<InstId>,
     block: &crate::types::BasicBlock,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
-    phi_arms: &BTreeMap<InstId, Vec<InstId>>,
 ) -> BTreeSet<InstId> {
     let mut live = incoming.clone();
     for inst in &block.insts {
         match inst.opcode {
             Opcode::Return => {
                 if let Some(&arg) = inst.args.first() {
-                    remove_linear_origins(&mut live, arg, inst_lookup, phi_arms);
+                    remove_linear_origins(&mut live, arg, inst_lookup);
                 }
                 live.clear();
             }
             Opcode::Unreachable => live.clear(),
-            _ => apply_linear_transfer(inst, &mut live, inst_lookup, phi_arms),
+            _ => apply_linear_transfer(inst, &mut live, inst_lookup),
         }
     }
     live
@@ -283,7 +281,6 @@ fn apply_linear_transfer(
     inst: &Inst,
     live: &mut BTreeSet<InstId>,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
-    phi_arms: &BTreeMap<InstId, Vec<InstId>>,
 ) {
     if inst.ty == Ty::LinearPtr
         && matches!(
@@ -309,12 +306,12 @@ fn apply_linear_transfer(
         // the merge and is reported as RegionLinear. Note: the Upsilon's
         // own `ty` is `Ty::Unit` (it produces no value), so we test the
         // arg's type instead.
-        remove_linear_origins(live, arg, inst_lookup, phi_arms);
+        remove_linear_origins(live, arg, inst_lookup);
     }
     if inst.opcode == Opcode::LinearConsume
         && let Some(&arg) = inst.args.first()
     {
-        remove_linear_origins(live, arg, inst_lookup, phi_arms);
+        remove_linear_origins(live, arg, inst_lookup);
     }
 }
 
@@ -322,9 +319,8 @@ fn remove_linear_origins(
     live: &mut BTreeSet<InstId>,
     id: InstId,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
-    phi_arms: &BTreeMap<InstId, Vec<InstId>>,
 ) {
-    for origin in linear_origins(id, inst_lookup, phi_arms) {
+    for origin in linear_origins(id, inst_lookup) {
         live.remove(&origin);
     }
 }
@@ -332,7 +328,6 @@ fn remove_linear_origins(
 fn linear_origins(
     id: InstId,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
-    _phi_arms: &BTreeMap<InstId, Vec<InstId>>,
 ) -> BTreeSet<InstId> {
     // A LinearPtr Phi is treated as its own leaf origin (see
     // `apply_linear_transfer`): per-arm origins are transferred into the Phi

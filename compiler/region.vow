@@ -270,13 +270,12 @@ fn check_linear_regions_module(m: IrModule, dctx: DiagCtx, path: String) {
     while fi < n {
         let f: IrFunction = m.functions[fi];
         let id_to_inst: Vec<IrInst> = build_id_to_inst(f);
-        let phi_arms: Vec<Vec<i64>> = build_phi_arms(f, id_to_inst.len());
-        check_linear_regions_function(f, id_to_inst, phi_arms, dctx, path);
+        check_linear_regions_function(f, id_to_inst, dctx, path);
         fi = fi + 1;
     }
 }
 
-fn check_linear_regions_function(f: IrFunction, id_to_inst: Vec<IrInst>, phi_arms: Vec<Vec<i64>>, dctx: DiagCtx, path: String) {
+fn check_linear_regions_function(f: IrFunction, id_to_inst: Vec<IrInst>, dctx: DiagCtx, path: String) {
     let n_blocks: i64 = f.blocks.len();
     let preds: Vec<Vec<i64>> = linear_predecessors(f);
     let block_in: Vec<Vec<i64>> = Vec::new();
@@ -310,7 +309,7 @@ fn check_linear_regions_function(f: IrFunction, id_to_inst: Vec<IrInst>, phi_arm
                 block_in[bi] = incoming;
                 changed = true;
             }
-            let out: Vec<i64> = linear_transfer_block(f.blocks[bi], block_in[bi], id_to_inst, phi_arms);
+            let out: Vec<i64> = linear_transfer_block(f.blocks[bi], block_in[bi], id_to_inst);
             sort_i64_vec_inplace(out);
             if !linear_vec_eq(block_out[bi], out) {
                 block_out[bi] = out;
@@ -330,14 +329,14 @@ fn check_linear_regions_function(f: IrFunction, id_to_inst: Vec<IrInst>, phi_arm
             let inst: IrInst = blk.insts[ii];
             if inst.op == IOP_RETURN() {
                 if inst.args.len() > 0 {
-                    linear_remove_origins(live, inst.args[0], id_to_inst, phi_arms);
+                    linear_remove_origins(live, inst.args[0], id_to_inst);
                 }
                 linear_emit_live_errors(f, live, id_to_inst, emitted, dctx, path);
                 live.clear();
             } else if inst.op == IOP_UNREACHABLE() {
                 live.clear();
             } else {
-                linear_apply_inst(inst, live, id_to_inst, phi_arms);
+                linear_apply_inst(inst, live, id_to_inst);
             }
             ii = ii + 1;
         }
@@ -345,7 +344,7 @@ fn check_linear_regions_function(f: IrFunction, id_to_inst: Vec<IrInst>, phi_arm
     }
 }
 
-fn linear_transfer_block(blk: IrBlock, incoming: Vec<i64>, id_to_inst: Vec<IrInst>, phi_arms: Vec<Vec<i64>>) -> Vec<i64> {
+fn linear_transfer_block(blk: IrBlock, incoming: Vec<i64>, id_to_inst: Vec<IrInst>) -> Vec<i64> {
     let live: Vec<i64> = Vec::new();
     linear_union_into(live, incoming);
     let mut ii: i64 = 0;
@@ -353,20 +352,20 @@ fn linear_transfer_block(blk: IrBlock, incoming: Vec<i64>, id_to_inst: Vec<IrIns
         let inst: IrInst = blk.insts[ii];
         if inst.op == IOP_RETURN() {
             if inst.args.len() > 0 {
-                linear_remove_origins(live, inst.args[0], id_to_inst, phi_arms);
+                linear_remove_origins(live, inst.args[0], id_to_inst);
             }
             live.clear();
         } else if inst.op == IOP_UNREACHABLE() {
             live.clear();
         } else {
-            linear_apply_inst(inst, live, id_to_inst, phi_arms);
+            linear_apply_inst(inst, live, id_to_inst);
         }
         ii = ii + 1;
     }
     live
 }
 
-fn linear_apply_inst(inst: IrInst, live: Vec<i64>, id_to_inst: Vec<IrInst>, phi_arms: Vec<Vec<i64>>) {
+fn linear_apply_inst(inst: IrInst, live: Vec<i64>, id_to_inst: Vec<IrInst>) {
     if inst.ty == ITY_LPTR() && (inst.op == IOP_GET_ARG() || inst.op == IOP_REGION_ALLOC() || inst.op == IOP_CALL() || inst.op == IOP_PHI()) {
         linear_insert_i64(live, inst.id);
     }
@@ -376,17 +375,17 @@ fn linear_apply_inst(inst: IrInst, live: Vec<i64>, id_to_inst: Vec<IrInst>, phi_
         if arg_id >= 0 && arg_id < id_to_inst.len() {
             let arg_inst: IrInst = id_to_inst[arg_id];
             if arg_inst.id >= 0 && arg_inst.ty == ITY_LPTR() {
-                linear_remove_origins(live, arg_id, id_to_inst, phi_arms);
+                linear_remove_origins(live, arg_id, id_to_inst);
             }
         }
     }
     if inst.op == IOP_LINEAR_CONSUME() && inst.args.len() > 0 {
-        linear_remove_origins(live, inst.args[0], id_to_inst, phi_arms);
+        linear_remove_origins(live, inst.args[0], id_to_inst);
     }
 }
 
-fn linear_remove_origins(live: Vec<i64>, id: i64, id_to_inst: Vec<IrInst>, phi_arms: Vec<Vec<i64>>) {
-    let origins: Vec<i64> = linear_origins(id, id_to_inst, phi_arms);
+fn linear_remove_origins(live: Vec<i64>, id: i64, id_to_inst: Vec<IrInst>) {
+    let origins: Vec<i64> = linear_origins(id, id_to_inst);
     let mut i: i64 = 0;
     while i < origins.len() {
         linear_remove_i64(live, origins[i]);
@@ -394,7 +393,7 @@ fn linear_remove_origins(live: Vec<i64>, id: i64, id_to_inst: Vec<IrInst>, phi_a
     }
 }
 
-fn linear_origins(id: i64, id_to_inst: Vec<IrInst>, phi_arms: Vec<Vec<i64>>) -> Vec<i64> {
+fn linear_origins(id: i64, id_to_inst: Vec<IrInst>) -> Vec<i64> {
     // A LinearPtr Phi is its own leaf origin — its arms have already been
     // transferred into it by their Upsilons (see `linear_apply_inst`).
     // Tracing through the Phi here would re-introduce a path-insensitive

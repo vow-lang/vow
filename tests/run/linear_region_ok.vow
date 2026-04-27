@@ -28,9 +28,18 @@ fn transfer_return(h: Handle, c: bool) -> Handle {
     }
 }
 
+fn vec_set_transfer() -> i64 {
+    let h: Handle = Handle { fd: 4 };
+    let v: Vec<Handle> = Vec::new();
+    v.push(Handle { fd: 0 });
+    v[0] = h;
+    0
+}
+
 fn main() -> i32 {
     same_block();
     nested_block();
+    vec_set_transfer();
     let h: Handle = Handle { fd: 3 };
     let h2: Handle = transfer_return(h, true);
     let v: Vec<Handle> = Vec::new();

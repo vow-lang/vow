@@ -1124,6 +1124,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         FIELD_IDX_SENTINEL
                     } as u32;
                     if field_idx != FIELD_IDX_SENTINEL as u32 {
+                        // Storing into a heap field transfers ownership of a
+                        // linear RHS into the container. Without an explicit
+                        // LinearConsume the post-region pass would still see
+                        // the moved origin live and fire a spurious
+                        // RegionLinear at the function's return.
+                        ctx.emit_linear_consume_if_needed(new_val, span);
                         ctx.emit(
                             Opcode::FieldSet,
                             Ty::Unit,
@@ -1136,6 +1142,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ExprKind::Index { base, index } => {
                     let vec_ptr = lower_expr(ctx, base);
                     let idx_id = lower_expr(ctx, index);
+                    // Same rationale as FieldSet: the vec store moves the
+                    // RHS into the container, discharging its linear obligation.
+                    ctx.emit_linear_consume_if_needed(new_val, span);
                     ctx.emit(
                         Opcode::Call,
                         Ty::Unit,

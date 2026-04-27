@@ -1880,6 +1880,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             }
             let fidx: i64 = lctx_struct_field_index(ctx, recv_tag_str, field_name);
             if fidx != -1 {
+                // Field store transfers a linear RHS into the heap container;
+                // the explicit consume keeps the post-region pass from
+                // reporting the moved origin as still-live at function return.
+                lctx_emit_linear_consume_if_needed(ctx, val_id);
                 let fs_args: Vec<i64> = Vec::new();
                 fs_args.push(recv_id);
                 fs_args.push(val_id);
@@ -1893,6 +1897,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let recv_id: i64 = lower_expr(ctx, recv_eid);
             let idx_id: i64 = lower_expr(ctx, idx_eid);
             let val_id: i64 = lower_expr(ctx, rhs_eid);
+            // Same rationale as FieldSet — vec store moves the value into the
+            // container, discharging its linear obligation.
+            lctx_emit_linear_consume_if_needed(ctx, val_id);
             let set_args: Vec<i64> = Vec::new();
             set_args.push(recv_id);
             set_args.push(idx_id);
