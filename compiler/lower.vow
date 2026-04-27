@@ -178,9 +178,7 @@ fn lctx_emit(ctx: LowerCtx, op: i64, ty: i64, args: Vec<i64>, dk: i64, dv: i64, 
 fn lctx_set_inst_span(ctx: LowerCtx, inst_id: i64, span: i64) {
     let start: i64 = span_unpack_start(span);
     let len: i64 = span_unpack_len(span);
-    // Fast path: callers patch the just-emitted inst, which is the last entry
-    // in the current block. Avoids an O(n) per-call scan that turns into
-    // O(n^2) over the function (called per param, alloc, let, and call).
+    // Fast path: patch the last inst in current block before falling back to a full O(n) scan.
     let cur_blk: IrBlock = ctx.func.blocks[ctx.current_block];
     let cur_n: i64 = cur_blk.insts.len();
     if cur_n > 0 {
@@ -1880,9 +1878,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             }
             let fidx: i64 = lctx_struct_field_index(ctx, recv_tag_str, field_name);
             if fidx != -1 {
-                // Field store transfers a linear RHS into the heap container;
-                // the explicit consume keeps the post-region pass from
-                // reporting the moved origin as still-live at function return.
+                // Field store transfers a linear RHS into the heap container.
                 lctx_emit_linear_consume_if_needed(ctx, val_id);
                 let fs_args: Vec<i64> = Vec::new();
                 fs_args.push(recv_id);
@@ -1897,8 +1893,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let recv_id: i64 = lower_expr(ctx, recv_eid);
             let idx_id: i64 = lower_expr(ctx, idx_eid);
             let val_id: i64 = lower_expr(ctx, rhs_eid);
-            // Same rationale as FieldSet — vec store moves the value into the
-            // container, discharging its linear obligation.
+            // Index store transfers a linear RHS into the heap container.
             lctx_emit_linear_consume_if_needed(ctx, val_id);
             let set_args: Vec<i64> = Vec::new();
             set_args.push(recv_id);

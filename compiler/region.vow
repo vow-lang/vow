@@ -323,11 +323,7 @@ fn check_linear_regions_function(f: IrFunction, id_to_inst: Vec<IrInst>, dctx: D
     let mut bi2: i64 = 0;
     while bi2 < n_blocks {
         let blk: IrBlock = f.blocks[bi2];
-        // Vow's Vec<i64> is reference-typed (header copy shares the heap
-        // allocation). Mirror the Rust pass at vow-ir/src/region.rs:233-234
-        // by copying contents into a fresh vec — without this, the
-        // `live.clear()` and `linear_remove_origins` mutations below would
-        // also corrupt block_in[bi2], breaking any future rerun of the loop.
+        // Copy contents (Vec<i64> is reference-typed; aliasing block_in[bi2] would mutate it on clear/remove).
         let live: Vec<i64> = Vec::new();
         linear_union_into(live, block_in[bi2]);
         let mut ii: i64 = 0;
@@ -400,11 +396,7 @@ fn linear_remove_origins(live: Vec<i64>, id: i64, id_to_inst: Vec<IrInst>) {
 }
 
 fn linear_origins(id: i64, id_to_inst: Vec<IrInst>) -> Vec<i64> {
-    // A LinearPtr Phi is its own leaf origin — its arms have already been
-    // transferred into it by their Upsilons (see `linear_apply_inst`).
-    // Tracing through the Phi here would re-introduce a path-insensitive
-    // double-removal: returning a Phi would consume every possible source
-    // origin, masking a leak on the unselected arm.
+    // LinearPtr Phi is a leaf origin — tracing arms here would discharge sibling-path origins (path-insensitive double-removal).
     let out: Vec<i64> = Vec::new();
     let stack: Vec<i64> = Vec::new();
     let seen: Vec<i64> = Vec::new();

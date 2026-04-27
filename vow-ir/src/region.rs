@@ -246,6 +246,7 @@ fn check_function_linear_regions(
                         &mut emitted,
                         diagnostics,
                     );
+                    live.clear();
                 }
                 Opcode::Unreachable => {
                     live.clear();
@@ -288,10 +289,7 @@ fn apply_linear_transfer(
             Opcode::GetArg | Opcode::RegionAlloc | Opcode::Call | Opcode::Phi
         )
     {
-        // A LinearPtr-typed Phi is its own fresh origin: each predecessor
-        // arm transferred its origin into the Phi via Upsilon (handled below),
-        // so leaks must be reported against the merged Phi value rather than
-        // the per-arm origins.
+        // LinearPtr Phi is its own fresh origin (arms are transferred in via Upsilon).
         live.insert(inst.id);
     }
     if inst.opcode == Opcode::Upsilon
@@ -300,12 +298,7 @@ fn apply_linear_transfer(
             .get(&arg)
             .is_some_and(|(_, a)| a.ty == Ty::LinearPtr)
     {
-        // Path-local transfer: the Upsilon hands the arm's origin to the
-        // target Phi. Removing it here keeps the analysis path-conservative —
-        // if a sibling arm fails to transfer, the unmatched origin survives
-        // the merge and is reported as RegionLinear. Note: the Upsilon's
-        // own `ty` is `Ty::Unit` (it produces no value), so we test the
-        // arg's type instead.
+        // Path-local transfer of the arm's origin into the target Phi (Upsilon ty is Unit, hence the arg-type check).
         remove_linear_origins(live, arg, inst_lookup);
     }
     if inst.opcode == Opcode::LinearConsume
@@ -329,12 +322,7 @@ fn linear_origins(
     id: InstId,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
 ) -> BTreeSet<InstId> {
-    // A LinearPtr Phi is treated as its own leaf origin (see
-    // `apply_linear_transfer`): per-arm origins are transferred into the Phi
-    // by their Upsilons, and only the Phi itself is left in `live`. Tracing
-    // back through Phi/Upsilon arms here would re-introduce the
-    // path-insensitive double-removal bug (returning a Phi would consume
-    // every possible source origin, masking a leak on the unselected arm).
+    // LinearPtr Phi is a leaf origin — tracing through arms here would discharge sibling-path origins (path-insensitive double-removal bug).
     let mut out = BTreeSet::new();
     let mut stack = vec![id];
     let mut seen = BTreeSet::new();

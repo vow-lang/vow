@@ -46,14 +46,7 @@ pub fn check_linear_usage(
 
     check_block(&fn_def.body, &mut tracker, env, file, emitter);
 
-    // Backstop for linear-typed let-bindings whose IR producer lowers as `i64`
-    // (FieldGet/Index of Vec<Linear>), which the post-region pass cannot see
-    // as a live origin. Without this, programs like `let x: Handle = v[0]; 0`
-    // would compile silently. Function parameters are intentionally skipped:
-    // they always lower to `GetArg(LinearPtr)` and the region pass already
-    // reports them as `RegionLinear`, so flagging them here would just produce
-    // a duplicate diagnostic. Partial-consume cases stay in `MaybeConsumed`
-    // (handled by the branch logic above) and defer to the region pass.
+    // Backstop for linear let-bindings whose IR producer lowers as i64 (FieldGet/Index of Vec<Linear>); params skip because the region pass already covers GetArg(LinearPtr).
     let param_names: std::collections::HashSet<&str> =
         fn_def.params.iter().map(|p| p.name.as_str()).collect();
     for (name, state) in &tracker.vars {
