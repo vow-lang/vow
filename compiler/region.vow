@@ -438,6 +438,13 @@ fn analyze_function(
     // "Phase 3 minimum" comment in vow-ir/src/region.rs). Both compilers
     // converge on empty store_effects for now, satisfying the differential
     // gate.
+    //
+    // TODO(#204, Phase 9): when store-effect INFERENCE lands here, the
+    // companion `check_store_conflict` equivalent (currently Rust-only,
+    // see `vow-ir/src/region.rs::check_store_conflict`) MUST land in the
+    // same touch. Inference without conflict emission would let the
+    // self-hosted compiler silently accept programs the Rust compiler
+    // rejects, breaking the differential gate without any visible signal.
 
     // Return whether the summary changed.
     if new_kind != prev_kind { return true; }

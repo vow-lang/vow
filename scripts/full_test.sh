@@ -676,9 +676,9 @@ for name in clamp max callee_blame cegis_broken; do
 done
 echo ""
 
-# ─── Section 10: Test Subcommand ────────────────────────────────────
+# ─── Section 10b: Test Subcommand ───────────────────────────────────
 
-section_begin "Section 10: Test Subcommand"
+section_begin "Section 10b: Test Subcommand"
 
 # Run vowc test with both compilers on compiler/ directory
 rust_test_json=$($RUST test compiler/ 2>/dev/null) || true

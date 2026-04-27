@@ -1037,6 +1037,10 @@ fn origin_to_constraint(origin: &ValueOrigin) -> RegionConstraint {
 ///   * Phi-of-mixed-origins: descend into upsilon arms and reject when
 ///     the joined origin set spans incompatible regions.
 fn check_store_conflict(
+    // Underscore-prefixed because it's unused today, but kept in the
+    // signature so the Phase-9 deferred cases (cross-param,
+    // Phi-of-mixed-origins) can reach the function body without a
+    // signature churn at the call site.
     _func: &Function,
     source_file: &str,
     target_arg_id: InstId,
@@ -1939,7 +1943,7 @@ mod tests {
         // Exactly one diagnostic per violating call site — `infer_regions`
         // runs `analyze_function` in an SCC fixed-point loop and would
         // accumulate one Diagnostic per round without per-iteration
-        // bucketing. See the `last_iter_diagnostics` mechanism in
+        // bucketing. See the `iter_diagnostics` mechanism in
         // `infer_regions`.
         assert_eq!(
             conflicts.len(),
