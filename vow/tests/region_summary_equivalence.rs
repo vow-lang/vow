@@ -38,7 +38,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use vow_diag::Severity;
-use vow_ir::{RegionConstraint, decode_module, encode_module};
+use vow_ir::{decode_module, encode_module, RegionConstraint};
 
 /// Assert canonical-form invariants on every function's summary.
 fn assert_canonical_summaries(module: &vow_ir::Module) {
@@ -150,8 +150,8 @@ fn small_module_uninit_never_leaks_after_round_trip() {
     // run the pass, encode + decode via the public .vmod path, and
     // assert canonical-form invariants survive the round trip.
     use vow_ir::{
-        BasicBlock, BlockId, FuncId, Function, HiddenRegionIdx, Inst, InstData, InstId, Module,
-        Opcode, RegionId, RegionSummary, Ty, VowEntry, VowId, infer_regions,
+        infer_regions, BasicBlock, BlockId, FuncId, Function, HiddenRegionIdx, Inst, InstData,
+        InstId, Module, Opcode, RegionId, RegionSummary, Ty, VowEntry, VowId,
     };
     use vow_syntax::ast::Effect;
     use vow_syntax::span::Span;
@@ -255,7 +255,7 @@ fn small_module_uninit_never_leaks_after_round_trip() {
         enum_layouts: vec![],
         warnings: vec![],
     };
-    infer_regions(&mut m);
+    infer_regions(&mut m, "test.vow");
     assert_canonical_summaries(&m);
     assert!(
         m.warnings.iter().all(|d| d.severity != Severity::Error),

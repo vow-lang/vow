@@ -51,7 +51,7 @@ use crate::types::{
 ///
 /// On `RegionConflict`, iteration completes anyway so internal `Uninit`
 /// state never leaks into `Function.summary` (spec §4.3).
-pub fn infer_regions(module: &mut Module) {
+pub fn infer_regions(module: &mut Module, source_file: &str) {
     let n_funcs = module.functions.len();
     if n_funcs == 0 {
         return;
@@ -97,7 +97,6 @@ pub fn infer_regions(module: &mut Module) {
         // stale (a callee summary upgrades from Uninit → AliasOf mid-loop
         // and changes which arg pairs are checked).
         let mut iters = 0;
-        let mut last_iter_diagnostics: Vec<Diagnostic>;
         loop {
             iters += 1;
             let mut iter_diagnostics: Vec<Diagnostic> = Vec::new();
@@ -107,6 +106,7 @@ pub fn infer_regions(module: &mut Module) {
                 let new_summary = analyze_function(
                     func,
                     fidx,
+                    source_file,
                     &summaries,
                     &mut region_maps[fidx as usize],
                     &mut iter_diagnostics,
@@ -116,21 +116,24 @@ pub fn infer_regions(module: &mut Module) {
                     changed = true;
                 }
             }
-            last_iter_diagnostics = iter_diagnostics;
             if !changed {
+                // Convergence iteration's diagnostics are canonical.
+                diagnostics.extend(iter_diagnostics);
                 break;
             }
             if iters > bound {
                 // Should never happen — the lattice is finite and joins are
                 // monotone. Emit a structured ICE diagnostic; do NOT panic
-                // (CLAUDE.md production-quality rule).
-                last_iter_diagnostics.push(internal_compiler_error(
+                // (CLAUDE.md production-quality rule). Preserve the partial
+                // last-iteration diagnostics alongside the ICE so the user
+                // sees what was emitted before we gave up.
+                diagnostics.extend(iter_diagnostics);
+                diagnostics.push(internal_compiler_error(
                     "region inference SCC exceeded monotone iteration bound",
                 ));
                 break;
             }
         }
-        diagnostics.extend(last_iter_diagnostics);
 
         // §4.3 step 5: resolve any function in this SCC still at Uninit.
         for &fidx in scc {
@@ -428,6 +431,7 @@ fn canonical_aliases(xs: &[u32]) -> Vec<u32> {
 fn analyze_function(
     func: &Function,
     func_idx: u32,
+    source_file: &str,
     summaries: &[InternalSummary],
     region_map: &mut BTreeMap<InstId, RegionId>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -456,6 +460,7 @@ fn analyze_function(
             handle_inst(
                 func,
                 func_idx,
+                source_file,
                 inst,
                 block.id,
                 &inst_lookup,
@@ -498,6 +503,7 @@ fn is_heap_producing(inst: &Inst) -> bool {
 fn handle_inst(
     func: &Function,
     _func_idx: u32,
+    source_file: &str,
     inst: &Inst,
     _block_id: BlockId,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
@@ -582,6 +588,7 @@ fn handle_inst(
                                 // target must outlive source — if conflict, emit.
                                 check_store_conflict(
                                     func,
+                                    source_file,
                                     target_arg_id,
                                     source_arg_id,
                                     inst,
@@ -1031,6 +1038,7 @@ fn origin_to_constraint(origin: &ValueOrigin) -> RegionConstraint {
 ///     the joined origin set spans incompatible regions.
 fn check_store_conflict(
     _func: &Function,
+    source_file: &str,
     target_arg_id: InstId,
     source_arg_id: InstId,
     call_inst: &Inst,
@@ -1063,18 +1071,18 @@ fn check_store_conflict(
                   block-local allocation stored into a parameter region"
             .to_string(),
         primary: SourceLocation {
-            file: String::new(),
+            file: source_file.to_string(),
             byte_offset: source_span.start,
             byte_len: source_span.len,
         },
         secondary: vec![
             SourceLocation {
-                file: String::new(),
+                file: source_file.to_string(),
                 byte_offset: target_span.start,
                 byte_len: target_span.len,
             },
             SourceLocation {
-                file: String::new(),
+                file: source_file.to_string(),
                 byte_offset: call_inst.origin.start,
                 byte_len: call_inst.origin.len,
             },
@@ -1399,7 +1407,7 @@ mod tests {
         // and resolves to AliasOf(0). A buggy implementation seeded at
         // ConstantGlobal would silently mis-summarise as ConstantGlobal.
         let mut m = module(vec![build_identity_fn()]);
-        infer_regions(&mut m);
+        infer_regions(&mut m, "test.vow");
         assert_eq!(
             m.functions[0].summary.return_region,
             RegionConstraint::AliasOf(0)
@@ -1409,7 +1417,7 @@ mod tests {
     #[test]
     fn rodata_literal_return() {
         let mut m = module(vec![build_const_str_return()]);
-        infer_regions(&mut m);
+        infer_regions(&mut m, "test.vow");
         assert_eq!(
             m.functions[0].summary.return_region,
             RegionConstraint::ConstantGlobal
@@ -1419,7 +1427,7 @@ mod tests {
     #[test]
     fn returned_alloc_escapes_to_caller() {
         let mut m = module(vec![build_returning_alloc()]);
-        infer_regions(&mut m);
+        infer_regions(&mut m, "test.vow");
         assert_eq!(
             m.functions[0].summary.return_region,
             RegionConstraint::FreshInCaller
@@ -1432,7 +1440,7 @@ mod tests {
     #[test]
     fn scalar_returns_are_constantglobal() {
         let mut m = module(vec![build_scalar_return()]);
-        infer_regions(&mut m);
+        infer_regions(&mut m, "test.vow");
         assert_eq!(
             m.functions[0].summary.return_region,
             RegionConstraint::ConstantGlobal
@@ -1449,7 +1457,7 @@ mod tests {
         ];
         let f = function(0, "id_ptr", vec![Ty::Ptr], Ty::Ptr, vec![block(0, insts)]);
         let mut m = module(vec![f]);
-        infer_regions(&mut m);
+        infer_regions(&mut m, "test.vow");
         assert_eq!(
             m.functions[0].summary.return_region,
             RegionConstraint::AliasOf(0)
@@ -1530,7 +1538,7 @@ mod tests {
             ],
         );
         let mut m = module(vec![f]);
-        infer_regions(&mut m);
+        infer_regions(&mut m, "test.vow");
         // The function has no RegionAlloc and no Call — its return path falls
         // through to §4.3 step 5 deep_origin walk, which sees Phi merging
         // Param(0) + Constant. Origin merge → FreshInCaller per §4.3 join.
@@ -1605,7 +1613,7 @@ mod tests {
             ],
         );
         let mut m = module(vec![f]);
-        infer_regions(&mut m);
+        infer_regions(&mut m, "test.vow");
         match &m.functions[0].summary.return_region {
             RegionConstraint::AliasOfAny(v) => {
                 assert_eq!(v, &vec![0, 2], "aliases must be ascending+deduplicated");
@@ -1632,7 +1640,7 @@ mod tests {
             f.id = FuncId(i as u32);
             f.name = format!("f{i}");
         }
-        infer_regions(&mut m);
+        infer_regions(&mut m, "test.vow");
 
         let bytes = crate::encode_module(&m);
         let decoded = crate::decode_module(&bytes).expect("decode round-trips");
@@ -1668,7 +1676,7 @@ mod tests {
         ];
         let f = function(0, "f", vec![Ty::Ptr], Ty::Ptr, vec![block(0, insts)]);
         let mut m = module(vec![f]);
-        infer_regions(&mut m);
+        infer_regions(&mut m, "test.vow");
         assert_eq!(
             m.functions[0].summary.return_region,
             RegionConstraint::AliasOf(0)
@@ -1709,7 +1717,7 @@ mod tests {
         let f0 = function(0, "f0", vec![], Ty::Ptr, vec![block(0, f0_insts)]);
         let f1 = function(1, "f1", vec![], Ty::Ptr, vec![block(0, f1_insts)]);
         let mut m = module(vec![f0, f1]);
-        infer_regions(&mut m);
+        infer_regions(&mut m, "test.vow");
         assert_eq!(
             m.functions[1].summary.return_region,
             RegionConstraint::FreshInCaller,
@@ -1741,7 +1749,7 @@ mod tests {
         ];
         let f = function(0, "local", vec![], Ty::I64, vec![block(0, insts)]);
         let mut m = module(vec![f]);
-        infer_regions(&mut m);
+        infer_regions(&mut m, "test.vow");
         let inst0 = &m.functions[0].blocks[0].insts[0];
         // The alloc has no must_outlive contributions in Phase 3 minimal —
         // it falls back to Root. This is conservative; Phase 4 will tighten.
@@ -1818,7 +1826,7 @@ mod tests {
         // so no RegionOpen/Close must be inserted.
         let f = build_returning_alloc();
         let mut m = module(vec![f]);
-        infer_regions(&mut m);
+        infer_regions(&mut m, "test.vow");
         insert_region_markers(&mut m);
         let any_marker = m.functions[0]
             .blocks
@@ -1852,7 +1860,7 @@ mod tests {
         ];
         let f = function(0, "local", vec![], Ty::I64, vec![block(0, insts)]);
         let mut m = module(vec![f]);
-        infer_regions(&mut m);
+        infer_regions(&mut m, "test.vow");
         let inst0 = &m.functions[0].blocks[0].insts[0];
         assert_eq!(inst0.region, RegionId::Root);
     }
@@ -1868,7 +1876,7 @@ mod tests {
     #[test]
     fn empty_module_does_not_panic() {
         let mut m = module(vec![]);
-        infer_regions(&mut m);
+        infer_regions(&mut m, "test.vow");
         assert!(m.functions.is_empty());
         assert!(m.warnings.is_empty());
     }
@@ -1920,7 +1928,7 @@ mod tests {
         );
 
         let mut m = module(vec![f0, f1]);
-        infer_regions(&mut m);
+        infer_regions(&mut m, "test.vow");
 
         let conflicts: Vec<_> = m
             .warnings
@@ -1945,6 +1953,12 @@ mod tests {
         assert_eq!(c.severity, Severity::Error);
         assert_eq!(c.blame, Blame::Callee);
         assert!(!c.hints.is_empty(), "expected at least one hint");
+        // RegionConflict diagnostics are user-visible; the file field
+        // must be populated, not the historical `String::new()` placeholder.
+        assert_eq!(c.primary.file, "test.vow");
+        for s in &c.secondary {
+            assert_eq!(s.file, "test.vow");
+        }
     }
 
     /// Same callee shape as the conflict test, but caller passes two
@@ -1987,7 +2001,7 @@ mod tests {
         );
 
         let mut m = module(vec![f0, f1]);
-        infer_regions(&mut m);
+        infer_regions(&mut m, "test.vow");
 
         let conflicts: Vec<_> = m
             .warnings
@@ -2042,7 +2056,7 @@ mod tests {
         );
 
         let mut m = module(vec![f0, f1]);
-        infer_regions(&mut m);
+        infer_regions(&mut m, "test.vow");
 
         let conflicts: Vec<_> = m
             .warnings

@@ -179,7 +179,7 @@ pub(crate) fn prepare_frontend(
             // effect/linear checks (above) and before any consumer of region
             // metadata. Pushes any RegionConflict diagnostics into
             // `module.warnings`.
-            vow_ir::infer_regions(&mut module);
+            vow_ir::infer_regions(&mut module, &source.to_string_lossy());
             diagnostics.extend(module.warnings.iter().cloned());
             // If region inference emitted any errors, fail compilation here so
             // the build pipeline reports CompileFailed (spec §4.4 — rejection,
