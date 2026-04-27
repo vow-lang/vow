@@ -46,15 +46,20 @@ pub fn check_linear_usage(
 
     check_block(&fn_def.body, &mut tracker, env, file, emitter);
 
-    // Backstop for linear-typed values that the AST tracker can see but the
-    // post-region pass cannot. The region pass only seeds `live` from
-    // instructions whose IR type is `LinearPtr`, but several producers (e.g.
-    // `FieldGet`/`Index` on `Vec<Linear>`) currently lower as `i64`, so
-    // programs like `let x: Handle = v[0]; 0` would otherwise compile
-    // silently. The branch logic above defers partial-consume cases to the
-    // region pass via `MaybeConsumed`; this scan only flags values that are
-    // unambiguously `Available` (i.e. never touched on any path).
+    // Backstop for linear-typed let-bindings whose IR producer lowers as `i64`
+    // (FieldGet/Index of Vec<Linear>), which the post-region pass cannot see
+    // as a live origin. Without this, programs like `let x: Handle = v[0]; 0`
+    // would compile silently. Function parameters are intentionally skipped:
+    // they always lower to `GetArg(LinearPtr)` and the region pass already
+    // reports them as `RegionLinear`, so flagging them here would just produce
+    // a duplicate diagnostic. Partial-consume cases stay in `MaybeConsumed`
+    // (handled by the branch logic above) and defer to the region pass.
+    let param_names: std::collections::HashSet<&str> =
+        fn_def.params.iter().map(|p| p.name.as_str()).collect();
     for (name, state) in &tracker.vars {
+        if param_names.contains(name.as_str()) {
+            continue;
+        }
         if let ConsumeState::Available(def_span) = state {
             emit_violation(
                 file,
@@ -859,9 +864,9 @@ mod tests {
         let mut emitter = TestEmitter(vec![]);
         check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
 
-        // `return;` doesn't consume `h`; the end-of-function scan still flags it.
-        assert_eq!(emitter.0.len(), 1);
-        assert!(emitter.0[0].message.contains("never consumed"));
+        // `return;` doesn't consume `h`, but the param case is left to the
+        // region pass — the AST backstop only flags non-param let-bindings.
+        assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
     }
 
     // --- While ---
@@ -1003,7 +1008,8 @@ mod tests {
     }
 
     #[test]
-    fn test_linear_never_consumed_error() {
+    fn test_linear_never_consumed_param_skipped() {
+        // The backstop intentionally skips params — region pass catches them.
         let env = make_env_with_linear_struct("FileHandle");
         let params = vec![make_param("h", named_type("FileHandle"))];
         let body = empty_block();
@@ -1012,9 +1018,7 @@ mod tests {
         let mut emitter = TestEmitter(vec![]);
         check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
 
-        assert_eq!(emitter.0.len(), 1);
-        assert!(emitter.0[0].message.contains("never consumed"));
-        assert_eq!(emitter.0[0].code, ErrorCode::LinearTypeViolation);
+        assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
     }
 
     #[test]
