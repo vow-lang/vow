@@ -1,0 +1,5 @@
+module Region
+
+fn region_value() -> i64 {
+    7
+}

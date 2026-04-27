@@ -1,0 +1,10 @@
+// TEST: stdout "11\n"
+module Main
+
+use sub.io
+
+fn main() -> i32 [io] {
+    print_i64(dotted_value());
+    print_str(String::from("\n"));
+    0
+}
