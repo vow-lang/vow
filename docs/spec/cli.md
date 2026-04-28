@@ -24,7 +24,7 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--max-k-step <N>` | `50`     | ESBMC incremental BMC max iterations          |
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
-| `--timeout <N>` | (none)      | ESBMC per-function timeout in seconds        |
+| `--timeout <N>` | `300`       | ESBMC per-function timeout in seconds (safety watchdog; cannot be disabled) |
 | `--vec-max <N>` | `128`       | Max Vec capacity for verification model      |
 | `--string-max <N>` | `256`    | Max String capacity for verification model   |
 | `--hashmap-max <N>` | `64`    | Max HashMap capacity for verification model  |
@@ -45,7 +45,7 @@ vow verify [OPTIONS] <source.vow>
 | `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations       |
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
-| `--timeout <N>` | (none)      | ESBMC per-function timeout in seconds        |
+| `--timeout <N>` | `300`       | ESBMC per-function timeout in seconds (safety watchdog; cannot be disabled) |
 | `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
 | `--string-max <N>`| `256`       | Max String capacity for verification model |
 | `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
