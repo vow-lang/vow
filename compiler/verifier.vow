@@ -21,6 +21,12 @@ struct VerifyResult {
     raw_output: String,
 }
 
+// exit_code sentinels: -1 spawn failure, -2 kernel watchdog kill, else child exit code.
+struct EsbmcRun {
+    exit_code: i64,
+    combined: String,
+}
+
 fn str_contains_byte(s: String, b: i64) -> bool {
     let n: i64 = s.len();
     let mut i: i64 = 0;
@@ -256,6 +262,20 @@ fn save_esbmc_debug(c_source: String, tmp_path: String, max_k_step: String, func
 
 fn DEFAULT_AUTO_TIMEOUT_STR() -> String { String::from("30") }
 
+// Mirrors DEFAULT_ESBMC_TIMEOUT_SECS in vow-verify/src/esbmc.rs.
+fn DEFAULT_ESBMC_TIMEOUT_MS() -> i64 { 300000 }
+
+// Mirrors Rust's `config.timeout_secs.unwrap_or(DEFAULT_ESBMC_TIMEOUT_SECS)`. n=0 → immediate deadline.
+fn watchdog_ms_for(effective_timeout: String) -> i64 {
+    if effective_timeout.len() > 0 {
+        let n: i64 = str_to_i64(effective_timeout);
+        if n >= 0 {
+            return n *! 1000;
+        }
+    }
+    DEFAULT_ESBMC_TIMEOUT_MS()
+}
+
 fn append_solver_args(args: Vec<String>, solver: String, encoding: String) {
     if solver.len() > 0 && solver != String::from("boolector") && solver != String::from("auto") {
         args.push(str2(String::from("--"), solver));
@@ -272,7 +292,7 @@ fn append_timeout_arg(args: Vec<String>, timeout_secs: String) {
     }
 }
 
-fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: String, solver: String, encoding: String, timeout_secs: String) -> i64 [io] {
+fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: String, solver: String, encoding: String, timeout_secs: String) -> EsbmcRun [io] {
     fs_write(tmp_path, c_source);
     save_esbmc_debug(c_source, tmp_path, max_k_step, func_name, false);
     let esbmc_args: Vec<String> = Vec::new();
@@ -285,8 +305,26 @@ fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: 
     esbmc_args.push(String::from("--64"));
     append_solver_args(esbmc_args, solver, encoding);
     append_timeout_arg(esbmc_args, timeout_secs);
-    let exit_code: i64 = process_run(esbmc_path(), esbmc_args);
-    exit_code
+    // Kernel watchdog kills the child if ESBMC's own --timeout doesn't fire.
+    let handle: i64 = process_start(esbmc_path(), esbmc_args);
+    if handle == -1 {
+        return EsbmcRun { exit_code: -1, combined: String::from("") };
+    }
+    let watchdog_ms: i64 = watchdog_ms_for(timeout_secs);
+    let exit_code: i64 = process_wait_timeout(handle, watchdog_ms);
+    if exit_code == -2 {
+        process_kill(handle);
+        return EsbmcRun { exit_code: -2, combined: String::from("(watchdog timeout)") };
+    }
+    let stdout: String = process_stdout_for(handle);
+    let stderr: String = process_stderr_for(handle);
+    let combined: String = String::from("");
+    combined.push_str(stdout);
+    combined.push_str(stderr);
+    // Evict the Completed entry from PROCESS_MAP so its captured buffers don't
+    // accumulate across runs. process_kill is a no-op on already-completed handles.
+    process_kill(handle);
+    EsbmcRun { exit_code: exit_code, combined: combined }
 }
 
 fn start_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: String, solver: String, encoding: String, timeout_secs: String) -> i64 [io] {
@@ -310,7 +348,7 @@ fn effective_timeout_for(encoding: String, solver: String, user_timeout: String)
     if user_timeout.len() > 0 {
         return user_timeout;
     }
-    // Bitwuzla can't use IR encoding — don't cap it with a timeout that has no retry path.
+    // Bitwuzla can't fall back to IR — skip --timeout so only the kernel watchdog (300s) caps it.
     let bv_solver: String = resolve_auto_bv_solver(solver);
     if bv_solver == String::from("bitwuzla") {
         return String::from("");
@@ -605,8 +643,8 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
     let auto_enc: bool = is_auto_encoding(encoding);
     let bv_solver: String = resolve_auto_bv_solver(solver);
     let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
-    let exit_code: i64 = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, solver, encoding, bv_timeout);
-    if exit_code == -1 {
+    let r: EsbmcRun = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, solver, encoding, bv_timeout);
+    if r.exit_code == -1 {
         return VerifyResult {
             status: VERIFY_NOT_FOUND(),
             vow_id: -1,
@@ -616,12 +654,10 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
             raw_output: String::from("esbmc not found"),
         };
     }
-    let stdout: String = process_get_stdout();
-    let stderr: String = process_get_stderr();
-    let combined: String = String::from("");
-    combined.push_str(stdout);
-    combined.push_str(stderr);
-    let mut status: i64 = parse_verify_status(combined);
+    let combined: String = r.combined;
+    let mut status: i64 = {
+        if r.exit_code == -2 { VERIFY_TIMEOUT() } else { parse_verify_status(combined) }
+    };
     let mut used_combined: String = combined;
 
     // Phase D: if BV timed out under Auto encoding and the BV solver is not
@@ -632,8 +668,8 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
         let ir_timeout: String = {
             if timeout_secs.len() > 0 { timeout_secs } else { DEFAULT_AUTO_TIMEOUT_STR() }
         };
-        let exit2: i64 = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, ir_solver, ir_encoding, ir_timeout);
-        if exit2 == -1 {
+        let r2: EsbmcRun = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, ir_solver, ir_encoding, ir_timeout);
+        if r2.exit_code == -1 {
             // ESBMC disappeared between BV and IR runs; surface consistently with verify_function_ir_fallback.
             return VerifyResult {
                 status: VERIFY_NOT_FOUND(),
@@ -644,12 +680,10 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
                 raw_output: String::from("esbmc not found"),
             };
         }
-        let so2: String = process_get_stdout();
-        let se2: String = process_get_stderr();
-        let combined2: String = String::from("");
-        combined2.push_str(so2);
-        combined2.push_str(se2);
-        let s2: i64 = parse_verify_status(combined2);
+        let combined2: String = r2.combined;
+        let s2: i64 = {
+            if r2.exit_code == -2 { VERIFY_TIMEOUT() } else { parse_verify_status(combined2) }
+        };
         status = {
             // IR-only counterexamples can be infeasible under BV (no overflow modeling), so a FAILED here is inconclusive — report the original Timeout instead.
             if s2 == VERIFY_PROVEN() { VERIFY_PROVEN_IR() }
@@ -686,8 +720,8 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
     // No cache lookup or write — see the note above resolve_auto_bv_solver.
     // `use_cache` stays on the signature for caller-side symmetry with the
     // Rust toolchain but has no effect.
-    let exit_code: i64 = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, ir_solver, ir_encoding, ir_timeout);
-    if exit_code == -1 {
+    let r: EsbmcRun = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, ir_solver, ir_encoding, ir_timeout);
+    if r.exit_code == -1 {
         return VerifyResult {
             status: VERIFY_NOT_FOUND(),
             vow_id: -1,
@@ -697,12 +731,10 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
             raw_output: String::from("esbmc not found"),
         };
     }
-    let stdout: String = process_get_stdout();
-    let stderr: String = process_get_stderr();
-    let combined: String = String::from("");
-    combined.push_str(stdout);
-    combined.push_str(stderr);
-    let raw_status: i64 = parse_verify_status(combined);
+    let combined: String = r.combined;
+    let raw_status: i64 = {
+        if r.exit_code == -2 { VERIFY_TIMEOUT() } else { parse_verify_status(combined) }
+    };
     let status: i64 = {
         // IR-only CEs can be infeasible under BV — demote FAILED to TIMEOUT (the caller only reaches us because BV already timed out).
         if raw_status == VERIFY_PROVEN() { VERIFY_PROVEN_IR() }
@@ -732,9 +764,25 @@ fn verify_start(f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_ca
     handle
 }
 
-fn verify_collect(handle: i64, f: IrFunction) -> VerifyResult [io] {
-    let exit_code: i64 = process_wait(handle);
+fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String) -> VerifyResult [io] {
+    // Kernel watchdog sized to match ESBMC's --timeout so a runaway process can't block indefinitely.
+    let exit_code: i64 = process_wait_timeout(handle, watchdog_ms_for(effective_timeout));
+    if exit_code == -2 {
+        process_kill(handle);
+        return VerifyResult {
+            status: VERIFY_TIMEOUT(),
+            vow_id: -1,
+            var_names: Vec::new(),
+            var_values: Vec::new(),
+            block_visits: Vec::new(),
+            raw_output: String::from("(watchdog timeout)"),
+        };
+    }
     if exit_code == -1 {
+        // try_wait error: runtime kills the child and stores a Completed entry
+        // before returning -1, so we still need to evict the PROCESS_MAP entry.
+        // For the handle-not-found case, process_kill is a no-op.
+        process_kill(handle);
         return VerifyResult {
             status: VERIFY_NOT_FOUND(),
             vow_id: -1,
@@ -749,6 +797,9 @@ fn verify_collect(handle: i64, f: IrFunction) -> VerifyResult [io] {
     let combined: String = String::from("");
     combined.push_str(stdout);
     combined.push_str(stderr);
+    // Evict the Completed entry from PROCESS_MAP so its captured buffers don't
+    // accumulate across runs. process_kill is a no-op on already-completed handles.
+    process_kill(handle);
     let status: i64 = parse_verify_status(combined);
     let vow_id: i64 = {
         if status == VERIFY_FAILED() {
