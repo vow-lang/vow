@@ -5601,6 +5601,8 @@ fn run_test_command(
         density_pct: 0.0,
     };
 
+    let _ = std::fs::create_dir_all("build");
+
     for test_file in &test_files {
         let start = std::time::Instant::now();
         let file_str = test_file.to_string_lossy().to_string();
@@ -5641,7 +5643,7 @@ fn run_test_command(
         total_density.functions_total += density.functions_total;
         total_density.functions_with_vows += density.functions_with_vows;
 
-        let tmp_out = std::env::temp_dir().join(format!("vow_test_{name}_{}", std::process::id()));
+        let tmp_out = Path::new("build").join(format!("vow_test_{name}_{}", std::process::id()));
         let result = run_pipeline_from_frontend(
             frontend,
             test_file,
