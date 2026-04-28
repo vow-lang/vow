@@ -2268,7 +2268,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             if method_name == String::from("get") {
                 let k_id: i64 = {
                     let ae: i64 = list_get(a, args_lid, 0);
-                    lower_expr(ctx, ae)
+                    lower_consumed_expr(ctx, ae)
                 };
                 let call_args: Vec<i64> = Vec::new();
                 call_args.push(recv_id);
@@ -2278,7 +2278,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             if method_name == String::from("contains_key") {
                 let k_id: i64 = {
                     let ae: i64 = list_get(a, args_lid, 0);
-                    lower_expr(ctx, ae)
+                    lower_consumed_expr(ctx, ae)
                 };
                 let call_args: Vec<i64> = Vec::new();
                 call_args.push(recv_id);
@@ -2288,7 +2288,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             if method_name == String::from("remove") {
                 let k_id: i64 = {
                     let ae: i64 = list_get(a, args_lid, 0);
-                    lower_expr(ctx, ae)
+                    lower_consumed_expr(ctx, ae)
                 };
                 let call_args: Vec<i64> = Vec::new();
                 call_args.push(recv_id);
