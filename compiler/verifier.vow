@@ -604,7 +604,6 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
     let fn_name: String = f.name;
     let auto_enc: bool = is_auto_encoding(encoding);
     let bv_solver: String = resolve_auto_bv_solver(solver);
-    let bv_encoding: String = { if auto_enc { String::from("bv") } else { encoding } };
     let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
     let exit_code: i64 = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, solver, encoding, bv_timeout);
     if exit_code == -1 {
@@ -718,10 +717,7 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
         else if raw_status == VERIFY_FAILED() { VERIFY_TIMEOUT() }
         else { raw_status }
     };
-    // Security: only FAILED is cached, never PROVEN. IR counterexamples can be
-    // infeasible under BV, so writing FAILED under (z3, ir) would be misleading
-    // — and no reader probes the IR key for FAILED anyway. The result is that
-    // the IR-fallback path no longer writes to the cache at all.
+    // No on-disk caching on self-hosted: see the note above resolve_auto_bv_solver.
     build_verify_result(f, status, combined)
 }
 
