@@ -22,7 +22,7 @@ use vow_verify::{
     run_with_fallback, verify_function_with_module_and_const_fns_configured,
 };
 
-use cache::{CachedVerifyResult, VerifyCache};
+use cache::{CachedFailure, VerifyCache};
 use frontend::{FrontendBundle, FrontendError, FrontendGoal, prepare_frontend};
 
 // ---------------------------------------------------------------------------
@@ -4937,31 +4937,12 @@ fn verify_one_function(
             func_config.encoding_str(),
         );
 
-        let cached_result = vc.lookup(&key).map(|c| match c {
-            CachedVerifyResult::Proven => VerificationResult::Proven,
-            CachedVerifyResult::Failed { .. } => {
-                VerificationResult::Failed(c.to_counterexample().unwrap())
-            }
-        });
-        // Phase D: if BV lookup misses under Auto encoding and BV solver
-        // isn't Bitwuzla, probe the IR fallback key for a prior ProvenIr
-        // result. Only promote Proven hits — IR Failed entries must be
-        // ignored because IR doesn't model overflow.
-        let cached_result = cached_result.or_else(|| {
-            if func_config.encoding != Encoding::Auto
-                || matches!(func_config.solver, Solver::Bitwuzla)
-            {
-                return None;
-            }
-            let ir_key = VerifyCache::cache_key(&c_src, limits.max_k_step, "z3", "ir");
-            vc.lookup(&ir_key).and_then(|c| match c {
-                CachedVerifyResult::Proven => Some(VerificationResult::ProvenIr),
-                CachedVerifyResult::Failed { .. } => None,
-            })
-        });
-
-        if let Some(r) = cached_result {
-            r
+        // Security: lookup only returns FAILED entries (PROVEN is never trusted
+        // from disk). The Phase D IR-fallback probe only consumed cached
+        // PROVEN, so it is removed: with PROVEN no longer cached, that probe
+        // could only return None.
+        if let Some(cached) = vc.lookup(&key) {
+            VerificationResult::Failed(cached.to_counterexample())
         } else {
             let esbmc = match find_esbmc() {
                 Some(p) => p,
@@ -4969,31 +4950,25 @@ fn verify_one_function(
             };
             let (res, resolved_config) =
                 run_with_fallback(&esbmc, &c_src, limits.max_k_step, &func.name, &func_config);
-            // Store under the resolved config so ProvenIr results are
-            // keyed by encoding=ir rather than the pre-fallback Auto/Bv.
-            let store_key = VerifyCache::cache_key(
-                &c_src,
-                limits.max_k_step,
-                resolved_config.solver_str(),
-                resolved_config.encoding_str(),
-            );
-            match &res {
-                VerificationResult::Proven | VerificationResult::ProvenIr => {
-                    vc.store(&store_key, &CachedVerifyResult::Proven);
-                }
-                VerificationResult::Failed(ce) => {
-                    vc.store(
-                        &store_key,
-                        &CachedVerifyResult::Failed {
-                            vow_id: ce.vow_id,
-                            description: ce.description.clone(),
-                            values: ce.values.clone(),
-                            block_visits: ce.block_visits.clone(),
-                            raw_output: ce.raw_output.clone(),
-                        },
-                    );
-                }
-                _ => {}
+            // Security: never cache PROVEN — a forged on-disk entry must not
+            // be able to bypass ESBMC on a later run.
+            if let VerificationResult::Failed(ce) = &res {
+                let store_key = VerifyCache::cache_key(
+                    &c_src,
+                    limits.max_k_step,
+                    resolved_config.solver_str(),
+                    resolved_config.encoding_str(),
+                );
+                vc.store(
+                    &store_key,
+                    &CachedFailure {
+                        vow_id: ce.vow_id,
+                        description: ce.description.clone(),
+                        values: ce.values.clone(),
+                        block_visits: ce.block_visits.clone(),
+                        raw_output: ce.raw_output.clone(),
+                    },
+                );
             }
             res
         }
@@ -6042,31 +6017,11 @@ fn update_contract_statuses(
                 config.encoding_str(),
             );
 
-            let cached_result = vc.lookup(&key).map(|c| match c {
-                CachedVerifyResult::Proven => VerificationResult::Proven,
-                CachedVerifyResult::Failed { .. } => {
-                    VerificationResult::Failed(c.to_counterexample().unwrap())
-                }
-            });
-            // Phase D: if BV lookup misses under Auto encoding and BV solver
-            // isn't Bitwuzla, also probe the IR fallback key. A hit there
-            // means a prior run had to fall back to ir; surface as ProvenIr
-            // so `contracts --verify` reports "proven-ir".
-            let cached_result = cached_result.or_else(|| {
-                if config.encoding != Encoding::Auto || matches!(config.solver, Solver::Bitwuzla) {
-                    return None;
-                }
-                let ir_key = VerifyCache::cache_key(&c_src, limits.max_k_step, "z3", "ir");
-                // Ignore IR Failed entries: IR lacks overflow modeling, so
-                // an IR-only counterexample may be infeasible under BV.
-                vc.lookup(&ir_key).and_then(|c| match c {
-                    CachedVerifyResult::Proven => Some(VerificationResult::ProvenIr),
-                    CachedVerifyResult::Failed { .. } => None,
-                })
-            });
-
-            if let Some(r) = cached_result {
-                r
+            // Security: lookup only returns FAILED (PROVEN is never trusted
+            // from disk); the Phase D IR-fallback probe consumed only cached
+            // PROVEN and is removed since that path can never hit.
+            if let Some(cached) = vc.lookup(&key) {
+                VerificationResult::Failed(cached.to_counterexample())
             } else {
                 let esbmc = match find_esbmc() {
                     Some(p) => p,
@@ -6081,29 +6036,24 @@ fn update_contract_statuses(
                 };
                 let (res, resolved_config) =
                     run_with_fallback(&esbmc, &c_src, limits.max_k_step, &func.name, config);
-                let store_key = VerifyCache::cache_key(
-                    &c_src,
-                    limits.max_k_step,
-                    resolved_config.solver_str(),
-                    resolved_config.encoding_str(),
-                );
-                match &res {
-                    VerificationResult::Proven | VerificationResult::ProvenIr => {
-                        vc.store(&store_key, &CachedVerifyResult::Proven);
-                    }
-                    VerificationResult::Failed(ce) => {
-                        vc.store(
-                            &store_key,
-                            &CachedVerifyResult::Failed {
-                                vow_id: ce.vow_id,
-                                description: ce.description.clone(),
-                                values: ce.values.clone(),
-                                block_visits: ce.block_visits.clone(),
-                                raw_output: ce.raw_output.clone(),
-                            },
-                        );
-                    }
-                    _ => {}
+                // Security: never cache PROVEN.
+                if let VerificationResult::Failed(ce) = &res {
+                    let store_key = VerifyCache::cache_key(
+                        &c_src,
+                        limits.max_k_step,
+                        resolved_config.solver_str(),
+                        resolved_config.encoding_str(),
+                    );
+                    vc.store(
+                        &store_key,
+                        &CachedFailure {
+                            vow_id: ce.vow_id,
+                            description: ce.description.clone(),
+                            values: ce.values.clone(),
+                            block_visits: ce.block_visits.clone(),
+                            raw_output: ce.raw_output.clone(),
+                        },
+                    );
                 }
                 res
             }

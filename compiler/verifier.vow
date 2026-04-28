@@ -532,60 +532,18 @@ fn map_ce_values(c_names: Vec<String>, c_values: Vec<String>, map_keys: Vec<Stri
     }
 }
 
-fn VERIFY_CACHE_DIR() -> String { String::from("/tmp/.vow_verify_cache/") }
-
-fn vow_hash_string(s: String) -> i64 {
-    let mut h: i64 = 5381;
-    let mut i: i64 = 0;
-    while i < s.len() {
-        h = h * 33 + s.byte_at(i);
-        i = i + 1;
-    }
-    h
-}
-
-fn verify_cache_key(c_source: String, max_k_step: String, solver: String, encoding: String) -> String {
-    let h: i64 = vow_hash_string(c_source);
-    let h2: i64 = h * 33 + vow_hash_string(max_k_step);
-    let h3: i64 = h2 * 33 + vow_hash_string(solver);
-    let h4: i64 = h3 * 33 + vow_hash_string(encoding);
-    let abs_h: i64 = { if h4 < 0 { 0 - h4 } else { h4 } };
-    i64_to_str(abs_h)
-}
-
-fn verify_cache_ensure_dir() -> i64 [io] {
-    fs_mkdir(VERIFY_CACHE_DIR())
-}
-
-fn verify_cache_lookup(key: String) -> i64 [io] {
-    let path: String = String::from("");
-    path.push_str(VERIFY_CACHE_DIR());
-    path.push_str(key);
-    path.push_str(String::from(".vr"));
-    let exists: i64 = fs_exists(path);
-    if exists == 0 { return -1; }
-    let content: String = fs_read(path);
-    if content.len() == 0 { return -1; }
-    if str_find_str(content, String::from("PROVEN")) >= 0 {
-        return VERIFY_PROVEN();
-    }
-    if str_find_str(content, String::from("FAILED")) >= 0 {
-        return VERIFY_FAILED();
-    }
-    -1
-}
-
-fn verify_cache_store(key: String, status: i64) [io] {
-    let path: String = String::from("");
-    path.push_str(VERIFY_CACHE_DIR());
-    path.push_str(key);
-    path.push_str(String::from(".vr"));
-    let content: String = {
-        if status == VERIFY_PROVEN() { String::from("PROVEN\n") }
-        else { String::from("FAILED\n") }
-    };
-    fs_write(path, content);
-}
+// The on-disk verify cache is intentionally absent on the self-hosted
+// compiler. Removing PROVEN trust (the security fix) made cache lookups
+// useless, and the FAILED format here cannot persist counterexample metadata
+// (vow_id, variable bindings, block visits), so cached FAILED hits would
+// degrade downstream contract matching. The Rust compiler retains a real
+// verify cache at vow/src/cache.rs with full failure metadata; the
+// self-hosted compiler currently always re-runs ESBMC.
+//
+// `--no-cache` (and the `use_cache` parameter threaded into verify entry
+// points) is kept for CLI symmetry with the Rust toolchain even though it
+// has no effect on this side; removing it would churn the parallel-pool
+// callers in compiler/main.vow without changing observable behavior.
 
 fn resolve_auto_bv_solver(solver: String) -> String {
     if solver.len() == 0 || solver == String::from("auto") {
@@ -646,43 +604,7 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
     let fn_name: String = f.name;
     let auto_enc: bool = is_auto_encoding(encoding);
     let bv_solver: String = resolve_auto_bv_solver(solver);
-    let bv_encoding: String = { if auto_enc { String::from("bv") } else { encoding } };
     let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
-    if use_cache {
-        verify_cache_ensure_dir();
-        // Lookup under the resolved BV key so cache hits survive Auto→Bv
-        // resolution. The BV-Proven store path uses the same key below.
-        let cache_key: String = verify_cache_key(c_source, max_k_step, bv_solver, bv_encoding);
-        let cached: i64 = verify_cache_lookup(cache_key);
-        if cached == VERIFY_PROVEN() {
-            return VerifyResult {
-                status: VERIFY_PROVEN(),
-                vow_id: -1,
-                var_names: Vec::new(),
-                var_values: Vec::new(),
-                block_visits: Vec::new(),
-                raw_output: String::from("(cached)"),
-            };
-        }
-        // Phase D: if previous run fell back to IR under Auto encoding, the
-        // result was stored under (z3, ir). Probe that key too so re-verify
-        // doesn't have to rerun the BV timeout.
-        if auto_enc && bv_solver != String::from("bitwuzla") {
-            let ir_key: String = verify_cache_key(c_source, max_k_step, String::from("z3"), String::from("ir"));
-            let cached_ir: i64 = verify_cache_lookup(ir_key);
-            if cached_ir == VERIFY_PROVEN() {
-                return VerifyResult {
-                    status: VERIFY_PROVEN_IR(),
-                    vow_id: -1,
-                    var_names: Vec::new(),
-                    var_values: Vec::new(),
-                    block_visits: Vec::new(),
-                    raw_output: String::from("(cached)"),
-                };
-            }
-        }
-    }
-
     let exit_code: i64 = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, solver, encoding, bv_timeout);
     if exit_code == -1 {
         return VerifyResult {
@@ -701,12 +623,6 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
     combined.push_str(stderr);
     let mut status: i64 = parse_verify_status(combined);
     let mut used_combined: String = combined;
-    let mut resolved_solver: String = {
-        if solver.len() == 0 || solver == String::from("auto") { bv_solver } else { solver }
-    };
-    let mut resolved_encoding: String = {
-        if auto_enc { String::from("bv") } else { encoding }
-    };
 
     // Phase D: if BV timed out under Auto encoding and the BV solver is not
     // Bitwuzla, retry once with --z3 --ir (integer encoding).
@@ -741,23 +657,9 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
             else { s2 }
         };
         used_combined = combined2;
-        resolved_solver = ir_solver;
-        resolved_encoding = ir_encoding;
     }
 
-    if use_cache {
-        let cache_status: i64 = {
-            if status == VERIFY_PROVEN_IR() { VERIFY_PROVEN() } else { status }
-        };
-        // Don't persist FAILED entries under (z3, ir): IR lacks overflow
-        // modeling, so IR-only counterexamples may be infeasible under BV,
-        // and neither secondary lookup retrieves IR-FAILED results anyway.
-        let is_ir_key: bool = resolved_encoding == String::from("ir");
-        if cache_status == VERIFY_PROVEN() || (cache_status == VERIFY_FAILED() && !is_ir_key) {
-            let cache_key2: String = verify_cache_key(c_source, max_k_step, resolved_solver, resolved_encoding);
-            verify_cache_store(cache_key2, cache_status);
-        }
-    }
+    // No on-disk caching on self-hosted: see the note above resolve_auto_bv_solver.
     build_verify_result(f, status, used_combined)
 }
 
@@ -781,15 +683,9 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
     let ir_timeout: String = {
         if timeout_secs.len() > 0 { timeout_secs } else { DEFAULT_AUTO_TIMEOUT_STR() }
     };
-    // Probe the IR cache first so a repeated BV timeout doesn't re-run Z3.
-    if use_cache {
-        verify_cache_ensure_dir();
-        let ir_probe_key: String = verify_cache_key(c_source, max_k_step, ir_solver, ir_encoding);
-        let cached_ir: i64 = verify_cache_lookup(ir_probe_key);
-        if cached_ir == VERIFY_PROVEN() {
-            return build_verify_result(f, VERIFY_PROVEN_IR(), String::from("(cached)"));
-        }
-    }
+    // No cache lookup or write — see the note above resolve_auto_bv_solver.
+    // `use_cache` stays on the signature for caller-side symmetry with the
+    // Rust toolchain but has no effect.
     let exit_code: i64 = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, ir_solver, ir_encoding, ir_timeout);
     if exit_code == -1 {
         return VerifyResult {
@@ -813,18 +709,7 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
         else if raw_status == VERIFY_FAILED() { VERIFY_TIMEOUT() }
         else { raw_status }
     };
-    if use_cache {
-        // Only persist PROVEN under (z3, ir). IR counterexamples can be
-        // infeasible under BV, so writing FAILED here would be misleading
-        // and no reader probes the IR key for FAILED anyway.
-        let cache_status: i64 = {
-            if status == VERIFY_PROVEN_IR() { VERIFY_PROVEN() } else { status }
-        };
-        if cache_status == VERIFY_PROVEN() {
-            let cache_key: String = verify_cache_key(c_source, max_k_step, ir_solver, ir_encoding);
-            verify_cache_store(cache_key, cache_status);
-        }
-    }
+    // No on-disk caching on self-hosted: see the note above resolve_auto_bv_solver.
     build_verify_result(f, status, combined)
 }
 
@@ -835,29 +720,9 @@ fn verify_start(f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_ca
         return -1;
     }
     let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max);
-    let auto_enc: bool = is_auto_encoding(encoding);
-    let bv_solver: String = resolve_auto_bv_solver(solver);
-    let bv_encoding: String = { if auto_enc { String::from("bv") } else { encoding } };
-    if use_cache {
-        verify_cache_ensure_dir();
-        // Lookup under the resolved BV key so hits produced by the sync
-        // `verify` path (which normalizes keys the same way) are visible
-        // here. Otherwise Auto mode splits the cache namespace.
-        let cache_key: String = verify_cache_key(c_source, max_k_step, bv_solver, bv_encoding);
-        let cached: i64 = verify_cache_lookup(cache_key);
-        if cached == VERIFY_PROVEN() {
-            return -2;
-        }
-        // Also probe the IR fallback key: a prior run may have escalated to
-        // (z3, ir) after a BV timeout.
-        if auto_enc && bv_solver != String::from("bitwuzla") {
-            let ir_key: String = verify_cache_key(c_source, max_k_step, String::from("z3"), String::from("ir"));
-            let cached_ir: i64 = verify_cache_lookup(ir_key);
-            if cached_ir == VERIFY_PROVEN() {
-                return -2;
-            }
-        }
-    }
+    // No cache lookup or write — see the note above resolve_auto_bv_solver.
+    // `use_cache` stays on the signature for caller-side symmetry with the
+    // Rust toolchain but has no effect.
     let tmp_path: String = String::from("/tmp/__vow_verify_");
     tmp_path.push_str(i64_to_str(idx));
     tmp_path.push_str(String::from(".c"));
