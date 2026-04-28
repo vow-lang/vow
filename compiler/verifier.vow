@@ -779,6 +779,10 @@ fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String) -> Veri
         };
     }
     if exit_code == -1 {
+        // try_wait error: runtime kills the child and stores a Completed entry
+        // before returning -1, so we still need to evict the PROCESS_MAP entry.
+        // For the handle-not-found case, process_kill is a no-op.
+        process_kill(handle);
         return VerifyResult {
             status: VERIFY_NOT_FOUND(),
             vow_id: -1,
