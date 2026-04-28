@@ -265,11 +265,11 @@ fn DEFAULT_AUTO_TIMEOUT_STR() -> String { String::from("30") }
 // Mirrors DEFAULT_ESBMC_TIMEOUT_SECS in vow-verify/src/esbmc.rs.
 fn DEFAULT_ESBMC_TIMEOUT_MS() -> i64 { 300000 }
 
-// Mirrors Rust's `config.timeout_secs.unwrap_or(DEFAULT_ESBMC_TIMEOUT_SECS)`.
+// Mirrors Rust's `config.timeout_secs.unwrap_or(DEFAULT_ESBMC_TIMEOUT_SECS)`. n=0 → immediate deadline.
 fn watchdog_ms_for(effective_timeout: String) -> i64 {
     if effective_timeout.len() > 0 {
         let n: i64 = str_to_i64(effective_timeout);
-        if n > 0 {
+        if n >= 0 {
             return n * 1000;
         }
     }
@@ -321,6 +321,9 @@ fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: 
     let combined: String = String::from("");
     combined.push_str(stdout);
     combined.push_str(stderr);
+    // Evict the Completed entry from PROCESS_MAP so its captured buffers don't
+    // accumulate across runs. process_kill is a no-op on already-completed handles.
+    process_kill(handle);
     EsbmcRun { exit_code: exit_code, combined: combined }
 }
 
@@ -925,6 +928,9 @@ fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String) -> Veri
     let combined: String = String::from("");
     combined.push_str(stdout);
     combined.push_str(stderr);
+    // Evict the Completed entry from PROCESS_MAP so its captured buffers don't
+    // accumulate across runs. process_kill is a no-op on already-completed handles.
+    process_kill(handle);
     let status: i64 = parse_verify_status(combined);
     let vow_id: i64 = {
         if status == VERIFY_FAILED() {
