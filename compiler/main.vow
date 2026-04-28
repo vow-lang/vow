@@ -4939,6 +4939,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
 
     // Collect per-contract entries into parallel arrays
     let e_vow_ids: Vec<i64> = Vec::new();
+    let e_func_ids: Vec<i64> = Vec::new();
     let e_func_names: Vec<String> = Vec::new();
     let e_kinds: Vec<String> = Vec::new();
     let e_descs: Vec<String> = Vec::new();
@@ -4956,6 +4957,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
         while vi < nv {
             let ve: IrVowEntry = func.vows[vi];
             e_vow_ids.push(ve.id);
+            e_func_ids.push(func.id);
             e_func_names.push(func.name);
             e_kinds.push(vow_kind_from_desc(ve.description));
             e_descs.push(ve.description);
@@ -4985,8 +4987,8 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
                 let vr: VerifyResult = verify_function_full(func, ir_mod, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c);
                 let st: i64 = vr.status;
                 let mut ei: i64 = 0;
-                while ei < e_func_names.len() {
-                    if e_func_names[ei] == func.name {
+                while ei < e_func_ids.len() {
+                    if e_func_ids[ei] == func.id {
                         if st == VERIFY_PROVEN() {
                             e_statuses[ei] = String::from("proven");
                         } else if st == VERIFY_PROVEN_IR() {
