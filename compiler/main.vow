@@ -319,8 +319,8 @@ fn verify_collect_and_report(
     let st: i64 = vr.status;
     if st == VERIFY_PROVEN() {
         eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN")));
-        // Security: PROVEN is never written to disk; see verify_cache_lookup
-        // in verifier.vow.
+        // No on-disk cache on self-hosted; see the note above
+        // resolve_auto_bv_solver in verifier.vow.
         return 1;
     }
     if st == VERIFY_PROVEN_IR() {
