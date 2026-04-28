@@ -91,35 +91,26 @@ fn fnv1a_hash(data: &[u8]) -> u64 {
     hash
 }
 
+// Security: cached PROVEN results from disk are never trusted, so the cached
+// type only carries failure data. A forged on-disk entry must not be able to
+// bypass ESBMC, so successful verifications are never cached.
 #[derive(Debug)]
-pub enum CachedVerifyResult {
-    Proven,
-    Failed {
-        vow_id: Option<u32>,
-        description: String,
-        values: Vec<(String, String)>,
-        block_visits: Vec<u32>,
-        raw_output: String,
-    },
+pub struct CachedFailure {
+    pub vow_id: Option<u32>,
+    pub description: String,
+    pub values: Vec<(String, String)>,
+    pub block_visits: Vec<u32>,
+    pub raw_output: String,
 }
 
-impl CachedVerifyResult {
-    pub fn to_counterexample(&self) -> Option<Counterexample> {
-        match self {
-            CachedVerifyResult::Proven => None,
-            CachedVerifyResult::Failed {
-                vow_id,
-                description,
-                values,
-                block_visits,
-                raw_output,
-            } => Some(Counterexample {
-                description: description.clone(),
-                vow_id: *vow_id,
-                values: values.clone(),
-                block_visits: block_visits.clone(),
-                raw_output: raw_output.clone(),
-            }),
+impl CachedFailure {
+    pub fn to_counterexample(&self) -> Counterexample {
+        Counterexample {
+            description: self.description.clone(),
+            vow_id: self.vow_id,
+            values: self.values.clone(),
+            block_visits: self.block_visits.clone(),
+            raw_output: self.raw_output.clone(),
         }
     }
 }
@@ -152,13 +143,13 @@ impl VerifyCache {
         format!("{hash:016x}")
     }
 
-    pub fn lookup(&self, key: &str) -> Option<CachedVerifyResult> {
+    pub fn lookup(&self, key: &str) -> Option<CachedFailure> {
         let path = self.dir.join(format!("{key}.vr"));
         let content = std::fs::read_to_string(path).ok()?;
         parse_cached_result(&content)
     }
 
-    pub fn store(&self, key: &str, result: &CachedVerifyResult) {
+    pub fn store(&self, key: &str, result: &CachedFailure) {
         let path = self.dir.join(format!("{key}.vr"));
         let content = serialize_cached_result(result);
         let mut f = match std::fs::File::create(&path) {
@@ -169,82 +160,74 @@ impl VerifyCache {
     }
 }
 
-fn serialize_cached_result(result: &CachedVerifyResult) -> String {
-    match result {
-        CachedVerifyResult::Proven => "PROVEN\n".to_string(),
-        CachedVerifyResult::Failed {
-            vow_id,
-            description,
-            values,
-            block_visits,
-            raw_output,
-        } => {
-            let mut s = String::from("FAILED\n");
-            match vow_id {
-                Some(id) => s.push_str(&format!("vow_id={id}\n")),
-                None => s.push_str("vow_id=\n"),
-            }
-            s.push_str(&format!("description={description}\n"));
-            let vals: Vec<String> = values.iter().map(|(k, v)| format!("{k}:{v}")).collect();
-            s.push_str(&format!("values={}\n", vals.join(",")));
-            let blks: Vec<String> = block_visits.iter().map(|b| b.to_string()).collect();
-            s.push_str(&format!("blocks={}\n", blks.join(",")));
-            s.push_str("raw=");
-            s.push_str(raw_output);
-            s.push('\n');
-            s
-        }
+fn serialize_cached_result(result: &CachedFailure) -> String {
+    let mut s = String::from("FAILED\n");
+    match result.vow_id {
+        Some(id) => s.push_str(&format!("vow_id={id}\n")),
+        None => s.push_str("vow_id=\n"),
     }
+    s.push_str(&format!("description={}\n", result.description));
+    let vals: Vec<String> = result
+        .values
+        .iter()
+        .map(|(k, v)| format!("{k}:{v}"))
+        .collect();
+    s.push_str(&format!("values={}\n", vals.join(",")));
+    let blks: Vec<String> = result.block_visits.iter().map(|b| b.to_string()).collect();
+    s.push_str(&format!("blocks={}\n", blks.join(",")));
+    s.push_str("raw=");
+    s.push_str(&result.raw_output);
+    s.push('\n');
+    s
 }
 
-fn parse_cached_result(content: &str) -> Option<CachedVerifyResult> {
+fn parse_cached_result(content: &str) -> Option<CachedFailure> {
     let mut lines = content.lines();
     let status = lines.next()?;
-    match status {
-        "PROVEN" => Some(CachedVerifyResult::Proven),
-        "FAILED" => {
-            let mut vow_id: Option<u32> = None;
-            let mut description = String::new();
-            let mut values = Vec::new();
-            let mut block_visits = Vec::new();
-            let mut raw_output = String::new();
+    // Security: only honor cached FAILED entries. A forged "PROVEN" file must
+    // never bypass ESBMC, so PROVEN content is discarded here.
+    if status != "FAILED" {
+        return None;
+    }
+    let mut vow_id: Option<u32> = None;
+    let mut description = String::new();
+    let mut values = Vec::new();
+    let mut block_visits = Vec::new();
+    let mut raw_output = String::new();
 
-            for line in lines {
-                if let Some(rest) = line.strip_prefix("vow_id=") {
-                    vow_id = rest.parse().ok();
-                } else if let Some(rest) = line.strip_prefix("description=") {
-                    description = rest.to_string();
-                } else if let Some(rest) = line.strip_prefix("values=") {
-                    if !rest.is_empty() {
-                        for pair in rest.split(',') {
-                            if let Some((k, v)) = pair.split_once(':') {
-                                values.push((k.to_string(), v.to_string()));
-                            }
-                        }
+    for line in lines {
+        if let Some(rest) = line.strip_prefix("vow_id=") {
+            vow_id = rest.parse().ok();
+        } else if let Some(rest) = line.strip_prefix("description=") {
+            description = rest.to_string();
+        } else if let Some(rest) = line.strip_prefix("values=") {
+            if !rest.is_empty() {
+                for pair in rest.split(',') {
+                    if let Some((k, v)) = pair.split_once(':') {
+                        values.push((k.to_string(), v.to_string()));
                     }
-                } else if let Some(rest) = line.strip_prefix("blocks=") {
-                    if !rest.is_empty() {
-                        for b in rest.split(',') {
-                            if let Ok(n) = b.parse() {
-                                block_visits.push(n);
-                            }
-                        }
-                    }
-                } else if let Some(rest) = line.strip_prefix("raw=") {
-                    raw_output = rest.to_string();
                 }
             }
-
-            Some(CachedVerifyResult::Failed {
-                vow_id,
-                description,
-                values,
-                block_visits,
-                raw_output,
-            })
+        } else if let Some(rest) = line.strip_prefix("blocks=") {
+            if !rest.is_empty() {
+                for b in rest.split(',') {
+                    if let Ok(n) = b.parse() {
+                        block_visits.push(n);
+                    }
+                }
+            }
+        } else if let Some(rest) = line.strip_prefix("raw=") {
+            raw_output = rest.to_string();
         }
-        _ => None,
     }
+
+    Some(CachedFailure {
+        vow_id,
+        description,
+        values,
+        block_visits,
+        raw_output,
+    })
 }
 
 #[cfg(test)]
@@ -253,16 +236,21 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn verify_cache_roundtrip_proven() {
-        let result = CachedVerifyResult::Proven;
-        let serialized = serialize_cached_result(&result);
-        let parsed = parse_cached_result(&serialized).unwrap();
-        assert!(matches!(parsed, CachedVerifyResult::Proven));
+    fn verify_cache_proven_disk_entry_is_discarded() {
+        // Security: a forged "PROVEN" cache file must never be honored.
+        assert!(parse_cached_result("PROVEN\n").is_none());
+        assert!(parse_cached_result("PROVEN").is_none());
+    }
+
+    #[test]
+    fn verify_cache_unknown_status_is_discarded() {
+        assert!(parse_cached_result("BOGUS\n").is_none());
+        assert!(parse_cached_result("").is_none());
     }
 
     #[test]
     fn verify_cache_roundtrip_failed() {
-        let result = CachedVerifyResult::Failed {
+        let result = CachedFailure {
             vow_id: Some(3),
             description: "test failure".to_string(),
             values: vec![("x".to_string(), "42".to_string())],
@@ -271,21 +259,10 @@ mod tests {
         };
         let serialized = serialize_cached_result(&result);
         let parsed = parse_cached_result(&serialized).unwrap();
-        match parsed {
-            CachedVerifyResult::Failed {
-                vow_id,
-                description,
-                values,
-                block_visits,
-                ..
-            } => {
-                assert_eq!(vow_id, Some(3));
-                assert_eq!(description, "test failure");
-                assert_eq!(values.len(), 1);
-                assert_eq!(block_visits, vec![0, 1, 3]);
-            }
-            _ => panic!("expected Failed"),
-        }
+        assert_eq!(parsed.vow_id, Some(3));
+        assert_eq!(parsed.description, "test failure");
+        assert_eq!(parsed.values.len(), 1);
+        assert_eq!(parsed.block_visits, vec![0, 1, 3]);
     }
 
     #[test]

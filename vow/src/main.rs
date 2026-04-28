@@ -22,7 +22,7 @@ use vow_verify::{
     run_with_fallback, verify_function_with_module_and_const_fns_configured,
 };
 
-use cache::{CachedVerifyResult, VerifyCache};
+use cache::{CachedFailure, VerifyCache};
 use frontend::{FrontendBundle, FrontendError, FrontendGoal, prepare_frontend};
 
 // ---------------------------------------------------------------------------
@@ -1114,7 +1114,7 @@ fn skill_json() -> String {
     "where_clauses": "fn f(x: i64 where x >= 0) -> i64 \u2014 refinement types on parameters",
     "structs": {
       "definition": "struct Name { field: Type, ... }",
-      "linear": "linear struct Name { field: Type, ... } \u2014 must be consumed exactly once",
+      "linear": "linear struct Name { field: Type, ... } \u2014 linear obligation must be consumed or returned before region close",
       "literal": "Name { field: value, ... }",
       "field_access": "value.field"
     },
@@ -1841,7 +1841,7 @@ linear struct FileHandle {
 }
 ```
 
-Linear struct values must be consumed exactly once.
+Linear struct values carry a linear obligation. The obligation must either be consumed before the value's owning region closes or transferred to the caller by returning the value.
 
 ### Struct Literals
 
@@ -1882,7 +1882,7 @@ fn main() -> i32 [io] {
 
 This enables in-place mutation patterns (e.g., make/unmake in search trees) without cloning. The same aliasing semantics apply when structs are stored in containers — see [Indexing](#indexing). To avoid aliasing, construct a fresh struct literal with the desired field values.
 
-**Note:** For `linear struct` types, passing the value to a function consumes it — the caller cannot access it afterward. To observe mutations to a linear struct, return the updated value from the function.
+**Note:** For `linear struct` types, passing the value to a function consumes it; the caller cannot access it afterward. Returning a linear value transfers the obligation to the caller, so this is the normal way to hand an updated linear value back out of a function.
 
 ## Enum Definitions
 
@@ -3107,17 +3107,35 @@ fn f() -> () {
 ### LinearTypeViolation
 
 **Phase:** Type Checker
-**Meaning:** A value of a `linear struct` type was not consumed exactly once.
+**Meaning:** A value of a `linear struct` type is used in a way that is immediately invalid before region inference runs, such as consuming it twice, consuming it inside a loop that may execute more than once, or consuming it after only some control-flow paths already consumed it.
 
 ```vow
 linear struct Handle { fd: i64 }
 
-fn f() -> () {
-    let h: Handle = Handle { fd: 1 };
+fn f(h: Handle) -> Handle {
+    let h2: Handle = h;
+    let h3: Handle = h;  // h was already consumed
+    h2
 }
 ```
 
-**Fix:** Ensure every linear value is consumed (passed to a function, returned, or destructured) exactly once.
+**Fix:** Restructure ownership so each path uses a consumed linear value at most once. Obligations that are simply left live at scope exit are reported later as `RegionLinear`.
+
+### RegionLinear
+
+**Phase:** Region Inference
+**Meaning:** A `linear struct` value can remain live when its owning region closes. Returning the value transfers the linear obligation to the caller; consuming it before the close satisfies the obligation.
+
+```vow
+linear struct Handle { fd: i64 }
+
+fn f() -> i64 {
+    let h: Handle = Handle { fd: 1 };
+    0
+}
+```
+
+**Fix:** Consume the value before the region closes, or return it so the caller receives the obligation.
 
 ### NonExhaustiveMatch
 
@@ -3959,7 +3977,16 @@ When stdin is exhausted, `stdin_read_line()` returns `""` (length 0), the `while
         "NonExhaustiveMatch",
         "VowRequiresViolated",
         "VowEnsuresViolated",
-        "VowInvariantViolated"
+        "VowInvariantViolated",
+        "UnknownMethod",
+        "UnsupportedFeature",
+        "LoweringWarning",
+        "MissingContract",
+        "ContractTypeMismatch",
+        "EsbmcNotFound",
+        "IoError",
+        "RegionConflict",
+        "RegionLinear"
       ],
       "description": "Machine-readable error code"
     },
@@ -4333,6 +4360,8 @@ pub struct BuildResult {
 pub struct ContractEntryJson {
     pub vow_id: u32,
     pub function: String,
+    #[serde(skip)]
+    pub function_id: u32,
     pub kind: String,
     pub description: String,
     pub blame: String,
@@ -4908,31 +4937,12 @@ fn verify_one_function(
             func_config.encoding_str(),
         );
 
-        let cached_result = vc.lookup(&key).map(|c| match c {
-            CachedVerifyResult::Proven => VerificationResult::Proven,
-            CachedVerifyResult::Failed { .. } => {
-                VerificationResult::Failed(c.to_counterexample().unwrap())
-            }
-        });
-        // Phase D: if BV lookup misses under Auto encoding and BV solver
-        // isn't Bitwuzla, probe the IR fallback key for a prior ProvenIr
-        // result. Only promote Proven hits — IR Failed entries must be
-        // ignored because IR doesn't model overflow.
-        let cached_result = cached_result.or_else(|| {
-            if func_config.encoding != Encoding::Auto
-                || matches!(func_config.solver, Solver::Bitwuzla)
-            {
-                return None;
-            }
-            let ir_key = VerifyCache::cache_key(&c_src, limits.max_k_step, "z3", "ir");
-            vc.lookup(&ir_key).and_then(|c| match c {
-                CachedVerifyResult::Proven => Some(VerificationResult::ProvenIr),
-                CachedVerifyResult::Failed { .. } => None,
-            })
-        });
-
-        if let Some(r) = cached_result {
-            r
+        // Security: lookup only returns FAILED entries (PROVEN is never trusted
+        // from disk). The Phase D IR-fallback probe only consumed cached
+        // PROVEN, so it is removed: with PROVEN no longer cached, that probe
+        // could only return None.
+        if let Some(cached) = vc.lookup(&key) {
+            VerificationResult::Failed(cached.to_counterexample())
         } else {
             let esbmc = match find_esbmc() {
                 Some(p) => p,
@@ -4940,31 +4950,25 @@ fn verify_one_function(
             };
             let (res, resolved_config) =
                 run_with_fallback(&esbmc, &c_src, limits.max_k_step, &func.name, &func_config);
-            // Store under the resolved config so ProvenIr results are
-            // keyed by encoding=ir rather than the pre-fallback Auto/Bv.
-            let store_key = VerifyCache::cache_key(
-                &c_src,
-                limits.max_k_step,
-                resolved_config.solver_str(),
-                resolved_config.encoding_str(),
-            );
-            match &res {
-                VerificationResult::Proven | VerificationResult::ProvenIr => {
-                    vc.store(&store_key, &CachedVerifyResult::Proven);
-                }
-                VerificationResult::Failed(ce) => {
-                    vc.store(
-                        &store_key,
-                        &CachedVerifyResult::Failed {
-                            vow_id: ce.vow_id,
-                            description: ce.description.clone(),
-                            values: ce.values.clone(),
-                            block_visits: ce.block_visits.clone(),
-                            raw_output: ce.raw_output.clone(),
-                        },
-                    );
-                }
-                _ => {}
+            // Security: never cache PROVEN — a forged on-disk entry must not
+            // be able to bypass ESBMC on a later run.
+            if let VerificationResult::Failed(ce) = &res {
+                let store_key = VerifyCache::cache_key(
+                    &c_src,
+                    limits.max_k_step,
+                    resolved_config.solver_str(),
+                    resolved_config.encoding_str(),
+                );
+                vc.store(
+                    &store_key,
+                    &CachedFailure {
+                        vow_id: ce.vow_id,
+                        description: ce.description.clone(),
+                        values: ce.values.clone(),
+                        block_visits: ce.block_visits.clone(),
+                        raw_output: ce.raw_output.clone(),
+                    },
+                );
             }
             res
         }
@@ -6013,37 +6017,17 @@ fn update_contract_statuses(
                 config.encoding_str(),
             );
 
-            let cached_result = vc.lookup(&key).map(|c| match c {
-                CachedVerifyResult::Proven => VerificationResult::Proven,
-                CachedVerifyResult::Failed { .. } => {
-                    VerificationResult::Failed(c.to_counterexample().unwrap())
-                }
-            });
-            // Phase D: if BV lookup misses under Auto encoding and BV solver
-            // isn't Bitwuzla, also probe the IR fallback key. A hit there
-            // means a prior run had to fall back to ir; surface as ProvenIr
-            // so `contracts --verify` reports "proven-ir".
-            let cached_result = cached_result.or_else(|| {
-                if config.encoding != Encoding::Auto || matches!(config.solver, Solver::Bitwuzla) {
-                    return None;
-                }
-                let ir_key = VerifyCache::cache_key(&c_src, limits.max_k_step, "z3", "ir");
-                // Ignore IR Failed entries: IR lacks overflow modeling, so
-                // an IR-only counterexample may be infeasible under BV.
-                vc.lookup(&ir_key).and_then(|c| match c {
-                    CachedVerifyResult::Proven => Some(VerificationResult::ProvenIr),
-                    CachedVerifyResult::Failed { .. } => None,
-                })
-            });
-
-            if let Some(r) = cached_result {
-                r
+            // Security: lookup only returns FAILED (PROVEN is never trusted
+            // from disk); the Phase D IR-fallback probe consumed only cached
+            // PROVEN and is removed since that path can never hit.
+            if let Some(cached) = vc.lookup(&key) {
+                VerificationResult::Failed(cached.to_counterexample())
             } else {
                 let esbmc = match find_esbmc() {
                     Some(p) => p,
                     None => {
                         for entry in entries.iter_mut() {
-                            if entry.function == func.name {
+                            if entry.function_id == func.id.0 {
                                 entry.status = "error".to_string();
                             }
                         }
@@ -6052,29 +6036,24 @@ fn update_contract_statuses(
                 };
                 let (res, resolved_config) =
                     run_with_fallback(&esbmc, &c_src, limits.max_k_step, &func.name, config);
-                let store_key = VerifyCache::cache_key(
-                    &c_src,
-                    limits.max_k_step,
-                    resolved_config.solver_str(),
-                    resolved_config.encoding_str(),
-                );
-                match &res {
-                    VerificationResult::Proven | VerificationResult::ProvenIr => {
-                        vc.store(&store_key, &CachedVerifyResult::Proven);
-                    }
-                    VerificationResult::Failed(ce) => {
-                        vc.store(
-                            &store_key,
-                            &CachedVerifyResult::Failed {
-                                vow_id: ce.vow_id,
-                                description: ce.description.clone(),
-                                values: ce.values.clone(),
-                                block_visits: ce.block_visits.clone(),
-                                raw_output: ce.raw_output.clone(),
-                            },
-                        );
-                    }
-                    _ => {}
+                // Security: never cache PROVEN.
+                if let VerificationResult::Failed(ce) = &res {
+                    let store_key = VerifyCache::cache_key(
+                        &c_src,
+                        limits.max_k_step,
+                        resolved_config.solver_str(),
+                        resolved_config.encoding_str(),
+                    );
+                    vc.store(
+                        &store_key,
+                        &CachedFailure {
+                            vow_id: ce.vow_id,
+                            description: ce.description.clone(),
+                            values: ce.values.clone(),
+                            block_visits: ce.block_visits.clone(),
+                            raw_output: ce.raw_output.clone(),
+                        },
+                    );
                 }
                 res
             }
@@ -6090,7 +6069,7 @@ fn update_contract_statuses(
         };
 
         for entry in entries.iter_mut() {
-            if entry.function == func.name {
+            if entry.function_id == func.id.0 {
                 match &result {
                     VerificationResult::Proven => {
                         entry.status = "proven".to_string();
@@ -6148,6 +6127,7 @@ fn run_contracts_command(
             entries.push(ContractEntryJson {
                 vow_id: vow.id.0,
                 function: func.name.clone(),
+                function_id: func.id.0,
                 kind: kind.to_string(),
                 description: vow.description.clone(),
                 blame: blame.to_string(),

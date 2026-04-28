@@ -1,0 +1,10 @@
+// TEST: error-code RegionLinear
+module LinearRegionParamUnconsumed
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn ignore(h: Handle) -> i32 {
+    0
+}

@@ -315,22 +315,13 @@ fn verify_collect_and_report(
         eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR (failed to start ESBMC)")));
         return 0;
     }
-    if h == -2 {
-        eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN (cached)")));
-        return 1;
-    }
     let effective_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
     let vr: VerifyResult = verify_collect(h, f, effective_timeout);
     let st: i64 = vr.status;
     if st == VERIFY_PROVEN() {
         eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN")));
-        if use_cache {
-            let c_src2: String = emit_c_for_verify(f, ir_mod, vec_max, string_max, hashmap_max);
-            let bv_solver2: String = resolve_auto_bv_solver(solver);
-            let bv_encoding2: String = { if is_auto_encoding(encoding) { String::from("bv") } else { encoding } };
-            let ck2: String = verify_cache_key(c_src2, max_k_step, bv_solver2, bv_encoding2);
-            verify_cache_store(ck2, VERIFY_PROVEN());
-        }
+        // No on-disk cache on self-hosted; see the note above
+        // resolve_auto_bv_solver in verifier.vow.
         return 1;
     }
     if st == VERIFY_PROVEN_IR() {
@@ -1815,7 +1806,7 @@ fn skill_json() -> String {
     r.push_str(String::from("    \"where_clauses\": \"fn f(x: i64 where x >= 0) -> i64 \\u2014 refinement types on parameters\",\n"));
     r.push_str(String::from("    \"structs\": {\n"));
     r.push_str(String::from("      \"definition\": \"struct Name { field: Type, ... }\",\n"));
-    r.push_str(String::from("      \"linear\": \"linear struct Name { field: Type, ... } \\u2014 must be consumed exactly once\",\n"));
+    r.push_str(String::from("      \"linear\": \"linear struct Name { field: Type, ... } \\u2014 linear obligation must be consumed or returned before region close\",\n"));
     r.push_str(String::from("      \"literal\": \"Name { field: value, ... }\",\n"));
     r.push_str(String::from("      \"field_access\": \"value.field\"\n"));
     r.push_str(String::from("    },\n"));
@@ -2542,7 +2533,7 @@ fn skill_full() -> String {
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Linear struct values must be consumed exactly once.\n"));
+    r.push_str(String::from("Linear struct values carry a linear obligation. The obligation must either be consumed before the value's owning region closes or transferred to the caller by returning the value.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Struct Literals\n"));
     r.push_str(String::from("\n"));
@@ -2583,7 +2574,7 @@ fn skill_full() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("This enables in-place mutation patterns (e.g., make/unmake in search trees) without cloning. The same aliasing semantics apply when structs are stored in containers -- see [Indexing](#indexing). To avoid aliasing, construct a fresh struct literal with the desired field values.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Note:** For `linear struct` types, passing the value to a function consumes it -- the caller cannot access it afterward. To observe mutations to a linear struct, return the updated value from the function.\n"));
+    r.push_str(String::from("**Note:** For `linear struct` types, passing the value to a function consumes it; the caller cannot access it afterward. Returning a linear value transfers the obligation to the caller, so this is the normal way to hand an updated linear value back out of a function.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Enum Definitions\n"));
     r.push_str(String::from("\n"));
@@ -3808,17 +3799,35 @@ fn skill_full() -> String {
     r.push_str(String::from("### LinearTypeViolation\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Phase:** Type Checker\n"));
-    r.push_str(String::from("**Meaning:** A value of a `linear struct` type was not consumed exactly once.\n"));
+    r.push_str(String::from("**Meaning:** A value of a `linear struct` type is used in a way that is immediately invalid before region inference runs, such as consuming it twice, consuming it inside a loop that may execute more than once, or consuming it after only some control-flow paths already consumed it.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("linear struct Handle { fd: i64 }\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("fn f() -> () {\n"));
-    r.push_str(String::from("    let h: Handle = Handle { fd: 1 };\n"));
+    r.push_str(String::from("fn f(h: Handle) -> Handle {\n"));
+    r.push_str(String::from("    let h2: Handle = h;\n"));
+    r.push_str(String::from("    let h3: Handle = h;  // h was already consumed\n"));
+    r.push_str(String::from("    h2\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Fix:** Ensure every linear value is consumed (passed to a function, returned, or destructured) exactly once.\n"));
+    r.push_str(String::from("**Fix:** Restructure ownership so each path uses a consumed linear value at most once. Obligations that are simply left live at scope exit are reported later as `RegionLinear`.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### RegionLinear\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Region Inference\n"));
+    r.push_str(String::from("**Meaning:** A `linear struct` value can remain live when its owning region closes. Returning the value transfers the linear obligation to the caller; consuming it before the close satisfies the obligation.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("linear struct Handle { fd: i64 }\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("fn f() -> i64 {\n"));
+    r.push_str(String::from("    let h: Handle = Handle { fd: 1 };\n"));
+    r.push_str(String::from("    0\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Consume the value before the region closes, or return it so the caller receives the obligation.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### NonExhaustiveMatch\n"));
     r.push_str(String::from("\n"));
@@ -4660,7 +4669,16 @@ fn skill_full() -> String {
     r.push_str(String::from("        \"NonExhaustiveMatch\",\n"));
     r.push_str(String::from("        \"VowRequiresViolated\",\n"));
     r.push_str(String::from("        \"VowEnsuresViolated\",\n"));
-    r.push_str(String::from("        \"VowInvariantViolated\"\n"));
+    r.push_str(String::from("        \"VowInvariantViolated\",\n"));
+    r.push_str(String::from("        \"UnknownMethod\",\n"));
+    r.push_str(String::from("        \"UnsupportedFeature\",\n"));
+    r.push_str(String::from("        \"LoweringWarning\",\n"));
+    r.push_str(String::from("        \"MissingContract\",\n"));
+    r.push_str(String::from("        \"ContractTypeMismatch\",\n"));
+    r.push_str(String::from("        \"EsbmcNotFound\",\n"));
+    r.push_str(String::from("        \"IoError\",\n"));
+    r.push_str(String::from("        \"RegionConflict\",\n"));
+    r.push_str(String::from("        \"RegionLinear\"\n"));
     r.push_str(String::from("      ],\n"));
     r.push_str(String::from("      \"description\": \"Machine-readable error code\"\n"));
     r.push_str(String::from("    },\n"));
@@ -4917,6 +4935,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
 
     // Collect per-contract entries into parallel arrays
     let e_vow_ids: Vec<i64> = Vec::new();
+    let e_func_ids: Vec<i64> = Vec::new();
     let e_func_names: Vec<String> = Vec::new();
     let e_kinds: Vec<String> = Vec::new();
     let e_descs: Vec<String> = Vec::new();
@@ -4934,6 +4953,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
         while vi < nv {
             let ve: IrVowEntry = func.vows[vi];
             e_vow_ids.push(ve.id);
+            e_func_ids.push(func.id);
             e_func_names.push(func.name);
             e_kinds.push(vow_kind_from_desc(ve.description));
             e_descs.push(ve.description);
@@ -4963,8 +4983,8 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
                 let vr: VerifyResult = verify_function_full(func, ir_mod, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c);
                 let st: i64 = vr.status;
                 let mut ei: i64 = 0;
-                while ei < e_func_names.len() {
-                    if e_func_names[ei] == func.name {
+                while ei < e_func_ids.len() {
+                    if e_func_ids[ei] == func.id {
                         if st == VERIFY_PROVEN() {
                             e_statuses[ei] = String::from("proven");
                         } else if st == VERIFY_PROVEN_IR() {

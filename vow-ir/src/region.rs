@@ -166,7 +166,254 @@ pub fn infer_regions(module: &mut Module, source_file: &str) {
         }
     }
 
+    check_linear_regions(module, source_file, &mut diagnostics);
+
     module.warnings.extend(diagnostics);
+}
+
+fn check_linear_regions(module: &Module, source_file: &str, diagnostics: &mut Vec<Diagnostic>) {
+    for func in &module.functions {
+        check_function_linear_regions(func, source_file, diagnostics);
+    }
+}
+
+fn check_function_linear_regions(
+    func: &Function,
+    source_file: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut inst_lookup: BTreeMap<InstId, (BlockId, &Inst)> = BTreeMap::new();
+    for block in &func.blocks {
+        for inst in &block.insts {
+            inst_lookup.insert(inst.id, (block.id, inst));
+        }
+    }
+    let predecessors = predecessor_map(func);
+
+    let mut block_in: BTreeMap<BlockId, BTreeSet<InstId>> = BTreeMap::new();
+    let mut block_out: BTreeMap<BlockId, BTreeSet<InstId>> = BTreeMap::new();
+    for block in &func.blocks {
+        block_in.insert(block.id, BTreeSet::new());
+        block_out.insert(block.id, BTreeSet::new());
+    }
+
+    let mut changed = true;
+    let mut iters = 0usize;
+    let bound = func
+        .blocks
+        .len()
+        .saturating_mul(func.blocks.len().max(1) + 1)
+        .max(8);
+    while changed && iters <= bound {
+        iters += 1;
+        changed = false;
+        for block in &func.blocks {
+            let mut incoming = BTreeSet::new();
+            if let Some(preds) = predecessors.get(&block.id) {
+                for pred in preds {
+                    if let Some(out) = block_out.get(pred) {
+                        incoming.extend(out.iter().copied());
+                    }
+                }
+            }
+            let previous_in = block_in.insert(block.id, incoming.clone());
+            if previous_in.as_ref() != Some(&incoming) {
+                changed = true;
+            }
+
+            let out = transfer_linear_block(&incoming, block, &inst_lookup);
+            if block_out.insert(block.id, out.clone()) != Some(out) {
+                changed = true;
+            }
+        }
+    }
+
+    let mut emitted: BTreeSet<InstId> = BTreeSet::new();
+    for block in &func.blocks {
+        let incoming = block_in.get(&block.id).cloned().unwrap_or_default();
+        let mut live = incoming;
+        for inst in &block.insts {
+            match inst.opcode {
+                Opcode::Return => {
+                    if let Some(&arg) = inst.args.first() {
+                        remove_linear_origins(&mut live, arg, &inst_lookup);
+                    }
+                    emit_live_linear_errors(
+                        func,
+                        source_file,
+                        &live,
+                        &inst_lookup,
+                        &mut emitted,
+                        diagnostics,
+                    );
+                    live.clear();
+                }
+                Opcode::Unreachable => {
+                    live.clear();
+                }
+                _ => apply_linear_transfer(inst, &mut live, &inst_lookup),
+            }
+        }
+    }
+}
+
+fn transfer_linear_block(
+    incoming: &BTreeSet<InstId>,
+    block: &crate::types::BasicBlock,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+) -> BTreeSet<InstId> {
+    let mut live = incoming.clone();
+    for inst in &block.insts {
+        match inst.opcode {
+            Opcode::Return => {
+                if let Some(&arg) = inst.args.first() {
+                    remove_linear_origins(&mut live, arg, inst_lookup);
+                }
+                live.clear();
+            }
+            Opcode::Unreachable => live.clear(),
+            _ => apply_linear_transfer(inst, &mut live, inst_lookup),
+        }
+    }
+    live
+}
+
+fn apply_linear_transfer(
+    inst: &Inst,
+    live: &mut BTreeSet<InstId>,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+) {
+    if inst.ty == Ty::LinearPtr
+        && matches!(
+            inst.opcode,
+            Opcode::GetArg | Opcode::RegionAlloc | Opcode::Call | Opcode::Phi
+        )
+    {
+        // LinearPtr Phi is its own fresh origin (arms are transferred in via Upsilon).
+        live.insert(inst.id);
+    }
+    if inst.opcode == Opcode::Upsilon
+        && let Some(&arg) = inst.args.first()
+        && inst_lookup
+            .get(&arg)
+            .is_some_and(|(_, a)| a.ty == Ty::LinearPtr)
+    {
+        // Path-local transfer of the arm's origin into the target Phi (Upsilon ty is Unit, hence the arg-type check).
+        remove_linear_origins(live, arg, inst_lookup);
+    }
+    if inst.opcode == Opcode::LinearConsume
+        && let Some(&arg) = inst.args.first()
+    {
+        remove_linear_origins(live, arg, inst_lookup);
+    }
+}
+
+fn remove_linear_origins(
+    live: &mut BTreeSet<InstId>,
+    id: InstId,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+) {
+    for origin in linear_origins(id, inst_lookup) {
+        live.remove(&origin);
+    }
+}
+
+fn linear_origins(
+    id: InstId,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+) -> BTreeSet<InstId> {
+    // LinearPtr Phi is a leaf origin — tracing through arms here would discharge sibling-path origins (path-insensitive double-removal bug).
+    let mut out = BTreeSet::new();
+    let mut stack = vec![id];
+    let mut seen = BTreeSet::new();
+    while let Some(cur) = stack.pop() {
+        if !seen.insert(cur) {
+            continue;
+        }
+        let Some((_, inst)) = inst_lookup.get(&cur) else {
+            continue;
+        };
+        match inst.opcode {
+            Opcode::Upsilon => stack.extend(inst.args.iter().copied()),
+            _ if inst.ty == Ty::LinearPtr => {
+                out.insert(cur);
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn predecessor_map(func: &Function) -> BTreeMap<BlockId, Vec<BlockId>> {
+    let mut preds: BTreeMap<BlockId, Vec<BlockId>> = BTreeMap::new();
+    for block in &func.blocks {
+        preds.entry(block.id).or_default();
+    }
+    for block in &func.blocks {
+        for succ in block_successors(block) {
+            preds.entry(succ).or_default().push(block.id);
+        }
+    }
+    preds
+}
+
+fn block_successors(block: &crate::types::BasicBlock) -> Vec<BlockId> {
+    let Some(term) = block
+        .insts
+        .iter()
+        .rev()
+        .find(|inst| inst.opcode.is_terminal())
+    else {
+        return vec![];
+    };
+    match &term.data {
+        InstData::BranchTargets {
+            then_block,
+            else_block,
+        } if term.opcode == Opcode::Branch => vec![*then_block, *else_block],
+        InstData::JumpTarget(target) if term.opcode == Opcode::Jump => vec![*target],
+        _ => vec![],
+    }
+}
+
+fn emit_live_linear_errors(
+    func: &Function,
+    source_file: &str,
+    live: &BTreeSet<InstId>,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+    emitted: &mut BTreeSet<InstId>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for origin in live {
+        if !emitted.insert(*origin) {
+            continue;
+        }
+        let Some((_, inst)) = inst_lookup.get(origin) else {
+            continue;
+        };
+        let name = func
+            .local_names
+            .get(&origin.0)
+            .cloned()
+            .unwrap_or_else(|| format!("%{}", origin.0));
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            code: ErrorCode::RegionLinear,
+            message: format!(
+                "linear value `{name}` is not consumed before its region closes"
+            ),
+            primary: SourceLocation {
+                file: source_file.to_string(),
+                byte_offset: inst.origin.start,
+                byte_len: inst.origin.len,
+            },
+            secondary: vec![],
+            blame: Blame::None,
+            hints: vec![format!(
+                "consume `{name}` before this scope exits, or return it to transfer the obligation to the caller"
+            )],
+        });
+    }
 }
 
 /// Insert `RegionOpen` / `RegionClose` markers around basic blocks whose

@@ -19,7 +19,16 @@
         "NonExhaustiveMatch",
         "VowRequiresViolated",
         "VowEnsuresViolated",
-        "VowInvariantViolated"
+        "VowInvariantViolated",
+        "UnknownMethod",
+        "UnsupportedFeature",
+        "LoweringWarning",
+        "MissingContract",
+        "ContractTypeMismatch",
+        "EsbmcNotFound",
+        "IoError",
+        "RegionConflict",
+        "RegionLinear"
       ],
       "description": "Machine-readable error code"
     },
