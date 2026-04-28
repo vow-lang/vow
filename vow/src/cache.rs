@@ -68,11 +68,7 @@ impl CompileCache {
 
     pub fn lookup(&self, key: &str) -> Option<PathBuf> {
         let cached = self.dir.join(format!("{key}.o"));
-        if cached.exists() {
-            Some(cached)
-        } else {
-            None
-        }
+        if cached.exists() { Some(cached) } else { None }
     }
 
     pub fn store(&self, key: &str, obj: &Path) -> PathBuf {
