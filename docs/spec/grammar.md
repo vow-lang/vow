@@ -413,7 +413,7 @@ linear struct FileHandle {
 }
 ```
 
-Linear struct values must be consumed exactly once.
+Linear struct values carry a linear obligation. The obligation must either be consumed before the value's owning region closes or transferred to the caller by returning the value.
 
 ### Struct Literals
 
@@ -454,7 +454,7 @@ fn main() -> i32 [io] {
 
 This enables in-place mutation patterns (e.g., make/unmake in search trees) without cloning. The same aliasing semantics apply when structs are stored in containers — see [Indexing](#indexing). To avoid aliasing, construct a fresh struct literal with the desired field values.
 
-**Note:** For `linear struct` types, passing the value to a function consumes it — the caller cannot access it afterward. To observe mutations to a linear struct, return the updated value from the function.
+**Note:** For `linear struct` types, passing the value to a function consumes it; the caller cannot access it afterward. Returning a linear value transfers the obligation to the caller, so this is the normal way to hand an updated linear value back out of a function.
 
 ## Enum Definitions
 

@@ -1,0 +1,52 @@
+module LinearRegionOk
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn same_block() -> i64 {
+    let h: Handle = Handle { fd: 1 };
+    let v: Vec<Handle> = Vec::new();
+    v.push(h);
+    0
+}
+
+fn nested_block() -> i64 {
+    let h: Handle = Handle { fd: 2 };
+    let v: Vec<Handle> = Vec::new();
+    {
+        v.push(h);
+    }
+    0
+}
+
+// Both arms reference `h`; this is *not* a double-consume because the
+// branches are mutually exclusive at runtime. Each branch's Upsilon
+// transfers the same `GetArg(h)` origin to the if-Phi on its own path,
+// so the analysis sees `h` discharged exactly once per execution path.
+fn transfer_return(h: Handle, c: bool) -> Handle {
+    if c {
+        h
+    } else {
+        h
+    }
+}
+
+fn vec_set_transfer() -> i64 {
+    let h: Handle = Handle { fd: 4 };
+    let v: Vec<Handle> = Vec::new();
+    v.push(Handle { fd: 0 });
+    v[0] = h;
+    0
+}
+
+fn main() -> i32 {
+    same_block();
+    nested_block();
+    vec_set_transfer();
+    let h: Handle = Handle { fd: 3 };
+    let h2: Handle = transfer_return(h, true);
+    let v: Vec<Handle> = Vec::new();
+    v.push(h2);
+    0
+}

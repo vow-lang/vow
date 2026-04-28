@@ -1,0 +1,11 @@
+// TEST: error-code RegionLinear
+module LinearRegionUnconsumed
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn main() -> i64 {
+    let h: Handle = Handle { fd: 1 };
+    0
+}

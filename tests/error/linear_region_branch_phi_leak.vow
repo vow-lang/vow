@@ -1,0 +1,22 @@
+// TEST: error-code RegionLinear
+module LinearRegionBranchPhiLeak
+
+linear struct Handle {
+    fd: i64,
+}
+
+fn choose(h: Handle, c: bool) -> Handle {
+    let r: Handle = if c {
+        h
+    } else {
+        Handle { fd: 2 }
+    };
+    r
+}
+
+fn main() -> i32 {
+    let h: Handle = Handle { fd: 1 };
+    let v: Vec<Handle> = Vec::new();
+    v.push(choose(h, true));
+    0
+}

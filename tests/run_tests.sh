@@ -118,6 +118,7 @@ parse_annotations() {
   TEST_STATUS=""
   TEST_CX_FN=""
   TEST_CX_BLAME=""
+  TEST_ERROR_CODE=""
   TEST_SKIP=""
   TEST_STDIN=""
   TEST_STDIN_FILE=""
@@ -139,6 +140,8 @@ parse_annotations() {
       TEST_CX_FN="${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ counterexample-blame\ (.+) ]]; then
       TEST_CX_BLAME="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^//\ TEST:\ error-code\ (.+) ]]; then
+      TEST_ERROR_CODE="${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ stdin\ \"(.*)\" ]]; then
       TEST_STDIN="${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ stdin-file\ (.+) ]]; then
@@ -437,6 +440,31 @@ for f in "$SCRIPT_DIR"/error/*.vow; do
   if [[ "$actual_status" != "$expected_status" ]]; then
     fail "$name" "status=$actual_status (expected $expected_status)"
     continue
+  fi
+
+  if [[ -n "$TEST_ERROR_CODE" ]]; then
+    # Scan all error-severity diagnostics, not just the first — a compiler
+    # may legitimately emit several errors for a single bug (e.g. AST
+    # backstop + region pass), and the harness should treat the test as
+    # passing if the expected code is anywhere in the output.
+    has_expected="$(EXPECTED="$TEST_ERROR_CODE" python3 -c "
+import json, sys, os
+expected = os.environ['EXPECTED']
+try:
+    d = json.loads(sys.stdin.read())
+except Exception:
+    print('false'); sys.exit(0)
+xs = d.get('diagnostics', []) or []
+codes = [x.get('error_code', '') for x in xs if x.get('severity', 'error') == 'error']
+print('true' if expected in codes else 'false')
+print('|'.join(codes))
+" <<< "$build_json")"
+    found="$(echo "$has_expected" | head -1)"
+    actual_codes="$(echo "$has_expected" | tail -1)"
+    if [[ "$found" != "true" ]]; then
+      fail "$name" "error_code=$actual_codes (expected $TEST_ERROR_CODE)"
+      continue
+    fi
   fi
 
   # Check stderr substring if annotated

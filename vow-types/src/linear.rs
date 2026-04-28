@@ -10,6 +10,7 @@ use crate::env::TypeEnv;
 enum ConsumeState {
     Available(Span),
     Consumed(Span),
+    MaybeConsumed(Span),
 }
 
 #[derive(Debug, Clone)]
@@ -45,19 +46,33 @@ pub fn check_linear_usage(
 
     check_block(&fn_def.body, &mut tracker, env, file, emitter);
 
+    // Backstop for linear let-bindings whose IR producer lowers as i64 (FieldGet/Index of Vec<Linear>); flags both Available (never consumed) and MaybeConsumed (consumed on some paths) since the region pass can't see those origins. Params skip via span (not name) so a shadowing `let h = v[0]` is still flagged.
+    let param_spans: std::collections::HashSet<Span> = fn_def
+        .params
+        .iter()
+        .filter(|p| is_linear_ast_type(&p.ty, env))
+        .map(|p| p.span)
+        .collect();
     for (name, state) in &tracker.vars {
-        if let ConsumeState::Available(def_span) = state {
-            emit_violation(
-                file,
-                emitter,
+        let (def_span, message, hint) = match state {
+            ConsumeState::Available(s) => (
+                *s,
                 format!("linear value `{name}` is never consumed"),
-                *def_span,
-                Blame::Callee,
-                vec![format!(
-                    "consume `{name}` by passing it to a function or using drop()"
-                )],
-            );
+                format!("consume `{name}` by passing it to a function or using drop()"),
+            ),
+            ConsumeState::MaybeConsumed(s) => (
+                *s,
+                format!("linear value `{name}` may not be consumed on every path"),
+                format!(
+                    "ensure `{name}` is consumed on every control-flow path before the function returns"
+                ),
+            ),
+            ConsumeState::Consumed(_) => continue,
+        };
+        if param_spans.contains(&def_span) {
+            continue;
         }
+        emit_violation(file, emitter, message, def_span, Blame::Callee, vec![hint]);
     }
 }
 
@@ -271,6 +286,18 @@ fn consume_var(
                 )],
             );
         }
+        Some(ConsumeState::MaybeConsumed(_)) => {
+            emit_violation(
+                file,
+                emitter,
+                format!("linear value `{name}` may already be consumed"),
+                span,
+                Blame::None,
+                vec![format!(
+                    "`{name}` is consumed on some control-flow paths; restructure before using it again"
+                )],
+            );
+        }
         Some(ConsumeState::Available(_)) => {
             if tracker.in_loop {
                 emit_violation(
@@ -288,6 +315,35 @@ fn consume_var(
                 .vars
                 .insert(name.to_string(), ConsumeState::Consumed(span));
         }
+    }
+}
+
+fn merge_branch_state(
+    left: Option<&ConsumeState>,
+    right: Option<&ConsumeState>,
+) -> Option<ConsumeState> {
+    match (left, right) {
+        (Some(ConsumeState::Consumed(span)), Some(ConsumeState::Consumed(_))) => {
+            Some(ConsumeState::Consumed(*span))
+        }
+        (Some(ConsumeState::Available(span)), Some(ConsumeState::Available(_))) => {
+            Some(ConsumeState::Available(*span))
+        }
+        (Some(ConsumeState::MaybeConsumed(span)), _)
+        | (_, Some(ConsumeState::MaybeConsumed(span))) => Some(ConsumeState::MaybeConsumed(*span)),
+        (Some(ConsumeState::Consumed(span)), Some(ConsumeState::Available(_)))
+        | (Some(ConsumeState::Available(_)), Some(ConsumeState::Consumed(span))) => {
+            Some(ConsumeState::MaybeConsumed(*span))
+        }
+        (Some(state), None) | (None, Some(state)) => Some(state.clone()),
+        (None, None) => None,
+    }
+}
+
+fn state_may_be_consumed(state: Option<&ConsumeState>) -> Option<Span> {
+    match state {
+        Some(ConsumeState::Consumed(span)) | Some(ConsumeState::MaybeConsumed(span)) => Some(*span),
+        _ => None,
     }
 }
 
@@ -312,60 +368,20 @@ fn check_if_branches(
         for name in &names {
             let then_state = then_tracker.vars.get(name);
             let else_state = else_tracker.vars.get(name);
-            match (then_state, else_state) {
-                (Some(ConsumeState::Consumed(span)), Some(ConsumeState::Consumed(_))) => {
-                    tracker
-                        .vars
-                        .insert(name.clone(), ConsumeState::Consumed(*span));
-                }
-                (Some(ConsumeState::Available(_)), Some(ConsumeState::Available(_))) => {}
-                (Some(ConsumeState::Consumed(span)), Some(ConsumeState::Available(_))) => {
-                    emit_violation(
-                        file,
-                        emitter,
-                        format!(
-                            "linear value `{name}` is consumed in one branch but not the other"
-                        ),
-                        *span,
-                        Blame::None,
-                        vec![format!("consume `{name}` in both branches or neither")],
-                    );
-                }
-                (Some(ConsumeState::Available(_)), Some(ConsumeState::Consumed(span))) => {
-                    emit_violation(
-                        file,
-                        emitter,
-                        format!(
-                            "linear value `{name}` is consumed in one branch but not the other"
-                        ),
-                        *span,
-                        Blame::None,
-                        vec![format!("consume `{name}` in both branches or neither")],
-                    );
-                }
-                _ => {}
+            if let Some(merged) = merge_branch_state(then_state, else_state) {
+                tracker.vars.insert(name.clone(), merged);
             }
         }
     } else {
         let names: Vec<String> = then_tracker.vars.keys().cloned().collect();
         for name in &names {
             let then_state = then_tracker.vars.get(name);
-            if matches!(then_state, Some(ConsumeState::Consumed(_)))
+            if let Some(span) = state_may_be_consumed(then_state)
                 && matches!(tracker.vars.get(name), Some(ConsumeState::Available(_)))
             {
-                emit_violation(
-                    file,
-                    emitter,
-                    format!(
-                        "linear value `{name}` is consumed in `if` branch but there is no `else` branch"
-                    ),
-                    then_branch.span,
-                    Blame::None,
-                    vec![format!("add an `else` branch that also consumes `{name}`")],
-                );
                 tracker
                     .vars
-                    .insert(name.clone(), ConsumeState::Consumed(then_branch.span));
+                    .insert(name.clone(), ConsumeState::MaybeConsumed(span));
             }
         }
     }
@@ -393,40 +409,19 @@ fn check_match_arms(
 
     let names: Vec<String> = tracker.vars.keys().cloned().collect();
     for name in &names {
-        let all_consumed = arm_trackers
+        let mut merged = arm_trackers.first().and_then(|t| t.vars.get(name)).cloned();
+        for arm_tracker in arm_trackers.iter().skip(1) {
+            merged = merge_branch_state(merged.as_ref(), arm_tracker.vars.get(name));
+        }
+        if let Some(state) = merged {
+            tracker.vars.insert(name.clone(), state);
+        } else if let Some(consumed_span) = arm_trackers
             .iter()
-            .all(|t| matches!(t.vars.get(name), Some(ConsumeState::Consumed(_))));
-        let any_consumed = arm_trackers
-            .iter()
-            .any(|t| matches!(t.vars.get(name), Some(ConsumeState::Consumed(_))));
-
-        if all_consumed {
-            if let Some(first_arm) = arm_trackers.first()
-                && let Some(ConsumeState::Consumed(span)) = first_arm.vars.get(name)
-            {
-                tracker
-                    .vars
-                    .insert(name.clone(), ConsumeState::Consumed(*span));
-            }
-        } else if any_consumed {
-            let consumed_span = arm_trackers
-                .iter()
-                .find_map(|t| {
-                    if let Some(ConsumeState::Consumed(s)) = t.vars.get(name) {
-                        Some(*s)
-                    } else {
-                        None
-                    }
-                })
-                .unwrap();
-            emit_violation(
-                file,
-                emitter,
-                format!("linear value `{name}` is consumed in one branch but not the other"),
-                consumed_span,
-                Blame::None,
-                vec![format!("consume `{name}` in all match arms or none")],
-            );
+            .find_map(|t| state_may_be_consumed(t.vars.get(name)))
+        {
+            tracker
+                .vars
+                .insert(name.clone(), ConsumeState::MaybeConsumed(consumed_span));
         }
     }
 }
@@ -581,21 +576,6 @@ mod tests {
     }
 
     #[test]
-    fn test_linear_never_consumed_error() {
-        let env = make_env_with_linear_struct("FileHandle");
-        let params = vec![make_param("h", named_type("FileHandle"))];
-        let body = empty_block();
-        let fn_def = make_fn_def(params, body);
-
-        let mut emitter = TestEmitter(vec![]);
-        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
-
-        assert_eq!(emitter.0.len(), 1);
-        assert!(emitter.0[0].message.contains("never consumed"));
-        assert_eq!(emitter.0[0].code, ErrorCode::LinearTypeViolation);
-    }
-
-    #[test]
     fn test_linear_consumed_twice_error() {
         let env = make_env_with_linear_struct("FileHandle");
         let params = vec![make_param("h", named_type("FileHandle"))];
@@ -660,7 +640,7 @@ mod tests {
     }
 
     #[test]
-    fn test_linear_in_only_one_branch_error() {
+    fn test_linear_in_only_one_branch_deferred_to_region_check() {
         let env = make_env_with_linear_struct("FileHandle");
         let params = vec![make_param("h", named_type("FileHandle"))];
 
@@ -682,17 +662,7 @@ mod tests {
         let mut emitter = TestEmitter(vec![]);
         check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
 
-        assert_eq!(
-            emitter.0.len(),
-            1,
-            "Expected 1 error but got: {:?}",
-            emitter.0
-        );
-        assert!(
-            emitter.0[0].message.contains("no `else` branch")
-                || emitter.0[0].message.contains("one branch")
-        );
-        assert_eq!(emitter.0[0].code, ErrorCode::LinearTypeViolation);
+        assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
     }
 
     #[test]
@@ -792,36 +762,6 @@ mod tests {
             "Expected no errors but got: {:?}",
             emitter.0
         );
-    }
-
-    #[test]
-    fn test_let_stmt_linear_never_consumed_error() {
-        let env = make_env_with_linear_struct("FileHandle");
-        let params = vec![];
-        let let_stmt = Stmt::Let {
-            pattern: Pat {
-                kind: PatKind::Ident {
-                    name: "h".to_string(),
-                    is_mut: false,
-                },
-                span: dummy_span(),
-            },
-            ty: Some(named_type("FileHandle")),
-            init: Box::new(ident_expr("open")),
-            span: dummy_span(),
-        };
-        let body = Block {
-            stmts: vec![let_stmt],
-            trailing_expr: None,
-            span: dummy_span(),
-        };
-        let fn_def = make_fn_def(params, body);
-
-        let mut emitter = TestEmitter(vec![]);
-        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
-
-        assert_eq!(emitter.0.len(), 1);
-        assert!(emitter.0[0].message.contains("never consumed"));
     }
 
     #[test]
@@ -925,9 +865,9 @@ mod tests {
         let mut emitter = TestEmitter(vec![]);
         check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
 
-        // h is never consumed
-        assert_eq!(emitter.0.len(), 1);
-        assert!(emitter.0[0].message.contains("never consumed"));
+        // `return;` doesn't consume `h`, but the param case is left to the
+        // region pass — the AST backstop only flags non-param let-bindings.
+        assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
     }
 
     // --- While ---
@@ -1001,7 +941,7 @@ mod tests {
     }
 
     #[test]
-    fn test_match_only_some_arms_consume_linear_error() {
+    fn test_match_only_some_arms_consume_linear_deferred_to_region_check() {
         let env = make_env_with_linear_struct("FileHandle");
         let params = vec![make_param("h", named_type("FileHandle"))];
         let match_expr = Expr {
@@ -1026,14 +966,13 @@ mod tests {
         let mut emitter = TestEmitter(vec![]);
         check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
 
-        assert!(!emitter.0.is_empty(), "Expected errors but got none");
-        assert!(emitter.0.iter().any(|d| d.message.contains("one branch")));
+        assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
     }
 
     // --- if-else asymmetric consumption ---
 
     #[test]
-    fn test_if_else_only_then_consumes_error() {
+    fn test_if_else_only_then_consumes_deferred_to_region_check() {
         let env = make_env_with_linear_struct("FileHandle");
         let params = vec![make_param("h", named_type("FileHandle"))];
 
@@ -1066,17 +1005,122 @@ mod tests {
         let mut emitter = TestEmitter(vec![]);
         check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
 
-        assert!(
-            emitter.0.len() >= 1,
-            "Expected at least 1 error but got: {:?}",
-            emitter.0
-        );
-        assert!(
-            emitter
-                .0
-                .iter()
-                .any(|d| d.message.contains("one branch") || d.message.contains("never consumed"))
-        );
+        assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
+    }
+
+    #[test]
+    fn test_linear_never_consumed_param_skipped() {
+        // The backstop intentionally skips params — region pass catches them.
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![make_param("h", named_type("FileHandle"))];
+        let body = empty_block();
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert!(emitter.0.is_empty(), "Got: {:?}", emitter.0);
+    }
+
+    #[test]
+    fn test_shadowed_param_let_still_flagged() {
+        // `fn(h: Handle) { let h: Handle = ...; 0 }` — the let binding shadows
+        // the param; the backstop must still report the shadowing let by span,
+        // not skip the entry just because its name matches a param name.
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![make_param("h", named_type("FileHandle"))];
+        let let_stmt = Stmt::Let {
+            pattern: Pat {
+                kind: PatKind::Ident {
+                    name: "h".to_string(),
+                    is_mut: false,
+                },
+                span: Span::new(100, 1),
+            },
+            ty: Some(named_type("FileHandle")),
+            init: Box::new(ident_expr("open")),
+            span: Span::new(100, 1),
+        };
+        let body = Block {
+            stmts: vec![let_stmt],
+            trailing_expr: None,
+            span: dummy_span(),
+        };
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert_eq!(emitter.0.len(), 1, "Got: {:?}", emitter.0);
+        assert!(emitter.0[0].message.contains("never consumed"));
+        // The diagnostic must point at the let span, not the param span.
+        assert_eq!(emitter.0[0].primary.byte_offset, 100);
+    }
+
+    #[test]
+    fn test_let_stmt_linear_never_consumed_error() {
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![];
+        let let_stmt = Stmt::Let {
+            pattern: Pat {
+                kind: PatKind::Ident {
+                    name: "h".to_string(),
+                    is_mut: false,
+                },
+                span: dummy_span(),
+            },
+            ty: Some(named_type("FileHandle")),
+            init: Box::new(ident_expr("open")),
+            span: dummy_span(),
+        };
+        let body = Block {
+            stmts: vec![let_stmt],
+            trailing_expr: None,
+            span: dummy_span(),
+        };
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert_eq!(emitter.0.len(), 1);
+        assert!(emitter.0[0].message.contains("never consumed"));
+    }
+
+    #[test]
+    fn test_partial_branch_then_later_consume_error() {
+        let env = make_env_with_linear_struct("FileHandle");
+        let params = vec![make_param("h", named_type("FileHandle"))];
+
+        let then_block = block_with_expr(call_with("consume", "h"));
+        let if_expr = Expr {
+            kind: ExprKind::If {
+                condition: Box::new(Expr {
+                    kind: ExprKind::Lit(Lit::Bool(true)),
+                    span: dummy_span(),
+                }),
+                then_branch: Box::new(then_block),
+                else_branch: None,
+            },
+            span: dummy_span(),
+        };
+        let body = Block {
+            stmts: vec![Stmt::Expr {
+                expr: if_expr,
+                has_semicolon: true,
+                span: dummy_span(),
+            }],
+            trailing_expr: Some(Box::new(call_with("close", "h"))),
+            span: dummy_span(),
+        };
+        let fn_def = make_fn_def(params, body);
+
+        let mut emitter = TestEmitter(vec![]);
+        check_linear_usage(&fn_def, &env, "test.vow", &mut emitter);
+
+        assert_eq!(emitter.0.len(), 1, "Got: {:?}", emitter.0);
+        assert!(emitter.0[0].message.contains("may already be consumed"));
+        assert_eq!(emitter.0[0].code, ErrorCode::LinearTypeViolation);
     }
 
     // --- BinaryOp, UnaryOp, FieldAccess, Index, Question, Tuple, Break ---

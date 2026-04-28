@@ -1114,7 +1114,7 @@ fn skill_json() -> String {
     "where_clauses": "fn f(x: i64 where x >= 0) -> i64 \u2014 refinement types on parameters",
     "structs": {
       "definition": "struct Name { field: Type, ... }",
-      "linear": "linear struct Name { field: Type, ... } \u2014 must be consumed exactly once",
+      "linear": "linear struct Name { field: Type, ... } \u2014 linear obligation must be consumed or returned before region close",
       "literal": "Name { field: value, ... }",
       "field_access": "value.field"
     },
@@ -1841,7 +1841,7 @@ linear struct FileHandle {
 }
 ```
 
-Linear struct values must be consumed exactly once.
+Linear struct values carry a linear obligation. The obligation must either be consumed before the value's owning region closes or transferred to the caller by returning the value.
 
 ### Struct Literals
 
@@ -1882,7 +1882,7 @@ fn main() -> i32 [io] {
 
 This enables in-place mutation patterns (e.g., make/unmake in search trees) without cloning. The same aliasing semantics apply when structs are stored in containers — see [Indexing](#indexing). To avoid aliasing, construct a fresh struct literal with the desired field values.
 
-**Note:** For `linear struct` types, passing the value to a function consumes it — the caller cannot access it afterward. To observe mutations to a linear struct, return the updated value from the function.
+**Note:** For `linear struct` types, passing the value to a function consumes it; the caller cannot access it afterward. Returning a linear value transfers the obligation to the caller, so this is the normal way to hand an updated linear value back out of a function.
 
 ## Enum Definitions
 
@@ -3107,17 +3107,35 @@ fn f() -> () {
 ### LinearTypeViolation
 
 **Phase:** Type Checker
-**Meaning:** A value of a `linear struct` type was not consumed exactly once.
+**Meaning:** A value of a `linear struct` type is used in a way that is immediately invalid before region inference runs, such as consuming it twice, consuming it inside a loop that may execute more than once, or consuming it after only some control-flow paths already consumed it.
 
 ```vow
 linear struct Handle { fd: i64 }
 
-fn f() -> () {
-    let h: Handle = Handle { fd: 1 };
+fn f(h: Handle) -> Handle {
+    let h2: Handle = h;
+    let h3: Handle = h;  // h was already consumed
+    h2
 }
 ```
 
-**Fix:** Ensure every linear value is consumed (passed to a function, returned, or destructured) exactly once.
+**Fix:** Restructure ownership so each path uses a consumed linear value at most once. Obligations that are simply left live at scope exit are reported later as `RegionLinear`.
+
+### RegionLinear
+
+**Phase:** Region Inference
+**Meaning:** A `linear struct` value can remain live when its owning region closes. Returning the value transfers the linear obligation to the caller; consuming it before the close satisfies the obligation.
+
+```vow
+linear struct Handle { fd: i64 }
+
+fn f() -> i64 {
+    let h: Handle = Handle { fd: 1 };
+    0
+}
+```
+
+**Fix:** Consume the value before the region closes, or return it so the caller receives the obligation.
 
 ### NonExhaustiveMatch
 
@@ -3959,7 +3977,16 @@ When stdin is exhausted, `stdin_read_line()` returns `""` (length 0), the `while
         "NonExhaustiveMatch",
         "VowRequiresViolated",
         "VowEnsuresViolated",
-        "VowInvariantViolated"
+        "VowInvariantViolated",
+        "UnknownMethod",
+        "UnsupportedFeature",
+        "LoweringWarning",
+        "MissingContract",
+        "ContractTypeMismatch",
+        "EsbmcNotFound",
+        "IoError",
+        "RegionConflict",
+        "RegionLinear"
       ],
       "description": "Machine-readable error code"
     },

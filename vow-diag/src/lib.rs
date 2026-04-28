@@ -65,6 +65,7 @@ pub enum ErrorCode {
     IoError,
     // Region inference (arena-per-scope, Phase 3)
     RegionConflict,
+    RegionLinear,
 }
 
 pub trait DiagnosticEmitter {
@@ -258,6 +259,13 @@ mod tests {
         // The DiagnosticJson layer in `vow/src/main.rs` derives this string via
         // `format!("{:?}", code)`, so the Debug format MUST stay PascalCase.
         assert_eq!(format!("{:?}", ErrorCode::RegionConflict), "RegionConflict");
+    }
+
+    #[test]
+    fn region_linear_debug_format_is_pascalcase() {
+        // Same contract as `region_conflict_debug_format_is_pascalcase`: the JSON
+        // `error_code` for the post-region linear-obligation check is "RegionLinear".
+        assert_eq!(format!("{:?}", ErrorCode::RegionLinear), "RegionLinear");
     }
 
     #[test]
