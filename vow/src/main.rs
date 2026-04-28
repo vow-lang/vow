@@ -4209,6 +4209,8 @@ pub struct BuildResult {
 pub struct ContractEntryJson {
     pub vow_id: u32,
     pub function: String,
+    #[serde(skip)]
+    pub function_id: u32,
     pub kind: String,
     pub description: String,
     pub blame: String,
@@ -5756,7 +5758,7 @@ fn update_contract_statuses(
                     Some(p) => p,
                     None => {
                         for entry in entries.iter_mut() {
-                            if entry.function == func.name {
+                            if entry.function_id == func.id.0 {
                                 entry.status = "error".to_string();
                             }
                         }
@@ -5802,7 +5804,7 @@ fn update_contract_statuses(
         };
 
         for entry in entries.iter_mut() {
-            if entry.function == func.name {
+            if entry.function_id == func.id.0 {
                 match &result {
                     VerificationResult::Proven => {
                         entry.status = "proven".to_string();
@@ -5860,6 +5862,7 @@ fn run_contracts_command(
             entries.push(ContractEntryJson {
                 vow_id: vow.id.0,
                 function: func.name.clone(),
+                function_id: func.id.0,
                 kind: kind.to_string(),
                 description: vow.description.clone(),
                 blame: blame.to_string(),

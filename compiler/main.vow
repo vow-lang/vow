@@ -4711,7 +4711,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
                 let vr: VerifyResult = verify_function_full(func, ir_mod, max_k_step, use_cache, solver, encoding, vec_max_c, string_max_c, hashmap_max_c);
                 let st: i64 = vr.status;
                 let mut ei: i64 = 0;
-                while ei < e_func_names.len() {
+                while ei < e_func_ids.len() {
                     if e_func_ids[ei] == func.id {
                         if st == VERIFY_PROVEN() {
                             e_statuses[ei] = String::from("proven");
