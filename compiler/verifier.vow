@@ -752,11 +752,10 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
         if timeout_secs.len() > 0 { timeout_secs } else { DEFAULT_AUTO_TIMEOUT_STR() }
     };
     // Security: PROVEN is never trusted from disk (see verify_cache_lookup),
-    // so the previous IR cache probe is dead and removed. Re-running ESBMC is
-    // the only safe path.
-    if use_cache {
-        verify_cache_ensure_dir();
-    }
+    // so the previous IR cache probe is gone. The IR-fallback path also
+    // never writes to the cache, so no verify_cache_ensure_dir() call is
+    // needed here. `use_cache` is kept on the signature for caller-side
+    // symmetry with verify_function_full but is unused.
     let exit_code: i64 = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, ir_solver, ir_encoding, ir_timeout);
     if exit_code == -1 {
         return VerifyResult {
@@ -796,10 +795,10 @@ fn verify_start(f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_ca
     let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max);
     // Security: PROVEN is never trusted from disk (see verify_cache_lookup),
     // so previous BV/IR cache-PROVEN probes are dead and removed. The parallel
-    // pool always runs ESBMC — see the matching note in verify_function_full.
-    if use_cache {
-        verify_cache_ensure_dir();
-    }
+    // pool also never writes to the cache (only verify_function_full does),
+    // so no verify_cache_ensure_dir() call is needed here. `use_cache` is kept
+    // on the signature for caller-side symmetry with verify_function_full but
+    // is unused.
     let tmp_path: String = String::from("/tmp/__vow_verify_");
     tmp_path.push_str(i64_to_str(idx));
     tmp_path.push_str(String::from(".c"));
