@@ -319,7 +319,8 @@ fn verify_collect_and_report(
         eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN (cached)")));
         return 1;
     }
-    let vr: VerifyResult = verify_collect(h, f);
+    let effective_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
+    let vr: VerifyResult = verify_collect(h, f, effective_timeout);
     let st: i64 = vr.status;
     if st == VERIFY_PROVEN() {
         eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN")));
@@ -765,7 +766,10 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                                 // process_start failed — treat as verification failure, not silent success.
                                 verify_failed = true;
                             } else if oh != -2 {
-                                let ovr: VerifyResult = verify_collect(oh, ovf);
+                                // cmd_test launches verify_start with empty solver/encoding/timeout,
+                                // so effective_timeout matches what start_esbmc passed: 30s under auto.
+                                let t_eff: String = effective_timeout_for(String::from(""), String::from(""), String::from(""));
+                                let ovr: VerifyResult = verify_collect(oh, ovf, t_eff);
                                 if ovr.status == VERIFY_FAILED() {
                                     verify_failed = true;
                                 } else if ovr.status == VERIFY_TIMEOUT() {
@@ -795,7 +799,8 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                         // Spawn failure — critical when t_jobs >= nfns and every handle lands here.
                         verify_failed = true;
                     } else if oh != -2 {
-                        let ovr: VerifyResult = verify_collect(oh, ovf);
+                        let t_eff: String = effective_timeout_for(String::from(""), String::from(""), String::from(""));
+                        let ovr: VerifyResult = verify_collect(oh, ovf, t_eff);
                         if ovr.status == VERIFY_FAILED() {
                             verify_failed = true;
                         }

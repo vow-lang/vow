@@ -21,6 +21,20 @@ struct VerifyResult {
     raw_output: String,
 }
 
+// Pairs ESBMC's exit code with its captured output. Replaces the prior pattern
+// of returning just the exit code and reading from `process_get_stdout()` /
+// `process_get_stderr()` globals — that pattern is incompatible with the
+// kernel-level watchdog (which uses `process_start` + `process_wait_timeout`).
+//
+// `exit_code` sentinels:
+//   -1 → ESBMC binary not found (failed to spawn)
+//   -2 → kernel watchdog killed the run
+//   else → child exit code (0 = success, etc.)
+struct EsbmcRun {
+    exit_code: i64,
+    combined: String,
+}
+
 fn str_contains_byte(s: String, b: i64) -> bool {
     let n: i64 = s.len();
     let mut i: i64 = 0;
@@ -261,6 +275,20 @@ fn DEFAULT_AUTO_TIMEOUT_STR() -> String { String::from("30") }
 // to fire (crash, ESBMC bug, runaway loop in C++ code).
 fn DEFAULT_ESBMC_TIMEOUT_MS() -> i64 { 300000 }
 
+// Compute the kernel watchdog deadline in ms from the effective `--timeout`
+// passed to ESBMC. If the caller supplied a numeric timeout we honour it
+// (matches Rust's `config.timeout_secs.unwrap_or(DEFAULT_ESBMC_TIMEOUT_SECS)`);
+// otherwise we fall back to the 300 s safety watchdog.
+fn watchdog_ms_for(effective_timeout: String) -> i64 {
+    if effective_timeout.len() > 0 {
+        let n: i64 = str_to_i64(effective_timeout);
+        if n > 0 {
+            return n * 1000;
+        }
+    }
+    DEFAULT_ESBMC_TIMEOUT_MS()
+}
+
 fn append_solver_args(args: Vec<String>, solver: String, encoding: String) {
     if solver.len() > 0 && solver != String::from("boolector") && solver != String::from("auto") {
         args.push(str2(String::from("--"), solver));
@@ -277,7 +305,7 @@ fn append_timeout_arg(args: Vec<String>, timeout_secs: String) {
     }
 }
 
-fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: String, solver: String, encoding: String, timeout_secs: String) -> i64 [io] {
+fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: String, solver: String, encoding: String, timeout_secs: String) -> EsbmcRun [io] {
     fs_write(tmp_path, c_source);
     save_esbmc_debug(c_source, tmp_path, max_k_step, func_name, false);
     let esbmc_args: Vec<String> = Vec::new();
@@ -290,8 +318,25 @@ fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: 
     esbmc_args.push(String::from("--64"));
     append_solver_args(esbmc_args, solver, encoding);
     append_timeout_arg(esbmc_args, timeout_secs);
-    let exit_code: i64 = process_run(esbmc_path(), esbmc_args);
-    exit_code
+    // Kernel-level safety watchdog mirroring DEFAULT_ESBMC_TIMEOUT_SECS in
+    // vow-verify: if ESBMC's own --timeout fails to fire, kill the process
+    // so a single runaway run can't block the verifier indefinitely.
+    let handle: i64 = process_start(esbmc_path(), esbmc_args);
+    if handle == -1 {
+        return EsbmcRun { exit_code: -1, combined: String::from("") };
+    }
+    let watchdog_ms: i64 = watchdog_ms_for(timeout_secs);
+    let exit_code: i64 = process_wait_timeout(handle, watchdog_ms);
+    if exit_code == -2 {
+        process_kill(handle);
+        return EsbmcRun { exit_code: -2, combined: String::from("(watchdog timeout)") };
+    }
+    let stdout: String = process_stdout_for(handle);
+    let stderr: String = process_stderr_for(handle);
+    let combined: String = String::from("");
+    combined.push_str(stdout);
+    combined.push_str(stderr);
+    EsbmcRun { exit_code: exit_code, combined: combined }
 }
 
 fn start_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: String, solver: String, encoding: String, timeout_secs: String) -> i64 [io] {
@@ -688,8 +733,8 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
         }
     }
 
-    let exit_code: i64 = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, solver, encoding, bv_timeout);
-    if exit_code == -1 {
+    let r: EsbmcRun = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, solver, encoding, bv_timeout);
+    if r.exit_code == -1 {
         return VerifyResult {
             status: VERIFY_NOT_FOUND(),
             vow_id: -1,
@@ -699,11 +744,7 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
             raw_output: String::from("esbmc not found"),
         };
     }
-    let stdout: String = process_get_stdout();
-    let stderr: String = process_get_stderr();
-    let combined: String = String::from("");
-    combined.push_str(stdout);
-    combined.push_str(stderr);
+    let combined: String = r.combined;
     let mut status: i64 = parse_verify_status(combined);
     let mut used_combined: String = combined;
     let mut resolved_solver: String = {
@@ -721,8 +762,8 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
         let ir_timeout: String = {
             if timeout_secs.len() > 0 { timeout_secs } else { DEFAULT_AUTO_TIMEOUT_STR() }
         };
-        let exit2: i64 = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, ir_solver, ir_encoding, ir_timeout);
-        if exit2 == -1 {
+        let r2: EsbmcRun = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, ir_solver, ir_encoding, ir_timeout);
+        if r2.exit_code == -1 {
             // ESBMC disappeared between BV and IR runs; surface consistently with verify_function_ir_fallback.
             return VerifyResult {
                 status: VERIFY_NOT_FOUND(),
@@ -733,11 +774,7 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
                 raw_output: String::from("esbmc not found"),
             };
         }
-        let so2: String = process_get_stdout();
-        let se2: String = process_get_stderr();
-        let combined2: String = String::from("");
-        combined2.push_str(so2);
-        combined2.push_str(se2);
+        let combined2: String = r2.combined;
         let s2: i64 = parse_verify_status(combined2);
         status = {
             // IR-only counterexamples can be infeasible under BV (no overflow modeling), so a FAILED here is inconclusive — report the original Timeout instead.
@@ -795,8 +832,8 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
             return build_verify_result(f, VERIFY_PROVEN_IR(), String::from("(cached)"));
         }
     }
-    let exit_code: i64 = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, ir_solver, ir_encoding, ir_timeout);
-    if exit_code == -1 {
+    let r: EsbmcRun = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, ir_solver, ir_encoding, ir_timeout);
+    if r.exit_code == -1 {
         return VerifyResult {
             status: VERIFY_NOT_FOUND(),
             vow_id: -1,
@@ -806,11 +843,7 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
             raw_output: String::from("esbmc not found"),
         };
     }
-    let stdout: String = process_get_stdout();
-    let stderr: String = process_get_stderr();
-    let combined: String = String::from("");
-    combined.push_str(stdout);
-    combined.push_str(stderr);
+    let combined: String = r.combined;
     let raw_status: i64 = parse_verify_status(combined);
     let status: i64 = {
         // IR-only CEs can be infeasible under BV — demote FAILED to TIMEOUT (the caller only reaches us because BV already timed out).
@@ -872,11 +905,14 @@ fn verify_start(f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_ca
     handle
 }
 
-fn verify_collect(handle: i64, f: IrFunction) -> VerifyResult [io] {
+fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String) -> VerifyResult [io] {
     // Kernel-level safety watchdog mirroring DEFAULT_ESBMC_TIMEOUT_SECS in
     // vow-verify: if ESBMC's own --timeout fails to fire, kill the process so
     // the parallel verifier never blocks indefinitely on a runaway run.
-    let exit_code: i64 = process_wait_timeout(handle, DEFAULT_ESBMC_TIMEOUT_MS());
+    // `effective_timeout` is the value passed to ESBMC's --timeout flag (the
+    // one returned by `effective_timeout_for` at start_esbmc time); the kernel
+    // watchdog is sized off it so it never fires before ESBMC's own timeout.
+    let exit_code: i64 = process_wait_timeout(handle, watchdog_ms_for(effective_timeout));
     if exit_code == -2 {
         process_kill(handle);
         return VerifyResult {
