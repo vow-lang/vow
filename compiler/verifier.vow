@@ -623,12 +623,6 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
     combined.push_str(stderr);
     let mut status: i64 = parse_verify_status(combined);
     let mut used_combined: String = combined;
-    let mut resolved_solver: String = {
-        if solver.len() == 0 || solver == String::from("auto") { bv_solver } else { solver }
-    };
-    let mut resolved_encoding: String = {
-        if auto_enc { String::from("bv") } else { encoding }
-    };
 
     // Phase D: if BV timed out under Auto encoding and the BV solver is not
     // Bitwuzla, retry once with --z3 --ir (integer encoding).
@@ -663,8 +657,6 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
             else { s2 }
         };
         used_combined = combined2;
-        resolved_solver = ir_solver;
-        resolved_encoding = ir_encoding;
     }
 
     // No on-disk caching on self-hosted: see the note above resolve_auto_bv_solver.
