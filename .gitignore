@@ -8,6 +8,7 @@ compiler/*.vow.c
 /.claude/worktrees/
 /.chief/
 /.claire/
+/.ultraplan/
 /codecov
 /lcov.info
 bench/results/

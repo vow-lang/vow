@@ -1,0 +1,13 @@
+// TEST: exit 1
+module Main
+
+use ir
+use module_io
+
+fn main() -> i32 {
+    let out: Vec<i64> = Vec::new();
+    let args: Vec<i64> = Vec::new();
+    let inst: IrInst = ir_inst_new(0, IOP_CONST_I64(), ITY_I64(), args, 99, 0, 0, String::from(""));
+    write_inst_data(out, inst);
+    0
+}

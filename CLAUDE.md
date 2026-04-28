@@ -199,9 +199,14 @@ sha256sum /tmp/compiler_b /tmp/compiler_c              # must be identical (bina
 
 The shim exposes a medium-granularity FFI API: module-level operations are separate calls
 (`__vow_clif_create`, `__vow_clif_add_string`, `__vow_clif_declare_function`, `__vow_clif_finish`,
-`__vow_clif_link`), while per-function compilation is a single call (`__vow_clif_compile_function`)
-that receives the function's IR as flattened parallel arrays (ids, ops, types, data kinds, values,
-strings, args). This avoids Cranelift `FunctionBuilder` lifetime issues across FFI boundaries.
+`__vow_clif_link`). Per-function compilation is streamed incrementally —
+`__vow_clif_fn_begin` opens a function, `__vow_clif_fn_block` / `__vow_clif_fn_inst` /
+`__vow_clif_fn_vow` append to it, and `__vow_clif_fn_end` drives Cranelift codegen. The
+shim owns the parallel arrays (ids, ops, types, data kinds, values, strings, args) as
+scratch buffers on `ModuleContext` and reuses them across functions via
+`Vec::clear()` (preserves capacity), eliminating the per-function alloc/realloc churn that
+the previous batched `__vow_clif_compile_function` required. Cranelift `FunctionBuilder`
+still operates on all of this at once, inside `fn_end`.
 
 The shim uses stack slots instead of SSA values for all instruction results. This is necessary
 because the self-hosted IR has cross-block references between sibling branches (e.g., an else

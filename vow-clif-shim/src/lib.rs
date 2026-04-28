@@ -1,5 +1,28 @@
 #![allow(clippy::missing_safety_doc)]
 
+// ---------------------------------------------------------------------------
+// User trap code registry
+// ---------------------------------------------------------------------------
+//
+// The shim emits Cranelift user trap codes to signal runtime conditions that
+// should fail loudly. Codes are allocated centrally here so collisions with
+// `vow-codegen` (which emits the same numeric space) are visible at a glance:
+//
+//   1  — VowViolation fallthrough (after `__vow_violation` is called, a trap
+//         prevents execution from continuing; see line ~1906).
+//   2  — `Unreachable` opcode hit at runtime (e.g. pattern-match exhaustion;
+//         line ~1371).
+//   3  — Unimplemented region opcode (Phase 2 `RegionOpen`/`RegionClose`
+//         guard; line ~1584). Intentionally asymmetric with
+//         `vow-codegen/src/cranelift_backend.rs`, which panics via
+//         `unreachable!("not emitted in Phase 2")` at **compile time** for
+//         the same opcodes — the shim cannot panic across the FFI boundary
+//         so it traps at **runtime** instead.
+//
+// When adding a new trap code, update this registry and the corresponding
+// `vow-codegen` site (if any) so agents reading either file see the full
+// picture.
+
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
@@ -165,6 +188,23 @@ const IOP_CALL: i64 = 76;
 const IOP_REGION_ALLOC: i64 = 77;
 const IOP_REGION_FREE: i64 = 78;
 
+// Region-kind discriminants. Mirror `compiler/ir.vow::REGION_KIND_*` and
+// `RegionId` in `vow-ir/src/types.rs`. The packed i64 is `val * 4 + kind`
+// (see `region_pack`).
+const REGION_KIND_BLOCK: i64 = 0;
+const REGION_KIND_CALLER: i64 = 1;
+const REGION_KIND_ROOT: i64 = 2;
+const REGION_KIND_RODATA: i64 = 3;
+
+/// Size of `vow_runtime::VowArena` in bytes — asserted in
+/// `vow-runtime/src/lib.rs` (`assert!(size_of::<VowArena>() == 48)`).
+/// Mirrors the same constant in `vow-codegen/src/cranelift_backend.rs`
+/// so a future `VowArena` resize updates both backends in lockstep.
+const VOW_ARENA_HEADER_SIZE: u32 = 48;
+/// Log₂ of the `VowArena` header alignment (8 bytes — contains
+/// pointers). Mirrors `vow-codegen`.
+const VOW_ARENA_HEADER_ALIGN_LOG2: u8 = 3;
+
 const IOP_LINEAR_CONSUME: i64 = 79;
 const IOP_LINEAR_BORROW: i64 = 80;
 
@@ -203,6 +243,14 @@ const IOP_BITAND_U64: i64 = 110;
 const IOP_BITOR_U64: i64 = 111;
 const IOP_SHL_U64: i64 = 112;
 const IOP_SHR_U64: i64 = 113;
+// Phase 2: declared but never emitted. Phase 4 wires arena open/close to
+// __vow_arena_open / __vow_arena_close. If one leaks into the shim today
+// it is a defensive no-op rather than a misdispatch (see compile_function
+// below).
+#[allow(dead_code)]
+const IOP_REGION_OPEN: i64 = 114;
+#[allow(dead_code)]
+const IOP_REGION_CLOSE: i64 = 115;
 
 // InstData kind constants (match compiler/ir.vow IDATA_*)
 #[allow(dead_code)]
@@ -248,6 +296,82 @@ struct ModuleContext {
     extern_func_ids: HashMap<String, CraneliftFuncId>,
     mode: i64,       // 0=release, 1=debug, 2=profile, 3=sanitize
     trace_mode: i64, // 0=off, 1=calls, 2=full
+    fn_scratch: FnScratch,
+}
+
+// Per-function scratch accumulated via incremental FFI. Buffers are reused
+// across functions — Rust's `Vec::clear()` preserves capacity, so amortized
+// cost converges to the peak function's working set.
+//
+// The `*_ptrs` fields below hold raw VowVec pointers aliased from caller-owned
+// strings (the live `IrModule`). They are only valid within one
+// `fn_begin → fn_end` cycle, since `fn_end` resets the scratch. Do not retain
+// these values across FFI boundaries.
+#[derive(Default)]
+struct FnScratch {
+    // True between a successful `fn_begin` and the matching `fn_end`. Gates
+    // `fn_block`/`fn_inst`/`fn_vow`/`fn_end` so an out-of-order caller hits a
+    // clean `-1` return instead of silently accumulating into `func_idx == 0`
+    // or panicking Cranelift mid-seal.
+    began: bool,
+    func_idx: i64,
+    ret_ty: i64,
+    param_tys: Vec<i64>,
+    // Per-block:
+    block_starts: Vec<i64>, // offsets into inst_* arrays
+    block_lengths: Vec<i64>,
+    // Per-instruction (flattened across all blocks of this function):
+    inst_ids: Vec<i64>,
+    inst_ops: Vec<i64>,
+    inst_tys: Vec<i64>,
+    inst_dks: Vec<i64>,
+    inst_dvs: Vec<i64>,
+    inst_dv2s: Vec<i64>,
+    inst_ds_ptrs: Vec<i64>, // raw VowVec ptrs — see struct-level doc
+    // Region tag per instruction, packed as (val * 4 + kind) — mirrors
+    // `region_pack` in `compiler/ir.vow` and `RegionId` in `vow-ir`. Today
+    // only the kind byte matters for codegen; the payload is read so
+    // `.vmod`-produced `Caller(idx)` regions carry through for error
+    // reporting when the shim refuses them (see REGION_KIND_ROOT check
+    // in IOP_REGION_ALLOC).
+    inst_rgns: Vec<i64>,
+    all_args: Vec<i64>,
+    arg_offsets: Vec<i64>,
+    arg_lengths: Vec<i64>,
+    // Per vow entry:
+    vow_ids: Vec<i64>,
+    vow_desc_ptrs: Vec<i64>, // raw VowVec ptrs — see struct-level doc
+    binding_counts: Vec<i64>,
+    binding_inst_ids_all: Vec<i64>,
+    binding_names_ptrs: Vec<i64>, // raw VowVec ptrs — see struct-level doc
+}
+
+impl FnScratch {
+    // Reset len=0 on all fields while preserving each Vec's allocated capacity.
+    fn reset(&mut self) {
+        self.began = false;
+        self.func_idx = 0;
+        self.ret_ty = 0;
+        self.param_tys.clear();
+        self.block_starts.clear();
+        self.block_lengths.clear();
+        self.inst_ids.clear();
+        self.inst_ops.clear();
+        self.inst_tys.clear();
+        self.inst_dks.clear();
+        self.inst_dvs.clear();
+        self.inst_dv2s.clear();
+        self.inst_ds_ptrs.clear();
+        self.inst_rgns.clear();
+        self.all_args.clear();
+        self.arg_offsets.clear();
+        self.arg_lengths.clear();
+        self.vow_ids.clear();
+        self.vow_desc_ptrs.clear();
+        self.binding_counts.clear();
+        self.binding_inst_ids_all.clear();
+        self.binding_names_ptrs.clear();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +431,7 @@ pub extern "C" fn __vow_clif_create(mode: i64, trace_mode: i64) -> i64 {
         extern_func_ids: HashMap::new(),
         mode,
         trace_mode,
+        fn_scratch: FnScratch::default(),
     });
 
     Box::into_raw(ctx) as i64
@@ -414,71 +539,202 @@ pub unsafe extern "C" fn __vow_clif_declare_function(
 }
 
 // ---------------------------------------------------------------------------
-// FFI: compile_function — the core: receives flattened IR, produces Cranelift
+// FFI: per-function incremental compilation (fn_begin / fn_block / fn_inst /
+// fn_vow / fn_end)
 // ---------------------------------------------------------------------------
 
-#[allow(clippy::too_many_arguments)]
+// Begin accumulating a new function. Clears any prior scratch state.
+//
+// The scratch is also reset by `fn_end` and by the next `fn_begin`, so any
+// partial state from a mid-stream `fn_block`/`fn_inst`/`fn_vow` error is
+// discarded at the next `fn_begin`. Cranelift's module state is separate: if
+// a previous `fn_end` failed partway, destroy the context rather than compile
+// more functions into it.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_clif_compile_function(
+pub unsafe extern "C" fn __vow_clif_fn_begin(
     ctx_ptr: i64,
     func_idx: i64,
     ret_ty: i64,
     param_tys_vec: i64,
-    n_blocks: i64,
-    block_starts_vec: i64,
-    block_lengths_vec: i64,
-    inst_ids_vec: i64,
-    inst_ops_vec: i64,
-    inst_tys_vec: i64,
-    inst_dks_vec: i64,
-    inst_dvs_vec: i64,
-    inst_dv2s_vec: i64,
-    inst_ds_vec: i64, // Vec<String> (Vec<i64> of VowVec ptrs)
-    all_args_vec: i64,
-    arg_offsets_vec: i64,
-    arg_lengths_vec: i64,
-    vow_ids_vec: i64,
-    vow_blames_vec: i64,
-    vow_descs_vec: i64, // Vec<String> (Vec<i64> of VowVec ptrs)
-    binding_counts_vec: i64,
-    binding_inst_ids_vec: i64,
-    binding_names_vec: i64, // Vec<String> (Vec<i64> of VowVec ptrs)
 ) -> i64 {
     let ctx = unsafe { &mut *(ctx_ptr as *mut ModuleContext) };
-    let fi = func_idx as usize;
-    if fi >= ctx.func_decls.len() {
-        eprintln!("clif_shim: func_idx {fi} out of range");
+    if (func_idx as usize) >= ctx.func_decls.len() {
+        eprintln!("clif_shim: func_idx {func_idx} out of range");
         return -1;
     }
+    ctx.fn_scratch.reset();
+    ctx.fn_scratch.began = true;
+    ctx.fn_scratch.func_idx = func_idx;
+    ctx.fn_scratch.ret_ty = ret_ty;
+    if param_tys_vec != 0 {
+        let slice = unsafe { read_i64_slice(param_tys_vec) };
+        ctx.fn_scratch.param_tys.extend_from_slice(slice);
+    }
+    0
+}
 
-    let param_tys = if param_tys_vec != 0 {
-        unsafe { read_i64_slice(param_tys_vec) }.to_vec()
+// Start a new block in the current function. Must be called before any
+// `__vow_clif_fn_inst` calls for that block.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_clif_fn_block(ctx_ptr: i64) -> i64 {
+    let ctx = unsafe { &mut *(ctx_ptr as *mut ModuleContext) };
+    let s = &mut ctx.fn_scratch;
+    if !s.began {
+        eprintln!("clif_shim: __vow_clif_fn_block without matching fn_begin");
+        return -1;
+    }
+    s.block_starts.push(s.inst_ids.len() as i64);
+    s.block_lengths.push(0);
+    0
+}
+
+// Add an instruction to the current block.
+// `ds_vec` / `args_vec` are VowVec pointers owned by the caller (the IrModule)
+// — the shim reads their contents without taking ownership.
+#[allow(clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_clif_fn_inst(
+    ctx_ptr: i64,
+    id: i64,
+    op: i64,
+    ty: i64,
+    dk: i64,
+    dv: i64,
+    dv2: i64,
+    ds_vec: i64,
+    args_vec: i64,
+    rgn: i64,
+) -> i64 {
+    let ctx = unsafe { &mut *(ctx_ptr as *mut ModuleContext) };
+    let args_start;
+    {
+        let s = &mut ctx.fn_scratch;
+        if !s.began {
+            eprintln!("clif_shim: __vow_clif_fn_inst without matching fn_begin");
+            return -1;
+        }
+        // Validate we are inside a block BEFORE touching any inst arrays, so
+        // an out-of-order call leaves the scratch arrays aligned.
+        if let Some(last) = s.block_lengths.last_mut() {
+            *last += 1;
+        } else {
+            eprintln!("clif_shim: __vow_clif_fn_inst before __vow_clif_fn_block");
+            return -1;
+        }
+        s.inst_ids.push(id);
+        s.inst_ops.push(op);
+        s.inst_tys.push(ty);
+        s.inst_dks.push(dk);
+        s.inst_dvs.push(dv);
+        s.inst_dv2s.push(dv2);
+        s.inst_ds_ptrs.push(ds_vec);
+        s.inst_rgns.push(rgn);
+        args_start = s.all_args.len() as i64;
+    }
+    // Copy arg inst IDs into the flat all_args buffer.
+    let args_len = if args_vec != 0 {
+        let args = unsafe { read_i64_slice(args_vec) };
+        ctx.fn_scratch.all_args.extend_from_slice(args);
+        args.len() as i64
     } else {
-        Vec::new()
+        0
     };
+    ctx.fn_scratch.arg_offsets.push(args_start);
+    ctx.fn_scratch.arg_lengths.push(args_len);
+    0
+}
 
-    let nb = n_blocks as usize;
-    let block_starts = unsafe { read_i64_slice(block_starts_vec) };
-    let block_lengths = unsafe { read_i64_slice(block_lengths_vec) };
-    let inst_ids = unsafe { read_i64_slice(inst_ids_vec) };
-    let inst_ops = unsafe { read_i64_slice(inst_ops_vec) };
-    let inst_tys = unsafe { read_i64_slice(inst_tys_vec) };
-    let inst_dks = unsafe { read_i64_slice(inst_dks_vec) };
-    let inst_dvs = unsafe { read_i64_slice(inst_dvs_vec) };
-    let inst_dv2s = unsafe { read_i64_slice(inst_dv2s_vec) };
-    let inst_ds_ptrs = unsafe { read_i64_slice(inst_ds_vec) };
-    let all_args = unsafe { read_i64_slice(all_args_vec) };
-    let arg_offsets = unsafe { read_i64_slice(arg_offsets_vec) };
-    let arg_lengths = unsafe { read_i64_slice(arg_lengths_vec) };
+// Add a vow entry to the current function. The `blame` field (Caller vs
+// Callee) is not a parameter here because the shim derives it from the IR
+// opcode (`IOP_VOW_REQ` → Caller, else Callee) — see `blame_byte` below.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_clif_fn_vow(
+    ctx_ptr: i64,
+    id: i64,
+    desc_vec: i64,
+    binding_inst_ids_vec: i64,
+    binding_names_vec: i64,
+) -> i64 {
+    let ctx = unsafe { &mut *(ctx_ptr as *mut ModuleContext) };
+    if !ctx.fn_scratch.began {
+        eprintln!("clif_shim: __vow_clif_fn_vow without matching fn_begin");
+        return -1;
+    }
+    let bids: &[i64] = if binding_inst_ids_vec != 0 {
+        unsafe { read_i64_slice(binding_inst_ids_vec) }
+    } else {
+        &[]
+    };
+    let bnames: &[i64] = if binding_names_vec != 0 {
+        unsafe { read_i64_slice(binding_names_vec) }
+    } else {
+        &[]
+    };
+    if bids.len() != bnames.len() {
+        eprintln!(
+            "clif_shim: __vow_clif_fn_vow: binding_inst_ids len ({}) != binding_names len ({})",
+            bids.len(),
+            bnames.len()
+        );
+        return -1;
+    }
+    ctx.fn_scratch.vow_ids.push(id);
+    ctx.fn_scratch.vow_desc_ptrs.push(desc_vec);
+    ctx.fn_scratch.binding_counts.push(bids.len() as i64);
+    ctx.fn_scratch.binding_inst_ids_all.extend_from_slice(bids);
+    ctx.fn_scratch.binding_names_ptrs.extend_from_slice(bnames);
+    0
+}
 
-    let vow_ids = unsafe { read_i64_slice(vow_ids_vec) };
-    let _vow_blames = unsafe { read_i64_slice(vow_blames_vec) };
-    let vow_desc_ptrs = unsafe { read_i64_slice(vow_descs_vec) };
-    let binding_counts = unsafe { read_i64_slice(binding_counts_vec) };
-    let binding_inst_ids_all = unsafe { read_i64_slice(binding_inst_ids_vec) };
-    let binding_names_ptrs = unsafe { read_i64_slice(binding_names_vec) };
+// Finalize the current function: drive Cranelift codegen using the accumulated
+// scratch, then reset the scratch (preserving allocated capacity for reuse).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_clif_fn_end(ctx_ptr: i64) -> i64 {
+    let ctx = unsafe { &mut *(ctx_ptr as *mut ModuleContext) };
+    let result = compile_current_function(ctx);
+    ctx.fn_scratch.reset();
+    result
+}
 
-    // Reconstruct per-instruction arg slices
+// Compiles the function described by `ctx.fn_scratch` via Cranelift.
+// This is the former body of the monolithic `__vow_clif_compile_function` FFI
+// entry, now reading its inputs from the per-context scratch instead of
+// rebuilt-per-call parameter arrays.
+fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
+    // Guarded by `began` so an fn_end without a matching fn_begin (or a
+    // duplicate fn_end) returns a clean FFI error rather than silently
+    // compiling into func_idx 0 or panicking Cranelift on an unsealed block.
+    if !ctx.fn_scratch.began {
+        eprintln!("clif_shim: __vow_clif_fn_end without matching fn_begin");
+        return -1;
+    }
+    let func_idx = ctx.fn_scratch.func_idx;
+    let fi = func_idx as usize;
+    debug_assert!(fi < ctx.func_decls.len(), "fn_begin should have rejected");
+    let ret_ty = ctx.fn_scratch.ret_ty;
+    // Alias scratch fields into locals so the existing body reads the same names.
+    // Rust's field-disjoint borrow checking lets us keep these immutable borrows
+    // alive alongside mutations of `ctx.obj_module`, `ctx.builder_ctx`, etc.
+    let param_tys: &[i64] = &ctx.fn_scratch.param_tys;
+    let block_starts: &[i64] = &ctx.fn_scratch.block_starts;
+    let block_lengths: &[i64] = &ctx.fn_scratch.block_lengths;
+    let inst_ids: &[i64] = &ctx.fn_scratch.inst_ids;
+    let inst_ops: &[i64] = &ctx.fn_scratch.inst_ops;
+    let inst_tys: &[i64] = &ctx.fn_scratch.inst_tys;
+    let inst_dks: &[i64] = &ctx.fn_scratch.inst_dks;
+    let inst_dvs: &[i64] = &ctx.fn_scratch.inst_dvs;
+    let inst_dv2s: &[i64] = &ctx.fn_scratch.inst_dv2s;
+    let inst_ds_ptrs: &[i64] = &ctx.fn_scratch.inst_ds_ptrs;
+    let inst_rgns: &[i64] = &ctx.fn_scratch.inst_rgns;
+    let all_args: &[i64] = &ctx.fn_scratch.all_args;
+    let arg_offsets: &[i64] = &ctx.fn_scratch.arg_offsets;
+    let arg_lengths: &[i64] = &ctx.fn_scratch.arg_lengths;
+    let vow_ids: &[i64] = &ctx.fn_scratch.vow_ids;
+    let vow_desc_ptrs: &[i64] = &ctx.fn_scratch.vow_desc_ptrs;
+    let binding_counts: &[i64] = &ctx.fn_scratch.binding_counts;
+    let binding_inst_ids_all: &[i64] = &ctx.fn_scratch.binding_inst_ids_all;
+    let binding_names_ptrs: &[i64] = &ctx.fn_scratch.binding_names_ptrs;
+    let nb = block_starts.len();
     let n_insts = inst_ids.len();
 
     // Build inst_id → block_index map
@@ -491,24 +747,37 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
         }
     }
 
-    // Declare arena runtime functions
+    // Declare arena runtime functions.
     let mut arena_alloc_sig = ctx.obj_module.make_signature();
-    arena_alloc_sig.params.push(AbiParam::new(types::I64));
-    arena_alloc_sig.params.push(AbiParam::new(types::I64));
+    arena_alloc_sig.params.push(AbiParam::new(types::I64)); // *VowArena
+    arena_alloc_sig.params.push(AbiParam::new(types::I64)); // size
+    arena_alloc_sig.params.push(AbiParam::new(types::I64)); // align
     arena_alloc_sig.returns.push(AbiParam::new(types::I64));
     let arena_alloc_id = ctx
         .obj_module
         .declare_function("__vow_arena_alloc", Linkage::Import, &arena_alloc_sig)
-        .expect("declare arena_alloc");
+        .expect("declare __vow_arena_alloc");
 
-    let mut arena_free_sig = ctx.obj_module.make_signature();
-    arena_free_sig.params.push(AbiParam::new(types::I64)); // ptr
-    arena_free_sig.params.push(AbiParam::new(types::I64)); // size
-    arena_free_sig.params.push(AbiParam::new(types::I64)); // align
-    let arena_free_id = ctx
+    let mut arena_open_close_sig = ctx.obj_module.make_signature();
+    arena_open_close_sig.params.push(AbiParam::new(types::I64)); // *VowArena
+    let arena_open_id = ctx
         .obj_module
-        .declare_function("__vow_arena_free", Linkage::Import, &arena_free_sig)
-        .expect("declare arena_free");
+        .declare_function("__vow_arena_open", Linkage::Import, &arena_open_close_sig)
+        .expect("declare __vow_arena_open");
+    let arena_close_id = ctx
+        .obj_module
+        .declare_function("__vow_arena_close", Linkage::Import, &arena_open_close_sig)
+        .expect("declare __vow_arena_close");
+
+    let root_arena_id = ctx
+        .obj_module
+        .declare_data("__vow_root_arena", Linkage::Import, true, false)
+        .expect("declare __vow_root_arena");
+    let runtime_start_sig = ctx.obj_module.make_signature();
+    let runtime_start_id = ctx
+        .obj_module
+        .declare_function("__vow_runtime_start", Linkage::Import, &runtime_start_sig)
+        .expect("declare __vow_runtime_start");
 
     // Debug-only runtime functions (debug=1 or sanitize=3)
     let vow_violation_id = if ctx.mode == 1 || ctx.mode == 3 {
@@ -602,7 +871,7 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
     // Build function signature
     let call_conv = ctx.isa.default_call_conv();
     let mut sig = Signature::new(call_conv);
-    for &pty in &param_tys {
+    for &pty in param_tys {
         if let Some(cl_ty) = ity_to_cranelift(pty) {
             sig.params.push(AbiParam::new(cl_ty));
         }
@@ -654,9 +923,28 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
     let arena_alloc_ref = ctx
         .obj_module
         .declare_func_in_func(arena_alloc_id, builder.func);
-    let arena_free_ref = ctx
+    let arena_open_ref = ctx
         .obj_module
-        .declare_func_in_func(arena_free_id, builder.func);
+        .declare_func_in_func(arena_open_id, builder.func);
+    let arena_close_ref = ctx
+        .obj_module
+        .declare_func_in_func(arena_close_id, builder.func);
+    let root_arena_gv = ctx
+        .obj_module
+        .declare_data_in_func(root_arena_id, builder.func);
+    // Per-block VowArena stack-slot map. Lazily populated on first use of
+    // a given BlockId by `IOP_REGION_OPEN` / `IOP_REGION_CLOSE` /
+    // `IOP_REGION_ALLOC` with `REGION_KIND_BLOCK`. `VowArena` is 48 bytes,
+    // 8-byte aligned (asserted in `vow-runtime/src/lib.rs`).
+    //
+    // BTreeMap (not HashMap) for the same reason `slot_map` below uses one
+    // (CLAUDE.md): deterministic iteration order is required for binary
+    // fixed-point reproducibility under the bootstrap triple. Today the
+    // map is only accessed via `.entry()` so the codegen order is
+    // incidentally deterministic, but any future iteration over it
+    // (diagnostics, init pass) MUST preserve that property by default.
+    let mut block_arena_slots: std::collections::BTreeMap<i64, StackSlot> =
+        std::collections::BTreeMap::new();
     let vow_violation_ref =
         vow_violation_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
     let overflow_ref = overflow_id.map(|id| ctx.obj_module.declare_func_in_func(id, builder.func));
@@ -867,6 +1155,12 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
             builder.ins().stack_store(zero, slot, 0);
         }
         // Emit stack_guard_init at main entry (all modes)
+        if ctx.func_decls[fi].is_main {
+            let runtime_start_ref = ctx
+                .obj_module
+                .declare_func_in_func(runtime_start_id, builder.func);
+            builder.ins().call(runtime_start_ref, &[]);
+        }
         if let Some(init_ref) = stack_guard_init_ref {
             builder.ins().call(init_ref, &[]);
         }
@@ -1533,40 +1827,107 @@ pub unsafe extern "C" fn __vow_clif_compile_function(
 
                 // Region / linear
                 IOP_REGION_ALLOC => {
+                    let rgn = inst_rgns[ii];
+                    let kind = rgn & 3;
+                    let payload = rgn >> 2;
                     let (size, align) = if dk == IDATA_ALLOC_SIZE {
                         (dv, dv2)
                     } else {
                         (0, 8)
                     };
+                    let arena = match kind {
+                        REGION_KIND_ROOT => builder.ins().global_value(types::I64, root_arena_gv),
+                        REGION_KIND_BLOCK => {
+                            let slot = *block_arena_slots.entry(payload).or_insert_with(|| {
+                                builder.create_sized_stack_slot(StackSlotData::new(
+                                    StackSlotKind::ExplicitSlot,
+                                    VOW_ARENA_HEADER_SIZE,
+                                    VOW_ARENA_HEADER_ALIGN_LOG2,
+                                ))
+                            });
+                            builder.ins().stack_addr(types::I64, slot, 0)
+                        }
+                        REGION_KIND_CALLER => {
+                            // Hidden-region plumbing (spec §5.2) is not yet
+                            // wired in the shim — `__vow_clif_declare_function`
+                            // does not accept a hidden-param count, so the
+                            // self-hosted compiler cannot emit any
+                            // `Caller`-routed allocation regardless of `k`.
+                            // Reject all `k` values rather than silently
+                            // routing into the root arena. Phase 5 (#200)
+                            // extends the declare API and lifts this reject.
+                            eprintln!(
+                                "clif_shim: IOP_REGION_ALLOC with REGION_KIND_CALLER \
+                                 (k={}) is not yet wired — self-hosted compiler must \
+                                 not emit Caller-routed allocations until hidden-param \
+                                 plumbing lands",
+                                payload,
+                            );
+                            return -1;
+                        }
+                        REGION_KIND_RODATA => {
+                            eprintln!(
+                                "clif_shim: IOP_REGION_ALLOC with REGION_KIND_RODATA \
+                                 is invalid — rodata-backed values are static, not \
+                                 allocated"
+                            );
+                            return -1;
+                        }
+                        _ => {
+                            eprintln!(
+                                "clif_shim: IOP_REGION_ALLOC with unknown region kind {kind}"
+                            );
+                            return -1;
+                        }
+                    };
                     let size_val = builder.ins().iconst(types::I64, size);
                     let align_val = builder.ins().iconst(types::I64, align);
-                    let call_inst = builder.ins().call(arena_alloc_ref, &[size_val, align_val]);
+                    let call_inst = builder
+                        .ins()
+                        .call(arena_alloc_ref, &[arena, size_val, align_val]);
                     let ptr = builder.inst_results(call_inst)[0];
                     set_val!(iid, ptr);
                 }
                 IOP_REGION_FREE => {
-                    if alen > 0 {
-                        let ptr_id = all_args[aoff];
-                        let ptr_val = *value_map.get(&ptr_id).unwrap_or_else(|| {
-                            panic!(
-                                "clif shim: IOP_REGION_FREE value_map miss: inst_id={iid} ptr_id={ptr_id} (block={bi}, inst_idx={ii}, func_idx={func_idx})"
-                            )
-                        });
-                        let (size, align) = if dk == IDATA_ALLOC_SIZE {
-                            (dv, dv2)
-                        } else {
-                            (0, 8)
-                        };
-                        let size_val = builder.ins().iconst(types::I64, size);
-                        let align_val = builder.ins().iconst(types::I64, align);
-                        builder
-                            .ins()
-                            .call(arena_free_ref, &[ptr_val, size_val, align_val]);
-                    }
                     let unit = builder.ins().iconst(types::I32, 0);
                     set_val!(iid, unit);
                 }
                 IOP_LINEAR_CONSUME | IOP_LINEAR_BORROW => {
+                    let unit = builder.ins().iconst(types::I32, 0);
+                    set_val!(iid, unit);
+                }
+
+                // RegionOpen / RegionClose: bracket a block-region's lifetime
+                // by calling `__vow_arena_open` / `__vow_arena_close` on the
+                // BlockId-keyed stack slot. The region payload (encoded in
+                // `inst_rgns[ii]`) names the block being opened/closed, which
+                // need not match the containing IR block — opens/closes can
+                // straddle basic-block boundaries.
+                IOP_REGION_OPEN | IOP_REGION_CLOSE => {
+                    let rgn = inst_rgns[ii];
+                    let kind = rgn & 3;
+                    if kind != REGION_KIND_BLOCK {
+                        eprintln!(
+                            "clif_shim: IOP_REGION_{{OPEN,CLOSE}} requires \
+                             REGION_KIND_BLOCK, got kind {kind}"
+                        );
+                        return -1;
+                    }
+                    let payload = rgn >> 2;
+                    let slot = *block_arena_slots.entry(payload).or_insert_with(|| {
+                        builder.create_sized_stack_slot(StackSlotData::new(
+                            StackSlotKind::ExplicitSlot,
+                            VOW_ARENA_HEADER_SIZE,
+                            VOW_ARENA_HEADER_ALIGN_LOG2,
+                        ))
+                    });
+                    let arena_addr = builder.ins().stack_addr(types::I64, slot, 0);
+                    let func_ref = if op == IOP_REGION_OPEN {
+                        arena_open_ref
+                    } else {
+                        arena_close_ref
+                    };
+                    builder.ins().call(func_ref, &[arena_addr]);
                     let unit = builder.ins().iconst(types::I32, 0);
                     set_val!(iid, unit);
                 }
@@ -2102,6 +2463,9 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_time_unix_ms" => {
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_num_cpus" => {
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_hex_encode" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
@@ -2234,10 +2598,35 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
                 sig.params.push(AbiParam::new(types::I64));
             }
         }
-        "__vow_clif_compile_function" => {
-            for _ in 0..23 {
+        "__vow_clif_fn_begin" => {
+            // ctx, func_idx, ret_ty, param_tys_vec
+            for _ in 0..4 {
                 sig.params.push(AbiParam::new(types::I64));
             }
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_clif_fn_block" => {
+            // ctx
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_clif_fn_inst" => {
+            // ctx, id, op, ty, dk, dv, dv2, ds_vec, args_vec, rgn
+            for _ in 0..10 {
+                sig.params.push(AbiParam::new(types::I64));
+            }
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_clif_fn_vow" => {
+            // ctx, id, desc_vec, binding_inst_ids_vec, binding_names_vec
+            for _ in 0..5 {
+                sig.params.push(AbiParam::new(types::I64));
+            }
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_clif_fn_end" => {
+            // ctx
+            sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_clif_finish" => {

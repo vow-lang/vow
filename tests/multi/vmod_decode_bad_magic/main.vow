@@ -1,0 +1,19 @@
+// TEST: exit 1
+module Main
+
+use ir
+use module_io
+
+fn main() -> i32 [panic] {
+    let bytes: Vec<i64> = Vec::new();
+    bytes.push(0);
+    bytes.push(MODULE_MAGIC_1());
+    bytes.push(MODULE_MAGIC_2());
+    bytes.push(MODULE_MAGIC_3());
+    bytes.push(1);
+    bytes.push(0);
+    bytes.push(0);
+    bytes.push(0);
+    let _m: IrModule = module_decode(bytes);
+    0
+}

@@ -1,0 +1,7 @@
+// TEST: stderr "undefined function"
+module UndefinedFunction
+
+fn main() -> i32 {
+  let _x: i64 = nonexistent_function(42);
+  0
+}

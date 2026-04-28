@@ -306,6 +306,14 @@ impl TypeEnv {
             },
         );
         env.define_fn(
+            "num_cpus",
+            FnSig {
+                params: vec![],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
             "hex_encode",
             FnSig {
                 params: vec![Ty::Applied(
@@ -494,34 +502,68 @@ impl TypeEnv {
                 effects: [Effect::IO].into_iter().collect(),
             },
         );
+        // Incremental per-function Cranelift FFI. Replaces the monolithic
+        // __vow_clif_compile_function; the self-hosted clif.vow now streams
+        // blocks/instructions/vow entries into shim-owned scratch buffers
+        // that are reused across functions.
         env.define_fn(
-            "__vow_clif_compile_function",
+            "__vow_clif_fn_begin",
             FnSig {
                 params: vec![
                     Ty::I64,
                     Ty::I64,
                     Ty::I64,
                     Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
+                ],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "__vow_clif_fn_block",
+            FnSig {
+                params: vec![Ty::I64],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "__vow_clif_fn_inst",
+            FnSig {
+                params: vec![
                     Ty::I64,
+                    Ty::I64,
+                    Ty::I64,
+                    Ty::I64,
+                    Ty::I64,
+                    Ty::I64,
+                    Ty::I64,
+                    Ty::Str,
                     Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::Str]),
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::Str]),
-                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
+                    Ty::I64,
+                ],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "__vow_clif_fn_vow",
+            FnSig {
+                params: vec![
+                    Ty::I64,
+                    Ty::I64,
+                    Ty::Str,
                     Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
                     Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::Str]),
                 ],
+                return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "__vow_clif_fn_end",
+            FnSig {
+                params: vec![Ty::I64],
                 return_ty: Ty::I64,
                 effects: [Effect::IO].into_iter().collect(),
             },

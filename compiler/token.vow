@@ -114,3 +114,44 @@ fn make_token(tag: i64, int_val: i64, int_val2: i64, str_val: String, span_start
         span_len: span_len,
     }
 }
+
+// Maps a keyword tag to its source spelling; empty string for non-keyword tags.
+fn keyword_text(tag: i64) -> String {
+    if tag == tok_kw_fn() { String::from("fn") }
+    else if tag == tok_kw_let() { String::from("let") }
+    else if tag == tok_kw_mut() { String::from("mut") }
+    else if tag == tok_kw_struct() { String::from("struct") }
+    else if tag == tok_kw_enum() { String::from("enum") }
+    else if tag == tok_kw_match() { String::from("match") }
+    else if tag == tok_kw_if() { String::from("if") }
+    else if tag == tok_kw_else() { String::from("else") }
+    else if tag == tok_kw_while() { String::from("while") }
+    else if tag == tok_kw_loop() { String::from("loop") }
+    else if tag == tok_kw_break() { String::from("break") }
+    else if tag == tok_kw_continue() { String::from("continue") }
+    else if tag == tok_kw_return() { String::from("return") }
+    else if tag == tok_kw_pub() { String::from("pub") }
+    else if tag == tok_kw_use() { String::from("use") }
+    else if tag == tok_kw_module() { String::from("module") }
+    else if tag == tok_kw_vow() { String::from("vow") }
+    else if tag == tok_kw_requires() { String::from("requires") }
+    else if tag == tok_kw_ensures() { String::from("ensures") }
+    else if tag == tok_kw_invariant() { String::from("invariant") }
+    else if tag == tok_kw_where() { String::from("where") }
+    else if tag == tok_kw_region() { String::from("region") }
+    else if tag == tok_kw_linear() { String::from("linear") }
+    else if tag == tok_kw_extern() { String::from("extern") }
+    else if tag == tok_kw_impl() { String::from("impl") }
+    else if tag == tok_kw_trait() { String::from("trait") }
+    else if tag == tok_kw_type() { String::from("type") }
+    else if tag == tok_kw_for() { String::from("for") }
+    else if tag == tok_kw_in() { String::from("in") }
+    else if tag == tok_kw_as() { String::from("as") }
+    else if tag == tok_kw_read() { String::from("read") }
+    else if tag == tok_kw_write() { String::from("write") }
+    else if tag == tok_kw_io() { String::from("io") }
+    else if tag == tok_kw_panic() { String::from("panic") }
+    else if tag == tok_kw_unsafe() { String::from("unsafe") }
+    else if tag == tok_kw_const() { String::from("const") }
+    else { String::from("") }
+}

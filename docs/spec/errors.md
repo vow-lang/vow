@@ -204,6 +204,30 @@ fn add(a: i64, b: i64) -> i64 vow {
 
 **Fix:** Install ESBMC, or use `--no-verify` to skip verification: `vowc build --no-verify <file>`.
 
+### RegionConflict
+
+**Phase:** Region Inference (arena-per-scope, Phase 3)
+**Meaning:** A heap-typed value's required lifetime cannot be satisfied by the regions the surrounding code provides. This fires when an interprocedural store-effect constraint is unsatisfiable — for example, a value allocated in an inner block is stored into a container that outlives that block.
+
+> **Coverage note (as of Phase 5):** the alloc→param-via-callee shape is
+> detected and emits this code with `Blame: Callee` and a hint pointing
+> at the three resolution strategies (copy into outer arena, hoist the
+> allocation, or restructure the data flow). Cross-parameter cases that
+> require a published store-effect, Phi-of-mixed-origins, and the full
+> block-tree LUB stay deferred to Phase 9 (issue #204). The spec shape
+> below is stable; the residual cases above silently promote to a
+> conservative `Root` region today rather than emitting a diagnostic.
+
+```vow
+fn store_into(out: Vec<String>, prefix: String) [io] {
+    let s: String = String::from(prefix);
+    s.push_str(String::from(" world"));
+    out.push(s);  // s is allocated in this function's scope but escapes into out's region
+}
+```
+
+**Fix:** Move the allocation to a wider scope, or copy the value into the target region (e.g., `String::from(s)` into the outer arena). The compiler does NOT silently promote values to the root region — see `docs/design/arena_memory.md` §4.4.
+
 ## Runtime Errors
 
 These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).
@@ -252,6 +276,26 @@ The `blame` field indicates who is at fault:
 
 **Fix:** Add a bounds check before indexing, or add contracts: `requires: i >= 0, requires: i < v.len()`.
 
+### RegionLiteralMutation
+
+**When:** A `Vec`, `String`, or `HashMap` mutation is attempted on a literal-backed container — one whose descriptor carries the `VOW_CAP_RODATA` sentinel (backing lives in `.rodata` or was pinned to the root region). See `docs/design/arena_memory.md` §6.1, §7.3.
+
+```json
+{"error":"RegionLiteralMutation","operation":"String::push_str","origin":"rodata"}
+```
+
+A plain-text hint follows on the next line (not a JSON field). The hint text is dispatched on the operation's type prefix:
+
+```
+hint: use String::from(literal) to obtain a mutable copy       # for String::* operations
+hint: use Vec::from(literal) to obtain a mutable copy          # for Vec::*    operations
+hint: construct a mutable HashMap and copy entries before mutating  # for HashMap::* operations
+```
+
+The `operation` field identifies the source-level method that trapped (e.g., `Vec::push`, `Vec::pop`, `HashMap::insert`, `String::clear`). The `origin` field identifies the storage class of the immutable backing; today only `rodata` is emitted.
+
+**Fix:** Obtain an explicit mutable copy before mutation: `String::from(literal)`, `Vec::from(literal)`, etc.
+
 ### StackOverflow
 
 **When:** The native call stack is exhausted, typically due to unbounded recursion.
@@ -269,6 +313,18 @@ In debug or sanitize mode, the diagnostic includes call depth and the function t
 The signal handler is installed in **all** build modes. The `depth` and `function` fields are only available in debug/sanitize mode where call-depth instrumentation is emitted.
 
 **Fix:** Add a base case to recursive functions, or restructure the algorithm to use iteration instead of recursion.
+
+### OutOfMemory
+
+**When:** A runtime arena operation (`__vow_arena_open` or `__vow_arena_alloc`) failed because the underlying `malloc` returned null. Non-recoverable from within Vow (`docs/design/arena_memory.md` §3.3, §16).
+
+```json
+{"error":"OutOfMemory","operation":"arena_alloc"}
+```
+
+The `operation` field is `arena_open` for the initial chunk allocation or `arena_alloc` for a later fallback chunk allocation.
+
+**Fix:** Reduce working-set size, raise the process memory limit, or run on a machine with more memory. This is not a Vow program error.
 
 ## Warnings
 

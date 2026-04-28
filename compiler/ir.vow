@@ -131,6 +131,39 @@ fn IOP_BITOR_U64() -> i64 vow { ensures: result >= 0 } { 111 }
 fn IOP_SHL_U64() -> i64 vow { ensures: result >= 0 } { 112 }
 fn IOP_SHR_U64() -> i64 vow { ensures: result >= 0 } { 113 }
 
+fn IOP_REGION_OPEN() -> i64 vow { ensures: result >= 0 } { 114 }
+fn IOP_REGION_CLOSE() -> i64 vow { ensures: result >= 0 } { 115 }
+
+fn REGION_KIND_BLOCK()  -> i64 vow { ensures: result >= 0 } { 0 }
+fn REGION_KIND_CALLER() -> i64 vow { ensures: result >= 0 } { 1 }
+fn REGION_KIND_ROOT()   -> i64 vow { ensures: result >= 0 } { 2 }
+fn REGION_KIND_RODATA() -> i64 vow { ensures: result >= 0 } { 3 }
+
+fn region_pack(kind: i64, val: i64) -> i64 vow {
+    requires: kind >= 0,
+    requires: kind <= 3,
+    requires: val >= 0,
+    requires: val <= 4294967295,
+    ensures: result == val * 4 + kind,
+    ensures: result >= 0
+} { val * 4 + kind }
+
+fn region_kind(r: i64) -> i64 vow {
+    requires: r >= 0,
+    ensures: result == r - (r / 4) * 4,
+    ensures: result >= 0,
+    ensures: result <= 3
+} { r - (r / 4) * 4 }
+fn region_val(r: i64)  -> i64 vow {
+    requires: r >= 0,
+    ensures: result == r / 4,
+    ensures: result >= 0
+} { r / 4 }
+fn region_root()   -> i64 { region_pack(REGION_KIND_ROOT(),   0) }
+fn region_rodata() -> i64 { region_pack(REGION_KIND_RODATA(), 0) }
+
+fn MODULE_VERSION() -> i64 vow { ensures: result > 0 } { 1 }
+
 fn iop_is_terminal(op: i64) -> bool vow {
     requires: op >= 0
 } {
@@ -147,6 +180,24 @@ fn ITY_PTR() -> i64 vow { ensures: result >= 0 } { 6 }
 fn ITY_LPTR() -> i64 vow { ensures: result >= 0 } { 7 }
 fn ITY_U64() -> i64 vow { ensures: result >= 0 } { 8 }
 
+// IDATA_* are the **in-memory** data-kind tags for the self-hosted IR
+// (`IrInst.dk`). They are a separate numbering space from the on-disk
+// `.vmod` discriminants in `vow-ir/src/serialize.rs::read_inst_data`
+// — the two partially overlap by accident but drift after slot 7
+// (e.g. IDATA_CONST_STR=8 in-memory maps to on-disk disc 9,
+// IDATA_CALL_TARGET=9 in-memory maps to on-disk disc 10, and
+// IDATA_CONST_U64=17 in-memory maps to on-disk disc 8). When Phase 3
+// adds full InstData encoding to `compiler/module_io.vow`, it must
+// build an explicit IDATA_* → on-disk-disc translation table rather
+// than reusing these constants as wire-format discriminants.
+//
+// Implementation note for that Phase 3 translation table: the on-disk
+// discriminants are defined as literal `out.push(N)` calls inside
+// `write_inst_data` (not derived from any named constant), so the
+// self-hosted encoder should mirror them with an explicit match on
+// `IDATA_*` → fixed byte, not via any `dk + offset` formula. That
+// keeps the mapping visible in one place and fails loudly if either
+// numbering space shifts.
 fn IDATA_NONE() -> i64 vow { ensures: result >= 0 } { 0 }
 fn IDATA_CONST_I32() -> i64 vow { ensures: result >= 0 } { 1 }
 fn IDATA_CONST_I64() -> i64 vow { ensures: result >= 0 } { 2 }
@@ -160,7 +211,9 @@ fn IDATA_CALL_TARGET() -> i64 vow { ensures: result >= 0 } { 9 }
 fn IDATA_CALL_EXTERN() -> i64 vow { ensures: result >= 0 } { 10 }
 fn IDATA_BRANCH_TARGETS() -> i64 vow { ensures: result >= 0 } { 11 }
 fn IDATA_JUMP_TARGET() -> i64 vow { ensures: result >= 0 } { 12 }
-fn IDATA_REGION_ID() -> i64 vow { ensures: result >= 0 } { 13 }
+// Slot 13 (IDATA_REGION_ID) was retired in Phase 2 alongside the Rust
+// `InstData::RegionId` variant; the shim keeps the numeric slot reserved
+// under `#[allow(dead_code)]` for numbering alignment. Do not reuse.
 fn IDATA_VOW_ID() -> i64 vow { ensures: result >= 0 } { 14 }
 fn IDATA_ALLOC_SIZE() -> i64 vow { ensures: result >= 0 } { 15 }
 fn IDATA_FIELD() -> i64 vow { ensures: result >= 0 } { 16 }
@@ -180,6 +233,7 @@ struct IrInst {
     ds: String,
     ostart: i64,
     olen: i64,
+    rgn: i64,
 }
 
 struct IrBlock {
@@ -197,6 +251,11 @@ struct IrVowEntry {
     offset: i64,
 }
 
+fn RSUM_KIND_FRESH_IN_CALLER() -> i64 vow { ensures: result >= 0 } { 0 }
+fn RSUM_KIND_ALIAS_OF()        -> i64 vow { ensures: result >= 0 } { 1 }
+fn RSUM_KIND_ALIAS_OF_ANY()    -> i64 vow { ensures: result >= 0 } { 2 }
+fn RSUM_KIND_CONSTANT_GLOBAL() -> i64 vow { ensures: result >= 0 } { 3 }
+
 struct IrFunction {
     id: i64,
     name: String,
@@ -208,6 +267,19 @@ struct IrFunction {
     blocks: Vec<IrBlock>,
     local_names_ids: Vec<i64>,
     local_names_strs: Vec<String>,
+    rsum_return_kind: i64,
+    rsum_return_aux: i64,
+    rsum_return_aliases: Vec<i64>,
+    // Flat encoding of `Vec<StoreEffect>` mirroring `vow-ir/src/types.rs`:
+    // per effect, [target_u32, constraint_kind, (aux_u32)?, (alias_count,
+    // alias_u32...)?]. Payload shape matches `write_region_constraint` in
+    // `vow-ir/src/serialize.rs`. Empty in Phase 2 (no effectful summaries
+    // produced yet).
+    rsum_store_effects: Vec<i64>,
+    // Per-parameter RegionVar indices (u32 on the Rust side). Matches
+    // `RegionSummary.param_regions` in `vow-ir/src/types.rs`. Empty in
+    // Phase 2 (no cross-module summaries produced yet).
+    rsum_param_regions: Vec<i64>,
 }
 
 struct IrFieldLayout {
@@ -253,6 +325,25 @@ fn ir_inst_new(id: i64, op: i64, ty: i64, args: Vec<i64>, dk: i64, dv: i64, dv2:
         ds: ds,
         ostart: 0,
         olen: 0,
+        rgn: region_root(),
+    }
+}
+
+fn ir_inst_set_region(inst: IrInst, rgn: i64) -> IrInst vow {
+    requires: rgn >= 0
+} {
+    IrInst {
+        id: inst.id,
+        op: inst.op,
+        ty: inst.ty,
+        args: inst.args,
+        dk: inst.dk,
+        dv: inst.dv,
+        dv2: inst.dv2,
+        ds: inst.ds,
+        ostart: inst.ostart,
+        olen: inst.olen,
+        rgn: rgn,
     }
 }
 
@@ -275,6 +366,11 @@ fn ir_function_new(id: i64, name: String, return_ty: i64, effects: i64) -> IrFun
         blocks: Vec::new(),
         local_names_ids: Vec::new(),
         local_names_strs: Vec::new(),
+        rsum_return_kind: RSUM_KIND_CONSTANT_GLOBAL(),
+        rsum_return_aux: 0,
+        rsum_return_aliases: Vec::new(),
+        rsum_store_effects: Vec::new(),
+        rsum_param_regions: Vec::new(),
     }
 }
 

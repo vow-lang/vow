@@ -1,0 +1,1150 @@
+module ModuleIo
+
+// Self-hosted `.vmod` encoder / decoder for the Phase 2 IR wire format.
+// Mirrors `vow-ir/src/serialize.rs` byte-for-byte:
+// - magic "VMOD" + v1 version header
+// - LEB128 counts / lengths
+// - explicit opcode / type / effect / blame / InstData discriminants
+// - region metadata on `IrInst`
+// - `RegionSummary` on `IrFunction`
+
+use ir
+
+fn MODULE_MAGIC_0() -> i64 vow { ensures: result >= 0 } { 86 }   // 'V'
+fn MODULE_MAGIC_1() -> i64 vow { ensures: result >= 0 } { 77 }   // 'M'
+fn MODULE_MAGIC_2() -> i64 vow { ensures: result >= 0 } { 79 }   // 'O'
+fn MODULE_MAGIC_3() -> i64 vow { ensures: result >= 0 } { 68 }   // 'D'
+
+fn BLAME_NONE() -> i64 vow { ensures: result >= 0 } { 2 }
+
+fn EFFECT_IO() -> i64 vow { ensures: result >= 0 } { 1 }
+fn EFFECT_PANIC() -> i64 vow { ensures: result >= 0 } { 2 }
+fn EFFECT_READ() -> i64 vow { ensures: result >= 0 } { 4 }
+fn EFFECT_UNSAFE() -> i64 vow { ensures: result >= 0 } { 8 }
+fn EFFECT_WRITE() -> i64 vow { ensures: result >= 0 } { 16 }
+
+struct ModuleReader {
+    buf: Vec<i64>,
+    pos: i64,
+}
+
+struct WireRegionConstraint {
+    kind: i64,
+    aux: i64,
+    aliases: Vec<i64>,
+}
+
+struct WireInstData {
+    dk: i64,
+    dv: i64,
+    dv2: i64,
+    ds: String,
+}
+
+struct WireRegionSummary {
+    return_kind: i64,
+    return_aux: i64,
+    return_aliases: Vec<i64>,
+    store_effects: Vec<i64>,
+    param_regions: Vec<i64>,
+}
+
+struct SortedLocalNames {
+    ids: Vec<i64>,
+    names: Vec<String>,
+}
+
+fn reader_new(buf: Vec<i64>) -> ModuleReader {
+    ModuleReader { buf: buf, pos: 0 }
+}
+
+fn reject_decode_i64() -> i64 {
+    let bad: Vec<i64> = Vec::new();
+    bad[0]
+}
+
+fn reject_encode_u8() -> i64 {
+    let bad: Vec<i64> = Vec::new();
+    bad[0]
+}
+
+fn reject_decode_module() -> IrModule {
+    let bad: Vec<i64> = Vec::new();
+    let name: String = String::new();
+    name.push_byte(bad[0]);
+    ir_module_new(name)
+}
+
+fn write_u8(out: Vec<i64>, v: i64) vow {
+    requires: v >= 0,
+    requires: v <= 255
+} {
+    out.push(v);
+}
+
+fn write_u16_le(out: Vec<i64>, v: i64) vow {
+    requires: v >= 0,
+    requires: v <= 65535
+} {
+    out.push(v % 256);
+    out.push((v / 256) % 256);
+}
+
+fn write_u32_le(out: Vec<i64>, v: i64) vow {
+    requires: v >= 0,
+    requires: v <= 4294967295
+} {
+    out.push(v % 256);
+    out.push((v / 256) % 256);
+    out.push((v / 65536) % 256);
+    out.push((v / 16777216) % 256);
+}
+
+fn low_byte(v: i64) -> i64 {
+    let q: i64 = v / 256;
+    let r: i64 = v - q * 256;
+    if r < 0 { return r + 256; }
+    r
+}
+
+fn write_u32_bits(out: Vec<i64>, v: i64) {
+    let mut n: i64 = v;
+    let mut i: i64 = 0;
+    while i < 4 vow {
+        invariant: i >= 0,
+        invariant: i <= 4
+    } {
+        let b: i64 = low_byte(n);
+        out.push(b);
+        n = (n - b) / 256;
+        i = i + 1;
+    }
+}
+
+fn write_i64_bits(out: Vec<i64>, v: i64) {
+    let mut n: i64 = v;
+    let mut i: i64 = 0;
+    while i < 8 vow {
+        invariant: i >= 0,
+        invariant: i <= 8
+    } {
+        let b: i64 = low_byte(n);
+        out.push(b);
+        n = (n - b) / 256;
+        i = i + 1;
+    }
+}
+
+fn reader_read_u8(r: ModuleReader) -> i64 vow {
+    requires: r.pos >= 0,
+    requires: r.pos < r.buf.len()
+} {
+    let b: i64 = r.buf[r.pos];
+    r.pos = r.pos + 1;
+    b
+}
+
+fn reader_read_u16_le(r: ModuleReader) -> i64 vow {
+    requires: r.pos >= 0,
+    requires: r.pos + 1 < r.buf.len()
+} {
+    let b0: i64 = r.buf[r.pos];
+    let b1: i64 = r.buf[r.pos + 1];
+    r.pos = r.pos + 2;
+    b0 + b1 * 256
+}
+
+fn reader_read_u32_le(r: ModuleReader) -> i64 vow {
+    requires: r.pos >= 0,
+    requires: r.pos + 3 < r.buf.len()
+} {
+    let b0: i64 = r.buf[r.pos];
+    let b1: i64 = r.buf[r.pos + 1];
+    let b2: i64 = r.buf[r.pos + 2];
+    let b3: i64 = r.buf[r.pos + 3];
+    r.pos = r.pos + 4;
+    b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
+}
+
+fn read_i32_bits(r: ModuleReader) -> i64 {
+    let u: i64 = reader_read_u32_le(r);
+    if u >= 2147483648 { return u - 4294967296; }
+    u
+}
+
+fn read_i64_bits(r: ModuleReader) -> i64 {
+    let b0: i64 = reader_read_u8(r);
+    let b1: i64 = reader_read_u8(r);
+    let b2: i64 = reader_read_u8(r);
+    let b3: i64 = reader_read_u8(r);
+    let b4: i64 = reader_read_u8(r);
+    let b5: i64 = reader_read_u8(r);
+    let b6: i64 = reader_read_u8(r);
+    let b7_raw: i64 = reader_read_u8(r);
+    let b7: i64 = if b7_raw >= 128 { b7_raw - 256 } else { b7_raw };
+    b0
+        + b1 * 256
+        + b2 * 65536
+        + b3 * 16777216
+        + b4 * 4294967296
+        + b5 * 1099511627776
+        + b6 * 281474976710656
+        + b7 * 72057594037927936
+}
+
+fn write_leb(out: Vec<i64>, v: i64) vow {
+    requires: v >= 0
+} {
+    let mut n: i64 = v;
+    loop vow {
+        invariant: n >= 0
+    } {
+        let byte: i64 = n - (n / 128) * 128;
+        n = n / 128;
+        if n == 0 {
+            out.push(byte);
+            return;
+        }
+        out.push(byte + 128);
+    }
+}
+
+fn reader_read_leb(r: ModuleReader) -> i64 vow {
+    requires: r.pos >= 0,
+    requires: r.pos < r.buf.len()
+} {
+    let mut value: i64 = 0;
+    let mut shift: i64 = 0;
+    let mut done: i64 = 0;
+    while done == 0 vow {
+        invariant: shift >= 0
+    } {
+        let b: i64 = reader_read_u8(r);
+        let chunk: i64 = b - (b / 128) * 128;
+        value = value + chunk * (1 << shift);
+        if (b / 128) == 0 {
+            done = 1;
+        } else {
+            shift = shift + 7;
+        }
+    }
+    value
+}
+
+fn write_string(out: Vec<i64>, s: String) {
+    let n: i64 = s.len();
+    write_leb(out, n);
+    let mut i: i64 = 0;
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
+        out.push(s.byte_at(i));
+        i = i + 1;
+    }
+}
+
+fn reader_read_string(r: ModuleReader) -> String {
+    let n: i64 = reader_read_leb(r);
+    let s: String = String::new();
+    let mut i: i64 = 0;
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
+        s.push_byte(reader_read_u8(r));
+        i = i + 1;
+    }
+    s
+}
+
+fn effect_bit_set(effects: i64, bit: i64) -> bool {
+    (effects / bit) % 2 == 1
+}
+
+fn effect_disc_count(effects: i64) -> i64 {
+    let mut n: i64 = 0;
+    if effect_bit_set(effects, EFFECT_IO()) { n = n + 1; }
+    if effect_bit_set(effects, EFFECT_PANIC()) { n = n + 1; }
+    if effect_bit_set(effects, EFFECT_READ()) { n = n + 1; }
+    if effect_bit_set(effects, EFFECT_UNSAFE()) { n = n + 1; }
+    if effect_bit_set(effects, EFFECT_WRITE()) { n = n + 1; }
+    n
+}
+
+fn write_effects(out: Vec<i64>, effects: i64) {
+    write_leb(out, effect_disc_count(effects));
+    if effect_bit_set(effects, EFFECT_IO()) { write_u8(out, 0); }
+    if effect_bit_set(effects, EFFECT_PANIC()) { write_u8(out, 1); }
+    if effect_bit_set(effects, EFFECT_READ()) { write_u8(out, 2); }
+    if effect_bit_set(effects, EFFECT_UNSAFE()) { write_u8(out, 3); }
+    if effect_bit_set(effects, EFFECT_WRITE()) { write_u8(out, 4); }
+}
+
+fn reader_read_effects(r: ModuleReader) -> i64 {
+    let n: i64 = reader_read_leb(r);
+    let mut effects: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
+        let d: i64 = reader_read_u8(r);
+        if d == 0 { effects = effects + EFFECT_IO(); }
+        if d == 1 { effects = effects + EFFECT_PANIC(); }
+        if d == 2 { effects = effects + EFFECT_READ(); }
+        if d == 3 { effects = effects + EFFECT_UNSAFE(); }
+        if d == 4 { effects = effects + EFFECT_WRITE(); }
+        i = i + 1;
+    }
+    effects
+}
+
+fn ty_disc(ty: i64) -> i64 {
+    ty
+}
+
+fn disc_ty(d: i64) -> i64 {
+    d
+}
+
+fn blame_disc(blame: i64) -> i64 {
+    if blame == BLAME_CALLER() { return 0; }
+    if blame == BLAME_CALLEE() { return 1; }
+    2
+}
+
+fn disc_blame(d: i64) -> i64 {
+    if d == 0 { return BLAME_CALLER(); }
+    if d == 1 { return BLAME_CALLEE(); }
+    BLAME_NONE()
+}
+
+fn opcode_disc(op: i64) -> i64 {
+    op
+}
+
+fn disc_opcode(d: i64) -> i64 {
+    d
+}
+
+fn region_encode(out: Vec<i64>, rgn: i64) vow {
+    requires: rgn >= 0,
+    requires: region_val(rgn) <= 4294967295,
+    requires: region_kind(rgn) <= 1 || region_val(rgn) == 0
+} {
+    let kind: i64 = region_kind(rgn);
+    let payload: i64 = region_val(rgn);
+    write_u8(out, kind);
+    write_u32_le(out, payload);
+}
+
+fn region_decode(r: ModuleReader) -> i64 [panic] {
+    let kind: i64 = reader_read_u8(r);
+    let payload: i64 = reader_read_u32_le(r);
+    if kind > REGION_KIND_RODATA() {
+        return reject_decode_i64();
+    }
+    if kind == REGION_KIND_ROOT() || kind == REGION_KIND_RODATA() {
+        if payload != 0 {
+            return reject_decode_i64();
+        }
+    }
+    region_pack(kind, payload)
+}
+
+fn region_constraint_encode(out: Vec<i64>, kind: i64, aux: i64, aliases: Vec<i64>) vow {
+    requires: kind >= 0,
+    requires: kind <= 3,
+    requires: aux >= 0,
+    requires: aux <= 4294967295
+} {
+    write_u8(out, kind);
+    if kind == RSUM_KIND_FRESH_IN_CALLER() || kind == RSUM_KIND_CONSTANT_GLOBAL() {
+        return;
+    }
+    if kind == RSUM_KIND_ALIAS_OF() {
+        write_u32_le(out, aux);
+        return;
+    }
+    let n: i64 = aliases.len();
+    write_leb(out, n);
+    let mut i: i64 = 0;
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
+        write_u32_le(out, aliases[i]);
+        i = i + 1;
+    }
+}
+
+fn region_constraint_decode(r: ModuleReader) -> WireRegionConstraint [panic] {
+    let kind: i64 = reader_read_u8(r);
+    if kind == RSUM_KIND_FRESH_IN_CALLER() || kind == RSUM_KIND_CONSTANT_GLOBAL() {
+        return WireRegionConstraint { kind: kind, aux: 0, aliases: Vec::new() };
+    }
+    if kind == RSUM_KIND_ALIAS_OF() {
+        return WireRegionConstraint {
+            kind: kind,
+            aux: reader_read_u32_le(r),
+            aliases: Vec::new(),
+        };
+    }
+    if kind != RSUM_KIND_ALIAS_OF_ANY() {
+        return WireRegionConstraint { kind: reject_decode_i64(), aux: 0, aliases: Vec::new() };
+    }
+    let n: i64 = reader_read_leb(r);
+    let aliases: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
+        aliases.push(reader_read_u32_le(r));
+        i = i + 1;
+    }
+    WireRegionConstraint { kind: kind, aux: 0, aliases: aliases }
+}
+
+fn store_effect_flat_advance(flat: Vec<i64>, start: i64) -> i64 {
+    let kind: i64 = flat[start + 1];
+    if kind == RSUM_KIND_FRESH_IN_CALLER() || kind == RSUM_KIND_CONSTANT_GLOBAL() {
+        start + 2
+    } else if kind == RSUM_KIND_ALIAS_OF() {
+        start + 3
+    } else {
+        start + 3 + flat[start + 2]
+    }
+}
+
+fn store_effect_count(flat: Vec<i64>) -> i64 {
+    let mut count: i64 = 0;
+    let mut i: i64 = 0;
+    let n: i64 = flat.len();
+    while i < n vow {
+        invariant: i >= 0
+    } {
+        i = store_effect_flat_advance(flat, i);
+        count = count + 1;
+    }
+    count
+}
+
+fn write_region_summary(out: Vec<i64>, f: IrFunction) {
+    let param_regions: Vec<i64> = f.rsum_param_regions;
+    write_leb(out, param_regions.len());
+    let mut i: i64 = 0;
+    while i < param_regions.len() vow {
+        invariant: i >= 0,
+        invariant: i <= param_regions.len()
+    } {
+        write_u32_le(out, param_regions[i]);
+        i = i + 1;
+    }
+
+    region_constraint_encode(out, f.rsum_return_kind, f.rsum_return_aux, f.rsum_return_aliases);
+
+    let flat: Vec<i64> = f.rsum_store_effects;
+    write_leb(out, store_effect_count(flat));
+    i = 0;
+    while i < flat.len() vow {
+        invariant: i >= 0,
+        invariant: i <= flat.len()
+    } {
+        let target: i64 = flat[i];
+        let kind: i64 = flat[i + 1];
+        write_u32_le(out, target);
+        if kind == RSUM_KIND_FRESH_IN_CALLER() || kind == RSUM_KIND_CONSTANT_GLOBAL() {
+            region_constraint_encode(out, kind, 0, Vec::new());
+            i = i + 2;
+        } else if kind == RSUM_KIND_ALIAS_OF() {
+            region_constraint_encode(out, kind, flat[i + 2], Vec::new());
+            i = i + 3;
+        } else {
+            let n_aliases: i64 = flat[i + 2];
+            let aliases: Vec<i64> = Vec::new();
+            let mut j: i64 = 0;
+            while j < n_aliases vow {
+                invariant: j >= 0,
+                invariant: j <= n_aliases
+            } {
+                aliases.push(flat[i + 3 + j]);
+                j = j + 1;
+            }
+            region_constraint_encode(out, kind, 0, aliases);
+            i = i + 3 + n_aliases;
+        }
+    }
+}
+
+fn read_region_summary(r: ModuleReader) -> WireRegionSummary [panic] {
+    let param_n: i64 = reader_read_leb(r);
+    let param_regions: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < param_n vow {
+        invariant: i >= 0,
+        invariant: i <= param_n
+    } {
+        param_regions.push(reader_read_u32_le(r));
+        i = i + 1;
+    }
+
+    let ret: WireRegionConstraint = region_constraint_decode(r);
+
+    let effects_n: i64 = reader_read_leb(r);
+    let flat: Vec<i64> = Vec::new();
+    i = 0;
+    while i < effects_n vow {
+        invariant: i >= 0,
+        invariant: i <= effects_n
+    } {
+        let target: i64 = reader_read_u32_le(r);
+        let src: WireRegionConstraint = region_constraint_decode(r);
+        flat.push(target);
+        flat.push(src.kind);
+        if src.kind == RSUM_KIND_ALIAS_OF() {
+            flat.push(src.aux);
+        } else if src.kind == RSUM_KIND_ALIAS_OF_ANY() {
+            flat.push(src.aliases.len());
+            let mut j: i64 = 0;
+            while j < src.aliases.len() vow {
+                invariant: j >= 0,
+                invariant: j <= src.aliases.len()
+            } {
+                flat.push(src.aliases[j]);
+                j = j + 1;
+            }
+        }
+        i = i + 1;
+    }
+
+    WireRegionSummary {
+        return_kind: ret.kind,
+        return_aux: ret.aux,
+        return_aliases: ret.aliases,
+        store_effects: flat,
+        param_regions: param_regions,
+    }
+}
+
+fn write_inst_data(out: Vec<i64>, inst: IrInst) {
+    let dk: i64 = inst.dk;
+    if dk == IDATA_NONE() { write_u8(out, 0); return; }
+    if dk == IDATA_CONST_I32() { write_u8(out, 1); write_u32_bits(out, inst.dv); return; }
+    if dk == IDATA_CONST_I64() { write_u8(out, 2); write_i64_bits(out, inst.dv); return; }
+    if dk == IDATA_CONST_F32() { write_u8(out, 3); write_u32_bits(out, inst.dv); return; }
+    if dk == IDATA_CONST_F64() { write_u8(out, 4); write_i64_bits(out, inst.dv); return; }
+    if dk == IDATA_CONST_BOOL() {
+        write_u8(out, 5);
+        if inst.dv == 0 { write_u8(out, 0); } else { write_u8(out, 1); }
+        return;
+    }
+    if dk == IDATA_ARG_INDEX() { write_u8(out, 6); write_u32_le(out, inst.dv); return; }
+    if dk == IDATA_PHI_TARGET() { write_u8(out, 7); write_u32_le(out, inst.dv); return; }
+    if dk == IDATA_CONST_U64() { write_u8(out, 8); write_i64_bits(out, inst.dv); return; }
+    if dk == IDATA_CONST_STR() { write_u8(out, 9); write_u32_le(out, inst.dv); return; }
+    if dk == IDATA_CALL_TARGET() { write_u8(out, 10); write_u32_le(out, inst.dv); return; }
+    if dk == IDATA_CALL_EXTERN() { write_u8(out, 11); write_string(out, inst.ds); return; }
+    if dk == IDATA_BRANCH_TARGETS() {
+        write_u8(out, 12);
+        write_u32_le(out, inst.dv);
+        write_u32_le(out, inst.dv2);
+        return;
+    }
+    if dk == IDATA_JUMP_TARGET() { write_u8(out, 13); write_u32_le(out, inst.dv); return; }
+    if dk == IDATA_VOW_ID() { write_u8(out, 14); write_u32_le(out, inst.dv); return; }
+    if dk == IDATA_ALLOC_SIZE() {
+        write_u8(out, 15);
+        write_u32_le(out, inst.dv);
+        write_u32_le(out, inst.dv2);
+        return;
+    }
+    if dk == IDATA_FIELD() { write_u8(out, 16); write_u32_le(out, inst.dv); return; }
+    write_u8(out, reject_encode_u8());
+}
+
+fn read_inst_data(r: ModuleReader) -> WireInstData [panic] {
+    let tag: i64 = reader_read_u8(r);
+    let data: WireInstData = WireInstData { dk: IDATA_NONE(), dv: 0, dv2: 0, ds: String::from("") };
+    if tag == 0 {
+    } else if tag == 1 {
+        data.dk = IDATA_CONST_I32();
+        data.dv = read_i32_bits(r);
+    } else if tag == 2 {
+        data.dk = IDATA_CONST_I64();
+        data.dv = read_i64_bits(r);
+    } else if tag == 3 {
+        data.dk = IDATA_CONST_F32();
+        data.dv = reader_read_u32_le(r);
+    } else if tag == 4 {
+        data.dk = IDATA_CONST_F64();
+        data.dv = read_i64_bits(r);
+    } else if tag == 5 {
+        data.dk = IDATA_CONST_BOOL();
+        if reader_read_u8(r) == 0 { data.dv = 0; } else { data.dv = 1; }
+    } else if tag == 6 {
+        data.dk = IDATA_ARG_INDEX();
+        data.dv = reader_read_u32_le(r);
+    } else if tag == 7 {
+        data.dk = IDATA_PHI_TARGET();
+        data.dv = reader_read_u32_le(r);
+    } else if tag == 8 {
+        data.dk = IDATA_CONST_U64();
+        data.dv = read_i64_bits(r);
+    } else if tag == 9 {
+        data.dk = IDATA_CONST_STR();
+        data.dv = reader_read_u32_le(r);
+    } else if tag == 10 {
+        data.dk = IDATA_CALL_TARGET();
+        data.dv = reader_read_u32_le(r);
+    } else if tag == 11 {
+        data.dk = IDATA_CALL_EXTERN();
+        data.ds = reader_read_string(r);
+    } else if tag == 12 {
+        data.dk = IDATA_BRANCH_TARGETS();
+        data.dv = reader_read_u32_le(r);
+        data.dv2 = reader_read_u32_le(r);
+    } else if tag == 13 {
+        data.dk = IDATA_JUMP_TARGET();
+        data.dv = reader_read_u32_le(r);
+    } else if tag == 14 {
+        data.dk = IDATA_VOW_ID();
+        data.dv = reader_read_u32_le(r);
+    } else if tag == 15 {
+        data.dk = IDATA_ALLOC_SIZE();
+        data.dv = reader_read_u32_le(r);
+        data.dv2 = reader_read_u32_le(r);
+    } else if tag == 16 {
+        data.dk = IDATA_FIELD();
+        data.dv = reader_read_u32_le(r);
+    } else {
+        return WireInstData { dk: reject_decode_i64(), dv: 0, dv2: 0, ds: String::from("") };
+    }
+    data
+}
+
+fn write_inst(out: Vec<i64>, inst: IrInst) {
+    write_u32_le(out, inst.id);
+    write_u16_le(out, opcode_disc(inst.op));
+    write_u8(out, ty_disc(inst.ty));
+    write_leb(out, inst.args.len());
+    let mut i: i64 = 0;
+    while i < inst.args.len() vow {
+        invariant: i >= 0,
+        invariant: i <= inst.args.len()
+    } {
+        write_u32_le(out, inst.args[i]);
+        i = i + 1;
+    }
+    write_inst_data(out, inst);
+    write_u32_le(out, inst.ostart);
+    write_u32_le(out, inst.olen);
+    region_encode(out, inst.rgn);
+}
+
+fn read_inst(r: ModuleReader) -> IrInst [panic] {
+    let id: i64 = reader_read_u32_le(r);
+    let op: i64 = disc_opcode(reader_read_u16_le(r));
+    let ty: i64 = disc_ty(reader_read_u8(r));
+    let argc: i64 = reader_read_leb(r);
+    let args: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < argc vow {
+        invariant: i >= 0,
+        invariant: i <= argc
+    } {
+        args.push(reader_read_u32_le(r));
+        i = i + 1;
+    }
+    let data: WireInstData = read_inst_data(r);
+    let inst: IrInst = ir_inst_new(id, op, ty, args, data.dk, data.dv, data.dv2, data.ds);
+    inst.ostart = reader_read_u32_le(r);
+    inst.olen = reader_read_u32_le(r);
+    inst.rgn = region_decode(r);
+    inst
+}
+
+fn write_block(out: Vec<i64>, block: IrBlock) {
+    write_u32_le(out, block.id);
+    write_leb(out, block.insts.len());
+    let mut i: i64 = 0;
+    while i < block.insts.len() vow {
+        invariant: i >= 0,
+        invariant: i <= block.insts.len()
+    } {
+        write_inst(out, block.insts[i]);
+        i = i + 1;
+    }
+}
+
+fn read_block(r: ModuleReader) -> IrBlock [panic] {
+    let block: IrBlock = ir_block_new(reader_read_u32_le(r));
+    let n: i64 = reader_read_leb(r);
+    let mut i: i64 = 0;
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
+        block.insts.push(read_inst(r));
+        i = i + 1;
+    }
+    block
+}
+
+fn write_vow_entry(out: Vec<i64>, entry: IrVowEntry) {
+    write_u32_le(out, entry.id);
+    write_string(out, entry.description);
+    write_u8(out, blame_disc(entry.blame));
+    write_leb(out, entry.binding_ids.len());
+    let mut i: i64 = 0;
+    while i < entry.binding_ids.len() vow {
+        invariant: i >= 0,
+        invariant: i <= entry.binding_ids.len()
+    } {
+        write_string(out, entry.binding_names[i]);
+        write_u32_le(out, entry.binding_ids[i]);
+        i = i + 1;
+    }
+    write_string(out, entry.file);
+    write_u32_le(out, entry.offset);
+}
+
+fn read_vow_entry(r: ModuleReader) -> IrVowEntry {
+    let entry: IrVowEntry = IrVowEntry {
+        id: reader_read_u32_le(r),
+        description: reader_read_string(r),
+        blame: disc_blame(reader_read_u8(r)),
+        binding_ids: Vec::new(),
+        binding_names: Vec::new(),
+        file: String::from(""),
+        offset: 0,
+    };
+    let n: i64 = reader_read_leb(r);
+    let mut i: i64 = 0;
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
+        entry.binding_names.push(reader_read_string(r));
+        entry.binding_ids.push(reader_read_u32_le(r));
+        i = i + 1;
+    }
+    entry.file = reader_read_string(r);
+    entry.offset = reader_read_u32_le(r);
+    entry
+}
+
+fn sort_local_names(ids: Vec<i64>, names: Vec<String>) -> SortedLocalNames vow {
+    requires: ids.len() == names.len()
+} {
+    let used: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < ids.len() vow {
+        invariant: i >= 0,
+        invariant: i <= ids.len()
+    } {
+        used.push(0);
+        i = i + 1;
+    }
+    let out_ids: Vec<i64> = Vec::new();
+    let out_names: Vec<String> = Vec::new();
+    let mut remaining: i64 = ids.len();
+    while remaining > 0 vow {
+        invariant: remaining >= 0,
+        invariant: remaining <= ids.len(),
+        invariant: out_ids.len() <= ids.len()
+    } {
+        let mut best_idx: i64 = -1;
+        let mut best_id: i64 = 0;
+        i = 0;
+        while i < ids.len() vow {
+            invariant: i >= 0,
+            invariant: i <= ids.len()
+        } {
+            if used[i] == 0 {
+                let cur: i64 = ids[i];
+                if best_idx == -1 || cur < best_id {
+                    best_idx = i;
+                    best_id = cur;
+                }
+            }
+            i = i + 1;
+        }
+        // Keep the last name for duplicate ids to mirror Rust's HashMap insert semantics.
+        let mut chosen_idx: i64 = best_idx;
+        i = 0;
+        while i < ids.len() vow {
+            invariant: i >= 0,
+            invariant: i <= ids.len(),
+            invariant: remaining >= 0,
+            invariant: remaining <= ids.len()
+        } {
+            if used[i] == 0 && ids[i] == best_id {
+                used[i] = 1;
+                remaining = remaining - 1;
+                chosen_idx = i;
+            }
+            i = i + 1;
+        }
+        out_ids.push(ids[chosen_idx]);
+        out_names.push(names[chosen_idx]);
+    }
+    SortedLocalNames { ids: out_ids, names: out_names }
+}
+
+fn write_field(out: Vec<i64>, field: IrFieldLayout) {
+    write_string(out, field.name);
+    write_u8(out, ty_disc(field.ty));
+}
+
+fn read_field(r: ModuleReader) -> IrFieldLayout {
+    IrFieldLayout {
+        name: reader_read_string(r),
+        ty: disc_ty(reader_read_u8(r)),
+    }
+}
+
+fn write_struct_layout(out: Vec<i64>, layout: IrStructLayout) {
+    write_string(out, layout.name);
+    write_leb(out, layout.fields.len());
+    let mut i: i64 = 0;
+    while i < layout.fields.len() vow {
+        invariant: i >= 0,
+        invariant: i <= layout.fields.len()
+    } {
+        write_field(out, layout.fields[i]);
+        i = i + 1;
+    }
+    if layout.is_linear == 0 { write_u8(out, 0); } else { write_u8(out, 1); }
+}
+
+fn read_struct_layout(r: ModuleReader) -> IrStructLayout {
+    let layout: IrStructLayout = IrStructLayout {
+        name: reader_read_string(r),
+        fields: Vec::new(),
+        is_linear: 0,
+    };
+    let n: i64 = reader_read_leb(r);
+    let mut i: i64 = 0;
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
+        layout.fields.push(read_field(r));
+        i = i + 1;
+    }
+    layout.is_linear = reader_read_u8(r);
+    layout
+}
+
+fn write_variant(out: Vec<i64>, variant: IrVariantLayout) {
+    write_string(out, variant.name);
+    write_i64_bits(out, variant.tag);
+    write_leb(out, variant.payload.len());
+    let mut i: i64 = 0;
+    while i < variant.payload.len() vow {
+        invariant: i >= 0,
+        invariant: i <= variant.payload.len()
+    } {
+        write_field(out, variant.payload[i]);
+        i = i + 1;
+    }
+}
+
+fn read_variant(r: ModuleReader) -> IrVariantLayout {
+    let variant: IrVariantLayout = IrVariantLayout {
+        name: reader_read_string(r),
+        tag: read_i64_bits(r),
+        payload: Vec::new(),
+    };
+    let n: i64 = reader_read_leb(r);
+    let mut i: i64 = 0;
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
+        variant.payload.push(read_field(r));
+        i = i + 1;
+    }
+    variant
+}
+
+fn write_enum_layout(out: Vec<i64>, layout: IrEnumLayout) {
+    write_string(out, layout.name);
+    write_leb(out, layout.variants.len());
+    let mut i: i64 = 0;
+    while i < layout.variants.len() vow {
+        invariant: i >= 0,
+        invariant: i <= layout.variants.len()
+    } {
+        write_variant(out, layout.variants[i]);
+        i = i + 1;
+    }
+}
+
+fn read_enum_layout(r: ModuleReader) -> IrEnumLayout {
+    let layout: IrEnumLayout = IrEnumLayout {
+        name: reader_read_string(r),
+        variants: Vec::new(),
+    };
+    let n: i64 = reader_read_leb(r);
+    let mut i: i64 = 0;
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
+        layout.variants.push(read_variant(r));
+        i = i + 1;
+    }
+    layout
+}
+
+fn write_function(out: Vec<i64>, f: IrFunction) {
+    write_u32_le(out, f.id);
+    write_string(out, f.name);
+
+    write_leb(out, f.params.len());
+    let mut i: i64 = 0;
+    while i < f.params.len() vow {
+        invariant: i >= 0,
+        invariant: i <= f.params.len()
+    } {
+        write_u8(out, ty_disc(f.params[i]));
+        i = i + 1;
+    }
+
+    write_leb(out, f.param_names.len());
+    i = 0;
+    while i < f.param_names.len() vow {
+        invariant: i >= 0,
+        invariant: i <= f.param_names.len()
+    } {
+        write_string(out, f.param_names[i]);
+        i = i + 1;
+    }
+
+    write_u8(out, ty_disc(f.return_ty));
+    write_effects(out, f.effects);
+
+    write_leb(out, f.vows.len());
+    i = 0;
+    while i < f.vows.len() vow {
+        invariant: i >= 0,
+        invariant: i <= f.vows.len()
+    } {
+        write_vow_entry(out, f.vows[i]);
+        i = i + 1;
+    }
+
+    write_leb(out, f.blocks.len());
+    i = 0;
+    while i < f.blocks.len() vow {
+        invariant: i >= 0,
+        invariant: i <= f.blocks.len()
+    } {
+        write_block(out, f.blocks[i]);
+        i = i + 1;
+    }
+
+    let sorted: SortedLocalNames = sort_local_names(f.local_names_ids, f.local_names_strs);
+    write_leb(out, sorted.ids.len());
+    i = 0;
+    while i < sorted.ids.len() vow {
+        invariant: i >= 0,
+        invariant: i <= sorted.ids.len()
+    } {
+        write_u32_le(out, sorted.ids[i]);
+        write_string(out, sorted.names[i]);
+        i = i + 1;
+    }
+
+    write_region_summary(out, f);
+}
+
+fn read_function(r: ModuleReader) -> IrFunction [panic] {
+    let id: i64 = reader_read_u32_le(r);
+    let name: String = reader_read_string(r);
+
+    let param_n: i64 = reader_read_leb(r);
+    let params: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < param_n vow {
+        invariant: i >= 0,
+        invariant: i <= param_n
+    } {
+        params.push(disc_ty(reader_read_u8(r)));
+        i = i + 1;
+    }
+
+    let param_name_n: i64 = reader_read_leb(r);
+    let param_names: Vec<String> = Vec::new();
+    i = 0;
+    while i < param_name_n vow {
+        invariant: i >= 0,
+        invariant: i <= param_name_n
+    } {
+        param_names.push(reader_read_string(r));
+        i = i + 1;
+    }
+
+    let return_ty: i64 = disc_ty(reader_read_u8(r));
+    let effects: i64 = reader_read_effects(r);
+
+    let f: IrFunction = ir_function_new(id, name, return_ty, effects);
+    f.params = params;
+    f.param_names = param_names;
+
+    let vow_n: i64 = reader_read_leb(r);
+    i = 0;
+    while i < vow_n vow {
+        invariant: i >= 0,
+        invariant: i <= vow_n
+    } {
+        f.vows.push(read_vow_entry(r));
+        i = i + 1;
+    }
+
+    let block_n: i64 = reader_read_leb(r);
+    i = 0;
+    while i < block_n vow {
+        invariant: i >= 0,
+        invariant: i <= block_n
+    } {
+        f.blocks.push(read_block(r));
+        i = i + 1;
+    }
+
+    let local_n: i64 = reader_read_leb(r);
+    i = 0;
+    while i < local_n vow {
+        invariant: i >= 0,
+        invariant: i <= local_n
+    } {
+        f.local_names_ids.push(reader_read_u32_le(r));
+        f.local_names_strs.push(reader_read_string(r));
+        i = i + 1;
+    }
+
+    let summary: WireRegionSummary = read_region_summary(r);
+    f.rsum_return_kind = summary.return_kind;
+    f.rsum_return_aux = summary.return_aux;
+    f.rsum_return_aliases = summary.return_aliases;
+    f.rsum_store_effects = summary.store_effects;
+    f.rsum_param_regions = summary.param_regions;
+    f
+}
+
+fn module_encode(m: IrModule) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    write_u8(out, MODULE_MAGIC_0());
+    write_u8(out, MODULE_MAGIC_1());
+    write_u8(out, MODULE_MAGIC_2());
+    write_u8(out, MODULE_MAGIC_3());
+    write_u32_le(out, MODULE_VERSION());
+    write_string(out, m.name);
+
+    write_leb(out, m.strings.len());
+    let mut i: i64 = 0;
+    while i < m.strings.len() vow {
+        invariant: i >= 0,
+        invariant: i <= m.strings.len()
+    } {
+        write_string(out, m.strings[i]);
+        i = i + 1;
+    }
+
+    write_leb(out, m.struct_layouts.len());
+    i = 0;
+    while i < m.struct_layouts.len() vow {
+        invariant: i >= 0,
+        invariant: i <= m.struct_layouts.len()
+    } {
+        write_struct_layout(out, m.struct_layouts[i]);
+        i = i + 1;
+    }
+
+    write_leb(out, m.enum_layouts.len());
+    i = 0;
+    while i < m.enum_layouts.len() vow {
+        invariant: i >= 0,
+        invariant: i <= m.enum_layouts.len()
+    } {
+        write_enum_layout(out, m.enum_layouts[i]);
+        i = i + 1;
+    }
+
+    write_leb(out, m.functions.len());
+    i = 0;
+    while i < m.functions.len() vow {
+        invariant: i >= 0,
+        invariant: i <= m.functions.len()
+    } {
+        write_function(out, m.functions[i]);
+        i = i + 1;
+    }
+
+    out
+}
+
+fn module_decode(buf: Vec<i64>) -> IrModule [panic] {
+    let r: ModuleReader = reader_new(buf);
+    let m0: i64 = reader_read_u8(r);
+    let m1: i64 = reader_read_u8(r);
+    let m2: i64 = reader_read_u8(r);
+    let m3: i64 = reader_read_u8(r);
+    let version: i64 = reader_read_u32_le(r);
+    if m0 != MODULE_MAGIC_0() { return reject_decode_module(); }
+    if m1 != MODULE_MAGIC_1() { return reject_decode_module(); }
+    if m2 != MODULE_MAGIC_2() { return reject_decode_module(); }
+    if m3 != MODULE_MAGIC_3() { return reject_decode_module(); }
+    if version != MODULE_VERSION() { return reject_decode_module(); }
+
+    let m: IrModule = ir_module_new(reader_read_string(r));
+
+    let strings_n: i64 = reader_read_leb(r);
+    let mut i: i64 = 0;
+    while i < strings_n vow {
+        invariant: i >= 0,
+        invariant: i <= strings_n
+    } {
+        m.strings.push(reader_read_string(r));
+        i = i + 1;
+    }
+
+    let struct_n: i64 = reader_read_leb(r);
+    i = 0;
+    while i < struct_n vow {
+        invariant: i >= 0,
+        invariant: i <= struct_n
+    } {
+        m.struct_layouts.push(read_struct_layout(r));
+        i = i + 1;
+    }
+
+    let enum_n: i64 = reader_read_leb(r);
+    i = 0;
+    while i < enum_n vow {
+        invariant: i >= 0,
+        invariant: i <= enum_n
+    } {
+        m.enum_layouts.push(read_enum_layout(r));
+        i = i + 1;
+    }
+
+    let fn_n: i64 = reader_read_leb(r);
+    i = 0;
+    while i < fn_n vow {
+        invariant: i >= 0,
+        invariant: i <= fn_n
+    } {
+        m.functions.push(read_function(r));
+        i = i + 1;
+    }
+
+    if r.pos != r.buf.len() {
+        return reject_decode_module();
+    }
+
+    m
+}

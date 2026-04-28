@@ -196,8 +196,6 @@ pub fn classify_function(func: &Function) -> SolverConfig {
 
 /// Run ESBMC with fallback: if BV times out in auto mode, retry with --ir --z3.
 /// Returns the result and the config that produced it.
-/// Not yet wired into the main verification loop — reserved for Phase D integration.
-#[allow(dead_code)]
 pub fn run_with_fallback(
     esbmc: &Path,
     c_src: &str,
@@ -213,11 +211,28 @@ pub fn run_with_fallback(
     }
 
     // Auto mode: run with BV first, fallback to IR on timeout.
-    let timeout = config.timeout_secs.unwrap_or(DEFAULT_AUTO_TIMEOUT_SECS);
+    //
+    // The default 30s cap is only meaningful when the IR fallback is
+    // actually reachable. Bitwuzla can't run the IR encoding, so applying
+    // `DEFAULT_AUTO_TIMEOUT_SECS` when the resolved BV solver is Bitwuzla
+    // would amount to a silent regression — users who pick Bitwuzla for
+    // bitwise-heavy contracts would get cut off at 30s with no retry.
+    // Leave those runs uncapped unless the user set --timeout explicitly.
+    let bv_solver = match config.solver {
+        Solver::Auto => Solver::Boolector,
+        s => s,
+    };
+    let timeout_secs = if config.timeout_secs.is_some() {
+        config.timeout_secs
+    } else if matches!(bv_solver, Solver::Bitwuzla) {
+        None
+    } else {
+        Some(DEFAULT_AUTO_TIMEOUT_SECS)
+    };
     let bv_config = SolverConfig {
         solver: config.solver,
         encoding: Encoding::Bv,
-        timeout_secs: Some(timeout),
+        timeout_secs,
     }
     .resolve();
 
@@ -232,15 +247,23 @@ pub fn run_with_fallback(
                 return (VerificationResult::Timeout, bv_config);
             }
 
+            // Reuse the same timeout policy for the IR retry: user override
+            // if set, else the 30s default (IR is always reachable here).
+            let ir_timeout = config.timeout_secs.or(Some(DEFAULT_AUTO_TIMEOUT_SECS));
             let ir_config = SolverConfig {
                 solver: Solver::Z3,
                 encoding: Encoding::Ir,
-                timeout_secs: Some(timeout),
+                timeout_secs: ir_timeout,
             };
             let ir_result =
                 run_esbmc_with_max_k_step(esbmc, c_src, max_k_step, func_name, &ir_config);
             match ir_result {
                 VerificationResult::Proven => (VerificationResult::ProvenIr, ir_config),
+                // IR returned a counterexample, but IR does not model
+                // overflow — a CE found only under IR can be infeasible
+                // under BV. Report Timeout (which is what BV actually
+                // produced) rather than an unsound definitive Failed.
+                VerificationResult::Failed(_) => (VerificationResult::Timeout, ir_config),
                 other => (other, ir_config),
             }
         }
@@ -255,7 +278,7 @@ pub fn run_with_fallback(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vow_ir::{BasicBlock, BlockId, FuncId, Inst, InstId, Ty};
+    use vow_ir::{BasicBlock, BlockId, FuncId, Inst, InstId, RegionId, RegionSummary, Ty};
     use vow_syntax::span::Span;
 
     fn inst(id: u32, opcode: Opcode, ty: Ty, args: Vec<u32>, data: InstData) -> Inst {
@@ -266,6 +289,7 @@ mod tests {
             args: args.into_iter().map(InstId).collect(),
             data,
             origin: Span { start: 0, len: 0 },
+            region: RegionId::Root,
         }
     }
 
@@ -283,6 +307,7 @@ mod tests {
                 insts,
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         }
     }
 
@@ -534,5 +559,198 @@ mod tests {
         );
         let c = classify_function(&func);
         assert_eq!(c.encoding, Encoding::Bv); // NEVER Ir from heuristic
+    }
+
+    // -- Phase D: run_with_fallback tests --
+
+    use crate::c_emitter::VerifyLimits;
+    use crate::esbmc::{emit_verify_c_source, find_esbmc};
+    use std::collections::HashMap;
+    use vow_diag::Blame;
+    use vow_ir::{InstData, Module as IrModule, Opcode, VowEntry, VowId};
+
+    fn trivially_true_fn() -> Function {
+        Function {
+            id: FuncId(0),
+            name: "always_ok".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::I32,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "true".to_string(),
+                blame: Blame::Callee,
+                bindings: vec![],
+                file: String::new(),
+                offset: 0,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(
+                        0,
+                        Opcode::ConstBool,
+                        Ty::Bool,
+                        vec![],
+                        InstData::ConstBool(true),
+                    ),
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::VowEnsures,
+                        ty: Ty::Unit,
+                        args: vec![InstId(0)],
+                        data: InstData::VowId(VowId(0)),
+                        origin: Span { start: 0, len: 0 },
+                        region: RegionId::Root,
+                    },
+                    inst(2, Opcode::ConstI32, Ty::I32, vec![], InstData::ConstI32(42)),
+                    inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+        }
+    }
+
+    fn emit_c_for(func: &Function) -> String {
+        let module = IrModule {
+            name: "test".to_string(),
+            functions: vec![func.clone()],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        let const_fns = HashMap::new();
+        emit_verify_c_source(func, &module, &const_fns, &VerifyLimits::default())
+    }
+
+    /// Phase D: when encoding is explicit (Bv), run_with_fallback runs once
+    /// and returns the resolved config unchanged.
+    #[test]
+    fn fallback_explicit_bv_one_shot() {
+        let esbmc = match find_esbmc() {
+            Some(p) => p,
+            None => {
+                eprintln!("SKIP: esbmc not found");
+                return;
+            }
+        };
+        let func = trivially_true_fn();
+        let c_src = emit_c_for(&func);
+        let cfg = SolverConfig {
+            solver: Solver::Boolector,
+            encoding: Encoding::Bv,
+            timeout_secs: None,
+        };
+        let (result, resolved) = run_with_fallback(&esbmc, &c_src, 5, &func.name, &cfg);
+        assert!(matches!(result, VerificationResult::Proven));
+        assert_eq!(resolved.solver, Solver::Boolector);
+        assert_eq!(resolved.encoding, Encoding::Bv);
+    }
+
+    /// Phase D: when encoding is Auto and BV proves the function, no IR
+    /// retry is attempted and the returned config reports encoding=Bv.
+    #[test]
+    fn fallback_auto_bv_proves_trivial_no_retry() {
+        let esbmc = match find_esbmc() {
+            Some(p) => p,
+            None => {
+                eprintln!("SKIP: esbmc not found");
+                return;
+            }
+        };
+        let func = trivially_true_fn();
+        let c_src = emit_c_for(&func);
+        let cfg = SolverConfig {
+            solver: Solver::Auto,
+            encoding: Encoding::Auto,
+            timeout_secs: None,
+        };
+        let (result, resolved) = run_with_fallback(&esbmc, &c_src, 5, &func.name, &cfg);
+        assert!(matches!(result, VerificationResult::Proven));
+        // No fallback kicked in, so encoding must be Bv (IR is only used on timeout).
+        assert_eq!(resolved.encoding, Encoding::Bv);
+    }
+
+    /// Phase D: the Bitwuzla guard — when BV solver is Bitwuzla and BV
+    /// times out in Auto encoding, run_with_fallback must NOT fall back to
+    /// IR (IR requires Z3). Force a timeout by using timeout_secs=0.
+    #[test]
+    fn fallback_bitwuzla_never_retries_ir() {
+        let esbmc = match find_esbmc() {
+            Some(p) => p,
+            None => {
+                eprintln!("SKIP: esbmc not found");
+                return;
+            }
+        };
+        let func = trivially_true_fn();
+        let c_src = emit_c_for(&func);
+        let cfg = SolverConfig {
+            solver: Solver::Bitwuzla,
+            encoding: Encoding::Auto,
+            timeout_secs: Some(0), // force BV to time out immediately
+        };
+        let (result, resolved) = run_with_fallback(&esbmc, &c_src, 5, &func.name, &cfg);
+        // The BV run might finish between spawn and the first 50ms poll; if
+        // so, we accept Proven. What we must never see is ProvenIr — that
+        // would mean the guard was bypassed and IR was tried with Bitwuzla.
+        match result {
+            VerificationResult::Timeout => {
+                assert_eq!(resolved.solver, Solver::Bitwuzla);
+                assert_eq!(resolved.encoding, Encoding::Bv);
+            }
+            VerificationResult::Proven => {
+                assert_eq!(resolved.solver, Solver::Bitwuzla);
+                assert_eq!(resolved.encoding, Encoding::Bv);
+            }
+            VerificationResult::ProvenIr => {
+                panic!("bitwuzla must not fall back to IR encoding");
+            }
+            other => panic!("unexpected result: {other:?}"),
+        }
+    }
+
+    /// Phase D: when BV times out under Auto encoding (non-Bitwuzla solver),
+    /// the fallback retries with Z3+IR. Force the BV timeout with
+    /// timeout_secs=0 so the IR retry is what actually runs; IR proves the
+    /// trivially-true ensures and we get ProvenIr.
+    #[test]
+    fn fallback_auto_bv_timeout_retries_with_ir() {
+        let esbmc = match find_esbmc() {
+            Some(p) => p,
+            None => {
+                eprintln!("SKIP: esbmc not found");
+                return;
+            }
+        };
+        let func = trivially_true_fn();
+        let c_src = emit_c_for(&func);
+        let cfg = SolverConfig {
+            solver: Solver::Boolector,
+            encoding: Encoding::Auto,
+            timeout_secs: Some(0),
+        };
+        let (result, resolved) = run_with_fallback(&esbmc, &c_src, 5, &func.name, &cfg);
+        // The BV run may or may not race the 50ms poll; accept either
+        // Proven (BV finished first) or ProvenIr (fallback kicked in).
+        match result {
+            VerificationResult::Proven => {
+                assert_eq!(resolved.encoding, Encoding::Bv);
+            }
+            VerificationResult::ProvenIr => {
+                assert_eq!(resolved.solver, Solver::Z3);
+                assert_eq!(resolved.encoding, Encoding::Ir);
+            }
+            VerificationResult::Timeout => {
+                // Both BV and IR timed out — still valid for the guard test,
+                // but the resolved config must reflect the IR attempt since
+                // fallback was enabled.
+                assert_eq!(resolved.encoding, Encoding::Ir);
+            }
+            other => panic!("unexpected result: {other:?}"),
+        }
     }
 }

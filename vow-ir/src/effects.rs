@@ -1,4 +1,4 @@
-use crate::types::{Opcode, RegionId};
+use crate::types::{AbstractRegionId, Opcode};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AbstractHeap {
@@ -6,7 +6,7 @@ pub enum AbstractHeap {
     SsaState,
     VowState,
     Io,
-    Region(RegionId),
+    Region(AbstractRegionId),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -102,6 +102,12 @@ pub fn inst_effects(opcode: &Opcode) -> Effects {
             e
         }
         Opcode::RegionAlloc | Opcode::RegionFree => {
+            let mut e = Effects::pure();
+            e.reads.insert(AbstractHeap::Memory);
+            e.writes.insert(AbstractHeap::Memory);
+            e
+        }
+        Opcode::RegionOpen | Opcode::RegionClose => {
             let mut e = Effects::pure();
             e.reads.insert(AbstractHeap::Memory);
             e.writes.insert(AbstractHeap::Memory);

@@ -9,6 +9,7 @@ use checker
 use lower
 use ir
 use diag
+use region
 
 struct CheckedFrontend {
     path: String,
@@ -144,16 +145,53 @@ fn frontend_prepare_path(path: String) -> FrontendPrep [io] {
 fn frontend_lower_path(path: String) -> LoweredFrontend [io] {
     let prep: FrontendPrep = frontend_prepare_path(path);
     let checked: CheckedFrontend = prep.checked;
+    // Snapshot the diags-Vec length before region inference. Counting
+    // *new* errors after inference (rather than recounting the whole
+    // Vec) makes the gate independent of whether any earlier stage
+    // already pushed SEV_ERROR diagnostics. Today the type-check gate
+    // bails before this path on errors, but pinning the delta keeps the
+    // recount correct under future stage reordering or upstream invariant
+    // changes.
+    let pre_diags_len: i64 = checked.dctx.diags.len();
     let ir_mod: IrModule = {
         if checked.n_errors > 0 {
             // Keep callers on one lowered entry point even when checking fails.
             ir_module_new(checked.path)
         } else {
-            lower_module_vow(prep.merged, prep.str_eids, checked.path)
+            // Phase 3: region inference. Mutates summaries + per-inst regions
+            // in place; emits any RegionConflict diagnostics through dctx so
+            // they reach the existing CompileFailed JSON path.
+            let lowered: IrModule = lower_module_vow(prep.merged, prep.str_eids, checked.path);
+            infer_regions_module(lowered, checked.dctx, checked.path)
         }
     };
+    // Refresh n_errors so any region diagnostics emitted above propagate to
+    // the n_errors > 0 gates in compiler/main.vow (CompileFailed bail-out).
+    // diag_ctx_emit takes DiagCtx by value, so its error_count++ does not
+    // propagate (struct value semantics). diags is a Vec — its push DOES
+    // propagate via shared backing — so count newly-pushed errors by
+    // walking the diags Vec from `pre_diags_len` to its current length.
+    // Latent in Phase 3 (RegionConflict only fires via the unreachable
+    // SCC-bound ICE), but Phase 5 will surface real conflicts.
+    let dctx_after: DiagCtx = checked.dctx;
+    let all_diags: Vec<Diagnostic> = dctx_after.diags;
+    let mut region_new_errors: i64 = 0;
+    let mut di: i64 = pre_diags_len;
+    while di < all_diags.len() {
+        if all_diags[di].severity == SEV_ERROR() {
+            region_new_errors = region_new_errors + 1;
+        }
+        di = di + 1;
+    }
+    let updated_checked: CheckedFrontend = CheckedFrontend {
+        path: checked.path,
+        dctx: dctx_after,
+        sources: checked.sources,
+        n_items: checked.n_items,
+        n_errors: checked.n_errors + region_new_errors,
+    };
     LoweredFrontend {
-        checked: checked,
+        checked: updated_checked,
         ir_mod: ir_mod,
     }
 }

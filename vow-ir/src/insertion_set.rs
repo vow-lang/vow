@@ -83,7 +83,7 @@ impl Default for InsertionSet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{BlockId, InstData, Opcode, Ty};
+    use crate::types::{BlockId, InstData, Opcode, RegionId, Ty};
     use vow_syntax::span::Span;
 
     fn dummy_span() -> Span {
@@ -98,6 +98,7 @@ mod tests {
             args: vec![],
             data,
             origin: dummy_span(),
+            region: RegionId::Root,
         }
     }
 
@@ -109,6 +110,7 @@ mod tests {
             args,
             data: InstData::None,
             origin: dummy_span(),
+            region: RegionId::Root,
         }
     }
 

@@ -168,6 +168,43 @@ pub unsafe extern "C" fn __vow_unwrap_panic() {
     std::process::exit(1);
 }
 
+// Arena / rodata runtime-error emitters. Both print a JSON envelope to stderr
+// then exit(1). Not routed through vow-diag (see docs/design/arena_memory.md §13.3).
+//
+// Both helpers are **non-allocating**. They take &'static str operation names
+// and emit to stderr via direct byte writes. oom_trap is called on allocation
+// failure; a heap allocation here would itself fail under memory pressure and
+// mask the structured OOM envelope.
+fn oom_trap(operation: &'static str) -> ! {
+    use std::io::Write;
+    let stderr = std::io::stderr();
+    let mut lock = stderr.lock();
+    let _ = lock.write_all(b"{\"error\":\"OutOfMemory\",\"operation\":\"");
+    let _ = lock.write_all(operation.as_bytes());
+    let _ = lock.write_all(b"\"}\n");
+    std::process::exit(1);
+}
+
+fn region_literal_mutation_trap(operation: &'static str) -> ! {
+    use std::io::Write;
+    let hint: &[u8] = if operation.starts_with("String::") {
+        b"hint: use String::from(literal) to obtain a mutable copy\n"
+    } else if operation.starts_with("Vec::") {
+        b"hint: use Vec::from(literal) to obtain a mutable copy\n"
+    } else if operation.starts_with("HashMap::") {
+        b"hint: construct a mutable HashMap and copy entries before mutating\n"
+    } else {
+        b"hint: obtain a mutable copy before mutation\n"
+    };
+    let stderr = std::io::stderr();
+    let mut lock = stderr.lock();
+    let _ = lock.write_all(b"{\"error\":\"RegionLiteralMutation\",\"operation\":\"");
+    let _ = lock.write_all(operation.as_bytes());
+    let _ = lock.write_all(b"\",\"origin\":\"rodata\"}\n");
+    let _ = lock.write_all(hint);
+    std::process::exit(1);
+}
+
 // ---------------------------------------------------------------------------
 // Trace instrumentation
 // ---------------------------------------------------------------------------
@@ -529,7 +566,7 @@ fn format_i64_to_buf(mut val: i64, buf: &mut [u8; 20]) -> &[u8] {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn __vow_arena_alloc(size: usize, align: usize) -> *mut u8 {
+pub extern "C" fn __vow_malloc(size: usize, align: usize) -> *mut u8 {
     if size == 0 {
         return align as *mut u8;
     }
@@ -542,13 +579,256 @@ pub extern "C" fn __vow_arena_alloc(size: usize, align: usize) -> *mut u8 {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_arena_free(ptr: *mut u8, size: usize, align: usize) {
+pub unsafe extern "C" fn __vow_free(ptr: *mut u8, size: usize, align: usize) {
     if size == 0 || ptr.is_null() {
         return;
     }
     let layout =
-        std::alloc::Layout::from_size_align(size, align).expect("__vow_arena_free: invalid layout");
+        std::alloc::Layout::from_size_align(size, align).expect("__vow_free: invalid layout");
     unsafe { std::alloc::dealloc(ptr, layout) };
+}
+
+// ---------------------------------------------------------------------------
+// Arena primitive (docs/design/arena_memory.md §3)
+// ---------------------------------------------------------------------------
+
+// Sentinel capacity used by rodata-backed container descriptors. Any mutation
+// entry point must trap with RegionLiteralMutation before any growth logic.
+// See docs/design/arena_memory.md §6.1, §7.3.
+pub const VOW_CAP_RODATA: usize = usize::MAX;
+
+#[repr(C)]
+pub struct VowArena {
+    pub first_chunk: *mut u8,
+    pub current_chunk: *mut u8,
+    pub cursor: usize,
+    pub chunk_end: usize,
+    pub last_alloc_start: *mut u8,
+    pub last_alloc_size: usize,
+}
+
+const _: () = assert!(core::mem::size_of::<VowArena>() == 48);
+
+const CHUNK_PAYLOAD: usize = 4096;
+const CHUNK_LINK_BYTES: usize = 8;
+const OVERSIZED_THRESHOLD: usize = 2048;
+
+const fn normal_chunk_total() -> usize {
+    CHUNK_LINK_BYTES + CHUNK_PAYLOAD
+}
+
+const fn oversized_chunk_total(bytes: usize, align: usize) -> usize {
+    CHUNK_LINK_BYTES + bytes + (align - 1)
+}
+
+// libc::malloc a chunk of `total` bytes and zero the next-chunk link word at
+// offset 0. Returns the base pointer or null on OOM; caller decides trap site.
+unsafe fn alloc_chunk(total: usize) -> *mut u8 {
+    let base = unsafe { libc::malloc(total) } as *mut u8;
+    if !base.is_null() {
+        unsafe { *(base as *mut *mut u8) = core::ptr::null_mut() };
+    }
+    base
+}
+
+// Align a raw address up to `align` (power of two).
+fn align_up(addr: usize, align: usize) -> usize {
+    (addr + align - 1) & !(align - 1)
+}
+
+// First usable address within a chunk for allocations of the given alignment.
+// Usable space begins at offset 8 (after the next-chunk link word).
+unsafe fn chunk_usable_start(base: *mut u8, align: usize) -> usize {
+    align_up(base as usize + CHUNK_LINK_BYTES, align)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_arena_open(a: *mut VowArena) {
+    let total = normal_chunk_total();
+    let base = unsafe { alloc_chunk(total) };
+    if base.is_null() {
+        oom_trap("arena_open");
+    }
+    let arena = unsafe { &mut *a };
+    arena.first_chunk = base;
+    arena.current_chunk = base;
+    arena.cursor = unsafe { chunk_usable_start(base, 8) };
+    arena.chunk_end = base as usize + total;
+    arena.last_alloc_start = core::ptr::null_mut();
+    arena.last_alloc_size = 0;
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_arena_close(a: *mut VowArena) {
+    let arena = unsafe { &mut *a };
+    let mut chunk = arena.first_chunk;
+    while !chunk.is_null() {
+        let next = unsafe { *(chunk as *mut *mut u8) };
+        unsafe { libc::free(chunk as *mut libc::c_void) };
+        chunk = next;
+    }
+    // Zero all fields. Spec §3.3 leaves the post-close state unspecified,
+    // and this zeroing choice makes a double-close a safe no-op (the loop
+    // above walks a null chain) rather than a dangling-pointer walk.
+    arena.first_chunk = core::ptr::null_mut();
+    arena.current_chunk = core::ptr::null_mut();
+    arena.cursor = 0;
+    arena.chunk_end = 0;
+    arena.last_alloc_start = core::ptr::null_mut();
+    arena.last_alloc_size = 0;
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_arena_alloc(
+    a: *mut VowArena,
+    bytes: usize,
+    align: usize,
+) -> *mut u8 {
+    // Overflow guard: all downstream arithmetic in this function
+    // (`align_up`, the fit-check, `oversized_chunk_total`) sums `bytes`
+    // and `align`, so both individually AND combined must fit in the
+    // allocator's size limit (`isize::MAX`, Rust convention). Without
+    // the combined check, `bytes == align == isize::MAX` would still
+    // wrap `CHUNK_LINK_BYTES + bytes + (align - 1)` on 64-bit `usize`.
+    let size_limit = isize::MAX as usize;
+    if bytes > size_limit || align > size_limit || bytes.saturating_add(align) > size_limit {
+        oom_trap("arena_alloc");
+    }
+    let arena = unsafe { &mut *a };
+    let aligned_cursor = align_up(arena.cursor, align);
+    if aligned_cursor + bytes <= arena.chunk_end {
+        arena.cursor = aligned_cursor + bytes;
+        arena.last_alloc_start = aligned_cursor as *mut u8;
+        arena.last_alloc_size = bytes;
+        return aligned_cursor as *mut u8;
+    }
+    // Need a new chunk. Use the oversized path whenever (a) bytes exceed the
+    // threshold or (b) worst-case alignment padding could push past a normal
+    // chunk's payload. (b) is inert today (all callers use align <= 8) but
+    // keeps the `cursor <= chunk_end` invariant under any alignment.
+    let total = if bytes > OVERSIZED_THRESHOLD || bytes + (align - 1) > CHUNK_PAYLOAD {
+        oversized_chunk_total(bytes, align)
+    } else {
+        normal_chunk_total()
+    };
+    let new_base = unsafe { alloc_chunk(total) };
+    if new_base.is_null() {
+        oom_trap("arena_alloc");
+    }
+    // Link new chunk as the tail.
+    unsafe { *(arena.current_chunk as *mut *mut u8) = new_base };
+    arena.current_chunk = new_base;
+    let start = unsafe { chunk_usable_start(new_base, align) };
+    arena.cursor = start + bytes;
+    arena.chunk_end = new_base as usize + total;
+    arena.last_alloc_start = start as *mut u8;
+    arena.last_alloc_size = bytes;
+    start as *mut u8
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_arena_try_extend(
+    a: *mut VowArena,
+    ptr: *mut u8,
+    old_size: usize,
+    new_size: usize,
+) -> i64 {
+    let arena = unsafe { &mut *a };
+    if ptr != arena.last_alloc_start || arena.last_alloc_size != old_size {
+        return 0;
+    }
+    if new_size < old_size {
+        return 0;
+    }
+    let delta = new_size - old_size;
+    if arena.cursor.saturating_add(delta) > arena.chunk_end {
+        return 0;
+    }
+    arena.cursor += delta;
+    arena.last_alloc_size = new_size;
+    1
+}
+
+// Root region header lives in .bss. Initialized by __vow_runtime_start before
+// main; never reclaimed (spec §6.2). Not yet wired to main (Phase 4).
+#[unsafe(no_mangle)]
+pub static mut __vow_root_arena: VowArena = VowArena {
+    first_chunk: core::ptr::null_mut(),
+    current_chunk: core::ptr::null_mut(),
+    cursor: 0,
+    chunk_end: 0,
+    last_alloc_start: core::ptr::null_mut(),
+    last_alloc_size: 0,
+};
+
+static ROOT_ARENA_INITIALIZED: AtomicBool = AtomicBool::new(false);
+static ROOT_ARENA_LOCK: Mutex<()> = Mutex::new(());
+
+unsafe fn ensure_root_arena() {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+}
+
+unsafe fn ensure_root_arena_locked() {
+    if !ROOT_ARENA_INITIALIZED.load(Ordering::SeqCst) {
+        unsafe { __vow_arena_open(&raw mut __vow_root_arena) };
+        ROOT_ARENA_INITIALIZED.store(true, Ordering::SeqCst);
+    }
+}
+
+unsafe fn root_arena_alloc(bytes: usize, align: usize) -> *mut u8 {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { __vow_arena_alloc(&raw mut __vow_root_arena, bytes, align) }
+}
+
+unsafe fn root_arena_alloc_zeroed(bytes: usize, align: usize) -> *mut u8 {
+    let ptr = unsafe { root_arena_alloc(bytes, align) };
+    unsafe { std::ptr::write_bytes(ptr, 0, bytes) };
+    ptr
+}
+
+/// Grow a backing buffer that lives in `__vow_root_arena`. Implements the
+/// spec §7.2 zero-copy fast path: try `__vow_arena_try_extend` first; if
+/// the backing is the most recent allocation in the chunk and the new
+/// size still fits, growth is O(1) with no copy and no orphaned backing.
+/// Otherwise fall back to a fresh allocation + memcpy of the prefix.
+///
+/// Phase 4 / S6 status: this fast path is wired for **root-arena-backed**
+/// containers — the only kind today, since `__vow_vec_new` /
+/// `__vow_string_new` / `__vow_map_new` all allocate from
+/// `__vow_root_arena`. Threading a per-container arena pointer through
+/// the descriptor (so block-arena-backed `Vec`/`String`/`HashMap` also
+/// benefit from try_extend) is a much larger API change deferred to
+/// Phase 9 (performance), per `docs/design/arena_memory.md` §15.
+unsafe fn root_arena_grow_backing(
+    ptr: *mut u8,
+    old_size: usize,
+    new_size: usize,
+    align: usize,
+) -> *mut u8 {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    if old_size > 0
+        && unsafe {
+            __vow_arena_try_extend(&raw mut __vow_root_arena, ptr, old_size, new_size) != 0
+        }
+    {
+        unsafe { std::ptr::write_bytes(ptr.add(old_size), 0, new_size - old_size) };
+        return ptr;
+    }
+
+    let new_ptr = unsafe { __vow_arena_alloc(&raw mut __vow_root_arena, new_size, align) };
+    if old_size > 0 {
+        unsafe { std::ptr::copy_nonoverlapping(ptr, new_ptr, old_size) };
+    }
+    unsafe { std::ptr::write_bytes(new_ptr.add(old_size), 0, new_size - old_size) };
+    new_ptr
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_runtime_start() {
+    unsafe { ensure_root_arena() };
 }
 
 #[repr(C)]
@@ -563,11 +843,7 @@ const VEC_INITIAL_CAP: usize = 8;
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_vec_new(elem_size: usize, align: usize) -> *mut u8 {
     let _ = elem_size;
-    let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
-    let header_ptr = unsafe { std::alloc::alloc_zeroed(header_layout) } as *mut VowVec;
-    if header_ptr.is_null() {
-        std::process::abort();
-    }
+    let header_ptr = unsafe { root_arena_alloc_zeroed(24, 8) } as *mut VowVec;
     // Lazy allocation: don't allocate buffer until first push.
     // Use a dangling aligned pointer so from_raw_parts with len=0 is safe.
     unsafe {
@@ -586,6 +862,9 @@ pub extern "C" fn __vow_vec_new_val() -> *mut u8 {
 
 unsafe fn __vow_vec_reserve(vec: *mut u8, additional: usize, elem_size: usize, elem_align: usize) {
     let v = unsafe { &mut *(vec as *mut VowVec) };
+    if v.cap == VOW_CAP_RODATA {
+        region_literal_mutation_trap("Vec::reserve");
+    }
     let required = v.len + additional;
     if required <= v.cap {
         return;
@@ -596,17 +875,7 @@ unsafe fn __vow_vec_reserve(vec: *mut u8, additional: usize, elem_size: usize, e
     }
     let old_size = v.cap * elem_size;
     let new_size = new_cap * elem_size;
-    let new_ptr = if old_size == 0 {
-        let layout = unsafe { std::alloc::Layout::from_size_align_unchecked(new_size, elem_align) };
-        unsafe { std::alloc::alloc_zeroed(layout) }
-    } else {
-        let old_layout =
-            unsafe { std::alloc::Layout::from_size_align_unchecked(old_size, elem_align) };
-        unsafe { std::alloc::realloc(v.ptr, old_layout, new_size) }
-    };
-    if new_ptr.is_null() {
-        std::process::abort();
-    }
+    let new_ptr = unsafe { root_arena_grow_backing(v.ptr, old_size, new_size, elem_align) };
     v.ptr = new_ptr;
     v.cap = new_cap;
 }
@@ -618,7 +887,27 @@ pub unsafe extern "C" fn __vow_vec_push(
     elem_size: usize,
     elem_align: usize,
 ) {
+    // Sanitizer first — consults the shadow table by pointer value and
+    // diagnoses UseAfterFree without dereferencing. The cap check must
+    // dereference, so it has to run after the sanitizer.
     sanitize_on_push(vec as usize);
+    unsafe { vec_push_no_sanitize(vec, elem, elem_size, elem_align, "Vec::push") };
+}
+
+// Inner push that assumes the caller has already run sanitize_on_push for
+// this pointer. Used by delegating wrappers (string_push_byte) that need a
+// type-specific operation name in the rodata trap without double-sanitizing.
+unsafe fn vec_push_no_sanitize(
+    vec: *mut u8,
+    elem: *const u8,
+    elem_size: usize,
+    elem_align: usize,
+    op: &'static str,
+) {
+    let v = unsafe { &*(vec as *const VowVec) };
+    if v.cap == VOW_CAP_RODATA {
+        region_literal_mutation_trap(op);
+    }
     unsafe { __vow_vec_reserve(vec, 1, elem_size, elem_align) };
     let v = unsafe { &mut *(vec as *mut VowVec) };
     let dest = unsafe { v.ptr.add(v.len * elem_size) };
@@ -635,8 +924,14 @@ pub unsafe extern "C" fn __vow_vec_len(vec: *const u8) -> usize {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_push_val(vec: *mut u8, value: i64) {
+    // Sanitize + cap-check here with the precise operation name. Delegating
+    // the whole path to __vow_vec_push would (a) double-sanitize and (b)
+    // report the trap as "Vec::push" instead of "Vec::push_val". Delegate
+    // the actual push to the no-sanitize helper so the shadow table records
+    // a single generation per appended element.
+    sanitize_on_push(vec as usize);
     let bytes = value.to_ne_bytes();
-    unsafe { __vow_vec_push(vec, bytes.as_ptr(), 8, 8) };
+    unsafe { vec_push_no_sanitize(vec, bytes.as_ptr(), 8, 8, "Vec::push_val") };
 }
 
 #[unsafe(no_mangle)]
@@ -649,57 +944,48 @@ pub unsafe extern "C" fn __vow_vec_get_val(vec: *const u8, index: usize) -> i64 
 pub unsafe extern "C" fn __vow_vec_pop(vec: *mut u8) {
     sanitize_on_pop(vec as usize);
     let v = unsafe { &mut *(vec as *mut VowVec) };
+    if v.cap == VOW_CAP_RODATA {
+        region_literal_mutation_trap("Vec::pop");
+    }
     if v.len > 0 {
         v.len -= 1;
     }
 }
 
-/// Frees the data buffer and resets the Vec to an empty state (len=0, cap=0).
-/// The Vec header itself remains valid and can be reused with push().
+/// Resets the Vec to an empty state. Arena-backed buffers are retained until
+/// the region closes; the header remains valid and can be reused with push().
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_clear(vec: *mut u8) {
     sanitize_on_clear(vec as usize);
     let v = unsafe { &mut *(vec as *mut VowVec) };
-    if v.cap > 0 && !v.ptr.is_null() {
-        let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(v.cap * 8, 8) };
-        unsafe { std::alloc::dealloc(v.ptr, buf_layout) };
+    if v.cap == VOW_CAP_RODATA {
+        region_literal_mutation_trap("Vec::clear");
     }
-    v.ptr = std::ptr::dangling_mut::<u64>() as *mut u8;
     v.len = 0;
-    v.cap = 0;
 }
 
-/// Truncates the Vec to `new_len` elements and shrinks the buffer to fit.
-/// If `new_len >= len`, this is a no-op. If `new_len == 0`, equivalent to clear().
+/// Truncates the Vec to `new_len` elements. Arena-backed buffers are not
+/// shrunk; their storage is reclaimed when the containing region closes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_truncate(vec: *mut u8, new_len: usize) {
     sanitize_on_truncate(vec as usize, new_len);
     let v = unsafe { &mut *(vec as *mut VowVec) };
+    if v.cap == VOW_CAP_RODATA {
+        region_literal_mutation_trap("Vec::truncate");
+    }
     if new_len >= v.len {
         return;
     }
-    if new_len == 0 {
-        unsafe { __vow_vec_clear(vec) };
-        return;
-    }
     v.len = new_len;
-    // Shrink buffer: reallocate to exactly new_len capacity (rounded up to next power of 2)
-    let new_cap = new_len.next_power_of_two().max(VEC_INITIAL_CAP);
-    if new_cap < v.cap {
-        let old_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(v.cap * 8, 8) };
-        let new_ptr = unsafe { std::alloc::realloc(v.ptr, old_layout, new_cap * 8) };
-        if new_ptr.is_null() {
-            std::process::abort();
-        }
-        v.ptr = new_ptr;
-        v.cap = new_cap;
-    }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_set_val(vec: *mut u8, index: usize, value: i64) {
     sanitize_on_set(vec as usize, index);
     let v = unsafe { &*(vec as *const VowVec) };
+    if v.cap == VOW_CAP_RODATA {
+        region_literal_mutation_trap("Vec::set");
+    }
     if index >= v.len {
         let json = r#"{"error":"IndexOutOfBounds"}"#;
         let _ = writeln!(std::io::stderr(), "{json}");
@@ -753,24 +1039,73 @@ pub unsafe extern "C" fn __vow_string_from_cstr(ptr: *const i8) -> *mut u8 {
     unsafe { __vow_string_new(ptr, bytes.len()) }
 }
 
+/// Deep-copy `source` (a `VowString` / `Vec<u8>` descriptor) into `arena`,
+/// returning a freshly-allocated descriptor whose backing also lives in
+/// `arena`. Used by Phase 4 / S5 return materialization (spec §5.1) to
+/// satisfy the `FreshInCaller` representation promise when the source path
+/// is a `.rodata` literal or a parameter alias whose backing is not in
+/// `target_region`.
+///
+/// The new descriptor has `cap = len`; growth is up to the caller. The
+/// source's `cap` is irrelevant — `VOW_CAP_RODATA` (read-only literal) is
+/// handled transparently because we only read `source.ptr` / `source.len`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_clone_into_arena(
+    arena: *mut VowArena,
+    source: *const u8,
+) -> *mut u8 {
+    // A null `source` here is anomalous: well-formed compilation never
+    // produces it. The only path that does is the codegen `ConstStr`
+    // fallback to `iconst(0)` when a string global is missing — which
+    // is itself an upstream compiler error. Surface it loudly in
+    // debug builds; release falls through to a benign empty descriptor
+    // (allocated on the arena) so a buggy build doesn't crash.
+    debug_assert!(
+        !source.is_null(),
+        "__vow_string_clone_into_arena: null source — indicates a missing \
+         ConstStr global (upstream codegen bug)"
+    );
+    let header = unsafe { __vow_arena_alloc(arena, 24, 8) } as *mut VowVec;
+    if source.is_null() {
+        unsafe {
+            (*header).ptr = std::ptr::dangling_mut::<u8>(); // len=0
+            (*header).len = 0;
+            (*header).cap = 0;
+        }
+        return header as *mut u8;
+    }
+    let src = unsafe { &*(source as *const VowVec) };
+    let len = src.len;
+    let data_ptr = if len == 0 {
+        std::ptr::dangling_mut::<u8>() // len=0 — same convention as __vow_vec_new
+    } else {
+        let p = unsafe { __vow_arena_alloc(arena, len, 1) };
+        unsafe { std::ptr::copy_nonoverlapping(src.ptr, p, len) };
+        p
+    };
+    unsafe {
+        (*header).ptr = data_ptr;
+        (*header).len = len;
+        (*header).cap = len;
+    }
+    header as *mut u8
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_len(s: *const u8) -> usize {
     unsafe { __vow_vec_len(s) }
 }
 
-/// Frees the String's byte buffer and resets to empty (len=0, cap=0).
-/// The String header remains valid and can be reused with push_byte/push_str.
+/// Resets the String to empty. Arena-backed storage is retained until the
+/// region closes; the header remains valid and can be reused.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_clear(s: *mut u8) {
     sanitize_on_read(s as usize, 0);
     let v = unsafe { &mut *(s as *mut VowVec) };
-    if v.cap > 0 && !v.ptr.is_null() {
-        let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(v.cap, 1) };
-        unsafe { std::alloc::dealloc(v.ptr, buf_layout) };
+    if v.cap == VOW_CAP_RODATA {
+        region_literal_mutation_trap("String::clear");
     }
-    v.ptr = std::ptr::dangling_mut::<u8>();
     v.len = 0;
-    v.cap = 0;
 }
 
 #[unsafe(no_mangle)]
@@ -813,6 +1148,10 @@ pub unsafe extern "C" fn __vow_string_contains(haystack: *const u8, needle: *con
 pub unsafe extern "C" fn __vow_string_push_str(dest: *mut u8, src: *const u8) {
     sanitize_on_read(dest as usize, 0);
     sanitize_on_read(src as usize, 0);
+    let vd0 = unsafe { &*(dest as *const VowVec) };
+    if vd0.cap == VOW_CAP_RODATA {
+        region_literal_mutation_trap("String::push_str");
+    }
     let vs = unsafe { &*(src as *const VowVec) };
     if vs.len == 0 {
         return;
@@ -851,8 +1190,13 @@ pub unsafe extern "C" fn __vow_string_byte_at(s: *const u8, idx: i64) -> i64 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_push_byte(s: *mut u8, byte: i64) {
+    // Sanitize once here, then delegate to the no-sanitize inner helper with
+    // a type-specific operation name. This keeps both orderings correct:
+    // sanitizer runs before any dereference (UAF detected first), and the
+    // shadow table records a single generation for the one appended byte.
+    sanitize_on_push(s as usize);
     let b = byte as u8;
-    unsafe { __vow_vec_push(s, &b as *const u8, 1, 1) };
+    unsafe { vec_push_no_sanitize(s, &b as *const u8, 1, 1, "String::push_byte") };
 }
 
 // ---------------------------------------------------------------------------
@@ -1150,6 +1494,13 @@ pub extern "C" fn __vow_time_unix_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_num_cpus() -> i64 {
+    std::thread::available_parallelism()
+        .map(|n| n.get() as i64)
+        .unwrap_or(1)
 }
 
 #[unsafe(no_mangle)]
@@ -1722,17 +2073,9 @@ const MAP_INITIAL_CAP: usize = 8;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_map_new() -> *mut u8 {
-    let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
-    let header_ptr = unsafe { std::alloc::alloc_zeroed(header_layout) } as *mut VowMap;
-    if header_ptr.is_null() {
-        std::process::abort();
-    }
+    let header_ptr = unsafe { root_arena_alloc_zeroed(24, 8) } as *mut VowMap;
     let buf_size = MAP_INITIAL_CAP * MAP_ENTRY_BYTES;
-    let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(buf_size, 8) };
-    let buf_ptr = unsafe { std::alloc::alloc_zeroed(buf_layout) };
-    if buf_ptr.is_null() {
-        std::process::abort();
-    }
+    let buf_ptr = unsafe { root_arena_alloc_zeroed(buf_size, 8) };
     unsafe {
         (*header_ptr).ptr = buf_ptr;
         (*header_ptr).len = 0;
@@ -1744,6 +2087,9 @@ pub extern "C" fn __vow_map_new() -> *mut u8 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_map_insert(map: *mut u8, key: i64, val: i64) {
     let m = unsafe { &mut *(map as *mut VowMap) };
+    if m.cap == VOW_CAP_RODATA {
+        region_literal_mutation_trap("HashMap::insert");
+    }
     let entries = unsafe { std::slice::from_raw_parts_mut(m.ptr as *mut i64, m.len * 2) };
     for i in 0..m.len {
         if entries[i * 2] == key {
@@ -1755,17 +2101,9 @@ pub unsafe extern "C" fn __vow_map_insert(map: *mut u8, key: i64, val: i64) {
         let old_size = m.cap * MAP_ENTRY_BYTES;
         let new_cap = m.cap * 2;
         let new_size = new_cap * MAP_ENTRY_BYTES;
-        let old_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(old_size, 8) };
-        let new_ptr = unsafe { std::alloc::realloc(m.ptr, old_layout, new_size) };
-        if new_ptr.is_null() {
-            std::process::abort();
-        }
+        let new_ptr = unsafe { root_arena_grow_backing(m.ptr, old_size, new_size, 8) };
         m.ptr = new_ptr;
         m.cap = new_cap;
-        unsafe {
-            let extra = new_ptr.add(old_size);
-            std::ptr::write_bytes(extra, 0, new_size - old_size);
-        }
     }
     let entries = unsafe { std::slice::from_raw_parts_mut(m.ptr as *mut i64, (m.len + 1) * 2) };
     entries[m.len * 2] = key;
@@ -1800,6 +2138,9 @@ pub unsafe extern "C" fn __vow_map_contains(map: *const u8, key: i64) -> bool {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_map_remove(map: *mut u8, key: i64) {
     let m = unsafe { &mut *(map as *mut VowMap) };
+    if m.cap == VOW_CAP_RODATA {
+        region_literal_mutation_trap("HashMap::remove");
+    }
     let entries = unsafe { std::slice::from_raw_parts_mut(m.ptr as *mut i64, m.len * 2) };
     for i in 0..m.len {
         if entries[i * 2] == key {
@@ -1826,47 +2167,17 @@ pub unsafe extern "C" fn __vow_map_len(map: *const u8) -> usize {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_free(s: *mut u8) {
-    if s.is_null() {
-        return;
-    }
-    sanitize_on_free(s as usize);
-    let v = unsafe { &*(s as *const VowVec) };
-    if v.cap > 0 && !v.ptr.is_null() {
-        let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(v.cap, 1) };
-        unsafe { std::alloc::dealloc(v.ptr, buf_layout) };
-    }
-    let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
-    unsafe { std::alloc::dealloc(s, header_layout) };
+    let _ = s;
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_free_val(v: *mut u8) {
-    if v.is_null() {
-        return;
-    }
-    sanitize_on_free(v as usize);
-    let vec = unsafe { &*(v as *const VowVec) };
-    if vec.cap > 0 && !vec.ptr.is_null() {
-        let buf_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(vec.cap * 8, 8) };
-        unsafe { std::alloc::dealloc(vec.ptr, buf_layout) };
-    }
-    let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
-    unsafe { std::alloc::dealloc(v, header_layout) };
+    let _ = v;
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_map_free(m: *mut u8) {
-    if m.is_null() {
-        return;
-    }
-    let map = unsafe { &*(m as *const VowMap) };
-    if map.cap > 0 && !map.ptr.is_null() {
-        let buf_layout =
-            unsafe { std::alloc::Layout::from_size_align_unchecked(map.cap * MAP_ENTRY_BYTES, 8) };
-        unsafe { std::alloc::dealloc(map.ptr, buf_layout) };
-    }
-    let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
-    unsafe { std::alloc::dealloc(m, header_layout) };
+    let _ = m;
 }
 
 // ---------------------------------------------------------------------------
@@ -1993,30 +2304,6 @@ fn sanitize_on_clear(vec_addr: usize) {
     }
 }
 
-fn sanitize_on_free(vec_addr: usize) {
-    if !sanitize_is_enabled() {
-        return;
-    }
-    let already_freed = {
-        let mut table = SHADOW_TABLE.lock().unwrap();
-        let map = shadow_table_get_or_init(&mut table);
-        if let Some(shadow) = map.get_mut(&vec_addr) {
-            if shadow.freed {
-                true
-            } else {
-                shadow.freed = true;
-                shadow.generations.clear();
-                false
-            }
-        } else {
-            false
-        }
-    };
-    if already_freed {
-        sanitize_emit_error("DoubleFree", &format!("\"vec\":\"0x{vec_addr:x}\""));
-    }
-}
-
 fn sanitize_on_pop(vec_addr: usize) {
     if !sanitize_is_enabled() {
         return;
@@ -2091,25 +2378,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn arena_alloc_free_roundtrip() {
-        let ptr = __vow_arena_alloc(64, 8);
+    fn malloc_free_roundtrip() {
+        let ptr = __vow_malloc(64, 8);
         assert!(!ptr.is_null());
-        unsafe { __vow_arena_free(ptr, 64, 8) };
+        unsafe { __vow_free(ptr, 64, 8) };
     }
 
     #[test]
-    fn arena_free_null_is_noop() {
-        unsafe { __vow_arena_free(std::ptr::null_mut(), 64, 8) };
+    fn free_null_is_noop() {
+        unsafe { __vow_free(std::ptr::null_mut(), 64, 8) };
     }
 
     #[test]
-    fn arena_free_zero_size_is_noop() {
-        unsafe { __vow_arena_free(0x8 as *mut u8, 0, 8) };
+    fn free_zero_size_is_noop() {
+        unsafe { __vow_free(0x8 as *mut u8, 0, 8) };
     }
 
     #[test]
-    fn arena_alloc_zero_returns_sentinel() {
-        let ptr = __vow_arena_alloc(0, 8);
+    fn malloc_zero_returns_sentinel() {
+        let ptr = __vow_malloc(0, 8);
         assert_eq!(ptr, 8 as *mut u8);
     }
 
@@ -2310,5 +2597,472 @@ mod tests {
         let v4 = __vow_vec_new_val();
         unsafe { __vow_vec_push_val(v4, 42) };
         unsafe { __vow_vec_free_val(v4) };
+    }
+
+    // -----------------------------------------------------------------------
+    // Arena primitive tests (docs/design/arena_memory.md §3, §10.4)
+    // -----------------------------------------------------------------------
+
+    fn empty_arena_header() -> VowArena {
+        VowArena {
+            first_chunk: core::ptr::null_mut(),
+            current_chunk: core::ptr::null_mut(),
+            cursor: 0,
+            chunk_end: 0,
+            last_alloc_start: core::ptr::null_mut(),
+            last_alloc_size: 0,
+        }
+    }
+
+    #[test]
+    fn arena_open_close_roundtrip() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        assert!(!a.first_chunk.is_null());
+        assert_eq!(a.first_chunk, a.current_chunk);
+        assert!(a.cursor >= a.first_chunk as usize + CHUNK_LINK_BYTES);
+        assert_eq!(a.chunk_end, a.first_chunk as usize + normal_chunk_total());
+        unsafe { __vow_arena_close(&mut a) };
+        assert!(a.first_chunk.is_null());
+    }
+
+    #[test]
+    fn arena_small_alloc_in_first_chunk() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        let first_base = a.first_chunk as usize;
+        let p = unsafe { __vow_arena_alloc(&mut a, 64, 8) };
+        assert!(!p.is_null());
+        let addr = p as usize;
+        assert!(addr >= first_base + CHUNK_LINK_BYTES);
+        assert!(addr + 64 <= a.chunk_end);
+        assert_eq!(a.last_alloc_start, p);
+        assert_eq!(a.last_alloc_size, 64);
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn arena_overflow_triggers_new_chunk() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        let first = a.first_chunk;
+        // 8 × 512 = 4096 bytes fits exactly in the first chunk (payload=4096).
+        for _ in 0..8 {
+            let _ = unsafe { __vow_arena_alloc(&mut a, 512, 8) };
+        }
+        assert_eq!(
+            a.current_chunk, first,
+            "still in first chunk after 4096 bytes"
+        );
+        // One more 512-byte alloc overflows; must spill into a new chunk.
+        let _ = unsafe { __vow_arena_alloc(&mut a, 512, 8) };
+        assert_ne!(a.current_chunk, first, "new chunk allocated on overflow");
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn arena_oversized_allocation_custom_chunk() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        // Bump past the first chunk to force the next alloc through the
+        // new-chunk path. A 64-byte prefix alloc + a 4096-byte oversized
+        // request won't fit in the remaining 4032 bytes, so spec §3.2's
+        // oversized path fires.
+        let _ = unsafe { __vow_arena_alloc(&mut a, 64, 8) };
+        let first = a.current_chunk;
+        let p = unsafe { __vow_arena_alloc(&mut a, 4096, 8) };
+        assert!(!p.is_null());
+        assert_ne!(
+            a.current_chunk, first,
+            "oversized alloc lives in its own chunk"
+        );
+        let expected_total = oversized_chunk_total(4096, 8);
+        assert_eq!(a.chunk_end, a.current_chunk as usize + expected_total);
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn arena_try_extend_succeeds_for_last_alloc() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        let p = unsafe { __vow_arena_alloc(&mut a, 64, 8) };
+        let r1 = unsafe { __vow_arena_try_extend(&mut a, p, 64, 128) };
+        assert_eq!(r1, 1);
+        assert_eq!(a.last_alloc_size, 128, "size updated post-extend");
+        // Back-to-back: subsequent extend must see the post-extend size.
+        let r2 = unsafe { __vow_arena_try_extend(&mut a, p, 128, 256) };
+        assert_eq!(r2, 1);
+        assert_eq!(a.last_alloc_size, 256);
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn arena_try_extend_fails_not_last_alloc() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        let pa = unsafe { __vow_arena_alloc(&mut a, 64, 8) };
+        let _pb = unsafe { __vow_arena_alloc(&mut a, 64, 8) };
+        let r = unsafe { __vow_arena_try_extend(&mut a, pa, 64, 128) };
+        assert_eq!(r, 0, "try_extend must fail when ptr is not the last alloc");
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn arena_try_extend_fails_old_size_mismatch() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        let p = unsafe { __vow_arena_alloc(&mut a, 64, 8) };
+        // ptr matches last_alloc_start but old_size does not.
+        let r = unsafe { __vow_arena_try_extend(&mut a, p, 32, 64) };
+        assert_eq!(
+            r, 0,
+            "try_extend must fail when old_size != last_alloc_size"
+        );
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn arena_try_extend_fails_chunk_overflow() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        let p = unsafe { __vow_arena_alloc(&mut a, 64, 8) };
+        let before_cursor = a.cursor;
+        let before_end = a.chunk_end;
+        // Request an extension that exceeds the chunk.
+        let r = unsafe { __vow_arena_try_extend(&mut a, p, 64, 1 << 30) };
+        assert_eq!(r, 0);
+        assert_eq!(a.cursor, before_cursor, "cursor unchanged on failure");
+        assert_eq!(a.chunk_end, before_end, "chunk_end unchanged");
+        assert_eq!(a.last_alloc_size, 64, "last_alloc_size unchanged");
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn string_clone_into_arena_copies_bytes() {
+        // Phase 4 / S5 return materialization: clones a String descriptor's
+        // backing into the supplied arena, returning a fresh, mutable
+        // descriptor (cap == len, not VOW_CAP_RODATA).
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        // Source is a rodata-backed descriptor — exercises the spec §5.1
+        // ".rodata literal returned on a FreshInCaller path" case.
+        let bytes: &[u8] = b"hello";
+        let source = VowVec {
+            ptr: bytes.as_ptr() as *mut u8,
+            len: bytes.len(),
+            cap: VOW_CAP_RODATA,
+        };
+        let cloned =
+            unsafe { __vow_string_clone_into_arena(&mut a, &source as *const VowVec as *const u8) };
+        let cv = unsafe { &*(cloned as *const VowVec) };
+        assert_eq!(cv.len, 5);
+        assert_eq!(cv.cap, 5, "clone must not inherit VOW_CAP_RODATA");
+        let cloned_bytes = unsafe { std::slice::from_raw_parts(cv.ptr, cv.len) };
+        assert_eq!(cloned_bytes, b"hello");
+        // The clone's backing must live in the arena, not in .rodata.
+        // `chunk_end` is an absolute address (`base + total`), not a size
+        // offset, so the upper bound is just `chunk_end` directly.
+        let cv_data = cv.ptr as usize;
+        let arena_start = a.first_chunk.cast::<u8>() as usize;
+        let arena_end = a.chunk_end;
+        assert!(
+            cv_data >= arena_start && cv_data < arena_end,
+            "cloned data must live inside the arena chunk"
+        );
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn string_clone_into_arena_handles_empty() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        let source = VowVec {
+            ptr: 1 as *mut u8,
+            len: 0,
+            cap: VOW_CAP_RODATA,
+        };
+        let cloned =
+            unsafe { __vow_string_clone_into_arena(&mut a, &source as *const VowVec as *const u8) };
+        let cv = unsafe { &*(cloned as *const VowVec) };
+        assert_eq!(cv.len, 0);
+        assert_eq!(cv.cap, 0);
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn arena_alignment_respected() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        for &align in &[1usize, 2, 4, 8, 16] {
+            let p = unsafe { __vow_arena_alloc(&mut a, 8, align) };
+            assert_eq!(p as usize % align, 0, "pointer must be {align}-aligned");
+        }
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn arena_large_alignment_takes_oversized_path() {
+        // Small `bytes` with large `align` must route to the oversized path,
+        // otherwise alignment padding could push `cursor > chunk_end`.
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        // Force the new-chunk path: bump cursor past first chunk.
+        let _ = unsafe { __vow_arena_alloc(&mut a, 64, 8) };
+        let p = unsafe { __vow_arena_alloc(&mut a, 9, 4096) };
+        assert_eq!(p as usize % 4096, 0, "pointer must be 4096-aligned");
+        assert!(a.cursor <= a.chunk_end, "cursor must not exceed chunk_end");
+        assert!((p as usize) + 9 <= a.chunk_end);
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn arena_close_walks_full_chain() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        // Force three chunks: oversized (own chunk) + normal + oversized.
+        let _ = unsafe { __vow_arena_alloc(&mut a, 4096, 8) };
+        let _ = unsafe { __vow_arena_alloc(&mut a, 100, 8) };
+        let _ = unsafe { __vow_arena_alloc(&mut a, 8192, 8) };
+        // If close fails to walk the chain, leak detectors (ASan/Miri) will flag;
+        // functional success is that close completes without UB.
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn legacy_typed_free_noop_worker() {
+        if std::env::var("VOW_LEGACY_FREE_NOOP_WORKER").is_err() {
+            return;
+        }
+        __vow_sanitize_init();
+        let v = __vow_vec_new_val();
+        unsafe { __vow_vec_push_val(v, 1) };
+        unsafe { __vow_vec_free_val(v) };
+        unsafe { __vow_vec_free_val(v) };
+        unsafe { __vow_vec_push_val(v, 2) };
+        assert_eq!(unsafe { __vow_vec_len(v) }, 2);
+    }
+
+    #[test]
+    fn legacy_typed_free_symbols_are_noops() {
+        let exe = std::env::current_exe().expect("current test exe");
+        let output = std::process::Command::new(exe)
+            .env("VOW_LEGACY_FREE_NOOP_WORKER", "1")
+            .args([
+                "tests::legacy_typed_free_noop_worker",
+                "--exact",
+                "--nocapture",
+            ])
+            .output()
+            .expect("spawn legacy free worker");
+        assert!(
+            output.status.success(),
+            "legacy free worker failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // VOW_CAP_RODATA trap tests. These use the subprocess pattern:
+    // rodata_trap_worker reruns itself with an env var and invokes the
+    // appropriate mutation on a rodata-backed descriptor; it exits(1) via
+    // the trap. Parent tests spawn the worker and assert exit status + stderr.
+    // -----------------------------------------------------------------------
+
+    fn make_rodata_vec_val() -> VowVec {
+        VowVec {
+            ptr: 1 as *mut u8, // never dereferenced; trap fires first
+            len: 0,
+            cap: VOW_CAP_RODATA,
+        }
+    }
+
+    fn make_rodata_map() -> VowMap {
+        VowMap {
+            ptr: 1 as *mut u8,
+            len: 0,
+            cap: VOW_CAP_RODATA,
+        }
+    }
+
+    /// Worker test: when `VOW_RODATA_TRAP_OP` is set, dispatches to the named
+    /// mutation which must trap with RegionLiteralMutation. Otherwise a no-op
+    /// so ordinary `cargo test` runs don't crash the test binary.
+    #[test]
+    fn rodata_trap_worker() {
+        let Ok(op) = std::env::var("VOW_RODATA_TRAP_OP") else {
+            return;
+        };
+        // Arena-overflow branch: exercises the size-limit guard in
+        // __vow_arena_alloc without touching descriptor state.
+        if op == "arena_alloc_overflow" {
+            let mut arena = empty_arena_header();
+            unsafe { __vow_arena_open(&mut arena) };
+            let _ = unsafe { __vow_arena_alloc(&mut arena, usize::MAX, 8) };
+            eprintln!("rodata_trap_worker: arena overflow did NOT trap");
+            std::process::exit(42);
+        }
+        let mut v = make_rodata_vec_val();
+        let vp = &mut v as *mut _ as *mut u8;
+        let mut m = make_rodata_map();
+        let mp = &mut m as *mut _ as *mut u8;
+        match op.as_str() {
+            "Vec::reserve" => unsafe { __vow_vec_reserve(vp, 1, 8, 8) },
+            "Vec::push" => {
+                let elem: i64 = 0;
+                unsafe { __vow_vec_push(vp, &elem as *const _ as *const u8, 8, 8) };
+            }
+            "Vec::push_val" => unsafe { __vow_vec_push_val(vp, 0) },
+            "Vec::pop" => unsafe { __vow_vec_pop(vp) },
+            "Vec::clear" => unsafe { __vow_vec_clear(vp) },
+            "Vec::truncate" => unsafe { __vow_vec_truncate(vp, 0) },
+            "Vec::set" => unsafe { __vow_vec_set_val(vp, 0, 0) },
+            "String::clear" => unsafe { __vow_string_clear(vp) },
+            "String::push_str" => {
+                let mut src = make_rodata_vec_val();
+                src.cap = 0; // source must not trap; destination is the rodata one
+                unsafe { __vow_string_push_str(vp, &src as *const _ as *const u8) };
+            }
+            "String::push_byte" => unsafe { __vow_string_push_byte(vp, 0x61) },
+            "HashMap::insert" => unsafe { __vow_map_insert(mp, 1, 2) },
+            "HashMap::remove" => unsafe { __vow_map_remove(mp, 1) },
+            other => panic!("unknown trap op: {other}"),
+        }
+        // Should be unreachable — each branch must trap.
+        eprintln!("rodata_trap_worker: did NOT trap for op={op}");
+        std::process::exit(42);
+    }
+
+    fn spawn_trap_worker(op: &str) -> (std::process::Output, String) {
+        let exe = std::env::current_exe().expect("current_exe");
+        let output = std::process::Command::new(exe)
+            .args(["tests::rodata_trap_worker", "--exact", "--nocapture"])
+            .env("VOW_RODATA_TRAP_OP", op)
+            .output()
+            .expect("spawn worker");
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        (output, stderr)
+    }
+
+    fn assert_rodata_trap(op: &str, expected_op_in_json: &str) {
+        let (out, stderr) = spawn_trap_worker(op);
+        assert!(
+            !out.status.success(),
+            "worker for {op} should have exited non-zero; stderr:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(r#""error":"RegionLiteralMutation""#),
+            "stderr missing RegionLiteralMutation for {op}:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(&format!(r#""operation":"{expected_op_in_json}""#)),
+            "stderr missing operation={expected_op_in_json}:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(r#""origin":"rodata""#),
+            "stderr missing origin=rodata:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("hint: use String::from(literal)")
+                || stderr.contains("hint: use Vec::from(literal)")
+                || stderr.contains("hint: construct a mutable HashMap"),
+            "stderr missing hint line:\n{stderr}"
+        );
+    }
+
+    #[test]
+    fn arena_alloc_rejects_overflow() {
+        // Verifies the isize::MAX size-limit guard: passing bytes=usize::MAX
+        // must trap OutOfMemory rather than wrap and return a garbage
+        // pointer.
+        let (out, stderr) = spawn_trap_worker("arena_alloc_overflow");
+        assert!(
+            !out.status.success(),
+            "worker should have exited non-zero; stderr:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(r#""error":"OutOfMemory""#),
+            "stderr missing OutOfMemory trap:\n{stderr}"
+        );
+    }
+
+    #[test]
+    fn rodata_vec_reserve_traps() {
+        assert_rodata_trap("Vec::reserve", "Vec::reserve");
+    }
+    /// Acceptance test 4 from issue #198: `VOW_CAP_RODATA` mutation via
+    /// `Vec::push` on a literal-backed descriptor traps with
+    /// `RegionLiteralMutation` before the allocation logic is reached
+    /// (spec §6.1, §7.3).
+    #[test]
+    fn rodata_vec_push_traps() {
+        assert_rodata_trap("Vec::push", "Vec::push");
+    }
+    #[test]
+    fn rodata_vec_push_val_traps() {
+        assert_rodata_trap("Vec::push_val", "Vec::push_val");
+    }
+    #[test]
+    fn rodata_vec_pop_traps() {
+        assert_rodata_trap("Vec::pop", "Vec::pop");
+    }
+    #[test]
+    fn rodata_vec_clear_traps() {
+        assert_rodata_trap("Vec::clear", "Vec::clear");
+    }
+    #[test]
+    fn rodata_vec_truncate_traps() {
+        assert_rodata_trap("Vec::truncate", "Vec::truncate");
+    }
+    #[test]
+    fn rodata_vec_set_traps() {
+        assert_rodata_trap("Vec::set", "Vec::set");
+    }
+    #[test]
+    fn rodata_string_clear_traps() {
+        assert_rodata_trap("String::clear", "String::clear");
+    }
+    #[test]
+    fn rodata_string_push_str_traps() {
+        assert_rodata_trap("String::push_str", "String::push_str");
+    }
+    #[test]
+    fn rodata_string_push_byte_traps() {
+        assert_rodata_trap("String::push_byte", "String::push_byte");
+    }
+    #[test]
+    fn rodata_map_insert_traps() {
+        assert_rodata_trap("HashMap::insert", "HashMap::insert");
+    }
+    #[test]
+    fn rodata_map_remove_traps() {
+        assert_rodata_trap("HashMap::remove", "HashMap::remove");
+    }
+
+    #[test]
+    fn rodata_lazy_empty_still_works() {
+        // cap == 0 (lazy-empty) must NOT be mistaken for VOW_CAP_RODATA.
+        let v = __vow_vec_new_val();
+        unsafe { __vow_vec_push_val(v, 42) };
+        let vec = unsafe { &*(v as *const VowVec) };
+        assert_eq!(vec.len, 1);
+        assert!(vec.cap >= 1, "lazy-allocated, cap should be populated");
+        unsafe { __vow_vec_free_val(v) };
+    }
+
+    #[test]
+    fn rodata_free_preserves_header_path() {
+        // free must not call libc::free on a rodata buffer. We construct a
+        // heap-allocated header whose `cap == VOW_CAP_RODATA` and `ptr` is a
+        // bogus value — if the free path touched it we would crash.
+        let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
+        let raw = unsafe { std::alloc::alloc_zeroed(header_layout) } as *mut VowVec;
+        unsafe {
+            (*raw).ptr = 1 as *mut u8;
+            (*raw).len = 0;
+            (*raw).cap = VOW_CAP_RODATA;
+        }
+        // Must complete without segfault: header freed, buffer skipped.
+        unsafe { __vow_vec_free_val(raw as *mut u8) };
     }
 }
