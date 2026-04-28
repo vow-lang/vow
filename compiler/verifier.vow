@@ -574,16 +574,14 @@ fn verify_cache_lookup(key: String) -> i64 [io] {
     -1
 }
 
-fn verify_cache_store(key: String, status: i64) [io] {
+// Security: only FAILED entries are cached on disk. Caching PROVEN would let a
+// forged cache file bypass ESBMC on a later run; see verify_cache_lookup.
+fn verify_cache_store_failed(key: String) [io] {
     let path: String = String::from("");
     path.push_str(VERIFY_CACHE_DIR());
     path.push_str(key);
     path.push_str(String::from(".vr"));
-    let content: String = {
-        if status == VERIFY_PROVEN() { String::from("PROVEN\n") }
-        else { String::from("FAILED\n") }
-    };
-    fs_write(path, content);
+    fs_write(path, String::from("FAILED\n"));
 }
 
 fn resolve_auto_bv_solver(solver: String) -> String {
@@ -647,39 +645,14 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
     let bv_solver: String = resolve_auto_bv_solver(solver);
     let bv_encoding: String = { if auto_enc { String::from("bv") } else { encoding } };
     let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
+    // Security: PROVEN is never trusted from disk (see verify_cache_lookup),
+    // so cache lookups can only return FAILED. The self-hosted FAILED cache
+    // does not persist counterexample metadata, so honoring it here would
+    // return degraded VerifyResults that break downstream contract matching
+    // (which keys off vow_id). Restoring a useful cache hit requires
+    // persisting full failure metadata mirroring vow/src/cache.rs.
     if use_cache {
         verify_cache_ensure_dir();
-        // Lookup under the resolved BV key so cache hits survive Auto→Bv
-        // resolution. The BV-Proven store path uses the same key below.
-        let cache_key: String = verify_cache_key(c_source, max_k_step, bv_solver, bv_encoding);
-        let cached: i64 = verify_cache_lookup(cache_key);
-        if cached == VERIFY_PROVEN() {
-            return VerifyResult {
-                status: VERIFY_PROVEN(),
-                vow_id: -1,
-                var_names: Vec::new(),
-                var_values: Vec::new(),
-                block_visits: Vec::new(),
-                raw_output: String::from("(cached)"),
-            };
-        }
-        // Phase D: if previous run fell back to IR under Auto encoding, the
-        // result was stored under (z3, ir). Probe that key too so re-verify
-        // doesn't have to rerun the BV timeout.
-        if auto_enc && bv_solver != String::from("bitwuzla") {
-            let ir_key: String = verify_cache_key(c_source, max_k_step, String::from("z3"), String::from("ir"));
-            let cached_ir: i64 = verify_cache_lookup(ir_key);
-            if cached_ir == VERIFY_PROVEN() {
-                return VerifyResult {
-                    status: VERIFY_PROVEN_IR(),
-                    vow_id: -1,
-                    var_names: Vec::new(),
-                    var_values: Vec::new(),
-                    block_visits: Vec::new(),
-                    raw_output: String::from("(cached)"),
-                };
-            }
-        }
     }
 
     let exit_code: i64 = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, solver, encoding, bv_timeout);
@@ -744,17 +717,15 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
         resolved_encoding = ir_encoding;
     }
 
+    // Security: only FAILED is cached. PROVEN is never written to disk so a
+    // forged cache file cannot bypass ESBMC on a later run.
+    // Don't persist FAILED entries under (z3, ir): IR lacks overflow
+    // modeling, so IR-only counterexamples may be infeasible under BV.
     if use_cache {
-        let cache_status: i64 = {
-            if status == VERIFY_PROVEN_IR() { VERIFY_PROVEN() } else { status }
-        };
-        // Don't persist FAILED entries under (z3, ir): IR lacks overflow
-        // modeling, so IR-only counterexamples may be infeasible under BV,
-        // and neither secondary lookup retrieves IR-FAILED results anyway.
         let is_ir_key: bool = resolved_encoding == String::from("ir");
-        if cache_status == VERIFY_PROVEN() || (cache_status == VERIFY_FAILED() && !is_ir_key) {
+        if status == VERIFY_FAILED() && !is_ir_key {
             let cache_key2: String = verify_cache_key(c_source, max_k_step, resolved_solver, resolved_encoding);
-            verify_cache_store(cache_key2, cache_status);
+            verify_cache_store_failed(cache_key2);
         }
     }
     build_verify_result(f, status, used_combined)
@@ -780,14 +751,11 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
     let ir_timeout: String = {
         if timeout_secs.len() > 0 { timeout_secs } else { DEFAULT_AUTO_TIMEOUT_STR() }
     };
-    // Probe the IR cache first so a repeated BV timeout doesn't re-run Z3.
+    // Security: PROVEN is never trusted from disk (see verify_cache_lookup),
+    // so the previous IR cache probe is dead and removed. Re-running ESBMC is
+    // the only safe path.
     if use_cache {
         verify_cache_ensure_dir();
-        let ir_probe_key: String = verify_cache_key(c_source, max_k_step, ir_solver, ir_encoding);
-        let cached_ir: i64 = verify_cache_lookup(ir_probe_key);
-        if cached_ir == VERIFY_PROVEN() {
-            return build_verify_result(f, VERIFY_PROVEN_IR(), String::from("(cached)"));
-        }
     }
     let exit_code: i64 = run_esbmc(c_source, max_k_step, String::from("/tmp/__vow_verify.c"), fn_name, ir_solver, ir_encoding, ir_timeout);
     if exit_code == -1 {
@@ -812,18 +780,10 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
         else if raw_status == VERIFY_FAILED() { VERIFY_TIMEOUT() }
         else { raw_status }
     };
-    if use_cache {
-        // Only persist PROVEN under (z3, ir). IR counterexamples can be
-        // infeasible under BV, so writing FAILED here would be misleading
-        // and no reader probes the IR key for FAILED anyway.
-        let cache_status: i64 = {
-            if status == VERIFY_PROVEN_IR() { VERIFY_PROVEN() } else { status }
-        };
-        if cache_status == VERIFY_PROVEN() {
-            let cache_key: String = verify_cache_key(c_source, max_k_step, ir_solver, ir_encoding);
-            verify_cache_store(cache_key, cache_status);
-        }
-    }
+    // Security: only FAILED is cached, never PROVEN. IR counterexamples can be
+    // infeasible under BV, so writing FAILED under (z3, ir) would be misleading
+    // — and no reader probes the IR key for FAILED anyway. The result is that
+    // the IR-fallback path no longer writes to the cache at all.
     build_verify_result(f, status, combined)
 }
 
@@ -834,28 +794,11 @@ fn verify_start(f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_ca
         return -1;
     }
     let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max);
-    let auto_enc: bool = is_auto_encoding(encoding);
-    let bv_solver: String = resolve_auto_bv_solver(solver);
-    let bv_encoding: String = { if auto_enc { String::from("bv") } else { encoding } };
+    // Security: PROVEN is never trusted from disk (see verify_cache_lookup),
+    // so previous BV/IR cache-PROVEN probes are dead and removed. The parallel
+    // pool always runs ESBMC — see the matching note in verify_function_full.
     if use_cache {
         verify_cache_ensure_dir();
-        // Lookup under the resolved BV key so hits produced by the sync
-        // `verify` path (which normalizes keys the same way) are visible
-        // here. Otherwise Auto mode splits the cache namespace.
-        let cache_key: String = verify_cache_key(c_source, max_k_step, bv_solver, bv_encoding);
-        let cached: i64 = verify_cache_lookup(cache_key);
-        if cached == VERIFY_PROVEN() {
-            return -2;
-        }
-        // Also probe the IR fallback key: a prior run may have escalated to
-        // (z3, ir) after a BV timeout.
-        if auto_enc && bv_solver != String::from("bitwuzla") {
-            let ir_key: String = verify_cache_key(c_source, max_k_step, String::from("z3"), String::from("ir"));
-            let cached_ir: i64 = verify_cache_lookup(ir_key);
-            if cached_ir == VERIFY_PROVEN() {
-                return -2;
-            }
-        }
     }
     let tmp_path: String = String::from("/tmp/__vow_verify_");
     tmp_path.push_str(i64_to_str(idx));

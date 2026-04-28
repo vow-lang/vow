@@ -315,21 +315,12 @@ fn verify_collect_and_report(
         eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR (failed to start ESBMC)")));
         return 0;
     }
-    if h == -2 {
-        eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN (cached)")));
-        return 1;
-    }
     let vr: VerifyResult = verify_collect(h, f);
     let st: i64 = vr.status;
     if st == VERIFY_PROVEN() {
         eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN")));
-        if use_cache {
-            let c_src2: String = emit_c_for_verify(f, ir_mod, vec_max, string_max, hashmap_max);
-            let bv_solver2: String = resolve_auto_bv_solver(solver);
-            let bv_encoding2: String = { if is_auto_encoding(encoding) { String::from("bv") } else { encoding } };
-            let ck2: String = verify_cache_key(c_src2, max_k_step, bv_solver2, bv_encoding2);
-            verify_cache_store(ck2, VERIFY_PROVEN());
-        }
+        // Security: PROVEN is never written to disk; see verify_cache_lookup
+        // in verifier.vow.
         return 1;
     }
     if st == VERIFY_PROVEN_IR() {
