@@ -348,7 +348,7 @@ fn effective_timeout_for(encoding: String, solver: String, user_timeout: String)
     if user_timeout.len() > 0 {
         return user_timeout;
     }
-    // Bitwuzla can't use IR encoding — don't cap it with a timeout that has no retry path.
+    // Bitwuzla can't fall back to IR — skip --timeout so only the kernel watchdog (300s) caps it.
     let bv_solver: String = resolve_auto_bv_solver(solver);
     if bv_solver == String::from("bitwuzla") {
         return String::from("");
