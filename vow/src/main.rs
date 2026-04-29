@@ -5467,10 +5467,16 @@ fn run_pipeline_from_frontend(
     } else {
         cache::CompileCache::new()
     };
-    let cache_key = cache::CompileCache::cache_key(frontend.dependencies(), &mode_str, &trace_str);
+    // Skip the full dependency-content hash when the object cache is disabled —
+    // computing the key would otherwise read every dependency file with no possible
+    // cache hit/store on the default verified path.
+    let cache_key = compile_cache
+        .as_ref()
+        .map(|_| cache::CompileCache::cache_key(frontend.dependencies(), &mode_str, &trace_str));
 
     if let Some(ref cc) = compile_cache
-        && let Some(cached_obj) = cc.lookup(&cache_key)
+        && let Some(ref key) = cache_key
+        && let Some(cached_obj) = cc.lookup(key)
         && std::fs::copy(&cached_obj, &obj_path).is_ok()
     {
         let exe_path = link_obj(&obj_path, &output_path);
@@ -5516,8 +5522,10 @@ fn run_pipeline_from_frontend(
     }
 
     // Store in cache
-    if let Some(ref cc) = compile_cache {
-        cc.store(&cache_key, &obj_path);
+    if let Some(ref cc) = compile_cache
+        && let Some(ref key) = cache_key
+    {
+        cc.store(key, &obj_path);
     }
 
     let exe_path = link_obj(&obj_path, &output_path);
