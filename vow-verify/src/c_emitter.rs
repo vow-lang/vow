@@ -216,7 +216,7 @@ fn is_known_builtin(name: &str) -> bool {
 }
 
 fn is_reserved_verifier_symbol(name: &str) -> bool {
-    matches!(name, "__ESBMC_assume" | "__ESBMC_assert") || name.starts_with("__VERIFIER_nondet_")
+    name.starts_with("__ESBMC_") || name.starts_with("__VERIFIER_")
 }
 
 /// Check whether a function can be precisely modeled in the C emitter.
@@ -433,7 +433,6 @@ fn collect_callees_dfs(
                     continue;
                 }
                 if let Some(callee) = module.functions.iter().find(|f| f.id == *fid)
-                    && !is_reserved_verifier_symbol(&callee.name)
                     && is_modelable(callee, module, const_fns, modelable_cache)
                 {
                     visited.insert(*fid);
@@ -1599,12 +1598,20 @@ mod tests {
                         vec![],
                         InstData::CallTarget(FuncId(2)),
                     ),
-                    inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+                    inst(
+                        2,
+                        Opcode::Call,
+                        Ty::I64,
+                        vec![],
+                        InstData::CallTarget(FuncId(3)),
+                    ),
+                    inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
-        let reserved = Function {
+        let nondet_reserved = Function {
             id: FuncId(1),
             name: "__VERIFIER_nondet_int".to_string(),
             params: vec![],
@@ -1620,9 +1627,28 @@ mod tests {
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+        };
+        let assume_reserved = Function {
+            id: FuncId(2),
+            name: "__ESBMC_assume".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let safe = Function {
-            id: FuncId(2),
+            id: FuncId(3),
             name: "safe".to_string(),
             params: vec![],
             param_names: vec![],
@@ -1637,10 +1663,11 @@ mod tests {
                 ],
             }],
             local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
         };
         let module = Module {
             name: "test".to_string(),
-            functions: vec![caller.clone(), reserved, safe],
+            functions: vec![caller.clone(), nondet_reserved, assume_reserved, safe],
             strings: vec![],
             struct_layouts: vec![],
             enum_layouts: vec![],
@@ -1649,7 +1676,7 @@ mod tests {
 
         let mut cache = HashMap::new();
         let callees = collect_modelable_callees(&caller, &module, &HashMap::new(), &mut cache);
-        assert_eq!(callees, vec![FuncId(2)]);
+        assert_eq!(callees, vec![FuncId(3)]);
     }
 
     #[test]
