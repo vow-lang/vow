@@ -892,6 +892,11 @@ fn deep_ret_const_global() -> DeepRet {
     DeepRet { kind: RSUM_KIND_CONSTANT_GLOBAL(), aux: 0, aliases: Vec::new() }
 }
 
+fn extern_fresh_in_caller(sym: String) -> bool {
+    sym == String::from("__vow_string_from_raw_parts_copy")
+        || sym == String::from("__vow_vec_from_raw_parts_copy_val")
+}
+
 fn deep_ret_uninit() -> DeepRet {
     DeepRet { kind: RSUM_INTERNAL_UNINIT(), aux: 0, aliases: Vec::new() }
 }
@@ -933,6 +938,9 @@ fn deep_origin_inner(
         return deep_ret_const_global();
     }
     if inst.op == IOP_CALL() {
+        if inst.dk == IDATA_CALL_EXTERN() && extern_fresh_in_caller(inst.ds) {
+            return DeepRet { kind: RSUM_KIND_FRESH_IN_CALLER(), aux: 0, aliases: Vec::new() };
+        }
         if inst.dk == IDATA_CALL_TARGET() {
             let callee_idx: i64 = inst.dv;
             if callee_idx >= 0 && callee_idx < int_kinds.len() {

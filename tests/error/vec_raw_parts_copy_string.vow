@@ -1,0 +1,7 @@
+// TEST: stderr "Vec::from_raw_parts_copy"
+module VecRawPartsCopyString
+
+fn main() -> i32 {
+    let _v: Vec<String> = Vec::from_raw_parts_copy(0, 0);
+    0
+}

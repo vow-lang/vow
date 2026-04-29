@@ -1,0 +1,10 @@
+// TEST: stdout "ok"
+module VecFromRawPartsCopyEmpty
+
+fn main() -> i32 [io] {
+    let v: Vec<i64> = Vec::from_raw_parts_copy(0, 0);
+    if v.len() == 0 {
+        print_str(String::from("ok"));
+    }
+    0
+}

@@ -1046,6 +1046,34 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let name_sid: i64 = expr_a(a, callee_eid);
             fn_name = arena_str(a, name_sid);
         }
+        if fn_name == String::from("pin_to_root") {
+            let nargs: i64 = list_len(a, args_lid);
+            if nargs > 0 {
+                let arg_eid: i64 = list_get(a, args_lid, 0);
+                let source_id: i64 = lower_consumed_expr(ctx, arg_eid);
+                if lctx_get_tag(ctx, source_id) == String::from("String") {
+                    let call_args: Vec<i64> = Vec::new();
+                    call_args.push(source_id);
+                    let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_pin_to_root"));
+                    lctx_tag(ctx, result, String::from("String"));
+                    lctx_track_alloc(ctx, result, String::from("String"), 0);
+                    return result;
+                }
+                if lctx_get_tag(ctx, source_id) == String::from("Vec") {
+                    let call_args: Vec<i64> = Vec::new();
+                    call_args.push(source_id);
+                    let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_pin_to_root_val"));
+                    lctx_tag(ctx, result, String::from("Vec"));
+                    let elem_name: String = lctx_get_vec_elem(ctx, source_id);
+                    if elem_name.len() > 0 {
+                        lctx_tag_vec_elem(ctx, result, elem_name);
+                    }
+                    lctx_track_alloc(ctx, result, String::from("Vec"), 0);
+                    return result;
+                }
+                return source_id;
+            }
+        }
         let debug_ext: String = debug_builtin_to_extern(fn_name);
         if debug_ext != String::from("") {
             let ret_ty: i64 = debug_builtin_ret_ty(fn_name);
@@ -2026,6 +2054,29 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             }
         }
 
+        if enum_name == String::from("String") && variant_name == String::from("from_raw_parts_copy") {
+            let call_args: Vec<i64> = Vec::new();
+            let nargs: i64 = list_len(a, fields_lid);
+            if nargs > 0 {
+                let ptr_eid: i64 = list_get(a, fields_lid, 0);
+                call_args.push(lower_expr(ctx, ptr_eid));
+            } else {
+                let zero_args: Vec<i64> = Vec::new();
+                call_args.push(lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), zero_args, IDATA_CONST_I64(), 0, 0, String::from("")));
+            }
+            if nargs > 1 {
+                let len_eid: i64 = list_get(a, fields_lid, 1);
+                call_args.push(lower_expr(ctx, len_eid));
+            } else {
+                let zero_args2: Vec<i64> = Vec::new();
+                call_args.push(lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), zero_args2, IDATA_CONST_I64(), 0, 0, String::from("")));
+            }
+            let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_from_raw_parts_copy"));
+            lctx_tag(ctx, result, String::from("String"));
+            lctx_track_alloc(ctx, result, String::from("String"), 0);
+            return result;
+        }
+
         if enum_name == String::from("String") && variant_name == String::from("new") {
             let size_args: Vec<i64> = Vec::new();
             let size_val: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), size_args, IDATA_CONST_I64(), 1, 0, String::from(""));
@@ -2059,6 +2110,29 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let vec_result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_new"));
             lctx_track_alloc(ctx, vec_result, String::from("Vec"), 0);
             return vec_result;
+        }
+
+        if enum_name == String::from("Vec") && variant_name == String::from("from_raw_parts_copy") {
+            let call_args: Vec<i64> = Vec::new();
+            let nargs: i64 = list_len(a, fields_lid);
+            if nargs > 0 {
+                let ptr_eid: i64 = list_get(a, fields_lid, 0);
+                call_args.push(lower_expr(ctx, ptr_eid));
+            } else {
+                let zero_args: Vec<i64> = Vec::new();
+                call_args.push(lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), zero_args, IDATA_CONST_I64(), 0, 0, String::from("")));
+            }
+            if nargs > 1 {
+                let len_eid: i64 = list_get(a, fields_lid, 1);
+                call_args.push(lower_expr(ctx, len_eid));
+            } else {
+                let zero_args2: Vec<i64> = Vec::new();
+                call_args.push(lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), zero_args2, IDATA_CONST_I64(), 0, 0, String::from("")));
+            }
+            let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_from_raw_parts_copy_val"));
+            lctx_tag(ctx, result, String::from("Vec"));
+            lctx_track_alloc(ctx, result, String::from("Vec"), 0);
+            return result;
         }
 
         let tag_val: i64 = lctx_find_variant_tag(ctx, enum_name, variant_name);

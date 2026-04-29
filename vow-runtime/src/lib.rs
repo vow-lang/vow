@@ -860,6 +860,52 @@ pub extern "C" fn __vow_vec_new_val() -> *mut u8 {
     __vow_vec_new(8, 8)
 }
 
+unsafe fn __vow_vec_new_val_in_arena(arena: *mut VowArena) -> *mut u8 {
+    let header_ptr = unsafe { __vow_arena_alloc(arena, 24, 8) } as *mut VowVec;
+    unsafe {
+        (*header_ptr).ptr = 8 as *mut u8;
+        (*header_ptr).len = 0;
+        (*header_ptr).cap = 0;
+    }
+    sanitize_on_vec_new(header_ptr as usize);
+    header_ptr as *mut u8
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_from_raw_parts_copy_val(
+    arena: *mut VowArena,
+    ptr: *const i64,
+    len: usize,
+) -> *mut u8 {
+    let vec = unsafe { __vow_vec_new_val_in_arena(arena) };
+    if len == 0 || ptr.is_null() {
+        return vec;
+    }
+    let bytes = len
+        .checked_mul(8)
+        .unwrap_or_else(|| oom_trap("Vec::from_raw_parts_copy"));
+    let v = unsafe { &mut *(vec as *mut VowVec) };
+    v.ptr = unsafe { __vow_arena_alloc(arena, bytes, 8) };
+    unsafe { std::ptr::copy_nonoverlapping(ptr as *const u8, v.ptr, bytes) };
+    v.len = len;
+    v.cap = len;
+    vec
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_pin_to_root_val(source: *const u8) -> *mut u8 {
+    if source.is_null() {
+        return __vow_vec_new_val();
+    }
+    sanitize_on_read(source as usize, 0);
+    let src = unsafe { &*(source as *const VowVec) };
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe {
+        __vow_vec_from_raw_parts_copy_val(&raw mut __vow_root_arena, src.ptr as *const i64, src.len)
+    }
+}
+
 unsafe fn __vow_vec_reserve(vec: *mut u8, additional: usize, elem_size: usize, elem_align: usize) {
     let v = unsafe { &mut *(vec as *mut VowVec) };
     if v.cap == VOW_CAP_RODATA {
@@ -1083,6 +1129,38 @@ pub unsafe extern "C" fn __vow_string_clone_into_arena(
         unsafe { std::ptr::copy_nonoverlapping(src.ptr, p, len) };
         p
     };
+    unsafe {
+        (*header).ptr = data_ptr;
+        (*header).len = len;
+        (*header).cap = len;
+    }
+    header as *mut u8
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_pin_to_root(source: *const u8) -> *mut u8 {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { __vow_string_clone_into_arena(&raw mut __vow_root_arena, source) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_from_raw_parts_copy(
+    arena: *mut VowArena,
+    ptr: *const u8,
+    len: usize,
+) -> *mut u8 {
+    let header = unsafe { __vow_arena_alloc(arena, 24, 8) } as *mut VowVec;
+    if len == 0 || ptr.is_null() {
+        unsafe {
+            (*header).ptr = std::ptr::dangling_mut::<u8>();
+            (*header).len = 0;
+            (*header).cap = 0;
+        }
+        return header as *mut u8;
+    }
+    let data_ptr = unsafe { __vow_arena_alloc(arena, len, 1) };
+    unsafe { std::ptr::copy_nonoverlapping(ptr, data_ptr, len) };
     unsafe {
         (*header).ptr = data_ptr;
         (*header).len = len;
@@ -2770,6 +2848,68 @@ mod tests {
             "cloned data must live inside the arena chunk"
         );
         unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn string_pin_to_root_deep_copies_bytes() {
+        let bytes: &[u8] = b"rooted";
+        let source = VowVec {
+            ptr: bytes.as_ptr() as *mut u8,
+            len: bytes.len(),
+            cap: VOW_CAP_RODATA,
+        };
+        let pinned = unsafe { __vow_string_pin_to_root(&source as *const VowVec as *const u8) };
+        let pv = unsafe { &*(pinned as *const VowVec) };
+        assert_eq!(pv.len, 6);
+        assert_eq!(pv.cap, 6, "pinning must return a mutable root copy");
+        assert_ne!(pv.ptr, bytes.as_ptr() as *mut u8);
+        let pinned_bytes = unsafe { std::slice::from_raw_parts(pv.ptr, pv.len) };
+        assert_eq!(pinned_bytes, b"rooted");
+    }
+
+    #[test]
+    fn string_from_raw_parts_copy_copies_bytes() {
+        unsafe { ensure_root_arena() };
+        let bytes: &[u8] = b"raw";
+        let copied = unsafe {
+            __vow_string_from_raw_parts_copy(&raw mut __vow_root_arena, bytes.as_ptr(), bytes.len())
+        };
+        let cv = unsafe { &*(copied as *const VowVec) };
+        assert_eq!(cv.len, 3);
+        assert!(cv.cap >= 3);
+        assert_ne!(cv.ptr, bytes.as_ptr() as *mut u8);
+        let copied_bytes = unsafe { std::slice::from_raw_parts(cv.ptr, cv.len) };
+        assert_eq!(copied_bytes, b"raw");
+    }
+
+    #[test]
+    fn vec_from_raw_parts_copy_val_copies_slots() {
+        unsafe { ensure_root_arena() };
+        let raw = [11_i64, 22_i64, 33_i64];
+        let copied = unsafe {
+            __vow_vec_from_raw_parts_copy_val(&raw mut __vow_root_arena, raw.as_ptr(), raw.len())
+        };
+        let cv = unsafe { &*(copied as *const VowVec) };
+        assert_eq!(cv.len, 3);
+        assert!(cv.cap >= 3);
+        assert_ne!(cv.ptr, raw.as_ptr() as *mut u8);
+        let copied_vals = unsafe { std::slice::from_raw_parts(cv.ptr as *const i64, cv.len) };
+        assert_eq!(copied_vals, &[11, 22, 33]);
+    }
+
+    #[test]
+    fn vec_pin_to_root_val_copies_slots() {
+        unsafe { ensure_root_arena() };
+        let raw = [7_i64, 8_i64];
+        let source = unsafe {
+            __vow_vec_from_raw_parts_copy_val(&raw mut __vow_root_arena, raw.as_ptr(), raw.len())
+        };
+        let pinned = unsafe { __vow_vec_pin_to_root_val(source) };
+        unsafe { __vow_vec_push_val(source, 9) };
+        let pv = unsafe { &*(pinned as *const VowVec) };
+        assert_eq!(pv.len, 2);
+        let pinned_vals = unsafe { std::slice::from_raw_parts(pv.ptr as *const i64, pv.len) };
+        assert_eq!(pinned_vals, &[7, 8]);
     }
 
     #[test]

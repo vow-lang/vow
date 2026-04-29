@@ -1080,29 +1080,43 @@ fn lower_inst(
                 .iter()
                 .map(|p| p.value_type)
                 .collect();
-            let mut call_args: Vec<Value> = inst
-                .args
-                .iter()
-                .enumerate()
-                .map(|(i, id)| {
-                    let v = *ctx.value_map.get(id).unwrap_or_else(|| {
-                        panic!(
-                            "cranelift backend: Call value_map miss for arg {id:?} in inst {:?}",
-                            inst.id
-                        )
-                    });
-                    if let Some(&expected_ty) = expected_types.get(i) {
-                        let actual_ty = builder.func.dfg.value_type(v);
-                        if actual_ty == types::I32 && expected_ty == types::I64 {
-                            return builder.ins().sextend(types::I64, v);
-                        }
-                        if actual_ty == types::I8 && expected_ty == types::I64 {
-                            return builder.ins().uextend(types::I64, v);
-                        }
+            let external_target_region = match &inst.data {
+                InstData::CallExtern(sym) if extern_uses_target_region(sym) => Some(inst.region),
+                _ => None,
+            };
+            let mut call_args: Vec<Value> = Vec::new();
+            if let Some(region) = external_target_region {
+                let arena = region_to_arena_value(
+                    builder,
+                    region,
+                    ctx.hidden_region_values,
+                    ctx.block_arena_slots,
+                    ctx.root_arena_gv,
+                )?;
+                call_args.push(arena);
+            }
+            let hidden_arg_offset = call_args.len();
+            for (i, id) in inst.args.iter().enumerate() {
+                let v = *ctx.value_map.get(id).unwrap_or_else(|| {
+                    panic!(
+                        "cranelift backend: Call value_map miss for arg {id:?} in inst {:?}",
+                        inst.id
+                    )
+                });
+                let v = if let Some(&expected_ty) = expected_types.get(i + hidden_arg_offset) {
+                    let actual_ty = builder.func.dfg.value_type(v);
+                    if actual_ty == types::I32 && expected_ty == types::I64 {
+                        builder.ins().sextend(types::I64, v)
+                    } else if actual_ty == types::I8 && expected_ty == types::I64 {
+                        builder.ins().uextend(types::I64, v)
+                    } else {
+                        v
                     }
+                } else {
                     v
-                })
-                .collect();
+                };
+                call_args.push(v);
+            }
             if internal_call {
                 // Project the callee's hidden region parameters from the
                 // caller's frame (spec §5.2). The order MUST match
@@ -1816,6 +1830,16 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // elem_align
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec
         }
+        "__vow_vec_from_raw_parts_copy_val" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // raw i64 ptr
+            sig.params.push(AbiParam::new(types::I64)); // len
+            sig.returns.push(AbiParam::new(types::I64)); // copied *VowVec
+        }
+        "__vow_vec_pin_to_root_val" => {
+            sig.params.push(AbiParam::new(types::I64)); // source vec ptr
+            sig.returns.push(AbiParam::new(types::I64)); // copied *VowVec
+        }
         "__vow_vec_len" => {
             sig.params.push(AbiParam::new(types::I64)); // vec ptr
             sig.returns.push(AbiParam::new(types::I64)); // len
@@ -1853,6 +1877,16 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_string_from_cstr" => {
             sig.params.push(AbiParam::new(types::I64)); // C-string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_string_pin_to_root" => {
+            sig.params.push(AbiParam::new(types::I64)); // source string ptr
+            sig.returns.push(AbiParam::new(types::I64)); // root-pinned *VowVec<u8>
+        }
+        "__vow_string_from_raw_parts_copy" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // raw bytes ptr
+            sig.params.push(AbiParam::new(types::I64)); // len
+            sig.returns.push(AbiParam::new(types::I64)); // copied *VowVec<u8>
         }
         "__vow_string_len" => {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
@@ -2185,6 +2219,13 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         _ => {}
     }
     sig
+}
+
+fn extern_uses_target_region(sym: &str) -> bool {
+    matches!(
+        sym,
+        "__vow_string_from_raw_parts_copy" | "__vow_vec_from_raw_parts_copy_val"
+    )
 }
 
 // ---------------------------------------------------------------------------

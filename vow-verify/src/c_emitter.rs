@@ -99,7 +99,13 @@ fn collect_typed_vars(func: &Function, creator: &str, prefix: &str) -> HashSet<u
             if inst.opcode == Opcode::Call
                 && let InstData::CallExtern(ref name) = inst.data
             {
-                if name == creator {
+                let is_alt_creator = (prefix == "__vow_vec_"
+                    && (name == "__vow_vec_from_raw_parts_copy_val"
+                        || name == "__vow_vec_pin_to_root_val"))
+                    || (prefix == "__vow_string_"
+                        && (name == "__vow_string_from_raw_parts_copy"
+                            || name == "__vow_string_pin_to_root"));
+                if name == creator || is_alt_creator {
                     vars.insert(inst.id.0);
                 } else if name.starts_with(prefix) && !inst.args.is_empty() {
                     vars.insert(inst.args[0].0);
@@ -182,10 +188,14 @@ fn is_known_builtin(name: &str) -> bool {
         "__vow_vec_new"
             | "__vow_vec_push_val"
             | "__vow_vec_get_val"
+            | "__vow_vec_from_raw_parts_copy_val"
+            | "__vow_vec_pin_to_root_val"
             | "__vow_vec_len"
             | "__vow_vec_pop"
             | "__vow_vec_set_val"
             | "__vow_string_from_cstr"
+            | "__vow_string_from_raw_parts_copy"
+            | "__vow_string_pin_to_root"
             | "__vow_string_len"
             | "__vow_string_push_str"
             | "__vow_string_push_byte"
@@ -703,6 +713,17 @@ fn emit_inst(
                     "__vow_vec_new" => {
                         out.push_str(&format!("  v{id}.len = 0;\n"));
                     }
+                    "__vow_vec_from_raw_parts_copy_val" => {
+                        let len = inst.args[1].0;
+                        let vec_max = limits.vec_max;
+                        out.push_str(&format!(
+                            "  __ESBMC_assume(v{len} >= 0 && v{len} < {vec_max});\n  v{id}.len = v{len};\n"
+                        ));
+                    }
+                    "__vow_vec_pin_to_root_val" => {
+                        let source = inst.args[0].0;
+                        out.push_str(&format!("  v{id} = v{source};\n"));
+                    }
                     "__vow_vec_push_val" => {
                         let vec = inst.args[0].0;
                         let val = inst.args[1].0;
@@ -754,6 +775,17 @@ fn emit_inst(
                             "  v{id}.len = __VERIFIER_nondet_long();\n\
                              \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < {string_max});\n",
                         ));
+                    }
+                    "__vow_string_from_raw_parts_copy" => {
+                        let len = inst.args[1].0;
+                        let string_max = limits.string_max;
+                        out.push_str(&format!(
+                            "  __ESBMC_assume(v{len} >= 0 && v{len} < {string_max});\n  v{id}.len = v{len};\n"
+                        ));
+                    }
+                    "__vow_string_pin_to_root" => {
+                        let source = inst.args[0].0;
+                        out.push_str(&format!("  v{id} = v{source};\n"));
                     }
                     "__vow_string_len" => {
                         let s = inst.args[0].0;

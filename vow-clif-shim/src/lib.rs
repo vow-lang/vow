@@ -196,6 +196,13 @@ const REGION_KIND_CALLER: i64 = 1;
 const REGION_KIND_ROOT: i64 = 2;
 const REGION_KIND_RODATA: i64 = 3;
 
+fn extern_uses_target_region(sym: &str) -> bool {
+    matches!(
+        sym,
+        "__vow_string_from_raw_parts_copy" | "__vow_vec_from_raw_parts_copy_val"
+    )
+}
+
 /// Size of `vow_runtime::VowArena` in bytes — asserted in
 /// `vow-runtime/src/lib.rs` (`assert!(size_of::<VowArena>() == 48)`).
 /// Mirrors the same constant in `vow-codegen/src/cranelift_backend.rs`
@@ -1756,26 +1763,56 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                         .iter()
                         .map(|p| p.value_type)
                         .collect();
-                    let call_args: Vec<Value> = (0..alen)
-                        .map(|i| {
-                            let arg_id = all_args[aoff + i];
-                            let v = *value_map.get(&arg_id).unwrap_or_else(|| {
-                                panic!(
-                                    "clif shim: IOP_CALL value_map miss: inst_id={iid} arg_id={arg_id} (block={bi}, inst_idx={ii}, func_idx={func_idx})"
-                                )
-                            });
-                            if let Some(&expected_ty) = expected_types.get(i) {
+                    let mut call_args: Vec<Value> = Vec::new();
+                    if dk == IDATA_CALL_EXTERN {
+                        let sym = unsafe { read_vow_string(inst_ds_ptrs[ii]) };
+                        if extern_uses_target_region(sym) {
+                            let rgn = inst_rgns[ii];
+                            let kind = rgn & 3;
+                            let payload = rgn >> 2;
+                            let arena = match kind {
+                                REGION_KIND_ROOT | REGION_KIND_CALLER => {
+                                    builder.ins().global_value(types::I64, root_arena_gv)
+                                }
+                                REGION_KIND_BLOCK => {
+                                    let slot =
+                                        *block_arena_slots.entry(payload).or_insert_with(|| {
+                                            builder.create_sized_stack_slot(StackSlotData::new(
+                                                StackSlotKind::ExplicitSlot,
+                                                48,
+                                                3,
+                                            ))
+                                        });
+                                    builder.ins().stack_addr(types::I64, slot, 0)
+                                }
+                                _ => builder.ins().global_value(types::I64, root_arena_gv),
+                            };
+                            call_args.push(arena);
+                        }
+                    }
+                    let hidden_arg_offset = call_args.len();
+                    for i in 0..alen {
+                        let arg_id = all_args[aoff + i];
+                        let v = *value_map.get(&arg_id).unwrap_or_else(|| {
+                            panic!(
+                                "clif shim: IOP_CALL value_map miss: inst_id={iid} arg_id={arg_id} (block={bi}, inst_idx={ii}, func_idx={func_idx})"
+                            )
+                        });
+                        let v =
+                            if let Some(&expected_ty) = expected_types.get(i + hidden_arg_offset) {
                                 let actual_ty = builder.func.dfg.value_type(v);
                                 if actual_ty == types::I32 && expected_ty == types::I64 {
-                                    return builder.ins().sextend(types::I64, v);
+                                    builder.ins().sextend(types::I64, v)
+                                } else if actual_ty == types::I8 && expected_ty == types::I64 {
+                                    builder.ins().uextend(types::I64, v)
+                                } else {
+                                    v
                                 }
-                                if actual_ty == types::I8 && expected_ty == types::I64 {
-                                    return builder.ins().uextend(types::I64, v);
-                                }
-                            }
-                            v
-                        })
-                        .collect();
+                            } else {
+                                v
+                            };
+                        call_args.push(v);
+                    }
                     let call_inst = builder.ins().call(func_ref, &call_args);
                     let results = builder.inst_results(call_inst);
                     if results.is_empty() {
@@ -2296,6 +2333,16 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_vec_new_val" => {
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_vec_from_raw_parts_copy_val" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_vec_pin_to_root_val" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_vec_len" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
@@ -2330,6 +2377,16 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_string_from_cstr" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_pin_to_root" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_from_raw_parts_copy" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }

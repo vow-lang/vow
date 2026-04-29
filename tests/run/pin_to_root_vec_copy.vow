@@ -1,0 +1,13 @@
+// TEST: stdout "ok"
+module PinToRootVecCopy
+
+fn main() -> i32 [io] {
+    let v: Vec<i64> = Vec::new();
+    v.push(1);
+    let pinned: Vec<i64> = pin_to_root(v);
+    v.push(2);
+    if pinned.len() == 1 && pinned[0] == 1 {
+        print_str(String::from("ok"));
+    }
+    0
+}

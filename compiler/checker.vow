@@ -71,6 +71,9 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
         if base_ptid != -1 {
             return ts_make_applied(e.ts, base_ptid, arg_tids);
         }
+        if name == String::from("Vec") {
+            return ts_make_applied(e.ts, ts_make_enum(e.ts, name), arg_tids);
+        }
         let sidx: i64 = env_lookup_struct(e, name);
         if sidx != -1 {
             return ts_make_applied(e.ts, ts_make_struct(e.ts, name), arg_tids);
@@ -104,6 +107,47 @@ fn is_opaque(tid: i64) -> bool vow {
     requires: tid >= 0
 } {
     tid == CTY_NEVER() || tid == CTY_UNKNOWN()
+}
+
+fn is_flat_slot_tid(ts: TyStore, tid: i64) -> bool {
+    let tag: i64 = ty_tag(ts, tid);
+    (tag >= CTY_I8() && tag <= CTY_U128()) || tag == CTY_F32() || tag == CTY_F64() || tag == CTY_BOOL()
+}
+
+fn is_flat_vec_tid(ts: TyStore, tid: i64) -> bool {
+    if ty_tag(ts, tid) != CTY_APPLIED() {
+        return false;
+    }
+    let base_tid: i64 = ty_a(ts, tid);
+    let base_tag: i64 = ty_tag(ts, base_tid);
+    if base_tag != CTY_STRUCT() && base_tag != CTY_ENUM() {
+        return false;
+    }
+    if ty_struct_name(ts, base_tid) != String::from("Vec") {
+        return false;
+    }
+    let args_lid: i64 = ty_b(ts, tid);
+    if ts_arg_len(ts, args_lid) == 0 {
+        return false;
+    }
+    is_flat_slot_tid(ts, ts_arg_get(ts, args_lid, 0))
+}
+
+fn is_supported_pin_tid(ts: TyStore, tid: i64) -> bool {
+    tid == CTY_STR() || is_flat_vec_tid(ts, tid)
+}
+
+fn is_vec_raw_parts_copy_expr(a: AstArena, eid: i64) -> bool {
+    if expr_tag(a, eid) != EXPR_ECTOR() {
+        return false;
+    }
+    let path_lid: i64 = expr_a(a, eid);
+    if list_len(a, path_lid) < 2 {
+        return false;
+    }
+    let first_sid: i64 = list_get(a, path_lid, 0);
+    let second_sid: i64 = list_get(a, path_lid, 1);
+    arena_str(a, first_sid) == String::from("Vec") && arena_str(a, second_sid) == String::from("from_raw_parts_copy")
 }
 
 fn check_module(e: CheckEnv, m: Module) [io] {
@@ -406,6 +450,9 @@ fn check_block(e: CheckEnv, m: Module, bid: i64) -> i64 [io] {
                 if !is_coercible(e.ts, init_tid, at_tid) {
                     env_emit_error(e, String::from("let binding type mismatch"), stmt_span(a, sid));
                 }
+                if is_vec_raw_parts_copy_expr(a, init_eid) && !is_flat_vec_tid(e.ts, at_tid) {
+                    env_emit_error(e, String::from("Vec::from_raw_parts_copy requires a flat scalar Vec<T>"), stmt_span(a, sid));
+                }
                 at_tid
             };
             bind_pattern(e, m, pat_pid, bound_tid);
@@ -684,6 +731,18 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         if callee_tag == EXPR_IDENT() {
             let name_sid: i64 = expr_a(a, callee_eid);
             let name: String = arena_str(a, name_sid);
+            if name == String::from("pin_to_root") {
+                if n_args != 1 {
+                    env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
+                    return CTY_NEVER();
+                }
+                let arg_eid: i64 = list_get(a, args_lid, 0);
+                let arg_tid: i64 = check_expr(e, m, arg_eid);
+                if !is_supported_pin_tid(e.ts, arg_tid) && !is_opaque(arg_tid) {
+                    env_emit_error(e, String::from("pin_to_root supports String and flat scalar Vec<T> only"), expr_span(a, eid));
+                }
+                return arg_tid;
+            }
             let fidx: i64 = env_lookup_fn(e, name);
             if fidx == -1 {
                 let msg: String = String::from("undefined function `");
@@ -1129,7 +1188,29 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         if first_name == String::from("Result") {
             return ts_make_enum(e.ts, String::from("Result"));
         }
+        if first_name == String::from("Vec") {
+            if n_path > 1 {
+                let second_sid: i64 = list_get(a, path_lid, 1);
+                let second_name: String = arena_str(a, second_sid);
+                if second_name == String::from("from_raw_parts_copy") {
+                    if n_args != 2 {
+                        env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
+                    }
+                    return CTY_NEVER();
+                }
+            }
+        }
         if first_name == String::from("String") {
+            if n_path > 1 {
+                let second_sid: i64 = list_get(a, path_lid, 1);
+                let second_name: String = arena_str(a, second_sid);
+                if second_name == String::from("from_raw_parts_copy") {
+                    if n_args != 2 {
+                        env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
+                    }
+                    return CTY_STR();
+                }
+            }
             return CTY_STR();
         }
         if n_path > 1 {

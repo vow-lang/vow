@@ -91,12 +91,16 @@ fn vec_insert_i64(v: Vec<i64>, val: i64) -> bool {
 
 fn is_known_builtin(name: String) -> bool {
     name == String::from("__vow_vec_new")
+    || name == String::from("__vow_vec_from_raw_parts_copy_val")
+    || name == String::from("__vow_vec_pin_to_root_val")
     || name == String::from("__vow_vec_push_val")
     || name == String::from("__vow_vec_get_val")
     || name == String::from("__vow_vec_len")
     || name == String::from("__vow_vec_pop")
     || name == String::from("__vow_vec_set_val")
     || name == String::from("__vow_string_from_cstr")
+    || name == String::from("__vow_string_from_raw_parts_copy")
+    || name == String::from("__vow_string_pin_to_root")
     || name == String::from("__vow_string_len")
     || name == String::from("__vow_string_push_str")
     || name == String::from("__vow_string_push_byte")
@@ -394,7 +398,13 @@ fn collect_modelled_vars(f: IrFunction, constructor: String, prefix: String) -> 
             let inst: IrInst = insts[ii];
             if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
                 let ds: String = inst.ds;
-                if ds == constructor {
+                let alt_creator: bool = (prefix == String::from("__vow_vec_")
+                    && (ds == String::from("__vow_vec_from_raw_parts_copy_val")
+                        || ds == String::from("__vow_vec_pin_to_root_val")))
+                    || (prefix == String::from("__vow_string_")
+                        && (ds == String::from("__vow_string_from_raw_parts_copy")
+                            || ds == String::from("__vow_string_pin_to_root")));
+                if ds == constructor || alt_creator {
                     vec_insert_i64(vars, inst.id);
                 }
             }
@@ -411,7 +421,13 @@ fn collect_modelled_vars(f: IrFunction, constructor: String, prefix: String) -> 
             let inst: IrInst = insts[ii];
             if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
                 let ds: String = inst.ds;
-                if str_starts_with(ds, prefix) && !(ds == constructor) {
+                let alt_creator: bool = (prefix == String::from("__vow_vec_")
+                    && (ds == String::from("__vow_vec_from_raw_parts_copy_val")
+                        || ds == String::from("__vow_vec_pin_to_root_val")))
+                    || (prefix == String::from("__vow_string_")
+                        && (ds == String::from("__vow_string_from_raw_parts_copy")
+                            || ds == String::from("__vow_string_pin_to_root")));
+                if str_starts_with(ds, prefix) && !(ds == constructor) && !alt_creator {
                     let iargs: Vec<i64> = inst.args;
                     if iargs.len() > 0 {
                         vec_insert_i64(vars, iargs[0]);
@@ -834,6 +850,22 @@ fn emit_vec_op(out: String, inst: IrInst, vec_max: i64) {
         out.push_str(str3(String::from("  v"), ids, String::from(".len = 0;\n")));
         return;
     }
+    if ds == String::from("__vow_vec_from_raw_parts_copy_val") {
+        let len_arg: i64 = iargs[1];
+        let ids: String = i64_to_str(id);
+        let ls: String = i64_to_str(len_arg);
+        out.push_str(str5(String::from("  __ESBMC_assume(v"), ls,
+            String::from(" >= 0 && v"), ls,
+            str3(String::from(" < "), i64_to_str(vec_max), String::from(");\n"))));
+        out.push_str(str5(String::from("  v"), ids, String::from(".len = v"), ls, String::from(";\n")));
+        return;
+    }
+    if ds == String::from("__vow_vec_pin_to_root_val") {
+        let src: i64 = iargs[0];
+        out.push_str(str5(String::from("  v"), i64_to_str(id),
+            String::from(" = v"), i64_to_str(src), String::from(";\n")));
+        return;
+    }
     if ds == String::from("__vow_vec_push_val") {
         let vec: i64 = iargs[0];
         let val: i64 = iargs[1];
@@ -901,6 +933,22 @@ fn emit_string_op(out: String, inst: IrInst, string_max: i64) {
         out.push_str(str5(String::from("  __ESBMC_assume(v"), ids,
             String::from(".len >= 0 && v"), ids,
             str3(String::from(".len < "), i64_to_str(string_max), String::from(");\n"))));
+        return;
+    }
+    if ds == String::from("__vow_string_from_raw_parts_copy") {
+        let len_arg: i64 = iargs[1];
+        let ids: String = i64_to_str(id);
+        let ls: String = i64_to_str(len_arg);
+        out.push_str(str5(String::from("  __ESBMC_assume(v"), ls,
+            String::from(" >= 0 && v"), ls,
+            str3(String::from(" < "), i64_to_str(string_max), String::from(");\n"))));
+        out.push_str(str5(String::from("  v"), ids, String::from(".len = v"), ls, String::from(";\n")));
+        return;
+    }
+    if ds == String::from("__vow_string_pin_to_root") {
+        let src: i64 = iargs[0];
+        out.push_str(str5(String::from("  v"), i64_to_str(id),
+            String::from(" = v"), i64_to_str(src), String::from(";\n")));
         return;
     }
     if ds == String::from("__vow_string_len") {

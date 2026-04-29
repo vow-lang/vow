@@ -285,7 +285,10 @@ fn watchdog_ms_for(effective_timeout: String) -> i64 {
     if effective_timeout.len() > 0 {
         let n: i64 = str_to_i64(effective_timeout);
         if n >= 0 {
-            return n *! 1000;
+            if n > 9223372036854775 {
+                return DEFAULT_ESBMC_TIMEOUT_MS();
+            }
+            return n * 1000;
         }
     }
     DEFAULT_ESBMC_TIMEOUT_MS()
