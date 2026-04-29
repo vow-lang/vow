@@ -624,10 +624,7 @@ impl<'e> Checker<'e> {
                     | BinOp::SubChecked
                     | BinOp::MulChecked
                     | BinOp::DivChecked
-                    | BinOp::RemChecked => {
-                        let elem_ty = self.check_same_numeric(lhs_ty, rhs_ty, expr.span);
-                        Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![elem_ty])
-                    }
+                    | BinOp::RemChecked => self.check_same_numeric(lhs_ty, rhs_ty, expr.span),
                     BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
                         let coercible = (lhs_ty == Ty::I32 && rhs_ty.is_integer())
                             || (rhs_ty == Ty::I32 && lhs_ty.is_integer());
@@ -1980,7 +1977,7 @@ mod tests {
     // --- Checked arithmetic ---
 
     #[test]
-    fn checked_add_returns_option() {
+    fn checked_add_returns_integer_type() {
         let mut emitter = TestEmitter(vec![]);
         let mut checker = new_checker(&mut emitter);
         let ty = checker.check_expr(&make_expr(ExprKind::BinaryOp {
@@ -1988,10 +1985,7 @@ mod tests {
             lhs: Box::new(int_lit()),
             rhs: Box::new(int_lit()),
         }));
-        assert_eq!(
-            ty,
-            Ty::Applied(Box::new(Ty::Enum("Option".to_string())), vec![Ty::I32])
-        );
+        assert_eq!(ty, Ty::I32);
         assert!(!checker.has_errors());
     }
 
