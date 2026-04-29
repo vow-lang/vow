@@ -867,7 +867,10 @@ fn emit_vec_op(out: String, inst: IrInst, vec_max: i64) {
     }
     if ds == String::from("__vow_vec_pop") {
         let vec: i64 = iargs[0];
-        out.push_str(str3(String::from("  v"), i64_to_str(vec), String::from(".len--;\n")));
+        let vs: String = i64_to_str(vec);
+        out.push_str(str5(String::from("  if (v"), vs,
+            String::from(".len > 0) { v"), i64_to_str(vec),
+            String::from(".len--; }\n")));
         return;
     }
     if ds == String::from("__vow_vec_set_val") {
