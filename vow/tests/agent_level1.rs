@@ -67,6 +67,48 @@ fn compile_success() {
 }
 
 #[test]
+fn checked_arithmetic_returns_integer() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let src_path = dir.path().join("checked_arithmetic.vow");
+    let out_path = dir.path().join("checked_arithmetic");
+    let src = r#"module CheckedArithmetic
+
+fn checked_add(a: i64, b: i64) -> i64 {
+    a +! b
+}
+
+fn main() -> i32 {
+    if checked_add(3, 4) != 7 {
+        return 1;
+    }
+    0
+}
+"#;
+    std::fs::write(&src_path, src).unwrap();
+
+    let result = Command::new(vow_bin())
+        .args([
+            "build",
+            "--no-verify",
+            "--no-cache",
+            src_path.to_str().unwrap(),
+            "-o",
+            out_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run vow");
+    assert_eq!(result.status.code(), Some(0), "expected exit 0");
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("invalid JSON: {e}\nstdout: {stdout}"));
+    assert_eq!(json["status"], "Unverified");
+    assert!(
+        json["diagnostics"].as_array().unwrap().is_empty(),
+        "expected no diagnostics, got {stdout}"
+    );
+}
+
+#[test]
 fn compile_type_error() {
     let dir = tempfile::TempDir::new().unwrap();
     let bad_src = "module Bad\nfn main() -> i32 { true }";
