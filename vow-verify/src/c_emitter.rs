@@ -726,7 +726,7 @@ fn emit_inst(
                     }
                     "__vow_vec_pop" => {
                         let vec = inst.args[0].0;
-                        out.push_str(&format!("  v{vec}.len--;\n"));
+                        out.push_str(&format!("  if (v{vec}.len > 0) {{ v{vec}.len--; }}\n"));
                     }
                     "__vow_vec_set_val" => {
                         let vec = inst.args[0].0;
@@ -2422,7 +2422,10 @@ mod tests {
             ],
         );
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
-        assert!(c.contains("v2.len--;"), "pop decrement: {c}");
+        assert!(
+            c.contains("if (v2.len > 0) { v2.len--; }"),
+            "pop decrement: {c}"
+        );
     }
 
     #[test]
