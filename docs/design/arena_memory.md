@@ -1476,8 +1476,7 @@ header, chunk-chained bump allocator, 4 KB chunks.
 
 Rename existing conflicting runtime allocation shims in the same
 commit so the `__vow_arena_*` symbol space is free for this
-spec's new primitives. See **Appendix A** for the concrete rename
-map against the current tree.
+spec's new primitives.
 
 Standalone C-level tests + ESBMC verification on the primitive
 in isolation (§10.4). Runtime ships unused by the compiler.
@@ -1486,7 +1485,7 @@ in isolation (§10.4). Runtime ships unused by the compiler.
 
 Rename the existing conflicting `RegionId` newtype out of the
 way in the same commit, freeing the `RegionId` name for the new
-enum defined in §12.1. See **Appendix A** for the concrete rename.
+enum defined in §12.1.
 
 **2a (Rust):** after the rename above, `vow-ir` gains the new
 `RegionId` enum (§12.1), a `region: RegionId` field on the
@@ -1615,10 +1614,8 @@ Delete:
   `RegionFree` instance in lowered IR is a no-op, so this
   removal is mechanical — no semantic change from pre-Phase-8
   behavior.
-- PR #181's conservative patch (the `// Tag but don't track`
-  comment in both compilers plus the self-hosted
-  `lctx_mark_escaped` call sites). See **Appendix A** for the
-  concrete grep anchors against the current tree.
+- PR #181's conservative ownership patch comments in both
+  compilers plus the self-hosted `lctx_mark_escaped` call sites.
 
 Close issue #186.
 
@@ -1665,79 +1662,3 @@ during implementation:
   and `VerifyLimits.max_k_step` default may need raising for deeply
   nested calls or accumulating loops. Defaults may be revised after
   Phase 9.
-
-## Appendix A — Current-tree implementation anchors
-
-This appendix is **not normative**. It collects the concrete
-references against today's tree that implementers will need
-while executing Phase 1, Phase 2, and Phase 8. Everything here
-is expected to drift — tests are added or renamed, files are
-reorganised, line numbers move with merges from `main`. When
-Phase 1 lands, the relevant entries here should be deleted;
-likewise for Phases 2 and 8. The durable design is in §15.
-
-**Snapshot basis.** Anchors below were verified against
-`330c6af` (the Phase 0 landing commit). They may be stale by
-the time the corresponding phase executes; implementers should
-re-verify via grep before acting.
-
-### A.1. Phase 1 — Runtime allocation-shim renames
-
-The existing `vow-runtime` exports two companion functions in
-the global-allocator shim that share the `__vow_arena_*` prefix
-with this spec's new Phase 1 symbols. Neither is related to the
-arena-per-scope model; they are generic `malloc`/`free`-style
-entry points. The Phase 1 PR MUST rename them atomically:
-
-| Old symbol                              | New symbol   |
-|-----------------------------------------|--------------|
-| `__vow_arena_alloc(size, align)`        | `__vow_malloc` |
-| `__vow_arena_free(ptr, size, align)`    | `__vow_free`   |
-
-**Call-site anchors** (grep the repo; text is stable, line
-numbers are not):
-
-- `vow-runtime/src/lib.rs` — `pub extern "C" fn __vow_arena_alloc`
-  and `pub unsafe extern "C" fn __vow_arena_free` (function
-  definitions).
-- `vow-runtime/src/lib.rs` — tests `arena_alloc_free_roundtrip`,
-  `arena_alloc_zero_returns_sentinel`, `arena_free_null_is_noop`,
-  `arena_free_zero_size_is_noop` call the old symbols directly.
-  Any test added before Phase 1 lands that mentions either old
-  name must follow the rename in the same commit.
-- `vow-codegen/src/cranelift_backend.rs` — two
-  `declare_function` import sites, one per old symbol.
-- `vow-clif-shim/src/lib.rs` — two `declare_function` import
-  sites, one per old symbol.
-
-### A.2. Phase 2 — IR `RegionId` newtype rename
-
-`vow-ir/src/types.rs` defines `pub struct RegionId(pub u32)` as
-a newtype used by the pre-arena effects-tracking machinery
-(`InstData` and `AbstractHeap::Region`). The Phase 2 PR MUST
-rename this existing newtype to `AbstractRegionId` across
-`vow-ir` and every downstream consumer, freeing the `RegionId`
-name for the new enum defined in §12.1.
-
-The new enum replaces the newtype at the IR-operand slot; the
-rename is bundled with the Phase 2 IR additions so CI stays
-green through the change.
-
-### A.3. Phase 8 — Conservative-patch cleanup
-
-PR #181's conservative patch left the following identifier
-signatures in the tree. Phase 8 MUST delete all of them
-atomically along with the legacy helpers listed in §15.
-
-- `// Tag but don't track: can't distinguish owned heap from
-  arena alias without ownership annotations.` — grep for
-  `Tag but don't track`; the comment text is stable across file
-  growth. Present in both `vow-ir/src/lower/mod.rs` (Rust side)
-  and `compiler/lower.vow` (self-hosted side).
-- `lctx_mark_escaped` call sites — grep for `lctx_mark_escaped`
-  in `compiler/lower.vow` to surface all call sites the patch
-  introduces; the function definition and every call MUST be
-  removed in the same commit.
-
-Close issue #186 once both sets are deleted and the bootstrap
-triple re-verifies to a fixed point.

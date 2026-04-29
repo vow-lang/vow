@@ -1237,10 +1237,6 @@ fn lower_inst(
             let ptr = builder.inst_results(call_inst)[0];
             ctx.value_map.insert(inst.id, ptr);
         }
-        Opcode::RegionFree => {
-            let unit = builder.ins().iconst(types::I32, 0);
-            ctx.value_map.insert(inst.id, unit);
-        }
         Opcode::LinearConsume | Opcode::LinearBorrow => {
             let unit = builder.ins().iconst(types::I32, 0);
             ctx.value_map.insert(inst.id, unit);
@@ -2096,16 +2092,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_process_stdout_for" | "__vow_process_stderr_for" => {
             sig.params.push(AbiParam::new(types::I64)); // handle
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
-        }
-        // Typed deallocation
-        "__vow_string_free" => {
-            sig.params.push(AbiParam::new(types::I64)); // string ptr
-        }
-        "__vow_vec_free_val" => {
-            sig.params.push(AbiParam::new(types::I64)); // vec ptr
-        }
-        "__vow_map_free" => {
-            sig.params.push(AbiParam::new(types::I64)); // map ptr
         }
         // HashMap runtime
         "__vow_map_new" => {
@@ -3855,14 +3841,7 @@ mod tests {
                         vec![],
                         InstData::AllocSize { size: 64, align: 8 },
                     ),
-                    inst(
-                        1,
-                        Opcode::RegionFree,
-                        Ty::Unit,
-                        vec![0],
-                        InstData::AllocSize { size: 64, align: 8 },
-                    ),
-                    inst(2, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                    inst(1, Opcode::Return, Ty::Unit, vec![], InstData::None),
                 ],
             )],
         );

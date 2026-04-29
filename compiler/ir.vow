@@ -90,7 +90,6 @@ fn IOP_VOW_INV() -> i64 vow { ensures: result >= 0 } { 75 }
 fn IOP_CALL() -> i64 vow { ensures: result >= 0 } { 76 }
 
 fn IOP_REGION_ALLOC() -> i64 vow { ensures: result >= 0 } { 77 }
-fn IOP_REGION_FREE() -> i64 vow { ensures: result >= 0 } { 78 }
 
 fn IOP_LINEAR_CONSUME() -> i64 vow { ensures: result >= 0 } { 79 }
 fn IOP_LINEAR_BORROW() -> i64 vow { ensures: result >= 0 } { 80 }

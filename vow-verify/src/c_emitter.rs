@@ -368,7 +368,6 @@ pub fn is_modelable(
                 | Opcode::Load
                 | Opcode::Store
                 | Opcode::RegionAlloc
-                | Opcode::RegionFree
                 | Opcode::RegionOpen
                 | Opcode::RegionClose
                 | Opcode::LinearConsume
@@ -992,7 +991,6 @@ fn emit_inst(
         | Opcode::Load
         | Opcode::Store
         | Opcode::RegionAlloc
-        | Opcode::RegionFree
         | Opcode::RegionOpen
         | Opcode::RegionClose
         | Opcode::LinearConsume

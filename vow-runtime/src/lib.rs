@@ -2240,25 +2240,6 @@ pub unsafe extern "C" fn __vow_map_len(map: *const u8) -> usize {
 }
 
 // ---------------------------------------------------------------------------
-// Typed deallocation
-// ---------------------------------------------------------------------------
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_string_free(s: *mut u8) {
-    let _ = s;
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_vec_free_val(v: *mut u8) {
-    let _ = v;
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_map_free(m: *mut u8) {
-    let _ = m;
-}
-
-// ---------------------------------------------------------------------------
 // Sanitize mode — Vec provenance tracking
 // ---------------------------------------------------------------------------
 
@@ -2484,7 +2465,6 @@ mod tests {
         let vec = unsafe { &*(v as *const VowVec) };
         assert_eq!(vec.len, 0);
         assert_eq!(vec.cap, 0, "empty Vec should have cap=0 (lazy)");
-        unsafe { __vow_vec_free_val(v) };
     }
 
     #[test]
@@ -2495,13 +2475,6 @@ mod tests {
         assert_eq!(vec.len, 1);
         assert!(vec.cap >= 1, "cap should be allocated after first push");
         assert_eq!(unsafe { __vow_vec_get_val(v, 0) }, 42);
-        unsafe { __vow_vec_free_val(v) };
-    }
-
-    #[test]
-    fn vec_free_empty_no_crash() {
-        let v = __vow_vec_new_val();
-        unsafe { __vow_vec_free_val(v) };
     }
 
     #[test]
@@ -2510,7 +2483,6 @@ mod tests {
         let vec = unsafe { &*(s as *const VowVec) };
         assert_eq!(vec.len, 0);
         assert_eq!(vec.cap, 0, "empty String should have cap=0 (lazy)");
-        unsafe { __vow_string_free(s) };
     }
 
     #[test]
@@ -2519,7 +2491,6 @@ mod tests {
         let vec = unsafe { &*(s as *const VowVec) };
         assert_eq!(vec.len, 0);
         assert_eq!(vec.cap, 0, "String::from(\"\") should have cap=0 (lazy)");
-        unsafe { __vow_string_free(s) };
     }
 
     #[test]
@@ -2529,7 +2500,6 @@ mod tests {
         let vec = unsafe { &*(s as *const VowVec) };
         assert_eq!(vec.len, 5);
         assert!(vec.cap >= 5);
-        unsafe { __vow_string_free(s) };
     }
 
     #[test]
@@ -2544,7 +2514,6 @@ mod tests {
         for i in 0..20 {
             assert_eq!(unsafe { __vow_vec_get_val(v, i as usize) }, i);
         }
-        unsafe { __vow_vec_free_val(v) };
     }
 
     #[test]
@@ -2558,7 +2527,6 @@ mod tests {
         assert_eq!(unsafe { &*(v as *const VowVec) }.len, 2);
         assert_eq!(unsafe { __vow_vec_get_val(v, 0) }, 10);
         assert_eq!(unsafe { __vow_vec_get_val(v, 1) }, 20);
-        unsafe { __vow_vec_free_val(v) };
     }
 
     #[test]
@@ -2566,7 +2534,6 @@ mod tests {
         let v = __vow_vec_new_val();
         unsafe { __vow_vec_pop(v) };
         assert_eq!(unsafe { &*(v as *const VowVec) }.len, 0);
-        unsafe { __vow_vec_free_val(v) };
     }
 
     #[test]
@@ -2575,7 +2542,6 @@ mod tests {
         unsafe { __vow_vec_push_val(v, 42) };
         unsafe { __vow_vec_pop(v) };
         assert_eq!(unsafe { &*(v as *const VowVec) }.len, 0);
-        unsafe { __vow_vec_free_val(v) };
     }
 
     #[test]
@@ -2591,7 +2557,6 @@ mod tests {
         assert_eq!(vec.len, 2);
         assert_eq!(unsafe { __vow_vec_get_val(v, 0) }, 1);
         assert_eq!(unsafe { __vow_vec_get_val(v, 1) }, 99);
-        unsafe { __vow_vec_free_val(v) };
     }
 
     #[test]
@@ -2607,7 +2572,6 @@ mod tests {
         assert_eq!(unsafe { __vow_vec_get_val(v, 0) }, 0);
         assert_eq!(unsafe { __vow_vec_get_val(v, 1) }, 1);
         assert_eq!(unsafe { __vow_vec_get_val(v, 2) }, 2);
-        unsafe { __vow_vec_free_val(v) };
     }
 
     // All sanitize tests consolidated into one test to avoid parallel test races
@@ -2639,8 +2603,6 @@ mod tests {
         let slot_gen = __vow_sanitize_vec_generation(v, 0);
         __vow_sanitize_check_generation(v, 0, slot_gen);
 
-        unsafe { __vow_vec_free_val(v) };
-
         // -- Truncate clears generations --
         let v2 = __vow_vec_new_val();
         unsafe { __vow_vec_push_val(v2, 1) };
@@ -2656,7 +2618,6 @@ mod tests {
             0,
             "truncated slot should have no generation"
         );
-        unsafe { __vow_vec_free_val(v2) };
 
         // -- Pop removes generation --
         let v3 = __vow_vec_new_val();
@@ -2669,12 +2630,10 @@ mod tests {
             0,
             "popped slot should have no generation"
         );
-        unsafe { __vow_vec_free_val(v3) };
 
         // -- Vec operations work without crash when sanitize enabled --
         let v4 = __vow_vec_new_val();
         unsafe { __vow_vec_push_val(v4, 42) };
-        unsafe { __vow_vec_free_val(v4) };
     }
 
     // -----------------------------------------------------------------------
@@ -2899,17 +2858,17 @@ mod tests {
 
     #[test]
     fn vec_pin_to_root_val_copies_slots() {
-        unsafe { ensure_root_arena() };
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
         let raw = [7_i64, 8_i64];
-        let source = unsafe {
-            __vow_vec_from_raw_parts_copy_val(&raw mut __vow_root_arena, raw.as_ptr(), raw.len())
-        };
+        let source = unsafe { __vow_vec_from_raw_parts_copy_val(&mut a, raw.as_ptr(), raw.len()) };
         let pinned = unsafe { __vow_vec_pin_to_root_val(source) };
         unsafe { __vow_vec_push_val(source, 9) };
         let pv = unsafe { &*(pinned as *const VowVec) };
         assert_eq!(pv.len, 2);
         let pinned_vals = unsafe { std::slice::from_raw_parts(pv.ptr as *const i64, pv.len) };
         assert_eq!(pinned_vals, &[7, 8]);
+        unsafe { __vow_arena_close(&mut a) };
     }
 
     #[test]
@@ -2966,40 +2925,6 @@ mod tests {
         // If close fails to walk the chain, leak detectors (ASan/Miri) will flag;
         // functional success is that close completes without UB.
         unsafe { __vow_arena_close(&mut a) };
-    }
-
-    #[test]
-    fn legacy_typed_free_noop_worker() {
-        if std::env::var("VOW_LEGACY_FREE_NOOP_WORKER").is_err() {
-            return;
-        }
-        __vow_sanitize_init();
-        let v = __vow_vec_new_val();
-        unsafe { __vow_vec_push_val(v, 1) };
-        unsafe { __vow_vec_free_val(v) };
-        unsafe { __vow_vec_free_val(v) };
-        unsafe { __vow_vec_push_val(v, 2) };
-        assert_eq!(unsafe { __vow_vec_len(v) }, 2);
-    }
-
-    #[test]
-    fn legacy_typed_free_symbols_are_noops() {
-        let exe = std::env::current_exe().expect("current test exe");
-        let output = std::process::Command::new(exe)
-            .env("VOW_LEGACY_FREE_NOOP_WORKER", "1")
-            .args([
-                "tests::legacy_typed_free_noop_worker",
-                "--exact",
-                "--nocapture",
-            ])
-            .output()
-            .expect("spawn legacy free worker");
-        assert!(
-            output.status.success(),
-            "legacy free worker failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
     }
 
     // -----------------------------------------------------------------------
@@ -3187,22 +3112,5 @@ mod tests {
         let vec = unsafe { &*(v as *const VowVec) };
         assert_eq!(vec.len, 1);
         assert!(vec.cap >= 1, "lazy-allocated, cap should be populated");
-        unsafe { __vow_vec_free_val(v) };
-    }
-
-    #[test]
-    fn rodata_free_preserves_header_path() {
-        // free must not call libc::free on a rodata buffer. We construct a
-        // heap-allocated header whose `cap == VOW_CAP_RODATA` and `ptr` is a
-        // bogus value — if the free path touched it we would crash.
-        let header_layout = unsafe { std::alloc::Layout::from_size_align_unchecked(24, 8) };
-        let raw = unsafe { std::alloc::alloc_zeroed(header_layout) } as *mut VowVec;
-        unsafe {
-            (*raw).ptr = 1 as *mut u8;
-            (*raw).len = 0;
-            (*raw).cap = VOW_CAP_RODATA;
-        }
-        // Must complete without segfault: header freed, buffer skipped.
-        unsafe { __vow_vec_free_val(raw as *mut u8) };
     }
 }

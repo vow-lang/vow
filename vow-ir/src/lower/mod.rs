@@ -16,29 +16,6 @@ use crate::types::{
     Opcode, RegionId, RegionSummary, StructLayout, Ty, VariantLayout, VowEntry, VowId,
 };
 
-fn builtin_alloc_tag(sym: &str) -> &'static str {
-    match sym {
-        "__vow_fs_read"
-        | "__vow_string_substr"
-        | "__vow_string_trim"
-        | "__vow_string_to_upper"
-        | "__vow_string_to_lower"
-        | "__vow_string_replace"
-        | "__vow_string_join"
-        | "__vow_string_from_i64"
-        | "__vow_stdin_read"
-        | "__vow_stdin_read_line"
-        | "__vow_process_get_stdout"
-        | "__vow_process_get_stderr"
-        | "__vow_process_stdout_for"
-        | "__vow_process_stderr_for"
-        | "__vow_hex_encode" => "String",
-        "__vow_fs_listdir" | "__vow_string_split" | "__vow_vec_sort" | "__vow_hex_decode"
-        | "__vow_args" => "Vec",
-        _ => "",
-    }
-}
-
 fn vow_debug_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
     match name {
         "debug_str" => Some(("__vow_debug_str", Ty::Unit)),
@@ -221,11 +198,6 @@ pub(crate) struct LowerCtx {
     // struct name → per-field Vec element type name (for FieldGet → Vec propagation)
     struct_field_vec_elems: HashMap<String, Vec<String>>,
     warnings: Vec<vow_diag::Diagnostic>,
-    // Scope-based deallocation: stack of alloc scopes, each tracking (InstId, tag).
-    // Push on entering a branch/loop/match arm, pop (with frees) on exit.
-    alloc_scopes: Vec<Vec<(InstId, String)>>,
-    // Alloc scope depth at each loop body entry (for break/continue frees).
-    loop_alloc_scope_depth: Vec<usize>,
 }
 
 impl LowerCtx {
@@ -296,25 +268,7 @@ impl LowerCtx {
             inst_vec_elem_type: HashMap::new(),
             struct_field_vec_elems,
             warnings: Vec::new(),
-            alloc_scopes: vec![Vec::new()],
-            loop_alloc_scope_depth: Vec::new(),
         }
-    }
-
-    pub(super) fn track_heap_alloc(&mut self, id: InstId, tag: &str) {
-        let _ = (id, tag);
-    }
-
-    pub(super) fn push_alloc_scope(&mut self) {
-        self.alloc_scopes.push(Vec::new());
-    }
-
-    pub(super) fn pop_alloc_scope_frees(&mut self) {
-        self.alloc_scopes.pop().expect("alloc_scopes underflow");
-    }
-
-    pub(super) fn emit_return_frees(&mut self, return_val: InstId, span: Span) {
-        let _ = (return_val, span);
     }
 
     pub(super) fn intern_str(&mut self, s: &str) -> u32 {
@@ -333,10 +287,6 @@ impl LowerCtx {
 
     pub(super) fn pop_scope(&mut self) {
         self.scope.pop();
-    }
-
-    pub(super) fn emit_string_free(&mut self, id: InstId, span: Span) {
-        let _ = (id, span);
     }
 
     pub(super) fn define(&mut self, name: String, id: InstId) {
@@ -662,7 +612,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 );
                 ctx.inst_struct_type.insert(vow_str, "String".to_string());
-                ctx.track_heap_alloc(vow_str, "String");
                 vow_str
             }
         },
@@ -704,15 +653,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 );
 
-                // RHS block: evaluate RHS, free temporaries, feed into Phi.
-                // Allocs inside the RHS must be freed in rhs_block (before the
-                // jump) — if they were tracked in the outer scope, the short-
-                // circuit path would still emit frees for values that were
-                // never allocated, causing double-free / invalid free.
+                // RHS block: evaluate RHS and feed it into the merge Phi.
                 ctx.switch_to_block(rhs_block);
-                ctx.push_alloc_scope();
                 let rhs_id = lower_expr(ctx, rhs);
-                ctx.pop_alloc_scope_frees();
                 let rhs_upsilon = ctx.emit(
                     Opcode::Upsilon,
                     Ty::Unit,
@@ -779,12 +722,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     InstData::CallExtern("__vow_string_eq".to_string()),
                     span,
                 );
-                if matches!(&lhs.kind, ExprKind::Lit(Lit::String(_))) {
-                    ctx.emit_string_free(lhs_id, span);
-                }
-                if matches!(&rhs.kind, ExprKind::Lit(Lit::String(_))) {
-                    ctx.emit_string_free(rhs_id, span);
-                }
                 if *op == BinOp::Ne {
                     ctx.emit(Opcode::Not, Ty::Bool, vec![eq_result], InstData::None, span)
                 } else {
@@ -852,7 +789,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         span,
                     );
                     ctx.inst_struct_type.insert(result, "String".to_string());
-                    ctx.track_heap_alloc(result, "String");
                     return result;
                 }
                 if ctx
@@ -871,7 +807,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     if let Some(elem_name) = ctx.inst_vec_elem_type.get(&source_id).cloned() {
                         ctx.inst_vec_elem_type.insert(result, elem_name);
                     }
-                    ctx.track_heap_alloc(result, "Vec");
                     return result;
                 }
                 return source_id;
@@ -885,7 +820,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     InstData::CallTarget(call_info.id),
                     span,
                 );
-                // Tag but don't track: can't distinguish owned heap from arena alias without ownership annotations.
                 if let Some(ret_tag) = call_info.ret_tag {
                     ctx.inst_struct_type.insert(result, ret_tag);
                 }
@@ -902,20 +836,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 )
             } else if let Some((sym, ret_ty)) = vow_builtin_to_runtime(&callee_name) {
-                let result = ctx.emit(
+                ctx.emit(
                     Opcode::Call,
                     ret_ty,
                     arg_ids,
                     InstData::CallExtern(sym.to_string()),
                     span,
-                );
-                if ret_ty == Ty::Ptr {
-                    let tag = builtin_alloc_tag(sym);
-                    if !tag.is_empty() {
-                        ctx.track_heap_alloc(result, tag);
-                    }
-                }
-                result
+                )
             } else {
                 ctx.emit(
                     Opcode::Call,
@@ -956,7 +883,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             // Lower then-branch.
             ctx.switch_to_block(then_block);
-            ctx.push_alloc_scope();
             let then_val = lower_block(ctx, then_branch);
             let then_terminated = ctx.is_terminated();
             let then_upsilon_block = ctx.current_block;
@@ -965,11 +891,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .iter()
                 .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                 .collect();
-            if !then_terminated {
-                ctx.pop_alloc_scope_frees();
-            } else {
-                ctx.alloc_scopes.pop();
-            }
             let then_upsilon_id = if !then_terminated {
                 let u = ctx.emit(
                     Opcode::Upsilon,
@@ -995,7 +916,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
             // Lower else-branch.
             ctx.switch_to_block(else_block);
-            ctx.push_alloc_scope();
             let else_val = if let Some(else_expr) = else_branch {
                 lower_expr(ctx, else_expr)
             } else {
@@ -1007,11 +927,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 .iter()
                 .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                 .collect();
-            if !else_terminated {
-                ctx.pop_alloc_scope_frees();
-            } else {
-                ctx.alloc_scopes.pop();
-            }
             let else_upsilon_id = if !else_terminated {
                 let u = ctx.emit(
                     Opcode::Upsilon,
@@ -1112,14 +1027,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 if let Some(vow_block) = ctx.vow_block.clone() {
                     vow::lower_ensures(ctx, &vow_block, val);
                 }
-                ctx.emit_return_frees(val, span);
                 ctx.emit(Opcode::Return, Ty::Unit, vec![val], InstData::None, span)
             } else {
                 let unit = ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span);
                 if let Some(vow_block) = ctx.vow_block.clone() {
                     vow::lower_ensures(ctx, &vow_block, unit);
                 }
-                ctx.emit_return_frees(unit, span);
                 ctx.emit(Opcode::Return, Ty::Unit, vec![unit], InstData::None, span)
             }
         }
@@ -1305,10 +1218,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.loop_continue_idx_phi.push(None);
             ctx.loop_continue_scope_depth.push(ctx.scope.len());
             ctx.loop_break_upsilons.push(None);
-            ctx.push_alloc_scope();
-            ctx.loop_alloc_scope_depth.push(ctx.alloc_scopes.len() - 1);
             lower_block(ctx, body);
-            ctx.loop_alloc_scope_depth.pop();
             ctx.loop_break_upsilons.pop();
             ctx.loop_continue_scope_depth.pop();
             ctx.loop_continue_idx_phi.pop();
@@ -1316,12 +1226,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.loop_continue_phis.pop();
             ctx.loop_header_blocks.pop();
             ctx.loop_exit_blocks.pop();
-
-            if !ctx.is_terminated() {
-                ctx.pop_alloc_scope_frees();
-            } else {
-                ctx.alloc_scopes.pop();
-            }
 
             // Emit back-edge Upsilons with the current scope values.
             if !ctx.is_terminated() {
@@ -1522,10 +1426,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.loop_exit_phis.push(exit_phi_ids.clone());
             ctx.loop_continue_idx_phi.push(Some(idx_phi));
             ctx.loop_continue_scope_depth.push(for_scope_depth);
-            ctx.push_alloc_scope();
-            ctx.loop_alloc_scope_depth.push(ctx.alloc_scopes.len() - 1);
             lower_block(ctx, body);
-            ctx.loop_alloc_scope_depth.pop();
             ctx.loop_continue_scope_depth.pop();
             ctx.loop_continue_idx_phi.pop();
             ctx.loop_exit_phis.pop();
@@ -1534,12 +1435,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.loop_exit_blocks.pop();
 
             ctx.pop_scope();
-
-            if !ctx.is_terminated() {
-                ctx.pop_alloc_scope_frees();
-            } else {
-                ctx.alloc_scopes.pop();
-            }
 
             // Increment index and emit back-edge
             if !ctx.is_terminated() {
@@ -1664,10 +1559,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.loop_continue_idx_phi.push(None);
             ctx.loop_continue_scope_depth.push(ctx.scope.len());
             ctx.loop_break_upsilons.push(Some(Vec::new()));
-            ctx.push_alloc_scope();
-            ctx.loop_alloc_scope_depth.push(ctx.alloc_scopes.len() - 1);
             lower_block(ctx, body);
-            ctx.loop_alloc_scope_depth.pop();
             let break_ups = ctx.loop_break_upsilons.pop().unwrap();
             ctx.loop_continue_scope_depth.pop();
             ctx.loop_continue_idx_phi.pop();
@@ -1675,12 +1567,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             ctx.loop_continue_phis.pop();
             ctx.loop_header_blocks.pop();
             ctx.loop_exit_blocks.pop();
-
-            if !ctx.is_terminated() {
-                ctx.pop_alloc_scope_frees();
-            } else {
-                ctx.alloc_scopes.pop();
-            }
 
             // Back-edge Upsilons
             if !ctx.is_terminated() {
@@ -1948,8 +1834,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 span,
             );
             ctx.inst_struct_type.insert(ptr_id, name.clone());
-            let alloc_size = (n_fields as u32 + 1) * 8;
-            ctx.track_heap_alloc(ptr_id, &format!("region:{alloc_size}"));
             for (field_name, field_expr) in fields {
                 let idx = match field_names.iter().position(|n| n == field_name) {
                     Some(i) => i,
@@ -2020,7 +1904,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 );
                 ctx.inst_struct_type.insert(result, "String".to_string());
-                ctx.track_heap_alloc(result, "String");
                 return result;
             }
             // String::new() builtin — empty string via __vow_vec_new(1, 1)
@@ -2047,7 +1930,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 );
                 ctx.inst_struct_type.insert(result, "String".to_string());
-                ctx.track_heap_alloc(result, "String");
                 return result;
             }
             // HashMap::new() builtin
@@ -2060,7 +1942,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 );
                 ctx.inst_struct_type.insert(result, "HashMap".to_string());
-                ctx.track_heap_alloc(result, "HashMap");
                 return result;
             }
             // Vec::new() builtin
@@ -2087,7 +1968,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 );
                 ctx.inst_struct_type.insert(result, "Vec".to_string());
-                ctx.track_heap_alloc(result, "Vec");
                 return result;
             }
             if enum_name == "Vec" && variant_name == "from_raw_parts_copy" {
@@ -2123,7 +2003,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 );
                 ctx.inst_struct_type.insert(result, "Vec".to_string());
-                ctx.track_heap_alloc(result, "Vec");
                 return result;
             }
             let tag = ctx
@@ -2141,7 +2020,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 span,
             );
             ctx.inst_struct_type.insert(ptr_id, enum_name.to_string());
-            ctx.track_heap_alloc(ptr_id, &format!("region:{size}"));
             let tag_val = ctx.emit(
                 Opcode::ConstI64,
                 Ty::I64,
@@ -2241,7 +2119,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
 
                         ctx.switch_to_block(arm_block);
                         ctx.push_scope();
-                        ctx.push_alloc_scope();
                         for (i, inner_pat) in inner.iter().enumerate() {
                             if let PatKind::Ident { name, .. } = &inner_pat.kind {
                                 let field_val = ctx.emit(
@@ -2256,19 +2133,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         }
                         let arm_result = lower_expr(ctx, &arm.body);
                         let arm_ty = ctx.inst_ty(arm_result);
-                        let arm_terminated = ctx.is_terminated();
                         ctx.pop_scope();
 
                         let arm_mut_vals: Vec<InstId> = mutations
                             .iter()
                             .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                             .collect();
-
-                        if !arm_terminated {
-                            ctx.pop_alloc_scope_frees();
-                        } else {
-                            ctx.alloc_scopes.pop();
-                        }
 
                         let up_id = ctx.emit(
                             Opcode::Upsilon,
@@ -2301,22 +2171,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                         } else {
                             ctx.push_scope();
                         }
-                        ctx.push_alloc_scope();
                         let arm_result = lower_expr(ctx, &arm.body);
                         let arm_ty = ctx.inst_ty(arm_result);
-                        let arm_terminated = ctx.is_terminated();
                         ctx.pop_scope();
 
                         let arm_mut_vals: Vec<InstId> = mutations
                             .iter()
                             .map(|(name, pre_id)| ctx.lookup(name).unwrap_or(*pre_id))
                             .collect();
-
-                        if !arm_terminated {
-                            ctx.pop_alloc_scope_frees();
-                        } else {
-                            ctx.alloc_scopes.pop();
-                        }
 
                         let up_id = ctx.emit(
                             Opcode::Upsilon,
@@ -2459,17 +2321,13 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     let arg_id = arg_expr.map(|e| lower_expr(ctx, e)).unwrap_or_else(|| {
                         ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
                     });
-                    let result = ctx.emit(
+                    ctx.emit(
                         Opcode::Call,
                         Ty::Bool,
                         vec![recv_id, arg_id],
                         InstData::CallExtern("__vow_string_contains".to_string()),
                         span,
-                    );
-                    if arg_expr.is_some_and(|e| matches!(&e.kind, ExprKind::Lit(Lit::String(_)))) {
-                        ctx.emit_string_free(arg_id, span);
-                    }
-                    result
+                    )
                 }
                 (Some("String"), "byte_at") => {
                     let idx_id = args
@@ -2787,7 +2645,6 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             if let Some(vow_block) = ctx.vow_block.clone() {
                 vow::lower_ensures(ctx, &vow_block, none_ptr);
             }
-            ctx.emit_return_frees(none_ptr, span);
             ctx.emit(
                 Opcode::Return,
                 Ty::Unit,
@@ -3215,7 +3072,6 @@ pub(crate) fn lower_function(
         if let Some(vow_block) = &fn_def.vow {
             vow::lower_ensures(&mut ctx, vow_block, trailing);
         }
-        ctx.emit_return_frees(trailing, span);
         ctx.emit(
             Opcode::Return,
             Ty::Unit,
@@ -4161,64 +4017,6 @@ mod tests {
         assert_eq!(alloc.data, InstData::AllocSize { size: 24, align: 8 });
     }
 
-    // --- Deallocation tests ---
-
-    fn pair_ty() -> Type {
-        Type::Named {
-            name: "Pair".to_string(),
-            span: sp(),
-        }
-    }
-
-    fn let_stmt(name: &str, ty: Option<Type>, init: Expr) -> Stmt {
-        Stmt::Let {
-            pattern: Pat {
-                kind: PatKind::Ident {
-                    name: name.to_string(),
-                    is_mut: false,
-                },
-                span: sp(),
-            },
-            ty,
-            init: Box::new(init),
-            span: sp(),
-        }
-    }
-
-    fn pair_literal(a: i128, b: i128) -> Expr {
-        Expr {
-            kind: ExprKind::StructLiteral {
-                name: "Pair".to_string(),
-                fields: vec![
-                    ("a".to_string(), int_expr(a)),
-                    ("b".to_string(), int_expr(b)),
-                ],
-            },
-            span: sp(),
-        }
-    }
-
-    fn lower_with_structs(fn_def: &FnDef, fields: Vec<&str>) -> Function {
-        let mut sfm = HashMap::new();
-        sfm.insert(
-            "Pair".to_string(),
-            fields.into_iter().map(|s| s.to_string()).collect(),
-        );
-        let (func, _, _) = lower_function(
-            fn_def,
-            "",
-            &HashMap::new(),
-            sfm,
-            HashMap::new(),
-            &HashSet::new(),
-            HashMap::new(),
-            HashMap::new(),
-            &HashSet::new(),
-            &HashMap::new(),
-        );
-        func
-    }
-
     #[test]
     fn user_defined_call_results_keep_struct_tags_for_field_access() {
         let body = Block {
@@ -4285,705 +4083,5 @@ mod tests {
             .find(|i| i.opcode == Opcode::FieldGet)
             .expect("expected FieldGet");
         assert_eq!(field_get.data, InstData::FieldIndex(0));
-    }
-
-    #[test]
-    fn user_defined_string_calls_do_not_assume_owned_heap_results() {
-        let body = Block {
-            stmts: vec![let_stmt(
-                "s",
-                Some(Type::Named {
-                    name: "String".to_string(),
-                    span: sp(),
-                }),
-                Expr {
-                    kind: ExprKind::Call {
-                        callee: Box::new(ident_expr("arena_str")),
-                        args: vec![],
-                    },
-                    span: sp(),
-                },
-            )],
-            trailing_expr: Some(Box::new(int_expr(0))),
-            span: sp(),
-        };
-        let fn_def = make_fn("f", vec![], i64_ty(), body, vec![]);
-
-        let mut func_index = HashMap::new();
-        func_index.insert(
-            "arena_str".to_string(),
-            FuncSigInfo {
-                id: FuncId(0),
-                ret_ty: Ty::Ptr,
-                ret_tag: Some("String".to_string()),
-                ret_vec_elem: None,
-            },
-        );
-
-        let (func, _, warnings) = lower_function(
-            &fn_def,
-            "",
-            &func_index,
-            HashMap::new(),
-            HashMap::new(),
-            &HashSet::new(),
-            HashMap::new(),
-            HashMap::new(),
-            &HashSet::new(),
-            &HashMap::new(),
-        );
-
-        assert!(
-            warnings.is_empty(),
-            "unexpected lowering warnings: {warnings:?}"
-        );
-
-        let has_string_free = func.blocks.iter().flat_map(|b| b.insts.iter()).any(|i| {
-            i.opcode == Opcode::Call
-                && i.data == InstData::CallExtern("__vow_string_free".to_string())
-        });
-        assert!(
-            !has_string_free,
-            "user-defined String calls may return aliases and must not be freed at the call site"
-        );
-    }
-
-    #[test]
-    fn multiple_arena_aliased_bindings_emit_no_frees_at_scope_exit() {
-        // Defense-in-depth: the single-binding case above proves the call site
-        // doesn't emit a free.  This variant pins the scope-exit behaviour for
-        // a realistic multi-binding sequence (the bootstrap crash path involved
-        // many arena-aliased String locals in a single lowering function).
-        let body = Block {
-            stmts: vec![
-                let_stmt(
-                    "a",
-                    Some(Type::Named {
-                        name: "String".to_string(),
-                        span: sp(),
-                    }),
-                    Expr {
-                        kind: ExprKind::Call {
-                            callee: Box::new(ident_expr("arena_str")),
-                            args: vec![],
-                        },
-                        span: sp(),
-                    },
-                ),
-                let_stmt(
-                    "b",
-                    Some(Type::Named {
-                        name: "String".to_string(),
-                        span: sp(),
-                    }),
-                    Expr {
-                        kind: ExprKind::Call {
-                            callee: Box::new(ident_expr("arena_str")),
-                            args: vec![],
-                        },
-                        span: sp(),
-                    },
-                ),
-            ],
-            trailing_expr: Some(Box::new(int_expr(0))),
-            span: sp(),
-        };
-        let fn_def = make_fn("f", vec![], i64_ty(), body, vec![]);
-
-        let mut func_index = HashMap::new();
-        func_index.insert(
-            "arena_str".to_string(),
-            FuncSigInfo {
-                id: FuncId(0),
-                ret_ty: Ty::Ptr,
-                ret_tag: Some("String".to_string()),
-                ret_vec_elem: None,
-            },
-        );
-
-        let (func, _, warnings) = lower_function(
-            &fn_def,
-            "",
-            &func_index,
-            HashMap::new(),
-            HashMap::new(),
-            &HashSet::new(),
-            HashMap::new(),
-            HashMap::new(),
-            &HashSet::new(),
-            &HashMap::new(),
-        );
-        assert!(
-            warnings.is_empty(),
-            "unexpected lowering warnings: {warnings:?}"
-        );
-
-        let free_count = func
-            .blocks
-            .iter()
-            .flat_map(|b| b.insts.iter())
-            .filter(|i| {
-                i.opcode == Opcode::Call
-                    && i.data == InstData::CallExtern("__vow_string_free".to_string())
-            })
-            .count();
-        assert_eq!(
-            free_count, 0,
-            "arena-aliased let bindings must emit zero __vow_string_free calls at scope exit, got {free_count}"
-        );
-    }
-
-    #[test]
-    fn no_region_free_for_unused_struct_after_arena_cutover() {
-        // fn f() -> i64 { let p = Pair{a:1, b:2}; 42 }
-        let body = Block {
-            stmts: vec![let_stmt("p", Some(pair_ty()), pair_literal(1, 2))],
-            trailing_expr: Some(Box::new(int_expr(42))),
-            span: sp(),
-        };
-        let fn_def = make_fn("f", vec![], i64_ty(), body, vec![]);
-        let func = lower_with_structs(&fn_def, vec!["a", "b"]);
-
-        let has_region_free = func
-            .blocks
-            .iter()
-            .flat_map(|b| b.insts.iter())
-            .any(|i| i.opcode == Opcode::RegionFree);
-        assert!(
-            !has_region_free,
-            "arena lowering must not emit per-value RegionFree for unused structs"
-        );
-    }
-
-    #[test]
-    fn no_region_free_for_returned_struct() {
-        // fn f() -> Pair { Pair{a:1, b:2} }
-        let body = Block {
-            stmts: vec![],
-            trailing_expr: Some(Box::new(pair_literal(1, 2))),
-            span: sp(),
-        };
-        let fn_def = make_fn("f", vec![], pair_ty(), body, vec![]);
-        let func = lower_with_structs(&fn_def, vec!["a", "b"]);
-
-        let has_region_free = func
-            .blocks
-            .iter()
-            .flat_map(|b| b.insts.iter())
-            .any(|i| i.opcode == Opcode::RegionFree);
-        assert!(!has_region_free, "returned struct should not be freed");
-    }
-
-    #[test]
-    fn no_region_free_for_phi_returned_struct() {
-        // fn f(flag: bool) -> Pair {
-        //   let p = Pair{a:1, b:2};
-        //   if flag { p } else { Pair{a:3, b:4} }
-        // }
-        let body = Block {
-            stmts: vec![let_stmt("p", Some(pair_ty()), pair_literal(1, 2))],
-            trailing_expr: Some(Box::new(Expr {
-                kind: ExprKind::If {
-                    condition: Box::new(ident_expr("flag")),
-                    then_branch: Box::new(Block {
-                        stmts: vec![],
-                        trailing_expr: Some(Box::new(ident_expr("p"))),
-                        span: sp(),
-                    }),
-                    else_branch: Some(Box::new(Expr {
-                        kind: ExprKind::Block(Box::new(Block {
-                            stmts: vec![],
-                            trailing_expr: Some(Box::new(pair_literal(3, 4))),
-                            span: sp(),
-                        })),
-                        span: sp(),
-                    })),
-                },
-                span: sp(),
-            })),
-            span: sp(),
-        };
-        let bool_ty = Type::Named {
-            name: "bool".to_string(),
-            span: sp(),
-        };
-        let fn_def = make_fn(
-            "f",
-            vec![make_param("flag", bool_ty)],
-            pair_ty(),
-            body,
-            vec![],
-        );
-        let func = lower_with_structs(&fn_def, vec!["a", "b"]);
-
-        let region_frees: Vec<_> = func
-            .blocks
-            .iter()
-            .flat_map(|b| b.insts.iter())
-            .filter(|i| i.opcode == Opcode::RegionFree)
-            .collect();
-        assert!(
-            region_frees.is_empty(),
-            "struct returned through Phi should not be freed, found {} RegionFree(s)",
-            region_frees.len()
-        );
-    }
-
-    #[test]
-    fn no_free_for_escaped_struct() {
-        // fn f(sink: fn(Pair)->i64) -> i64 { let p = Pair{a:1, b:2}; sink(p) }
-        let body = Block {
-            stmts: vec![let_stmt("p", Some(pair_ty()), pair_literal(1, 2))],
-            trailing_expr: Some(Box::new(Expr {
-                kind: ExprKind::Call {
-                    callee: Box::new(ident_expr("sink")),
-                    args: vec![ident_expr("p")],
-                },
-                span: sp(),
-            })),
-            span: sp(),
-        };
-        let fn_def = make_fn(
-            "f",
-            vec![make_param("sink", i64_ty())],
-            i64_ty(),
-            body,
-            vec![],
-        );
-        let func = lower_with_structs(&fn_def, vec!["a", "b"]);
-
-        let has_region_free = func
-            .blocks
-            .iter()
-            .flat_map(|b| b.insts.iter())
-            .any(|i| i.opcode == Opcode::RegionFree);
-        assert!(!has_region_free, "escaped struct should not be freed");
-    }
-
-    #[test]
-    fn no_string_free_for_unused_string_after_arena_cutover() {
-        // fn f() -> i64 { let s = String::from("hello"); 42 }
-        let body = Block {
-            stmts: vec![let_stmt(
-                "s",
-                Some(Type::Named {
-                    name: "String".to_string(),
-                    span: sp(),
-                }),
-                Expr {
-                    kind: ExprKind::EnumConstruct {
-                        path: vec!["String".to_string(), "from".to_string()],
-                        fields: vec![Expr {
-                            kind: ExprKind::Lit(Lit::String("hello".to_string())),
-                            span: sp(),
-                        }],
-                    },
-                    span: sp(),
-                },
-            )],
-            trailing_expr: Some(Box::new(int_expr(42))),
-            span: sp(),
-        };
-        let fn_def = make_fn("f", vec![], i64_ty(), body, vec![]);
-        let (func, _, _) = lower_function(
-            &fn_def,
-            "",
-            &HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
-            &HashSet::new(),
-            HashMap::new(),
-            HashMap::new(),
-            &HashSet::new(),
-            &HashMap::new(),
-        );
-
-        let has_string_free = func.blocks.iter().flat_map(|b| b.insts.iter()).any(|i| {
-            i.opcode == Opcode::Call
-                && i.data == InstData::CallExtern("__vow_string_free".to_string())
-        });
-        assert!(
-            !has_string_free,
-            "arena lowering must not emit per-value __vow_string_free for unused strings"
-        );
-    }
-
-    #[test]
-    fn region_allocs_do_not_get_matching_region_frees() {
-        // Arena close, not per-object free, owns reclamation after the cutover.
-        let body = Block {
-            stmts: vec![let_stmt("p", Some(pair_ty()), pair_literal(1, 2))],
-            trailing_expr: Some(Box::new(int_expr(0))),
-            span: sp(),
-        };
-        let fn_def = make_fn("f", vec![], i64_ty(), body, vec![]);
-        let func = lower_with_structs(&fn_def, vec!["a", "b"]);
-
-        let alloc_data = func
-            .blocks
-            .iter()
-            .flat_map(|b| b.insts.iter())
-            .find(|i| i.opcode == Opcode::RegionAlloc)
-            .map(|i| i.data.clone())
-            .expect("expected RegionAlloc");
-        assert!(
-            func.blocks
-                .iter()
-                .flat_map(|b| b.insts.iter())
-                .all(|i| i.opcode != Opcode::RegionFree),
-            "arena lowering must not emit RegionFree after allocation {:?}",
-            alloc_data
-        );
-    }
-
-    #[test]
-    fn no_region_free_for_struct_returned_through_phi() {
-        // fn f(flag: bool) -> Pair { if flag { Pair{a:1,b:2} } else { Pair{a:3,b:4} } }
-        // Both allocations feed the return Phi — neither should be freed
-        let body = Block {
-            stmts: vec![],
-            trailing_expr: Some(Box::new(Expr {
-                kind: ExprKind::If {
-                    condition: Box::new(ident_expr("flag")),
-                    then_branch: Box::new(Block {
-                        stmts: vec![],
-                        trailing_expr: Some(Box::new(pair_literal(1, 2))),
-                        span: sp(),
-                    }),
-                    else_branch: Some(Box::new(Expr {
-                        kind: ExprKind::Block(Box::new(Block {
-                            stmts: vec![],
-                            trailing_expr: Some(Box::new(pair_literal(3, 4))),
-                            span: sp(),
-                        })),
-                        span: sp(),
-                    })),
-                },
-                span: sp(),
-            })),
-            span: sp(),
-        };
-        let bool_ty = Type::Named {
-            name: "bool".to_string(),
-            span: sp(),
-        };
-        let fn_def = make_fn(
-            "f",
-            vec![make_param("flag", bool_ty)],
-            pair_ty(),
-            body,
-            vec![],
-        );
-        let func = lower_with_structs(&fn_def, vec!["a", "b"]);
-
-        let region_frees: Vec<_> = func
-            .blocks
-            .iter()
-            .flat_map(|b| b.insts.iter())
-            .filter(|i| i.opcode == Opcode::RegionFree)
-            .collect();
-        assert!(
-            region_frees.is_empty(),
-            "struct returned directly through Phi should not be freed, found {} RegionFree(s)",
-            region_frees.len()
-        );
-    }
-
-    #[test]
-    fn receiver_method_does_not_emit_free_after_arena_cutover() {
-        // fn f() -> i64 { let s = String::from("x"); s.len() }
-        // s.len() is read-only — s must still be freed (#71)
-        let body = Block {
-            stmts: vec![let_stmt(
-                "s",
-                Some(Type::Named {
-                    name: "String".to_string(),
-                    span: sp(),
-                }),
-                Expr {
-                    kind: ExprKind::EnumConstruct {
-                        path: vec!["String".to_string(), "from".to_string()],
-                        fields: vec![Expr {
-                            kind: ExprKind::Lit(Lit::String("x".to_string())),
-                            span: sp(),
-                        }],
-                    },
-                    span: sp(),
-                },
-            )],
-            trailing_expr: Some(Box::new(Expr {
-                kind: ExprKind::MethodCall {
-                    receiver: Box::new(ident_expr("s")),
-                    method: "len".to_string(),
-                    args: vec![],
-                },
-                span: sp(),
-            })),
-            span: sp(),
-        };
-        let fn_def = make_fn("f", vec![], i64_ty(), body, vec![]);
-        let (func, _, _) = lower_function(
-            &fn_def,
-            "",
-            &HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
-            &HashSet::new(),
-            HashMap::new(),
-            HashMap::new(),
-            &HashSet::new(),
-            &HashMap::new(),
-        );
-
-        let has_string_free = func.blocks.iter().flat_map(|b| b.insts.iter()).any(|i| {
-            i.opcode == Opcode::Call
-                && i.data == InstData::CallExtern("__vow_string_free".to_string())
-        });
-        assert!(
-            !has_string_free,
-            "arena lowering must not emit __vow_string_free after receiver method calls"
-        );
-    }
-
-    #[test]
-    fn nested_phi_struct_not_freed() {
-        // fn f(a: bool, b: bool) -> Pair {
-        //   let p = Pair{a:1,b:2};
-        //   if a { if b { p } else { Pair{a:3,b:4} } } else { Pair{a:5,b:6} }
-        // }
-        // p flows through nested Phi chain → must not be freed
-        let inner_if = Expr {
-            kind: ExprKind::If {
-                condition: Box::new(ident_expr("b")),
-                then_branch: Box::new(Block {
-                    stmts: vec![],
-                    trailing_expr: Some(Box::new(ident_expr("p"))),
-                    span: sp(),
-                }),
-                else_branch: Some(Box::new(Expr {
-                    kind: ExprKind::Block(Box::new(Block {
-                        stmts: vec![],
-                        trailing_expr: Some(Box::new(pair_literal(3, 4))),
-                        span: sp(),
-                    })),
-                    span: sp(),
-                })),
-            },
-            span: sp(),
-        };
-        let body = Block {
-            stmts: vec![let_stmt("p", Some(pair_ty()), pair_literal(1, 2))],
-            trailing_expr: Some(Box::new(Expr {
-                kind: ExprKind::If {
-                    condition: Box::new(ident_expr("a")),
-                    then_branch: Box::new(Block {
-                        stmts: vec![],
-                        trailing_expr: Some(Box::new(inner_if)),
-                        span: sp(),
-                    }),
-                    else_branch: Some(Box::new(Expr {
-                        kind: ExprKind::Block(Box::new(Block {
-                            stmts: vec![],
-                            trailing_expr: Some(Box::new(pair_literal(5, 6))),
-                            span: sp(),
-                        })),
-                        span: sp(),
-                    })),
-                },
-                span: sp(),
-            })),
-            span: sp(),
-        };
-        let bool_ty = Type::Named {
-            name: "bool".to_string(),
-            span: sp(),
-        };
-        let fn_def = make_fn(
-            "f",
-            vec![make_param("a", bool_ty.clone()), make_param("b", bool_ty)],
-            pair_ty(),
-            body,
-            vec![],
-        );
-        let func = lower_with_structs(&fn_def, vec!["a", "b"]);
-
-        let region_frees: Vec<_> = func
-            .blocks
-            .iter()
-            .flat_map(|b| b.insts.iter())
-            .filter(|i| i.opcode == Opcode::RegionFree)
-            .collect();
-        assert!(
-            region_frees.is_empty(),
-            "struct reachable through nested Phi chain should not be freed, found {} RegionFree(s)",
-            region_frees.len()
-        );
-    }
-
-    #[test]
-    fn string_method_call_emits_no_string_free_after_arena_cutover() {
-        // fn f() -> i64 { let s: String = String::from("hello"); s.len() }
-        // s.len() is read-only, but arena close owns reclamation after cutover.
-        let string_from = Expr {
-            kind: ExprKind::EnumConstruct {
-                path: vec!["String".to_string(), "from".to_string()],
-                fields: vec![Expr {
-                    kind: ExprKind::Lit(Lit::String("hello".to_string())),
-                    span: sp(),
-                }],
-            },
-            span: sp(),
-        };
-        let method_call = Expr {
-            kind: ExprKind::MethodCall {
-                receiver: Box::new(ident_expr("s")),
-                method: "len".to_string(),
-                args: vec![],
-            },
-            span: sp(),
-        };
-        let body = Block {
-            stmts: vec![let_stmt(
-                "s",
-                Some(Type::Named {
-                    name: "String".to_string(),
-                    span: sp(),
-                }),
-                string_from,
-            )],
-            trailing_expr: Some(Box::new(method_call)),
-            span: sp(),
-        };
-        let fn_def = make_fn("f", vec![], i64_ty(), body, vec![]);
-        let (func, _, _) = lower_function(
-            &fn_def,
-            "",
-            &HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
-            &HashSet::new(),
-            HashMap::new(),
-            HashMap::new(),
-            &HashSet::new(),
-            &HashMap::new(),
-        );
-
-        let has_string_free = func.blocks.iter().flat_map(|b| b.insts.iter()).any(|i| {
-            i.opcode == Opcode::Call
-                && i.data == InstData::CallExtern("__vow_string_free".to_string())
-        });
-        assert!(
-            !has_string_free,
-            "String used via .len() must not emit per-value free after arena cutover"
-        );
-    }
-
-    #[test]
-    fn vec_method_call_emits_no_vec_free_after_arena_cutover() {
-        // fn f() -> i64 { let v: Vec<i64> = Vec::new(); v.len() }
-        // v.len() is read-only, but arena close owns reclamation after cutover.
-        let vec_new = Expr {
-            kind: ExprKind::EnumConstruct {
-                path: vec!["Vec".to_string(), "new".to_string()],
-                fields: vec![],
-            },
-            span: sp(),
-        };
-        let method_call = Expr {
-            kind: ExprKind::MethodCall {
-                receiver: Box::new(ident_expr("v")),
-                method: "len".to_string(),
-                args: vec![],
-            },
-            span: sp(),
-        };
-        let body = Block {
-            stmts: vec![let_stmt(
-                "v",
-                Some(Type::Named {
-                    name: "Vec".to_string(),
-                    span: sp(),
-                }),
-                vec_new,
-            )],
-            trailing_expr: Some(Box::new(method_call)),
-            span: sp(),
-        };
-        let fn_def = make_fn("f", vec![], i64_ty(), body, vec![]);
-        let (func, _, _) = lower_function(
-            &fn_def,
-            "",
-            &HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
-            &HashSet::new(),
-            HashMap::new(),
-            HashMap::new(),
-            &HashSet::new(),
-            &HashMap::new(),
-        );
-
-        let has_vec_free = func.blocks.iter().flat_map(|b| b.insts.iter()).any(|i| {
-            i.opcode == Opcode::Call
-                && i.data == InstData::CallExtern("__vow_vec_free_val".to_string())
-        });
-        assert!(
-            !has_vec_free,
-            "Vec used via .len() must not emit per-value free after arena cutover"
-        );
-    }
-
-    #[test]
-    fn hashmap_method_call_emits_no_map_free_after_arena_cutover() {
-        // fn f() -> i64 { let m: HashMap = HashMap::new(); m.len() }
-        // m.len() is read-only, but arena close owns reclamation after cutover.
-        let map_new = Expr {
-            kind: ExprKind::EnumConstruct {
-                path: vec!["HashMap".to_string(), "new".to_string()],
-                fields: vec![],
-            },
-            span: sp(),
-        };
-        let method_call = Expr {
-            kind: ExprKind::MethodCall {
-                receiver: Box::new(ident_expr("m")),
-                method: "len".to_string(),
-                args: vec![],
-            },
-            span: sp(),
-        };
-        let body = Block {
-            stmts: vec![let_stmt(
-                "m",
-                Some(Type::Named {
-                    name: "HashMap".to_string(),
-                    span: sp(),
-                }),
-                map_new,
-            )],
-            trailing_expr: Some(Box::new(method_call)),
-            span: sp(),
-        };
-        let fn_def = make_fn("f", vec![], i64_ty(), body, vec![]);
-        let (func, _, _) = lower_function(
-            &fn_def,
-            "",
-            &HashMap::new(),
-            HashMap::new(),
-            HashMap::new(),
-            &HashSet::new(),
-            HashMap::new(),
-            HashMap::new(),
-            &HashSet::new(),
-            &HashMap::new(),
-        );
-
-        let has_map_free = func.blocks.iter().flat_map(|b| b.insts.iter()).any(|i| {
-            i.opcode == Opcode::Call && i.data == InstData::CallExtern("__vow_map_free".to_string())
-        });
-        assert!(
-            !has_map_free,
-            "HashMap used via .len() must not emit per-value free after arena cutover"
-        );
     }
 }

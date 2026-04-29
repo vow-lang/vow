@@ -158,7 +158,6 @@ pub enum Opcode {
     Call,
 
     RegionAlloc,
-    RegionFree,
     /// Block-region open marker (spec §12.3). Declared in Phase 2 but not
     /// emitted anywhere yet; Phase 4 wires lowering to emit it.
     RegionOpen,
