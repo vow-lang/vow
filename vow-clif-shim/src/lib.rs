@@ -186,7 +186,6 @@ const IOP_VOW_INV: i64 = 75;
 const IOP_CALL: i64 = 76;
 
 const IOP_REGION_ALLOC: i64 = 77;
-const IOP_REGION_FREE: i64 = 78;
 
 // Region-kind discriminants. Mirror `compiler/ir.vow::REGION_KIND_*` and
 // `RegionId` in `vow-ir/src/types.rs`. The packed i64 is `val * 4 + kind`
@@ -1925,10 +1924,6 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     let ptr = builder.inst_results(call_inst)[0];
                     set_val!(iid, ptr);
                 }
-                IOP_REGION_FREE => {
-                    let unit = builder.ins().iconst(types::I32, 0);
-                    set_val!(iid, unit);
-                }
                 IOP_LINEAR_CONSUME | IOP_LINEAR_BORROW => {
                     let unit = builder.ins().iconst(types::I32, 0);
                     set_val!(iid, unit);
@@ -2584,15 +2579,6 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_process_stdout_for" | "__vow_process_stderr_for" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
-        }
-        "__vow_string_free" => {
-            sig.params.push(AbiParam::new(types::I64));
-        }
-        "__vow_vec_free_val" => {
-            sig.params.push(AbiParam::new(types::I64));
-        }
-        "__vow_map_free" => {
-            sig.params.push(AbiParam::new(types::I64));
         }
         "__vow_map_new" => {
             sig.returns.push(AbiParam::new(types::I64));

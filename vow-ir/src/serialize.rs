@@ -326,7 +326,7 @@ opcode_map! {
     71 => Phi, 72 => Upsilon,
     73 => VowRequires, 74 => VowEnsures, 75 => VowInvariant,
     76 => Call,
-    77 => RegionAlloc, 78 => RegionFree,
+    77 => RegionAlloc,
     79 => LinearConsume, 80 => LinearBorrow,
     81 => FieldGet, 82 => FieldSet,
     83 => XorI32, 84 => XorI64,

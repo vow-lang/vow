@@ -166,7 +166,6 @@ fn opcode_name(op: i64) -> String {
     if op == IOP_VOW_INV() { return String::from("VowInvariant"); }
     if op == IOP_CALL() { return String::from("Call"); }
     if op == IOP_REGION_ALLOC() { return String::from("RegionAlloc"); }
-    if op == IOP_REGION_FREE() { return String::from("RegionFree"); }
     if op == IOP_REGION_OPEN() { return String::from("RegionOpen"); }
     if op == IOP_REGION_CLOSE() { return String::from("RegionClose"); }
     if op == IOP_LINEAR_CONSUME() { return String::from("LinearConsume"); }

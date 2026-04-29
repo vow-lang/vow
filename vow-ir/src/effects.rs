@@ -101,7 +101,7 @@ pub fn inst_effects(opcode: &Opcode) -> Effects {
             e.control = true;
             e
         }
-        Opcode::RegionAlloc | Opcode::RegionFree => {
+        Opcode::RegionAlloc => {
             let mut e = Effects::pure();
             e.reads.insert(AbstractHeap::Memory);
             e.writes.insert(AbstractHeap::Memory);

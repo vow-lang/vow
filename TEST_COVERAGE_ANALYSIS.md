@@ -125,12 +125,6 @@ The runtime crate has **71 public `extern "C"` functions** (15 safe + 56 unsafe)
 - `hex_encode_decode_roundtrip` — encode then decode, verify identical
 - `hex_decode_invalid_returns_empty` — odd-length or non-hex input
 
-#### Deallocation (`__vow_*_free`) — 4 tests
-- `string_free_does_not_crash` — alloc, free, no segfault
-- `vec_free_val_does_not_crash` — alloc, push, free, no segfault
-- `map_free_does_not_crash` — alloc, insert, free, no segfault
-- `free_null_is_safe` — free(null) for all three types, no crash
-
 **Testing approach:** These are `unsafe extern "C"` functions. Tests can call them directly with `unsafe` blocks. The vec/string/map/arena functions are pure memory operations and straightforward to test. Process-based tests (spawning a subprocess to verify exit codes) are needed for: violation handlers (`__vow_violation`, `__vow_arithmetic_overflow`, `__vow_unwrap_panic`), tracing output, print I/O capture, `__vow_process_exit`, and `__vow_args`. File I/O tests should use `std::env::temp_dir()` with unique subdirectories to avoid conflicts.
 
 ---
