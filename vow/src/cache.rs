@@ -8,9 +8,9 @@ use vow_verify::Counterexample;
 use crate::frontend::DependencyManifest;
 
 // Bump this whenever generated object files are no longer ABI-compatible with
-// existing cached artifacts. Phase 4 adds the root-arena argument to
-// __vow_arena_alloc, so pre-cutover objects must not be reused.
-const COMPILE_CACHE_ABI_VERSION: &str = "arena-phase4-region-alloc-v1";
+// existing cached artifacts. Phase 7 adds FFI wrapper stdlib intrinsics and
+// runtime helper imports, so pre-cutover objects must not be reused.
+const COMPILE_CACHE_ABI_VERSION: &str = "arena-phase7-ffi-wrapper-v1";
 
 pub struct CompileCache {
     dir: PathBuf,

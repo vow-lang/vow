@@ -42,6 +42,47 @@ fn suggest_similar(name: &str, candidates: &[String], max_distance: usize) -> Op
     best.map(|(_, s)| s.to_string())
 }
 
+fn is_flat_slot_ty(ty: &Ty) -> bool {
+    matches!(
+        ty,
+        Ty::I8
+            | Ty::I16
+            | Ty::I32
+            | Ty::I64
+            | Ty::I128
+            | Ty::U8
+            | Ty::U16
+            | Ty::U32
+            | Ty::U64
+            | Ty::U128
+            | Ty::F32
+            | Ty::F64
+            | Ty::Bool
+    )
+}
+
+fn is_flat_vec_ty(ty: &Ty) -> bool {
+    match ty {
+        Ty::Applied(base, args) if matches!(base.as_ref(), Ty::Struct(name) if name == "Vec") => {
+            args.first().is_some_and(is_flat_slot_ty)
+        }
+        _ => false,
+    }
+}
+
+fn is_supported_pin_ty(ty: &Ty) -> bool {
+    matches!(ty, Ty::Str) || is_flat_vec_ty(ty)
+}
+
+fn is_vec_raw_parts_copy_expr(expr: &vow_syntax::ast::Expr) -> bool {
+    matches!(
+        &expr.kind,
+        ExprKind::EnumConstruct { path, .. }
+            if path.first().is_some_and(|p| p == "Vec")
+                && path.get(1).is_some_and(|p| p == "from_raw_parts_copy")
+    )
+}
+
 pub struct Checker<'e> {
     pub(crate) env: TypeEnv,
     pub(crate) current_return_ty: Ty,
@@ -538,6 +579,18 @@ impl<'e> Checker<'e> {
                                     )],
                                 );
                             }
+                            if is_vec_raw_parts_copy_expr(init) && !is_flat_vec_ty(&ann_ty) {
+                                self.emit_error_with_hints(
+                                    ErrorCode::TypeMismatch,
+                                    format!(
+                                        "Vec::from_raw_parts_copy requires a flat scalar Vec<T>, found `{ann_ty}`"
+                                    ),
+                                    ann.span(),
+                                    vec![
+                                        "pointer-containing Vec payloads need a hand-written deep-copy wrapper".to_string(),
+                                    ],
+                                );
+                            }
                             ann_ty
                         }
                         Err(msg) => {
@@ -721,6 +774,35 @@ impl<'e> Checker<'e> {
                         return Ty::Unit;
                     }
                 };
+                if name == "pin_to_root" {
+                    if args.len() != 1 {
+                        self.emit_error_with_hints(
+                            ErrorCode::TypeMismatch,
+                            format!(
+                                "function `pin_to_root` expects 1 argument but got {}",
+                                args.len()
+                            ),
+                            expr.span,
+                            vec!["expected signature: (heap_value)".to_string()],
+                        );
+                        for arg in args {
+                            self.check_expr(arg);
+                        }
+                        return Ty::Unit;
+                    }
+                    let arg_ty = self.check_expr(&args[0]);
+                    if !is_supported_pin_ty(&arg_ty) && arg_ty != Ty::Never {
+                        self.emit_error_with_hints(
+                            ErrorCode::TypeMismatch,
+                            format!("pin_to_root does not support `{arg_ty}`"),
+                            args[0].span,
+                            vec![
+                                "supported forms are String and Vec<T> where T is a flat scalar slot; pointer-containing values need a hand-written deep-copy wrapper".to_string(),
+                            ],
+                        );
+                    }
+                    return arg_ty;
+                }
                 let (param_tys, return_ty) = match self.env.lookup_fn(name) {
                     Some(sig) => (sig.params.clone(), sig.return_ty.clone()),
                     None => {
@@ -1361,6 +1443,39 @@ impl<'e> Checker<'e> {
                         }
                         return Ty::Str;
                     }
+                    ("String", "from_raw_parts_copy") => {
+                        if fields.len() != 2 {
+                            self.emit_error_with_hints(
+                                ErrorCode::TypeMismatch,
+                                format!(
+                                    "String::from_raw_parts_copy expects 2 arguments but got {}",
+                                    fields.len()
+                                ),
+                                expr.span,
+                                vec![
+                                    "expected signature: (ptr: i64, len: i64) -> String"
+                                        .to_string(),
+                                ],
+                            );
+                        }
+                        for field in fields {
+                            let arg_ty = self.check_expr(field);
+                            if arg_ty != Ty::I64 && arg_ty != Ty::I32 && arg_ty != Ty::Never {
+                                self.emit_error_with_hints(
+                                    ErrorCode::TypeMismatch,
+                                    format!(
+                                        "String::from_raw_parts_copy argument has type `{arg_ty}` but expects `i64`"
+                                    ),
+                                    field.span,
+                                    vec![
+                                        "raw pointers and lengths cross the FFI boundary as i64"
+                                            .to_string(),
+                                    ],
+                                );
+                            }
+                        }
+                        return Ty::Str;
+                    }
                     ("String", "new") => {
                         return Ty::Str;
                     }
@@ -1404,6 +1519,39 @@ impl<'e> Checker<'e> {
                     }
                     ("Vec", "new") => {
                         // Vec::new() returns Vec<T> with unknown element type (Never)
+                        return Ty::Never;
+                    }
+                    ("Vec", "from_raw_parts_copy") => {
+                        if fields.len() != 2 {
+                            self.emit_error_with_hints(
+                                ErrorCode::TypeMismatch,
+                                format!(
+                                    "Vec::from_raw_parts_copy expects 2 arguments but got {}",
+                                    fields.len()
+                                ),
+                                expr.span,
+                                vec![
+                                    "expected signature: (ptr: i64, len: i64) -> Vec<T>"
+                                        .to_string(),
+                                ],
+                            );
+                        }
+                        for field in fields {
+                            let arg_ty = self.check_expr(field);
+                            if arg_ty != Ty::I64 && arg_ty != Ty::I32 && arg_ty != Ty::Never {
+                                self.emit_error_with_hints(
+                                    ErrorCode::TypeMismatch,
+                                    format!(
+                                        "Vec::from_raw_parts_copy argument has type `{arg_ty}` but expects `i64`"
+                                    ),
+                                    field.span,
+                                    vec![
+                                        "raw pointers and lengths cross the FFI boundary as i64"
+                                            .to_string(),
+                                    ],
+                                );
+                            }
+                        }
                         return Ty::Never;
                     }
                     _ => {}

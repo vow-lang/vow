@@ -835,6 +835,47 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ExprKind::Ident(name) => name.clone(),
                 _ => todo!("non-ident callee in Call lowering"),
             };
+            if callee_name == "pin_to_root" {
+                let Some(source_id) = arg_ids.first().copied() else {
+                    return ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span);
+                };
+                if ctx
+                    .inst_struct_type
+                    .get(&source_id)
+                    .is_some_and(|tag| tag == "String")
+                {
+                    let result = ctx.emit(
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![source_id],
+                        InstData::CallExtern("__vow_string_pin_to_root".to_string()),
+                        span,
+                    );
+                    ctx.inst_struct_type.insert(result, "String".to_string());
+                    ctx.track_heap_alloc(result, "String");
+                    return result;
+                }
+                if ctx
+                    .inst_struct_type
+                    .get(&source_id)
+                    .is_some_and(|tag| tag == "Vec")
+                {
+                    let result = ctx.emit(
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![source_id],
+                        InstData::CallExtern("__vow_vec_pin_to_root_val".to_string()),
+                        span,
+                    );
+                    ctx.inst_struct_type.insert(result, "Vec".to_string());
+                    if let Some(elem_name) = ctx.inst_vec_elem_type.get(&source_id).cloned() {
+                        ctx.inst_vec_elem_type.insert(result, elem_name);
+                    }
+                    ctx.track_heap_alloc(result, "Vec");
+                    return result;
+                }
+                return source_id;
+            }
             let call_info = ctx.func_index.get(&callee_name).cloned();
             if let Some(call_info) = call_info {
                 let result = ctx.emit(
@@ -1946,6 +1987,42 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ctx.inst_struct_type.insert(ptr_id, "String".to_string());
                 return ptr_id;
             }
+            if enum_name == "String" && variant_name == "from_raw_parts_copy" {
+                let ptr_id = fields
+                    .first()
+                    .map(|e| lower_expr(ctx, e))
+                    .unwrap_or_else(|| {
+                        ctx.emit(
+                            Opcode::ConstI64,
+                            Ty::I64,
+                            vec![],
+                            InstData::ConstI64(0),
+                            span,
+                        )
+                    });
+                let len_id = fields
+                    .get(1)
+                    .map(|e| lower_expr(ctx, e))
+                    .unwrap_or_else(|| {
+                        ctx.emit(
+                            Opcode::ConstI64,
+                            Ty::I64,
+                            vec![],
+                            InstData::ConstI64(0),
+                            span,
+                        )
+                    });
+                let result = ctx.emit(
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![ptr_id, len_id],
+                    InstData::CallExtern("__vow_string_from_raw_parts_copy".to_string()),
+                    span,
+                );
+                ctx.inst_struct_type.insert(result, "String".to_string());
+                ctx.track_heap_alloc(result, "String");
+                return result;
+            }
             // String::new() builtin — empty string via __vow_vec_new(1, 1)
             if enum_name == "String" && variant_name == "new" {
                 let size_val = ctx.emit(
@@ -2007,6 +2084,42 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     Ty::Ptr,
                     vec![size_val, align_val],
                     InstData::CallExtern("__vow_vec_new".to_string()),
+                    span,
+                );
+                ctx.inst_struct_type.insert(result, "Vec".to_string());
+                ctx.track_heap_alloc(result, "Vec");
+                return result;
+            }
+            if enum_name == "Vec" && variant_name == "from_raw_parts_copy" {
+                let ptr_id = fields
+                    .first()
+                    .map(|e| lower_expr(ctx, e))
+                    .unwrap_or_else(|| {
+                        ctx.emit(
+                            Opcode::ConstI64,
+                            Ty::I64,
+                            vec![],
+                            InstData::ConstI64(0),
+                            span,
+                        )
+                    });
+                let len_id = fields
+                    .get(1)
+                    .map(|e| lower_expr(ctx, e))
+                    .unwrap_or_else(|| {
+                        ctx.emit(
+                            Opcode::ConstI64,
+                            Ty::I64,
+                            vec![],
+                            InstData::ConstI64(0),
+                            span,
+                        )
+                    });
+                let result = ctx.emit(
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![ptr_id, len_id],
+                    InstData::CallExtern("__vow_vec_from_raw_parts_copy_val".to_string()),
                     span,
                 );
                 ctx.inst_struct_type.insert(result, "Vec".to_string());

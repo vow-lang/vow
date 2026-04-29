@@ -1,0 +1,8 @@
+// TEST: stderr "pin_to_root"
+module PinToRootVecString
+
+fn main() -> i32 [io] {
+    let v: Vec<String> = Vec::new();
+    let _pinned: Vec<String> = pin_to_root(v);
+    0
+}

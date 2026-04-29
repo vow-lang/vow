@@ -736,8 +736,19 @@ fn analyze_function(
     summary
 }
 
+fn extern_fresh_in_caller(sym: &str) -> bool {
+    matches!(
+        sym,
+        "__vow_string_from_raw_parts_copy" | "__vow_vec_from_raw_parts_copy_val"
+    )
+}
+
 fn is_heap_producing(inst: &Inst) -> bool {
     matches!(inst.opcode, Opcode::RegionAlloc)
+        || matches!(
+            (&inst.opcode, &inst.data),
+            (Opcode::Call, InstData::CallExtern(sym)) if extern_fresh_in_caller(sym)
+        )
 }
 
 /// Handle one instruction: contribute to `must_outlive` and to the
@@ -1088,6 +1099,11 @@ fn origin_to_internal_inner(
         | Opcode::ConstBool
         | Opcode::ConstUnit => InternalReturnRegion::Published(RegionConstraint::ConstantGlobal),
         Opcode::Call => {
+            if let InstData::CallExtern(sym) = &inst.data
+                && extern_fresh_in_caller(sym)
+            {
+                return InternalReturnRegion::Published(RegionConstraint::FreshInCaller);
+            }
             if let InstData::CallTarget(callee_id) = &inst.data
                 && let Some(cs) = summaries.get(callee_id.0 as usize)
             {
