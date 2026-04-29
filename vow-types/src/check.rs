@@ -41,6 +41,11 @@ fn bounded_edit_distance(a: &str, b: &str, max_distance: usize) -> Option<usize>
     (distance <= max_distance).then_some(distance)
 }
 
+// `MAX_HINT_CANDIDATES` is enforced here as a defensive backstop: while the
+// var/fn callers pre-bound their candidate vectors via `all_var_names` /
+// `all_fn_names`, the struct-field and `all_struct_names` callers pass slices
+// whose length comes from user code. The internal cap keeps the cost bounded
+// regardless of caller.
 fn suggest_similar(name: &str, candidates: &[String], max_distance: usize) -> Option<String> {
     if name.len() > MAX_HINT_IDENTIFIER_BYTES {
         return None;

@@ -1,5 +1,5 @@
 use crate::types::Ty;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use vow_syntax::ast::{Effect, Type as AstType};
 
 /// Signature of a function or method known to the type checker.
@@ -46,7 +46,10 @@ pub enum VariantKind {
 /// (functions, structs, enums) are stored separately and are always visible.
 pub struct TypeEnv {
     scopes: Vec<HashMap<String, Ty>>,
-    fn_sigs: HashMap<String, FnSig>,
+    /// `BTreeMap` (not `HashMap`) so `all_fn_names` returns a deterministic
+    /// subset when the candidate cap is hit — diagnostic output is part of
+    /// the binary fixed-point invariant.
+    fn_sigs: BTreeMap<String, FnSig>,
     struct_defs: HashMap<String, StructInfo>,
     enum_defs: HashMap<String, EnumInfo>,
     type_aliases: HashMap<String, Ty>,
@@ -62,7 +65,7 @@ impl TypeEnv {
     pub fn new() -> Self {
         let mut env = Self {
             scopes: vec![HashMap::new()],
-            fn_sigs: HashMap::new(),
+            fn_sigs: BTreeMap::new(),
             struct_defs: HashMap::new(),
             enum_defs: HashMap::new(),
             type_aliases: HashMap::new(),
