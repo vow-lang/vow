@@ -13,29 +13,47 @@ use crate::types::Ty;
 /// Set of expression addresses (`*const Expr as usize`) whose resolved type is `Ty::Str`.
 pub type StringExprSet = HashSet<usize>;
 
-fn edit_distance(a: &str, b: &str) -> usize {
+const MAX_HINT_CANDIDATES: usize = 256;
+const MAX_HINT_IDENTIFIER_BYTES: usize = 128;
+
+fn bounded_edit_distance(a: &str, b: &str, max_distance: usize) -> Option<usize> {
+    let a_len = a.len();
     let n = b.len();
+    if a_len.abs_diff(n) > max_distance {
+        return None;
+    }
     let mut prev = (0..=n).collect::<Vec<_>>();
     let mut curr = vec![0; n + 1];
     for (i, ca) in a.bytes().enumerate() {
         curr[0] = i + 1;
+        let mut row_min = curr[0];
         for (j, cb) in b.bytes().enumerate() {
             let cost = if ca == cb { 0 } else { 1 };
             curr[j + 1] = (prev[j] + cost).min(prev[j + 1] + 1).min(curr[j] + 1);
+            row_min = row_min.min(curr[j + 1]);
+        }
+        if row_min > max_distance {
+            return None;
         }
         std::mem::swap(&mut prev, &mut curr);
     }
-    prev[n]
+    let distance = prev[n];
+    (distance <= max_distance).then_some(distance)
 }
 
 fn suggest_similar(name: &str, candidates: &[String], max_distance: usize) -> Option<String> {
+    if name.len() > MAX_HINT_IDENTIFIER_BYTES {
+        return None;
+    }
     let mut best: Option<(usize, &str)> = None;
     for c in candidates {
         if c == name {
             continue;
         }
-        let d = edit_distance(name, c);
-        if d <= max_distance && (best.is_none() || d < best.unwrap().0) {
+        let Some(d) = bounded_edit_distance(name, c, max_distance) else {
+            continue;
+        };
+        if best.is_none_or(|(best_distance, _)| d < best_distance) {
             best = Some((d, c.as_str()));
         }
     }
@@ -652,7 +670,9 @@ impl<'e> Checker<'e> {
                     Some(ty) => ty.clone(),
                     None => {
                         let mut hints = Vec::new();
-                        let candidates = self.env.all_var_names();
+                        let candidates = self
+                            .env
+                            .all_var_names(MAX_HINT_CANDIDATES, MAX_HINT_IDENTIFIER_BYTES);
                         if let Some(suggestion) = suggest_similar(name, &candidates, 3) {
                             hints.push(format!("did you mean `{suggestion}`?"));
                         }
@@ -804,7 +824,9 @@ impl<'e> Checker<'e> {
                     Some(sig) => (sig.params.clone(), sig.return_ty.clone()),
                     None => {
                         let mut hints = Vec::new();
-                        let candidates = self.env.all_fn_names();
+                        let candidates = self
+                            .env
+                            .all_fn_names(MAX_HINT_CANDIDATES, MAX_HINT_IDENTIFIER_BYTES);
                         if let Some(suggestion) = suggest_similar(name, &candidates, 3) {
                             hints.push(format!("did you mean `{suggestion}`?"));
                         }
@@ -1015,8 +1037,13 @@ impl<'e> Checker<'e> {
                     Some(info) => match info.fields.iter().find(|(n, _)| n == field) {
                         Some((_, ty)) => ty.clone(),
                         None => {
-                            let field_names: Vec<String> =
-                                info.fields.iter().map(|(n, _)| n.clone()).collect();
+                            let field_names: Vec<String> = info
+                                .fields
+                                .iter()
+                                .filter(|(n, _)| n.len() <= MAX_HINT_IDENTIFIER_BYTES)
+                                .take(MAX_HINT_CANDIDATES)
+                                .map(|(n, _)| n.clone())
+                                .collect();
                             let mut hints = Vec::new();
                             if let Some(s) = suggest_similar(field, &field_names, 3) {
                                 hints.push(format!("did you mean `{s}`?"));
@@ -1358,7 +1385,9 @@ impl<'e> Checker<'e> {
                 let info = self.env.lookup_struct(name).cloned();
                 match info {
                     None => {
-                        let candidates = self.env.all_struct_names();
+                        let candidates = self
+                            .env
+                            .all_struct_names(MAX_HINT_CANDIDATES, MAX_HINT_IDENTIFIER_BYTES);
                         let mut hints = Vec::new();
                         if let Some(s) = suggest_similar(name, &candidates, 3) {
                             hints.push(format!("did you mean `{s}`?"));
@@ -3017,28 +3046,38 @@ mod tests {
         assert!(!checker.has_errors());
     }
 
-    // --- edit_distance tests ---
+    // --- bounded_edit_distance tests ---
 
     #[test]
     fn edit_distance_identical() {
-        assert_eq!(edit_distance("hello", "hello"), 0);
+        assert_eq!(bounded_edit_distance("hello", "hello", 3), Some(0));
     }
 
     #[test]
     fn edit_distance_single_char() {
-        assert_eq!(edit_distance("cat", "bat"), 1);
+        assert_eq!(bounded_edit_distance("cat", "bat", 3), Some(1));
     }
 
     #[test]
     fn edit_distance_completely_different() {
-        assert_eq!(edit_distance("abc", "xyz"), 3);
+        assert_eq!(bounded_edit_distance("abc", "xyz", 3), Some(3));
     }
 
     #[test]
     fn edit_distance_empty_strings() {
-        assert_eq!(edit_distance("", ""), 0);
-        assert_eq!(edit_distance("abc", ""), 3);
-        assert_eq!(edit_distance("", "abc"), 3);
+        assert_eq!(bounded_edit_distance("", "", 3), Some(0));
+        assert_eq!(bounded_edit_distance("abc", "", 3), Some(3));
+        assert_eq!(bounded_edit_distance("", "abc", 3), Some(3));
+    }
+
+    #[test]
+    fn edit_distance_short_circuits_when_too_far() {
+        // Length-difference fast path: |1 - 8| = 7 > 2, returns None before
+        // touching the DP table.
+        assert_eq!(bounded_edit_distance("a", "zzzzzzzz", 2), None);
+        // Row-min pruning path: same-length strings whose distance exceeds
+        // the cap, so the inter-row check rejects before the final row.
+        assert_eq!(bounded_edit_distance("abcd", "wxyz", 2), None);
     }
 
     // --- suggest_similar tests ---
@@ -3071,7 +3110,7 @@ mod tests {
         let mut env = TypeEnv::new();
         env.define("x", Ty::I64);
         env.define("y", Ty::Bool);
-        let names = env.all_var_names();
+        let names = env.all_var_names(64, 64);
         assert!(names.contains(&"x".to_string()));
         assert!(names.contains(&"y".to_string()));
     }
@@ -3079,9 +3118,63 @@ mod tests {
     #[test]
     fn all_fn_names_returns_defined_fns() {
         let env = TypeEnv::new();
-        let names = env.all_fn_names();
+        let names = env.all_fn_names(64, 64);
         assert!(names.contains(&"print_str".to_string()));
         assert!(names.contains(&"print_i64".to_string()));
+    }
+
+    #[test]
+    fn all_var_names_returns_bounded_subset_when_capped() {
+        // Single-scope sanity check: with more bindings than `max_names`, the
+        // helper must return exactly `max_names` entries — the
+        // lexicographically smallest of the qualifying keys — and the result
+        // must be reproducible across runs.
+        let mut env = TypeEnv::new();
+        for i in 0..1000 {
+            env.define(format!("var_{i:04}").as_str(), Ty::I64);
+        }
+        let names = env.all_var_names(8, 64);
+        assert_eq!(names.len(), 8);
+        assert_eq!(
+            names,
+            vec![
+                "var_0000".to_string(),
+                "var_0001".to_string(),
+                "var_0002".to_string(),
+                "var_0003".to_string(),
+                "var_0004".to_string(),
+                "var_0005".to_string(),
+                "var_0006".to_string(),
+                "var_0007".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn all_var_names_prioritizes_inner_scopes_under_cap() {
+        // Multi-scope: when the cap can be filled from the innermost scope, no
+        // outer-scope names appear, even if they're lexicographically smaller.
+        // Within each scope, the lex-smallest entries are picked.
+        let mut env = TypeEnv::new();
+        env.define("aardvark", Ty::I64); // outer
+        env.define("alpaca", Ty::I64); // outer
+        env.push_scope();
+        env.define("zebra", Ty::I64); // inner
+        env.define("yak", Ty::I64); // inner
+        let names = env.all_var_names(2, 64);
+        assert_eq!(names, vec!["yak".to_string(), "zebra".to_string()]);
+
+        // When the cap exceeds the inner scope, the remaining slots are filled
+        // from the outer scope in lex order.
+        let names = env.all_var_names(3, 64);
+        assert_eq!(
+            names,
+            vec![
+                "yak".to_string(),
+                "zebra".to_string(),
+                "aardvark".to_string()
+            ]
+        );
     }
 
     // --- hint integration tests ---
