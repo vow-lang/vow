@@ -138,6 +138,7 @@ impl Parser {
         self.expect(TokenKind::LBrace);
         let mut methods = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at_end() {
+            let pre_iter = self.cursor;
             let method_start = self.current_span();
             self.expect(TokenKind::KwFn);
             let (method_name, _) = self
@@ -162,6 +163,9 @@ impl Parser {
                 effects,
                 span: method_start.merge(method_end),
             });
+            if self.cursor == pre_iter && !self.at(&TokenKind::RBrace) && !self.at_end() {
+                self.advance();
+            }
         }
         let end = self.current_span();
         self.expect(TokenKind::RBrace);
@@ -202,6 +206,7 @@ impl Parser {
         self.expect(TokenKind::LBrace);
         let mut methods: Vec<FnDef> = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at_end() {
+            let pre_iter = self.cursor;
             let method_start = self.current_span();
             let vis = if self.at(&TokenKind::KwPub) {
                 self.advance();
@@ -241,6 +246,9 @@ impl Parser {
                 span: method_start.merge(method_end),
                 is_declaration: false,
             });
+            if self.cursor == pre_iter && !self.at(&TokenKind::RBrace) && !self.at_end() {
+                self.advance();
+            }
         }
         let end = self.current_span();
         self.expect(TokenKind::RBrace);
@@ -292,6 +300,7 @@ impl Parser {
         };
         let mut fns = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at_end() {
+            let pre_iter = self.cursor;
             let fn_start = self.current_span();
             self.expect(TokenKind::KwFn);
             let (fn_name, _) = self
@@ -316,6 +325,9 @@ impl Parser {
                 effects,
                 span: fn_start.merge(fn_end),
             });
+            if self.cursor == pre_iter && !self.at(&TokenKind::RBrace) && !self.at_end() {
+                self.advance();
+            }
         }
         let end = self.current_span();
         self.expect(TokenKind::RBrace);
@@ -540,6 +552,28 @@ mod tests {
         match &module.items[1] {
             Item::Fn(f) => assert_eq!(f.name, "after"),
             other => panic!("expected fn after extern, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_impl_recovery_keeps_methods_inside_impl() {
+        // `fn bad {}` is a malformed impl method (missing param list). The recovery
+        // must not consume the body opener `{`, otherwise the trailing `}` would be
+        // mistaken for the impl's closing brace and `fn ok` would escape to the
+        // module level.
+        let src = "impl S { fn bad {} fn ok(s: S) -> () { } }";
+        let (module, diags) = crate::parser::parse_module(src, "<test>");
+        assert!(!diags.is_empty());
+        assert_eq!(module.items.len(), 1, "module items: {:?}", module.items);
+        match &module.items[0] {
+            Item::Impl(i) => {
+                assert!(
+                    i.methods.iter().any(|m| m.name == "ok"),
+                    "ok method missing: {:?}",
+                    i.methods
+                );
+            }
+            other => panic!("expected impl, got {:?}", other),
         }
     }
 }

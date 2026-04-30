@@ -631,6 +631,7 @@ impl Parser {
         let mut params = Vec::new();
         if self.expect(TokenKind::LParen).is_none() {
             if !self.at_end()
+                && !self.at(&TokenKind::LBrace)
                 && !self.at(&TokenKind::RBrace)
                 && !self.at(&TokenKind::RParen)
                 && !self.at(&TokenKind::Semicolon)
