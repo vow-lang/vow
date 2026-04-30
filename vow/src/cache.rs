@@ -49,7 +49,7 @@ impl CompileCache {
             entries.push((canon.to_string_lossy().to_string(), content_hash));
         }
         entries.sort_by(|a, b| a.0.cmp(&b.0));
-        // Length-prefix paths so embedded ':' or '\n' (both legal in POSIX filenames) can't create serialization collisions before the final hash.
+        // Length-prefix paths so an embedded ':' (the in-format path/hash separator, legal in POSIX filenames) can't create boundary ambiguity in the dep encoding.
         let mut combined = String::new();
         combined.push_str("__abi=");
         combined.push_str(abi_seed);
