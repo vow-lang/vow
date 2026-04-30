@@ -1000,11 +1000,23 @@ fn emit_inst(
         }
         Opcode::FieldGet => {
             if vec_vars.contains(&id) {
-                out.push_str(&format!("  /* FieldGet -> vec */ v{}.len = 0;\n", id));
+                let vec_max = limits.vec_max;
+                out.push_str(&format!(
+                    "  /* FieldGet -> vec */ v{id}.len = __VERIFIER_nondet_long();\n\
+                     \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {vec_max});\n"
+                ));
             } else if string_vars.contains(&id) {
-                out.push_str(&format!("  /* FieldGet -> string */ v{}.len = 0;\n", id));
+                let string_max = limits.string_max;
+                out.push_str(&format!(
+                    "  /* FieldGet -> string */ v{id}.len = __VERIFIER_nondet_long();\n\
+                     \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {string_max});\n"
+                ));
             } else if hashmap_vars.contains(&id) {
-                out.push_str(&format!("  /* FieldGet -> hashmap */ v{}.len = 0;\n", id));
+                let hashmap_max = limits.hashmap_max;
+                out.push_str(&format!(
+                    "  /* FieldGet -> hashmap */ v{id}.len = __VERIFIER_nondet_long();\n\
+                     \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {hashmap_max});\n"
+                ));
             } else if let Some(&src_id) = inst.args.first() {
                 if option_vars.contains(&src_id.0) {
                     if let InstData::FieldIndex(idx) = inst.data {
@@ -2753,6 +2765,151 @@ mod tests {
         );
         assert!(!c.contains("v0.keys = "), "no keys assignment: {c}");
         assert!(!c.contains("v0.vals = "), "no vals assignment: {c}");
+    }
+
+    #[test]
+    fn emit_fieldget_container_bounds() {
+        use vow_ir::InstId;
+        // FieldGet result used as a string should be nondeterministic within model bounds.
+        let str_func = Function {
+            id: FuncId(0),
+            name: "str_field".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::FieldGet,
+                        ty: Ty::Ptr,
+                        args: vec![InstId(0)],
+                        data: InstData::FieldIndex(0),
+                        origin: sp(),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(2),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(1)],
+                        data: InstData::CallExtern("__vow_string_len".to_string()),
+                        origin: sp(),
+                        region: RegionId::Root,
+                    },
+                    inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+        };
+        let c = emit_c_function(&str_func, &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            c.contains("__ESBMC_assume(v1.len >= 0 && v1.len <= 256)"),
+            "FieldGet string bound must include string_max: {c}"
+        );
+        assert!(
+            !c.contains("/* FieldGet -> string */ v1.len = 0;"),
+            "FieldGet string must not force empty value: {c}"
+        );
+
+        // FieldGet result used as a vec should be nondeterministic within model bounds.
+        let vec_func = Function {
+            id: FuncId(0),
+            name: "vec_field".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::FieldGet,
+                        ty: Ty::Ptr,
+                        args: vec![InstId(0)],
+                        data: InstData::FieldIndex(0),
+                        origin: sp(),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(2),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(1)],
+                        data: InstData::CallExtern("__vow_vec_len".to_string()),
+                        origin: sp(),
+                        region: RegionId::Root,
+                    },
+                    inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+        };
+        let c = emit_c_function(&vec_func, &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            c.contains("__ESBMC_assume(v1.len >= 0 && v1.len <= 128)"),
+            "FieldGet vec bound must include vec_max: {c}"
+        );
+        assert!(
+            !c.contains("/* FieldGet -> vec */ v1.len = 0;"),
+            "FieldGet vec must not force empty value: {c}"
+        );
+
+        // FieldGet result used as a hashmap should be nondeterministic within model bounds.
+        let map_func = Function {
+            id: FuncId(0),
+            name: "map_field".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    Inst {
+                        id: InstId(1),
+                        opcode: Opcode::FieldGet,
+                        ty: Ty::Ptr,
+                        args: vec![InstId(0)],
+                        data: InstData::FieldIndex(0),
+                        origin: sp(),
+                        region: RegionId::Root,
+                    },
+                    Inst {
+                        id: InstId(2),
+                        opcode: Opcode::Call,
+                        ty: Ty::I64,
+                        args: vec![InstId(1)],
+                        data: InstData::CallExtern("__vow_map_len".to_string()),
+                        origin: sp(),
+                        region: RegionId::Root,
+                    },
+                    inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+        };
+        let c = emit_c_function(&map_func, &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            c.contains("__ESBMC_assume(v1.len >= 0 && v1.len <= 64)"),
+            "FieldGet map bound must include hashmap_max: {c}"
+        );
+        assert!(
+            !c.contains("/* FieldGet -> hashmap */ v1.len = 0;"),
+            "FieldGet map must not force empty value: {c}"
+        );
     }
 
     #[test]

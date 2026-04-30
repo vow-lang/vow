@@ -847,18 +847,24 @@ fn emit_inst(out: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64
 
     if op == IOP_FIELD_GET() {
         if vec_contains_i64(vec_vars, id) {
-            out.push_str(str3(String::from("  /* FieldGet -> vec */ v"),
-                i64_to_str(id), String::from(".len = 0;\n")));
+            let ids: String = i64_to_str(id);
+            out.push_str(str3(String::from("  /* FieldGet -> vec */ v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
+            out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len >= 0 && v")));
+            out.push_str(str4(ids, String::from(".len <= "), i64_to_str(vec_max), String::from(");\n")));
             return;
         }
         if vec_contains_i64(string_vars, id) {
-            out.push_str(str3(String::from("  /* FieldGet -> string */ v"),
-                i64_to_str(id), String::from(".len = 0;\n")));
+            let ids: String = i64_to_str(id);
+            out.push_str(str3(String::from("  /* FieldGet -> string */ v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
+            out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len >= 0 && v")));
+            out.push_str(str4(ids, String::from(".len <= "), i64_to_str(string_max), String::from(");\n")));
             return;
         }
         if vec_contains_i64(hashmap_vars, id) {
-            out.push_str(str3(String::from("  /* FieldGet -> hashmap */ v"),
-                i64_to_str(id), String::from(".len = 0;\n")));
+            let ids: String = i64_to_str(id);
+            out.push_str(str3(String::from("  /* FieldGet -> hashmap */ v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
+            out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len >= 0 && v")));
+            out.push_str(str4(ids, String::from(".len <= "), i64_to_str(hashmap_max), String::from(");\n")));
             return;
         }
         emit_unmodelled(out, inst);
