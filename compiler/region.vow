@@ -1711,6 +1711,33 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
     while fi < n_funcs {
         let f: IrFunction = m.functions[fi];
 
+        // Idempotency guard (mirrors the Rust `debug_assert!` at
+        // `vow-ir/src/region.rs:443-451`). This pass is non-idempotent —
+        // a second invocation would insert duplicate `IOP_REGION_OPEN` /
+        // `IOP_REGION_CLOSE` pairs because the scan only looks at
+        // `REGION_KIND_BLOCK` heap producers and would not notice its
+        // own previously-inserted markers. The pipeline calls this once
+        // today; if a future reorder causes a double call, skip the
+        // function rather than corrupt its IR.
+        let mut already_has_markers: bool = false;
+        let mut bi_g: i64 = 0;
+        while bi_g < f.blocks.len() {
+            let blk_g: IrBlock = f.blocks[bi_g];
+            let mut ii_g: i64 = 0;
+            while ii_g < blk_g.insts.len() {
+                let op_g: i64 = blk_g.insts[ii_g].op;
+                if op_g == IOP_REGION_OPEN() || op_g == IOP_REGION_CLOSE() {
+                    already_has_markers = true;
+                }
+                ii_g = ii_g + 1;
+            }
+            bi_g = bi_g + 1;
+        }
+        if already_has_markers {
+            fi = fi + 1;
+            continue;
+        }
+
         // Find the largest existing inst id so we can mint fresh ones.
         let mut max_id: i64 = 0;
         let mut bi: i64 = 0;

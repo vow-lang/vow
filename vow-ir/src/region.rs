@@ -978,6 +978,15 @@ fn propagate_alias_markers(
             changed |= propagate_alias(must_outlive, result_id, arg_id);
         }
     }
+    // The marker lattice is finite and `bound` accounts for the worst-case
+    // propagation chain, so non-convergence is unreachable on valid IR.
+    // A regression that breaks monotonicity would silently under-propagate
+    // markers and could let a block-local alloc qualify for block-region
+    // placement when it shouldn't — catch it loudly in debug builds.
+    debug_assert!(
+        !changed,
+        "propagate_alias_markers did not converge within {bound} iterations"
+    );
 }
 
 /// After a Phi or call returns an alias, the result inst is the same value as
