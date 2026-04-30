@@ -5342,10 +5342,9 @@ fn link_obj(obj_path: &Path, output_path: &Path) -> Option<PathBuf> {
     }
 }
 
-// Compile-object cache is disabled when `no_cache` is set or whenever ESBMC verification is active, so the linked binary is always produced by the same codegen run whose IR was verified. Lifted into a helper so the gate can be unit-tested without driving the whole pipeline.
-#[inline]
-fn compile_cache_disabled(no_cache: bool, no_verify: bool) -> bool {
-    no_cache || !no_verify
+// Compile-object cache is only enabled when `--no-cache` is off and verification is off, so verified builds always link a fresh codegen output.
+fn compile_cache_enabled(no_cache: bool, no_verify: bool) -> bool {
+    !no_cache && no_verify
 }
 
 pub fn run_pipeline(
@@ -5467,10 +5466,10 @@ fn run_pipeline_from_frontend(
     let mode_str = format!("{mode:?}");
     let trace_str = format!("{trace:?}");
     // Disable object cache when verification is active: linked binary must come from the same codegen run as the verified IR.
-    let compile_cache = if compile_cache_disabled(no_cache, no_verify) {
-        None
-    } else {
+    let compile_cache = if compile_cache_enabled(no_cache, no_verify) {
         cache::CompileCache::new()
+    } else {
+        None
     };
     // Skip the dependency-content hash when the cache is disabled — no point reading every dep file with no possible hit/store. `and_then` propagates a None from `cache_key` (fail-closed on per-dep canonicalize/open/read errors) so neither lookup nor store fires with an incomplete dep set.
     let cache_key = compile_cache.as_ref().and_then(|_| {
@@ -9394,26 +9393,22 @@ fn main() -> i32 {
     }
 
     #[test]
-    fn compile_cache_disabled_in_verified_builds_and_when_no_cache() {
-        // Regression guard for the security gate: the compile-object cache must
-        // be `None` whenever `no_cache` is set OR verification is active. Pure
-        // logic test on the lifted helper so it does not need ESBMC, the full
-        // pipeline, or env-var mutation (which would race with other tests that
-        // read VOW_CACHE_DIR via `CompileCache::new()`).
+    fn compile_cache_only_enabled_for_unverified_unflagged_builds() {
+        // Regression guard for the security gate: the compile-object cache may be enabled only when `--no-cache` is off and `--no-verify` is on. Any other combination must keep the cache disabled.
         assert!(
-            compile_cache_disabled(false, false),
+            !compile_cache_enabled(false, false),
             "default verified build (no_cache=false, no_verify=false): cache must be disabled"
         );
         assert!(
-            compile_cache_disabled(true, false),
+            !compile_cache_enabled(true, false),
             "no_cache=true with verification: cache must be disabled"
         );
         assert!(
-            compile_cache_disabled(true, true),
+            !compile_cache_enabled(true, true),
             "no_cache=true: cache must be disabled regardless of verification"
         );
         assert!(
-            !compile_cache_disabled(false, true),
+            compile_cache_enabled(false, true),
             "--no-verify without --no-cache: cache must be enabled"
         );
     }

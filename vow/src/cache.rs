@@ -40,7 +40,7 @@ impl CompileCache {
         trace: &str,
         abi_seed: &str,
     ) -> Option<String> {
-        // FNV-1a (not DefaultHasher) for stable on-disk keys across toolchain upgrades; not cryptographic — adversarial-poisoning integrity comes from the verified-build cache gate, not hash strength.
+        // FNV-1a for stable on-disk keys across toolchain upgrades (DefaultHasher is unspecified across releases).
         let mut entries: Vec<(String, u64)> = Vec::with_capacity(deps.paths().len());
         for p in deps.paths() {
             let canon = p.canonicalize().ok()?;
@@ -49,7 +49,7 @@ impl CompileCache {
             entries.push((canon.to_string_lossy().to_string(), content_hash));
         }
         entries.sort_by(|a, b| a.0.cmp(&b.0));
-        // Length-prefix paths so an embedded ':' (the in-format path/hash separator, legal in POSIX filenames) can't create boundary ambiguity in the dep encoding.
+        // Length-prefix paths so an embedded `:` can't create path/hash boundary ambiguity.
         let mut combined = String::new();
         combined.push_str("__abi=");
         combined.push_str(abi_seed);
