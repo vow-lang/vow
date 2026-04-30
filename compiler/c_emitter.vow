@@ -501,16 +501,18 @@ fn unsupported_op_vow_id_str() -> String {
 }
 
 // Fail-closed marker for opcodes that have side effects but no verifier model.
-// Emits `__ESBMC_assert(0, "vow:<sentinel> unsupported opcode in verifier model: <Op>")`
-// so ESBMC can no longer report `Proven` for functions containing the opcode,
-// and so the resulting counterexample carries a parseable `vow:<id>` token.
-// A non-Unit nondet result is still produced to preserve C shape downstream.
+// The assertion text must be exactly `vow:<id>` — `parse_vow_id` (and the Rust
+// `extract_vow_id`) accept only pure digits after `vow:`, so any trailing text
+// would defeat the sentinel. Descriptive context lives in a separate C comment.
 fn emit_unsupported_for_verification(out: String, inst: IrInst) {
     let id: i64 = inst.id;
-    out.push_str(str4(
-        String::from("  __ESBMC_assert(0, \"vow:"), unsupported_op_vow_id_str(),
-        String::from(" unsupported opcode in verifier model: "),
-        str2(opcode_name(inst.op), String::from("\");\n"))
+    out.push_str(str3(
+        String::from("  /* unsupported opcode in verifier model: "),
+        opcode_name(inst.op), String::from(" */\n")
+    ));
+    out.push_str(str3(
+        String::from("  __ESBMC_assert(0, \"vow:"),
+        unsupported_op_vow_id_str(), String::from("\");\n")
     ));
     if inst.ty != ITY_UNIT() {
         out.push_str(str4(

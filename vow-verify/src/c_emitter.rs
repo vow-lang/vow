@@ -1054,12 +1054,16 @@ pub const UNSUPPORTED_OP_VOW_ID: u32 = u32::MAX;
 
 fn emit_unsupported_for_verification(inst: &Inst, out: &mut String) {
     let id = inst.id.0;
-    // Tag the assertion with `vow:<sentinel>` so `extract_vow_id` parses a
-    // distinguishable id instead of returning `None` (which would otherwise be
-    // coerced to `0` and collide with a legitimate vow 0).
+    // The assertion text must be exactly `vow:<id>` — `extract_vow_id` calls
+    // `parse::<u32>()` on the suffix, which rejects anything but pure digits.
+    // The descriptive text goes in a separate C comment so the verifier model
+    // stays human-readable while the violated-property line remains parseable.
     out.push_str(&format!(
-        "  __ESBMC_assert(0, \"vow:{} unsupported opcode in verifier model: {:?}\");\n",
-        UNSUPPORTED_OP_VOW_ID, inst.opcode
+        "  /* unsupported opcode in verifier model: {:?} */\n",
+        inst.opcode
+    ));
+    out.push_str(&format!(
+        "  __ESBMC_assert(0, \"vow:{UNSUPPORTED_OP_VOW_ID}\");\n",
     ));
     if inst.ty != Ty::Unit {
         out.push_str(&format!(
