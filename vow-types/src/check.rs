@@ -46,11 +46,8 @@ fn suggest_similar(name: &str, candidates: &[String], max_distance: usize) -> Op
         return None;
     }
     let mut best: Option<(usize, &str)> = None;
-    for c in candidates.iter().take(MAX_HINT_CANDIDATES) {
+    for c in candidates {
         if c == name {
-            continue;
-        }
-        if c.len() > MAX_HINT_IDENTIFIER_BYTES {
             continue;
         }
         let Some(d) = bounded_edit_distance(name, c, max_distance) else {
@@ -1040,8 +1037,13 @@ impl<'e> Checker<'e> {
                     Some(info) => match info.fields.iter().find(|(n, _)| n == field) {
                         Some((_, ty)) => ty.clone(),
                         None => {
-                            let field_names: Vec<String> =
-                                info.fields.iter().map(|(n, _)| n.clone()).collect();
+                            let field_names: Vec<String> = info
+                                .fields
+                                .iter()
+                                .filter(|(n, _)| n.len() <= MAX_HINT_IDENTIFIER_BYTES)
+                                .take(MAX_HINT_CANDIDATES)
+                                .map(|(n, _)| n.clone())
+                                .collect();
                             let mut hints = Vec::new();
                             if let Some(s) = suggest_similar(field, &field_names, 3) {
                                 hints.push(format!("did you mean `{s}`?"));
