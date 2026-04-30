@@ -156,14 +156,15 @@ impl Parser {
             let effects = self.parse_effects();
             let method_end = self.current_span();
             self.expect(TokenKind::Semicolon);
-            methods.push(TraitMethod {
-                name: method_name,
-                params,
-                return_ty,
-                effects,
-                span: method_start.merge(method_end),
-            });
-            if self.cursor == pre_iter && !self.at(&TokenKind::RBrace) && !self.at_end() {
+            if self.cursor > pre_iter {
+                methods.push(TraitMethod {
+                    name: method_name,
+                    params,
+                    return_ty,
+                    effects,
+                    span: method_start.merge(method_end),
+                });
+            } else if !self.at(&TokenKind::RBrace) && !self.at_end() {
                 self.advance();
             }
         }
@@ -235,18 +236,19 @@ impl Parser {
             };
             let body = self.parse_block_required();
             let method_end = body.span;
-            methods.push(FnDef {
-                vis,
-                name: method_name,
-                params,
-                return_ty,
-                effects,
-                vow,
-                body,
-                span: method_start.merge(method_end),
-                is_declaration: false,
-            });
-            if self.cursor == pre_iter && !self.at(&TokenKind::RBrace) && !self.at_end() {
+            if self.cursor > pre_iter {
+                methods.push(FnDef {
+                    vis,
+                    name: method_name,
+                    params,
+                    return_ty,
+                    effects,
+                    vow,
+                    body,
+                    span: method_start.merge(method_end),
+                    is_declaration: false,
+                });
+            } else if !self.at(&TokenKind::RBrace) && !self.at_end() {
                 self.advance();
             }
         }
@@ -318,14 +320,15 @@ impl Parser {
             let effects = self.parse_effects();
             let fn_end = self.current_span();
             self.expect(TokenKind::Semicolon);
-            fns.push(ExternFn {
-                name: fn_name,
-                params,
-                return_ty,
-                effects,
-                span: fn_start.merge(fn_end),
-            });
-            if self.cursor == pre_iter && !self.at(&TokenKind::RBrace) && !self.at_end() {
+            if self.cursor > pre_iter {
+                fns.push(ExternFn {
+                    name: fn_name,
+                    params,
+                    return_ty,
+                    effects,
+                    span: fn_start.merge(fn_end),
+                });
+            } else if !self.at(&TokenKind::RBrace) && !self.at_end() {
                 self.advance();
             }
         }
@@ -553,6 +556,29 @@ mod tests {
             Item::Fn(f) => assert_eq!(f.name, "after"),
             other => panic!("expected fn after extern, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn parse_trait_recovery_resyncs_at_next_fn_keyword() {
+        // The recovery must not consume the `fn` keyword of the next method:
+        // the second method's span should still start at `fn`, not at the
+        // bare identifier.
+        let src = "trait T { fn bad fn ok(s: Self) -> (); }";
+        let (item, diags) = parse_item_with_diags(src);
+        let t = match item {
+            Item::Trait(t) => t,
+            other => panic!("expected trait, got {:?}", other),
+        };
+        assert!(!diags.is_empty());
+        assert_eq!(t.methods.len(), 2, "methods: {:?}", t.methods);
+        assert_eq!(t.methods[0].name, "bad");
+        assert_eq!(t.methods[1].name, "ok");
+        let ok_start = t.methods[1].span.start as usize;
+        assert!(
+            src[ok_start..].starts_with("fn ok"),
+            "expected ok method span to start at `fn`, got: {:?}",
+            &src[ok_start..ok_start.saturating_add(5).min(src.len())]
+        );
     }
 
     #[test]

@@ -635,6 +635,7 @@ impl Parser {
                 && !self.at(&TokenKind::RBrace)
                 && !self.at(&TokenKind::RParen)
                 && !self.at(&TokenKind::Semicolon)
+                && !self.at(&TokenKind::KwFn)
             {
                 self.advance();
             }

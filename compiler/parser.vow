@@ -357,7 +357,7 @@ fn parse_params(p: Parser) -> i64 {
     let lp_ok: bool = expect(p, tok_lparen());
     let items: Vec<i64> = Vec::new();
     if !lp_ok {
-        if !at_end(p) && !at(p, tok_lbrace()) && !at(p, tok_rbrace()) && !at(p, tok_rparen()) && !at(p, tok_semicolon()) {
+        if !at_end(p) && !at(p, tok_lbrace()) && !at(p, tok_rbrace()) && !at(p, tok_rparen()) && !at(p, tok_semicolon()) && !at(p, tok_kw_fn()) {
             let _skip: Token = advance(p);
         }
         return arena_add_list(p.arena, items);
