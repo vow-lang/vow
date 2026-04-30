@@ -1,5 +1,3 @@
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -39,8 +37,10 @@ impl CompileCache {
         trace: &str,
         abi_seed: &str,
     ) -> String {
-        let mut hasher = DefaultHasher::new();
-        abi_seed.hash(&mut hasher);
+        // The outer combiner uses `fnv1a_hash` (not `DefaultHasher`) so the on-disk
+        // key is stable across Rust toolchain upgrades — `DefaultHasher`'s algorithm
+        // is documented as unspecified and may change between releases, which would
+        // silently invalidate every cached object on a stable upgrade.
         let mut entries: Vec<(String, u64)> = deps
             .paths()
             .iter()
@@ -52,22 +52,29 @@ impl CompileCache {
             })
             .collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut combined = String::new();
+        combined.push_str("__abi=");
+        combined.push_str(abi_seed);
+        combined.push('\n');
         for (path, content_hash) in &entries {
-            path.hash(&mut hasher);
-            content_hash.hash(&mut hasher);
+            combined.push_str("__dep=");
+            combined.push_str(path);
+            combined.push(':');
+            combined.push_str(&format!("{content_hash:016x}"));
+            combined.push('\n');
         }
-        mode.hash(&mut hasher);
-        trace.hash(&mut hasher);
-        format!("{:016x}", hasher.finish())
+        combined.push_str("__mode=");
+        combined.push_str(mode);
+        combined.push('\n');
+        combined.push_str("__trace=");
+        combined.push_str(trace);
+        let hash = fnv1a_hash(combined.as_bytes());
+        format!("{hash:016x}")
     }
 
     pub fn lookup(&self, key: &str) -> Option<PathBuf> {
         let cached = self.dir.join(format!("{key}.o"));
-        if cached.exists() {
-            Some(cached)
-        } else {
-            None
-        }
+        if cached.exists() { Some(cached) } else { None }
     }
 
     pub fn store(&self, key: &str, obj: &Path) -> PathBuf {

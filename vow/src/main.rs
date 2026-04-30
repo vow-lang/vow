@@ -5462,7 +5462,8 @@ fn run_pipeline_from_frontend(
     let trace_str = format!("{trace:?}");
     // Object cache reuse is disabled when verification is enabled so the linked
     // binary always comes from the same codegen run as the verified IR.
-    let compile_cache = if no_cache || !no_verify {
+    let verification_active = !no_verify;
+    let compile_cache = if no_cache || verification_active {
         None
     } else {
         cache::CompileCache::new()
