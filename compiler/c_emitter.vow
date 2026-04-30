@@ -492,6 +492,41 @@ fn emit_unmodelled(out: String, inst: IrInst) {
     }
 }
 
+// Sentinel vow_id paired with `emit_unsupported_for_verification`.
+// Mirrors `vow_verify::c_emitter::UNSUPPORTED_OP_VOW_ID = u32::MAX`. Reserved so
+// the diagnostic pipeline can distinguish a verifier-limitation failure from
+// a real vow violation. Single source of truth for the self-hosted side; the
+// stringified form is derived via `i64_to_str` so the two cannot drift.
+fn unsupported_op_vow_id() -> i64 {
+    4294967295
+}
+
+fn unsupported_op_vow_id_str() -> String {
+    i64_to_str(unsupported_op_vow_id())
+}
+
+// Fail-closed marker for opcodes that have side effects but no verifier model.
+// The assertion text must be exactly `vow:<id>` — `parse_vow_id` (and the Rust
+// `extract_vow_id`) accept only pure digits after `vow:`, so any trailing text
+// would defeat the sentinel. Descriptive context lives in a separate C comment.
+fn emit_unsupported_for_verification(out: String, inst: IrInst) {
+    let id: i64 = inst.id;
+    out.push_str(str3(
+        String::from("  /* unsupported opcode in verifier model: "),
+        opcode_name(inst.op), String::from(" */\n")
+    ));
+    out.push_str(str3(
+        String::from("  __ESBMC_assert(0, \"vow:"),
+        unsupported_op_vow_id_str(), String::from("\");\n")
+    ));
+    if inst.ty != ITY_UNIT() {
+        out.push_str(str4(
+            String::from("  v"), i64_to_str(id),
+            String::from(" = __VERIFIER_nondet_"), str2(c_nondet_suffix(inst.ty), String::from("();\n"))
+        ));
+    }
+}
+
 fn emit_binop(out: String, ty: i64, id: i64, a: i64, b: i64, op: String) {
     out.push_str(str7(
         String::from("  v"),
@@ -760,7 +795,7 @@ fn emit_inst(out: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64
                 emit_map_op(out, inst, hashmap_max);
                 return;
             }
-            emit_unmodelled(out, inst);
+            emit_unsupported_for_verification(out, inst);
             return;
         }
         if inst.dk == IDATA_CALL_TARGET() {
@@ -806,7 +841,7 @@ fn emit_inst(out: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64
                 return;
             }
         }
-        emit_unmodelled(out, inst);
+        emit_unsupported_for_verification(out, inst);
         return;
     }
 
@@ -833,11 +868,11 @@ fn emit_inst(out: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64
     if op == IOP_LOAD() || op == IOP_STORE() || op == IOP_REGION_ALLOC()
        || op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE()
        || op == IOP_LINEAR_CONSUME() || op == IOP_LINEAR_BORROW() || op == IOP_FIELD_SET() {
-        emit_unmodelled(out, inst);
+        emit_unsupported_for_verification(out, inst);
         return;
     }
 
-    emit_unmodelled(out, inst);
+    emit_unsupported_for_verification(out, inst);
 }
 
 fn emit_vec_op(out: String, inst: IrInst, vec_max: i64) {
