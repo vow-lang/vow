@@ -3124,6 +3124,32 @@ mod tests {
         assert!(names.contains(&"print_i64".to_string()));
     }
 
+    #[test]
+    fn all_var_names_returns_bounded_subset_when_capped() {
+        // With more bindings than `max_names`, the helper must return exactly
+        // `max_names` entries — the lexicographically smallest of the
+        // qualifying keys — and the result must be reproducible across runs.
+        let mut env = TypeEnv::new();
+        for i in 0..1000 {
+            env.define(format!("var_{i:04}").as_str(), Ty::I64);
+        }
+        let names = env.all_var_names(8, 64);
+        assert_eq!(names.len(), 8);
+        assert_eq!(
+            names,
+            vec![
+                "var_0000".to_string(),
+                "var_0001".to_string(),
+                "var_0002".to_string(),
+                "var_0003".to_string(),
+                "var_0004".to_string(),
+                "var_0005".to_string(),
+                "var_0006".to_string(),
+                "var_0007".to_string(),
+            ]
+        );
+    }
+
     // --- hint integration tests ---
 
     #[test]

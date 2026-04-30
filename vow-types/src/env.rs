@@ -1,5 +1,5 @@
 use crate::types::Ty;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, BinaryHeap, HashMap, HashSet};
 use vow_syntax::ast::{Effect, Type as AstType};
 
 /// Signature of a function or method known to the type checker.
@@ -40,20 +40,40 @@ pub enum VariantKind {
     Struct(Vec<(String, Ty)>),
 }
 
-/// Collect, sort, and truncate the keys of a `HashMap` for hint candidates.
+/// Pick the lexicographically smallest `max_names` keys from a `HashMap`.
 ///
-/// Producing a deterministic subset on the error path: keys are filtered by
-/// length, sorted lexicographically, and capped at `max_names`. This keeps
-/// the underlying map's hot-path lookups O(1) while ensuring the "did you
-/// mean" suggestion fired for the same source is reproducible across runs.
+/// Used on the "did you mean" hint path. Memory and work are bounded by
+/// `max_names`, not by the map size: we keep a max-heap capped at
+/// `max_names` and replace the largest entry whenever a smaller key is
+/// seen. That way an adversarial source with millions of definitions
+/// cannot inflate the diagnostic path beyond O(N · log max_names) time
+/// and O(max_names) memory, while still producing a deterministic
+/// candidate subset.
 fn sorted_capped_keys<V>(
     map: &HashMap<String, V>,
     max_names: usize,
     max_len: usize,
 ) -> Vec<String> {
-    let mut keys: Vec<&String> = map.keys().filter(|key| key.len() <= max_len).collect();
-    keys.sort_unstable();
-    keys.into_iter().take(max_names).cloned().collect()
+    if max_names == 0 {
+        return Vec::new();
+    }
+    let mut heap: BinaryHeap<&String> = BinaryHeap::with_capacity(max_names);
+    for key in map.keys() {
+        if key.len() > max_len {
+            continue;
+        }
+        if heap.len() < max_names {
+            heap.push(key);
+        } else if let Some(&top) = heap.peek() {
+            if key < top {
+                heap.pop();
+                heap.push(key);
+            }
+        }
+    }
+    let mut result: Vec<String> = heap.into_iter().map(String::clone).collect();
+    result.sort_unstable();
+    result
 }
 
 /// Scope-based type environment.
@@ -672,20 +692,45 @@ impl TypeEnv {
     }
 
     pub fn all_var_names(&self, max_names: usize, max_len: usize) -> Vec<String> {
-        // Walk scopes inner→outer so that, when the cap truncates the result,
-        // shadowing inner-scope bindings win over outer-scope leftovers. Each
-        // scope's keys are sorted before iteration so the candidate subset is
-        // deterministic across runs even though `HashMap` iteration is not.
-        let mut names = Vec::with_capacity(max_names.min(32));
-        let mut seen = HashSet::with_capacity(max_names.min(32));
+        // Walk scopes inner→outer so shadowing inner-scope bindings win over
+        // outer-scope leftovers under the cap. Each scope's contribution is
+        // selected with a bounded max-heap (capacity = `remaining`), so the
+        // hint path uses O(max_names) memory and O(N · log max_names) time
+        // independent of how many bindings the program declares.
+        if max_names == 0 {
+            return Vec::new();
+        }
+        let mut names: Vec<String> = Vec::with_capacity(max_names.min(32));
+        let mut seen: HashSet<&str> = HashSet::with_capacity(max_names.min(32));
         for scope in self.scopes.iter().rev() {
-            let mut keys: Vec<&String> = scope.keys().filter(|key| key.len() <= max_len).collect();
-            keys.sort_unstable();
-            for key in keys {
-                if seen.insert(key) {
+            if names.len() >= max_names {
+                break;
+            }
+            let remaining = max_names - names.len();
+            let mut heap: BinaryHeap<&String> = BinaryHeap::with_capacity(remaining);
+            for key in scope.keys() {
+                if key.len() > max_len {
+                    continue;
+                }
+                if seen.contains(key.as_str()) {
+                    continue;
+                }
+                if heap.len() < remaining {
+                    heap.push(key);
+                } else if let Some(&top) = heap.peek() {
+                    if key < top {
+                        heap.pop();
+                        heap.push(key);
+                    }
+                }
+            }
+            let mut scope_names: Vec<&String> = heap.into_iter().collect();
+            scope_names.sort_unstable();
+            for key in scope_names {
+                if seen.insert(key.as_str()) {
                     names.push(key.clone());
                     if names.len() >= max_names {
-                        return names;
+                        break;
                     }
                 }
             }
