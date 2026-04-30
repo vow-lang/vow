@@ -64,14 +64,14 @@ fn sorted_capped_keys<V>(
         }
         if heap.len() < max_names {
             heap.push(key);
-        } else if let Some(&top) = heap.peek() {
-            if key < top {
-                heap.pop();
-                heap.push(key);
-            }
+        } else if let Some(&top) = heap.peek()
+            && key < top
+        {
+            heap.pop();
+            heap.push(key);
         }
     }
-    let mut result: Vec<String> = heap.into_iter().map(String::clone).collect();
+    let mut result: Vec<String> = heap.into_iter().cloned().collect();
     result.sort_unstable();
     result
 }
@@ -700,8 +700,8 @@ impl TypeEnv {
         if max_names == 0 {
             return Vec::new();
         }
-        let mut names: Vec<String> = Vec::with_capacity(max_names.min(32));
-        let mut seen: HashSet<&str> = HashSet::with_capacity(max_names.min(32));
+        let mut names: Vec<String> = Vec::with_capacity(max_names);
+        let mut seen: HashSet<&str> = HashSet::with_capacity(max_names);
         for scope in self.scopes.iter().rev() {
             if names.len() >= max_names {
                 break;
@@ -717,11 +717,11 @@ impl TypeEnv {
                 }
                 if heap.len() < remaining {
                     heap.push(key);
-                } else if let Some(&top) = heap.peek() {
-                    if key < top {
-                        heap.pop();
-                        heap.push(key);
-                    }
+                } else if let Some(&top) = heap.peek()
+                    && key < top
+                {
+                    heap.pop();
+                    heap.push(key);
                 }
             }
             let mut scope_names: Vec<&String> = heap.into_iter().collect();

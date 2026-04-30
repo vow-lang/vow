@@ -3126,9 +3126,10 @@ mod tests {
 
     #[test]
     fn all_var_names_returns_bounded_subset_when_capped() {
-        // With more bindings than `max_names`, the helper must return exactly
-        // `max_names` entries — the lexicographically smallest of the
-        // qualifying keys — and the result must be reproducible across runs.
+        // Single-scope sanity check: with more bindings than `max_names`, the
+        // helper must return exactly `max_names` entries — the
+        // lexicographically smallest of the qualifying keys — and the result
+        // must be reproducible across runs.
         let mut env = TypeEnv::new();
         for i in 0..1000 {
             env.define(format!("var_{i:04}").as_str(), Ty::I64);
@@ -3147,6 +3148,29 @@ mod tests {
                 "var_0006".to_string(),
                 "var_0007".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn all_var_names_prioritizes_inner_scopes_under_cap() {
+        // Multi-scope: when the cap can be filled from the innermost scope, no
+        // outer-scope names appear, even if they're lexicographically smaller.
+        // Within each scope, the lex-smallest entries are picked.
+        let mut env = TypeEnv::new();
+        env.define("aardvark", Ty::I64); // outer
+        env.define("alpaca", Ty::I64); // outer
+        env.push_scope();
+        env.define("zebra", Ty::I64); // inner
+        env.define("yak", Ty::I64); // inner
+        let names = env.all_var_names(2, 64);
+        assert_eq!(names, vec!["yak".to_string(), "zebra".to_string()]);
+
+        // When the cap exceeds the inner scope, the remaining slots are filled
+        // from the outer scope in lex order.
+        let names = env.all_var_names(3, 64);
+        assert_eq!(
+            names,
+            vec!["yak".to_string(), "zebra".to_string(), "aardvark".to_string()]
         );
     }
 
