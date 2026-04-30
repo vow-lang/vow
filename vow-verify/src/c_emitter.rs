@@ -1046,11 +1046,20 @@ fn emit_unmodelled(inst: &Inst, out: &mut String) {
     }
 }
 
+/// Sentinel `vow_id` reported when ESBMC fails on an
+/// `emit_unsupported_for_verification` assertion. Reserved so the diagnostic
+/// pipeline can distinguish a verifier-limitation failure from a real vow
+/// violation; never assigned to a user-authored vow.
+pub const UNSUPPORTED_OP_VOW_ID: u32 = u32::MAX;
+
 fn emit_unsupported_for_verification(inst: &Inst, out: &mut String) {
     let id = inst.id.0;
+    // Tag the assertion with `vow:<sentinel>` so `extract_vow_id` parses a
+    // distinguishable id instead of returning `None` (which would otherwise be
+    // coerced to `0` and collide with a legitimate vow 0).
     out.push_str(&format!(
-        "  __ESBMC_assert(0, \"unsupported opcode in verifier model: {:?}\");\n",
-        inst.opcode
+        "  __ESBMC_assert(0, \"vow:{} unsupported opcode in verifier model: {:?}\");\n",
+        UNSUPPORTED_OP_VOW_ID, inst.opcode
     ));
     if inst.ty != Ty::Unit {
         out.push_str(&format!(
@@ -2155,6 +2164,10 @@ mod tests {
             c.contains("unsupported opcode in verifier model"),
             "fail-closed assert: {c}"
         );
+        assert!(
+            c.contains(&format!("vow:{UNSUPPORTED_OP_VOW_ID}")),
+            "sentinel vow id in assert: {c}"
+        );
         assert!(c.contains("__VERIFIER_nondet_long"), "nondet for I64: {c}");
     }
 
@@ -2594,6 +2607,10 @@ mod tests {
         assert!(
             c.contains("unsupported opcode in verifier model: Call"),
             "non-vec call must fail closed: {c}"
+        );
+        assert!(
+            c.contains(&format!("vow:{UNSUPPORTED_OP_VOW_ID}")),
+            "sentinel vow id in assert: {c}"
         );
         assert!(
             c.contains("__VERIFIER_nondet_long"),
