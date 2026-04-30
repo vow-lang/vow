@@ -30,6 +30,8 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--hashmap-max <N>` | `64`    | Max HashMap capacity for verification model  |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
 
+**Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever ESBMC verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.
+
 ### `vow verify`
 
 Verify contracts only — no executable output. Emits the same JSON format as `vow build` but `executable` is always `null`.

@@ -5342,6 +5342,12 @@ fn link_obj(obj_path: &Path, output_path: &Path) -> Option<PathBuf> {
     }
 }
 
+// Compile-object cache is disabled when `no_cache` is set or whenever ESBMC verification is active, so the linked binary is always produced by the same codegen run whose IR was verified. Lifted into a helper so the gate can be unit-tested without driving the whole pipeline.
+#[inline]
+fn compile_cache_disabled(no_cache: bool, no_verify: bool) -> bool {
+    no_cache || !no_verify
+}
+
 pub fn run_pipeline(
     source: &Path,
     output: Option<&Path>,
@@ -5461,16 +5467,15 @@ fn run_pipeline_from_frontend(
     let mode_str = format!("{mode:?}");
     let trace_str = format!("{trace:?}");
     // Disable object cache when verification is active: linked binary must come from the same codegen run as the verified IR.
-    let verification_active = !no_verify;
-    let compile_cache = if no_cache || verification_active {
+    let compile_cache = if compile_cache_disabled(no_cache, no_verify) {
         None
     } else {
         cache::CompileCache::new()
     };
-    // Skip the dependency-content hash when the cache is disabled — no point reading every dep file with no possible hit/store.
-    let cache_key = compile_cache
-        .as_ref()
-        .map(|_| cache::CompileCache::cache_key(frontend.dependencies(), &mode_str, &trace_str));
+    // Skip the dependency-content hash when the cache is disabled — no point reading every dep file with no possible hit/store. `and_then` propagates a None from `cache_key` (fail-closed on per-dep canonicalize/open/read errors) so neither lookup nor store fires with an incomplete dep set.
+    let cache_key = compile_cache.as_ref().and_then(|_| {
+        cache::CompileCache::cache_key(frontend.dependencies(), &mode_str, &trace_str)
+    });
 
     if let Some(ref cc) = compile_cache
         && let Some(ref key) = cache_key
@@ -9389,76 +9394,27 @@ fn main() -> i32 {
     }
 
     #[test]
-    fn verified_build_does_not_populate_compile_cache() {
-        // Regression guard for the verification_active gate: a verified build must
-        // never populate VOW_CACHE_DIR. An unverified build with the same source
-        // must populate it (counter-proof that the test is observing the gate).
-        if find_esbmc().is_none() {
-            eprintln!("SKIP: esbmc not found");
-            return;
-        }
-
-        let dir = TempDir::new().unwrap();
-        let cache_dir = dir.path().join("cache");
-        std::fs::create_dir_all(&cache_dir).unwrap();
-
-        let prev = std::env::var("VOW_CACHE_DIR").ok();
-        // SAFETY: process-global env mutation. No other test in this crate
-        // reads or writes VOW_CACHE_DIR, so this does not race under default
-        // cargo test threading.
-        unsafe {
-            std::env::set_var("VOW_CACHE_DIR", &cache_dir);
-        }
-
-        let src = "module M fn f(x: i64) -> i64 { x }";
-        let source = write_source(&dir, "f.vow", src);
-
-        let _ = run_pipeline(
-            &source,
-            None,
-            BuildMode::Release,
-            false,
-            false,
-            TraceMode::Off,
-        );
-        let after_verified = count_o_files(&cache_dir);
-
-        let _ = run_pipeline(
-            &source,
-            None,
-            BuildMode::Release,
-            true,
-            false,
-            TraceMode::Off,
-        );
-        let after_unverified = count_o_files(&cache_dir);
-
-        // SAFETY: see above.
-        unsafe {
-            match prev {
-                Some(v) => std::env::set_var("VOW_CACHE_DIR", v),
-                None => std::env::remove_var("VOW_CACHE_DIR"),
-            }
-        }
-
-        assert_eq!(
-            after_verified, 0,
-            "verified build must not populate compile cache"
+    fn compile_cache_disabled_in_verified_builds_and_when_no_cache() {
+        // Regression guard for the security gate: the compile-object cache must
+        // be `None` whenever `no_cache` is set OR verification is active. Pure
+        // logic test on the lifted helper so it does not need ESBMC, the full
+        // pipeline, or env-var mutation (which would race with other tests that
+        // read VOW_CACHE_DIR via `CompileCache::new()`).
+        assert!(
+            compile_cache_disabled(false, false),
+            "default verified build (no_cache=false, no_verify=false): cache must be disabled"
         );
         assert!(
-            after_unverified > 0,
-            "unverified build must populate compile cache (counter-proof)"
+            compile_cache_disabled(true, false),
+            "no_cache=true with verification: cache must be disabled"
         );
-    }
-
-    fn count_o_files(dir: &Path) -> usize {
-        std::fs::read_dir(dir)
-            .map(|entries| {
-                entries
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.path().extension().is_some_and(|ext| ext == "o"))
-                    .count()
-            })
-            .unwrap_or(0)
+        assert!(
+            compile_cache_disabled(true, true),
+            "no_cache=true: cache must be disabled regardless of verification"
+        );
+        assert!(
+            !compile_cache_disabled(false, true),
+            "--no-verify without --no-cache: cache must be enabled"
+        );
     }
 }

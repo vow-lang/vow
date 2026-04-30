@@ -27,27 +27,27 @@ impl CompileCache {
         Some(Self { dir })
     }
 
-    pub fn cache_key(deps: &DependencyManifest, mode: &str, trace: &str) -> String {
+    pub fn cache_key(deps: &DependencyManifest, mode: &str, trace: &str) -> Option<String> {
         Self::cache_key_with_abi_seed(deps, mode, trace, COMPILE_CACHE_ABI_VERSION)
     }
 
+    // Fail closed on any per-dep canonicalize / open / read error: returning None
+    // skips both lookup and store, so partial dep sets can never collide with a
+    // previously-cached object built from the full set.
     fn cache_key_with_abi_seed(
         deps: &DependencyManifest,
         mode: &str,
         trace: &str,
         abi_seed: &str,
-    ) -> String {
+    ) -> Option<String> {
         // FNV-1a (not DefaultHasher) for stable on-disk keys across toolchain upgrades; not cryptographic — adversarial-poisoning integrity comes from the verified-build cache gate, not hash strength.
-        let mut entries: Vec<(String, u64)> = deps
-            .paths()
-            .iter()
-            .filter_map(|p| {
-                let canon = p.canonicalize().ok()?;
-                let f = std::fs::File::open(&canon).ok()?;
-                let content_hash = fnv1a_hash_reader(BufReader::new(f)).ok()?;
-                Some((canon.to_string_lossy().to_string(), content_hash))
-            })
-            .collect();
+        let mut entries: Vec<(String, u64)> = Vec::with_capacity(deps.paths().len());
+        for p in deps.paths() {
+            let canon = p.canonicalize().ok()?;
+            let f = std::fs::File::open(&canon).ok()?;
+            let content_hash = fnv1a_hash_reader(BufReader::new(f)).ok()?;
+            entries.push((canon.to_string_lossy().to_string(), content_hash));
+        }
         entries.sort_by(|a, b| a.0.cmp(&b.0));
         // Length-prefix paths so embedded ':' or '\n' (both legal in POSIX filenames) can't create serialization collisions before the final hash.
         let mut combined = String::new();
@@ -66,7 +66,7 @@ impl CompileCache {
         combined.push_str("__trace=");
         combined.push_str(trace);
         let hash = fnv1a_hash(combined.as_bytes());
-        format!("{hash:016x}")
+        Some(format!("{hash:016x}"))
     }
 
     pub fn lookup(&self, key: &str) -> Option<PathBuf> {
@@ -319,8 +319,8 @@ mod tests {
         let deps_ab = DependencyManifest::from_paths(vec![a.clone(), b.clone()]);
         let deps_ba = DependencyManifest::from_paths(vec![b, a]);
 
-        let k1 = CompileCache::cache_key(&deps_ab, "Release", "Off");
-        let k2 = CompileCache::cache_key(&deps_ba, "Release", "Off");
+        let k1 = CompileCache::cache_key(&deps_ab, "Release", "Off").unwrap();
+        let k2 = CompileCache::cache_key(&deps_ba, "Release", "Off").unwrap();
 
         assert_eq!(k1, k2);
     }
@@ -336,8 +336,8 @@ mod tests {
         let deps_a = DependencyManifest::from_paths(vec![a.clone()]);
         let deps_ab = DependencyManifest::from_paths(vec![a, b]);
 
-        let k1 = CompileCache::cache_key(&deps_a, "Release", "Off");
-        let k2 = CompileCache::cache_key(&deps_ab, "Release", "Off");
+        let k1 = CompileCache::cache_key(&deps_a, "Release", "Off").unwrap();
+        let k2 = CompileCache::cache_key(&deps_ab, "Release", "Off").unwrap();
 
         assert_ne!(k1, k2);
     }
@@ -350,8 +350,10 @@ mod tests {
 
         let deps = DependencyManifest::from_paths(vec![a]);
 
-        let old_key = CompileCache::cache_key_with_abi_seed(&deps, "Release", "Off", "old-abi");
-        let new_key = CompileCache::cache_key_with_abi_seed(&deps, "Release", "Off", "new-abi");
+        let old_key =
+            CompileCache::cache_key_with_abi_seed(&deps, "Release", "Off", "old-abi").unwrap();
+        let new_key =
+            CompileCache::cache_key_with_abi_seed(&deps, "Release", "Off", "new-abi").unwrap();
 
         assert_ne!(old_key, new_key);
     }
@@ -363,10 +365,21 @@ mod tests {
         std::fs::write(&a, "module A").unwrap();
         let deps = DependencyManifest::from_paths(vec![a.clone()]);
 
-        let k1 = CompileCache::cache_key(&deps, "Release", "Off");
+        let k1 = CompileCache::cache_key(&deps, "Release", "Off").unwrap();
         std::fs::write(&a, "module A updated").unwrap();
-        let k2 = CompileCache::cache_key(&deps, "Release", "Off");
+        let k2 = CompileCache::cache_key(&deps, "Release", "Off").unwrap();
 
         assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn compile_cache_key_returns_none_when_dependency_unreadable() {
+        // Fail-closed: any per-dep canonicalize / open / read error must cause
+        // key generation to return None so the cache is not consulted with an
+        // incomplete dep set (which could collide with a previously-cached key).
+        let dir = TempDir::new().unwrap();
+        let missing = dir.path().join("does_not_exist.vow");
+        let deps = DependencyManifest::from_paths(vec![missing]);
+        assert!(CompileCache::cache_key(&deps, "Release", "Off").is_none());
     }
 }
