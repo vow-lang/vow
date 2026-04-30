@@ -753,6 +753,14 @@ fn check_region_store_conflicts_module(
 fn check_store_effects_at_call(
     flat: Vec<i64>, call_inst: IrInst, id_to_inst: Vec<IrInst>, dctx: DiagCtx, path: String
 ) {
+    // Divergence note: the Rust path (`vow-ir/src/region.rs::handle_inst`,
+    // `Opcode::Call` arm) adds a `VirtualCaller` marker on the target arg
+    // for `RSUM_KIND_FRESH_IN_CALLER` store effects, routing the target
+    // toward `Caller(0)`. The self-hosted compiler has no `VirtualCaller`
+    // marker mechanism — targets of FreshInCaller store effects stay at
+    // their default `Root`. No diagnostic effect (region routing only),
+    // but worth promoting to true parity once hidden-caller-region
+    // plumbing for `IOP_REGION_ALLOC` lands in `vow-clif-shim`.
     let mut i: i64 = 0;
     while i < flat.len() {
         let target: i64 = flat[i];
