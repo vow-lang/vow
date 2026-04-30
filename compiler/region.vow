@@ -12,7 +12,7 @@ use diag
 //   `rsum_return_kind` field always carries one of the four published
 //   `RSUM_KIND_*` discriminants after `infer_regions_module` returns.
 // - `AliasOfAny` aliases vec is ascending + deduplicated (canonical).
-// - `store_effects` are sorted by `target_param` ascending (canonical).
+// - `store_effects` are sorted by `(target_param, source_constraint)` (canonical).
 //
 // Internal Uninit state lives only in this module's local arrays
 // (`int_kinds: Vec<i64>` keyed by function index). Sentinel value
@@ -231,6 +231,8 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx, path: String) -> IrModule {
         m.functions[fi] = new_f;
         fi = fi + 1;
     }
+
+    check_region_store_conflicts_module(m, id_to_inst_per_fn, dctx, path);
 
     // Commit per-inst regions.
     let mut fi2: i64 = 0;
@@ -542,6 +544,36 @@ fn linear_vec_eq(a: Vec<i64>, b: Vec<i64>) -> bool {
     true
 }
 
+fn clone_i64_vec(src: Vec<i64>) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < src.len() {
+        out.push(src[i]);
+        i = i + 1;
+    }
+    out
+}
+
+fn clone_i64_vec_vec(src: Vec<Vec<i64>>) -> Vec<Vec<i64>> {
+    let out: Vec<Vec<i64>> = Vec::new();
+    let mut i: i64 = 0;
+    while i < src.len() {
+        out.push(clone_i64_vec(src[i]));
+        i = i + 1;
+    }
+    out
+}
+
+fn i64_vec_vec_eq(a: Vec<Vec<i64>>, b: Vec<Vec<i64>>) -> bool {
+    if a.len() != b.len() { return false; }
+    let mut i: i64 = 0;
+    while i < a.len() {
+        if !linear_vec_eq(a[i], b[i]) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
 // ---- Lookup helper for parallel inst-region arrays ----
 
 fn lookup_inst_region(keys: Vec<i64>, vals: Vec<i64>, id: i64) -> i64 {
@@ -591,11 +623,12 @@ fn canonicalize_store_effects(
         perm.push(pi);
         pi = pi + 1;
     }
-    // Insertion sort perm by targets[perm[i]] ascending.
+    // Insertion sort perm by Rust's BTreeSet key order:
+    // target, then RegionConstraint discriminant, then payload.
     let mut a: i64 = 1;
     while a < n {
         let mut b: i64 = a;
-        while b > 0 && targets[perm[b - 1]] > targets[perm[b]] {
+        while b > 0 && store_effect_less(targets, kinds, aux, aliases, perm[b], perm[b - 1]) {
             let tmp: i64 = perm[b - 1];
             perm[b - 1] = perm[b];
             perm[b] = tmp;
@@ -627,6 +660,180 @@ fn canonicalize_store_effects(
     out
 }
 
+fn store_effect_less(
+    targets: Vec<i64>, kinds: Vec<i64>, auxs: Vec<i64>, aliases: Vec<Vec<i64>>,
+    a: i64, b: i64
+) -> bool {
+    if targets[a] != targets[b] {
+        return targets[a] < targets[b];
+    }
+    if kinds[a] != kinds[b] {
+        return kinds[a] < kinds[b];
+    }
+    if kinds[a] == RSUM_KIND_ALIAS_OF() && auxs[a] != auxs[b] {
+        return auxs[a] < auxs[b];
+    }
+    if kinds[a] == RSUM_KIND_ALIAS_OF_ANY() {
+        return i64_vec_lex_less(aliases[a], aliases[b]);
+    }
+    false
+}
+
+fn i64_vec_lex_less(a: Vec<i64>, b: Vec<i64>) -> bool {
+    let mut i: i64 = 0;
+    while i < a.len() && i < b.len() {
+        if a[i] != b[i] {
+            return a[i] < b[i];
+        }
+        i = i + 1;
+    }
+    a.len() < b.len()
+}
+
+fn add_store_effect(
+    targets: Vec<i64>, kinds: Vec<i64>, auxs: Vec<i64>, aliases_list: Vec<Vec<i64>>,
+    target: i64, kind: i64, aux: i64, aliases: Vec<i64>
+) {
+    let mut i: i64 = 0;
+    while i < targets.len() {
+        if targets[i] == target && kinds[i] == kind {
+            if kind == RSUM_KIND_ALIAS_OF() {
+                if auxs[i] == aux {
+                    return;
+                }
+            } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
+                if linear_vec_eq(aliases_list[i], aliases) {
+                    return;
+                }
+            } else {
+                return;
+            }
+        }
+        i = i + 1;
+    }
+    targets.push(target);
+    kinds.push(kind);
+    auxs.push(aux);
+    aliases_list.push(clone_i64_vec(aliases));
+}
+
+fn check_region_store_conflicts_module(
+    m: IrModule, id_to_inst_per_fn: Vec<Vec<IrInst>>, dctx: DiagCtx, path: String
+) {
+    let mut fi: i64 = 0;
+    while fi < m.functions.len() {
+        let f: IrFunction = m.functions[fi];
+        let id_to_inst: Vec<IrInst> = id_to_inst_per_fn[fi];
+        let mut bi: i64 = 0;
+        while bi < f.blocks.len() {
+            let blk: IrBlock = f.blocks[bi];
+            let mut ii: i64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
+                    let callee_idx: i64 = inst.dv;
+                    if callee_idx >= 0 && callee_idx < m.functions.len() {
+                        check_store_effects_at_call(
+                            m.functions[callee_idx].rsum_store_effects,
+                            inst,
+                            id_to_inst,
+                            dctx,
+                            path,
+                        );
+                    }
+                }
+                ii = ii + 1;
+            }
+            bi = bi + 1;
+        }
+        fi = fi + 1;
+    }
+}
+
+fn check_store_effects_at_call(
+    flat: Vec<i64>, call_inst: IrInst, id_to_inst: Vec<IrInst>, dctx: DiagCtx, path: String
+) {
+    let mut i: i64 = 0;
+    while i < flat.len() {
+        let target: i64 = flat[i];
+        i = i + 1;
+        if i >= flat.len() { return; }
+        let kind: i64 = flat[i];
+        i = i + 1;
+        if kind == RSUM_KIND_ALIAS_OF() {
+            if i >= flat.len() { return; }
+            let source_param: i64 = flat[i];
+            i = i + 1;
+            if target >= 0 && target < call_inst.args.len()
+                && source_param >= 0 && source_param < call_inst.args.len()
+            {
+                check_store_conflict(
+                    path,
+                    call_inst.args[target],
+                    call_inst.args[source_param],
+                    call_inst,
+                    id_to_inst,
+                    dctx,
+                );
+            }
+        } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
+            if i >= flat.len() { return; }
+            let n: i64 = flat[i];
+            i = i + 1;
+            let mut ai: i64 = 0;
+            while ai < n && i < flat.len() {
+                let source_param: i64 = flat[i];
+                if target >= 0 && target < call_inst.args.len()
+                    && source_param >= 0 && source_param < call_inst.args.len()
+                {
+                    check_store_conflict(
+                        path,
+                        call_inst.args[target],
+                        call_inst.args[source_param],
+                        call_inst,
+                        id_to_inst,
+                        dctx,
+                    );
+                }
+                i = i + 1;
+                ai = ai + 1;
+            }
+        }
+    }
+}
+
+fn check_store_conflict(
+    path: String, target_arg_id: i64, source_arg_id: i64, call_inst: IrInst,
+    id_to_inst: Vec<IrInst>, dctx: DiagCtx
+) {
+    let source: DeepRet = trace_origin_shallow(id_to_inst, source_arg_id);
+    if source.kind != RSUM_KIND_FRESH_IN_CALLER() {
+        return;
+    }
+    let target_param: i64 = trace_param_shallow(id_to_inst, target_arg_id);
+    if target_param < 0 {
+        return;
+    }
+
+    let source_inst: IrInst = lookup_inst_or_default(id_to_inst, source_arg_id);
+    let span_start: i64 = if source_inst.id >= 0 && source_inst.olen > 0 { source_inst.ostart } else { call_inst.ostart };
+    let span_len: i64 = if source_inst.id >= 0 && source_inst.olen > 0 { source_inst.olen } else { call_inst.olen };
+    let d: Diagnostic = diag_new(
+        SEV_ERROR(),
+        EC_REGION_CONFLICT(),
+        String::from("value's region cannot satisfy target container's region: block-local allocation stored into a parameter region"),
+        path,
+        span_start,
+        span_len,
+        DIAG_BLAME_CALLEE()
+    );
+    diag_add_hint(
+        d,
+        String::from("hoist the allocation to a wider scope, copy the value into the outer arena, or restructure the return flow so the value escapes to the caller")
+    );
+    diag_ctx_emit(dctx, d);
+}
+
 // ---- Per-function analysis ----
 
 // Returns true if the function's internal summary changed.
@@ -645,6 +852,10 @@ fn analyze_function(
     let prev_kind: i64 = int_kinds[fidx];
     let prev_aux: i64 = int_auxs[fidx];
     let prev_aliases: Vec<i64> = int_aliases_list[fidx];
+    let prev_se_targets: Vec<i64> = clone_i64_vec(int_se_targets[fidx]);
+    let prev_se_src_kinds: Vec<i64> = clone_i64_vec(int_se_src_kinds[fidx]);
+    let prev_se_src_aux: Vec<i64> = clone_i64_vec(int_se_src_aux[fidx]);
+    let prev_se_src_aliases: Vec<Vec<i64>> = clone_i64_vec_vec(int_se_src_aliases[fidx]);
 
     // 1. Compute return-region contribution by deep-walking the Return arg
     //    through Pizlo Phi/Upsilon arms and Call summaries.
@@ -674,36 +885,71 @@ fn analyze_function(
                 acc_aux = join_aux(acc_kind, acc_aux, ret_kind, ret_aux, joined_kind);
                 acc_kind = joined_kind;
             }
-            // Tag heap-producing insts with Caller(0) when they flow into a
-            // Return; for Phase 3 we conservatively tag every RegionAlloc
-            // that escapes via Return to Caller(0). All other RegionAllocs
-            // remain at their Phase 2 default (Root).
+            if (inst.op == IOP_STORE() || inst.op == IOP_FIELD_SET()) && inst.args.len() >= 2 {
+                let target_id: i64 = inst.args[0];
+                let source_id: i64 = inst.args[1];
+                let target_param: i64 = trace_param_shallow(id_to_inst, target_id);
+                if target_param >= 0 {
+                    let source: DeepRet = trace_origin_shallow(id_to_inst, source_id);
+                    add_store_effect(
+                        int_se_targets[fidx],
+                        int_se_src_kinds[fidx],
+                        int_se_src_aux[fidx],
+                        int_se_src_aliases[fidx],
+                        target_param,
+                        source.kind,
+                        source.aux,
+                        source.aliases,
+                    );
+                }
+            }
             ii = ii + 1;
         }
         bi = bi + 1;
     }
 
-    // Tag RegionAlloc instructions that escape to virtual caller.
+    // Tag local heap-producing instructions with block regions when all direct
+    // uses stay in the defining block. This is the self-hosted Phase 9 subset
+    // that the shim can lower today: `IOP_REGION_ALLOC` and FreshInCaller
+    // extern wrappers can route through `REGION_KIND_BLOCK`; caller-routed
+    // internal function returns remain Root because the shim still rejects
+    // `REGION_KIND_CALLER` for `IOP_REGION_ALLOC`.
+    let mut rbi: i64 = 0;
+    while rbi < n_bks {
+        let rb: IrBlock = bks[rbi];
+        let mut rii: i64 = 0;
+        while rii < rb.insts.len() {
+            let rinst: IrInst = rb.insts[rii];
+            if is_heap_producing_for_block_region(rinst)
+                && value_used_only_in_block(f, rinst.id, rb.id)
+            {
+                put_inst_region(
+                    region_keys[fidx],
+                    region_vals[fidx],
+                    rinst.id,
+                    region_pack(REGION_KIND_BLOCK(), rb.id)
+                );
+            }
+            rii = rii + 1;
+        }
+        rbi = rbi + 1;
+    }
+
+    // Escaping RegionAlloc instructions still deliberately stay Root.
     //
-    // Phase 3 minimum: the self-hosted Cranelift shim in
-    // `vow-clif-shim/src/lib.rs` (IOP_REGION_ALLOC path) currently only
-    // accepts `REGION_KIND_ROOT`; any `Caller` or `Block` region makes
-    // `fn_end` return -1 ("hidden-arena routing lands in a follow-up").
-    // Emitting `region_caller0()` here would break self-hosted codegen for
-    // any program with an escaping allocation. We therefore leave escaping
-    // allocations at their Phase-2 default (Root) in self-hosted IR until
-    // the shim learns hidden-arena plumbing. The summary itself is still
-    // set to FreshInCaller where appropriate so the metadata remains
-    // correct for downstream consumers; only the per-inst region tag is
-    // degraded for codegen compatibility.
+    // Phase 9 status: the self-hosted Cranelift shim can lower block regions,
+    // but `IOP_REGION_ALLOC` still has no hidden-caller-region plumbing.
+    // Emitting `region_caller0()` here would break self-hosted codegen for any
+    // program with an escaping allocation. We therefore leave escaping
+    // allocations at their Phase-2 default (Root). The summary itself is still
+    // set to FreshInCaller where appropriate so the metadata remains correct
+    // for downstream consumers; only the per-inst region tag is degraded for
+    // codegen compatibility.
     //
     // Rust codegen accepts Caller(0) via `cranelift_backend.rs` + Phase 4's
-    // hidden-arena projection, so the Rust pass emits `Caller(0)` on
-    // escaping allocs. This is an intentional divergence between the two
-    // compilers until the self-hosted shim catches up. Helpers
-    // `collect_escaping_allocs` and `region_caller0` remain in this module
-    // so the port is ready to drop in as a one-line change once the shim
-    // supports hidden-arena routing.
+    // hidden-arena projection, so the Rust pass emits `Caller(0)` on escaping
+    // allocs. This is the remaining intentional divergence between the two
+    // compilers until the self-hosted shim catches up.
 
     let new_kind: i64 = acc_kind;
     let new_aux: i64 = acc_aux;
@@ -712,29 +958,6 @@ fn analyze_function(
     int_kinds[fidx] = new_kind;
     int_auxs[fidx] = new_aux;
     int_aliases_list[fidx] = new_aliases;
-
-    // For Phase 3 minimal we don't infer store_effects in self-hosted yet.
-    // The Rust pass also defers full store-effect inference (see step 5
-    // "Phase 3 minimum" comment in vow-ir/src/region.rs). Both compilers
-    // converge on empty store_effects for now, satisfying the differential
-    // gate.
-    //
-    // TODO(#204, Phase 9): when store-effect INFERENCE lands here, the
-    // companion `check_store_conflict` equivalent (currently Rust-only,
-    // see `vow-ir/src/region.rs::check_store_conflict`) MUST land in the
-    // same touch. Inference without conflict emission would let the
-    // self-hosted compiler silently accept programs the Rust compiler
-    // rejects, breaking the differential gate without any visible signal.
-    //
-    // The Phase-9 implementation must also mirror the per-iteration
-    // diagnostics buffering pattern from `vow-ir/src/region.rs`'s
-    // `iter_diagnostics` (the SCC fixed-point loop runs `analyze_function`
-    // multiple times, so a diagnostic emitted directly via `diag_ctx_emit`
-    // would fire once per round). The Rust pass keeps a Vec per iteration
-    // and extends `diagnostics` only on convergence (or alongside the ICE
-    // marker on iteration-bound exceeded). Without this, a single real
-    // conflict will be reported `iters` times, breaking the
-    // `conflicts.len() == 1` invariant the Rust tests assert.
 
     // Return whether the summary changed.
     if new_kind != prev_kind { return true; }
@@ -747,38 +970,59 @@ fn analyze_function(
             k = k + 1;
         }
     }
-    // TODO(Phase 5 / issue #200): self-hosted needs TWO additions here,
-    // not just the convergence check.
-    //
-    // (1) Store-effect INFERENCE itself is missing. The Rust pass'
-    // `handle_inst` (vow-ir/src/region.rs `Opcode::Store | Opcode::FieldSet`
-    // arm) calls `trace_origin` + `origin_to_constraint` and inserts
-    // into `summary.store_effects`. The self-hosted port has no
-    // equivalent — `int_se_targets[fidx]` etc. are always left empty.
-    // Functions that store one parameter into another currently
-    // produce empty `store_effects` from the self-hosted compiler
-    // even when the Rust compiler produces a non-empty result.
-    //
-    // (2) Once (1) lands, add the convergence comparison here so a
-    // round where only store_effects grow will set `changed = true`:
-    // compare int_se_targets[fidx] / int_se_src_kinds[fidx] /
-    // int_se_src_aux[fidx] / int_se_src_aliases[fidx] against their
-    // prev_* snapshots. Without this, the SCC fixed-point will
-    // declare convergence one iteration too early.
-    //
-    // Both gaps are harmless today (both compilers produce empty
-    // store_effects), but both must land together to keep the
-    // differential gate working.
+    if !linear_vec_eq(prev_se_targets, int_se_targets[fidx]) { return true; }
+    if !linear_vec_eq(prev_se_src_kinds, int_se_src_kinds[fidx]) { return true; }
+    if !linear_vec_eq(prev_se_src_aux, int_se_src_aux[fidx]) { return true; }
+    if !i64_vec_vec_eq(prev_se_src_aliases, int_se_src_aliases[fidx]) { return true; }
     false
 }
 
+fn is_heap_producing_for_block_region(inst: IrInst) -> bool {
+    if inst.op == IOP_REGION_ALLOC() {
+        return true;
+    }
+    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && extern_fresh_in_caller(inst.ds) {
+        return true;
+    }
+    false
+}
+
+fn value_used_only_in_block(f: IrFunction, id: i64, defining_block: i64) -> bool {
+    let bks: Vec<IrBlock> = f.blocks;
+    let mut bi: i64 = 0;
+    while bi < bks.len() {
+        let blk: IrBlock = bks[bi];
+        let mut ii: i64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            let mut ai: i64 = 0;
+            while ai < inst.args.len() {
+                if inst.args[ai] == id {
+                    if blk.id != defining_block {
+                        return false;
+                    }
+                    if inst.op == IOP_RETURN()
+                        || inst.op == IOP_UPSILON()
+                        || inst.op == IOP_CALL()
+                        || inst.op == IOP_STORE()
+                        || inst.op == IOP_FIELD_SET()
+                    {
+                        return false;
+                    }
+                }
+                ai = ai + 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    true
+}
+
 // Currently unused (intentional scaffolding). Becomes live once the
-// `vow-clif-shim` learns hidden-arena routing for `IOP_REGION_ALLOC`
-// (tracked alongside Phase 5 wiring, issue #200). Keeping this and
-// `collect_escaping_allocs` ready avoids a second touch of the file
-// when the shim is updated. Until then, escaping allocations stay at
-// the Phase-2 default (Root) — see the comment in `analyze_function`
-// where these would otherwise be wired.
+// `vow-clif-shim` learns hidden-caller-region routing for `IOP_REGION_ALLOC`.
+// Until then, escaping allocations stay at the Phase-2 default (Root) — see
+// the comment in `analyze_function` where these would otherwise be wired.
 fn region_caller0() -> i64 {
     // RegionId::Caller(HiddenRegionIdx(0)) packed: kind=CALLER, val=0.
     region_pack(REGION_KIND_CALLER(), 0)
@@ -899,6 +1143,38 @@ fn extern_fresh_in_caller(sym: String) -> bool {
 
 fn deep_ret_uninit() -> DeepRet {
     DeepRet { kind: RSUM_INTERNAL_UNINIT(), aux: 0, aliases: Vec::new() }
+}
+
+fn lookup_inst_or_default(id_to_inst: Vec<IrInst>, id: i64) -> IrInst {
+    if id >= 0 && id < id_to_inst.len() {
+        return id_to_inst[id];
+    }
+    ir_inst_new(-1, 0, 0, Vec::new(), 0, 0, 0, String::from(""))
+}
+
+fn trace_origin_shallow(id_to_inst: Vec<IrInst>, id: i64) -> DeepRet {
+    let inst: IrInst = lookup_inst_or_default(id_to_inst, id);
+    if inst.id < 0 {
+        return deep_ret_const_global();
+    }
+    if inst.op == IOP_GET_ARG() {
+        return DeepRet { kind: RSUM_KIND_ALIAS_OF(), aux: inst.dv, aliases: Vec::new() };
+    }
+    if inst.op == IOP_REGION_ALLOC() {
+        return DeepRet { kind: RSUM_KIND_FRESH_IN_CALLER(), aux: 0, aliases: Vec::new() };
+    }
+    if is_const_op(inst.op) {
+        return deep_ret_const_global();
+    }
+    deep_ret_const_global()
+}
+
+fn trace_param_shallow(id_to_inst: Vec<IrInst>, id: i64) -> i64 {
+    let inst: IrInst = lookup_inst_or_default(id_to_inst, id);
+    if inst.id >= 0 && inst.op == IOP_GET_ARG() {
+        return inst.dv;
+    }
+    -1
 }
 
 fn deep_origin(
@@ -1166,15 +1442,6 @@ fn resolve_uninit_return_kind(m: IrModule, fidx: i64, id_to_inst: Vec<IrInst>, p
     acc_kind
 }
 
-// TODO(#204): Pre-existing limitation — bails on the *first* `IOP_RETURN`
-// it finds and returns its `aux`. If a function has multiple Return sites
-// both typed `AliasOf` but aliasing different parameters,
-// `resolve_uninit_return_kind` (which joins across all Returns) can settle
-// on `AliasOf(N)` while this returns `aux` from whichever Return appears
-// first in block order — potentially a different index. Today this is
-// unreachable (the only callers feed in functions whose internal kind is
-// already `Uninit`, which is rare on the corpus), but Phase 9 should join
-// across all Returns the same way `resolve_uninit_return_kind` does.
 fn resolve_uninit_return_aux(m: IrModule, fidx: i64, kind: i64, id_to_inst: Vec<IrInst>, phi_arms: Vec<Vec<i64>>) -> i64 {
     if kind != RSUM_KIND_ALIAS_OF() {
         return 0;
@@ -1184,6 +1451,9 @@ fn resolve_uninit_return_aux(m: IrModule, fidx: i64, kind: i64, id_to_inst: Vec<
     let int_kinds_empty: Vec<i64> = Vec::new();
     let int_auxs_empty: Vec<i64> = Vec::new();
     let int_aliases_empty: Vec<Vec<i64>> = Vec::new();
+    let mut acc_kind: i64 = RSUM_INTERNAL_UNINIT();
+    let mut acc_aux: i64 = 0;
+    let mut acc_aliases: Vec<i64> = Vec::new();
     let mut bi: i64 = 0;
     while bi < bks.len() {
         let blk: IrBlock = bks[bi];
@@ -1193,11 +1463,22 @@ fn resolve_uninit_return_aux(m: IrModule, fidx: i64, kind: i64, id_to_inst: Vec<
             if inst.op == IOP_RETURN() && inst.args.len() > 0 {
                 let visiting: Vec<i64> = Vec::new();
                 let dr: DeepRet = deep_origin_inner(id_to_inst, phi_arms, inst.args[0], int_kinds_empty, int_auxs_empty, int_aliases_empty, visiting);
-                return dr.aux;
+                let arm_kind: i64 = dr.kind;
+                let arm_aux: i64 = dr.aux;
+                let arm_aliases: Vec<i64> = dr.aliases;
+                let nk: i64 = join_kinds(acc_kind, acc_aux, acc_aliases, arm_kind, arm_aux, arm_aliases);
+                let nl: Vec<i64> = join_aliases(acc_kind, acc_aux, acc_aliases, arm_kind, arm_aux, arm_aliases, nk);
+                let na: i64 = join_aux(acc_kind, acc_aux, arm_kind, arm_aux, nk);
+                acc_kind = nk;
+                acc_aux = na;
+                acc_aliases = nl;
             }
             ii = ii + 1;
         }
         bi = bi + 1;
+    }
+    if acc_kind == RSUM_KIND_ALIAS_OF() {
+        return acc_aux;
     }
     0
 }
@@ -1221,14 +1502,12 @@ fn region_vec_contains_i64(v: Vec<i64>, x: i64) -> bool {
 }
 
 // Currently unused — same scaffolding rationale as `region_caller0` above.
-// Becomes live once the clif-shim accepts non-Root regions on
-// `IOP_REGION_ALLOC` (issue #200, Phase 5).
+// Becomes live once the clif-shim accepts hidden caller regions on
+// `IOP_REGION_ALLOC`.
 fn collect_escaping_allocs(m: IrModule, f: IrFunction) -> Vec<i64> {
-    // Phase 3 minimal: a RegionAlloc inst escapes if its id appears as the
-    // sole arg of any Return in the same function (transitively through
-    // simple GetArg/Phi edges — covered by deep_kind path returning
-    // FreshInCaller). For a tracer-bullet, mark an alloc as escaping only
-    // if a Return reaches it directly (not via Phi chains).
+    // Conservative helper: a RegionAlloc inst escapes if its id appears as
+    // the sole arg of any Return in the same function. Full transitive
+    // handling happens in the return-summary walk above.
     let escaping: Vec<i64> = Vec::new();
     let bks: Vec<IrBlock> = f.blocks;
     // Pass 1: collect Return arg ids.
@@ -1402,39 +1681,20 @@ fn tarjan_sccs(cg: Vec<Vec<i64>>, n: i64) -> Vec<Vec<i64>> {
 
 // ---------------------------------------------------------------------------
 // Block-region marker insertion (mirror of vow-ir/src/region.rs
-// `insert_region_markers`). Tags every non-escaping `IOP_REGION_ALLOC` with
-// `Block(defining_block)` and brackets the containing block with
-// `IOP_REGION_OPEN` / `IOP_REGION_CLOSE` markers per spec §3.5 criterion 1.
+// `insert_region_markers`). Brackets blocks that already contain a
+// `REGION_KIND_BLOCK` heap-producing instruction with `IOP_REGION_OPEN` /
+// `IOP_REGION_CLOSE` markers per spec §3.5 criterion 1.
 //
-// Phase 4 status: this function is a NO-OP (the body returns the module
-// unchanged) because:
-//   1. The Rust pass equivalent (`vow-ir/src/region.rs::lub_to_region_id`)
-//      defers `Block(_)` emission to Phase 9 (#204) until `must_outlive`
-//      tracks every use of a heap-typed value (regular `FieldGet`/`Load`,
-//      non-store-effect call args, Phi-merged values).
-//   2. To stay aligned with the Rust pass, the self-hosted equivalent must
-//      defer the same way. The implementation below remains as scaffolding
-//      so Phase 9 can flip a single switch.
-//   3. The shim rejects `REGION_KIND_CALLER` with `k > 0` (S1
-//      vow-clif-shim/src/lib.rs); escaping allocs continue to route to
-//      `Root` until full hidden-region plumbing lands.
-//
-// `frontend.vow` therefore does NOT call this function in Phase 4. The
-// body below is unreachable (the early `return m;` short-circuits it) and
-// remains only as Phase 9 scaffolding — it is NOT exercised by any test
-// today. When Phase 9 lifts the `Block(_)` deferral in `region.rs`, drop
-// the early return here, wire the call from `frontend.vow`, and add a
-// differential test against the Rust pass.
+// Phase 9 status: this is live for safe local block regions. It intentionally
+// does not retag `IOP_REGION_ALLOC` by itself; inference decides which values
+// are safe to place in a block region, and this pass only materializes markers.
 // ---------------------------------------------------------------------------
 
 fn insert_region_markers_module(m: IrModule) -> IrModule {
-    // No-op for Phase 4 — see header comment for rationale.
-    return m;
     let n_funcs: i64 = m.functions.len();
     let mut fi: i64 = 0;
     while fi < n_funcs {
         let f: IrFunction = m.functions[fi];
-        let escaping_ids: Vec<i64> = collect_escaping_allocs(m, f);
 
         // Find the largest existing inst id so we can mint fresh ones.
         let mut max_id: i64 = 0;
@@ -1452,26 +1712,7 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
         }
         let mut next_id: i64 = max_id + 1;
 
-        // Pass 1: tag non-escaping RegionAlloc insts with Block(defining_block).
-        let mut bi2: i64 = 0;
-        while bi2 < f.blocks.len() {
-            let blk: IrBlock = f.blocks[bi2];
-            let mut ii2: i64 = 0;
-            while ii2 < blk.insts.len() {
-                let inst: IrInst = blk.insts[ii2];
-                if inst.op == IOP_REGION_ALLOC()
-                    && !region_vec_contains_i64(escaping_ids, inst.id)
-                {
-                    let block_region: i64 = region_pack(REGION_KIND_BLOCK(), blk.id);
-                    blk.insts[ii2] = ir_inst_set_region(inst, block_region);
-                }
-                ii2 = ii2 + 1;
-            }
-            f.blocks[bi2] = blk;
-            bi2 = bi2 + 1;
-        }
-
-        // Pass 2: collect blocks that now contain a Block-tagged alloc.
+        // Pass 1: collect blocks that contain a Block-tagged heap producer.
         let block_regions: Vec<i64> = Vec::new();
         let mut bi3: i64 = 0;
         while bi3 < f.blocks.len() {
@@ -1491,7 +1732,7 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
             bi3 = bi3 + 1;
         }
 
-        // Pass 3: insert RegionOpen at start of marked blocks and
+        // Pass 2: insert RegionOpen at start of marked blocks and
         // RegionClose just before the terminator.
         let mut bi4: i64 = 0;
         while bi4 < f.blocks.len() {

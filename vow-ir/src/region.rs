@@ -715,6 +715,9 @@ fn analyze_function(
         }
     }
 
+    collect_regular_use_markers(func, &mut must_outlive);
+    propagate_alias_markers(func, summaries, &phi_arms, &mut must_outlive);
+
     // Compute return-region contributions in a deep pass, walking Phi/Call
     // origins with the current summaries fixed. This is the canonical
     // path; the in-handle_inst Return shortcut only flags virtual-caller
@@ -724,7 +727,7 @@ fn analyze_function(
     // Compute LUB-derived RegionId for every heap-producing inst.
     for block in &func.blocks {
         for inst in &block.insts {
-            if !is_heap_producing(inst) {
+            if !is_heap_producing(inst, summaries) {
                 continue;
             }
             let markers = must_outlive.get(&inst.id).cloned().unwrap_or_default();
@@ -743,11 +746,19 @@ fn extern_fresh_in_caller(sym: &str) -> bool {
     )
 }
 
-fn is_heap_producing(inst: &Inst) -> bool {
+fn is_heap_producing(inst: &Inst, summaries: &[InternalSummary]) -> bool {
     matches!(inst.opcode, Opcode::RegionAlloc)
         || matches!(
             (&inst.opcode, &inst.data),
             (Opcode::Call, InstData::CallExtern(sym)) if extern_fresh_in_caller(sym)
+        )
+        || matches!(
+            (&inst.opcode, &inst.data),
+            (Opcode::Call, InstData::CallTarget(callee_id))
+                if summaries
+                    .get(callee_id.0 as usize)
+                    .is_some_and(|s| s.return_region
+                        == InternalReturnRegion::Published(RegionConstraint::FreshInCaller))
         )
 }
 
@@ -895,37 +906,96 @@ fn add_marker(
     must_outlive.entry(inst_id).or_default().insert(marker);
 }
 
-/// After a call returns AliasOf(j), the result inst is *the same value* as
-/// arg[j] from the must_outlive standpoint: any marker on the result must
-/// also apply to arg[j], and vice versa.
-///
-/// **Currently inert in the forward sweep.** `handle_inst` invokes this at
-/// the point a `Call` is processed, but no downstream consumer (e.g., a
-/// `Return` that marks the call result `VirtualCaller`) has run yet — so
-/// `must_outlive[result_id]` is always empty here and the function returns
-/// without doing anything. The return-region summary is correctly
-/// computed by the separate `compute_return_region` deep pass below, so
-/// this no-op does not affect Phase 3 outputs.
-///
-/// TODO(Phase 5 / issue #200): once store-effect propagation lands, run
-/// `propagate_alias` either as a backward sweep after the must_outlive
-/// forward pass completes, or as a dedicated pass that walks
-/// `Opcode::Call` results once their downstream uses are visible. Either
-/// approach makes the function load-bearing for AliasOf-driven
-/// arena-routing decisions on call results.
+fn collect_regular_use_markers(
+    func: &Function,
+    must_outlive: &mut BTreeMap<InstId, BTreeSet<MustOutliveMarker>>,
+) {
+    for block in &func.blocks {
+        for inst in &block.insts {
+            for &arg_id in &inst.args {
+                add_marker(must_outlive, arg_id, MustOutliveMarker::Block(block.id));
+                if matches!(
+                    inst.opcode,
+                    Opcode::Call | Opcode::Store | Opcode::FieldSet | Opcode::Upsilon
+                ) {
+                    add_marker(must_outlive, arg_id, MustOutliveMarker::Root);
+                }
+            }
+        }
+    }
+}
+
+fn propagate_alias_markers(
+    func: &Function,
+    summaries: &[InternalSummary],
+    phi_arms: &BTreeMap<InstId, Vec<InstId>>,
+    must_outlive: &mut BTreeMap<InstId, BTreeSet<MustOutliveMarker>>,
+) {
+    let mut alias_edges: Vec<(InstId, InstId)> = Vec::new();
+    for (phi_id, arms) in phi_arms {
+        for &arm_id in arms {
+            alias_edges.push((*phi_id, arm_id));
+        }
+    }
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.opcode != Opcode::Call {
+                continue;
+            }
+            let InstData::CallTarget(callee_id) = &inst.data else {
+                continue;
+            };
+            let Some(summary) = summaries.get(callee_id.0 as usize) else {
+                continue;
+            };
+            match &summary.return_region {
+                InternalReturnRegion::Published(RegionConstraint::AliasOf(j)) => {
+                    let j_idx = *j as usize;
+                    if j_idx < inst.args.len() {
+                        alias_edges.push((inst.id, inst.args[j_idx]));
+                    }
+                }
+                InternalReturnRegion::Published(RegionConstraint::AliasOfAny(js)) => {
+                    for j in js {
+                        let j_idx = *j as usize;
+                        if j_idx < inst.args.len() {
+                            alias_edges.push((inst.id, inst.args[j_idx]));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut changed = true;
+    let mut iters = 0usize;
+    let bound = alias_edges.len().saturating_add(func.blocks.len()).max(8);
+    while changed && iters <= bound {
+        changed = false;
+        iters += 1;
+        for &(result_id, arg_id) in &alias_edges {
+            changed |= propagate_alias(must_outlive, result_id, arg_id);
+        }
+    }
+}
+
+/// After a Phi or call returns an alias, the result inst is the same value as
+/// its arm/arg from the must_outlive standpoint: markers on the result must
+/// also apply to the origin.
 fn propagate_alias(
     must_outlive: &mut BTreeMap<InstId, BTreeSet<MustOutliveMarker>>,
     result_id: InstId,
     arg_id: InstId,
-) {
+) -> bool {
     let result_markers = must_outlive.get(&result_id).cloned().unwrap_or_default();
     if result_markers.is_empty() {
-        return;
+        return false;
     }
-    must_outlive
-        .entry(arg_id)
-        .or_default()
-        .extend(result_markers);
+    let entry = must_outlive.entry(arg_id).or_default();
+    let before = entry.len();
+    entry.extend(result_markers);
+    entry.len() != before
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -969,30 +1039,14 @@ fn lub_to_region_id(markers: &BTreeSet<MustOutliveMarker>, defining_block: Block
     if has_caller {
         return RegionId::Caller(HiddenRegionIdx(0));
     }
-    // ── Phase 4 (CURRENT BEHAVIOUR) ────────────────────────────────────
-    // All pure-block-marker / empty-set cases are routed to `Root`.
-    // The classification logic below (Phase 9 target) is NOT active
-    // yet — we cannot safely emit `Block(_)` until the `must_outlive`
-    // pass tracks every use of the value (regular `FieldGet`/`Load`,
-    // non-store-effect call args, Pizlo-Phi uses). An untracked read
-    // in a sibling block would consume freed memory after
-    // `RegionClose`. `Root` is conservatively safe — process-lifetime
-    // storage strictly outlives any concrete block LUB.
-    //
-    // ── Phase 9 (#204) target classification, FOR REFERENCE ────────────
-    // Once `must_outlive` is complete, the bullets below describe the
-    // intended behaviour:
-    //   - Empty set → defining block (its narrowest possible region).
-    //   - Single marker == defining block → that block.
-    //   - Anything else (different single block, multiple blocks) →
-    //     `Root` (no block-tree dominance info; returning
-    //     `Block(other)` for an alloc in a different basic block
-    //     would risk use-after-free when `other`'s arena closes).
-    //
-    // The match below is the Phase 9 dispatch, retained as a
-    // structural placeholder; for now we discard `blocks` and return
-    // `Root` unconditionally.
-    let _ = (blocks, defining_block);
+    blocks.sort_unstable();
+    blocks.dedup();
+    if blocks.is_empty() || (blocks.len() == 1 && blocks[0] == defining_block) {
+        return RegionId::Block(defining_block);
+    }
+    // Conservative Phase 9 rule: a concrete-block use outside the defining
+    // block needs full block-tree dominance/LUB to place safely. Until that
+    // exists, Root outlives all blocks without risking a premature close.
     RegionId::Root
 }
 
@@ -1251,15 +1305,11 @@ fn origin_to_constraint(origin: &ValueOrigin) -> RegionConstraint {
 
 /// Phase 5 partial conflict detection (spec §4.4).
 ///
-/// **Self-hosted gap (#204):** the self-hosted `compiler/region.vow` has
-/// no equivalent of this function today. The gap is currently masked
-/// because the self-hosted port also defers store-effect *inference*
-/// (see `compiler/region.vow` `analyze_function`'s "Phase 3 minimal"
-/// note), so `store_effects` is always empty on the self-hosted path
-/// and no call site reaches this check. Both pieces — the inference
-/// and the conflict emission — must land together on the self-hosted
-/// side before the differential gate stays meaningful for programs
-/// that exercise this diagnostic.
+/// The self-hosted `compiler/region.vow` mirrors this in two phases: it
+/// publishes direct `Store`/`FieldSet` effects during fixed-point iteration,
+/// then checks call sites once after summaries converge. Keeping diagnostic
+/// emission outside the SCC loop avoids duplicate reports while preserving the
+/// same source-visible rejection as this Rust path.
 ///
 /// Called during the forward sweep when an `Opcode::Call` site processes
 /// a callee store-effect of shape `(target_param, AliasOf(p))`: the callee
@@ -1283,7 +1333,7 @@ fn origin_to_constraint(origin: &ValueOrigin) -> RegionConstraint {
 ///   hoist the alloc, copy via `pin_to_root`, or restructure the return
 ///   flow per §4.4 + issue #200.
 ///
-/// Deferred to Phase 9 (#204):
+/// Still outside this partial checker:
 ///   * Full block-tree LUB requires a dominator tree (`lub_to_region_id`
 ///     currently routes undecidable block-marker sets to `Root` — the
 ///     pre-existing §4.4 compliance gap shipped with Phase 4).
@@ -2019,9 +2069,9 @@ mod tests {
         let mut m = module(vec![f]);
         infer_regions(&mut m, "test.vow");
         let inst0 = &m.functions[0].blocks[0].insts[0];
-        // The alloc has no must_outlive contributions in Phase 3 minimal —
-        // it falls back to Root. This is conservative; Phase 4 will tighten.
-        assert!(matches!(inst0.region, RegionId::Root | RegionId::Block(_)));
+        // A heap value with no escaping uses can be scoped to its defining
+        // block; this is the no-alloc-block elision prerequisite from #204.
+        assert_eq!(inst0.region, RegionId::Block(BlockId(0)));
         assert_eq!(
             m.functions[0].summary.return_region,
             RegionConstraint::ConstantGlobal,
@@ -2032,9 +2082,8 @@ mod tests {
     #[test]
     fn markers_inserted_for_non_empty_block_region() {
         // The marker insertion pass keys off `inst.region == Block(_)`. We
-        // hand-tag the alloc to exercise the marker pass directly — the
-        // region pass's own `Block(_)` emission is currently disabled (see
-        // `local_alloc_assigned_to_root_until_use_set_is_complete`).
+        // hand-tag the alloc to exercise the marker pass directly without
+        // depending on the inference pass shape.
         let mut alloc = inst(
             0,
             Opcode::RegionAlloc,
@@ -2108,13 +2157,7 @@ mod tests {
     }
 
     #[test]
-    fn local_alloc_assigned_to_root_until_use_set_is_complete() {
-        // Phase 4 / S3 (deferred to Phase 9 / #204): non-escaping local
-        // allocs would ideally land in `Block(defining_block)`, but
-        // `must_outlive` currently misses `FieldGet` / `Load` / non-store-
-        // effect call args. Without a complete use-set we cannot safely
-        // close the block's arena while uses might survive. The pass falls
-        // back to `Root` until `must_outlive` is extended.
+    fn local_alloc_used_only_in_defining_block_routes_to_block_region() {
         let insts = vec![
             inst(
                 0,
@@ -2123,14 +2166,91 @@ mod tests {
                 vec![],
                 InstData::AllocSize { size: 16, align: 8 },
             ),
-            inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(1, Opcode::Load, Ty::I64, vec![0], InstData::None),
             inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
         ];
         let f = function(0, "local", vec![], Ty::I64, vec![block(0, insts)]);
         let mut m = module(vec![f]);
         infer_regions(&mut m, "test.vow");
         let inst0 = &m.functions[0].blocks[0].insts[0];
-        assert_eq!(inst0.region, RegionId::Root);
+        assert_eq!(inst0.region, RegionId::Block(BlockId(0)));
+        insert_region_markers(&mut m);
+        assert_eq!(
+            m.functions[0].blocks[0].insts[0].opcode,
+            Opcode::RegionOpen,
+            "non-empty block region should open at block entry"
+        );
+        assert!(
+            m.functions[0].blocks[0]
+                .insts
+                .iter()
+                .any(|i| i.opcode == Opcode::RegionClose),
+            "non-empty block region should close before the terminator"
+        );
+    }
+
+    #[test]
+    fn alloc_used_from_another_block_stays_root() {
+        let b0_insts = vec![
+            inst(
+                0,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                1,
+                Opcode::Jump,
+                Ty::Unit,
+                vec![],
+                InstData::JumpTarget(BlockId(1)),
+            ),
+        ];
+        let b1_insts = vec![
+            inst(2, Opcode::Load, Ty::I64, vec![0], InstData::None),
+            inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+        ];
+        let f = function(
+            0,
+            "cross_block",
+            vec![],
+            Ty::I64,
+            vec![block(0, b0_insts), block(1, b1_insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m, "test.vow");
+        let inst0 = &m.functions[0].blocks[0].insts[0];
+        assert_eq!(
+            inst0.region,
+            RegionId::Root,
+            "uses outside the defining block must stay conservative"
+        );
+    }
+
+    #[test]
+    fn fresh_in_caller_call_result_used_locally_routes_to_block_region() {
+        let callee = build_returning_alloc();
+        let caller_insts = vec![
+            inst(
+                10,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![],
+                InstData::CallTarget(FuncId(0)),
+            ),
+            inst(11, Opcode::Load, Ty::I64, vec![10], InstData::None),
+            inst(12, Opcode::Return, Ty::Unit, vec![11], InstData::None),
+        ];
+        let caller = function(1, "caller", vec![], Ty::I64, vec![block(0, caller_insts)]);
+        let mut m = module(vec![callee, caller]);
+        infer_regions(&mut m, "test.vow");
+        let call = &m.functions[1].blocks[0].insts[0];
+        assert_eq!(
+            call.region,
+            RegionId::Block(BlockId(0)),
+            "FreshInCaller call result should allocate in the caller's local block"
+        );
     }
 
     #[test]

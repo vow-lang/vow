@@ -162,7 +162,8 @@ fn frontend_lower_path(path: String) -> LoweredFrontend [io] {
             // in place; emits any RegionConflict diagnostics through dctx so
             // they reach the existing CompileFailed JSON path.
             let lowered: IrModule = lower_module_vow(prep.merged, prep.str_eids, checked.path);
-            infer_regions_module(lowered, checked.dctx, checked.path)
+            let inferred: IrModule = infer_regions_module(lowered, checked.dctx, checked.path);
+            insert_region_markers_module(inferred)
         }
     };
     // Refresh n_errors so any region diagnostics emitted above propagate to

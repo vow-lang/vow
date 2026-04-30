@@ -287,50 +287,47 @@ fn small_module_uninit_never_leaks_after_round_trip() {
     }
 }
 
-/// Documents the **Rust ↔ self-hosted divergence** on the
-/// alloc→param-via-callee shape (Phase 5 partial RegionConflict
-/// detection, issue #200).
-///
-/// Today's behaviour:
-/// - `vow-ir/src/region.rs::check_store_conflict` (the Rust frontend)
-///   emits `RegionConflict { blame: Callee }` for this shape.
-/// - `compiler/region.vow` has no equivalent. The gap is masked
-///   because the self-hosted side also defers store-effect *inference*
-///   (`compiler/region.vow:436`-style "Phase 3 minimal" comment), so
-///   `store_effects` is always empty and no call site reaches the
-///   conflict check.
-///
-/// The differential gate in `scripts/full_test.sh` therefore can't
-/// validate this code path: both sides emit no `RegionConflict` (Rust
-/// because the input doesn't trigger it on today's corpus,
-/// self-hosted because it can never trigger).
-///
-/// **This `#[ignore]` test makes that gap visibly load-bearing in the
-/// suite.** When #204 lands store-effect inference + the
-/// `check_store_conflict` equivalent on the self-hosted path, this
-/// test must:
-/// 1. drop the `#[ignore]` annotation;
-/// 2. construct a `.vow` program exercising the alloc→param-via-callee
-///    shape (the same logical shape the inline
-///    `region_conflict_alloc_into_param_via_callee_store_effect` test
-///    in `vow-ir/src/region.rs` exercises at the IR level);
-/// 3. assert both compilers emit exactly one `RegionConflict` with
-///    `blame: Callee` on the same source span;
-/// 4. fail loudly if only one side emits.
-///
-/// Until #204 lands, this test fails with `todo!()` if accidentally
-/// run, preventing #204 from merging without implementing the parity
-/// check it's tracking.
+/// Source-level regression for the same logical shape as the inline
+/// `region_conflict_alloc_into_param_via_callee_store_effect` IR test:
+/// a callee stores arg1 into arg0, and a caller passes a parameter container
+/// plus a fresh block-local allocation. The checked-in `tests/error/` fixture
+/// is also consumed by the self-hosted shell suite after bootstrap.
 #[test]
-#[ignore = "tracks #204 (Phase 9): self-hosted check_store_conflict equivalent"]
 fn parity_alloc_into_param_via_callee_emits_region_conflict() {
-    todo!(
-        "Implement when #204 (Phase 9 self-hosted store-effect inference + \
-         check_store_conflict equivalent) lands. Construct a .vow program \
-         exercising the alloc→param-via-callee shape (mirrors the inline \
-         region_conflict_alloc_into_param_via_callee_store_effect test in \
-         vow-ir/src/region.rs::tests), run it through both ./target/release/vow \
-         and build/vowc, and assert both emit exactly one RegionConflict \
-         with blame: Callee on the same source span."
-    )
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let fixture = root
+        .join("tests")
+        .join("error")
+        .join("region_conflict_store_effect.vow");
+    let out = Command::new(env!("CARGO_BIN_EXE_vow"))
+        .args(["build", "--no-verify"])
+        .arg(&fixture)
+        .output()
+        .expect("failed to run vow");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "fixture should fail with RegionConflict\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("failed to parse vow stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    assert_eq!(parsed["status"].as_str(), Some("CompileFailed"));
+    let diagnostics = parsed["diagnostics"]
+        .as_array()
+        .expect("diagnostics should be an array");
+    let conflicts: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionConflict"))
+        .collect();
+    assert_eq!(
+        conflicts.len(),
+        1,
+        "expected exactly one RegionConflict diagnostic\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert_eq!(conflicts[0]["blame"].as_str(), Some("callee"));
 }
