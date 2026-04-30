@@ -495,9 +495,14 @@ fn emit_unmodelled(out: String, inst: IrInst) {
 // Sentinel vow_id paired with `emit_unsupported_for_verification`.
 // Mirrors `vow_verify::c_emitter::UNSUPPORTED_OP_VOW_ID = u32::MAX`. Reserved so
 // the diagnostic pipeline can distinguish a verifier-limitation failure from
-// a real vow violation.
+// a real vow violation. Single source of truth for the self-hosted side; the
+// stringified form is derived via `i64_to_str` so the two cannot drift.
+fn unsupported_op_vow_id() -> i64 {
+    4294967295
+}
+
 fn unsupported_op_vow_id_str() -> String {
-    String::from("4294967295")
+    i64_to_str(unsupported_op_vow_id())
 }
 
 // Fail-closed marker for opcodes that have side effects but no verifier model.
