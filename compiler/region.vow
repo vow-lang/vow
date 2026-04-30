@@ -785,6 +785,15 @@ fn check_store_effects_at_call(
                 );
             }
         } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
+            // Unreachable on today's pipeline (kept for forward compat).
+            // `trace_origin_shallow` only ever produces `AliasOf`,
+            // `FreshInCaller`, or `ConstantGlobal` source constraints, so
+            // store_effects with `AliasOfAny` source cannot be generated.
+            // The Rust `handle_inst` Call arm also skips this case
+            // (`_ => {}` at vow-ir/src/region.rs). Even if a future origin
+            // tracer produces `AliasOfAny`, `check_store_conflict` early-
+            // returns unless the source is `FreshInCaller`, which a
+            // parameter-alias source can't be — so no false positive.
             if i >= flat.len() { return; }
             let n: i64 = flat[i];
             i = i + 1;
@@ -826,6 +835,14 @@ fn check_store_conflict(
     let source_inst: IrInst = lookup_inst_or_default(id_to_inst, source_arg_id);
     let span_start: i64 = if source_inst.id >= 0 && source_inst.olen > 0 { source_inst.ostart } else { call_inst.ostart };
     let span_len: i64 = if source_inst.id >= 0 && source_inst.olen > 0 { source_inst.olen } else { call_inst.olen };
+    // Diagnostic shape divergence from the Rust pass: the Rust
+    // `check_store_conflict` (vow-ir/src/region.rs) emits a primary span
+    // (the source alloc) plus two secondary spans (target container span
+    // and call-site span) so the user can see the full alloc → store →
+    // container chain. The self-hosted `Diagnostic` in `compiler/diag.vow`
+    // currently models a single span + hints only; secondary spans need a
+    // structural extension to `diag_new` and the JSON / human emitters.
+    // Tracked alongside the other self-hosted diagnostic-infra gaps.
     let d: Diagnostic = diag_new(
         SEV_ERROR(),
         EC_REGION_CONFLICT(),
@@ -1002,6 +1019,17 @@ fn is_heap_producing_for_block_region(inst: IrInst, int_kinds: Vec<i64>) -> bool
     false
 }
 
+// TODO(scalability, follow-up to #204): this is O(blocks × insts × args)
+// per call, and `analyze_function` invokes it once per heap-producing
+// inst. Rough total per function: O(h × n) where h = heap producers,
+// n = total insts. The Rust pass achieves the same effect in O(n) by
+// folding all uses into a `must_outlive` map in a single forward sweep
+// (`collect_regular_use_markers` at vow-ir/src/region.rs:909-926) and
+// then reading per-id markers in O(markers) per producer. That refactor
+// is structural — it would change the analyze_function signature and
+// touch the bootstrap fixed point — and is intentionally deferred so
+// this PR stays scoped to Phase 9 routing. See CLAUDE.md "Scalability is
+// a requirement" for the long-term direction.
 fn value_used_only_in_block(f: IrFunction, id: i64, defining_block: i64) -> bool {
     let bks: Vec<IrBlock> = f.blocks;
     let mut bi: i64 = 0;
