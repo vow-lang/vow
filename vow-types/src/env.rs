@@ -1,5 +1,5 @@
 use crate::types::Ty;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use vow_syntax::ast::{Effect, Type as AstType};
 
 /// Signature of a function or method known to the type checker.
@@ -40,18 +40,36 @@ pub enum VariantKind {
     Struct(Vec<(String, Ty)>),
 }
 
+/// Collect, sort, and truncate the keys of a `HashMap` for hint candidates.
+///
+/// Producing a deterministic subset on the error path: keys are filtered by
+/// length, sorted lexicographically, and capped at `max_names`. This keeps
+/// the underlying map's hot-path lookups O(1) while ensuring the "did you
+/// mean" suggestion fired for the same source is reproducible across runs.
+fn sorted_capped_keys<V>(
+    map: &HashMap<String, V>,
+    max_names: usize,
+    max_len: usize,
+) -> Vec<String> {
+    let mut keys: Vec<&String> = map.keys().filter(|key| key.len() <= max_len).collect();
+    keys.sort_unstable();
+    keys.into_iter().take(max_names).cloned().collect()
+}
+
 /// Scope-based type environment.
 ///
 /// Maintains a stack of lexical scopes for variable bindings. Top-level definitions
 /// (functions, structs, enums) are stored separately and are always visible.
 pub struct TypeEnv {
-    /// Scope maps and definition tables on the "did you mean" hint path use
-    /// `BTreeMap` so that `all_var_names` / `all_fn_names` / `all_struct_names`
-    /// return a deterministic subset when the candidate cap is hit — otherwise
-    /// the suggested identifier would vary between runs for the same source.
-    scopes: Vec<BTreeMap<String, Ty>>,
-    fn_sigs: BTreeMap<String, FnSig>,
-    struct_defs: BTreeMap<String, StructInfo>,
+    // `HashMap` is used for the lookup tables because the type checker hits
+    // them on every variable reference, function call, and struct access —
+    // O(1) is the right complexity for those hot paths. The "did you mean"
+    // hint helpers (`all_var_names` / `all_fn_names` / `all_struct_names`)
+    // sort keys on demand so the truncated candidate subset stays
+    // deterministic even though the underlying iteration order is not.
+    scopes: Vec<HashMap<String, Ty>>,
+    fn_sigs: HashMap<String, FnSig>,
+    struct_defs: HashMap<String, StructInfo>,
     enum_defs: HashMap<String, EnumInfo>,
     type_aliases: HashMap<String, Ty>,
 }
@@ -65,9 +83,9 @@ impl Default for TypeEnv {
 impl TypeEnv {
     pub fn new() -> Self {
         let mut env = Self {
-            scopes: vec![BTreeMap::new()],
-            fn_sigs: BTreeMap::new(),
-            struct_defs: BTreeMap::new(),
+            scopes: vec![HashMap::new()],
+            fn_sigs: HashMap::new(),
+            struct_defs: HashMap::new(),
             enum_defs: HashMap::new(),
             type_aliases: HashMap::new(),
         };
@@ -601,7 +619,7 @@ impl TypeEnv {
     }
 
     pub fn push_scope(&mut self) {
-        self.scopes.push(BTreeMap::new());
+        self.scopes.push(HashMap::new());
     }
 
     pub fn pop_scope(&mut self) {
@@ -654,13 +672,16 @@ impl TypeEnv {
     }
 
     pub fn all_var_names(&self, max_names: usize, max_len: usize) -> Vec<String> {
+        // Walk scopes inner→outer so that, when the cap truncates the result,
+        // shadowing inner-scope bindings win over outer-scope leftovers. Each
+        // scope's keys are sorted before iteration so the candidate subset is
+        // deterministic across runs even though `HashMap` iteration is not.
         let mut names = Vec::with_capacity(max_names.min(32));
         let mut seen = HashSet::with_capacity(max_names.min(32));
         for scope in self.scopes.iter().rev() {
-            for key in scope.keys() {
-                if key.len() > max_len {
-                    continue;
-                }
+            let mut keys: Vec<&String> = scope.keys().filter(|key| key.len() <= max_len).collect();
+            keys.sort_unstable();
+            for key in keys {
                 if seen.insert(key) {
                     names.push(key.clone());
                     if names.len() >= max_names {
@@ -673,21 +694,11 @@ impl TypeEnv {
     }
 
     pub fn all_fn_names(&self, max_names: usize, max_len: usize) -> Vec<String> {
-        self.fn_sigs
-            .keys()
-            .filter(|name| name.len() <= max_len)
-            .take(max_names)
-            .cloned()
-            .collect()
+        sorted_capped_keys(&self.fn_sigs, max_names, max_len)
     }
 
     pub fn all_struct_names(&self, max_names: usize, max_len: usize) -> Vec<String> {
-        self.struct_defs
-            .keys()
-            .filter(|name| name.len() <= max_len)
-            .take(max_names)
-            .cloned()
-            .collect()
+        sorted_capped_keys(&self.struct_defs, max_names, max_len)
     }
 
     pub fn resolve(&self, ast_ty: &AstType) -> Result<Ty, String> {

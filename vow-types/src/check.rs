@@ -3073,6 +3073,11 @@ mod tests {
 
     #[test]
     fn edit_distance_short_circuits_when_too_far() {
+        // Length-difference fast path: |1 - 8| = 7 > 2, returns None before
+        // touching the DP table.
+        assert_eq!(bounded_edit_distance("a", "zzzzzzzz", 2), None);
+        // Row-min pruning path: same-length strings whose distance exceeds
+        // the cap, so the inter-row check rejects before the final row.
         assert_eq!(bounded_edit_distance("abcd", "wxyz", 2), None);
     }
 
