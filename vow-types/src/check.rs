@@ -41,11 +41,9 @@ fn bounded_edit_distance(a: &str, b: &str, max_distance: usize) -> Option<usize>
     (distance <= max_distance).then_some(distance)
 }
 
-// `MAX_HINT_CANDIDATES` is enforced here as a defensive backstop: while the
-// var/fn callers pre-bound their candidate vectors via `all_var_names` /
-// `all_fn_names`, the struct-field and `all_struct_names` callers pass slices
-// whose length comes from user code. The internal cap keeps the cost bounded
-// regardless of caller.
+// `MAX_HINT_CANDIDATES` is enforced here as a defensive backstop: the
+// struct-field caller passes `info.fields`, whose length comes from user
+// code. The internal cap keeps the cost bounded regardless of caller.
 fn suggest_similar(name: &str, candidates: &[String], max_distance: usize) -> Option<String> {
     if name.len() > MAX_HINT_IDENTIFIER_BYTES {
         return None;
@@ -1388,7 +1386,9 @@ impl<'e> Checker<'e> {
                 let info = self.env.lookup_struct(name).cloned();
                 match info {
                     None => {
-                        let candidates = self.env.all_struct_names();
+                        let candidates = self
+                            .env
+                            .all_struct_names(MAX_HINT_CANDIDATES, MAX_HINT_IDENTIFIER_BYTES);
                         let mut hints = Vec::new();
                         if let Some(s) = suggest_similar(name, &candidates, 3) {
                             hints.push(format!("did you mean `{s}`?"));

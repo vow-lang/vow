@@ -45,12 +45,13 @@ pub enum VariantKind {
 /// Maintains a stack of lexical scopes for variable bindings. Top-level definitions
 /// (functions, structs, enums) are stored separately and are always visible.
 pub struct TypeEnv {
-    scopes: Vec<HashMap<String, Ty>>,
-    /// `BTreeMap` (not `HashMap`) so `all_fn_names` returns a deterministic
-    /// subset when the candidate cap is hit — diagnostic output is part of
-    /// the binary fixed-point invariant.
+    /// Scope maps and definition tables on the "did you mean" hint path use
+    /// `BTreeMap` so that `all_var_names` / `all_fn_names` / `all_struct_names`
+    /// return a deterministic subset when the candidate cap is hit — otherwise
+    /// the suggested identifier would vary between runs for the same source.
+    scopes: Vec<BTreeMap<String, Ty>>,
     fn_sigs: BTreeMap<String, FnSig>,
-    struct_defs: HashMap<String, StructInfo>,
+    struct_defs: BTreeMap<String, StructInfo>,
     enum_defs: HashMap<String, EnumInfo>,
     type_aliases: HashMap<String, Ty>,
 }
@@ -64,9 +65,9 @@ impl Default for TypeEnv {
 impl TypeEnv {
     pub fn new() -> Self {
         let mut env = Self {
-            scopes: vec![HashMap::new()],
+            scopes: vec![BTreeMap::new()],
             fn_sigs: BTreeMap::new(),
-            struct_defs: HashMap::new(),
+            struct_defs: BTreeMap::new(),
             enum_defs: HashMap::new(),
             type_aliases: HashMap::new(),
         };
@@ -600,7 +601,7 @@ impl TypeEnv {
     }
 
     pub fn push_scope(&mut self) {
-        self.scopes.push(HashMap::new());
+        self.scopes.push(BTreeMap::new());
     }
 
     pub fn pop_scope(&mut self) {
@@ -680,8 +681,13 @@ impl TypeEnv {
             .collect()
     }
 
-    pub fn all_struct_names(&self) -> Vec<String> {
-        self.struct_defs.keys().cloned().collect()
+    pub fn all_struct_names(&self, max_names: usize, max_len: usize) -> Vec<String> {
+        self.struct_defs
+            .keys()
+            .filter(|name| name.len() <= max_len)
+            .take(max_names)
+            .cloned()
+            .collect()
     }
 
     pub fn resolve(&self, ast_ty: &AstType) -> Result<Ty, String> {
