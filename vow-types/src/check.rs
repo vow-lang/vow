@@ -3170,7 +3170,11 @@ mod tests {
         let names = env.all_var_names(3, 64);
         assert_eq!(
             names,
-            vec!["yak".to_string(), "zebra".to_string(), "aardvark".to_string()]
+            vec![
+                "yak".to_string(),
+                "zebra".to_string(),
+                "aardvark".to_string()
+            ]
         );
     }
 
