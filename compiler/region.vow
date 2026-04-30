@@ -785,6 +785,9 @@ fn check_store_effects_at_call(
                 );
             }
         } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
+            // FIXME: align with Rust `_ => {}` before enabling AliasOfAny
+            // origin tracing.
+            //
             // Unreachable on today's pipeline: `trace_origin_shallow` only ever
             // produces `AliasOf`, `FreshInCaller`, or `ConstantGlobal`, so
             // store_effects with `AliasOfAny` source cannot currently be generated.
