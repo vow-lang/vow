@@ -116,7 +116,16 @@ fn is_known_builtin(name: String) -> bool {
     || name == String::from("__vow_map_remove")
 }
 
+fn is_reserved_verifier_symbol(name: String) -> bool {
+    str_starts_with(name, String::from("__ESBMC_"))
+    || str_starts_with(name, String::from("__VERIFIER_"))
+}
+
 fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelable_cache_ids: Vec<i64>, modelable_cache_vals: Vec<i64>) -> bool {
+    if is_reserved_verifier_symbol(f.name) {
+        return false;
+    }
+
     let fid: i64 = f.id;
     let nc: i64 = modelable_cache_ids.len();
     let mut ci: i64 = 0;
