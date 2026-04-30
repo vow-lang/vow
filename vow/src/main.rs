@@ -5475,6 +5475,9 @@ fn run_pipeline_from_frontend(
     let cache_key = compile_cache.as_ref().and_then(|_| {
         cache::CompileCache::cache_key(frontend.dependencies(), &mode_str, &trace_str)
     });
+    if compile_cache.is_some() && cache_key.is_none() {
+        eprintln!("warning: compile cache bypassed — one or more dependencies could not be hashed");
+    }
 
     if let Some(ref cc) = compile_cache
         && let Some(ref key) = cache_key

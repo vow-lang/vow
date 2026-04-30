@@ -20,7 +20,7 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--no-verify`     | (off)       | Skip ESBMC static verification            |
 | `--dump-ir`       | (off)       | Print IR text to stdout and exit (no JSON output, no codegen) |
 | `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
-| `--no-cache`    | (off)       | Disable compile and verify caching           |
+| `--no-cache`    | (off)       | Disable verification result caching, and (for `--no-verify` builds) the compile-object cache. See "Compile-object cache behavior" below |
 | `--max-k-step <N>` | `50`     | ESBMC incremental BMC max iterations          |
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |

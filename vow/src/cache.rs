@@ -95,7 +95,7 @@ fn fnv1a_hash(data: &[u8]) -> u64 {
     hash
 }
 
-// Streaming FNV-1a so dependency-content hashing stays bounded-memory regardless of file size.
+// Streaming FNV-1a so dependency-content hashing stays bounded-memory regardless of file size. Caller must pass a blocking reader (e.g. `BufReader<File>`); a non-blocking `Read` returning 0 to mean "try again" would be misinterpreted as EOF.
 fn fnv1a_hash_reader<R: Read>(mut r: R) -> std::io::Result<u64> {
     let mut hash: u64 = 0xcbf29ce484222325;
     let mut buf = [0u8; 8192];
