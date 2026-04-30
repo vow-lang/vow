@@ -40,15 +40,7 @@ pub enum VariantKind {
     Struct(Vec<(String, Ty)>),
 }
 
-/// Pick the lexicographically smallest `max_names` keys from a `HashMap`.
-///
-/// Used on the "did you mean" hint path. Memory and work are bounded by
-/// `max_names`, not by the map size: we keep a max-heap capped at
-/// `max_names` and replace the largest entry whenever a smaller key is
-/// seen. That way an adversarial source with millions of definitions
-/// cannot inflate the diagnostic path beyond O(N · log max_names) time
-/// and O(max_names) memory, while still producing a deterministic
-/// candidate subset.
+/// Picks the lex-smallest `max_names` keys via a bounded max-heap so the hint path can't be inflated by adversarial input.
 fn sorted_capped_keys<V>(
     map: &HashMap<String, V>,
     max_names: usize,
@@ -81,12 +73,6 @@ fn sorted_capped_keys<V>(
 /// Maintains a stack of lexical scopes for variable bindings. Top-level definitions
 /// (functions, structs, enums) are stored separately and are always visible.
 pub struct TypeEnv {
-    // `HashMap` is used for the lookup tables because the type checker hits
-    // them on every variable reference, function call, and struct access —
-    // O(1) is the right complexity for those hot paths. The "did you mean"
-    // hint helpers (`all_var_names` / `all_fn_names` / `all_struct_names`)
-    // sort keys on demand so the truncated candidate subset stays
-    // deterministic even though the underlying iteration order is not.
     scopes: Vec<HashMap<String, Ty>>,
     fn_sigs: HashMap<String, FnSig>,
     struct_defs: HashMap<String, StructInfo>,
@@ -692,11 +678,7 @@ impl TypeEnv {
     }
 
     pub fn all_var_names(&self, max_names: usize, max_len: usize) -> Vec<String> {
-        // Walk scopes inner→outer so shadowing inner-scope bindings win over
-        // outer-scope leftovers under the cap. Each scope's contribution is
-        // selected with a bounded max-heap (capacity = `remaining`), so the
-        // hint path uses O(max_names) memory and O(N · log max_names) time
-        // independent of how many bindings the program declares.
+        // Inner-scope priority: each scope contributes via a bounded max-heap so the hint path stays O(max_names) memory.
         if max_names == 0 {
             return Vec::new();
         }
@@ -727,11 +709,10 @@ impl TypeEnv {
             let mut scope_names: Vec<&String> = heap.into_iter().collect();
             scope_names.sort_unstable();
             for key in scope_names {
-                if seen.insert(key.as_str()) {
-                    names.push(key.clone());
-                    if names.len() >= max_names {
-                        break;
-                    }
+                seen.insert(key.as_str());
+                names.push(key.clone());
+                if names.len() >= max_names {
+                    break;
                 }
             }
         }
