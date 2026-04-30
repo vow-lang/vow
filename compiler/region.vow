@@ -785,15 +785,15 @@ fn check_store_effects_at_call(
                 );
             }
         } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
-            // Unreachable on today's pipeline (kept for forward compat).
-            // `trace_origin_shallow` only ever produces `AliasOf`,
-            // `FreshInCaller`, or `ConstantGlobal` source constraints, so
-            // store_effects with `AliasOfAny` source cannot be generated.
-            // The Rust `handle_inst` Call arm also skips this case
-            // (`_ => {}` at vow-ir/src/region.rs). Even if a future origin
-            // tracer produces `AliasOfAny`, `check_store_conflict` early-
-            // returns unless the source is `FreshInCaller`, which a
-            // parameter-alias source can't be — so no false positive.
+            // Unreachable on today's pipeline: `trace_origin_shallow` only ever
+            // produces `AliasOf`, `FreshInCaller`, or `ConstantGlobal`, so
+            // store_effects with `AliasOfAny` source cannot currently be generated.
+            // DIVERGENCE: the Rust `handle_inst` Call arm skips `AliasOfAny`
+            // (`_ => {}` at vow-ir/src/region.rs). If a future origin tracer
+            // produces `AliasOfAny`, the self-hosted compiler would emit a
+            // RegionConflict for each alias element where the caller passes
+            // a fresh allocation, while Rust emits none. When AliasOfAny store
+            // effects land, align the two paths first.
             if i >= flat.len() { return; }
             let n: i64 = flat[i];
             i = i + 1;
@@ -1749,10 +1749,10 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
         // function rather than corrupt its IR.
         let mut already_has_markers: bool = false;
         let mut bi_g: i64 = 0;
-        while bi_g < f.blocks.len() {
+        while bi_g < f.blocks.len() && !already_has_markers {
             let blk_g: IrBlock = f.blocks[bi_g];
             let mut ii_g: i64 = 0;
-            while ii_g < blk_g.insts.len() {
+            while ii_g < blk_g.insts.len() && !already_has_markers {
                 let op_g: i64 = blk_g.insts[ii_g].op;
                 if op_g == IOP_REGION_OPEN() || op_g == IOP_REGION_CLOSE() {
                     already_has_markers = true;
