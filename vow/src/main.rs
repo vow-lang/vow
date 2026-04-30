@@ -18,8 +18,9 @@ use vow_codegen::{Backend, BuildMode, TraceMode};
 use vow_diag::{Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
     ConstantValue, Counterexample, DEFAULT_MAX_K_STEP, Encoding, Solver, SolverConfig,
-    VerificationResult, VerifyLimits, detect_constant_functions, emit_verify_c_source, find_esbmc,
-    run_with_fallback, verify_function_with_module_and_const_fns_configured,
+    UNSUPPORTED_OP_VOW_ID, VerificationResult, VerifyLimits, detect_constant_functions,
+    emit_verify_c_source, find_esbmc, run_with_fallback,
+    verify_function_with_module_and_const_fns_configured,
 };
 
 use cache::{CachedFailure, VerifyCache};
@@ -4656,12 +4657,22 @@ fn build_structured_counterexample(
 ) -> StructuredCounterexample {
     use vow_ir::InstData;
     let vid = ce.vow_id.unwrap_or(0);
+    // ESBMC tripped a fail-closed assertion that vow-verify's c_emitter inserts
+    // for opcodes the verifier model does not handle. The sentinel id is
+    // reserved and never matches a user-authored vow, so synthesize a
+    // diagnostic that an agent can act on instead of letting the code below
+    // fall through to the generic "unmatched id" path.
+    let unsupported_op = ce.vow_id == Some(UNSUPPORTED_OP_VOW_ID);
     let vow_entry = ce
         .vow_id
         .and_then(|id| func.vows.iter().find(|v| v.id.0 == id));
-    let violation = vow_entry
-        .map(|v| v.description.clone())
-        .unwrap_or_else(|| ce.description.clone());
+    let violation = if unsupported_op {
+        "function uses side-effecting operations not supported for verification".to_string()
+    } else {
+        vow_entry
+            .map(|v| v.description.clone())
+            .unwrap_or_else(|| ce.description.clone())
+    };
     let blame = vow_entry
         .map(|v| match v.blame {
             vow_diag::Blame::Caller => "caller",
@@ -8880,6 +8891,67 @@ fn main() -> i32 {
         assert_eq!(sce.call_sites.len(), 1);
         assert_eq!(sce.call_sites[0].caller_function, "main");
         assert_eq!(sce.call_sites[0].offset, 120);
+    }
+
+    #[test]
+    fn structured_counterexample_unsupported_op_sentinel() {
+        use vow_ir::*;
+        use vow_syntax::span::Span;
+
+        let func = Function {
+            id: FuncId(0),
+            name: "uses_unsupported".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "some real vow".to_string(),
+                blame: vow_diag::Blame::Callee,
+                bindings: vec![],
+                file: "test.vow".to_string(),
+                offset: 0,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![Inst {
+                    id: InstId(0),
+                    opcode: Opcode::Return,
+                    ty: Ty::Unit,
+                    args: vec![],
+                    data: InstData::None,
+                    origin: Span::new(0, 0),
+                    region: RegionId::Root,
+                }],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+        };
+
+        let ce = vow_verify::Counterexample {
+            description: "[Counterexample]".to_string(),
+            vow_id: Some(UNSUPPORTED_OP_VOW_ID),
+            values: vec![],
+            block_visits: vec![],
+            raw_output: String::new(),
+        };
+
+        let call_sites = std::collections::HashMap::new();
+        let sce = build_structured_counterexample(&func, &ce, "test.vow", &call_sites);
+
+        assert_eq!(sce.vow_id, UNSUPPORTED_OP_VOW_ID);
+        assert!(
+            sce.violation.contains("not supported for verification"),
+            "expected unsupported-op message, got {:?}",
+            sce.violation
+        );
+        assert_ne!(
+            sce.violation, "[Counterexample]",
+            "must not fall through to raw ESBMC line"
+        );
+        assert_eq!(sce.blame, "none");
+        assert!(sce.source.is_none());
     }
 
     #[test]
