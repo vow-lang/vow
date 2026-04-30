@@ -38,7 +38,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use vow_diag::Severity;
-use vow_ir::{RegionConstraint, decode_module, encode_module};
+use vow_ir::{decode_module, encode_module, RegionConstraint};
 
 /// Assert canonical-form invariants on every function's summary.
 fn assert_canonical_summaries(module: &vow_ir::Module) {
@@ -150,8 +150,8 @@ fn small_module_uninit_never_leaks_after_round_trip() {
     // run the pass, encode + decode via the public .vmod path, and
     // assert canonical-form invariants survive the round trip.
     use vow_ir::{
-        BasicBlock, BlockId, FuncId, Function, HiddenRegionIdx, Inst, InstData, InstId, Module,
-        Opcode, RegionId, RegionSummary, Ty, VowEntry, VowId, infer_regions,
+        infer_regions, BasicBlock, BlockId, FuncId, Function, HiddenRegionIdx, Inst, InstData,
+        InstId, Module, Opcode, RegionId, RegionSummary, Ty, VowEntry, VowId,
     };
     use vow_syntax::ast::Effect;
     use vow_syntax::span::Span;
@@ -290,10 +290,12 @@ fn small_module_uninit_never_leaks_after_round_trip() {
 /// Source-level regression for the same logical shape as the inline
 /// `region_conflict_alloc_into_param_via_callee_store_effect` IR test:
 /// a callee stores arg1 into arg0, and a caller passes a parameter container
-/// plus a fresh block-local allocation. The checked-in `tests/error/` fixture
-/// is also consumed by the self-hosted shell suite after bootstrap.
+/// plus a fresh block-local allocation. Exercises only the Rust frontend
+/// here; the same fixture is picked up by the self-hosted shell suite via
+/// its `// TEST: error-code RegionConflict` annotation, which runs
+/// `build/vowc` on it after bootstrap.
 #[test]
-fn parity_alloc_into_param_via_callee_emits_region_conflict() {
+fn rust_alloc_into_param_via_callee_emits_region_conflict() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()

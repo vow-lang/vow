@@ -909,18 +909,19 @@ fn analyze_function(
     }
 
     // Tag local heap-producing instructions with block regions when all direct
-    // uses stay in the defining block. This is the self-hosted Phase 9 subset
-    // that the shim can lower today: `IOP_REGION_ALLOC` and FreshInCaller
-    // extern wrappers can route through `REGION_KIND_BLOCK`; caller-routed
-    // internal function returns remain Root because the shim still rejects
-    // `REGION_KIND_CALLER` for `IOP_REGION_ALLOC`.
+    // uses stay in the defining block. The self-hosted Phase 9 subset routes
+    // three cases through `REGION_KIND_BLOCK`: `IOP_REGION_ALLOC`, FreshInCaller
+    // extern wrappers, and `IOP_CALL` + `IDATA_CALL_TARGET` whose callee
+    // summary is `FRESH_IN_CALLER`. The block-region tag uses
+    // `REGION_KIND_BLOCK`, not `REGION_KIND_CALLER`, so the shim's pending
+    // hidden-caller-region work is irrelevant here.
     let mut rbi: i64 = 0;
     while rbi < n_bks {
         let rb: IrBlock = bks[rbi];
         let mut rii: i64 = 0;
         while rii < rb.insts.len() {
             let rinst: IrInst = rb.insts[rii];
-            if is_heap_producing_for_block_region(rinst)
+            if is_heap_producing_for_block_region(rinst, int_kinds)
                 && value_used_only_in_block(f, rinst.id, rb.id)
             {
                 put_inst_region(
@@ -977,11 +978,17 @@ fn analyze_function(
     false
 }
 
-fn is_heap_producing_for_block_region(inst: IrInst) -> bool {
+fn is_heap_producing_for_block_region(inst: IrInst, int_kinds: Vec<i64>) -> bool {
     if inst.op == IOP_REGION_ALLOC() {
         return true;
     }
     if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && extern_fresh_in_caller(inst.ds) {
+        return true;
+    }
+    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET()
+        && inst.dv >= 0 && inst.dv < int_kinds.len()
+        && int_kinds[inst.dv] == RSUM_KIND_FRESH_IN_CALLER()
+    {
         return true;
     }
     false
