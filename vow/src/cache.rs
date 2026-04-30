@@ -40,7 +40,12 @@ impl CompileCache {
         // The outer combiner uses `fnv1a_hash` (not `DefaultHasher`) so the on-disk
         // key is stable across Rust toolchain upgrades — `DefaultHasher`'s algorithm
         // is documented as unspecified and may change between releases, which would
-        // silently invalidate every cached object on a stable upgrade.
+        // silently invalidate every cached object on a stable upgrade. FNV-1a is used
+        // here for cache-key stability and accidental-staleness avoidance only — it is
+        // not cryptographic, and the integrity guarantee against adversarial cache
+        // poisoning comes from disabling the cache lookup entirely on verified builds
+        // (see `compile_cache` gate in `run_pipeline_from_frontend`), not from the
+        // hash strength.
         let mut entries: Vec<(String, u64)> = deps
             .paths()
             .iter()
@@ -52,16 +57,18 @@ impl CompileCache {
             })
             .collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
+        // Length-prefix the path so embedded ':' or '\n' bytes (both legal in POSIX
+        // filenames) cannot make two distinct (path, hash) tuples serialize to the
+        // same byte sequence before the final hash.
         let mut combined = String::new();
         combined.push_str("__abi=");
         combined.push_str(abi_seed);
         combined.push('\n');
         for (path, content_hash) in &entries {
-            combined.push_str("__dep=");
-            combined.push_str(path);
-            combined.push(':');
-            combined.push_str(&format!("{content_hash:016x}"));
-            combined.push('\n');
+            combined.push_str(&format!(
+                "__dep={}:{path}:{content_hash:016x}\n",
+                path.len()
+            ));
         }
         combined.push_str("__mode=");
         combined.push_str(mode);
