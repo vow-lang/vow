@@ -5460,17 +5460,14 @@ fn run_pipeline_from_frontend(
     // Cache lookup
     let mode_str = format!("{mode:?}");
     let trace_str = format!("{trace:?}");
-    // Object cache reuse is disabled when verification is enabled so the linked
-    // binary always comes from the same codegen run as the verified IR.
+    // Disable object cache when verification is active: linked binary must come from the same codegen run as the verified IR.
     let verification_active = !no_verify;
     let compile_cache = if no_cache || verification_active {
         None
     } else {
         cache::CompileCache::new()
     };
-    // Skip the full dependency-content hash when the object cache is disabled —
-    // computing the key would otherwise read every dependency file with no possible
-    // cache hit/store on the default verified path.
+    // Skip the dependency-content hash when the cache is disabled — no point reading every dep file with no possible hit/store.
     let cache_key = compile_cache
         .as_ref()
         .map(|_| cache::CompileCache::cache_key(frontend.dependencies(), &mode_str, &trace_str));
@@ -9389,5 +9386,79 @@ fn main() -> i32 {
             !json.contains("branch_decisions"),
             "empty field should be skipped"
         );
+    }
+
+    #[test]
+    fn verified_build_does_not_populate_compile_cache() {
+        // Regression guard for the verification_active gate: a verified build must
+        // never populate VOW_CACHE_DIR. An unverified build with the same source
+        // must populate it (counter-proof that the test is observing the gate).
+        if find_esbmc().is_none() {
+            eprintln!("SKIP: esbmc not found");
+            return;
+        }
+
+        let dir = TempDir::new().unwrap();
+        let cache_dir = dir.path().join("cache");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+
+        let prev = std::env::var("VOW_CACHE_DIR").ok();
+        // SAFETY: process-global env mutation. No other test in this crate
+        // reads or writes VOW_CACHE_DIR, so this does not race under default
+        // cargo test threading.
+        unsafe {
+            std::env::set_var("VOW_CACHE_DIR", &cache_dir);
+        }
+
+        let src = "module M fn f(x: i64) -> i64 { x }";
+        let source = write_source(&dir, "f.vow", src);
+
+        let _ = run_pipeline(
+            &source,
+            None,
+            BuildMode::Release,
+            false,
+            false,
+            TraceMode::Off,
+        );
+        let after_verified = count_o_files(&cache_dir);
+
+        let _ = run_pipeline(
+            &source,
+            None,
+            BuildMode::Release,
+            true,
+            false,
+            TraceMode::Off,
+        );
+        let after_unverified = count_o_files(&cache_dir);
+
+        // SAFETY: see above.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("VOW_CACHE_DIR", v),
+                None => std::env::remove_var("VOW_CACHE_DIR"),
+            }
+        }
+
+        assert_eq!(
+            after_verified, 0,
+            "verified build must not populate compile cache"
+        );
+        assert!(
+            after_unverified > 0,
+            "unverified build must populate compile cache (counter-proof)"
+        );
+    }
+
+    fn count_o_files(dir: &Path) -> usize {
+        std::fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().extension().is_some_and(|ext| ext == "o"))
+                    .count()
+            })
+            .unwrap_or(0)
     }
 }
