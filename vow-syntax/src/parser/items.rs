@@ -138,6 +138,7 @@ impl Parser {
         self.expect(TokenKind::LBrace);
         let mut methods = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at_end() {
+            let pre_iter = self.cursor;
             let method_start = self.current_span();
             self.expect(TokenKind::KwFn);
             let (method_name, _) = self
@@ -155,13 +156,17 @@ impl Parser {
             let effects = self.parse_effects();
             let method_end = self.current_span();
             self.expect(TokenKind::Semicolon);
-            methods.push(TraitMethod {
-                name: method_name,
-                params,
-                return_ty,
-                effects,
-                span: method_start.merge(method_end),
-            });
+            if self.cursor > pre_iter {
+                methods.push(TraitMethod {
+                    name: method_name,
+                    params,
+                    return_ty,
+                    effects,
+                    span: method_start.merge(method_end),
+                });
+            } else if !self.at(&TokenKind::RBrace) && !self.at_end() {
+                self.advance();
+            }
         }
         let end = self.current_span();
         self.expect(TokenKind::RBrace);
@@ -202,6 +207,7 @@ impl Parser {
         self.expect(TokenKind::LBrace);
         let mut methods: Vec<FnDef> = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at_end() {
+            let pre_iter = self.cursor;
             let method_start = self.current_span();
             let vis = if self.at(&TokenKind::KwPub) {
                 self.advance();
@@ -230,17 +236,21 @@ impl Parser {
             };
             let body = self.parse_block_required();
             let method_end = body.span;
-            methods.push(FnDef {
-                vis,
-                name: method_name,
-                params,
-                return_ty,
-                effects,
-                vow,
-                body,
-                span: method_start.merge(method_end),
-                is_declaration: false,
-            });
+            if self.cursor > pre_iter {
+                methods.push(FnDef {
+                    vis,
+                    name: method_name,
+                    params,
+                    return_ty,
+                    effects,
+                    vow,
+                    body,
+                    span: method_start.merge(method_end),
+                    is_declaration: false,
+                });
+            } else if !self.at(&TokenKind::RBrace) && !self.at_end() {
+                self.advance();
+            }
         }
         let end = self.current_span();
         self.expect(TokenKind::RBrace);
@@ -292,6 +302,7 @@ impl Parser {
         };
         let mut fns = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at_end() {
+            let pre_iter = self.cursor;
             let fn_start = self.current_span();
             self.expect(TokenKind::KwFn);
             let (fn_name, _) = self
@@ -309,13 +320,17 @@ impl Parser {
             let effects = self.parse_effects();
             let fn_end = self.current_span();
             self.expect(TokenKind::Semicolon);
-            fns.push(ExternFn {
-                name: fn_name,
-                params,
-                return_ty,
-                effects,
-                span: fn_start.merge(fn_end),
-            });
+            if self.cursor > pre_iter {
+                fns.push(ExternFn {
+                    name: fn_name,
+                    params,
+                    return_ty,
+                    effects,
+                    span: fn_start.merge(fn_end),
+                });
+            } else if !self.at(&TokenKind::RBrace) && !self.at_end() {
+                self.advance();
+            }
         }
         let end = self.current_span();
         self.expect(TokenKind::RBrace);
@@ -331,6 +346,7 @@ impl Parser {
 mod tests {
     use crate::ast::{Item, VariantKind, Visibility};
     use crate::parser::parse_item_source;
+    use vow_diag::Diagnostic;
 
     fn parse_item(src: &str) -> Item {
         let (item, diags) = parse_item_source(src, "<test>");
@@ -340,6 +356,11 @@ mod tests {
             diags.iter().map(|e| &e.message).collect::<Vec<_>>()
         );
         item.expect("no item parsed")
+    }
+
+    fn parse_item_with_diags(src: &str) -> (Item, Vec<Diagnostic>) {
+        let (item, diags) = parse_item_source(src, "<test>");
+        (item.expect("no item parsed"), diags)
     }
 
     #[test]
@@ -476,5 +497,109 @@ mod tests {
         assert_eq!(e.vis, Visibility::Public);
         assert_eq!(e.name, "Color");
         assert_eq!(e.variants.len(), 3);
+    }
+
+    #[test]
+    fn parse_trait_recovers_after_missing_method_params() {
+        let src = "trait T { fn broken<T>(); fn ok(self: Self) -> (); }";
+        let (item, diags) = parse_item_with_diags(src);
+        let t = match item {
+            Item::Trait(t) => t,
+            other => panic!("expected trait, got {:?}", other),
+        };
+        assert!(!diags.is_empty());
+        assert!(t.methods.iter().any(|m| m.name == "ok"));
+    }
+
+    #[test]
+    fn parse_impl_recovers_after_missing_method_params() {
+        let src = "impl S { fn broken<T>() { } fn ok(self: S) -> () { } }";
+        let (item, diags) = parse_item_with_diags(src);
+        let i = match item {
+            Item::Impl(i) => i,
+            other => panic!("expected impl, got {:?}", other),
+        };
+        assert!(!diags.is_empty());
+        assert!(i.methods.iter().any(|m| m.name == "ok"));
+    }
+
+    #[test]
+    fn parse_trait_recovery_does_not_consume_closing_brace() {
+        // The `}` terminating the trait body must not be consumed by parse_params'
+        // recovery when a method signature is missing its `(`. Otherwise the next
+        // module-level item would be parsed inside the trait body.
+        let src = "trait T { fn bad } fn after() -> i32 { 1 }";
+        let (module, diags) = crate::parser::parse_module(src, "<test>");
+        assert!(!diags.is_empty());
+        assert_eq!(module.items.len(), 2, "module items: {:?}", module.items);
+        match &module.items[0] {
+            Item::Trait(t) => assert_eq!(t.name, "T"),
+            other => panic!("expected trait, got {:?}", other),
+        }
+        match &module.items[1] {
+            Item::Fn(f) => assert_eq!(f.name, "after"),
+            other => panic!("expected fn after trait, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_extern_recovery_does_not_consume_closing_brace() {
+        let src = "extern \"C\" { fn bad } fn after() -> i32 { 1 }";
+        let (module, diags) = crate::parser::parse_module(src, "<test>");
+        assert!(!diags.is_empty());
+        assert_eq!(module.items.len(), 2, "module items: {:?}", module.items);
+        match &module.items[0] {
+            Item::Extern(_) => {}
+            other => panic!("expected extern, got {:?}", other),
+        }
+        match &module.items[1] {
+            Item::Fn(f) => assert_eq!(f.name, "after"),
+            other => panic!("expected fn after extern, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_trait_recovery_resyncs_at_next_fn_keyword() {
+        // The recovery must not consume the `fn` keyword of the next method:
+        // the second method's span should still start at `fn`, not at the
+        // bare identifier.
+        let src = "trait T { fn bad fn ok(s: Self) -> (); }";
+        let (item, diags) = parse_item_with_diags(src);
+        let t = match item {
+            Item::Trait(t) => t,
+            other => panic!("expected trait, got {:?}", other),
+        };
+        assert!(!diags.is_empty());
+        assert_eq!(t.methods.len(), 2, "methods: {:?}", t.methods);
+        assert_eq!(t.methods[0].name, "bad");
+        assert_eq!(t.methods[1].name, "ok");
+        let ok_start = t.methods[1].span.start as usize;
+        assert!(
+            src[ok_start..].starts_with("fn ok"),
+            "expected ok method span to start at `fn`, got: {:?}",
+            &src[ok_start..ok_start.saturating_add(5).min(src.len())]
+        );
+    }
+
+    #[test]
+    fn parse_impl_recovery_keeps_methods_inside_impl() {
+        // `fn bad {}` is a malformed impl method (missing param list). The recovery
+        // must not consume the body opener `{`, otherwise the trailing `}` would be
+        // mistaken for the impl's closing brace and `fn ok` would escape to the
+        // module level.
+        let src = "impl S { fn bad {} fn ok(s: S) -> () { } }";
+        let (module, diags) = crate::parser::parse_module(src, "<test>");
+        assert!(!diags.is_empty());
+        assert_eq!(module.items.len(), 1, "module items: {:?}", module.items);
+        match &module.items[0] {
+            Item::Impl(i) => {
+                assert!(
+                    i.methods.iter().any(|m| m.name == "ok"),
+                    "ok method missing: {:?}",
+                    i.methods
+                );
+            }
+            other => panic!("expected impl, got {:?}", other),
+        }
     }
 }

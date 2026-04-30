@@ -630,6 +630,15 @@ impl Parser {
     pub(crate) fn parse_params(&mut self) -> Vec<Param> {
         let mut params = Vec::new();
         if self.expect(TokenKind::LParen).is_none() {
+            if !self.at_end()
+                && !self.at(&TokenKind::LBrace)
+                && !self.at(&TokenKind::RBrace)
+                && !self.at(&TokenKind::RParen)
+                && !self.at(&TokenKind::Semicolon)
+                && !self.at(&TokenKind::KwFn)
+            {
+                self.advance();
+            }
             return params;
         }
         while !self.at(&TokenKind::RParen) && !self.at_end() {
