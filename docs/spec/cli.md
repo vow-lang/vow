@@ -20,7 +20,7 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--no-verify`     | (off)       | Skip ESBMC static verification            |
 | `--dump-ir`       | (off)       | Print IR text to stdout and exit (no JSON output, no codegen) |
 | `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
-| `--no-cache`    | (off)       | Disable compile and verify caching           |
+| `--no-cache`    | (off)       | Disable verification result caching, and (for `--no-verify` builds) the compile-object cache. See "Compile-object cache behavior" below |
 | `--max-k-step <N>` | `50`     | ESBMC incremental BMC max iterations          |
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
@@ -29,6 +29,8 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--string-max <N>` | `256`    | Max String capacity for verification model   |
 | `--hashmap-max <N>` | `64`    | Max HashMap capacity for verification model  |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
+
+**Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever ESBMC verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.
 
 ### `vow verify`
 

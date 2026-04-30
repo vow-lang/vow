@@ -5353,6 +5353,11 @@ fn link_obj(obj_path: &Path, output_path: &Path) -> Option<PathBuf> {
     }
 }
 
+// Compile-object cache is only enabled when `--no-cache` is off and verification is off, so verified builds always link a fresh codegen output.
+fn compile_cache_enabled(no_cache: bool, no_verify: bool) -> bool {
+    !no_cache && no_verify
+}
+
 pub fn run_pipeline(
     source: &Path,
     output: Option<&Path>,
@@ -5471,15 +5476,23 @@ fn run_pipeline_from_frontend(
     // Cache lookup
     let mode_str = format!("{mode:?}");
     let trace_str = format!("{trace:?}");
-    let compile_cache = if no_cache {
-        None
-    } else {
+    // Disable object cache when verification is active: linked binary must come from the same codegen run as the verified IR.
+    let compile_cache = if compile_cache_enabled(no_cache, no_verify) {
         cache::CompileCache::new()
+    } else {
+        None
     };
-    let cache_key = cache::CompileCache::cache_key(frontend.dependencies(), &mode_str, &trace_str);
+    // Skip the dependency-content hash when the cache is disabled — no point reading every dep file with no possible hit/store. `and_then` propagates a None from `cache_key` (fail-closed on per-dep canonicalize/open/read errors) so neither lookup nor store fires with an incomplete dep set.
+    let cache_key = compile_cache.as_ref().and_then(|_| {
+        cache::CompileCache::cache_key(frontend.dependencies(), &mode_str, &trace_str)
+    });
+    if compile_cache.is_some() && cache_key.is_none() {
+        eprintln!("warning: compile cache bypassed — one or more dependencies could not be hashed");
+    }
 
     if let Some(ref cc) = compile_cache
-        && let Some(cached_obj) = cc.lookup(&cache_key)
+        && let Some(ref key) = cache_key
+        && let Some(cached_obj) = cc.lookup(key)
         && std::fs::copy(&cached_obj, &obj_path).is_ok()
     {
         let exe_path = link_obj(&obj_path, &output_path);
@@ -5525,8 +5538,10 @@ fn run_pipeline_from_frontend(
     }
 
     // Store in cache
-    if let Some(ref cc) = compile_cache {
-        cc.store(&cache_key, &obj_path);
+    if let Some(ref cc) = compile_cache
+        && let Some(ref key) = cache_key
+    {
+        cc.store(key, &obj_path);
     }
 
     let exe_path = link_obj(&obj_path, &output_path);
@@ -9449,6 +9464,27 @@ fn main() -> i32 {
         assert!(
             !json.contains("branch_decisions"),
             "empty field should be skipped"
+        );
+    }
+
+    #[test]
+    fn compile_cache_only_enabled_for_unverified_unflagged_builds() {
+        // Regression guard for the security gate: the compile-object cache may be enabled only when `--no-cache` is off and `--no-verify` is on. Any other combination must keep the cache disabled.
+        assert!(
+            !compile_cache_enabled(false, false),
+            "default verified build (no_cache=false, no_verify=false): cache must be disabled"
+        );
+        assert!(
+            !compile_cache_enabled(true, false),
+            "no_cache=true with verification: cache must be disabled"
+        );
+        assert!(
+            !compile_cache_enabled(true, true),
+            "no_cache=true: cache must be disabled regardless of verification"
+        );
+        assert!(
+            compile_cache_enabled(false, true),
+            "--no-verify without --no-cache: cache must be enabled"
         );
     }
 }
