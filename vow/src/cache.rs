@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
 use vow_verify::Counterexample;
@@ -43,8 +43,8 @@ impl CompileCache {
             .iter()
             .filter_map(|p| {
                 let canon = p.canonicalize().ok()?;
-                let content = std::fs::read(&canon).ok()?;
-                let content_hash = fnv1a_hash(&content);
+                let f = std::fs::File::open(&canon).ok()?;
+                let content_hash = fnv1a_hash_reader(BufReader::new(f)).ok()?;
                 Some((canon.to_string_lossy().to_string(), content_hash))
             })
             .collect();
@@ -92,6 +92,23 @@ fn fnv1a_hash(data: &[u8]) -> u64 {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     hash
+}
+
+// Streaming FNV-1a so dependency-content hashing stays bounded-memory regardless of file size.
+fn fnv1a_hash_reader<R: Read>(mut r: R) -> std::io::Result<u64> {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = r.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        for &byte in &buf[..n] {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    Ok(hash)
 }
 
 // Security: cached PROVEN results from disk are never trusted, so the cached
