@@ -65,6 +65,7 @@ impl CompileCache {
         combined.push('\n');
         combined.push_str("__trace=");
         combined.push_str(trace);
+        combined.push('\n');
         let hash = fnv1a_hash(combined.as_bytes());
         Some(format!("{hash:016x}"))
     }
