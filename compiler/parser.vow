@@ -354,8 +354,14 @@ fn parse_effects(p: Parser) -> i64 {
 }
 
 fn parse_params(p: Parser) -> i64 {
-    let _lp: bool = expect(p, tok_lparen());
+    let lp_ok: bool = expect(p, tok_lparen());
     let items: Vec<i64> = Vec::new();
+    if !lp_ok {
+        if !at_end(p) && !at(p, tok_rbrace()) && !at(p, tok_rparen()) && !at(p, tok_semicolon()) {
+            let _skip: Token = advance(p);
+        }
+        return arena_add_list(p.arena, items);
+    }
     while !at(p, tok_rparen()) && !at_end(p) {
         let name_sid: i64 = expect_ident(p);
         let _colon: bool = expect(p, tok_colon());

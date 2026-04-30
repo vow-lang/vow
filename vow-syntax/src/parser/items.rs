@@ -507,4 +507,39 @@ mod tests {
         assert!(!diags.is_empty());
         assert!(i.methods.iter().any(|m| m.name == "ok"));
     }
+
+    #[test]
+    fn parse_trait_recovery_does_not_consume_closing_brace() {
+        // The `}` terminating the trait body must not be consumed by parse_params'
+        // recovery when a method signature is missing its `(`. Otherwise the next
+        // module-level item would be parsed inside the trait body.
+        let src = "trait T { fn bad } fn after() -> i32 { 1 }";
+        let (module, diags) = crate::parser::parse_module(src, "<test>");
+        assert!(!diags.is_empty());
+        assert_eq!(module.items.len(), 2, "module items: {:?}", module.items);
+        match &module.items[0] {
+            Item::Trait(t) => assert_eq!(t.name, "T"),
+            other => panic!("expected trait, got {:?}", other),
+        }
+        match &module.items[1] {
+            Item::Fn(f) => assert_eq!(f.name, "after"),
+            other => panic!("expected fn after trait, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_extern_recovery_does_not_consume_closing_brace() {
+        let src = "extern \"C\" { fn bad } fn after() -> i32 { 1 }";
+        let (module, diags) = crate::parser::parse_module(src, "<test>");
+        assert!(!diags.is_empty());
+        assert_eq!(module.items.len(), 2, "module items: {:?}", module.items);
+        match &module.items[0] {
+            Item::Extern(_) => {}
+            other => panic!("expected extern, got {:?}", other),
+        }
+        match &module.items[1] {
+            Item::Fn(f) => assert_eq!(f.name, "after"),
+            other => panic!("expected fn after extern, got {:?}", other),
+        }
+    }
 }
