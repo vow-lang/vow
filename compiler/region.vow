@@ -785,36 +785,22 @@ fn check_store_effects_at_call(
                 );
             }
         } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
-            // FIXME: align with Rust `_ => {}` before enabling AliasOfAny
-            // origin tracing.
-            //
             // Unreachable on today's pipeline: `trace_origin_shallow` only ever
             // produces `AliasOf`, `FreshInCaller`, or `ConstantGlobal`, so
             // store_effects with `AliasOfAny` source cannot currently be generated.
-            // DIVERGENCE: the Rust `handle_inst` Call arm skips `AliasOfAny`
-            // (`_ => {}` at vow-ir/src/region.rs). If a future origin tracer
-            // produces `AliasOfAny`, the self-hosted compiler would emit a
-            // RegionConflict for each alias element where the caller passes
-            // a fresh allocation, while Rust emits none. When AliasOfAny store
-            // effects land, align the two paths first.
+            // The flat-array cursor `i` must still consume the `n` alias entries
+            // to stay aligned for the next effect, but no conflict check fires —
+            // matching the Rust `handle_inst` Call arm's `_ => {}` at
+            // vow-ir/src/region.rs.
+            //
+            // FIXME: when AliasOfAny store effects land (e.g. after
+            // `trace_origin_shallow` is extended), align the two paths before
+            // re-introducing any diagnostic here.
             if i >= flat.len() { return; }
             let n: i64 = flat[i];
             i = i + 1;
             let mut ai: i64 = 0;
             while ai < n && i < flat.len() {
-                let source_param: i64 = flat[i];
-                if target >= 0 && target < call_inst.args.len()
-                    && source_param >= 0 && source_param < call_inst.args.len()
-                {
-                    check_store_conflict(
-                        path,
-                        call_inst.args[target],
-                        call_inst.args[source_param],
-                        call_inst,
-                        id_to_inst,
-                        dctx,
-                    );
-                }
                 i = i + 1;
                 ai = ai + 1;
             }
