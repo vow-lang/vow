@@ -1,0 +1,23 @@
+// TEST: error-code RegionConflict
+module RegionConflictStoreEffect
+
+struct Box {
+    value: Payload,
+}
+
+struct Payload {
+    n: i64,
+}
+
+fn put(target: Box, value: Payload) {
+    target.value = value;
+}
+
+fn caller(target: Box) {
+    let value: Payload = Payload { n: 1 };
+    put(target, value);
+}
+
+fn main() -> i32 {
+    0
+}
