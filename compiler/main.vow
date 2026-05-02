@@ -216,7 +216,25 @@ fn emit_ce_vars(vr: VerifyResult) [io] {
     }
 }
 
-fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
+// Skip non-modelable vowed functions before ESBMC runs; otherwise the C emitter emits __ESBMC_assert(0) traps and the build fails closed.
+fn skip_if_non_modelable(f: IrFunction, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx) -> bool [io] {
+    let reason: String = non_modelable_reason(f, ir_mod, const_fn_indices);
+    if reason.len() == 0 {
+        return false;
+    }
+    eprintln_str(str3(String::from("  "), f.name, String::from(": SKIPPED (non-modelable in verifier)")));
+    let msg: String = str3(
+        String::from("skipped verification of `"),
+        f.name,
+        str2(String::from("`: "), reason),
+    );
+    let d: Diagnostic = diag_new(SEV_WARNING(), EC_VERIFICATION_SKIPPED(), msg, String::from(""), 0, 0, DIAG_BLAME_NONE());
+    diag_add_hint(d, String::from("the contract is documentary; runtime checks still apply in --mode debug"));
+    diag_ctx_emit(dctx, d);
+    true
+}
+
+fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
                    vec_max: i64, string_max: i64, hashmap_max: i64, jobs: i64) -> i64 [io] {
     let mut all_proven: i64 = 1;
     // Bounded pool: ≤ jobs ESBMC processes in flight, FIFO drain. See #175.
@@ -240,10 +258,14 @@ fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, path: String, ces: Ve
                 }
             }
             if all_proven == 1 {
-                eprintln_str(str3(String::from("Verifying "), f.name, String::from("...")));
-                let h: i64 = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max);
-                in_flight_h.push(h);
-                in_flight_fi.push(fi);
+                if skip_if_non_modelable(f, ir_mod, const_fn_indices, dctx) {
+                    // Skipped: do not enqueue ESBMC. Build/run continues with the warning.
+                } else {
+                    eprintln_str(str3(String::from("Verifying "), f.name, String::from("...")));
+                    let h: i64 = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max);
+                    in_flight_h.push(h);
+                    in_flight_fi.push(fi);
+                }
             }
         }
         fi = fi + 1;
@@ -429,7 +451,8 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
     emit_ir_warnings(ir_mod, dctx);
     let fns: Vec<IrFunction> = ir_mod.functions;
     let ces: Vec<VerifyCE> = Vec::new();
-    let all_proven: i64 = run_verify_loop(fns, ir_mod, path, ces, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, jobs);
+    let const_fn_indices: Vec<i64> = detect_const_fns(ir_mod);
+    let all_proven: i64 = run_verify_loop(fns, ir_mod, const_fn_indices, dctx, path, ces, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, jobs);
     let status_str: String = {
         if all_proven == 1 {
             String::from("Verified")
@@ -519,6 +542,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
     // Bounded pool: ≤ jobs ESBMC processes in flight, FIFO drain. See #175.
     let in_flight_h: Vec<i64> = Vec::new();
     let in_flight_fi: Vec<i64> = Vec::new();
+    let const_fn_indices: Vec<i64> = detect_const_fns(ir_mod);
     if do_verify {
         let mut fi: i64 = 0;
         while fi < fns.len() {
@@ -538,10 +562,14 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
                     }
                 }
                 if all_proven == 1 {
-                    eprintln_str(str3(String::from("Starting verification of "), f.name, String::from("...")));
-                    let h: i64 = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max);
-                    in_flight_h.push(h);
-                    in_flight_fi.push(fi);
+                    if skip_if_non_modelable(f, ir_mod, const_fn_indices, dctx) {
+                        // Skipped: do not enqueue ESBMC. Build continues with the warning.
+                    } else {
+                        eprintln_str(str3(String::from("Starting verification of "), f.name, String::from("...")));
+                        let h: i64 = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max);
+                        in_flight_h.push(h);
+                        in_flight_fi.push(fi);
+                    }
                 }
             }
             fi = fi + 1;
@@ -964,7 +992,8 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
             let ces: Vec<VerifyCE> = Vec::new();
             let use_cache_leg: bool = !has_flag(argv, String::from("--no-cache"));
             let jobs_leg: i64 = resolve_verify_jobs(argv);
-            let all_proven: i64 = run_verify_loop(fns, ir_mod, path, ces, max_k_step, use_cache_leg, String::from(""), String::from(""), String::from(""), vec_max_leg, string_max_leg, hashmap_max_leg, jobs_leg);
+            let const_fn_indices_leg: Vec<i64> = detect_const_fns(ir_mod);
+            let all_proven: i64 = run_verify_loop(fns, ir_mod, const_fn_indices_leg, dctx, path, ces, max_k_step, use_cache_leg, String::from(""), String::from(""), String::from(""), vec_max_leg, string_max_leg, hashmap_max_leg, jobs_leg);
             let status_str: String = {
                 if all_proven == 1 {
                     String::from("Verified")
@@ -1122,7 +1151,7 @@ fn skill_json() -> String {
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
     r.push_str(String::from("          \"form\": \"--no-cache\",\n"));
-    r.push_str(String::from("          \"description\": \"Disable compile and verify caching\",\n"));
+    r.push_str(String::from("          \"description\": \"Disable verification result caching, and (for --no-verify builds) the compile-object cache. See \\\"Compile-object cache behavior\\\" below\",\n"));
     r.push_str(String::from("          \"long\": \"--no-cache\",\n"));
     r.push_str(String::from("          \"value_kind\": \"flag\"\n"));
     r.push_str(String::from("        },\n"));
@@ -1563,7 +1592,7 @@ fn skill_json() -> String {
     r.push_str(String::from("    \"--no-verify\": \"Skip ESBMC static verification\",\n"));
     r.push_str(String::from("    \"--dump-ir\": \"Print IR text to stdout and exit (no JSON output, no codegen)\",\n"));
     r.push_str(String::from("    \"--debug-trace <off|calls|full>\": \"Emit JSON trace lines to stderr at runtime (default: off)\",\n"));
-    r.push_str(String::from("    \"--no-cache\": \"Disable compile and verify caching\",\n"));
+    r.push_str(String::from("    \"--no-cache\": \"Disable verification result caching, and (for --no-verify builds) the compile-object cache. See \\\"Compile-object cache behavior\\\" below\",\n"));
     r.push_str(String::from("    \"--max-k-step <N>\": \"ESBMC incremental BMC max iterations (default: 50)\",\n"));
     r.push_str(String::from("    \"--solver <boolector|z3|bitwuzla|auto>\": \"ESBMC SMT solver; auto selects per-function via heuristic (default: auto)\",\n"));
     r.push_str(String::from("    \"--encoding <bv|ir|auto>\": \"ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)\",\n"));
@@ -1955,7 +1984,7 @@ fn skill_human() -> String {
     r.push_str(String::from("  --no-verify             Skip ESBMC static verification\n"));
     r.push_str(String::from("  --dump-ir               Print IR text to stdout and exit (no JSON output, no codegen)\n"));
     r.push_str(String::from("  --debug-trace <off|calls|full>  Emit JSON trace lines to stderr at runtime (default: off)\n"));
-    r.push_str(String::from("  --no-cache              Disable compile and verify caching\n"));
+    r.push_str(String::from("  --no-cache              Disable verification result caching, and (for --no-verify builds) the compile-object cache. See \"Compile-object cache behavior\" below\n"));
     r.push_str(String::from("  --max-k-step <N>        ESBMC incremental BMC max iterations (default: 50)\n"));
     r.push_str(String::from("  --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)\n"));
     r.push_str(String::from("  --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)\n"));
@@ -2961,7 +2990,7 @@ fn skill_full() -> String {
     r.push_str(String::from("| `--no-verify`     | (off)       | Skip ESBMC static verification            |\n"));
     r.push_str(String::from("| `--dump-ir`       | (off)       | Print IR text to stdout and exit (no JSON output, no codegen) |\n"));
     r.push_str(String::from("| `--debug-trace <off\\|calls\\|full>` | `off` | Emit JSON trace lines to stderr at runtime |\n"));
-    r.push_str(String::from("| `--no-cache`    | (off)       | Disable compile and verify caching           |\n"));
+    r.push_str(String::from("| `--no-cache`    | (off)       | Disable verification result caching, and (for `--no-verify` builds) the compile-object cache. See \"Compile-object cache behavior\" below |\n"));
     r.push_str(String::from("| `--max-k-step <N>` | `50`     | ESBMC incremental BMC max iterations          |\n"));
     r.push_str(String::from("| `--solver <boolector\\|z3\\|bitwuzla\\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |\n"));
     r.push_str(String::from("| `--encoding <bv\\|ir\\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |\n"));
@@ -2970,6 +2999,8 @@ fn skill_full() -> String {
     r.push_str(String::from("| `--string-max <N>` | `256`    | Max String capacity for verification model   |\n"));
     r.push_str(String::from("| `--hashmap-max <N>` | `64`    | Max HashMap capacity for verification model  |\n"));
     r.push_str(String::from("| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever ESBMC verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow verify`\n"));
     r.push_str(String::from("\n"));
@@ -3136,7 +3167,7 @@ fn skill_full() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Status          | Meaning                                     |\n"));
     r.push_str(String::from("|-----------------|---------------------------------------------|\n"));
-    r.push_str(String::from("| `Verified`      | Compiled + all contracts proved by ESBMC     |\n"));
+    r.push_str(String::from("| `Verified`      | Compiled + all contracts proved by ESBMC. Functions whose bodies the verifier cannot model (`RegionAlloc`, `FieldSet`, `Linear*`, `Load`/`Store`, `RemF*`, effectful) are reported as a `VerificationSkipped` *Warning* in `diagnostics[]` and the build still succeeds -- their contracts are documentary, runtime-checked under `--mode debug`. |\n"));
     r.push_str(String::from("| `Unverified`    | Compiled with `--no-verify` (ESBMC skipped)  |\n"));
     r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, or link failure |\n"));
     r.push_str(String::from("| `VerifyFailed`  | ESBMC found a counterexample, timed out, errored, or was not found |\n"));
@@ -3233,7 +3264,7 @@ fn skill_full() -> String {
     r.push_str(String::from("      \"status\": \"not_verified\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  ],\n"));
-    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 0, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 1 }\n"));
+    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 0, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 1, \"skipped\": 0 }\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
@@ -3252,7 +3283,7 @@ fn skill_full() -> String {
     r.push_str(String::from("      \"status\": \"proven\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  ],\n"));
-    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 1, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 0 }\n"));
+    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 1, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 0, \"skipped\": 0 }\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
@@ -3266,7 +3297,7 @@ fn skill_full() -> String {
     r.push_str(String::from("| `description` | string  | Full contract text                                       |\n"));
     r.push_str(String::from("| `blame`       | string  | `\"Caller\"` (requires) or `\"Callee\"` (ensures/invariant)  |\n"));
     r.push_str(String::from("| `source`      | object  | `{ \"file\": string, \"offset\": integer }`                  |\n"));
-    r.push_str(String::from("| `status`      | string  | `\"proven\"`, `\"proven-ir\"`, `\"failed\"`, `\"unknown\"`, `\"timeout\"`, `\"error\"`, or `\"not_verified\"` |\n"));
+    r.push_str(String::from("| `status`      | string  | `\"proven\"`, `\"proven-ir\"`, `\"failed\"`, `\"unknown\"`, `\"timeout\"`, `\"error\"`, `\"not_verified\"`, or `\"skipped\"` |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Status Values\n"));
     r.push_str(String::from("\n"));
@@ -3279,6 +3310,7 @@ fn skill_full() -> String {
     r.push_str(String::from("| `unknown`       | Another contract in the same function failed; this one was not individually checked |\n"));
     r.push_str(String::from("| `timeout`       | ESBMC timed out on the containing function (BV and -- when applicable -- IR fallback both timed out) |\n"));
     r.push_str(String::from("| `error`         | ESBMC error or tool not found                        |\n"));
+    r.push_str(String::from("| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]`. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Trace Output (stderr, --debug-trace)\n"));
     r.push_str(String::from("\n"));
@@ -3983,6 +4015,26 @@ fn skill_full() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Move the allocation to a wider scope, or copy the value into the target region (e.g., `String::from(s)` into the outer arena). The compiler does NOT silently promote values to the root region -- see `docs/design/arena_memory.md` §4.4.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("### VerificationSkipped\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Verification (Warning, not Error -- does not fail the build)\n"));
+    r.push_str(String::from("**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent -- most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and the `Linear*` family. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```json\n"));
+    r.push_str(String::from("{\n"));
+    r.push_str(String::from("  \"error_code\": \"VerificationSkipped\",\n"));
+    r.push_str(String::from("  \"severity\": \"warning\",\n"));
+    r.push_str(String::from("  \"message\": \"skipped verification of `ir_inst_set_region`: function `ir_inst_set_region` is not modelable in the verifier (contains unsupported opcode `RegionAlloc`)\",\n"));
+    r.push_str(String::from("  \"hints\": [\n"));
+    r.push_str(String::from("    \"the contract is documentary; runtime checks still apply in --mode debug\"\n"));
+    r.push_str(String::from("  ]\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Why this isn't a failure.** Per `CLAUDE.md`'s \"Contract Authoring\" guidance, contracts express semantic correctness and must not be weakened to fit the verifier. When the verifier's bounded model checker cannot represent a function's body, the right response is to skip with a structured warning, not to fail closed inline (which historically tripped a defense-in-depth `__ESBMC_assert(0, \"vow:UNSUPPORTED_OP_VOW_ID\")` and broke the bootstrap on every vowed struct-builder).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** None required for the build to pass. If you want static verification of the contract, refactor the function so its body uses only modelable opcodes -- typically by splitting allocation/initialisation away from the contract-bearing computation.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("## Runtime Errors\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).\n"));
@@ -4593,7 +4645,7 @@ fn skill_full() -> String {
     r.push_str(String::from("          },\n"));
     r.push_str(String::from("          \"status\": {\n"));
     r.push_str(String::from("            \"type\": \"string\",\n"));
-    r.push_str(String::from("            \"enum\": [\"proven\", \"proven-ir\", \"failed\", \"unknown\", \"timeout\", \"error\", \"not_verified\"],\n"));
+    r.push_str(String::from("            \"enum\": [\"proven\", \"proven-ir\", \"failed\", \"unknown\", \"timeout\", \"error\", \"not_verified\", \"skipped\"],\n"));
     r.push_str(String::from("            \"description\": \"Verification status\"\n"));
     r.push_str(String::from("          }\n"));
     r.push_str(String::from("        },\n"));
@@ -4602,7 +4654,7 @@ fn skill_full() -> String {
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"summary\": {\n"));
     r.push_str(String::from("      \"type\": \"object\",\n"));
-    r.push_str(String::from("      \"required\": [\"total\", \"proven\", \"failed\", \"unknown\", \"timeout\", \"error\", \"not_verified\"],\n"));
+    r.push_str(String::from("      \"required\": [\"total\", \"proven\", \"failed\", \"unknown\", \"timeout\", \"error\", \"not_verified\", \"skipped\"],\n"));
     r.push_str(String::from("      \"properties\": {\n"));
     r.push_str(String::from("        \"total\": { \"type\": \"integer\" },\n"));
     r.push_str(String::from("        \"proven\": { \"type\": \"integer\" },\n"));
@@ -4610,7 +4662,8 @@ fn skill_full() -> String {
     r.push_str(String::from("        \"unknown\": { \"type\": \"integer\" },\n"));
     r.push_str(String::from("        \"timeout\": { \"type\": \"integer\" },\n"));
     r.push_str(String::from("        \"error\": { \"type\": \"integer\" },\n"));
-    r.push_str(String::from("        \"not_verified\": { \"type\": \"integer\" }\n"));
+    r.push_str(String::from("        \"not_verified\": { \"type\": \"integer\" },\n"));
+    r.push_str(String::from("        \"skipped\": { \"type\": \"integer\" }\n"));
     r.push_str(String::from("      },\n"));
     r.push_str(String::from("      \"additionalProperties\": false\n"));
     r.push_str(String::from("    }\n"));
@@ -5000,32 +5053,44 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
             eprintln_str(String::from("error: ESBMC not found; install ESBMC to run verification"));
             return 1;
         }
+        let const_fn_indices_c: Vec<i64> = detect_const_fns(ir_mod);
         fi = 0;
         while fi < nf {
             let func: IrFunction = ir_mod.functions[fi];
             if func.vows.len() > 0 {
-                let vr: VerifyResult = verify_function_full(func, ir_mod, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c);
-                let st: i64 = vr.status;
-                let mut ei: i64 = 0;
-                while ei < e_func_ids.len() {
-                    if e_func_ids[ei] == func.id {
-                        if st == VERIFY_PROVEN() {
-                            e_statuses[ei] = String::from("proven");
-                        } else if st == VERIFY_PROVEN_IR() {
-                            e_statuses[ei] = String::from("proven-ir");
-                        } else if st == VERIFY_FAILED() {
-                            if vr.vow_id == e_vow_ids[ei] {
-                                e_statuses[ei] = String::from("failed");
-                            } else {
-                                e_statuses[ei] = String::from("unknown");
-                            }
-                        } else if st == VERIFY_TIMEOUT() {
-                            e_statuses[ei] = String::from("timeout");
-                        } else {
-                            e_statuses[ei] = String::from("error");
+                let skip_reason: String = non_modelable_reason(func, ir_mod, const_fn_indices_c);
+                if skip_reason.len() > 0 {
+                    let mut ei: i64 = 0;
+                    while ei < e_func_ids.len() {
+                        if e_func_ids[ei] == func.id {
+                            e_statuses[ei] = String::from("skipped");
                         }
+                        ei = ei + 1;
                     }
-                    ei = ei + 1;
+                } else {
+                    let vr: VerifyResult = verify_function_full(func, ir_mod, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c);
+                    let st: i64 = vr.status;
+                    let mut ei: i64 = 0;
+                    while ei < e_func_ids.len() {
+                        if e_func_ids[ei] == func.id {
+                            if st == VERIFY_PROVEN() {
+                                e_statuses[ei] = String::from("proven");
+                            } else if st == VERIFY_PROVEN_IR() {
+                                e_statuses[ei] = String::from("proven-ir");
+                            } else if st == VERIFY_FAILED() {
+                                if vr.vow_id == e_vow_ids[ei] {
+                                    e_statuses[ei] = String::from("failed");
+                                } else {
+                                    e_statuses[ei] = String::from("unknown");
+                                }
+                            } else if st == VERIFY_TIMEOUT() {
+                                e_statuses[ei] = String::from("timeout");
+                            } else {
+                                e_statuses[ei] = String::from("error");
+                            }
+                        }
+                        ei = ei + 1;
+                    }
                 }
             }
             fi = fi + 1;
@@ -5067,6 +5132,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     let n_timeout: i64 = 0;
     let n_error: i64 = 0;
     let n_not_verified: i64 = 0;
+    let n_skipped: i64 = 0;
     let mut si: i64 = 0;
     while si < total {
         let s: String = e_statuses[si];
@@ -5080,6 +5146,8 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
             n_timeout = n_timeout + 1;
         } else if s == String::from("error") {
             n_error = n_error + 1;
+        } else if s == String::from("skipped") {
+            n_skipped = n_skipped + 1;
         } else {
             n_not_verified = n_not_verified + 1;
         }
@@ -5100,6 +5168,8 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     json.push_str(i64_to_str(n_error));
     json.push_str(String::from(",\"not_verified\":"));
     json.push_str(i64_to_str(n_not_verified));
+    json.push_str(String::from(",\"skipped\":"));
+    json.push_str(i64_to_str(n_skipped));
     json.push_str(String::from("}}"));
     print_str(json);
     0

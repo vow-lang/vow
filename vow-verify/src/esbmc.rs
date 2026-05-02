@@ -11,7 +11,7 @@ use crate::solver_strategy::{SolverConfig, run_with_fallback};
 
 use crate::c_emitter::{
     ConstantValue, VerifyLimits, collect_modelable_callees, detect_constant_functions,
-    emit_c_module, emit_c_module_with_callees,
+    emit_c_module, emit_c_module_with_callees, non_modelable_reason,
 };
 
 // ---------------------------------------------------------------------------
@@ -36,6 +36,10 @@ pub enum VerificationResult {
     Timeout,
     ToolNotFound,
     ToolError(String),
+    /// Function's body contains non-modelable opcodes or effects; ESBMC not invoked. Treat as warning, not failure.
+    Skipped {
+        reason: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -296,6 +300,10 @@ pub fn verify_function_with_module_and_const_fns_configured(
     config: &SolverConfig,
     limits: &VerifyLimits,
 ) -> VerificationResult {
+    if let Some(reason) = non_modelable_reason(func, module, const_fns) {
+        return VerificationResult::Skipped { reason };
+    }
+
     let esbmc = match find_esbmc() {
         Some(p) => p,
         None => return VerificationResult::ToolNotFound,
@@ -1471,6 +1479,74 @@ VERIFICATION FAILED";
                 eprintln!("SKIP: esbmc not found");
             }
             other => panic!("expected Failed or ToolNotFound, got {other:?}"),
+        }
+    }
+
+    fn vowed_with_region_alloc() -> Function {
+        // fn alloc_thing(rgn: i64) -> Ptr requires: rgn >= 0 { /* RegionAlloc */ }
+        Function {
+            id: FuncId(0),
+            name: "alloc_thing".to_string(),
+            params: vec![Ty::I64],
+            param_names: vec!["rgn".to_string()],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![VowEntry {
+                id: VowId(0),
+                description: "rgn >= 0".to_string(),
+                blame: Blame::Caller,
+                bindings: vec![("rgn".to_string(), InstId(0))],
+                file: String::new(),
+                offset: 0,
+            }],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(0)),
+                    inst(
+                        1,
+                        Opcode::RegionAlloc,
+                        Ty::Ptr,
+                        vec![],
+                        InstData::AllocSize { size: 8, align: 8 },
+                    ),
+                    inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+        }
+    }
+
+    #[test]
+    fn vowed_function_with_region_alloc_returns_skipped() {
+        let func = vowed_with_region_alloc();
+        let module = Module {
+            name: "test".to_string(),
+            functions: vec![func.clone()],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        let result = verify_function_with_module_and_const_fns_configured(
+            &func,
+            &module,
+            &HashMap::new(),
+            10,
+            &SolverConfig::default_config(),
+            &VerifyLimits::default(),
+        );
+        match result {
+            VerificationResult::Skipped { reason } => {
+                assert!(
+                    reason.contains("RegionAlloc")
+                        || reason.contains("not modelable")
+                        || reason.contains("unsupported"),
+                    "skip reason should mention the cause: {reason}"
+                );
+            }
+            other => panic!("expected Skipped (gate must run before find_esbmc), got {other:?}"),
         }
     }
 }

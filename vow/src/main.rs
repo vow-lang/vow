@@ -19,7 +19,7 @@ use vow_diag::{Diagnostic, DiagnosticEmitter, HumanEmitter, Severity};
 use vow_verify::{
     ConstantValue, Counterexample, DEFAULT_MAX_K_STEP, Encoding, Solver, SolverConfig,
     UNSUPPORTED_OP_VOW_ID, VerificationResult, VerifyLimits, detect_constant_functions,
-    emit_verify_c_source, find_esbmc, run_with_fallback,
+    emit_verify_c_source, find_esbmc, non_modelable_reason, run_with_fallback,
     verify_function_with_module_and_const_fns_configured,
 };
 
@@ -424,7 +424,7 @@ fn skill_json() -> String {
         },
         {
           "form": "--no-cache",
-          "description": "Disable compile and verify caching",
+          "description": "Disable verification result caching, and (for --no-verify builds) the compile-object cache. See \"Compile-object cache behavior\" below",
           "long": "--no-cache",
           "value_kind": "flag"
         },
@@ -865,7 +865,7 @@ fn skill_json() -> String {
     "--no-verify": "Skip ESBMC static verification",
     "--dump-ir": "Print IR text to stdout and exit (no JSON output, no codegen)",
     "--debug-trace <off|calls|full>": "Emit JSON trace lines to stderr at runtime (default: off)",
-    "--no-cache": "Disable compile and verify caching",
+    "--no-cache": "Disable verification result caching, and (for --no-verify builds) the compile-object cache. See \"Compile-object cache behavior\" below",
     "--max-k-step <N>": "ESBMC incremental BMC max iterations (default: 50)",
     "--solver <boolector|z3|bitwuzla|auto>": "ESBMC SMT solver; auto selects per-function via heuristic (default: auto)",
     "--encoding <bv|ir|auto>": "ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)",
@@ -1257,7 +1257,7 @@ BUILD OPTIONS
   --no-verify             Skip ESBMC static verification
   --dump-ir               Print IR text to stdout and exit (no JSON output, no codegen)
   --debug-trace <off|calls|full>  Emit JSON trace lines to stderr at runtime (default: off)
-  --no-cache              Disable compile and verify caching
+  --no-cache              Disable verification result caching, and (for --no-verify builds) the compile-object cache. See "Compile-object cache behavior" below
   --max-k-step <N>        ESBMC incremental BMC max iterations (default: 50)
   --solver <boolector|z3|bitwuzla|auto>  ESBMC SMT solver; auto selects per-function via heuristic (default: auto)
   --encoding <bv|ir|auto>  ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 (default: auto)
@@ -2263,7 +2263,7 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--no-verify`     | (off)       | Skip ESBMC static verification            |
 | `--dump-ir`       | (off)       | Print IR text to stdout and exit (no JSON output, no codegen) |
 | `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
-| `--no-cache`    | (off)       | Disable compile and verify caching           |
+| `--no-cache`    | (off)       | Disable verification result caching, and (for `--no-verify` builds) the compile-object cache. See "Compile-object cache behavior" below |
 | `--max-k-step <N>` | `50`     | ESBMC incremental BMC max iterations          |
 | `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
 | `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
@@ -2272,6 +2272,8 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--string-max <N>` | `256`    | Max String capacity for verification model   |
 | `--hashmap-max <N>` | `64`    | Max HashMap capacity for verification model  |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
+
+**Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever ESBMC verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.
 
 ### `vow verify`
 
@@ -2438,7 +2440,7 @@ vow verify --help --human  # same legacy text (works on all subcommands)
 
 | Status          | Meaning                                     |
 |-----------------|---------------------------------------------|
-| `Verified`      | Compiled + all contracts proved by ESBMC     |
+| `Verified`      | Compiled + all contracts proved by ESBMC. Functions whose bodies the verifier cannot model (`RegionAlloc`, `FieldSet`, `Linear*`, `Load`/`Store`, `RemF*`, effectful) are reported as a `VerificationSkipped` *Warning* in `diagnostics[]` and the build still succeeds — their contracts are documentary, runtime-checked under `--mode debug`. |
 | `Unverified`    | Compiled with `--no-verify` (ESBMC skipped)  |
 | `CompileFailed` | Parse error, type error, module load error, or link failure |
 | `VerifyFailed`  | ESBMC found a counterexample, timed out, errored, or was not found |
@@ -2535,7 +2537,7 @@ vow verify --help --human  # same legacy text (works on all subcommands)
       "status": "not_verified"
     }
   ],
-  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1 }
+  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0 }
 }
 ```
 
@@ -2554,7 +2556,7 @@ vow verify --help --human  # same legacy text (works on all subcommands)
       "status": "proven"
     }
   ],
-  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0 }
+  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0 }
 }
 ```
 
@@ -2568,7 +2570,7 @@ vow verify --help --human  # same legacy text (works on all subcommands)
 | `description` | string  | Full contract text                                       |
 | `blame`       | string  | `"Caller"` (requires) or `"Callee"` (ensures/invariant)  |
 | `source`      | object  | `{ "file": string, "offset": integer }`                  |
-| `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, or `"not_verified"` |
+| `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, or `"skipped"` |
 
 ### Status Values
 
@@ -2581,6 +2583,7 @@ vow verify --help --human  # same legacy text (works on all subcommands)
 | `unknown`       | Another contract in the same function failed; this one was not individually checked |
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
+| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]`. |
 
 ## Trace Output (stderr, --debug-trace)
 
@@ -3285,6 +3288,26 @@ fn store_into(out: Vec<String>, prefix: String) [io] {
 
 **Fix:** Move the allocation to a wider scope, or copy the value into the target region (e.g., `String::from(s)` into the outer arena). The compiler does NOT silently promote values to the root region — see `docs/design/arena_memory.md` §4.4.
 
+### VerificationSkipped
+
+**Phase:** Verification (Warning, not Error — does not fail the build)
+**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and the `Linear*` family. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
+
+```json
+{
+  "error_code": "VerificationSkipped",
+  "severity": "warning",
+  "message": "skipped verification of `ir_inst_set_region`: function `ir_inst_set_region` is not modelable in the verifier (contains unsupported opcode `RegionAlloc`)",
+  "hints": [
+    "the contract is documentary; runtime checks still apply in --mode debug"
+  ]
+}
+```
+
+**Why this isn't a failure.** Per `CLAUDE.md`'s "Contract Authoring" guidance, contracts express semantic correctness and must not be weakened to fit the verifier. When the verifier's bounded model checker cannot represent a function's body, the right response is to skip with a structured warning, not to fail closed inline (which historically tripped a defense-in-depth `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")` and broke the bootstrap on every vowed struct-builder).
+
+**Fix:** None required for the build to pass. If you want static verification of the contract, refactor the function so its body uses only modelable opcodes — typically by splitting allocation/initialisation away from the contract-bearing computation.
+
 ## Runtime Errors
 
 These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).
@@ -3895,7 +3918,7 @@ When stdin is exhausted, `stdin_read_line()` returns `""` (length 0), the `while
           },
           "status": {
             "type": "string",
-            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified"],
+            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
             "description": "Verification status"
           }
         },
@@ -3904,7 +3927,7 @@ When stdin is exhausted, `stdin_read_line()` returns `""` (length 0), the `while
     },
     "summary": {
       "type": "object",
-      "required": ["total", "proven", "failed", "unknown", "timeout", "error", "not_verified"],
+      "required": ["total", "proven", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
       "properties": {
         "total": { "type": "integer" },
         "proven": { "type": "integer" },
@@ -3912,7 +3935,8 @@ When stdin is exhausted, `stdin_read_line()` returns `""` (length 0), the `while
         "unknown": { "type": "integer" },
         "timeout": { "type": "integer" },
         "error": { "type": "integer" },
-        "not_verified": { "type": "integer" }
+        "not_verified": { "type": "integer" },
+        "skipped": { "type": "integer" }
       },
       "additionalProperties": false
     }
@@ -4273,6 +4297,20 @@ enum VerifyOutcome {
     ToolNotFound,
 }
 
+/// A vowed function the verifier skipped; surfaces as a Warning in `BuildOutput.diagnostics`.
+#[derive(Debug, Clone)]
+struct SkippedFunction {
+    function: String,
+    reason: String,
+}
+
+/// Per-function verdict: continue, skip-with-warning, or halt.
+enum PerFuncResult {
+    Ok,
+    Skipped(SkippedFunction),
+    Halt(VerifyOutcome),
+}
+
 #[derive(Debug)]
 pub struct BuildOutput {
     pub status: BuildStatus,
@@ -4402,6 +4440,7 @@ pub struct ContractsSummaryJson {
     pub timeout: u32,
     pub error: u32,
     pub not_verified: u32,
+    pub skipped: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4942,7 +4981,15 @@ fn verify_one_function(
     verify_cache: Option<&VerifyCache>,
     limits: &VerifyLimits,
     config: &SolverConfig,
-) -> Option<VerifyOutcome> {
+) -> PerFuncResult {
+    // Non-modelable vowed functions must be skipped here; the C emitter would emit __ESBMC_assert(0) traps for them.
+    if let Some(reason) = non_modelable_reason(func, ir_module, const_fns) {
+        return PerFuncResult::Skipped(SkippedFunction {
+            function: func.name.clone(),
+            reason,
+        });
+    }
+
     // Resolve Auto solver via heuristic (Phase B).
     // Skip heuristic when encoding is Ir — that forces Z3 via resolve().
     let func_config = if config.solver == Solver::Auto && config.encoding != Encoding::Ir {
@@ -4974,7 +5021,7 @@ fn verify_one_function(
         } else {
             let esbmc = match find_esbmc() {
                 Some(p) => p,
-                None => return Some(VerifyOutcome::ToolNotFound),
+                None => return PerFuncResult::Halt(VerifyOutcome::ToolNotFound),
             };
             let (res, resolved_config) =
                 run_with_fallback(&esbmc, &c_src, limits.max_k_step, &func.name, &func_config);
@@ -5014,21 +5061,28 @@ fn verify_one_function(
     match result {
         VerificationResult::Failed(ce) => {
             let sce = build_structured_counterexample(func, &ce, file, call_site_index);
-            Some(VerifyOutcome::Failed {
+            PerFuncResult::Halt(VerifyOutcome::Failed {
                 function: func.name.clone(),
                 description: ce.description.clone(),
                 counterexamples: vec![sce],
             })
         }
-        VerificationResult::ToolError(e) => Some(VerifyOutcome::Error {
+        VerificationResult::ToolError(e) => PerFuncResult::Halt(VerifyOutcome::Error {
             function: func.name.clone(),
             message: e,
         }),
-        VerificationResult::Timeout => Some(VerifyOutcome::Timeout {
+        VerificationResult::Timeout => PerFuncResult::Halt(VerifyOutcome::Timeout {
             function: func.name.clone(),
         }),
-        VerificationResult::Proven | VerificationResult::ProvenIr => None,
-        VerificationResult::ToolNotFound => Some(VerifyOutcome::ToolNotFound),
+        VerificationResult::Proven | VerificationResult::ProvenIr => PerFuncResult::Ok,
+        VerificationResult::ToolNotFound => PerFuncResult::Halt(VerifyOutcome::ToolNotFound),
+        // The verifier-side gate already short-circuits this path; the
+        // emit-and-run code above never returns Skipped today. Treat any
+        // future Skipped from those entry points the same way.
+        VerificationResult::Skipped { reason } => PerFuncResult::Skipped(SkippedFunction {
+            function: func.name.clone(),
+            reason,
+        }),
     }
 }
 
@@ -5041,7 +5095,7 @@ fn run_verification_sync(
     limits: &VerifyLimits,
     jobs: usize,
     config: &SolverConfig,
-) -> VerifyOutcome {
+) -> (VerifyOutcome, Vec<SkippedFunction>) {
     let const_fns = detect_constant_functions(ir_module);
 
     let vowed: Vec<&vow_ir::Function> = ir_module
@@ -5051,13 +5105,14 @@ fn run_verification_sync(
         .collect();
 
     if vowed.is_empty() {
-        return VerifyOutcome::Proven;
+        return (VerifyOutcome::Proven, Vec::new());
     }
 
     let jobs = jobs.max(1).min(vowed.len());
     if jobs == 1 {
+        let mut skipped = Vec::new();
         for func in &vowed {
-            if let Some(outcome) = verify_one_function(
+            match verify_one_function(
                 func,
                 ir_module,
                 &const_fns,
@@ -5067,23 +5122,30 @@ fn run_verification_sync(
                 limits,
                 config,
             ) {
-                return outcome;
+                PerFuncResult::Ok => {}
+                PerFuncResult::Skipped(s) => skipped.push(s),
+                PerFuncResult::Halt(out) => return (out, skipped),
             }
         }
-        return VerifyOutcome::Proven;
+        return (VerifyOutcome::Proven, skipped);
     }
 
-    // Stop after first failure; return lowest-indexed outcome for deterministic reporting.
+    // Stop after first halt-class outcome (Failed/Error/Timeout/ToolNotFound);
+    // return lowest-indexed halt for deterministic reporting. Skipped
+    // functions never halt — they're aggregated and reported as warnings.
     let next = AtomicUsize::new(0);
     let stop = AtomicBool::new(false);
-    let outcomes: StdMutex<Vec<Option<VerifyOutcome>>> =
+    let halts: StdMutex<Vec<Option<VerifyOutcome>>> =
+        StdMutex::new((0..vowed.len()).map(|_| None).collect());
+    let skipped_acc: StdMutex<Vec<Option<SkippedFunction>>> =
         StdMutex::new((0..vowed.len()).map(|_| None).collect());
 
     thread::scope(|scope| {
         for _ in 0..jobs {
             let next = &next;
             let stop = &stop;
-            let outcomes = &outcomes;
+            let halts = &halts;
+            let skipped_acc = &skipped_acc;
             let vowed = &vowed;
             let const_fns = &const_fns;
             scope.spawn(move || {
@@ -5095,11 +5157,11 @@ fn run_verification_sync(
                     if idx >= vowed.len() {
                         break;
                     }
-                    // Always finish what we've claimed so `outcomes[idx]` reflects
-                    // its true verdict — otherwise lowest-index failure reporting
+                    // Always finish what we've claimed so `halts[idx]` reflects
+                    // its true verdict — otherwise lowest-index halt reporting
                     // becomes timing-dependent. The pre-check already avoids claims
-                    // in the common post-failure case.
-                    let outcome = verify_one_function(
+                    // in the common post-halt case.
+                    match verify_one_function(
                         vowed[idx],
                         ir_module,
                         const_fns,
@@ -5108,27 +5170,39 @@ fn run_verification_sync(
                         verify_cache,
                         limits,
                         config,
-                    );
-                    if let Some(out) = outcome {
-                        let mut guard = outcomes.lock().expect("verify outcomes mutex poisoned");
-                        guard[idx] = Some(out);
-                        drop(guard);
-                        // Release pairs with sibling threads' stop.load(Acquire) to propagate early-exit.
-                        stop.store(true, Ordering::Release);
+                    ) {
+                        PerFuncResult::Ok => {}
+                        PerFuncResult::Skipped(s) => {
+                            let mut guard =
+                                skipped_acc.lock().expect("verify skipped mutex poisoned");
+                            guard[idx] = Some(s);
+                        }
+                        PerFuncResult::Halt(out) => {
+                            let mut guard = halts.lock().expect("verify halts mutex poisoned");
+                            guard[idx] = Some(out);
+                            drop(guard);
+                            // Release pairs with sibling threads' stop.load(Acquire) to propagate early-exit.
+                            stop.store(true, Ordering::Release);
+                        }
                     }
                 }
             });
         }
     });
 
-    let results = outcomes
-        .into_inner()
-        .expect("verify outcomes mutex poisoned");
-    results
+    let halts = halts.into_inner().expect("verify halts mutex poisoned");
+    let outcome = halts
         .into_iter()
         .flatten()
         .next()
-        .unwrap_or(VerifyOutcome::Proven)
+        .unwrap_or(VerifyOutcome::Proven);
+    let skipped: Vec<SkippedFunction> = skipped_acc
+        .into_inner()
+        .expect("verify skipped mutex poisoned")
+        .into_iter()
+        .flatten()
+        .collect();
+    (outcome, skipped)
 }
 
 fn blame_to_error_code(blame: &str) -> vow_diag::ErrorCode {
@@ -5149,9 +5223,36 @@ fn blame_to_diag_blame(blame: &str) -> vow_diag::Blame {
 
 fn verify_outcome_to_output(
     outcome: VerifyOutcome,
-    mut diagnostics: Vec<Diagnostic>,
+    diagnostics: Vec<Diagnostic>,
     executable: Option<PathBuf>,
 ) -> BuildOutput {
+    verify_outcome_to_output_with_skipped(outcome, diagnostics, &[], executable)
+}
+
+fn verify_outcome_to_output_with_skipped(
+    outcome: VerifyOutcome,
+    mut diagnostics: Vec<Diagnostic>,
+    skipped: &[SkippedFunction],
+    executable: Option<PathBuf>,
+) -> BuildOutput {
+    for s in skipped {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Warning,
+            code: vow_diag::ErrorCode::VerificationSkipped,
+            message: format!("skipped verification of `{}`: {}", s.function, s.reason),
+            primary: vow_diag::SourceLocation {
+                file: String::new(),
+                byte_offset: 0,
+                byte_len: 0,
+            },
+            secondary: vec![],
+            blame: vow_diag::Blame::None,
+            hints: vec![
+                "the contract is documentary; runtime checks still apply in --mode debug"
+                    .to_string(),
+            ],
+        });
+    }
     let (status, counterexamples, verify_status, verify_message) = match outcome {
         VerifyOutcome::Failed {
             function,
@@ -5317,7 +5418,7 @@ fn run_verify_only_inner(
     let verify_cache = if no_cache { None } else { VerifyCache::new() };
     let file = source.to_string_lossy().to_string();
     let call_site_index = build_call_site_index(ir_module, &file);
-    let outcome = run_verification_sync(
+    let (outcome, skipped) = run_verification_sync(
         ir_module,
         &file,
         &call_site_index,
@@ -5326,7 +5427,7 @@ fn run_verify_only_inner(
         jobs,
         config,
     );
-    verify_outcome_to_output(outcome, all_diagnostics, None)
+    verify_outcome_to_output_with_skipped(outcome, all_diagnostics, &skipped, None)
 }
 
 // ---------------------------------------------------------------------------
@@ -5452,9 +5553,9 @@ fn run_pipeline_from_frontend(
     };
     let verify_limits = *limits;
     let verify_config = *config;
-    let verify_handle = thread::spawn(move || -> VerifyOutcome {
+    let verify_handle = thread::spawn(move || -> (VerifyOutcome, Vec<SkippedFunction>) {
         if no_verify {
-            return VerifyOutcome::Skipped;
+            return (VerifyOutcome::Skipped, Vec::new());
         }
         run_verification_sync(
             &module_for_verify,
@@ -5496,8 +5597,15 @@ fn run_pipeline_from_frontend(
         && std::fs::copy(&cached_obj, &obj_path).is_ok()
     {
         let exe_path = link_obj(&obj_path, &output_path);
-        let verify_outcome = verify_handle.join().unwrap_or(VerifyOutcome::Skipped);
-        return verify_outcome_to_output(verify_outcome, all_diagnostics, exe_path);
+        let (verify_outcome, skipped) = verify_handle
+            .join()
+            .unwrap_or((VerifyOutcome::Skipped, Vec::new()));
+        return verify_outcome_to_output_with_skipped(
+            verify_outcome,
+            all_diagnostics,
+            &skipped,
+            exe_path,
+        );
     }
 
     // Codegen
@@ -5546,8 +5654,10 @@ fn run_pipeline_from_frontend(
 
     let exe_path = link_obj(&obj_path, &output_path);
 
-    let verify_outcome = verify_handle.join().unwrap_or(VerifyOutcome::Skipped);
-    verify_outcome_to_output(verify_outcome, all_diagnostics, exe_path)
+    let (verify_outcome, skipped) = verify_handle
+        .join()
+        .unwrap_or((VerifyOutcome::Skipped, Vec::new()));
+    verify_outcome_to_output_with_skipped(verify_outcome, all_diagnostics, &skipped, exe_path)
 }
 
 // ---------------------------------------------------------------------------
@@ -6024,6 +6134,7 @@ fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJso
         timeout: 0,
         error: 0,
         not_verified: 0,
+        skipped: 0,
     };
     for e in entries {
         match e.status.as_str() {
@@ -6032,6 +6143,7 @@ fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJso
             "unknown" => summary.unknown += 1,
             "timeout" => summary.timeout += 1,
             "error" => summary.error += 1,
+            "skipped" => summary.skipped += 1,
             _ => summary.not_verified += 1,
         }
     }
@@ -6048,6 +6160,15 @@ fn update_contract_statuses(
     let const_fns = detect_constant_functions(ir_module);
     for func in &ir_module.functions {
         if func.vows.is_empty() {
+            continue;
+        }
+
+        if non_modelable_reason(func, ir_module, &const_fns).is_some() {
+            for entry in entries.iter_mut() {
+                if entry.function_id == func.id.0 {
+                    entry.status = "skipped".to_string();
+                }
+            }
             continue;
         }
 
@@ -6132,6 +6253,9 @@ fn update_contract_statuses(
                     }
                     VerificationResult::ToolError(_) | VerificationResult::ToolNotFound => {
                         entry.status = "error".to_string();
+                    }
+                    VerificationResult::Skipped { .. } => {
+                        entry.status = "skipped".to_string();
                     }
                 }
             }
@@ -8642,6 +8766,47 @@ fn main() -> i32 {
                 panic!("unexpected compile failure: {message}");
             }
             other => panic!("unexpected status: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn vowed_struct_builder_is_skipped_not_failed() {
+        let dir = TempDir::new().unwrap();
+        let src = r#"module SkipDemo
+struct Foo { x: i64, rgn: i64 }
+fn make_foo(x: i64, rgn: i64) -> Foo vow {
+  requires: rgn >= 0
+} {
+  Foo { x: x, rgn: rgn }
+}
+fn main() -> i32 {
+  0
+}"#;
+        let source = write_source(&dir, "skip_demo.vow", src);
+        let limits = VerifyLimits::default();
+        let result =
+            run_verify_only_inner(&source, true, &limits, 1, &SolverConfig::default_config());
+        match &result.status {
+            BuildStatus::Verified => {
+                assert!(
+                    result
+                        .diagnostics
+                        .iter()
+                        .any(|d| matches!(d.severity, vow_diag::Severity::Warning)
+                            && d.message.contains("make_foo")),
+                    "expected a Warning diagnostic naming `make_foo`, got: {:?}",
+                    result.diagnostics
+                );
+            }
+            BuildStatus::VerifyFailed { description, .. }
+                if description.contains("ESBMC not found") =>
+            {
+                eprintln!("SKIP: esbmc not found");
+            }
+            BuildStatus::CompileFailed { message } => {
+                panic!("unexpected compile failure: {message}");
+            }
+            other => panic!("expected Verified for non-modelable vowed fn, got {other:?}"),
         }
     }
 

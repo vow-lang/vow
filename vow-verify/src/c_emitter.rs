@@ -394,6 +394,84 @@ pub fn is_modelable(
     true
 }
 
+/// Gate: if `func` is non-modelable, return a human-readable reason; `None` means modelable. Mirror of `compiler/c_emitter.vow::non_modelable_reason`; must stay in sync.
+pub fn non_modelable_reason(
+    func: &Function,
+    module: &Module,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+) -> Option<String> {
+    if is_reserved_verifier_symbol(&func.name) {
+        return Some(format!(
+            "function `{}` shadows a reserved verifier symbol",
+            func.name
+        ));
+    }
+    if !func.effects.is_empty() {
+        return Some(format!(
+            "function `{}` has effects; the verifier model is restricted to pure functions",
+            func.name
+        ));
+    }
+    let mut cache = HashMap::new();
+    if is_modelable(func, module, const_fns, &mut cache) {
+        return None;
+    }
+    let offender = first_unsupported_opcode(func, module, const_fns);
+    let detail = match offender {
+        Some(name) => format!("contains unsupported opcode `{name}`"),
+        None => "calls a non-modelable callee".to_string(),
+    };
+    Some(format!(
+        "function `{}` is not modelable in the verifier ({detail})",
+        func.name
+    ))
+}
+
+fn first_unsupported_opcode(
+    func: &Function,
+    module: &Module,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+) -> Option<String> {
+    for block in &func.blocks {
+        for inst in &block.insts {
+            match inst.opcode {
+                Opcode::RemF32
+                | Opcode::RemF64
+                | Opcode::Load
+                | Opcode::Store
+                | Opcode::RegionAlloc
+                | Opcode::RegionOpen
+                | Opcode::RegionClose
+                | Opcode::LinearConsume
+                | Opcode::LinearBorrow
+                | Opcode::FieldSet => return Some(format!("{:?}", inst.opcode)),
+                Opcode::Call => match &inst.data {
+                    InstData::CallExtern(name) => {
+                        if !is_known_builtin(name) {
+                            return Some(format!("Call extern `{name}`"));
+                        }
+                    }
+                    InstData::CallTarget(fid) => {
+                        if !const_fns.contains_key(fid) {
+                            if let Some(callee) = module.functions.iter().find(|f| f.id == *fid) {
+                                let mut cache = HashMap::new();
+                                if !is_modelable(callee, module, const_fns, &mut cache) {
+                                    return Some(format!("Call target `{}`", callee.name));
+                                }
+                            } else {
+                                return Some(format!("Call target `FuncId({})`", fid.0));
+                            }
+                        }
+                    }
+                    _ => return Some(format!("Call ({:?})", inst.data)),
+                },
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
 /// Collect all modelable callees reachable from `func`, excluding constant
 /// functions (which are inlined). Returns FuncIds in topological order
 /// (callees before callers).

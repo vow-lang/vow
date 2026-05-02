@@ -66,6 +66,11 @@ pub enum ErrorCode {
     // Region inference (arena-per-scope, Phase 3)
     RegionConflict,
     RegionLinear,
+    // Emitted as a Warning when a vowed function's body cannot be modeled
+    // by the verifier (e.g. uses RegionAlloc/FieldSet/Linear*/Load/Store).
+    // The build still succeeds; the contract is documentary, not statically
+    // checked. Runtime checks still apply in --mode debug.
+    VerificationSkipped,
 }
 
 pub trait DiagnosticEmitter {
