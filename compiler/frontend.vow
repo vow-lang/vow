@@ -28,6 +28,11 @@ struct FrontendPrep {
     checked: CheckedFrontend,
     merged: Module,
     str_eids: Vec<i64>,
+    // Parallel to `merged.items`: the originating source-file path for each
+    // item. Threaded into `lower_module_vow` so each `IrFunction.source_file`
+    // labels region diagnostics with the right file under multi-module
+    // compilation (#254).
+    item_files: Vec<String>,
 }
 
 fn frontend_dir_path(path: String) -> String {
@@ -69,7 +74,7 @@ fn resolve_use_path(arena: AstArena, root_dir: String, use_lid: i64) -> String {
     r
 }
 
-fn load_frontend_deps(root_dir: String, m: Module, arena: AstArena, all_items: Vec<i64>, visited: Vec<String>, dctx: DiagCtx) [io] {
+fn load_frontend_deps(root_dir: String, m: Module, arena: AstArena, all_items: Vec<i64>, item_files: Vec<String>, visited: Vec<String>, dctx: DiagCtx) [io] {
     let uses: Vec<i64> = m.uses;
     let n_uses: i64 = uses.len();
     let mut ui: i64 = 0;
@@ -86,12 +91,13 @@ fn load_frontend_deps(root_dir: String, m: Module, arena: AstArena, all_items: V
                 diag_ctx_add_source(dctx, dep_path, src);
                 let tokens: Vec<Token> = lex(src);
                 let dep_m: Module = parse_module_into(tokens, arena, dctx, dep_path);
-                load_frontend_deps(root_dir, dep_m, arena, all_items, visited, dctx);
+                load_frontend_deps(root_dir, dep_m, arena, all_items, item_files, visited, dctx);
                 let dep_items: Vec<i64> = dep_m.items;
                 let n_dep: i64 = dep_items.len();
                 let mut di: i64 = 0;
                 while di < n_dep {
                     all_items.push(dep_items[di]);
+                    item_files.push(dep_path);
                     di = di + 1;
                 }
             }
@@ -109,14 +115,19 @@ fn frontend_prepare_path(path: String) -> FrontendPrep [io] {
     let m: Module = parse_module_into(tokens, arena, dctx, path);
     let root_dir: String = frontend_dir_path(path);
     let all_items: Vec<i64> = Vec::new();
+    // item_files is parallel to all_items: each entry is the source path of
+    // the corresponding item. Used by lower_module_vow to set IrFunction
+    // source_file per FnDef so multi-module diagnostics label correctly.
+    let item_files: Vec<String> = Vec::new();
     let visited: Vec<String> = Vec::new();
     visited.push(path);
-    load_frontend_deps(root_dir, m, arena, all_items, visited, dctx);
+    load_frontend_deps(root_dir, m, arena, all_items, item_files, visited, dctx);
     let root_items: Vec<i64> = m.items;
     let n_root: i64 = root_items.len();
     let mut ri: i64 = 0;
     while ri < n_root {
         all_items.push(root_items[ri]);
+        item_files.push(path);
         ri = ri + 1;
     }
     let merged: Module = Module {
@@ -139,6 +150,7 @@ fn frontend_prepare_path(path: String) -> FrontendPrep [io] {
         checked: checked,
         merged: merged,
         str_eids: e.expr_str_eids,
+        item_files: item_files,
     }
 }
 
@@ -161,8 +173,8 @@ fn frontend_lower_path(path: String) -> LoweredFrontend [io] {
             // Phase 3: region inference. Mutates summaries + per-inst regions
             // in place; emits any RegionConflict diagnostics through dctx so
             // they reach the existing CompileFailed JSON path.
-            let lowered: IrModule = lower_module_vow(prep.merged, prep.str_eids, checked.path);
-            let inferred: IrModule = infer_regions_module(lowered, checked.dctx, checked.path);
+            let lowered: IrModule = lower_module_vow(prep.merged, prep.str_eids, prep.item_files);
+            let inferred: IrModule = infer_regions_module(lowered, checked.dctx);
             insert_region_markers_module(inferred)
         }
     };

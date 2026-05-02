@@ -24,7 +24,11 @@ use vow_syntax::ast::Effect;
 use vow_syntax::span::Span;
 
 pub const MODULE_MAGIC: [u8; 4] = *b"VMOD";
-pub const MODULE_VERSION: u32 = 1;
+/// Bumped 1 → 3 for #254 (Function gains a `source_file` String field).
+/// Skips 2 because `tests/multi/vmod_decode_bad_version/main.vow` pins
+/// the literal byte `2` as its "bad version" probe — leaving it untouched
+/// keeps that fixture meaningful without a parallel source edit.
+pub const MODULE_VERSION: u32 = 3;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum DecodeError {
@@ -665,6 +669,7 @@ fn write_function(out: &mut Vec<u8>, f: &Function) {
         write_string(out, v);
     }
     write_region_summary(out, &f.summary);
+    write_string(out, &f.source_file);
 }
 
 fn read_function(r: &mut Reader) -> Result<Function, DecodeError> {
@@ -722,6 +727,7 @@ fn read_function(r: &mut Reader) -> Result<Function, DecodeError> {
         }
     }
     let summary = read_region_summary(r)?;
+    let source_file = r.string()?;
     Ok(Function {
         id,
         name,
@@ -733,6 +739,7 @@ fn read_function(r: &mut Reader) -> Result<Function, DecodeError> {
         blocks,
         local_names,
         summary,
+        source_file,
     })
 }
 
@@ -921,10 +928,10 @@ mod tests {
     #[test]
     fn magic_and_version_are_stable() {
         assert_eq!(&MODULE_MAGIC, b"VMOD");
-        assert_eq!(MODULE_VERSION, 1);
+        assert_eq!(MODULE_VERSION, 3);
         let bytes = encode_module(&empty_module());
         assert_eq!(&bytes[..4], b"VMOD");
-        assert_eq!(&bytes[4..8], &1u32.to_le_bytes());
+        assert_eq!(&bytes[4..8], &3u32.to_le_bytes());
     }
 
     #[test]
@@ -1091,6 +1098,7 @@ mod tests {
                 return_region: RegionConstraint::FreshInCaller,
                 store_effects: vec![],
             },
+            source_file: String::new(),
         };
         let m = Module {
             name: "caller_test".to_string(),
@@ -1113,6 +1121,40 @@ mod tests {
     fn determinism_encode_is_stable() {
         let m = empty_module();
         assert_eq!(encode_module(&m), encode_module(&m));
+    }
+
+    /// #254 round-trip: a non-empty `Function.source_file` must survive
+    /// encode → decode unchanged. The previous wire format had no slot for
+    /// it, so this test would silently lose the field on every reload.
+    #[test]
+    fn source_file_round_trips() {
+        let func = Function {
+            id: FuncId(0),
+            name: "f".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::Unit,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: "lib.vow".to_string(),
+        };
+        let m = Module {
+            name: "src_file_test".to_string(),
+            functions: vec![func],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        let m2 = decode_module(&encode_module(&m)).unwrap();
+        assert_eq!(m2.functions[0].source_file, "lib.vow");
+        assert_eq!(m, m2);
     }
 
     #[test]
@@ -1281,6 +1323,7 @@ mod tests {
                         },
                     ],
                 },
+                source_file: String::new(),
             }],
             warnings: vec![],
         }

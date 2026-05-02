@@ -8190,6 +8190,7 @@ fn main() -> i32 {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let map = build_c_to_source_name_map(&func);
         assert_eq!(map.get("p0"), Some(&"x".to_string()));
@@ -8238,6 +8239,7 @@ fn main() -> i32 {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let map = build_c_to_source_name_map(&func);
         // p0 maps to "a" (first non-Unit), p1 maps to "b"
@@ -8282,6 +8284,7 @@ fn main() -> i32 {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let map = build_c_to_source_name_map(&func);
         assert!(map.is_empty());
@@ -8881,6 +8884,7 @@ fn main() -> i32 {
                     }],
                     local_names: std::collections::HashMap::new(),
                     summary: RegionSummary::default(),
+                    source_file: String::new(),
                 },
                 Function {
                     id: FuncId(1),
@@ -8924,6 +8928,7 @@ fn main() -> i32 {
                     }],
                     local_names: std::collections::HashMap::new(),
                     summary: RegionSummary::default(),
+                    source_file: String::new(),
                 },
                 Function {
                     id: FuncId(2),
@@ -8967,6 +8972,7 @@ fn main() -> i32 {
                     }],
                     local_names: std::collections::HashMap::new(),
                     summary: RegionSummary::default(),
+                    source_file: String::new(),
                 },
             ],
             strings: vec![],
@@ -9041,6 +9047,7 @@ fn main() -> i32 {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
 
         let ce = vow_verify::Counterexample {
@@ -9107,6 +9114,7 @@ fn main() -> i32 {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
 
         let ce = vow_verify::Counterexample {
@@ -9168,6 +9176,7 @@ fn main() -> i32 {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
 
         let ce = vow_verify::Counterexample {
@@ -9318,6 +9327,7 @@ fn main() -> i32 {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let caller = Function {
             id: FuncId(1),
@@ -9370,6 +9380,7 @@ fn main() -> i32 {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let module = Module {
             name: "test".to_string(),
@@ -9440,6 +9451,7 @@ fn main() -> i32 {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let ce = vow_verify::Counterexample {
             description: "test".to_string(),
@@ -9544,6 +9556,7 @@ fn main() -> i32 {
             ],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let ce = vow_verify::Counterexample {
             description: "test".to_string(),

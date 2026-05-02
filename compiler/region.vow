@@ -24,7 +24,10 @@ fn RSUM_INTERNAL_UNINIT() -> i64 vow { ensures: result == -1 } { -1 }
 // Public entry point. Mutates `m.functions[*].rsum_*` fields and
 // `m.functions[*].blocks[*].insts[*].rgn` for heap-producing insts.
 // Diagnostics are emitted via `dctx`.
-fn infer_regions_module(m: IrModule, dctx: DiagCtx, path: String) -> IrModule {
+// Diagnostic file labels are read from each `IrFunction.source_file` at
+// emission time, not from a single root path — required for correct labels
+// under multi-module compilation (#254).
+fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
     let n_funcs: i64 = m.functions.len();
     if n_funcs == 0 {
         return m;
@@ -141,10 +144,13 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx, path: String) -> IrModule {
             if !changed {
                 converged = true;
             } else if iters > bound {
+                // Internal compiler error: not tied to a specific source span,
+                // so emit with empty file path (matches the Rust pass's
+                // `internal_compiler_error` shape in vow-ir/src/region.rs).
                 let d: Diagnostic = diag_error(
                     EC_REGION_CONFLICT(),
                     String::from("internal compiler error: region inference SCC exceeded monotone iteration bound"),
-                    path, 0, 0
+                    String::from(""), 0, 0
                 );
                 diag_ctx_emit(dctx, d);
                 converged = true;
@@ -227,12 +233,13 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx, path: String) -> IrModule {
             rsum_return_aliases: int_aliases_list[fi],
             rsum_store_effects: canon_se,
             rsum_param_regions: pregs,
+            source_file: f.source_file,
         };
         m.functions[fi] = new_f;
         fi = fi + 1;
     }
 
-    check_region_store_conflicts_module(m, id_to_inst_per_fn, dctx, path);
+    check_region_store_conflicts_module(m, id_to_inst_per_fn, dctx);
 
     // Commit per-inst regions.
     let mut fi2: i64 = 0;
@@ -261,23 +268,23 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx, path: String) -> IrModule {
         fi2 = fi2 + 1;
     }
 
-    check_linear_regions_module(m, dctx, path);
+    check_linear_regions_module(m, dctx);
 
     m
 }
 
-fn check_linear_regions_module(m: IrModule, dctx: DiagCtx, path: String) {
+fn check_linear_regions_module(m: IrModule, dctx: DiagCtx) {
     let n: i64 = m.functions.len();
     let mut fi: i64 = 0;
     while fi < n {
         let f: IrFunction = m.functions[fi];
         let id_to_inst: Vec<IrInst> = build_id_to_inst(f);
-        check_linear_regions_function(f, id_to_inst, dctx, path);
+        check_linear_regions_function(f, id_to_inst, dctx);
         fi = fi + 1;
     }
 }
 
-fn check_linear_regions_function(f: IrFunction, id_to_inst: Vec<IrInst>, dctx: DiagCtx, path: String) {
+fn check_linear_regions_function(f: IrFunction, id_to_inst: Vec<IrInst>, dctx: DiagCtx) {
     let n_blocks: i64 = f.blocks.len();
     let preds: Vec<Vec<i64>> = linear_predecessors(f);
     let block_in: Vec<Vec<i64>> = Vec::new();
@@ -335,7 +342,7 @@ fn check_linear_regions_function(f: IrFunction, id_to_inst: Vec<IrInst>, dctx: D
                 if inst.args.len() > 0 {
                     linear_remove_origins(live, inst.args[0], id_to_inst);
                 }
-                linear_emit_live_errors(f, live, id_to_inst, emitted, dctx, path);
+                linear_emit_live_errors(f, live, id_to_inst, emitted, dctx);
                 live.clear();
             } else if inst.op == IOP_UNREACHABLE() {
                 live.clear();
@@ -469,7 +476,7 @@ fn linear_successors(blk: IrBlock) -> Vec<i64> {
     out
 }
 
-fn linear_emit_live_errors(f: IrFunction, live: Vec<i64>, id_to_inst: Vec<IrInst>, emitted: Vec<i64>, dctx: DiagCtx, path: String) {
+fn linear_emit_live_errors(f: IrFunction, live: Vec<i64>, id_to_inst: Vec<IrInst>, emitted: Vec<i64>, dctx: DiagCtx) {
     let mut i: i64 = 0;
     while i < live.len() {
         let id: i64 = live[i];
@@ -486,7 +493,7 @@ fn linear_emit_live_errors(f: IrFunction, live: Vec<i64>, id_to_inst: Vec<IrInst
             let msg: String = String::from("linear value `");
             msg.push_str(name);
             msg.push_str(String::from("` is not consumed before its region closes"));
-            let d: Diagnostic = diag_error(EC_REGION_LINEAR(), msg, path, inst.ostart, inst.olen);
+            let d: Diagnostic = diag_error(EC_REGION_LINEAR(), msg, f.source_file, inst.ostart, inst.olen);
             diag_add_hint(d, String::from("consume the linear value before this scope exits, or return it to transfer the obligation to the caller"));
             diag_ctx_emit(dctx, d);
         }
@@ -718,7 +725,7 @@ fn add_store_effect(
 }
 
 fn check_region_store_conflicts_module(
-    m: IrModule, id_to_inst_per_fn: Vec<Vec<IrInst>>, dctx: DiagCtx, path: String
+    m: IrModule, id_to_inst_per_fn: Vec<Vec<IrInst>>, dctx: DiagCtx
 ) {
     let mut fi: i64 = 0;
     while fi < m.functions.len() {
@@ -738,7 +745,7 @@ fn check_region_store_conflicts_module(
                             inst,
                             id_to_inst,
                             dctx,
-                            path,
+                            f.source_file,
                         );
                     }
                 }
@@ -751,7 +758,7 @@ fn check_region_store_conflicts_module(
 }
 
 fn check_store_effects_at_call(
-    flat: Vec<i64>, call_inst: IrInst, id_to_inst: Vec<IrInst>, dctx: DiagCtx, path: String
+    flat: Vec<i64>, call_inst: IrInst, id_to_inst: Vec<IrInst>, dctx: DiagCtx, source_file: String
 ) {
     // Divergence note: the Rust path (`vow-ir/src/region.rs::handle_inst`,
     // `Opcode::Call` arm) adds a `VirtualCaller` marker on the target arg
@@ -776,7 +783,7 @@ fn check_store_effects_at_call(
                 && source_param >= 0 && source_param < call_inst.args.len()
             {
                 check_store_conflict(
-                    path,
+                    source_file,
                     call_inst.args[target],
                     call_inst.args[source_param],
                     call_inst,
@@ -809,7 +816,7 @@ fn check_store_effects_at_call(
 }
 
 fn check_store_conflict(
-    path: String, target_arg_id: i64, source_arg_id: i64, call_inst: IrInst,
+    source_file: String, target_arg_id: i64, source_arg_id: i64, call_inst: IrInst,
     id_to_inst: Vec<IrInst>, dctx: DiagCtx
 ) {
     let source: DeepRet = trace_origin_shallow(id_to_inst, source_arg_id);
@@ -836,7 +843,7 @@ fn check_store_conflict(
         SEV_ERROR(),
         EC_REGION_CONFLICT(),
         String::from("value's region cannot satisfy target container's region: block-local allocation stored into a parameter region"),
-        path,
+        source_file,
         span_start,
         span_len,
         DIAG_BLAME_CALLEE()

@@ -197,6 +197,7 @@ mod tests {
             blocks,
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         }
     }
 

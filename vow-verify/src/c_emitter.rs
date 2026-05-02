@@ -1728,6 +1728,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let nondet_reserved = Function {
             id: FuncId(1),
@@ -1746,6 +1747,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let assume_reserved = Function {
             id: FuncId(2),
@@ -1764,6 +1766,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let safe = Function {
             id: FuncId(3),
@@ -1782,6 +1785,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let module = Module {
             name: "test".to_string(),
@@ -1824,6 +1828,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("int64_t add("), "signature: {c}");
@@ -1876,6 +1881,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("__ESBMC_assume(v3)"), "requires: {c}");
@@ -1921,6 +1927,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         }
     }
 
@@ -2295,6 +2302,7 @@ mod tests {
             ],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -2492,6 +2500,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("__ESBMC_assert(v0"), "ensures: {c}");
@@ -2788,6 +2797,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("__vow_vec_t v0;"), "phi uses vec type: {c}");
@@ -2874,6 +2884,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&str_func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -2916,6 +2927,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&vec_func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -2951,6 +2963,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&map_func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -3000,6 +3013,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&str_func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -3047,6 +3061,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&vec_func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -3094,6 +3109,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&map_func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -3567,6 +3583,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -3872,6 +3889,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -3944,6 +3962,7 @@ mod tests {
             ],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("int __blk_0 = 0;"), "blk_0 decl: {c}");
@@ -3980,6 +3999,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         }
     }
 
@@ -4029,6 +4049,7 @@ mod tests {
             ],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let module = Module {
             name: "test".to_string(),
@@ -4069,6 +4090,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let module = Module {
             name: "test".to_string(),
