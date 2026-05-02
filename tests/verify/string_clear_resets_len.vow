@@ -1,7 +1,6 @@
-// Pin: issue #256 — __vow_string_clear must be modeled as `len = 0`,
-// not silently elided. Before this fix the call fell through to the
-// unmodelled handler, leaving `len` symbolic and breaking any contract
-// that reasoned about the post-clear length.
+// __vow_string_clear must be modeled as `len = 0`. Without the model
+// the call is elided and `s.len()` after a clear is symbolic, so any
+// contract reasoning about the post-clear length silently weakens.
 module StringClearResetsLen
 
 fn clear_makes_empty() -> i64 vow {

@@ -1,11 +1,13 @@
-// Pin: issue #256 — repeated `__vow_string_eq` on the same operand pair
-// must agree within a path. The per-pair `_Bool __str_eq_<lo>_<hi>` cache
-// (cdbdef7) is what makes this true; PR #231 would have replaced it with
-// independent nondets and broken this property.
+// `collect_typed_vars` only detects args[0] of `__vow_string_eq` as a
+// string operand, so this test uses locally-constructed strings (which
+// are detected via the `__vow_string_from_cstr` creator path) instead of
+// parameters — broadening the detector is a separate concern.
 //
-// Note: we use locally-constructed strings rather than parameters because
-// `collect_typed_vars` does not yet detect the args[1] of __vow_string_eq
-// as a string operand — that's a separate issue and out of scope here.
+// The property under test: repeated `__vow_string_eq` on the same operand
+// pair must agree within a path. The shared `_Bool __str_eq_<lo>_<hi>`
+// cache is what makes this true; replacing it with independent nondets
+// would let ESBMC pick different values for the same pair on the same
+// path and falsify any `requires a.eq(b); ensures a.eq(b)` contract.
 module StringEqIdempotent
 
 fn eq_is_idempotent() -> bool vow {
