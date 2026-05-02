@@ -216,15 +216,7 @@ fn emit_ce_vars(vr: VerifyResult) [io] {
     }
 }
 
-// Modelability gate (mirror of `vow_verify::c_emitter::non_modelable_reason`).
-// Vowed functions whose bodies the C emitter cannot model — most importantly
-// struct constructors that lower to RegionAlloc + FieldSet — must be skipped
-// here. Verifying them inline would emit `__ESBMC_assert(0,
-// "vow:UNSUPPORTED_OP_VOW_ID")` defense-in-depth traps and fail closed,
-// breaking the bootstrap (issue #195 regression).
-//
-// Returns true (and emits a Warning diagnostic) when the function is
-// non-modelable; the caller skips ESBMC for it.
+// Skip non-modelable vowed functions before ESBMC runs; otherwise the C emitter emits __ESBMC_assert(0) traps and the build fails closed.
 fn skip_if_non_modelable(f: IrFunction, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx) -> bool [io] {
     let reason: String = non_modelable_reason(f, ir_mod, const_fn_indices);
     if reason.len() == 0 {
@@ -3272,7 +3264,7 @@ fn skill_full() -> String {
     r.push_str(String::from("      \"status\": \"not_verified\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  ],\n"));
-    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 0, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 1 }\n"));
+    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 0, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 1, \"skipped\": 0 }\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
@@ -3291,7 +3283,7 @@ fn skill_full() -> String {
     r.push_str(String::from("      \"status\": \"proven\"\n"));
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("  ],\n"));
-    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 1, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 0 }\n"));
+    r.push_str(String::from("  \"summary\": { \"total\": 1, \"proven\": 1, \"failed\": 0, \"timeout\": 0, \"error\": 0, \"not_verified\": 0, \"skipped\": 0 }\n"));
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
@@ -3305,7 +3297,7 @@ fn skill_full() -> String {
     r.push_str(String::from("| `description` | string  | Full contract text                                       |\n"));
     r.push_str(String::from("| `blame`       | string  | `\"Caller\"` (requires) or `\"Callee\"` (ensures/invariant)  |\n"));
     r.push_str(String::from("| `source`      | object  | `{ \"file\": string, \"offset\": integer }`                  |\n"));
-    r.push_str(String::from("| `status`      | string  | `\"proven\"`, `\"proven-ir\"`, `\"failed\"`, `\"unknown\"`, `\"timeout\"`, `\"error\"`, or `\"not_verified\"` |\n"));
+    r.push_str(String::from("| `status`      | string  | `\"proven\"`, `\"proven-ir\"`, `\"failed\"`, `\"unknown\"`, `\"timeout\"`, `\"error\"`, `\"not_verified\"`, or `\"skipped\"` |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Status Values\n"));
     r.push_str(String::from("\n"));
@@ -4653,7 +4645,7 @@ fn skill_full() -> String {
     r.push_str(String::from("          },\n"));
     r.push_str(String::from("          \"status\": {\n"));
     r.push_str(String::from("            \"type\": \"string\",\n"));
-    r.push_str(String::from("            \"enum\": [\"proven\", \"proven-ir\", \"failed\", \"unknown\", \"timeout\", \"error\", \"not_verified\"],\n"));
+    r.push_str(String::from("            \"enum\": [\"proven\", \"proven-ir\", \"failed\", \"unknown\", \"timeout\", \"error\", \"not_verified\", \"skipped\"],\n"));
     r.push_str(String::from("            \"description\": \"Verification status\"\n"));
     r.push_str(String::from("          }\n"));
     r.push_str(String::from("        },\n"));
@@ -4662,7 +4654,7 @@ fn skill_full() -> String {
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"summary\": {\n"));
     r.push_str(String::from("      \"type\": \"object\",\n"));
-    r.push_str(String::from("      \"required\": [\"total\", \"proven\", \"failed\", \"unknown\", \"timeout\", \"error\", \"not_verified\"],\n"));
+    r.push_str(String::from("      \"required\": [\"total\", \"proven\", \"failed\", \"unknown\", \"timeout\", \"error\", \"not_verified\", \"skipped\"],\n"));
     r.push_str(String::from("      \"properties\": {\n"));
     r.push_str(String::from("        \"total\": { \"type\": \"integer\" },\n"));
     r.push_str(String::from("        \"proven\": { \"type\": \"integer\" },\n"));
@@ -4670,7 +4662,8 @@ fn skill_full() -> String {
     r.push_str(String::from("        \"unknown\": { \"type\": \"integer\" },\n"));
     r.push_str(String::from("        \"timeout\": { \"type\": \"integer\" },\n"));
     r.push_str(String::from("        \"error\": { \"type\": \"integer\" },\n"));
-    r.push_str(String::from("        \"not_verified\": { \"type\": \"integer\" }\n"));
+    r.push_str(String::from("        \"not_verified\": { \"type\": \"integer\" },\n"));
+    r.push_str(String::from("        \"skipped\": { \"type\": \"integer\" }\n"));
     r.push_str(String::from("      },\n"));
     r.push_str(String::from("      \"additionalProperties\": false\n"));
     r.push_str(String::from("    }\n"));
@@ -5060,32 +5053,44 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
             eprintln_str(String::from("error: ESBMC not found; install ESBMC to run verification"));
             return 1;
         }
+        let const_fn_indices_c: Vec<i64> = detect_const_fns(ir_mod);
         fi = 0;
         while fi < nf {
             let func: IrFunction = ir_mod.functions[fi];
             if func.vows.len() > 0 {
-                let vr: VerifyResult = verify_function_full(func, ir_mod, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c);
-                let st: i64 = vr.status;
-                let mut ei: i64 = 0;
-                while ei < e_func_ids.len() {
-                    if e_func_ids[ei] == func.id {
-                        if st == VERIFY_PROVEN() {
-                            e_statuses[ei] = String::from("proven");
-                        } else if st == VERIFY_PROVEN_IR() {
-                            e_statuses[ei] = String::from("proven-ir");
-                        } else if st == VERIFY_FAILED() {
-                            if vr.vow_id == e_vow_ids[ei] {
-                                e_statuses[ei] = String::from("failed");
-                            } else {
-                                e_statuses[ei] = String::from("unknown");
-                            }
-                        } else if st == VERIFY_TIMEOUT() {
-                            e_statuses[ei] = String::from("timeout");
-                        } else {
-                            e_statuses[ei] = String::from("error");
+                let skip_reason: String = non_modelable_reason(func, ir_mod, const_fn_indices_c);
+                if skip_reason.len() > 0 {
+                    let mut ei: i64 = 0;
+                    while ei < e_func_ids.len() {
+                        if e_func_ids[ei] == func.id {
+                            e_statuses[ei] = String::from("skipped");
                         }
+                        ei = ei + 1;
                     }
-                    ei = ei + 1;
+                } else {
+                    let vr: VerifyResult = verify_function_full(func, ir_mod, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c);
+                    let st: i64 = vr.status;
+                    let mut ei: i64 = 0;
+                    while ei < e_func_ids.len() {
+                        if e_func_ids[ei] == func.id {
+                            if st == VERIFY_PROVEN() {
+                                e_statuses[ei] = String::from("proven");
+                            } else if st == VERIFY_PROVEN_IR() {
+                                e_statuses[ei] = String::from("proven-ir");
+                            } else if st == VERIFY_FAILED() {
+                                if vr.vow_id == e_vow_ids[ei] {
+                                    e_statuses[ei] = String::from("failed");
+                                } else {
+                                    e_statuses[ei] = String::from("unknown");
+                                }
+                            } else if st == VERIFY_TIMEOUT() {
+                                e_statuses[ei] = String::from("timeout");
+                            } else {
+                                e_statuses[ei] = String::from("error");
+                            }
+                        }
+                        ei = ei + 1;
+                    }
                 }
             }
             fi = fi + 1;
@@ -5127,6 +5132,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     let n_timeout: i64 = 0;
     let n_error: i64 = 0;
     let n_not_verified: i64 = 0;
+    let n_skipped: i64 = 0;
     let mut si: i64 = 0;
     while si < total {
         let s: String = e_statuses[si];
@@ -5140,6 +5146,8 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
             n_timeout = n_timeout + 1;
         } else if s == String::from("error") {
             n_error = n_error + 1;
+        } else if s == String::from("skipped") {
+            n_skipped = n_skipped + 1;
         } else {
             n_not_verified = n_not_verified + 1;
         }
@@ -5160,6 +5168,8 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     json.push_str(i64_to_str(n_error));
     json.push_str(String::from(",\"not_verified\":"));
     json.push_str(i64_to_str(n_not_verified));
+    json.push_str(String::from(",\"skipped\":"));
+    json.push_str(i64_to_str(n_skipped));
     json.push_str(String::from("}}"));
     print_str(json);
     0

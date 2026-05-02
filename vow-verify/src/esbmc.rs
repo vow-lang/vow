@@ -36,12 +36,7 @@ pub enum VerificationResult {
     Timeout,
     ToolNotFound,
     ToolError(String),
-    /// The function's body contains opcodes the C emitter cannot faithfully
-    /// model (e.g. `RegionAlloc`, `FieldSet`, `Load`/`Store`, `RemF*`, linear
-    /// ops) or it has effects. Verification was not attempted; ESBMC was not
-    /// invoked. Build drivers should treat this as a structured warning
-    /// (vow contract is documentary, not statically checked) — never as a
-    /// failure.
+    /// Function's body contains non-modelable opcodes or effects; ESBMC not invoked. Treat as warning, not failure.
     Skipped {
         reason: String,
     },
@@ -1486,15 +1481,6 @@ VERIFICATION FAILED";
             other => panic!("expected Failed or ToolNotFound, got {other:?}"),
         }
     }
-
-    // --- Non-modelable function skip gate ---
-    //
-    // A vowed function whose body contains opcodes the verifier cannot model
-    // (RegionAlloc, FieldSet, RegionOpen/Close, Linear*, Load, Store, RemFxx)
-    // must be diagnosed as Skipped *before* any C is emitted or ESBMC is
-    // invoked. The fail-closed `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")`
-    // emitted by the C emitter for these opcodes is defense-in-depth — it
-    // should be unreachable in practice once the gate is in place.
 
     fn vowed_with_region_alloc() -> Function {
         // fn alloc_thing(rgn: i64) -> Ptr requires: rgn >= 0 { /* RegionAlloc */ }

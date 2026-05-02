@@ -2537,7 +2537,7 @@ vow verify --help --human  # same legacy text (works on all subcommands)
       "status": "not_verified"
     }
   ],
-  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1 }
+  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0 }
 }
 ```
 
@@ -2556,7 +2556,7 @@ vow verify --help --human  # same legacy text (works on all subcommands)
       "status": "proven"
     }
   ],
-  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0 }
+  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0 }
 }
 ```
 
@@ -2570,7 +2570,7 @@ vow verify --help --human  # same legacy text (works on all subcommands)
 | `description` | string  | Full contract text                                       |
 | `blame`       | string  | `"Caller"` (requires) or `"Callee"` (ensures/invariant)  |
 | `source`      | object  | `{ "file": string, "offset": integer }`                  |
-| `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, or `"not_verified"` |
+| `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, or `"skipped"` |
 
 ### Status Values
 
@@ -3918,7 +3918,7 @@ When stdin is exhausted, `stdin_read_line()` returns `""` (length 0), the `while
           },
           "status": {
             "type": "string",
-            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified"],
+            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
             "description": "Verification status"
           }
         },
@@ -3927,7 +3927,7 @@ When stdin is exhausted, `stdin_read_line()` returns `""` (length 0), the `while
     },
     "summary": {
       "type": "object",
-      "required": ["total", "proven", "failed", "unknown", "timeout", "error", "not_verified"],
+      "required": ["total", "proven", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
       "properties": {
         "total": { "type": "integer" },
         "proven": { "type": "integer" },
@@ -3935,7 +3935,8 @@ When stdin is exhausted, `stdin_read_line()` returns `""` (length 0), the `while
         "unknown": { "type": "integer" },
         "timeout": { "type": "integer" },
         "error": { "type": "integer" },
-        "not_verified": { "type": "integer" }
+        "not_verified": { "type": "integer" },
+        "skipped": { "type": "integer" }
       },
       "additionalProperties": false
     }
@@ -4296,19 +4297,14 @@ enum VerifyOutcome {
     ToolNotFound,
 }
 
-/// Reason a single vowed function was skipped by the verifier (e.g. its body
-/// uses opcodes the C emitter cannot model, like `RegionAlloc`/`FieldSet`).
-/// Surfaces in `BuildOutput.diagnostics` as a Warning — the build still
-/// succeeds.
+/// A vowed function the verifier skipped; surfaces as a Warning in `BuildOutput.diagnostics`.
 #[derive(Debug, Clone)]
 struct SkippedFunction {
     function: String,
     reason: String,
 }
 
-/// Per-function verification verdict, distinguishing "all good" from
-/// "skip with warning" from "halt the run". Avoids overloading
-/// `Option<VerifyOutcome>` (where `None` ambiguously meant either).
+/// Per-function verdict: continue, skip-with-warning, or halt.
 enum PerFuncResult {
     Ok,
     Skipped(SkippedFunction),
@@ -4444,6 +4440,7 @@ pub struct ContractsSummaryJson {
     pub timeout: u32,
     pub error: u32,
     pub not_verified: u32,
+    pub skipped: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4985,12 +4982,7 @@ fn verify_one_function(
     limits: &VerifyLimits,
     config: &SolverConfig,
 ) -> PerFuncResult {
-    // Modelability gate (issue #195 regression fix). A vowed function whose
-    // body contains opcodes the C emitter cannot model — most importantly
-    // `RegionAlloc` and `FieldSet`, which struct construction lowers to —
-    // would otherwise hit the `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")`
-    // defense-in-depth trap inline in the C model and fail closed. Skip such
-    // functions here so the build continues with a structured warning.
+    // Non-modelable vowed functions must be skipped here; the C emitter would emit __ESBMC_assert(0) traps for them.
     if let Some(reason) = non_modelable_reason(func, ir_module, const_fns) {
         return PerFuncResult::Skipped(SkippedFunction {
             function: func.name.clone(),
@@ -6142,6 +6134,7 @@ fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJso
         timeout: 0,
         error: 0,
         not_verified: 0,
+        skipped: 0,
     };
     for e in entries {
         match e.status.as_str() {
@@ -6150,6 +6143,7 @@ fn build_contracts_summary(entries: &[ContractEntryJson]) -> ContractsSummaryJso
             "unknown" => summary.unknown += 1,
             "timeout" => summary.timeout += 1,
             "error" => summary.error += 1,
+            "skipped" => summary.skipped += 1,
             _ => summary.not_verified += 1,
         }
     }
@@ -6166,6 +6160,15 @@ fn update_contract_statuses(
     let const_fns = detect_constant_functions(ir_module);
     for func in &ir_module.functions {
         if func.vows.is_empty() {
+            continue;
+        }
+
+        if non_modelable_reason(func, ir_module, &const_fns).is_some() {
+            for entry in entries.iter_mut() {
+                if entry.function_id == func.id.0 {
+                    entry.status = "skipped".to_string();
+                }
+            }
             continue;
         }
 
@@ -8766,15 +8769,6 @@ fn main() -> i32 {
         }
     }
 
-    // A vowed function whose body the verifier cannot model (here: a struct
-    // constructor that lowers to RegionAlloc + FieldSet) must NOT cause a
-    // VerifyFailed build. The build succeeds; a structured warning
-    // diagnostic identifies the skipped function and the reason.
-    //
-    // Regression test for the bootstrap regression on `ir_inst_set_region`
-    // observed under issue #195: commit 882a6bc made the C emitter fail
-    // closed on unsupported opcodes, which turned every vowed struct-builder
-    // into a hard build break.
     #[test]
     fn vowed_struct_builder_is_skipped_not_failed() {
         let dir = TempDir::new().unwrap();

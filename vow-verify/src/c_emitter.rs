@@ -394,15 +394,7 @@ pub fn is_modelable(
     true
 }
 
-/// If `func` cannot be precisely modeled by the C emitter, return a
-/// human-readable explanation suitable for a `VerificationResult::Skipped`
-/// reason. Returns `None` when the function IS modelable.
-///
-/// This is the gate that prevents the verifier from emitting fail-closed
-/// `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")` traps inline in a
-/// function body — those traps remain as defense-in-depth, but should be
-/// unreachable in practice once this gate is consulted at the verify-driver
-/// entry point.
+/// Gate: if `func` is non-modelable, return a human-readable reason; `None` means modelable. Mirror of `compiler/c_emitter.vow::non_modelable_reason`; must stay in sync.
 pub fn non_modelable_reason(
     func: &Function,
     module: &Module,

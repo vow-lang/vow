@@ -307,6 +307,8 @@ fn first_unsupported_opcode_name(f: IrFunction, m: IrModule, const_fn_indices: V
                             return str3(String::from("Call target `"), callee_name, String::from("`"));
                         }
                     }
+                } else {
+                    return str3(String::from("Call (dk="), i64_to_str(inst.dk), String::from(")"));
                 }
             }
             ii = ii + 1;
