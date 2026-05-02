@@ -2576,6 +2576,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -2607,6 +2608,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -2645,6 +2647,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -2748,6 +2751,7 @@ mod tests {
                 ],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let _ = VowId(0); // suppress unused import
@@ -2790,6 +2794,7 @@ mod tests {
             blocks: vec![],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let sig = build_signature(&ir_func, CallConv::SystemV);
         assert_eq!(sig.params.len(), 2);
@@ -2822,6 +2827,7 @@ mod tests {
                     source: RegionConstraint::FreshInCaller,
                 }],
             },
+            source_file: String::new(),
         };
 
         let sig = build_signature(&ir_func, CallConv::SystemV);
@@ -2857,6 +2863,7 @@ mod tests {
                     source: RegionConstraint::FreshInCaller,
                 }],
             },
+            source_file: String::new(),
         };
 
         let sig = build_signature(&ir_func, CallConv::SystemV);
@@ -2915,6 +2922,7 @@ mod tests {
                     source: RegionConstraint::FreshInCaller,
                 }],
             },
+            source_file: String::new(),
         };
 
         let helper = Function {
@@ -2940,6 +2948,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
 
         let module = make_module("test", vec![main_fn, helper]);
@@ -2973,6 +2982,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         }
     }
 
@@ -3187,6 +3197,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3251,6 +3262,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3286,6 +3298,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3319,6 +3332,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3352,6 +3366,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3409,6 +3424,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3444,6 +3460,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3476,6 +3493,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3510,6 +3528,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3542,6 +3561,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3614,6 +3634,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3662,6 +3683,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3710,6 +3732,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3760,6 +3783,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -4446,6 +4470,7 @@ mod tests {
                     }],
                     local_names: std::collections::HashMap::new(),
                     summary: RegionSummary::default(),
+                    source_file: String::new(),
                 },
                 Function {
                     id: FuncId(1),
@@ -4471,6 +4496,7 @@ mod tests {
                     }],
                     local_names: std::collections::HashMap::new(),
                     summary: RegionSummary::default(),
+                    source_file: String::new(),
                 },
             ],
         );
@@ -4568,6 +4594,7 @@ mod tests {
                 return_region: RegionConstraint::FreshInCaller,
                 store_effects: vec![],
             },
+            source_file: String::new(),
         }
     }
 
@@ -4729,6 +4756,7 @@ mod tests {
                     return_region: RegionConstraint::FreshInCaller,
                     store_effects: vec![],
                 },
+                source_file: String::new(),
             }],
         );
         module.strings.push("hello".to_string());
@@ -4777,6 +4805,7 @@ mod tests {
                     return_region: RegionConstraint::FreshInCaller,
                     store_effects: vec![],
                 },
+                source_file: String::new(),
             }],
         );
         let result =
@@ -4849,6 +4878,7 @@ mod tests {
                 return_region: RegionConstraint::FreshInCaller,
                 store_effects: vec![],
             },
+            source_file: String::new(),
         };
 
         let mut caller_open = inst(0, Opcode::RegionOpen, Ty::Unit, vec![], InstData::None);
@@ -4883,6 +4913,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
 
         let module = make_module("test", vec![callee, caller]);
@@ -4978,6 +5009,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -5013,6 +5045,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =

@@ -85,7 +85,13 @@ fn resolve_use(root_dir: &Path, path: &[String]) -> PathBuf {
 
 /// Merge all modules into a single Module for unified type-checking and lowering.
 /// All items from dependency modules are visible as if declared in the root.
-pub(crate) fn merge_modules(graph: ModuleGraph) -> Module {
+///
+/// Returns the merged module plus a parallel `Vec<String>` of source-file
+/// paths — `item_files[i]` is the originating file path of `items[i]`.
+/// This per-item provenance is consumed by `vow_ir::lower_module` to set
+/// `Function.source_file` so region diagnostics label the right file under
+/// multi-module compilation (#254).
+pub(crate) fn merge_modules(graph: ModuleGraph) -> (Module, Vec<String>) {
     let (_, root_module) = graph
         .modules
         .last()
@@ -93,14 +99,20 @@ pub(crate) fn merge_modules(graph: ModuleGraph) -> Module {
         .unwrap_or_else(|| panic!("empty module graph"));
 
     let mut all_items = Vec::new();
-    for (_, module) in &graph.modules {
-        all_items.extend(module.items.clone());
+    let mut item_files: Vec<String> = Vec::new();
+    for (path, module) in &graph.modules {
+        let path_str = path.to_string_lossy().into_owned();
+        for item in &module.items {
+            all_items.push(item.clone());
+            item_files.push(path_str.clone());
+        }
     }
 
-    Module {
+    let merged = Module {
         name: root_module.name,
         uses: vec![],
         items: all_items,
         span: root_module.span,
-    }
+    };
+    (merged, item_files)
 }

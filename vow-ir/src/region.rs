@@ -49,9 +49,14 @@ use crate::types::{
 /// each heap-producing `Inst.region`. Diagnostics are pushed onto
 /// `module.warnings` (existing channel — same one `lower_module` uses).
 ///
+/// Each emitted diagnostic is labelled with the source file recorded on
+/// the analysing `Function.source_file` (set by `lower_module` from
+/// `merge_modules`'s per-item path) — required for correct labels under
+/// multi-module compilation (#254).
+///
 /// On `RegionConflict`, iteration completes anyway so internal `Uninit`
 /// state never leaks into `Function.summary` (spec §4.3).
-pub fn infer_regions(module: &mut Module, source_file: &str) {
+pub fn infer_regions(module: &mut Module) {
     let n_funcs = module.functions.len();
     if n_funcs == 0 {
         return;
@@ -105,7 +110,6 @@ pub fn infer_regions(module: &mut Module, source_file: &str) {
                 let func = &module.functions[fidx as usize];
                 let new_summary = analyze_function(
                     func,
-                    source_file,
                     &summaries,
                     &mut region_maps[fidx as usize],
                     &mut iter_diagnostics,
@@ -166,22 +170,18 @@ pub fn infer_regions(module: &mut Module, source_file: &str) {
         }
     }
 
-    check_linear_regions(module, source_file, &mut diagnostics);
+    check_linear_regions(module, &mut diagnostics);
 
     module.warnings.extend(diagnostics);
 }
 
-fn check_linear_regions(module: &Module, source_file: &str, diagnostics: &mut Vec<Diagnostic>) {
+fn check_linear_regions(module: &Module, diagnostics: &mut Vec<Diagnostic>) {
     for func in &module.functions {
-        check_function_linear_regions(func, source_file, diagnostics);
+        check_function_linear_regions(func, diagnostics);
     }
 }
 
-fn check_function_linear_regions(
-    func: &Function,
-    source_file: &str,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
+fn check_function_linear_regions(func: &Function, diagnostics: &mut Vec<Diagnostic>) {
     let mut inst_lookup: BTreeMap<InstId, (BlockId, &Inst)> = BTreeMap::new();
     for block in &func.blocks {
         for inst in &block.insts {
@@ -238,14 +238,7 @@ fn check_function_linear_regions(
                     if let Some(&arg) = inst.args.first() {
                         remove_linear_origins(&mut live, arg, &inst_lookup);
                     }
-                    emit_live_linear_errors(
-                        func,
-                        source_file,
-                        &live,
-                        &inst_lookup,
-                        &mut emitted,
-                        diagnostics,
-                    );
+                    emit_live_linear_errors(func, &live, &inst_lookup, &mut emitted, diagnostics);
                     live.clear();
                 }
                 Opcode::Unreachable => {
@@ -378,7 +371,6 @@ fn block_successors(block: &crate::types::BasicBlock) -> Vec<BlockId> {
 
 fn emit_live_linear_errors(
     func: &Function,
-    source_file: &str,
     live: &BTreeSet<InstId>,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
     emitted: &mut BTreeSet<InstId>,
@@ -403,7 +395,7 @@ fn emit_live_linear_errors(
                 "linear value `{name}` is not consumed before its region closes"
             ),
             primary: SourceLocation {
-                file: source_file.to_string(),
+                file: func.source_file.clone(),
                 byte_offset: inst.origin.start,
                 byte_len: inst.origin.len,
             },
@@ -676,11 +668,11 @@ fn canonical_aliases(xs: &[u32]) -> Vec<u32> {
 /// `region_map` with per-inst regions.
 fn analyze_function(
     func: &Function,
-    source_file: &str,
     summaries: &[InternalSummary],
     region_map: &mut BTreeMap<InstId, RegionId>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> InternalSummary {
+    let source_file: &str = &func.source_file;
     let mut summary = InternalSummary::seed(func.params.len());
 
     // Build inst lookup + a flat "all instructions" iterator that records
@@ -1351,14 +1343,6 @@ fn origin_to_constraint(origin: &ValueOrigin) -> RegionConstraint {
 ///     which is built up forward through this same pass.
 ///   * Phi-of-mixed-origins: descend into upsilon arms and reject when
 ///     the joined origin set spans incompatible regions.
-// Multi-module limitation (#254): `source_file` is the *root* file path,
-// not the per-function source. `module_loader::merge_modules` collects
-// items from every imported module into a single AST without rebasing
-// spans, and `lower_module` tags the whole merged IR with the root path,
-// so a function from `lib.vow` whose span points into `lib.vow` gets
-// labelled as `main.vow` here. Tracked in #254 for the structural fix
-// (per-Function `source_file` field). Single-module builds — including
-// every test on the corpus today — get the correct file label.
 fn check_store_conflict(
     source_file: &str,
     target_arg_id: InstId,
@@ -1664,6 +1648,7 @@ mod tests {
             blocks,
             local_names: HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: "test.vow".to_string(),
         }
     }
 
@@ -1734,7 +1719,7 @@ mod tests {
         // and resolves to AliasOf(0). A buggy implementation seeded at
         // ConstantGlobal would silently mis-summarise as ConstantGlobal.
         let mut m = module(vec![build_identity_fn()]);
-        infer_regions(&mut m, "test.vow");
+        infer_regions(&mut m);
         assert_eq!(
             m.functions[0].summary.return_region,
             RegionConstraint::AliasOf(0)
@@ -1744,7 +1729,7 @@ mod tests {
     #[test]
     fn rodata_literal_return() {
         let mut m = module(vec![build_const_str_return()]);
-        infer_regions(&mut m, "test.vow");
+        infer_regions(&mut m);
         assert_eq!(
             m.functions[0].summary.return_region,
             RegionConstraint::ConstantGlobal
@@ -1754,7 +1739,7 @@ mod tests {
     #[test]
     fn returned_alloc_escapes_to_caller() {
         let mut m = module(vec![build_returning_alloc()]);
-        infer_regions(&mut m, "test.vow");
+        infer_regions(&mut m);
         assert_eq!(
             m.functions[0].summary.return_region,
             RegionConstraint::FreshInCaller
@@ -1767,7 +1752,7 @@ mod tests {
     #[test]
     fn scalar_returns_are_constantglobal() {
         let mut m = module(vec![build_scalar_return()]);
-        infer_regions(&mut m, "test.vow");
+        infer_regions(&mut m);
         assert_eq!(
             m.functions[0].summary.return_region,
             RegionConstraint::ConstantGlobal
@@ -1784,7 +1769,7 @@ mod tests {
         ];
         let f = function(0, "id_ptr", vec![Ty::Ptr], Ty::Ptr, vec![block(0, insts)]);
         let mut m = module(vec![f]);
-        infer_regions(&mut m, "test.vow");
+        infer_regions(&mut m);
         assert_eq!(
             m.functions[0].summary.return_region,
             RegionConstraint::AliasOf(0)
@@ -1865,7 +1850,7 @@ mod tests {
             ],
         );
         let mut m = module(vec![f]);
-        infer_regions(&mut m, "test.vow");
+        infer_regions(&mut m);
         // The function has no RegionAlloc and no Call — its return path falls
         // through to §4.3 step 5 deep_origin walk, which sees Phi merging
         // Param(0) + Constant. Origin merge → FreshInCaller per §4.3 join.
@@ -1940,7 +1925,7 @@ mod tests {
             ],
         );
         let mut m = module(vec![f]);
-        infer_regions(&mut m, "test.vow");
+        infer_regions(&mut m);
         match &m.functions[0].summary.return_region {
             RegionConstraint::AliasOfAny(v) => {
                 assert_eq!(v, &vec![0, 2], "aliases must be ascending+deduplicated");
@@ -1967,7 +1952,7 @@ mod tests {
             f.id = FuncId(i as u32);
             f.name = format!("f{i}");
         }
-        infer_regions(&mut m, "test.vow");
+        infer_regions(&mut m);
 
         let bytes = crate::encode_module(&m);
         let decoded = crate::decode_module(&bytes).expect("decode round-trips");
@@ -2003,7 +1988,7 @@ mod tests {
         ];
         let f = function(0, "f", vec![Ty::Ptr], Ty::Ptr, vec![block(0, insts)]);
         let mut m = module(vec![f]);
-        infer_regions(&mut m, "test.vow");
+        infer_regions(&mut m);
         assert_eq!(
             m.functions[0].summary.return_region,
             RegionConstraint::AliasOf(0)
@@ -2044,7 +2029,7 @@ mod tests {
         let f0 = function(0, "f0", vec![], Ty::Ptr, vec![block(0, f0_insts)]);
         let f1 = function(1, "f1", vec![], Ty::Ptr, vec![block(0, f1_insts)]);
         let mut m = module(vec![f0, f1]);
-        infer_regions(&mut m, "test.vow");
+        infer_regions(&mut m);
         assert_eq!(
             m.functions[1].summary.return_region,
             RegionConstraint::FreshInCaller,
@@ -2076,7 +2061,7 @@ mod tests {
         ];
         let f = function(0, "local", vec![], Ty::I64, vec![block(0, insts)]);
         let mut m = module(vec![f]);
-        infer_regions(&mut m, "test.vow");
+        infer_regions(&mut m);
         let inst0 = &m.functions[0].blocks[0].insts[0];
         // A heap value with no escaping uses can be scoped to its defining
         // block; this is the no-alloc-block elision prerequisite from #204.
@@ -2152,7 +2137,7 @@ mod tests {
         // so no RegionOpen/Close must be inserted.
         let f = build_returning_alloc();
         let mut m = module(vec![f]);
-        infer_regions(&mut m, "test.vow");
+        infer_regions(&mut m);
         insert_region_markers(&mut m);
         let any_marker = m.functions[0]
             .blocks
@@ -2180,7 +2165,7 @@ mod tests {
         ];
         let f = function(0, "local", vec![], Ty::I64, vec![block(0, insts)]);
         let mut m = module(vec![f]);
-        infer_regions(&mut m, "test.vow");
+        infer_regions(&mut m);
         let inst0 = &m.functions[0].blocks[0].insts[0];
         assert_eq!(inst0.region, RegionId::Block(BlockId(0)));
         insert_region_markers(&mut m);
@@ -2228,7 +2213,7 @@ mod tests {
             vec![block(0, b0_insts), block(1, b1_insts)],
         );
         let mut m = module(vec![f]);
-        infer_regions(&mut m, "test.vow");
+        infer_regions(&mut m);
         let inst0 = &m.functions[0].blocks[0].insts[0];
         assert_eq!(
             inst0.region,
@@ -2253,7 +2238,7 @@ mod tests {
         ];
         let caller = function(1, "caller", vec![], Ty::I64, vec![block(0, caller_insts)]);
         let mut m = module(vec![callee, caller]);
-        infer_regions(&mut m, "test.vow");
+        infer_regions(&mut m);
         let call = &m.functions[1].blocks[0].insts[0];
         assert_eq!(
             call.region,
@@ -2273,7 +2258,7 @@ mod tests {
     #[test]
     fn empty_module_does_not_panic() {
         let mut m = module(vec![]);
-        infer_regions(&mut m, "test.vow");
+        infer_regions(&mut m);
         assert!(m.functions.is_empty());
         assert!(m.warnings.is_empty());
     }
@@ -2325,7 +2310,7 @@ mod tests {
         );
 
         let mut m = module(vec![f0, f1]);
-        infer_regions(&mut m, "test.vow");
+        infer_regions(&mut m);
 
         let conflicts: Vec<_> = m
             .warnings
@@ -2355,6 +2340,88 @@ mod tests {
         assert_eq!(c.primary.file, "test.vow");
         for s in &c.secondary {
             assert_eq!(s.file, "test.vow");
+        }
+    }
+
+    /// Multi-module #254 regression: the conflict diagnostic must label the
+    /// file that actually contains the analyzing function (the caller of the
+    /// store-effect callee), not the root file or some shared default. This
+    /// is the proof that `Function.source_file` is consulted at emission
+    /// time rather than the historical single-`&str` parameter threaded
+    /// through `infer_regions`.
+    #[test]
+    fn region_conflict_uses_callee_function_source_file() {
+        let f0_insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(2, Opcode::Store, Ty::Unit, vec![0, 1], InstData::None),
+            inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let mut f0 = function(
+            0,
+            "copy_param",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, f0_insts)],
+        );
+        f0.source_file = "main.vow".to_string();
+
+        let f1_insts = vec![
+            inst(4, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(
+                5,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                6,
+                Opcode::Call,
+                Ty::Unit,
+                vec![4, 5],
+                InstData::CallTarget(FuncId(0)),
+            ),
+            inst(7, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let mut f1 = function(
+            1,
+            "caller",
+            vec![Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, f1_insts)],
+        );
+        f1.source_file = "lib.vow".to_string();
+
+        let mut m = module(vec![f0, f1]);
+        infer_regions(&mut m);
+
+        let conflicts: Vec<_> = m
+            .warnings
+            .iter()
+            .filter(|d| d.code == ErrorCode::RegionConflict)
+            .filter(|d| !d.message.starts_with("internal compiler error"))
+            .collect();
+        assert_eq!(
+            conflicts.len(),
+            1,
+            "expected exactly one RegionConflict, got {} from warnings: {:?}",
+            conflicts.len(),
+            m.warnings
+        );
+        let c = conflicts[0];
+        // The conflict is detected during analysis of `caller` (f1) — that
+        // is the function whose source file must label every span on the
+        // diagnostic. f0's "main.vow" must not appear.
+        assert_eq!(
+            c.primary.file, "lib.vow",
+            "primary span must point at the analyzing function's source file"
+        );
+        for s in &c.secondary {
+            assert_eq!(
+                s.file, "lib.vow",
+                "secondary spans must also point at the analyzing function's source file"
+            );
         }
     }
 
@@ -2398,7 +2465,7 @@ mod tests {
         );
 
         let mut m = module(vec![f0, f1]);
-        infer_regions(&mut m, "test.vow");
+        infer_regions(&mut m);
 
         let conflicts: Vec<_> = m
             .warnings
@@ -2453,7 +2520,7 @@ mod tests {
         );
 
         let mut m = module(vec![f0, f1]);
-        infer_regions(&mut m, "test.vow");
+        infer_regions(&mut m);
 
         let conflicts: Vec<_> = m
             .warnings
