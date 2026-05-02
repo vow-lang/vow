@@ -8787,23 +8787,27 @@ fn main() -> i32 {
         let result =
             run_verify_only_inner(&source, true, &limits, 1, &SolverConfig::default_config());
         match &result.status {
-            BuildStatus::Verified | BuildStatus::Unverified => {}
+            BuildStatus::Verified => {
+                assert!(
+                    result
+                        .diagnostics
+                        .iter()
+                        .any(|d| matches!(d.severity, vow_diag::Severity::Warning)
+                            && d.message.contains("make_foo")),
+                    "expected a Warning diagnostic naming `make_foo`, got: {:?}",
+                    result.diagnostics
+                );
+            }
+            BuildStatus::VerifyFailed { description, .. }
+                if description.contains("ESBMC not found") =>
+            {
+                eprintln!("SKIP: esbmc not found");
+            }
             BuildStatus::CompileFailed { message } => {
                 panic!("unexpected compile failure: {message}");
             }
-            other => {
-                panic!("expected Verified/Unverified for non-modelable vowed fn, got {other:?}")
-            }
+            other => panic!("expected Verified for non-modelable vowed fn, got {other:?}"),
         }
-        assert!(
-            result
-                .diagnostics
-                .iter()
-                .any(|d| matches!(d.severity, vow_diag::Severity::Warning)
-                    && d.message.contains("make_foo")),
-            "expected a Warning diagnostic naming `make_foo`, got diagnostics: {:?}",
-            result.diagnostics
-        );
     }
 
     #[test]

@@ -453,23 +453,13 @@ fn first_unsupported_opcode(
                     }
                     InstData::CallTarget(fid) => {
                         if !const_fns.contains_key(fid) {
-                            let modelable = module
-                                .functions
-                                .iter()
-                                .find(|f| f.id == *fid)
-                                .map(|callee| {
-                                    let mut cache = HashMap::new();
-                                    is_modelable(callee, module, const_fns, &mut cache)
-                                })
-                                .unwrap_or(false);
-                            if !modelable {
-                                let name = module
-                                    .functions
-                                    .iter()
-                                    .find(|f| f.id == *fid)
-                                    .map(|f| f.name.clone())
-                                    .unwrap_or_else(|| format!("FuncId({})", fid.0));
-                                return Some(format!("Call target `{name}`"));
+                            if let Some(callee) = module.functions.iter().find(|f| f.id == *fid) {
+                                let mut cache = HashMap::new();
+                                if !is_modelable(callee, module, const_fns, &mut cache) {
+                                    return Some(format!("Call target `{}`", callee.name));
+                                }
+                            } else {
+                                return Some(format!("Call target `FuncId({})`", fid.0));
                             }
                         }
                     }
