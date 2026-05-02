@@ -199,6 +199,7 @@ fn is_known_builtin(name: &str) -> bool {
             | "__vow_string_len"
             | "__vow_string_push_str"
             | "__vow_string_push_byte"
+            | "__vow_string_clear"
             | "__vow_string_byte_at"
             | "__vow_string_eq"
             | "__vow_string_contains"
@@ -536,6 +537,7 @@ fn emit_inst(
     option_vars: &HashSet<u32>,
     const_fns: &HashMap<FuncId, ConstantValue>,
     modelable_fns: &HashSet<FuncId>,
+    eq_pairs: &[(u32, u32)],
     module: &Module,
     limits: &VerifyLimits,
 ) {
@@ -880,6 +882,7 @@ fn emit_inst(
                         let dest = inst.args[0].0;
                         let src = inst.args[1].0;
                         out.push_str(&format!("  v{dest}.len += v{src}.len;\n"));
+                        emit_string_eq_invalidate(dest, eq_pairs, out);
                     }
                     "__vow_string_push_byte" => {
                         let s = inst.args[0].0;
@@ -889,6 +892,12 @@ fn emit_inst(
                             "  __ESBMC_assert(v{s}.len < {string_max}, \"string capacity\");\n\
                              \x20 v{s}.data[v{s}.len] = (int8_t)v{byte};\n  v{s}.len++;\n",
                         ));
+                        emit_string_eq_invalidate(s, eq_pairs, out);
+                    }
+                    "__vow_string_clear" => {
+                        let s = inst.args[0].0;
+                        out.push_str(&format!("  v{s}.len = 0;\n"));
+                        emit_string_eq_invalidate(s, eq_pairs, out);
                     }
                     "__vow_string_byte_at" => {
                         let s = inst.args[0].0;
@@ -1144,6 +1153,46 @@ fn emit_unmodelled(inst: &Inst, out: &mut String) {
     }
 }
 
+/// Collect every unordered (lo, hi) operand pair appearing as arguments to
+/// `__vow_string_eq`, in IR-traversal order with linear deduplication. The
+/// caller emits one shared `_Bool __str_eq_<lo>_<hi>` per pair, and re-samples
+/// it whenever a modeled mutation touches `lo` or `hi`.
+fn compute_string_eq_pairs(func: &Function) -> Vec<(u32, u32)> {
+    let mut eq_pairs: Vec<(u32, u32)> = Vec::new();
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.opcode == Opcode::Call
+                && let InstData::CallExtern(ref name) = inst.data
+                && name == "__vow_string_eq"
+                && inst.args.len() == 2
+            {
+                let a = inst.args[0].0;
+                let b = inst.args[1].0;
+                if a != b {
+                    let pair = (a.min(b), a.max(b));
+                    if !eq_pairs.contains(&pair) {
+                        eq_pairs.push(pair);
+                    }
+                }
+            }
+        }
+    }
+    eq_pairs
+}
+
+/// Emit `__str_eq_<lo>_<hi> = __VERIFIER_nondet_bool();` for every cached pair
+/// involving `operand`. Called immediately after each modeled string mutation
+/// so the verifier cannot prove a stale equality across a mutation.
+fn emit_string_eq_invalidate(operand: u32, eq_pairs: &[(u32, u32)], out: &mut String) {
+    for &(lo, hi) in eq_pairs {
+        if lo == operand || hi == operand {
+            out.push_str(&format!(
+                "  __str_eq_{lo}_{hi} = __VERIFIER_nondet_bool();\n"
+            ));
+        }
+    }
+}
+
 /// Sentinel `vow_id` reported when ESBMC fails on an
 /// `emit_unsupported_for_verification` assertion. Reserved so the diagnostic
 /// pipeline can distinguish a verifier-limitation failure from a real vow
@@ -1367,33 +1416,13 @@ pub fn emit_c_function_full(
     // __VERIFIER_nondet_bool() on every call would let ESBMC pick different
     // values for the same (a,b) pair, breaking determinism (e.g. body proves
     // `a.eq(b)` then `ensures: a.eq(b)` fails). Declare one shared bool per
-    // unordered pair (min, max) and reuse it at every call site.
-    {
-        let mut eq_pairs: Vec<(u32, u32)> = Vec::new();
-        for block in &func.blocks {
-            for inst in &block.insts {
-                if inst.opcode == Opcode::Call
-                    && let InstData::CallExtern(ref name) = inst.data
-                    && name == "__vow_string_eq"
-                    && inst.args.len() == 2
-                {
-                    let a = inst.args[0].0;
-                    let b = inst.args[1].0;
-                    if a != b {
-                        let pair = (a.min(b), a.max(b));
-                        if !eq_pairs.contains(&pair) {
-                            eq_pairs.push(pair);
-                        }
-                    }
-                }
-            }
-        }
-        eq_pairs.sort();
-        for (lo, hi) in eq_pairs {
-            out.push_str(&format!(
-                "  _Bool __str_eq_{lo}_{hi} = __VERIFIER_nondet_bool();\n"
-            ));
-        }
+    // unordered pair (min, max) and reuse it at every call site, then
+    // re-sample after each modeled mutation on either operand.
+    let eq_pairs = compute_string_eq_pairs(func);
+    for &(lo, hi) in &eq_pairs {
+        out.push_str(&format!(
+            "  _Bool __str_eq_{lo}_{hi} = __VERIFIER_nondet_bool();\n"
+        ));
     }
 
     // Block-visit tracking variables
@@ -1443,6 +1472,7 @@ pub fn emit_c_function_full(
                 &option_vars,
                 const_fns,
                 modelable_fns,
+                &eq_pairs,
                 module,
                 limits,
             );
@@ -1466,6 +1496,7 @@ pub fn emit_c_function_full(
                 &option_vars,
                 const_fns,
                 modelable_fns,
+                &eq_pairs,
                 module,
                 limits,
             );
@@ -3489,6 +3520,347 @@ mod tests {
     }
 
     #[test]
+    fn emit_string_eq_invalidates_on_push_byte() {
+        // After `__vow_string_push_byte(a, ...)` mutates `a`, every cached
+        // pair touching `a` must be re-sampled with __VERIFIER_nondet_bool().
+        // The cache itself stays — the pair is still shared by call sites
+        // before and after the mutation — but its value can change.
+        use vow_ir::InstId;
+        let func = make_func(
+            "push_then_compare",
+            vec![],
+            Ty::Bool,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                Inst {
+                    id: InstId(1),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(2)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(4),
+                    opcode: Opcode::Call,
+                    ty: Ty::Bool,
+                    args: vec![InstId(1), InstId(3)],
+                    data: InstData::CallExtern("__vow_string_eq".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(5, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(65)),
+                Inst {
+                    id: InstId(6),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(1), InstId(5)],
+                    data: InstData::CallExtern("__vow_string_push_byte".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(7),
+                    opcode: Opcode::Call,
+                    ty: Ty::Bool,
+                    args: vec![InstId(1), InstId(3)],
+                    data: InstData::CallExtern("__vow_string_eq".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(8, Opcode::Return, Ty::Unit, vec![7], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        // Exactly one shared declaration for the (1, 3) pair.
+        let decls = c
+            .matches("_Bool __str_eq_1_3 = __VERIFIER_nondet_bool();")
+            .count();
+        assert_eq!(decls, 1, "expected exactly one shared decl: {c}");
+        // Both reads share the cached name.
+        assert!(
+            c.contains("v4 = (v1.len == v3.len) ? __str_eq_1_3 : 0"),
+            "first eq call must use cached nondet: {c}"
+        );
+        assert!(
+            c.contains("v7 = (v1.len == v3.len) ? __str_eq_1_3 : 0"),
+            "second eq call must reuse cached nondet: {c}"
+        );
+        // Re-sample line follows the mutation (`v1.len++;`) and precedes the
+        // second read.
+        let resample = "__str_eq_1_3 = __VERIFIER_nondet_bool();";
+        let len_inc_pos = c.find("v1.len++;").expect("push_byte must emit len++");
+        let resample_pos = c[len_inc_pos..]
+            .find(resample)
+            .map(|p| p + len_inc_pos)
+            .expect(&format!("re-sample must follow v1.len++: {c}"));
+        let second_read_pos = c
+            .find("v7 = (v1.len == v3.len)")
+            .expect("second read must exist");
+        assert!(
+            resample_pos < second_read_pos,
+            "re-sample must precede second read: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_string_eq_invalidates_on_push_str() {
+        // `__vow_string_push_str(dest, src)` mutates dest's len; src is
+        // read-only. Cached pairs touching dest must be re-sampled; pairs
+        // not touching dest must not.
+        use vow_ir::InstId;
+        let func = make_func(
+            "push_str_then_compare",
+            vec![],
+            Ty::Bool,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                Inst {
+                    id: InstId(1),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(2)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(4),
+                    opcode: Opcode::Call,
+                    ty: Ty::Bool,
+                    args: vec![InstId(1), InstId(3)],
+                    data: InstData::CallExtern("__vow_string_eq".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(5),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(1), InstId(3)],
+                    data: InstData::CallExtern("__vow_string_push_str".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(6),
+                    opcode: Opcode::Call,
+                    ty: Ty::Bool,
+                    args: vec![InstId(1), InstId(3)],
+                    data: InstData::CallExtern("__vow_string_eq".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(7, Opcode::Return, Ty::Unit, vec![6], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        // Cache shared across both reads.
+        let decls = c
+            .matches("_Bool __str_eq_1_3 = __VERIFIER_nondet_bool();")
+            .count();
+        assert_eq!(decls, 1, "expected exactly one shared decl: {c}");
+        // Re-sample line follows v1.len += v3.len; (the push_str body) and
+        // precedes the second read.
+        let push_pos = c
+            .find("v1.len += v3.len;")
+            .expect("push_str must emit `dest.len += src.len;`");
+        let resample = "__str_eq_1_3 = __VERIFIER_nondet_bool();";
+        let resample_pos = c[push_pos..]
+            .find(resample)
+            .map(|p| p + push_pos)
+            .expect(&format!("re-sample must follow push_str body: {c}"));
+        let second_read_pos = c
+            .find("v6 = (v1.len == v3.len)")
+            .expect("second read must exist");
+        assert!(
+            resample_pos < second_read_pos,
+            "re-sample must precede second read: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_string_clear_emits_len_zero_and_invalidates() {
+        // `__vow_string_clear` was previously elided as unmodelled, which
+        // both lost the `len = 0` post-condition and skipped cache
+        // invalidation. The new model must emit both.
+        use vow_ir::InstId;
+        let func = make_func(
+            "clear_then_compare",
+            vec![],
+            Ty::Bool,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                Inst {
+                    id: InstId(1),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(2)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(4),
+                    opcode: Opcode::Call,
+                    ty: Ty::Bool,
+                    args: vec![InstId(1), InstId(3)],
+                    data: InstData::CallExtern("__vow_string_eq".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(5),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(1)],
+                    data: InstData::CallExtern("__vow_string_clear".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(6),
+                    opcode: Opcode::Call,
+                    ty: Ty::Bool,
+                    args: vec![InstId(1), InstId(3)],
+                    data: InstData::CallExtern("__vow_string_eq".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(7, Opcode::Return, Ty::Unit, vec![6], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        // Clear must NOT fall through to the unmodelled handler.
+        assert!(
+            !c.contains("/* opcode Call not modelled */"),
+            "clear must be modeled, not unmodelled: {c}"
+        );
+        // The new model emits `len = 0`.
+        let zero_pos = c
+            .find("v1.len = 0;")
+            .expect(&format!("clear must emit `v1.len = 0;`: {c}"));
+        // Re-sample for the (1, 3) pair follows the clear and precedes the
+        // second read.
+        let resample = "__str_eq_1_3 = __VERIFIER_nondet_bool();";
+        let resample_pos = c[zero_pos..]
+            .find(resample)
+            .map(|p| p + zero_pos)
+            .expect(&format!("re-sample must follow clear: {c}"));
+        let second_read_pos = c
+            .find("v6 = (v1.len == v3.len)")
+            .expect("second read must exist");
+        assert!(
+            resample_pos < second_read_pos,
+            "re-sample must precede second read: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_string_eq_no_invalidation_for_unrelated_operand() {
+        // The cache key is the (lo, hi) operand pair. A mutation on a string
+        // that is NOT in any cached pair must emit no re-sample.
+        use vow_ir::InstId;
+        let func = make_func(
+            "mutate_unrelated",
+            vec![],
+            Ty::Bool,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                Inst {
+                    id: InstId(1),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(2)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(4, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(2)),
+                Inst {
+                    id: InstId(5),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(4)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(6),
+                    opcode: Opcode::Call,
+                    ty: Ty::Bool,
+                    args: vec![InstId(1), InstId(3)],
+                    data: InstData::CallExtern("__vow_string_eq".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(7, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(65)),
+                Inst {
+                    id: InstId(8),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(5), InstId(7)],
+                    data: InstData::CallExtern("__vow_string_push_byte".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(9, Opcode::Return, Ty::Unit, vec![6], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        // Cached pair is (1, 3); the push_byte is on operand 5.
+        // Cache decl is the only place __str_eq_1_3 is assigned; no re-sample.
+        let assignments = c.matches("__str_eq_1_3").count();
+        // Two occurrences expected: the decl line and the read at v6.
+        assert_eq!(
+            assignments, 2,
+            "no re-sample for unrelated operand (decl + 1 read = 2): {c}"
+        );
+    }
+
+    #[test]
     fn emit_string_contains() {
         use vow_ir::InstId;
         let func = make_func(
@@ -4135,6 +4507,7 @@ mod tests {
             &HashSet::new(),
             &const_fns,
             &HashSet::new(),
+            &[],
             &empty_module,
             &VerifyLimits::default(),
         );
@@ -4170,6 +4543,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             &HashSet::new(),
+            &[],
             &empty_module,
             &VerifyLimits::default(),
         );
