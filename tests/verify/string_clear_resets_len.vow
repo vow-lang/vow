@@ -1,0 +1,18 @@
+// Pin: issue #256 — __vow_string_clear must be modeled as `len = 0`,
+// not silently elided. Before this fix the call fell through to the
+// unmodelled handler, leaving `len` symbolic and breaking any contract
+// that reasoned about the post-clear length.
+module StringClearResetsLen
+
+fn clear_makes_empty() -> i64 vow {
+  ensures: result == 0
+} {
+  let s: String = String::from("hello");
+  s.clear();
+  s.len()
+}
+
+fn main() -> i32 [io] {
+  print_i64(clear_makes_empty());
+  0
+}

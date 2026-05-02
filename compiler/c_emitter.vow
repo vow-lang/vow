@@ -104,6 +104,7 @@ fn is_known_builtin(name: String) -> bool {
     || name == String::from("__vow_string_len")
     || name == String::from("__vow_string_push_str")
     || name == String::from("__vow_string_push_byte")
+    || name == String::from("__vow_string_clear")
     || name == String::from("__vow_string_byte_at")
     || name == String::from("__vow_string_eq")
     || name == String::from("__vow_string_contains")
@@ -664,6 +665,7 @@ fn emit_cmp(out: String, id: i64, a: i64, b: i64, op: String) {
 
 fn emit_inst(out: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64>,
              hashmap_vars: Vec<i64>, const_fn_indices: Vec<i64>, modelable_fi_set: Vec<i64>, m: IrModule,
+             eq_lo: Vec<i64>, eq_hi: Vec<i64>,
              vec_max: i64, string_max: i64, hashmap_max: i64) {
     let id: i64 = inst.id;
     let op: i64 = inst.op;
@@ -903,7 +905,7 @@ fn emit_inst(out: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64
                 return;
             }
             if str_starts_with(ds, String::from("__vow_string_")) {
-                emit_string_op(out, inst, string_max);
+                emit_string_op(out, inst, string_max, eq_lo, eq_hi);
                 return;
             }
             if str_starts_with(ds, String::from("__vow_map_")) {
@@ -1078,7 +1080,66 @@ fn emit_vec_op(out: String, inst: IrInst, vec_max: i64) {
     emit_unmodelled(out, inst);
 }
 
-fn emit_string_op(out: String, inst: IrInst, string_max: i64) {
+// Walk every instruction in the function and append each unordered (lo, hi)
+// __vow_string_eq operand pair into the parallel `eq_lo`/`eq_hi` arrays, in
+// IR-traversal order with linear deduplication. Mirrors the Rust emitter's
+// `compute_string_eq_pairs`.
+fn compute_string_eq_pairs(blocks: Vec<IrBlock>, eq_lo: Vec<i64>, eq_hi: Vec<i64>) {
+    let n_blocks: i64 = blocks.len();
+    let mut bi: i64 = 0;
+    while bi < n_blocks {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let mut ii: i64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
+                && inst.ds == String::from("__vow_string_eq") {
+                let ea: Vec<i64> = inst.args;
+                if ea.len() == 2 {
+                    let a: i64 = ea[0];
+                    let b: i64 = ea[1];
+                    if a != b {
+                        let lo: i64 = if a < b { a } else { b };
+                        let hi: i64 = if a < b { b } else { a };
+                        let mut found: bool = false;
+                        let mut pi: i64 = 0;
+                        while pi < eq_lo.len() {
+                            if eq_lo[pi] == lo && eq_hi[pi] == hi { found = true; }
+                            pi = pi + 1;
+                        }
+                        if !found {
+                            eq_lo.push(lo);
+                            eq_hi.push(hi);
+                        }
+                    }
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+}
+
+// Re-sample every cached `__str_eq_<lo>_<hi>` whose pair touches `operand`.
+// Called immediately after each modeled string mutation so the verifier
+// cannot prove a stale equality across the mutation.
+fn emit_string_eq_invalidate(out: String, operand: i64, eq_lo: Vec<i64>, eq_hi: Vec<i64>) {
+    let n: i64 = eq_lo.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let lo: i64 = eq_lo[i];
+        let hi: i64 = eq_hi[i];
+        if lo == operand || hi == operand {
+            out.push_str(str5(String::from("  __str_eq_"), i64_to_str(lo),
+                String::from("_"), i64_to_str(hi),
+                String::from(" = __VERIFIER_nondet_bool();\n")));
+        }
+        i = i + 1;
+    }
+}
+
+fn emit_string_op(out: String, inst: IrInst, string_max: i64, eq_lo: Vec<i64>, eq_hi: Vec<i64>) {
     let id: i64 = inst.id;
     let ds: String = inst.ds;
     let iargs: Vec<i64> = inst.args;
@@ -1118,6 +1179,7 @@ fn emit_string_op(out: String, inst: IrInst, string_max: i64) {
         let src: i64 = iargs[1];
         out.push_str(str5(String::from("  v"), i64_to_str(dest),
             String::from(".len += v"), i64_to_str(src), String::from(".len;\n")));
+        emit_string_eq_invalidate(out, dest, eq_lo, eq_hi);
         return;
     }
     if ds == String::from("__vow_string_push_byte") {
@@ -1129,6 +1191,13 @@ fn emit_string_op(out: String, inst: IrInst, string_max: i64) {
         out.push_str(str6(String::from("  v"), ss, String::from(".data[v"), ss,
             String::from(".len] = (int8_t)v"), str2(i64_to_str(byte), String::from(";\n"))));
         out.push_str(str3(String::from("  v"), ss, String::from(".len++;\n")));
+        emit_string_eq_invalidate(out, s, eq_lo, eq_hi);
+        return;
+    }
+    if ds == String::from("__vow_string_clear") {
+        let s: i64 = iargs[0];
+        out.push_str(str3(String::from("  v"), i64_to_str(s), String::from(".len = 0;\n")));
+        emit_string_eq_invalidate(out, s, eq_lo, eq_hi);
         return;
     }
     if ds == String::from("__vow_string_byte_at") {
@@ -1469,42 +1538,11 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
 
     // Per-pair nondet cache for abstract __vow_string_eq. Mirrors the Rust
     // emitter: one shared _Bool per unordered (a, b) pair ensures repeated
-    // comparisons of the same pair agree.
+    // comparisons of the same pair agree, and emit_string_eq_invalidate
+    // re-samples the entry after each modeled mutation on either operand.
     let eq_lo: Vec<i64> = Vec::new();
     let eq_hi: Vec<i64> = Vec::new();
-    bi = 0;
-    while bi < n_blocks {
-        let blk: IrBlock = blocks[bi];
-        let insts: Vec<IrInst> = blk.insts;
-        let mut ii: i64 = 0;
-        while ii < insts.len() {
-            let inst: IrInst = insts[ii];
-            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
-                && inst.ds == String::from("__vow_string_eq") {
-                let ea: Vec<i64> = inst.args;
-                if ea.len() == 2 {
-                    let a: i64 = ea[0];
-                    let b: i64 = ea[1];
-                    if a != b {
-                        let lo: i64 = if a < b { a } else { b };
-                        let hi: i64 = if a < b { b } else { a };
-                        let mut found: bool = false;
-                        let mut pi: i64 = 0;
-                        while pi < eq_lo.len() {
-                            if eq_lo[pi] == lo && eq_hi[pi] == hi { found = true; }
-                            pi = pi + 1;
-                        }
-                        if !found {
-                            eq_lo.push(lo);
-                            eq_hi.push(hi);
-                        }
-                    }
-                }
-            }
-            ii = ii + 1;
-        }
-        bi = bi + 1;
-    }
+    compute_string_eq_pairs(blocks, eq_lo, eq_hi);
     let mut ei: i64 = 0;
     while ei < eq_lo.len() {
         out.push_str(str5(String::from("  _Bool __str_eq_"), i64_to_str(eq_lo[ei]),
@@ -1568,7 +1606,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
         let mut ri: i64 = 0;
         while ri < regular.len() {
             let inst: IrInst = insts[regular[ri]];
-            emit_inst(out, inst, vec_vars, string_vars, hashmap_vars, const_fn_indices, modelable_fi_set, m, vec_max, string_max, hashmap_max);
+            emit_inst(out, inst, vec_vars, string_vars, hashmap_vars, const_fn_indices, modelable_fi_set, m, eq_lo, eq_hi, vec_max, string_max, hashmap_max);
             ri = ri + 1;
         }
 
@@ -1592,7 +1630,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
 
         if terminal_idx >= 0 {
             let term: IrInst = insts[terminal_idx];
-            emit_inst(out, term, vec_vars, string_vars, hashmap_vars, const_fn_indices, modelable_fi_set, m, vec_max, string_max, hashmap_max);
+            emit_inst(out, term, vec_vars, string_vars, hashmap_vars, const_fn_indices, modelable_fi_set, m, eq_lo, eq_hi, vec_max, string_max, hashmap_max);
         }
 
         bi = bi + 1;

@@ -1,0 +1,23 @@
+// Pin: issue #256 — repeated `__vow_string_eq` on the same operand pair
+// must agree within a path. The per-pair `_Bool __str_eq_<lo>_<hi>` cache
+// (cdbdef7) is what makes this true; PR #231 would have replaced it with
+// independent nondets and broken this property.
+//
+// Note: we use locally-constructed strings rather than parameters because
+// `collect_typed_vars` does not yet detect the args[1] of __vow_string_eq
+// as a string operand — that's a separate issue and out of scope here.
+module StringEqIdempotent
+
+fn eq_is_idempotent() -> bool vow {
+  ensures: result == true
+} {
+  let a: String = String::from("hello");
+  let b: String = String::from("hello");
+  let first: bool = a.eq(b);
+  let second: bool = a.eq(b);
+  first == second
+}
+
+fn main() -> i32 [io] {
+  if eq_is_idempotent() { 0 } else { 1 }
+}
