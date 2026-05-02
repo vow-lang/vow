@@ -245,6 +245,110 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
     true
 }
 
+// Mirror of `vow_verify::c_emitter::non_modelable_reason`. Returns a
+// human-readable explanation for why the verifier cannot model this
+// function (used as a Warning diagnostic + skip-the-function gate).
+// Empty string means the function IS modelable.
+fn iop_unsupported_name(op: i64) -> String {
+    if op == IOP_REM_F32() { return String::from("RemF32"); }
+    if op == IOP_REM_F64() { return String::from("RemF64"); }
+    if op == IOP_LOAD() { return String::from("Load"); }
+    if op == IOP_STORE() { return String::from("Store"); }
+    if op == IOP_REGION_ALLOC() { return String::from("RegionAlloc"); }
+    if op == IOP_REGION_OPEN() { return String::from("RegionOpen"); }
+    if op == IOP_REGION_CLOSE() { return String::from("RegionClose"); }
+    if op == IOP_LINEAR_CONSUME() { return String::from("LinearConsume"); }
+    if op == IOP_LINEAR_BORROW() { return String::from("LinearBorrow"); }
+    if op == IOP_FIELD_SET() { return String::from("FieldSet"); }
+    String::from("")
+}
+
+fn first_unsupported_opcode_name(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>) -> String {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: i64 = 0;
+    while bi < blocks.len() {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let mut ii: i64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            let op: i64 = inst.op;
+            let name: String = iop_unsupported_name(op);
+            if name.len() > 0 {
+                return name;
+            }
+            if op == IOP_CALL() {
+                if inst.dk == IDATA_CALL_EXTERN() {
+                    if !is_known_builtin(inst.ds) {
+                        return str3(String::from("Call extern `"), inst.ds, String::from("`"));
+                    }
+                } else if inst.dk == IDATA_CALL_TARGET() {
+                    let target_fi: i64 = inst.dv;
+                    if !vec_contains_i64(const_fn_indices, target_fi) {
+                        let fns: Vec<IrFunction> = m.functions;
+                        let mut found_modelable: bool = false;
+                        let mut callee_name: String = String::from("");
+                        let mut fi: i64 = 0;
+                        while fi < fns.len() {
+                            let callee: IrFunction = fns[fi];
+                            if callee.id == target_fi {
+                                callee_name = callee.name;
+                                let cache_ids: Vec<i64> = Vec::new();
+                                let cache_vals: Vec<i64> = Vec::new();
+                                found_modelable = is_modelable(callee, m, const_fn_indices, cache_ids, cache_vals);
+                                fi = fns.len();
+                            }
+                            fi = fi + 1;
+                        }
+                        if !found_modelable {
+                            if callee_name.len() == 0 {
+                                callee_name = str2(String::from("FuncId("), str2(i64_to_str(target_fi), String::from(")")));
+                            }
+                            return str3(String::from("Call target `"), callee_name, String::from("`"));
+                        }
+                    }
+                }
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    String::from("")
+}
+
+fn non_modelable_reason(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>) -> String {
+    if is_reserved_verifier_symbol(f.name) {
+        return str3(String::from("function `"), f.name, String::from("` shadows a reserved verifier symbol"));
+    }
+    if f.effects != 0 {
+        return str3(
+            String::from("function `"),
+            f.name,
+            String::from("` has effects; the verifier model is restricted to pure functions"),
+        );
+    }
+    let cache_ids: Vec<i64> = Vec::new();
+    let cache_vals: Vec<i64> = Vec::new();
+    if is_modelable(f, m, const_fn_indices, cache_ids, cache_vals) {
+        return String::from("");
+    }
+    let offender: String = first_unsupported_opcode_name(f, m, const_fn_indices);
+    let detail: String = {
+        if offender.len() > 0 {
+            str3(String::from("contains unsupported opcode `"), offender, String::from("`"))
+        } else {
+            String::from("calls a non-modelable callee")
+        }
+    };
+    str5(
+        String::from("function `"),
+        f.name,
+        String::from("` is not modelable in the verifier ("),
+        detail,
+        String::from(")"),
+    )
+}
+
 fn collect_callees_dfs(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>,
                        modelable_cache_ids: Vec<i64>, modelable_cache_vals: Vec<i64>,
                        visited: Vec<i64>, order: Vec<i64>) {

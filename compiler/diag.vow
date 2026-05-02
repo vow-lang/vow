@@ -28,6 +28,9 @@ fn EC_CONTRACT_TYPE_MISMATCH() -> i64 vow { ensures: result >= 0 } { 16 }
 fn EC_ESBMC_NOT_FOUND() -> i64 vow { ensures: result >= 0 } { 17 }
 fn EC_REGION_CONFLICT() -> i64 vow { ensures: result >= 0 } { 18 }
 fn EC_REGION_LINEAR() -> i64 vow { ensures: result >= 0 } { 19 }
+// Emitted as a Warning when a vowed function's body cannot be modeled by
+// the verifier. Mirrors `vow_diag::ErrorCode::VerificationSkipped`.
+fn EC_VERIFICATION_SKIPPED() -> i64 vow { ensures: result >= 0 } { 20 }
 
 struct Diagnostic {
     severity: i64,
@@ -216,8 +219,11 @@ fn ec_name(code: i64) -> String {
     if code == EC_REGION_LINEAR() {
         String::from("RegionLinear")
     } else {
+    if code == EC_VERIFICATION_SKIPPED() {
+        String::from("VerificationSkipped")
+    } else {
         String::from("IoError")
-    }}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}
 }
 
 fn sev_name_lower(s: i64) -> String {

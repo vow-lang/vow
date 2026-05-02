@@ -394,6 +394,102 @@ pub fn is_modelable(
     true
 }
 
+/// If `func` cannot be precisely modeled by the C emitter, return a
+/// human-readable explanation suitable for a `VerificationResult::Skipped`
+/// reason. Returns `None` when the function IS modelable.
+///
+/// This is the gate that prevents the verifier from emitting fail-closed
+/// `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")` traps inline in a
+/// function body — those traps remain as defense-in-depth, but should be
+/// unreachable in practice once this gate is consulted at the verify-driver
+/// entry point.
+pub fn non_modelable_reason(
+    func: &Function,
+    module: &Module,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+) -> Option<String> {
+    if is_reserved_verifier_symbol(&func.name) {
+        return Some(format!(
+            "function `{}` shadows a reserved verifier symbol",
+            func.name
+        ));
+    }
+    if !func.effects.is_empty() {
+        return Some(format!(
+            "function `{}` has effects; the verifier model is restricted to pure functions",
+            func.name
+        ));
+    }
+    let mut cache = HashMap::new();
+    if is_modelable(func, module, const_fns, &mut cache) {
+        return None;
+    }
+    let offender = first_unsupported_opcode(func, module, const_fns);
+    let detail = match offender {
+        Some(name) => format!("contains unsupported opcode `{name}`"),
+        None => "calls a non-modelable callee".to_string(),
+    };
+    Some(format!(
+        "function `{}` is not modelable in the verifier ({detail})",
+        func.name
+    ))
+}
+
+fn first_unsupported_opcode(
+    func: &Function,
+    module: &Module,
+    const_fns: &HashMap<FuncId, ConstantValue>,
+) -> Option<String> {
+    for block in &func.blocks {
+        for inst in &block.insts {
+            match inst.opcode {
+                Opcode::RemF32
+                | Opcode::RemF64
+                | Opcode::Load
+                | Opcode::Store
+                | Opcode::RegionAlloc
+                | Opcode::RegionOpen
+                | Opcode::RegionClose
+                | Opcode::LinearConsume
+                | Opcode::LinearBorrow
+                | Opcode::FieldSet => return Some(format!("{:?}", inst.opcode)),
+                Opcode::Call => match &inst.data {
+                    InstData::CallExtern(name) => {
+                        if !is_known_builtin(name) {
+                            return Some(format!("Call extern `{name}`"));
+                        }
+                    }
+                    InstData::CallTarget(fid) => {
+                        if !const_fns.contains_key(fid) {
+                            let modelable = module
+                                .functions
+                                .iter()
+                                .find(|f| f.id == *fid)
+                                .map(|callee| {
+                                    let mut cache = HashMap::new();
+                                    is_modelable(callee, module, const_fns, &mut cache)
+                                })
+                                .unwrap_or(false);
+                            if !modelable {
+                                let name = module
+                                    .functions
+                                    .iter()
+                                    .find(|f| f.id == *fid)
+                                    .map(|f| f.name.clone())
+                                    .unwrap_or_else(|| format!("FuncId({})", fid.0));
+                                return Some(format!("Call target `{name}`"));
+                            }
+                        }
+                    }
+                    _ => return Some(format!("Call ({:?})", inst.data)),
+                },
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
 /// Collect all modelable callees reachable from `func`, excluding constant
 /// functions (which are inlined). Returns FuncIds in topological order
 /// (callees before callers).
