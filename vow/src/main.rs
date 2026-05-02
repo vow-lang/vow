@@ -5181,14 +5181,12 @@ fn run_verification_sync(
                     ) {
                         PerFuncResult::Ok => {}
                         PerFuncResult::Skipped(s) => {
-                            let mut guard = skipped_acc
-                                .lock()
-                                .expect("verify skipped mutex poisoned");
+                            let mut guard =
+                                skipped_acc.lock().expect("verify skipped mutex poisoned");
                             guard[idx] = Some(s);
                         }
                         PerFuncResult::Halt(out) => {
-                            let mut guard =
-                                halts.lock().expect("verify halts mutex poisoned");
+                            let mut guard = halts.lock().expect("verify halts mutex poisoned");
                             guard[idx] = Some(out);
                             drop(guard);
                             // Release pairs with sibling threads' stop.load(Acquire) to propagate early-exit.
@@ -5200,9 +5198,7 @@ fn run_verification_sync(
         }
     });
 
-    let halts = halts
-        .into_inner()
-        .expect("verify halts mutex poisoned");
+    let halts = halts.into_inner().expect("verify halts mutex poisoned");
     let outcome = halts
         .into_iter()
         .flatten()
@@ -5251,10 +5247,7 @@ fn verify_outcome_to_output_with_skipped(
         diagnostics.push(Diagnostic {
             severity: Severity::Warning,
             code: vow_diag::ErrorCode::VerificationSkipped,
-            message: format!(
-                "skipped verification of `{}`: {}",
-                s.function, s.reason
-            ),
+            message: format!("skipped verification of `{}`: {}", s.function, s.reason),
             primary: vow_diag::SourceLocation {
                 file: String::new(),
                 byte_offset: 0,
@@ -8804,15 +8797,16 @@ fn main() -> i32 {
             BuildStatus::CompileFailed { message } => {
                 panic!("unexpected compile failure: {message}");
             }
-            other => panic!(
-                "expected Verified/Unverified for non-modelable vowed fn, got {other:?}"
-            ),
+            other => {
+                panic!("expected Verified/Unverified for non-modelable vowed fn, got {other:?}")
+            }
         }
         assert!(
-            result.diagnostics.iter().any(|d| matches!(
-                d.severity,
-                vow_diag::Severity::Warning
-            ) && d.message.contains("make_foo")),
+            result
+                .diagnostics
+                .iter()
+                .any(|d| matches!(d.severity, vow_diag::Severity::Warning)
+                    && d.message.contains("make_foo")),
             "expected a Warning diagnostic naming `make_foo`, got diagnostics: {:?}",
             result.diagnostics
         );

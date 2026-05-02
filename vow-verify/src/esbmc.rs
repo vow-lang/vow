@@ -42,7 +42,9 @@ pub enum VerificationResult {
     /// invoked. Build drivers should treat this as a structured warning
     /// (vow contract is documentary, not statically checked) — never as a
     /// failure.
-    Skipped { reason: String },
+    Skipped {
+        reason: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1558,9 +1560,7 @@ VERIFICATION FAILED";
                     "skip reason should mention the cause: {reason}"
                 );
             }
-            other => panic!(
-                "expected Skipped (gate must run before find_esbmc), got {other:?}"
-            ),
+            other => panic!("expected Skipped (gate must run before find_esbmc), got {other:?}"),
         }
     }
 }
