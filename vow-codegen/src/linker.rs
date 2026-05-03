@@ -186,6 +186,18 @@ mod tests {
     }
 
     #[test]
+    fn cargo_target_fallback_accepts_release_when_debug_missing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let release_dir = dir.path().join("release");
+        std::fs::create_dir_all(&release_dir).unwrap();
+        let lib = release_dir.join("libvow_runtime.a");
+        std::fs::write(&lib, b"").unwrap();
+
+        let found = find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, dir.path());
+        assert_eq!(found.as_deref(), Some(lib.as_path()));
+    }
+
+    #[test]
     fn cargo_target_fallback_prefers_debug_before_release() {
         let dir = tempfile::TempDir::new().unwrap();
         let debug_dir = dir.path().join("debug");

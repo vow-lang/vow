@@ -2822,6 +2822,20 @@ mod tests {
     #[test]
     fn cargo_target_fallback_does_not_require_current_exe() {
         let root = tempfile::TempDir::new().unwrap();
+        let debug_dir = root.path().join("debug");
+        std::fs::create_dir_all(&debug_dir).unwrap();
+        let lib = debug_dir.join("libvow_runtime.a");
+        std::fs::write(&lib, b"").unwrap();
+
+        let found =
+            find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, root.path());
+        let expected = lib.to_string_lossy().into_owned();
+        assert_eq!(found.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn cargo_target_fallback_accepts_release_when_debug_missing() {
+        let root = tempfile::TempDir::new().unwrap();
         let release_dir = root.path().join("release");
         std::fs::create_dir_all(&release_dir).unwrap();
         let lib = release_dir.join("libvow_runtime.a");
