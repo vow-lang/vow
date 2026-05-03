@@ -192,6 +192,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
     vec_methods = method_names("Vec<T> Methods")
     string_methods = method_names("String Methods")
     hashmap_methods = method_names("HashMap<K, V> Methods")
+    btreemap_methods = method_names("BTreeMap<K, V> Methods")
     option_methods = method_names("Option<T> Methods")
     option_methods.append("? operator")
 
@@ -565,6 +566,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
                 "Vec<T>": vec_methods,
                 "String": string_methods,
                 "HashMap<K,V>": hashmap_methods,
+                "BTreeMap<K,V>": btreemap_methods,
                 "Option<T>": option_methods,
             },
             "error_propagation": "? on Option<T> or Result<T, E> propagates None/Err to the caller",
@@ -715,9 +717,10 @@ def build_help_human(data: dict) -> str:
     vec_short = short_methods(methods["Vec<T>"])
     str_short = short_methods(methods["String"])
     hm_short = short_methods(methods["HashMap<K,V>"])
+    bm_short = short_methods(methods["BTreeMap<K,V>"])
     opt_short = short_methods(methods["Option<T>"])
     lines.append(f"METHODS   : Vec: {vec_short}   String: {str_short}")
-    lines.append(f"            HashMap: {hm_short}   Option: {opt_short}")
+    lines.append(f"            HashMap: {hm_short}   BTreeMap: {bm_short}   Option: {opt_short}")
 
     ops = lang["operators"]
     arith = " ".join(ops["arithmetic"])

@@ -211,7 +211,10 @@ impl<'e> Checker<'e> {
                         .iter()
                         .map(|f| {
                             let ty = match self.env.resolve(&f.ty) {
-                                Ok(ty) => ty,
+                                Ok(ty) => {
+                                    self.check_btreemap_key_in_ty(&ty, f.span);
+                                    ty
+                                }
                                 Err(msg) => {
                                     self.emit_error(ErrorCode::TypeMismatch, msg, f.span);
                                     Ty::Unit
@@ -239,7 +242,10 @@ impl<'e> Checker<'e> {
                                     let resolved: Vec<Ty> = types
                                         .iter()
                                         .map(|t| match self.env.resolve(t) {
-                                            Ok(ty) => ty,
+                                            Ok(ty) => {
+                                                self.check_btreemap_key_in_ty(&ty, t.span());
+                                                ty
+                                            }
                                             Err(msg) => {
                                                 self.emit_error(
                                                     ErrorCode::TypeMismatch,
@@ -257,7 +263,10 @@ impl<'e> Checker<'e> {
                                         .iter()
                                         .map(|f| {
                                             let ty = match self.env.resolve(&f.ty) {
-                                                Ok(ty) => ty,
+                                                Ok(ty) => {
+                                                    self.check_btreemap_key_in_ty(&ty, f.span);
+                                                    ty
+                                                }
                                                 Err(msg) => {
                                                     self.emit_error(
                                                         ErrorCode::TypeMismatch,
@@ -282,7 +291,10 @@ impl<'e> Checker<'e> {
                     self.env.define_enum(&e.name, EnumInfo { variants });
                 }
                 Item::TypeAlias(a) => match self.env.resolve(&a.ty) {
-                    Ok(ty) => self.env.define_alias(&a.name, ty),
+                    Ok(ty) => {
+                        self.check_btreemap_key_in_ty(&ty, a.ty.span());
+                        self.env.define_alias(&a.name, ty);
+                    }
                     Err(msg) => self.emit_error(ErrorCode::TypeMismatch, msg, a.ty.span()),
                 },
                 _ => {}
@@ -293,7 +305,10 @@ impl<'e> Checker<'e> {
         for item in &module.items {
             if let Item::Const(c) = item {
                 let ty = match self.env.resolve(&c.ty) {
-                    Ok(ty) => ty,
+                    Ok(ty) => {
+                        self.check_btreemap_key_in_ty(&ty, c.ty.span());
+                        ty
+                    }
                     Err(msg) => {
                         self.emit_error(ErrorCode::TypeMismatch, msg, c.ty.span());
                         continue;
