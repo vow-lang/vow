@@ -2187,7 +2187,10 @@ fn cargo_target_dir() -> std::path::PathBuf {
 }
 
 fn find_lib_in_cargo_target(name: &str, target_dir: &std::path::Path) -> Option<String> {
-    for profile in &["release", "debug"] {
+    // Development fallback only: env overrides and installed-prefix libraries
+    // are checked first, so prefer plain cargo build/test artifacts here while
+    // still accepting release bootstrap artifacts.
+    for profile in &["debug", "release"] {
         let p = target_dir.join(profile).join(name);
         if p.exists() {
             return Some(p.to_string_lossy().into_owned());
@@ -2819,6 +2822,20 @@ mod tests {
     #[test]
     fn cargo_target_fallback_does_not_require_current_exe() {
         let root = tempfile::TempDir::new().unwrap();
+        let debug_dir = root.path().join("debug");
+        std::fs::create_dir_all(&debug_dir).unwrap();
+        let lib = debug_dir.join("libvow_runtime.a");
+        std::fs::write(&lib, b"").unwrap();
+
+        let found =
+            find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, root.path());
+        let expected = lib.to_string_lossy().into_owned();
+        assert_eq!(found.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn cargo_target_fallback_accepts_release_when_debug_missing() {
+        let root = tempfile::TempDir::new().unwrap();
         let release_dir = root.path().join("release");
         std::fs::create_dir_all(&release_dir).unwrap();
         let lib = release_dir.join("libvow_runtime.a");
@@ -2827,6 +2844,24 @@ mod tests {
         let found =
             find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, root.path());
         let expected = lib.to_string_lossy().into_owned();
+        assert_eq!(found.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn cargo_target_fallback_prefers_debug_before_release() {
+        let root = tempfile::TempDir::new().unwrap();
+        let debug_dir = root.path().join("debug");
+        let release_dir = root.path().join("release");
+        std::fs::create_dir_all(&debug_dir).unwrap();
+        std::fs::create_dir_all(&release_dir).unwrap();
+        let debug_lib = debug_dir.join("libvow_runtime.a");
+        let release_lib = release_dir.join("libvow_runtime.a");
+        std::fs::write(&debug_lib, b"debug").unwrap();
+        std::fs::write(&release_lib, b"release").unwrap();
+
+        let found =
+            find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, root.path());
+        let expected = debug_lib.to_string_lossy().into_owned();
         assert_eq!(found.as_deref(), Some(expected.as_str()));
     }
 }

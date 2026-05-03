@@ -74,6 +74,9 @@ fn cargo_target_dir() -> PathBuf {
 }
 
 fn find_lib_in_cargo_target(name: &str, target_dir: &Path) -> Option<PathBuf> {
+    // Development fallback only: env overrides and installed-prefix libraries
+    // are checked first, so prefer plain cargo build/test artifacts here while
+    // still accepting release bootstrap artifacts.
     ["debug", "release"]
         .into_iter()
         .map(|profile| target_dir.join(profile).join(name))
@@ -180,6 +183,34 @@ mod tests {
 
         let found = find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, dir.path());
         assert_eq!(found.as_deref(), Some(lib.as_path()));
+    }
+
+    #[test]
+    fn cargo_target_fallback_accepts_release_when_debug_missing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let release_dir = dir.path().join("release");
+        std::fs::create_dir_all(&release_dir).unwrap();
+        let lib = release_dir.join("libvow_runtime.a");
+        std::fs::write(&lib, b"").unwrap();
+
+        let found = find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, dir.path());
+        assert_eq!(found.as_deref(), Some(lib.as_path()));
+    }
+
+    #[test]
+    fn cargo_target_fallback_prefers_debug_before_release() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let debug_dir = dir.path().join("debug");
+        let release_dir = dir.path().join("release");
+        std::fs::create_dir_all(&debug_dir).unwrap();
+        std::fs::create_dir_all(&release_dir).unwrap();
+        let debug_lib = debug_dir.join("libvow_runtime.a");
+        let release_lib = release_dir.join("libvow_runtime.a");
+        std::fs::write(&debug_lib, b"debug").unwrap();
+        std::fs::write(&release_lib, b"release").unwrap();
+
+        let found = find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, dir.path());
+        assert_eq!(found.as_deref(), Some(debug_lib.as_path()));
     }
 
     #[test]
