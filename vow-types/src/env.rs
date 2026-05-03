@@ -791,6 +791,15 @@ impl TypeEnv {
                             vec![self.resolve(k)?, self.resolve(v)?],
                         ));
                     }
+                    "BTreeMap" => {
+                        if args.len() != 2 {
+                            return Err("BTreeMap requires two type arguments".to_string());
+                        }
+                        return Ok(Ty::Applied(
+                            Box::new(Ty::Struct("BTreeMap".to_string())),
+                            vec![self.resolve(&args[0])?, self.resolve(&args[1])?],
+                        ));
+                    }
                     _ => {}
                 }
                 let base = self.resolve(&AstType::Named {

@@ -2647,6 +2647,29 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_btreemap_new" => {
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_btreemap_len" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_btreemap_insert" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_btreemap_get" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_btreemap_contains" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I8));
+        }
         "__vow_unwrap_panic" => {}
         // Cranelift shim FFI (for self-hosting: the binary calls back into the shim)
         "__vow_trace_enter" | "__vow_trace_exit" => {

@@ -146,7 +146,7 @@ def normalize_option(
         option["value_kind"] = "enum"
         option["values"] = ["off", "calls", "full"]
         option["default"] = default
-    elif normalized_flag in ("--max-k-step <N>", "--vec-max <N>", "--string-max <N>", "--hashmap-max <N>"):
+    elif normalized_flag in ("--max-k-step <N>", "--vec-max <N>", "--string-max <N>", "--hashmap-max <N>", "--btreemap-max <N>"):
         option["default"] = int(default) if default.isdigit() else default
     elif output_default is not None:
         option["default"] = output_default
@@ -192,6 +192,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
     vec_methods = method_names("Vec<T> Methods")
     string_methods = method_names("String Methods")
     hashmap_methods = method_names("HashMap<K, V> Methods")
+    btreemap_methods = method_names("BTreeMap<K, V> Methods")
     option_methods = method_names("Option<T> Methods")
     option_methods.append("? operator")
 
@@ -300,6 +301,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
         "vec_max": 128,
         "string_max": 256,
         "hashmap_max": 64,
+        "btreemap_max": 64,
     }
 
     return {
@@ -564,6 +566,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
                 "Vec<T>": vec_methods,
                 "String": string_methods,
                 "HashMap<K,V>": hashmap_methods,
+                "BTreeMap<K,V>": btreemap_methods,
                 "Option<T>": option_methods,
             },
             "error_propagation": "? on Option<T> or Result<T, E> propagates None/Err to the caller",
@@ -714,9 +717,10 @@ def build_help_human(data: dict) -> str:
     vec_short = short_methods(methods["Vec<T>"])
     str_short = short_methods(methods["String"])
     hm_short = short_methods(methods["HashMap<K,V>"])
+    bm_short = short_methods(methods["BTreeMap<K,V>"])
     opt_short = short_methods(methods["Option<T>"])
     lines.append(f"METHODS   : Vec: {vec_short}   String: {str_short}")
-    lines.append(f"            HashMap: {hm_short}   Option: {opt_short}")
+    lines.append(f"            HashMap: {hm_short}   BTreeMap: {bm_short}   Option: {opt_short}")
 
     ops = lang["operators"]
     arith = " ".join(ops["arithmetic"])
@@ -730,12 +734,13 @@ def build_help_human(data: dict) -> str:
 
     vdefaults = data.get("verification_defaults", {})
     if vdefaults:
-        lines.append("VERIFICATION DEFAULTS (configurable via --max-k-step, --vec-max, --string-max, --hashmap-max)")
+        lines.append("VERIFICATION DEFAULTS (configurable via --max-k-step, --vec-max, --string-max, --hashmap-max, --btreemap-max)")
         lines.append(f"  Strategy        : {vdefaults.get('strategy', 'k-induction-parallel')} (incremental BMC + k-induction)")
         lines.append(f"  Incremental BMC : {vdefaults.get('max_k_step', DEFAULT_MAX_K_STEP)} max iterations (--max-k-step)")
         lines.append(f"  Vec<T>          : {vdefaults.get('vec_max', 128)} max capacity")
         lines.append(f"  String          : {vdefaults.get('string_max', 256)} max capacity")
         lines.append(f"  HashMap<K, V>   : {vdefaults.get('hashmap_max', 64)} max capacity")
+        lines.append(f"  BTreeMap<K, V>  : {vdefaults.get('btreemap_max', 64)} max capacity")
 
     return "\n".join(lines)
 

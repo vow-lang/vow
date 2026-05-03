@@ -1,0 +1,8 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "BTreeMap requires two type arguments"
+module BTreeMapArity
+
+fn main() -> i32 {
+    let m: BTreeMap<i64> = BTreeMap::new();
+    0
+}

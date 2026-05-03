@@ -162,6 +162,37 @@ trait Foo {
 
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
 
+### BTreeMapKeyTypeMustBeI64
+
+**Phase:** Type Checker
+**Meaning:** A `BTreeMap<K, V>` was instantiated with `K` not equal to `i64`. Phase 1 of the BTreeMap stdlib only supports `i64` keys; the runtime helpers and ESBMC C model are hard-coded to i64.
+
+```vow
+fn f() -> () {
+    let m: BTreeMap<bool, i64> = BTreeMap::new();
+    m.insert(true, 1);
+}
+```
+
+**Output:** `BTreeMap key type must be i64; found 'bool'`
+
+**Fix:** Use `BTreeMap<i64, V>`. If you need string or struct keys, hash or intern them to `i64` at the call site and keep a side-table for the originals.
+
+### BTreeMapValueTypeMustBeI64
+
+**Phase:** Type Checker
+**Meaning:** A `BTreeMap<K, V>` was instantiated with `V` not equal to `i64`. Phase 1 only supports `i64` values; the runtime helpers and ESBMC C model are hard-coded to i64 values. Widening V to struct payloads is a planned follow-up to the BTreeMap stdlib work.
+
+```vow
+fn f() -> () {
+    let n: BTreeMap<i64, String> = BTreeMap::new();
+}
+```
+
+**Output:** `BTreeMap value type must be i64 in Phase 1; found 'String'`
+
+**Fix:** Use `BTreeMap<i64, i64>`. For richer values, store an integer index/handle and keep the actual values in a separate `Vec<V>`.
+
 ### MissingContract
 
 **Phase:** Type Checker

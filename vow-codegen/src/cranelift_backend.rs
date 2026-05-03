@@ -2120,6 +2120,30 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // map ptr
             sig.returns.push(AbiParam::new(types::I64)); // len
         }
+        // BTreeMap runtime — sorted parallel-Vec backing
+        "__vow_btreemap_new" => {
+            sig.returns.push(AbiParam::new(types::I64)); // *VowBTreeMap
+        }
+        "__vow_btreemap_len" => {
+            sig.params.push(AbiParam::new(types::I64)); // map ptr
+            sig.returns.push(AbiParam::new(types::I64)); // len
+        }
+        "__vow_btreemap_insert" => {
+            sig.params.push(AbiParam::new(types::I64)); // map ptr
+            sig.params.push(AbiParam::new(types::I64)); // key
+            sig.params.push(AbiParam::new(types::I64)); // value
+            sig.returns.push(AbiParam::new(types::I64)); // *VowOption (prev)
+        }
+        "__vow_btreemap_get" => {
+            sig.params.push(AbiParam::new(types::I64)); // map ptr
+            sig.params.push(AbiParam::new(types::I64)); // key
+            sig.returns.push(AbiParam::new(types::I64)); // *VowOption
+        }
+        "__vow_btreemap_contains" => {
+            sig.params.push(AbiParam::new(types::I64)); // map ptr
+            sig.params.push(AbiParam::new(types::I64)); // key
+            sig.returns.push(AbiParam::new(types::I8)); // bool
+        }
         // Cranelift shim FFI (used by self-hosted compiler)
         "__vow_clif_create" => {
             sig.params.push(AbiParam::new(types::I64)); // mode

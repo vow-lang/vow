@@ -130,6 +130,7 @@ pub fn api_function(x: i64) -> i64 {
 | `Result<T, E>`     | Success or error                |
 | `String`           | UTF-8 string (backed by Vec<u8>)|
 | `HashMap<K, V>`    | Key-value map (linear scan)     |
+| `BTreeMap<K, V>`   | Sorted key-value map (binary search; ascending iteration). Phase 1: `K = V = i64` only |
 
 ### User-Defined Types
 
@@ -558,6 +559,23 @@ m.contains_key(k)
 | `.get(k)`           | `(K) -> V`                  |
 | `.contains_key(k)`  | `(K) -> bool`               |
 | `.remove(k)`        | `(K) -> ()`                 |
+| `.len()`            | `() -> i64`                 |
+
+### BTreeMap<K, V> Methods
+
+In Phase 1, both `K` and `V` must be `i64`. K violations raise `BTreeMapKeyTypeMustBeI64`; V violations raise `BTreeMapValueTypeMustBeI64`.
+The runtime helpers and ESBMC C model are hard-coded to i64 keys + i64 values; widening V
+to support struct payloads is a planned follow-up.
+Storage is two parallel sorted arrays (binary-search lookup, sorted-insert writes).
+Iteration order is ascending by key and is **deterministic across runs and compilers** —
+prefer `BTreeMap` over `HashMap` for any map whose iteration affects compiler output.
+
+| Method              | Signature                   |
+|---------------------|-----------------------------|
+| `BTreeMap::new()`   | `() -> BTreeMap<K, V>`      |
+| `.insert(k, v)`     | `(K, V) -> Option<V>` (returns the previous value bound to `k`, if any) |
+| `.get(k)`           | `(K) -> Option<V>` (returns the value bound to `k`, or `None`)          |
+| `.contains(k)`      | `(K) -> bool`               |
 | `.len()`            | `() -> i64`                 |
 
 ### Option<T> Methods

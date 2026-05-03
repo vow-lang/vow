@@ -57,6 +57,7 @@ pub struct VerifyLimits {
     pub vec_max: usize,
     pub string_max: usize,
     pub hashmap_max: usize,
+    pub btreemap_max: usize,
 }
 
 impl Default for VerifyLimits {
@@ -66,6 +67,7 @@ impl Default for VerifyLimits {
             vec_max: 128,
             string_max: 256,
             hashmap_max: 64,
+            btreemap_max: 64,
         }
     }
 }
@@ -146,7 +148,10 @@ fn collect_option_vars(func: &Function) -> HashSet<u32> {
         for inst in &block.insts {
             if inst.opcode == Opcode::Call
                 && let InstData::CallExtern(ref name) = inst.data
-                && (name == "__vow_string_parse_i64_opt" || name == "__vow_string_parse_u64_opt")
+                && (name == "__vow_string_parse_i64_opt"
+                    || name == "__vow_string_parse_u64_opt"
+                    || name == "__vow_btreemap_insert"
+                    || name == "__vow_btreemap_get")
             {
                 vars.insert(inst.id.0);
             }
@@ -213,6 +218,11 @@ fn is_known_builtin(name: &str) -> bool {
             | "__vow_map_get"
             | "__vow_map_contains"
             | "__vow_map_remove"
+            | "__vow_btreemap_new"
+            | "__vow_btreemap_len"
+            | "__vow_btreemap_insert"
+            | "__vow_btreemap_get"
+            | "__vow_btreemap_contains"
     )
 }
 
@@ -245,6 +255,7 @@ pub fn is_modelable(
     let vec_vars = collect_typed_vars(func, "__vow_vec_new", "__vow_vec_");
     let string_vars = collect_typed_vars(func, "__vow_string_from_cstr", "__vow_string_");
     let hashmap_vars = collect_typed_vars(func, "__vow_map_new", "__vow_map_");
+    let btreemap_vars = collect_typed_vars(func, "__vow_btreemap_new", "__vow_btreemap_");
     let option_vars = collect_option_vars(func);
 
     for block in &func.blocks {
@@ -369,6 +380,7 @@ pub fn is_modelable(
                     vec_vars.contains(&iid)
                         || string_vars.contains(&iid)
                         || hashmap_vars.contains(&iid)
+                        || btreemap_vars.contains(&iid)
                         || option_vars.contains(&inst.args.first().map_or(u32::MAX, |a| a.0))
                 }
 
@@ -534,6 +546,7 @@ fn emit_inst(
     vec_vars: &HashSet<u32>,
     string_vars: &HashSet<u32>,
     hashmap_vars: &HashSet<u32>,
+    btreemap_vars: &HashSet<u32>,
     option_vars: &HashSet<u32>,
     const_fns: &HashMap<FuncId, ConstantValue>,
     modelable_fns: &HashSet<FuncId>,
@@ -770,6 +783,7 @@ fn emit_inst(
                 if vec_vars.contains(&val_id.0)
                     || string_vars.contains(&val_id.0)
                     || hashmap_vars.contains(&val_id.0)
+                    || btreemap_vars.contains(&val_id.0)
                     || option_vars.contains(&val_id.0)
                 {
                     out.push_str("  return 0; /* modelled type return */\n");
@@ -1043,6 +1057,77 @@ fn emit_inst(
             }
         }
 
+        // BTreeMap ops — linear-scan C model (sorted early-exit, cheaper to unwind than binary search); insert/get return Option.
+        Opcode::Call if matches!(&inst.data, InstData::CallExtern(n) if n.starts_with("__vow_btreemap_")) =>
+        {
+            if let InstData::CallExtern(ref name) = inst.data {
+                match name.as_str() {
+                    "__vow_btreemap_new" => {
+                        out.push_str(&format!("  v{id}.len = 0;\n"));
+                    }
+                    "__vow_btreemap_len" => {
+                        let m = inst.args[0].0;
+                        out.push_str(&format!("  v{id} = v{m}.len;\n"));
+                    }
+                    "__vow_btreemap_insert" => {
+                        let m = inst.args[0].0;
+                        let k = inst.args[1].0;
+                        let v = inst.args[2].0;
+                        let btreemap_max = limits.btreemap_max;
+                        // Sorted-insert: replace value if key found (return Some(prev)), else shift+insert (return None).
+                        out.push_str(&format!(
+                            "  v{id}.tag = 0; v{id}.payload = 0;\n\
+                             \x20 {{\n\
+                             \x20   _Bool __found = 0;\n\
+                             \x20   int64_t __pos = v{m}.len;\n\
+                             \x20   for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
+                             \x20     if (v{m}.keys[__i] == v{k}) {{\n\
+                             \x20       v{id}.tag = 1; v{id}.payload = v{m}.vals[__i];\n\
+                             \x20       v{m}.vals[__i] = v{v};\n\
+                             \x20       __found = 1; break;\n\
+                             \x20     }}\n\
+                             \x20     if (v{m}.keys[__i] > v{k}) {{ __pos = __i; break; }}\n\
+                             \x20   }}\n\
+                             \x20   if (!__found) {{\n\
+                             \x20     __ESBMC_assert(v{m}.len < {btreemap_max}, \"btreemap capacity\");\n\
+                             \x20     for (int64_t __j = v{m}.len; __j > __pos; __j--) {{\n\
+                             \x20       v{m}.keys[__j] = v{m}.keys[__j - 1];\n\
+                             \x20       v{m}.vals[__j] = v{m}.vals[__j - 1];\n\
+                             \x20     }}\n\
+                             \x20     v{m}.keys[__pos] = v{k}; v{m}.vals[__pos] = v{v}; v{m}.len++;\n\
+                             \x20   }}\n\
+                             \x20 }}\n"
+                        ));
+                    }
+                    "__vow_btreemap_get" => {
+                        let m = inst.args[0].0;
+                        let k = inst.args[1].0;
+                        out.push_str(&format!(
+                            "  v{id}.tag = 0; v{id}.payload = 0;\n\
+                             \x20 for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
+                             \x20   if (v{m}.keys[__i] == v{k}) {{ v{id}.tag = 1; v{id}.payload = v{m}.vals[__i]; break; }}\n\
+                             \x20   if (v{m}.keys[__i] > v{k}) {{ break; }}\n\
+                             \x20 }}\n"
+                        ));
+                    }
+                    "__vow_btreemap_contains" => {
+                        let m = inst.args[0].0;
+                        let k = inst.args[1].0;
+                        out.push_str(&format!(
+                            "  v{id} = 0;\n\
+                             \x20 for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
+                             \x20   if (v{m}.keys[__i] == v{k}) {{ v{id} = 1; break; }}\n\
+                             \x20   if (v{m}.keys[__i] > v{k}) {{ break; }}\n\
+                             \x20 }}\n"
+                        ));
+                    }
+                    _ => {
+                        emit_unmodelled(inst, out);
+                    }
+                }
+            }
+        }
+
         // Constant-function inlining: replace CallTarget with the known constant
         Opcode::Call if matches!(&inst.data, InstData::CallTarget(fid) if const_fns.contains_key(fid)) => {
             if let InstData::CallTarget(fid) = &inst.data {
@@ -1115,6 +1200,15 @@ fn emit_inst(
                 out.push_str(&format!(
                     "  /* FieldGet -> hashmap */ v{id}.len = __VERIFIER_nondet_long();\n\
                      \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {hashmap_max});\n"
+                ));
+            } else if btreemap_vars.contains(&id) {
+                let btreemap_max = limits.btreemap_max;
+                // Sorted-keys assume: get/contains/insert C model requires ascending-key state.
+                out.push_str(&format!(
+                    "  /* FieldGet -> btreemap */ v{id}.len = __VERIFIER_nondet_long();\n\
+                     \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {btreemap_max});\n\
+                     \x20 for (int64_t __si = 0; __si + 1 < v{id}.len; __si++)\n\
+                     \x20   __ESBMC_assume(v{id}.keys[__si] < v{id}.keys[__si + 1]);\n"
                 ));
             } else if let Some(&src_id) = inst.args.first() {
                 if option_vars.contains(&src_id.0) {
@@ -1274,6 +1368,7 @@ pub fn emit_c_function_full(
     let vec_vars = collect_typed_vars(func, "__vow_vec_new", "__vow_vec_");
     let string_vars = collect_typed_vars(func, "__vow_string_from_cstr", "__vow_string_");
     let hashmap_vars = collect_typed_vars(func, "__vow_map_new", "__vow_map_");
+    let btreemap_vars = collect_typed_vars(func, "__vow_btreemap_new", "__vow_btreemap_");
     let option_vars = collect_option_vars(func);
 
     // Return type (use int64_t for Ptr since structs are opaque in verification)
@@ -1342,8 +1437,15 @@ pub fn emit_c_function_full(
                             "  __vow_hashmap_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
                              \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {hashmap_max});\n"
                         ));
-                    } else if option_vars.contains(&id) {
-                        out.push_str(&format!("  __vow_option_t v{};\n  v{}.tag = 0;\n", id, id));
+                    } else if btreemap_vars.contains(&id) {
+                        let btreemap_max = limits.btreemap_max;
+                        // Sorted-keys assume: get/contains/insert C model requires ascending-key state.
+                        out.push_str(&format!(
+                            "  __vow_btreemap_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
+                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {btreemap_max});\n\
+                             \x20 for (int64_t __si = 0; __si + 1 < v{id}.len; __si++)\n\
+                             \x20   __ESBMC_assume(v{id}.keys[__si] < v{id}.keys[__si + 1]);\n"
+                        ));
                     } else {
                         let c_ty = match inst.ty {
                             Ty::Ptr | Ty::LinearPtr => "int64_t",
@@ -1383,6 +1485,8 @@ pub fn emit_c_function_full(
                 out.push_str(&format!("  __vow_string_t v{};\n", id));
             } else if hashmap_vars.contains(&id) {
                 out.push_str(&format!("  __vow_hashmap_t v{};\n", id));
+            } else if btreemap_vars.contains(&id) {
+                out.push_str(&format!("  __vow_btreemap_t v{};\n", id));
             } else if option_vars.contains(&id) {
                 out.push_str(&format!("  __vow_option_t v{};\n", id));
             } else {
@@ -1412,7 +1516,20 @@ pub fn emit_c_function_full(
         }
         ups_sources.sort();
         for src in ups_sources {
-            out.push_str(&format!("  int64_t __ups_{};\n", src));
+            // Upsilon temps must share the source's struct type; struct-to-int64 assignment corrupts the payload.
+            if option_vars.contains(&src) {
+                out.push_str(&format!("  __vow_option_t __ups_{};\n", src));
+            } else if vec_vars.contains(&src) {
+                out.push_str(&format!("  __vow_vec_t __ups_{};\n", src));
+            } else if string_vars.contains(&src) {
+                out.push_str(&format!("  __vow_string_t __ups_{};\n", src));
+            } else if hashmap_vars.contains(&src) {
+                out.push_str(&format!("  __vow_hashmap_t __ups_{};\n", src));
+            } else if btreemap_vars.contains(&src) {
+                out.push_str(&format!("  __vow_btreemap_t __ups_{};\n", src));
+            } else {
+                out.push_str(&format!("  int64_t __ups_{};\n", src));
+            }
         }
     }
 
@@ -1473,6 +1590,7 @@ pub fn emit_c_function_full(
                 &vec_vars,
                 &string_vars,
                 &hashmap_vars,
+                &btreemap_vars,
                 &option_vars,
                 const_fns,
                 modelable_fns,
@@ -1497,6 +1615,7 @@ pub fn emit_c_function_full(
                 &vec_vars,
                 &string_vars,
                 &hashmap_vars,
+                &btreemap_vars,
                 &option_vars,
                 const_fns,
                 modelable_fns,
@@ -1551,6 +1670,7 @@ fn emit_c_preamble(out: &mut String, shifts: &ShiftNeeds, limits: &VerifyLimits)
     let vec_max = limits.vec_max;
     let string_max = limits.string_max;
     let hashmap_max = limits.hashmap_max;
+    let btreemap_max = limits.btreemap_max;
     out.push_str(&format!(
         "typedef struct {{ int64_t len; int64_t data[{vec_max}]; }} __vow_vec_t;\n",
     ));
@@ -1559,6 +1679,9 @@ fn emit_c_preamble(out: &mut String, shifts: &ShiftNeeds, limits: &VerifyLimits)
     ));
     out.push_str(&format!(
         "typedef struct {{ int64_t len; int64_t keys[{hashmap_max}]; int64_t vals[{hashmap_max}]; }} __vow_hashmap_t;\n",
+    ));
+    out.push_str(&format!(
+        "typedef struct {{ int64_t len; int64_t keys[{btreemap_max}]; int64_t vals[{btreemap_max}]; }} __vow_btreemap_t;\n",
     ));
     out.push_str("typedef struct { int64_t tag; int64_t payload; } __vow_option_t;\n");
     if shifts.shl_i64 {
@@ -4517,6 +4640,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
+            &HashSet::new(),
             &const_fns,
             &HashSet::new(),
             &[],
@@ -4549,6 +4673,7 @@ mod tests {
         emit_inst(
             &call_inst,
             &mut out,
+            &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),

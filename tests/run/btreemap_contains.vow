@@ -1,0 +1,20 @@
+// TEST: stdout "empty_contains_5=false\nafter_insert_contains_5=true\nafter_insert_contains_99=false\n"
+module BTreeMapContains
+
+fn print_bool(label: String, b: bool) [io] {
+    print_str(label);
+    if b {
+        print_str(String::from("true\n"));
+    } else {
+        print_str(String::from("false\n"));
+    }
+}
+
+fn main() -> i32 [io] {
+    let m: BTreeMap<i64, i64> = BTreeMap::new();
+    print_bool(String::from("empty_contains_5="), m.contains(5));
+    m.insert(5, 10);
+    print_bool(String::from("after_insert_contains_5="), m.contains(5));
+    print_bool(String::from("after_insert_contains_99="), m.contains(99));
+    0
+}

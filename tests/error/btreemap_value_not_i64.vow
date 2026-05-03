@@ -1,0 +1,8 @@
+// TEST: error-code BTreeMapValueTypeMustBeI64
+// TEST: stderr "BTreeMap value type must be i64"
+module BTreeMapValueNotI64
+
+fn main() -> i32 {
+    let m: BTreeMap<i64, String> = BTreeMap::new();
+    0
+}

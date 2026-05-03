@@ -1997,6 +1997,13 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             return result;
         }
 
+        if enum_name == String::from("BTreeMap") && variant_name == String::from("new") {
+            let call_args: Vec<i64> = Vec::new();
+            let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_btreemap_new"));
+            lctx_tag(ctx, result, String::from("BTreeMap"));
+            return result;
+        }
+
         if enum_name == String::from("Vec") && variant_name == String::from("new") {
             let size_args: Vec<i64> = Vec::new();
             let size_val: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), size_args, IDATA_CONST_I64(), 8, 0, String::from(""));
@@ -2261,6 +2268,80 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 call_args.push(recv_id);
                 call_args.push(k_id);
                 return lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_map_remove"));
+            }
+        }
+
+        if recv_tag_str == String::from("BTreeMap") {
+            if method_name == String::from("len") {
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(recv_id);
+                return lctx_emit(ctx, IOP_CALL(), ITY_I64(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_btreemap_len"));
+            }
+            // Guard list_get against missing arguments. The type checker is
+            // responsible for catching arity errors but doesn't yet, so a
+            // malformed `m.insert(1)` (only one arg) would otherwise reach
+            // this code and trigger a list-out-of-bounds. Fall back to
+            // ConstUnit which produces a downstream type error rather than a
+            // crash. Mirrors the Vec.push pattern in the same file.
+            let nargs: i64 = list_len(a, args_lid);
+            if method_name == String::from("insert") {
+                let k_id: i64 = {
+                    if nargs > 0 {
+                        let ae: i64 = list_get(a, args_lid, 0);
+                        lower_consumed_expr(ctx, ae)
+                    } else {
+                        let u_args: Vec<i64> = Vec::new();
+                        lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
+                    }
+                };
+                let v_id: i64 = {
+                    if nargs > 1 {
+                        let ae: i64 = list_get(a, args_lid, 1);
+                        lower_consumed_expr(ctx, ae)
+                    } else {
+                        let u_args: Vec<i64> = Vec::new();
+                        lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
+                    }
+                };
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(recv_id);
+                call_args.push(k_id);
+                call_args.push(v_id);
+                let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_btreemap_insert"));
+                lctx_tag(ctx, result, String::from("Option"));
+                return result;
+            }
+            if method_name == String::from("get") {
+                let k_id: i64 = {
+                    if nargs > 0 {
+                        let ae: i64 = list_get(a, args_lid, 0);
+                        lower_consumed_expr(ctx, ae)
+                    } else {
+                        let u_args: Vec<i64> = Vec::new();
+                        lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
+                    }
+                };
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(recv_id);
+                call_args.push(k_id);
+                let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_btreemap_get"));
+                lctx_tag(ctx, result, String::from("Option"));
+                return result;
+            }
+            if method_name == String::from("contains") {
+                let k_id: i64 = {
+                    if nargs > 0 {
+                        let ae: i64 = list_get(a, args_lid, 0);
+                        lower_consumed_expr(ctx, ae)
+                    } else {
+                        let u_args: Vec<i64> = Vec::new();
+                        lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
+                    }
+                };
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(recv_id);
+                call_args.push(k_id);
+                return lctx_emit(ctx, IOP_CALL(), ITY_BOOL(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_btreemap_contains"));
             }
         }
 
@@ -3193,6 +3274,8 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
                 let tn: String = arena_str(a, tn_sid);
                 if tn == String::from("HashMap") {
                     lctx_tag(ctx, arg_id, String::from("HashMap"));
+                } else if tn == String::from("BTreeMap") {
+                    lctx_tag(ctx, arg_id, String::from("BTreeMap"));
                 } else if tn == String::from("Vec") {
                     lctx_tag(ctx, arg_id, String::from("Vec"));
                     let pargs_lid: i64 = type_b(a, ptid);
