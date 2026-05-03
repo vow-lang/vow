@@ -1459,8 +1459,6 @@ pub fn emit_c_function_full(
                              \x20 for (int64_t __si = 0; __si + 1 < v{id}.len; __si++)\n\
                              \x20   __ESBMC_assume(v{id}.keys[__si] < v{id}.keys[__si + 1]);\n"
                         ));
-                    } else if option_vars.contains(&id) {
-                        out.push_str(&format!("  __vow_option_t v{};\n  v{}.tag = 0;\n", id, id));
                     } else {
                         let c_ty = match inst.ty {
                             Ty::Ptr | Ty::LinearPtr => "int64_t",
@@ -1531,11 +1529,7 @@ pub fn emit_c_function_full(
         }
         ups_sources.sort();
         for src in ups_sources {
-            // Match the temp's C type to the source's tagged type so the
-            // `__ups_src = vsrc; vphi = __ups_src;` assignment doesn't tear
-            // a struct payload into an int64. All five modeled-type tags
-            // (Vec/String/HashMap/BTreeMap/Option) emit struct typedefs in
-            // the C model and would corrupt under struct-to-int assignment.
+            // Upsilon temps must share the source's struct type; struct-to-int64 assignment corrupts the payload.
             if option_vars.contains(&src) {
                 out.push_str(&format!("  __vow_option_t __ups_{};\n", src));
             } else if vec_vars.contains(&src) {
