@@ -55,6 +55,7 @@ pub enum ErrorCode {
     UnknownMethod,
     UnsupportedFeature,
     BTreeMapKeyTypeMustBeI64,
+    BTreeMapValueTypeMustBeI64,
     // Lowering warnings
     LoweringWarning,
     // Contract errors

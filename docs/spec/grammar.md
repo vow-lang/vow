@@ -563,7 +563,7 @@ m.contains_key(k)
 
 ### BTreeMap<K, V> Methods
 
-In Phase 1, both `K` and `V` must be `i64` (other types raise `BTreeMapKeyTypeMustBeI64`).
+In Phase 1, both `K` and `V` must be `i64`. K violations raise `BTreeMapKeyTypeMustBeI64`; V violations raise `BTreeMapValueTypeMustBeI64`.
 The runtime helpers and ESBMC C model are hard-coded to i64 keys + i64 values; widening V
 to support struct payloads is a planned follow-up.
 Storage is two parallel sorted arrays (binary-search lookup, sorted-insert writes).

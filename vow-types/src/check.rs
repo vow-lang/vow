@@ -425,12 +425,17 @@ impl<'e> Checker<'e> {
                         );
                     }
                     for f in &block.fns {
-                        let params = f
+                        let params: Vec<Ty> = f
                             .params
                             .iter()
-                            .map(|p| self.env.resolve(&p.ty).unwrap_or(Ty::Unit))
+                            .map(|p| {
+                                let ty = self.env.resolve(&p.ty).unwrap_or(Ty::Unit);
+                                self.check_btreemap_key_in_ty(&ty, p.span);
+                                ty
+                            })
                             .collect();
                         let return_ty = self.env.resolve(&f.return_ty).unwrap_or(Ty::Unit);
+                        self.check_btreemap_key_in_ty(&return_ty, f.return_ty.span());
                         let effects: BTreeSet<Effect> = f.effects.iter().cloned().collect();
                         self.env.define_fn(
                             &f.name,
@@ -1875,7 +1880,7 @@ impl<'e> Checker<'e> {
                 && !matches!(val_ty, Ty::I64 | Ty::Never)
             {
                 self.emit_error(
-                    ErrorCode::BTreeMapKeyTypeMustBeI64,
+                    ErrorCode::BTreeMapValueTypeMustBeI64,
                     format!("BTreeMap value type must be i64 in Phase 1; found '{val_ty}'"),
                     span,
                 );
