@@ -88,6 +88,16 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
                     kerr_msg.push_str(String::from("'"));
                     env_emit_error_code(e, EC_BTREEMAP_KEY_TYPE_MUST_BE_I64(), kerr_msg, type_span(a, ast_tid));
                 }
+                if arg_tids.len() > 1 {
+                    let bval_tid: i64 = arg_tids[1];
+                    let bval_tag: i64 = ty_tag(e.ts, bval_tid);
+                    if bval_tag != CTY_I64() && bval_tag != CTY_NEVER() {
+                        let verr_msg: String = String::from("BTreeMap value type must be i64 in Phase 1; found '");
+                        verr_msg.push_str(ty_tag_name(bval_tag));
+                        verr_msg.push_str(String::from("'"));
+                        env_emit_error_code(e, EC_BTREEMAP_KEY_TYPE_MUST_BE_I64(), verr_msg, type_span(a, ast_tid));
+                    }
+                }
             }
             return ts_make_applied(e.ts, ts_make_struct(e.ts, name), arg_tids);
         }

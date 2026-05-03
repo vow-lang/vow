@@ -1520,10 +1520,19 @@ pub fn emit_c_function_full(
         for src in ups_sources {
             // Match the temp's C type to the source's tagged type so the
             // `__ups_src = vsrc; vphi = __ups_src;` assignment doesn't tear
-            // a struct payload into an int64. Today only Option flows
-            // through phi as a struct.
+            // a struct payload into an int64. All five modeled-type tags
+            // (Vec/String/HashMap/BTreeMap/Option) emit struct typedefs in
+            // the C model and would corrupt under struct-to-int assignment.
             if option_vars.contains(&src) {
                 out.push_str(&format!("  __vow_option_t __ups_{};\n", src));
+            } else if vec_vars.contains(&src) {
+                out.push_str(&format!("  __vow_vec_t __ups_{};\n", src));
+            } else if string_vars.contains(&src) {
+                out.push_str(&format!("  __vow_string_t __ups_{};\n", src));
+            } else if hashmap_vars.contains(&src) {
+                out.push_str(&format!("  __vow_hashmap_t __ups_{};\n", src));
+            } else if btreemap_vars.contains(&src) {
+                out.push_str(&format!("  __vow_btreemap_t __ups_{};\n", src));
             } else {
                 out.push_str(&format!("  int64_t __ups_{};\n", src));
             }

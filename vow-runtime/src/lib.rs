@@ -2245,6 +2245,10 @@ pub unsafe extern "C" fn __vow_map_len(map: *const u8) -> usize {
 // writes. Lives in the root arena (no explicit free), matching HashMap.
 // ---------------------------------------------------------------------------
 
+// `keys_len` is the shared logical length of both parallel arrays; both
+// arrays are always grown together so `vals_cap == keys_cap` is a kept
+// invariant — duplicate `vals_cap` field retained for ABI symmetry with the
+// keys side and to make per-array growth tracking obvious to readers.
 #[repr(C)]
 pub struct VowBTreeMap {
     pub keys_ptr: *mut u8,

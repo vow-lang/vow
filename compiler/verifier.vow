@@ -168,37 +168,6 @@ fn emit_harness(f: IrFunction) -> String {
     out
 }
 
-fn emit_c_preamble(vec_max: i64, string_max: i64, hashmap_max: i64) -> String {
-    let out: String = String::from("");
-    out.push_str(String::from("#include <stdint.h>\n"));
-    out.push_str(String::from("#include <stdbool.h>\n"));
-    out.push_str(String::from("extern void __ESBMC_assume(_Bool);\n"));
-    out.push_str(String::from("extern void __ESBMC_assert(_Bool, const char*);\n"));
-    out.push_str(String::from("extern int __VERIFIER_nondet_int(void);\n"));
-    out.push_str(String::from("extern long __VERIFIER_nondet_long(void);\n"));
-    out.push_str(String::from("extern float __VERIFIER_nondet_float(void);\n"));
-    out.push_str(String::from("extern double __VERIFIER_nondet_double(void);\n"));
-    out.push_str(String::from("extern _Bool __VERIFIER_nondet_bool(void);\n\n"));
-    out.push_str(str3(
-        String::from("typedef struct { int64_t len; int64_t data["),
-        i64_to_str(vec_max),
-        String::from("]; } __vow_vec_t;\n")
-    ));
-    out.push_str(str3(
-        String::from("typedef struct { int64_t len; int8_t data["),
-        i64_to_str(string_max),
-        String::from("]; } __vow_string_t;\n")
-    ));
-    out.push_str(str5(
-        String::from("typedef struct { int64_t len; int64_t keys["),
-        i64_to_str(hashmap_max),
-        String::from("]; int64_t vals["),
-        i64_to_str(hashmap_max),
-        String::from("]; } __vow_hashmap_t;\n\n")
-    ));
-    out
-}
-
 fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> String {
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
     let callee_fis: Vec<i64> = collect_modelable_callees(f, m, const_fn_indices);

@@ -1848,23 +1848,38 @@ impl<'e> Checker<'e> {
         }
     }
 
-    // Recursively walk `ty` for BTreeMap<K, V> shapes where K is neither i64
-    // nor Never (the placeholder produced by BTreeMap::new() before inference).
-    // Emits BTreeMapKeyTypeMustBeI64 at `span` for each occurrence. Called from
+    // Recursively walk `ty` for BTreeMap<K, V> shapes where K or V is neither
+    // i64 nor Never. Phase 1's runtime helpers and ESBMC C model are hard-coded
+    // to i64 keys and i64 values (`__vow_btreemap_insert(map, key:i64, val:i64)`
+    // and `int64_t vals[BTREEMAP_MAX]`), so any other K or V silently routes
+    // through the i64 ABI and produces invalid codegen. Both restrictions
+    // surface as `BTreeMapKeyTypeMustBeI64` (the error code is the only one we
+    // have for this constraint; the message distinguishes K vs V). Called from
     // the major type-resolution sites (Stmt::Let annotations, function param /
-    // return / field types) so the error fires at type formation rather than
-    // only at method-call sites.
+    // return / field / alias / const types) so the error fires at type
+    // formation rather than only at method-call sites.
     fn check_btreemap_key_in_ty(&mut self, ty: &Ty, span: vow_syntax::span::Span) {
         if let Ty::Applied(base, args) = ty
             && matches!(base.as_ref(), Ty::Struct(n) if n == "BTreeMap")
-            && let Some(key_ty) = args.first()
-            && !matches!(key_ty, Ty::I64 | Ty::Never)
         {
-            self.emit_error(
-                ErrorCode::BTreeMapKeyTypeMustBeI64,
-                format!("BTreeMap key type must be i64; found `{key_ty}`"),
-                span,
-            );
+            if let Some(key_ty) = args.first()
+                && !matches!(key_ty, Ty::I64 | Ty::Never)
+            {
+                self.emit_error(
+                    ErrorCode::BTreeMapKeyTypeMustBeI64,
+                    format!("BTreeMap key type must be i64; found `{key_ty}`"),
+                    span,
+                );
+            }
+            if let Some(val_ty) = args.get(1)
+                && !matches!(val_ty, Ty::I64 | Ty::Never)
+            {
+                self.emit_error(
+                    ErrorCode::BTreeMapKeyTypeMustBeI64,
+                    format!("BTreeMap value type must be i64 in Phase 1; found `{val_ty}`"),
+                    span,
+                );
+            }
         }
         // Recurse through composite types so nested maps (e.g. Vec<BTreeMap<bool, i64>>)
         // are also caught.

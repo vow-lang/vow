@@ -1749,12 +1749,19 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
         let src: i64 = ups_sources[ui];
         // Match the temp's C type to the source's tagged type so the
         // `__ups_src = vsrc; vphi = __ups_src;` assignment doesn't tear
-        // a struct payload into an int64. Today only Option flows
-        // through phi as a struct; Vec/String/HashMap/BTreeMap do too
-        // but their phi flow is rare and the existing fallback works
-        // for those.
+        // a struct payload into an int64. All five modeled-type tags
+        // (Vec/String/HashMap/BTreeMap/Option) emit struct typedefs in
+        // the C model and would corrupt under struct-to-int assignment.
         if vec_contains_i64(option_vars, src) {
             out.push_str(str3(String::from("  __vow_option_t __ups_"), i64_to_str(src), String::from(";\n")));
+        } else if vec_contains_i64(vec_vars, src) {
+            out.push_str(str3(String::from("  __vow_vec_t __ups_"), i64_to_str(src), String::from(";\n")));
+        } else if vec_contains_i64(string_vars, src) {
+            out.push_str(str3(String::from("  __vow_string_t __ups_"), i64_to_str(src), String::from(";\n")));
+        } else if vec_contains_i64(hashmap_vars, src) {
+            out.push_str(str3(String::from("  __vow_hashmap_t __ups_"), i64_to_str(src), String::from(";\n")));
+        } else if vec_contains_i64(btreemap_vars, src) {
+            out.push_str(str3(String::from("  __vow_btreemap_t __ups_"), i64_to_str(src), String::from(";\n")));
         } else {
             out.push_str(str3(String::from("  int64_t __ups_"), i64_to_str(src), String::from(";\n")));
         }
