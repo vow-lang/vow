@@ -2731,7 +2731,7 @@ ESBMC uses bounded models for collection types. Defaults are shown below; overri
 | Type              | Default Max Capacity | CLI Flag | Supported Operations |
 |-------------------|---------------------|----------|----------------------------------------------|
 | `Vec<T>`          | 128                 | `--vec-max <N>` | `new`, `push`, `pop`, `len`, `get`, `set`    |
-| `String`          | 256                 | `--string-max <N>` | `from`, `len`, `push_byte`, `byte_at`        |
+| `String`          | 256                 | `--string-max <N>` | `from`, `len`, `push_byte`, `push_str`, `byte_at` |
 | `HashMap<K, V>`   | 64                  | `--hashmap-max <N>` | `new`, `insert`, `get`, `contains_key`, `len`|
 
 These support the same operations as the runtime but with bounded storage. `String::from` produces a nondeterministic length (0 to max-1) in verification.

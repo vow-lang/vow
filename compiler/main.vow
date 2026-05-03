@@ -3458,7 +3458,7 @@ fn skill_full() -> String {
     r.push_str(String::from("| Type              | Default Max Capacity | CLI Flag | Supported Operations |\n"));
     r.push_str(String::from("|-------------------|---------------------|----------|----------------------------------------------|\n"));
     r.push_str(String::from("| `Vec<T>`          | 128                 | `--vec-max <N>` | `new`, `push`, `pop`, `len`, `get`, `set`    |\n"));
-    r.push_str(String::from("| `String`          | 256                 | `--string-max <N>` | `from`, `len`, `push_byte`, `byte_at`        |\n"));
+    r.push_str(String::from("| `String`          | 256                 | `--string-max <N>` | `from`, `len`, `push_byte`, `push_str`, `byte_at` |\n"));
     r.push_str(String::from("| `HashMap<K, V>`   | 64                  | `--hashmap-max <N>` | `new`, `insert`, `get`, `contains_key`, `len`|\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("These support the same operations as the runtime but with bounded storage. `String::from` produces a nondeterministic length (0 to max-1) in verification.\n"));
