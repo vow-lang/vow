@@ -2118,38 +2118,79 @@ pub unsafe extern "C" fn __vow_clif_link(obj_path_ptr: i64, output_path_ptr: i64
 // ---------------------------------------------------------------------------
 
 fn find_lib(name: &str) -> Option<String> {
-    // Check env var
     let env_key = if name.contains("runtime") {
         "VOW_RUNTIME_PATH"
     } else {
         "VOW_CLIF_SHIM_PATH"
     };
-    if let Ok(p) = std::env::var(env_key)
-        && std::path::Path::new(&p).exists()
-    {
-        return Some(p);
+    let exe = std::env::current_exe().ok();
+    find_lib_from_parts(name, std::env::var_os(env_key), exe.as_deref())
+}
+
+fn find_lib_from_parts(
+    name: &str,
+    env_value: Option<std::ffi::OsString>,
+    exe: Option<&std::path::Path>,
+) -> Option<String> {
+    let target_dir = cargo_target_dir();
+    find_lib_from_parts_with_target_dir(name, env_value, exe, &target_dir)
+}
+
+fn find_lib_from_parts_with_target_dir(
+    name: &str,
+    env_value: Option<std::ffi::OsString>,
+    exe: Option<&std::path::Path>,
+    target_dir: &std::path::Path,
+) -> Option<String> {
+    if let Some(p) = env_value {
+        let path = std::path::PathBuf::from(p);
+        if path.exists() {
+            return Some(path.to_string_lossy().into_owned());
+        }
     }
 
-    // Adjacent to current exe
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
+    if let Some(exe) = exe
+        && let Some(path) = find_installed_lib_for_exe(name, exe)
     {
+        return Some(path);
+    }
+
+    find_lib_in_cargo_target(name, target_dir)
+}
+
+fn find_installed_lib_for_exe(name: &str, exe: &std::path::Path) -> Option<String> {
+    if let Some(dir) = exe.parent() {
+        // Preserve the legacy adjacent-to-exe lookup before prefix paths so
+        // manual installs that co-locate the static libraries with vowc keep
+        // working.
         let p = dir.join(name);
         if p.exists() {
             return Some(p.to_string_lossy().into_owned());
         }
+        if let Some(prefix) = dir.parent() {
+            let p = prefix.join("lib").join("vow").join(name);
+            if p.exists() {
+                return Some(p.to_string_lossy().into_owned());
+            }
+            let p = prefix.join("lib").join(name);
+            if p.exists() {
+                return Some(p.to_string_lossy().into_owned());
+            }
+        }
     }
 
-    // Cargo target directories (for development)
+    None
+}
+
+fn cargo_target_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../target"))
+}
+
+fn find_lib_in_cargo_target(name: &str, target_dir: &std::path::Path) -> Option<String> {
     for profile in &["release", "debug"] {
-        let p = format!(
-            "{}/../target/{}/{}",
-            env!("CARGO_MANIFEST_DIR"),
-            profile,
-            name
-        );
-        if std::path::Path::new(&p).exists() {
-            return Some(p);
+        let p = target_dir.join(profile).join(name);
+        if p.exists() {
+            return Some(p.to_string_lossy().into_owned());
         }
     }
 
@@ -2690,4 +2731,79 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         }
     }
     sig
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_lib_in_installed_lib_vow_dir() {
+        let root = tempfile::TempDir::new().unwrap();
+        let bin_dir = root.path().join("bin");
+        let lib_dir = root.path().join("lib").join("vow");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::create_dir_all(&lib_dir).unwrap();
+        let exe = bin_dir.join("vowc");
+        let lib = lib_dir.join("libvow_runtime.a");
+        std::fs::write(&exe, b"").unwrap();
+        std::fs::write(&lib, b"").unwrap();
+
+        let found = find_lib_from_parts_with_target_dir(
+            "libvow_runtime.a",
+            None,
+            Some(&exe),
+            &root.path().join("target"),
+        );
+        let expected = lib.to_string_lossy().into_owned();
+        assert_eq!(found.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn finds_lib_in_installed_lib_dir() {
+        let root = tempfile::TempDir::new().unwrap();
+        let bin_dir = root.path().join("bin");
+        let lib_dir = root.path().join("lib");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::create_dir_all(&lib_dir).unwrap();
+        let exe = bin_dir.join("vowc");
+        let lib = lib_dir.join("libvow_runtime.a");
+        std::fs::write(&exe, b"").unwrap();
+        std::fs::write(&lib, b"").unwrap();
+
+        let found = find_lib_from_parts_with_target_dir(
+            "libvow_runtime.a",
+            None,
+            Some(&exe),
+            &root.path().join("target"),
+        );
+        let expected = lib.to_string_lossy().into_owned();
+        assert_eq!(found.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn env_override_does_not_require_current_exe() {
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = root.path().join("libvow_runtime.a");
+        std::fs::write(&lib, b"").unwrap();
+
+        let found =
+            find_lib_from_parts("libvow_runtime.a", Some(lib.clone().into_os_string()), None);
+        let expected = lib.to_string_lossy().into_owned();
+        assert_eq!(found.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn cargo_target_fallback_does_not_require_current_exe() {
+        let root = tempfile::TempDir::new().unwrap();
+        let release_dir = root.path().join("release");
+        std::fs::create_dir_all(&release_dir).unwrap();
+        let lib = release_dir.join("libvow_runtime.a");
+        std::fs::write(&lib, b"").unwrap();
+
+        let found =
+            find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, root.path());
+        let expected = lib.to_string_lossy().into_owned();
+        assert_eq!(found.as_deref(), Some(expected.as_str()));
+    }
 }

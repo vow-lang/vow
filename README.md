@@ -11,7 +11,12 @@ For project design details, see [docs/vow_design.md](docs/vow_design.md).
 ```bash
 # Bootstrap (one-time)
 cargo build --all --release
-scripts/bootstrap.sh --no-verify
+scripts/bootstrap.sh --skip-cargo
+
+# Install the self-hosted toolchain to a user prefix
+scripts/install-toolchain.sh --prefix "$HOME/.local"
+export PATH="$HOME/.local/bin:$PATH"
+vowc build --no-verify examples/hello.vow -o /tmp/vow_hello
 
 # Day-to-day usage
 ulimit -v 2000000; build/vowc build examples/divide.vow              # compile + verify
