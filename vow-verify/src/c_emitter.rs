@@ -1216,7 +1216,7 @@ fn emit_inst(
                     "  /* FieldGet -> btreemap */ v{id}.len = __VERIFIER_nondet_long();\n\
                      \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {btreemap_max});\n\
                      \x20 for (int64_t __si = 0; __si + 1 < v{id}.len; __si++)\n\
-                     \x20   __ESBMC_assume(v{id}.keys[__si] <= v{id}.keys[__si + 1]);\n"
+                     \x20   __ESBMC_assume(v{id}.keys[__si] < v{id}.keys[__si + 1]);\n"
                 ));
             } else if let Some(&src_id) = inst.args.first() {
                 if option_vars.contains(&src_id.0) {
@@ -1457,7 +1457,7 @@ pub fn emit_c_function_full(
                             "  __vow_btreemap_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
                              \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {btreemap_max});\n\
                              \x20 for (int64_t __si = 0; __si + 1 < v{id}.len; __si++)\n\
-                             \x20   __ESBMC_assume(v{id}.keys[__si] <= v{id}.keys[__si + 1]);\n"
+                             \x20   __ESBMC_assume(v{id}.keys[__si] < v{id}.keys[__si + 1]);\n"
                         ));
                     } else if option_vars.contains(&id) {
                         out.push_str(&format!("  __vow_option_t v{};\n  v{}.tag = 0;\n", id, id));

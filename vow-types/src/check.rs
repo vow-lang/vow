@@ -969,7 +969,7 @@ impl<'e> Checker<'e> {
                     {
                         self.emit_error(
                             ErrorCode::BTreeMapKeyTypeMustBeI64,
-                            format!("BTreeMap key type must be i64; found `{key_ty}`"),
+                            format!("BTreeMap key type must be i64; found '{key_ty}'"),
                             expr.span,
                         );
                     }
@@ -1867,7 +1867,7 @@ impl<'e> Checker<'e> {
             {
                 self.emit_error(
                     ErrorCode::BTreeMapKeyTypeMustBeI64,
-                    format!("BTreeMap key type must be i64; found `{key_ty}`"),
+                    format!("BTreeMap key type must be i64; found '{key_ty}'"),
                     span,
                 );
             }
@@ -1876,7 +1876,7 @@ impl<'e> Checker<'e> {
             {
                 self.emit_error(
                     ErrorCode::BTreeMapKeyTypeMustBeI64,
-                    format!("BTreeMap value type must be i64 in Phase 1; found `{val_ty}`"),
+                    format!("BTreeMap value type must be i64 in Phase 1; found '{val_ty}'"),
                     span,
                 );
             }
