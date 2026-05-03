@@ -57,7 +57,10 @@ struct ScopeSnap {
 }
 
 fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eids: Vec<i64>) -> LowerCtx {
-    let f: IrFunction = ir_function_new(0, name, return_ty, effects);
+    // Placeholder source_file; the per-function value is stamped onto
+    // `ctx.func.source_file` inside `lower_function_vow` (compiler/lower.vow)
+    // from `ctx.file`, which `lower_module_vow` updates for each FnDef.
+    let f: IrFunction = ir_function_new(0, name, return_ty, effects, String::from(""));
     let entry: IrBlock = ir_block_new(0);
     f.blocks.push(entry);
     LowerCtx {
@@ -3190,7 +3193,9 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     let params_lid: i64 = fn_params_lid(a, fid);
 
     let ir_ret: i64 = lctx_lower_ast_ty(ctx, ret_tid);
-    let func: IrFunction = ir_function_new(0, name, ir_ret, eff);
+    // ctx.file is updated per FnDef by lower_module_vow before invoking
+    // lower_function_vow, so each function gets its originating source path.
+    let func: IrFunction = ir_function_new(0, name, ir_ret, eff, ctx.file);
     let entry: IrBlock = ir_block_new(0);
     func.blocks.push(entry);
 
@@ -3312,7 +3317,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     ctx.func
 }
 
-fn lower_module_vow(m: Module, str_eids: Vec<i64>, file_path: String) -> IrModule {
+fn lower_module_vow(m: Module, str_eids: Vec<i64>, item_files: Vec<String>) -> IrModule {
     let a: AstArena = m.arena;
     let mod_name_sid: i64 = m.name_sid;
     let mod_name: String = arena_str(a, mod_name_sid);
@@ -3529,7 +3534,8 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>, file_path: String) -> IrModul
     }
 
     let ctx: LowerCtx = lctx_new(String::from(""), ITY_UNIT(), 0, a, str_eids);
-    ctx.file = file_path;
+    // ctx.file is updated per FnDef inside the lowering loop below so each
+    // IrFunction gets the originating source path from `item_files`.
     ctx.func_names = func_names;
     ctx.func_ret_tys = func_ret_tys;
     ctx.func_ret_tags = func_ret_tags;
@@ -3554,6 +3560,9 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>, file_path: String) -> IrModul
         let ik: i64 = item_kind(item);
         let iid: i64 = item_id(item);
         if ik == ITEM_FN() {
+            // Stamp the per-item source path onto ctx.file; lower_function_vow
+            // forwards it into the constructed IrFunction's source_file field.
+            ctx.file = item_files[ii2];
             let ir_func: IrFunction = lower_function_vow(ctx, iid);
             ir_func.id = func_idx;
 

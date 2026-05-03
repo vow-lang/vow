@@ -195,6 +195,7 @@ fn small_module_uninit_never_leaks_after_round_trip() {
             blocks,
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         }
     }
 
@@ -255,7 +256,7 @@ fn small_module_uninit_never_leaks_after_round_trip() {
         enum_layouts: vec![],
         warnings: vec![],
     };
-    infer_regions(&mut m, "test.vow");
+    infer_regions(&mut m);
     assert_canonical_summaries(&m);
     assert!(
         m.warnings.iter().all(|d| d.severity != Severity::Error),

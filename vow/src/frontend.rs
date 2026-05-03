@@ -144,7 +144,7 @@ pub(crate) fn prepare_frontend(
     let deps = DependencyManifest::from_paths(
         graph.modules.iter().map(|(path, _)| path.clone()).collect(),
     );
-    let ast = module_loader::merge_modules(graph);
+    let (ast, item_files) = module_loader::merge_modules(graph);
 
     let mut null_emit = NullEmitter;
     let mut collecting_emit = CollectingEmitter::new(&mut null_emit);
@@ -170,7 +170,7 @@ pub(crate) fn prepare_frontend(
         FrontendGoal::MergedAst => None,
         FrontendGoal::LoweredIr => {
             let string_exprs = string_exprs.expect("LoweredIr goal must preserve string exprs");
-            let mut module = vow_ir::lower_module(&ast, &source.to_string_lossy(), &string_exprs);
+            let mut module = vow_ir::lower_module(&ast, &item_files, &string_exprs);
             // Track lower-warning count so region inference does not see them
             // as its own (and the post-pass error check below only reacts to
             // newly-added Severity::Error diagnostics from infer_regions).
@@ -178,8 +178,10 @@ pub(crate) fn prepare_frontend(
             // Phase 3: region inference (arena-per-scope). Runs after type/
             // effect/linear checks (above) and before any consumer of region
             // metadata. Pushes any RegionConflict diagnostics into
-            // `module.warnings`.
-            vow_ir::infer_regions(&mut module, &source.to_string_lossy());
+            // `module.warnings`. Diagnostic file labels come from each
+            // `Function.source_file` (set by `lower_module`), not a single
+            // shared root path — see #254.
+            vow_ir::infer_regions(&mut module);
             diagnostics.extend(module.warnings.iter().cloned());
             // If region inference emitted any errors, fail compilation here so
             // the build pipeline reports CompileFailed (spec §4.4 — rejection,

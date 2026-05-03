@@ -1,10 +1,9 @@
 // TEST: stdout "first_inserted_returned_some=0\nsecond_inserted_returned_some=42\nv=99\n"
 module BTreeMapOverwrite
 
-// Prints "label=N" if `o` is Some(N), else "label=0" by short-circuit:
-// Caller relies on the printed line being absent (no "\n") when None.
-// To make output deterministic regardless of path, we always print the label
-// then short-circuit on None, so callers must know what to expect.
+// Prints "<label><N>\n" if `o` is Some(N); short-circuits on None so callers
+// must know which path they expect. Caller append a "0\n" line to keep
+// stdout deterministic on the None path.
 fn announce(label: String, o: Option<i64>) -> Option<i64> [io] {
     print_str(label);
     let v: i64 = o?;
@@ -14,7 +13,8 @@ fn announce(label: String, o: Option<i64>) -> Option<i64> [io] {
 }
 
 fn fetch(m: BTreeMap<i64, i64>) -> Option<i64> [io] {
-    let v: i64 = m.get(7)?;
+    let r: Option<i64> = m.get(7);
+    let v: i64 = r?;
     print_str(String::from("v="));
     print_i64(v);
     print_str(String::from("\n"));
@@ -24,12 +24,11 @@ fn fetch(m: BTreeMap<i64, i64>) -> Option<i64> [io] {
 fn main() -> i32 [io] {
     let m: BTreeMap<i64, i64> = BTreeMap::new();
     let first: Option<i64> = m.insert(7, 42);
-    // first should be None → announce prints "first_inserted_returned_some=" then short-circuits.
-    // We append a 0 line afterwards so the test sees a clean newline even on None.
+    // first is None → announce prints label only and short-circuits.
     announce(String::from("first_inserted_returned_some="), first);
     print_str(String::from("0\n"));
     let second: Option<i64> = m.insert(7, 99);
-    // second should be Some(42) → announce prints "second_inserted_returned_some=42\n".
+    // second is Some(42) → announce prints "second_inserted_returned_some=42\n".
     announce(String::from("second_inserted_returned_some="), second);
     fetch(m);
     0

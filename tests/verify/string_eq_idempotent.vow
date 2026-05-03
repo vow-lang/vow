@@ -1,0 +1,25 @@
+// `collect_typed_vars` only detects args[0] of `__vow_string_eq` as a
+// string operand, so this test uses locally-constructed strings (which
+// are detected via the `__vow_string_from_cstr` creator path) instead of
+// parameters — broadening the detector is a separate concern.
+//
+// The property under test: repeated `__vow_string_eq` on the same operand
+// pair must agree within a path. The shared `_Bool __str_eq_<lo>_<hi>`
+// cache is what makes this true; replacing it with independent nondets
+// would let ESBMC pick different values for the same pair on the same
+// path and falsify any `requires a.eq(b); ensures a.eq(b)` contract.
+module StringEqIdempotent
+
+fn eq_is_idempotent() -> bool vow {
+  ensures: result == true
+} {
+  let a: String = String::from("hello");
+  let b: String = String::from("hello");
+  let first: bool = a.eq(b);
+  let second: bool = a.eq(b);
+  first == second
+}
+
+fn main() -> i32 [io] {
+  if eq_is_idempotent() { 0 } else { 1 }
+}

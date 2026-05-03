@@ -4,7 +4,8 @@
 module BTreeMapSortedInvariant
 
 fn fetch(m: BTreeMap<i64, i64>, k: i64) -> Option<i64> [io] {
-    let v: i64 = m.get(k)?;
+    let r: Option<i64> = m.get(k);
+    let v: i64 = r?;
     print_i64(k);
     print_str(String::from("=>"));
     print_i64(v);

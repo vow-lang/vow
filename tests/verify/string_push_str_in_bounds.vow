@@ -1,0 +1,14 @@
+module StringPushStrInBounds
+
+fn cat(a: String, b: String) -> i64 vow {
+  requires: a.len() + b.len() <= 256
+} {
+  let mut s: String = a;
+  s.push_str(b);
+  s.len()
+}
+
+fn main() -> i32 [io] {
+  print_i64(cat(String::from("hi"), String::from(" there")));
+  0
+}

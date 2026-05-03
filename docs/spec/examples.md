@@ -381,7 +381,8 @@ When stdin is exhausted, `stdin_read_line()` returns `""` (length 0), the `while
 module BTreeMapExample
 
 fn fetch(m: BTreeMap<i64, i64>) -> Option<i64> [io] {
-    let v: i64 = m.get(7)?;
+    let r: Option<i64> = m.get(7);
+    let v: i64 = r?;
     print_i64(v);
     print_str(String::from("\n"));
     Option::Some(v)

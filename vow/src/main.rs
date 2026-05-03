@@ -2758,7 +2758,7 @@ ESBMC uses bounded models for collection types. Defaults are shown below; overri
 | Type              | Default Max Capacity | CLI Flag | Supported Operations |
 |-------------------|---------------------|----------|----------------------------------------------|
 | `Vec<T>`          | 128                 | `--vec-max <N>` | `new`, `push`, `pop`, `len`, `get`, `set`    |
-| `String`          | 256                 | `--string-max <N>` | `from`, `len`, `push_byte`, `byte_at`        |
+| `String`          | 256                 | `--string-max <N>` | `from`, `len`, `push_byte`, `push_str`, `byte_at` |
 | `HashMap<K, V>`   | 64                  | `--hashmap-max <N>` | `new`, `insert`, `get`, `contains_key`, `len`|
 
 These support the same operations as the runtime but with bounded storage. `String::from` produces a nondeterministic length (0 to max-1) in verification.
@@ -8268,6 +8268,7 @@ fn main() -> i32 {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let map = build_c_to_source_name_map(&func);
         assert_eq!(map.get("p0"), Some(&"x".to_string()));
@@ -8316,6 +8317,7 @@ fn main() -> i32 {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let map = build_c_to_source_name_map(&func);
         // p0 maps to "a" (first non-Unit), p1 maps to "b"
@@ -8360,6 +8362,7 @@ fn main() -> i32 {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let map = build_c_to_source_name_map(&func);
         assert!(map.is_empty());
@@ -8959,6 +8962,7 @@ fn main() -> i32 {
                     }],
                     local_names: std::collections::HashMap::new(),
                     summary: RegionSummary::default(),
+                    source_file: String::new(),
                 },
                 Function {
                     id: FuncId(1),
@@ -9002,6 +9006,7 @@ fn main() -> i32 {
                     }],
                     local_names: std::collections::HashMap::new(),
                     summary: RegionSummary::default(),
+                    source_file: String::new(),
                 },
                 Function {
                     id: FuncId(2),
@@ -9045,6 +9050,7 @@ fn main() -> i32 {
                     }],
                     local_names: std::collections::HashMap::new(),
                     summary: RegionSummary::default(),
+                    source_file: String::new(),
                 },
             ],
             strings: vec![],
@@ -9119,6 +9125,7 @@ fn main() -> i32 {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
 
         let ce = vow_verify::Counterexample {
@@ -9185,6 +9192,7 @@ fn main() -> i32 {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
 
         let ce = vow_verify::Counterexample {
@@ -9246,6 +9254,7 @@ fn main() -> i32 {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
 
         let ce = vow_verify::Counterexample {
@@ -9396,6 +9405,7 @@ fn main() -> i32 {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let caller = Function {
             id: FuncId(1),
@@ -9448,6 +9458,7 @@ fn main() -> i32 {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let module = Module {
             name: "test".to_string(),
@@ -9518,6 +9529,7 @@ fn main() -> i32 {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let ce = vow_verify::Counterexample {
             description: "test".to_string(),
@@ -9622,6 +9634,7 @@ fn main() -> i32 {
             ],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let ce = vow_verify::Counterexample {
             description: "test".to_string(),

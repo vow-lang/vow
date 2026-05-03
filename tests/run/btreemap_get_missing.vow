@@ -4,7 +4,8 @@ module BTreeMapGetMissing
 // `?` propagates None to caller. If get(99) returns None on an empty map,
 // `try_get` short-circuits and the line "got_value=..." is NEVER printed.
 fn try_get(m: BTreeMap<i64, i64>) -> Option<i64> [io] {
-    let v: i64 = m.get(99)?;
+    let r: Option<i64> = m.get(99);
+    let v: i64 = r?;
     print_str(String::from("got_value="));
     print_i64(v);
     print_str(String::from("\n"));

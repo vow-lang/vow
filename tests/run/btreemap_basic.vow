@@ -2,7 +2,8 @@
 module BTreeMapBasic
 
 fn fetch(m: BTreeMap<i64, i64>) -> Option<i64> [io] {
-    let v: i64 = m.get(7)?;
+    let r: Option<i64> = m.get(7);
+    let v: i64 = r?;
     print_str(String::from("v="));
     print_i64(v);
     print_str(String::from("\n"));

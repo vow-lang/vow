@@ -232,6 +232,7 @@ impl LowerCtx {
             blocks: vec![entry],
             local_names: HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: file.clone(),
         };
         let mut enum_variant_map = enum_variant_map;
         enum_variant_map
@@ -3161,15 +3162,27 @@ pub(crate) fn lower_function(
     ctx.finish()
 }
 
-pub fn lower_module(module: &AstModule, file: &str, string_exprs: &StringExprSet) -> Module {
-    let fn_items: Vec<&FnDef> = module
+pub fn lower_module(
+    module: &AstModule,
+    item_files: &[String],
+    string_exprs: &StringExprSet,
+) -> Module {
+    debug_assert_eq!(
+        module.items.len(),
+        item_files.len(),
+        "item_files must be parallel to module.items"
+    );
+    // Walk module.items keeping the original index so each retained FnDef
+    // can be paired with its source-file path from `item_files`.
+    let fn_items: Vec<(&FnDef, &str)> = module
         .items
         .iter()
-        .filter_map(|item| {
+        .enumerate()
+        .filter_map(|(idx, item)| {
             if let Item::Fn(fn_def) = item
                 && !fn_def.is_declaration
             {
-                Some(fn_def)
+                Some((fn_def, item_files[idx].as_str()))
             } else {
                 None
             }
@@ -3193,7 +3206,7 @@ pub fn lower_module(module: &AstModule, file: &str, string_exprs: &StringExprSet
     let func_index: HashMap<String, FuncSigInfo> = fn_items
         .iter()
         .enumerate()
-        .map(|(idx, fn_def)| {
+        .map(|(idx, (fn_def, _))| {
             (
                 fn_def.name.clone(),
                 FuncSigInfo {
@@ -3342,10 +3355,10 @@ pub fn lower_module(module: &AstModule, file: &str, string_exprs: &StringExprSet
     let functions: Vec<Function> = fn_items
         .iter()
         .enumerate()
-        .map(|(idx, fn_def)| {
+        .map(|(idx, (fn_def, src_file))| {
             let (mut func, pool, func_warnings) = lower_function(
                 fn_def,
-                file,
+                src_file,
                 &func_index,
                 struct_field_map.clone(),
                 enum_variant_map.clone(),

@@ -161,7 +161,11 @@ fn region_val(r: i64)  -> i64 vow {
 fn region_root()   -> i64 { region_pack(REGION_KIND_ROOT(),   0) }
 fn region_rodata() -> i64 { region_pack(REGION_KIND_RODATA(), 0) }
 
-fn MODULE_VERSION() -> i64 vow { ensures: result > 0 } { 1 }
+// Bumped 1 → 3 for #254 (IrFunction gains a `source_file` String field).
+// Skips 2 because `tests/multi/vmod_decode_bad_version/main.vow` pins the
+// literal byte 2 as its bad-version probe — kept synchronized with the
+// Rust `MODULE_VERSION` constant in `vow-ir/src/serialize.rs`.
+fn MODULE_VERSION() -> i64 vow { ensures: result > 0 } { 3 }
 
 fn iop_is_terminal(op: i64) -> bool vow {
     requires: op >= 0
@@ -279,6 +283,12 @@ struct IrFunction {
     // `RegionSummary.param_regions` in `vow-ir/src/types.rs`. Empty in
     // Phase 2 (no cross-module summaries produced yet).
     rsum_param_regions: Vec<i64>,
+    // Originating source file for spans inside this function's blocks. Set
+    // during lowering from the per-item source path tracked by
+    // `frontend::load_frontend_deps`. Region diagnostics consult this
+    // field directly instead of receiving a single root path — required
+    // for correct file labels under multi-module compilation (#254).
+    source_file: String,
 }
 
 struct IrFieldLayout {
@@ -353,7 +363,7 @@ fn ir_block_new(id: i64) -> IrBlock {
     }
 }
 
-fn ir_function_new(id: i64, name: String, return_ty: i64, effects: i64) -> IrFunction {
+fn ir_function_new(id: i64, name: String, return_ty: i64, effects: i64, source_file: String) -> IrFunction {
     IrFunction {
         id: id,
         name: name,
@@ -370,6 +380,7 @@ fn ir_function_new(id: i64, name: String, return_ty: i64, effects: i64) -> IrFun
         rsum_return_aliases: Vec::new(),
         rsum_store_effects: Vec::new(),
         rsum_param_regions: Vec::new(),
+        source_file: source_file,
     }
 }
 
