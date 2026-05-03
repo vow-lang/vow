@@ -2329,11 +2329,7 @@ pub unsafe extern "C" fn __vow_btreemap_insert(map: *mut u8, key: i64, val: i64)
         Err(idx) => {
             if m.entries_len == m.keys_cap {
                 let old_size = m.keys_cap * BTREEMAP_ENTRY_BYTES;
-                let new_cap = if m.keys_cap == 0 {
-                    BTREEMAP_INITIAL_CAP
-                } else {
-                    m.keys_cap * 2
-                };
+                let new_cap = m.keys_cap * 2;
                 let new_size = new_cap * BTREEMAP_ENTRY_BYTES;
                 m.keys_ptr = unsafe { root_arena_grow_backing(m.keys_ptr, old_size, new_size, 8) };
                 m.vals_ptr = unsafe { root_arena_grow_backing(m.vals_ptr, old_size, new_size, 8) };
