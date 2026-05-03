@@ -1057,11 +1057,7 @@ fn emit_inst(
             }
         }
 
-        // BTreeMap operations — sorted parallel-array model. The C model uses
-        // linear scan with `keys[i] > k → break` early-exit (cheaper to unwind
-        // for ESBMC than open-coded binary search); the runtime uses true
-        // binary search. `insert` keeps the array sorted via shift-insert.
-        // Returns Option-typed results for insert/get matching the runtime ABI.
+        // BTreeMap ops — linear-scan C model (sorted early-exit, cheaper to unwind than binary search); insert/get return Option.
         Opcode::Call if matches!(&inst.data, InstData::CallExtern(n) if n.starts_with("__vow_btreemap_")) =>
         {
             if let InstData::CallExtern(ref name) = inst.data {
@@ -1078,9 +1074,7 @@ fn emit_inst(
                         let k = inst.args[1].0;
                         let v = inst.args[2].0;
                         let btreemap_max = limits.btreemap_max;
-                        // Find insertion position (preserves ascending order).
-                        // If key found, replace value and return Some(prev);
-                        // else shift right and insert, return None.
+                        // Sorted-insert: replace value if key found (return Some(prev)), else shift+insert (return None).
                         out.push_str(&format!(
                             "  v{id}.tag = 0; v{id}.payload = 0;\n\
                              \x20 {{\n\
@@ -1209,9 +1203,7 @@ fn emit_inst(
                 ));
             } else if btreemap_vars.contains(&id) {
                 let btreemap_max = limits.btreemap_max;
-                // Same sorted-keys assume as the GetArg site so nondet
-                // BTreeMap fields read from a struct produce a valid
-                // ascending-key state for get/contains/insert.
+                // Sorted-keys assume: get/contains/insert C model requires ascending-key state.
                 out.push_str(&format!(
                     "  /* FieldGet -> btreemap */ v{id}.len = __VERIFIER_nondet_long();\n\
                      \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {btreemap_max});\n\
@@ -1447,12 +1439,7 @@ pub fn emit_c_function_full(
                         ));
                     } else if btreemap_vars.contains(&id) {
                         let btreemap_max = limits.btreemap_max;
-                        // Constrain the symbolic keys array to ascending order
-                        // so the get/contains/insert C model — which uses
-                        // `keys[i] > k → break` early-exit — reasons about a
-                        // valid sorted state. Without this, ESBMC could
-                        // refute relationships like `contains(k) ↔ get(k) is Some`
-                        // for functions taking BTreeMap parameters.
+                        // Sorted-keys assume: get/contains/insert C model requires ascending-key state.
                         out.push_str(&format!(
                             "  __vow_btreemap_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
                              \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {btreemap_max});\n\

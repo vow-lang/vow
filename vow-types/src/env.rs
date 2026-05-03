@@ -792,15 +792,12 @@ impl TypeEnv {
                         ));
                     }
                     "BTreeMap" => {
-                        let k = args
-                            .first()
-                            .ok_or_else(|| "BTreeMap requires two type arguments".to_string())?;
-                        let v = args
-                            .get(1)
-                            .ok_or_else(|| "BTreeMap requires two type arguments".to_string())?;
+                        if args.len() != 2 {
+                            return Err("BTreeMap requires two type arguments".to_string());
+                        }
                         return Ok(Ty::Applied(
                             Box::new(Ty::Struct("BTreeMap".to_string())),
-                            vec![self.resolve(k)?, self.resolve(v)?],
+                            vec![self.resolve(&args[0])?, self.resolve(&args[1])?],
                         ));
                     }
                     _ => {}
