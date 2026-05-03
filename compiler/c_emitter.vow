@@ -1068,6 +1068,11 @@ fn emit_inst(out: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64
             out.push_str(str3(String::from("  /* FieldGet -> btreemap */ v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
             out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len >= 0 && v")));
             out.push_str(str4(ids, String::from(".len <= "), i64_to_str(btreemap_max), String::from(");\n")));
+            // Sorted-keys assume so get/contains/insert C model reasons
+            // about a valid ascending-key state (matches Rust c_emitter).
+            out.push_str(str3(String::from("  for (int64_t __si = 0; __si + 1 < v"), ids, String::from(".len; __si++)\n")));
+            out.push_str(str3(String::from("    __ESBMC_assume(v"), ids, String::from(".keys[__si] <= v")));
+            out.push_str(str3(ids, String::from(".keys[__si + 1]);\n"), String::from("")));
             return;
         }
         // Option projection: FieldGet[0] -> .tag, FieldGet[1+] -> .payload.
@@ -1649,6 +1654,11 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
                         out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
                         out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len >= 0 && v")));
                         out.push_str(str4(ids, String::from(".len <= "), i64_to_str(btreemap_max), String::from(");\n")));
+                        // Sorted-keys assume so get/contains/insert C model
+                        // reasons about a valid ascending-key state.
+                        out.push_str(str3(String::from("  for (int64_t __si = 0; __si + 1 < v"), ids, String::from(".len; __si++)\n")));
+                        out.push_str(str3(String::from("    __ESBMC_assume(v"), ids, String::from(".keys[__si] <= v")));
+                        out.push_str(str3(ids, String::from(".keys[__si + 1]);\n"), String::from("")));
                     } else if vec_contains_i64(option_vars, iid) {
                         // Defensive: Rust c_emitter mirrors this branch for GetArg.
                         // Today option_vars only flows from CallExtern results so this
