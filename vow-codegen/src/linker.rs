@@ -17,6 +17,11 @@ pub fn find_shim_lib() -> Option<PathBuf> {
 }
 
 fn find_lib(name: &str, env_var: &str) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    find_lib_for_exe(name, env_var, &exe)
+}
+
+fn find_lib_for_exe(name: &str, env_var: &str, exe: &Path) -> Option<PathBuf> {
     if let Ok(p) = std::env::var(env_var) {
         let path = PathBuf::from(p);
         if path.exists() {
@@ -24,10 +29,12 @@ fn find_lib(name: &str, env_var: &str) -> Option<PathBuf> {
         }
     }
 
+    let exe_dir = exe.parent();
+    let prefix_dir = exe_dir.and_then(|dir| dir.parent());
     let candidates = [
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.join(name))),
+        exe_dir.map(|dir| dir.join(name)),
+        prefix_dir.map(|prefix| prefix.join("lib").join("vow").join(name)),
+        prefix_dir.map(|prefix| prefix.join("lib").join(name)),
         Some(PathBuf::from(format!(
             "{}/{name}",
             concat!(env!("CARGO_MANIFEST_DIR"), "/../target/debug")
@@ -80,6 +87,38 @@ pub fn link(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_lib_in_installed_lib_vow_dir() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let bin_dir = dir.path().join("bin");
+        let lib_dir = dir.path().join("lib").join("vow");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::create_dir_all(&lib_dir).unwrap();
+        let exe = bin_dir.join("vowc");
+        let lib = lib_dir.join("libvow_runtime.a");
+        std::fs::write(&exe, b"").unwrap();
+        std::fs::write(&lib, b"").unwrap();
+
+        let found = find_lib_for_exe("libvow_runtime.a", "VOW_TEST_RUNTIME_PATH", &exe);
+        assert_eq!(found.as_deref(), Some(lib.as_path()));
+    }
+
+    #[test]
+    fn finds_lib_in_installed_lib_dir() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let bin_dir = dir.path().join("bin");
+        let lib_dir = dir.path().join("lib");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::create_dir_all(&lib_dir).unwrap();
+        let exe = bin_dir.join("vowc");
+        let lib = lib_dir.join("libvow_runtime.a");
+        std::fs::write(&exe, b"").unwrap();
+        std::fs::write(&lib, b"").unwrap();
+
+        let found = find_lib_for_exe("libvow_runtime.a", "VOW_TEST_RUNTIME_PATH", &exe);
+        assert_eq!(found.as_deref(), Some(lib.as_path()));
+    }
 
     #[test]
     fn find_runtime_returns_some_in_dev_build() {

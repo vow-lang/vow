@@ -12,6 +12,42 @@ fn examples_dir() -> PathBuf {
         .join("examples")
 }
 
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf()
+}
+
+fn support_lib(name: &str) -> PathBuf {
+    if let Some(path) = find_support_lib(name) {
+        return path;
+    }
+
+    let status = Command::new("cargo")
+        .args(["build", "-p", "vow-runtime", "-p", "vow-clif-shim"])
+        .status()
+        .expect("failed to invoke cargo to build support libraries");
+    assert!(
+        status.success(),
+        "cargo build -p vow-runtime -p vow-clif-shim failed"
+    );
+
+    find_support_lib(name)
+        .unwrap_or_else(|| panic!("missing {name} after building support libraries"))
+}
+
+fn find_support_lib(name: &str) -> Option<PathBuf> {
+    let root = workspace_root();
+    for profile in ["debug", "release"] {
+        let path = root.join("target").join(profile).join(name);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    None
+}
+
 #[test]
 fn help_json_valid() {
     let out = Command::new(vow_bin())
@@ -36,6 +72,56 @@ fn build_help_json_valid() {
     let json: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("invalid JSON from build --help: {e}\nstdout: {stdout}"));
     assert!(json.get("tool").is_some(), "expected 'tool' key in JSON");
+}
+
+#[test]
+fn installed_prefix_can_build_and_run_program_without_env_paths() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let prefix = dir.path().join("prefix");
+    let bin_dir = prefix.join("bin");
+    let lib_dir = prefix.join("lib").join("vow");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    std::fs::create_dir_all(&lib_dir).unwrap();
+
+    let installed_vowc = bin_dir.join("vowc");
+    std::fs::copy(vow_bin(), &installed_vowc).unwrap();
+    std::fs::copy(
+        support_lib("libvow_runtime.a"),
+        lib_dir.join("libvow_runtime.a"),
+    )
+    .unwrap();
+    std::fs::copy(
+        support_lib("libvow_clif_shim.a"),
+        lib_dir.join("libvow_clif_shim.a"),
+    )
+    .unwrap();
+
+    let out_path = dir.path().join("hello");
+    let result = Command::new(&installed_vowc)
+        .args([
+            "build",
+            "--no-verify",
+            "--no-cache",
+            examples_dir().join("hello.vow").to_str().unwrap(),
+            "-o",
+            out_path.to_str().unwrap(),
+        ])
+        .env_remove("VOW_RUNTIME_PATH")
+        .env_remove("VOW_CLIF_SHIM_PATH")
+        .output()
+        .expect("failed to run installed vowc");
+    assert_eq!(
+        result.status.code(),
+        Some(0),
+        "expected installed vowc build to succeed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    let run = Command::new(&out_path)
+        .output()
+        .expect("failed to run installed-compiler output");
+    assert_eq!(run.status.code(), Some(0), "compiled binary should exit 0");
 }
 
 #[test]
