@@ -28,6 +28,7 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--vec-max <N>` | `128`       | Max Vec capacity for verification model      |
 | `--string-max <N>` | `256`    | Max String capacity for verification model   |
 | `--hashmap-max <N>` | `64`    | Max HashMap capacity for verification model  |
+| `--btreemap-max <N>` | `64`   | Max BTreeMap capacity for verification model |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
 
 **Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever ESBMC verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.
@@ -52,6 +53,7 @@ vow verify [OPTIONS] <source.vow>
 | `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
 | `--string-max <N>`| `256`       | Max String capacity for verification model |
 | `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
+| `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
 
 ### `vow contracts`
@@ -74,6 +76,7 @@ vow contracts [OPTIONS] <source.vow>
 | `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
 | `--string-max <N>`| `256`       | Max String capacity for verification model |
 | `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
+| `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|
 | `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |
 
 ### `vow skill`
@@ -112,6 +115,7 @@ vow test [OPTIONS] [<path>]
 | `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
 | `--string-max <N>`| `256`       | Max String capacity for verification model |
 | `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
+| `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs (with --verify) |
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` in the given directory, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.

@@ -644,7 +644,7 @@ fn build_verify_result(f: IrFunction, status: i64, combined: String) -> VerifyRe
 }
 
 fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
-                        vec_max: i64, string_max: i64, hashmap_max: i64) -> VerifyResult [io] {
+                        vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> VerifyResult [io] {
     let vows: Vec<IrVowEntry> = f.vows;
     if vows.len() == 0 {
         return VerifyResult {
@@ -656,7 +656,7 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
             raw_output: String::from(""),
         };
     }
-    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, VOW_BTREEMAP_MAX());
+    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max);
     let fn_name: String = f.name;
     let auto_enc: bool = is_auto_encoding(encoding);
     let bv_solver: String = resolve_auto_bv_solver(solver);
@@ -718,7 +718,7 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
 }
 
 fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, use_cache: bool, timeout_secs: String,
-                               vec_max: i64, string_max: i64, hashmap_max: i64) -> VerifyResult [io] {
+                               vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> VerifyResult [io] {
     let vows: Vec<IrVowEntry> = f.vows;
     if vows.len() == 0 {
         return VerifyResult {
@@ -730,7 +730,7 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
             raw_output: String::from(""),
         };
     }
-    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, VOW_BTREEMAP_MAX());
+    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max);
     let fn_name: String = f.name;
     let ir_solver: String = String::from("z3");
     let ir_encoding: String = String::from("ir");
@@ -767,12 +767,12 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
 }
 
 fn verify_start(f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
-                vec_max: i64, string_max: i64, hashmap_max: i64) -> i64 [io] {
+                vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> i64 [io] {
     let vows: Vec<IrVowEntry> = f.vows;
     if vows.len() == 0 {
         return -1;
     }
-    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, VOW_BTREEMAP_MAX());
+    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max);
     // No cache lookup or write — see the note above resolve_auto_bv_solver.
     // `use_cache` stays on the signature for caller-side symmetry with the
     // Rust toolchain but has no effect.

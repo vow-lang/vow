@@ -40,7 +40,7 @@ fn get_source_path(argv: Vec<String>) -> String {
         if first_byte != 45 {
             if i > 1 {
                 let prev: String = argv[i - 1];
-                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--max-k-step") || prev == String::from("--debug-trace") || prev == String::from("--filter") || prev == String::from("--timeout") || prev == String::from("--solver") || prev == String::from("--encoding") || prev == String::from("--vec-max") || prev == String::from("--string-max") || prev == String::from("--hashmap-max") || prev == String::from("--verify-jobs") {
+                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--max-k-step") || prev == String::from("--debug-trace") || prev == String::from("--filter") || prev == String::from("--timeout") || prev == String::from("--solver") || prev == String::from("--encoding") || prev == String::from("--vec-max") || prev == String::from("--string-max") || prev == String::from("--hashmap-max") || prev == String::from("--btreemap-max") || prev == String::from("--verify-jobs") {
                     i = i - 1;
                 } else {
                     return a;
@@ -63,7 +63,7 @@ fn get_source_path_sub(argv: Vec<String>) -> String {
         if first_byte != 45 {
             if i > 2 {
                 let prev: String = argv[i - 1];
-                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--max-k-step") || prev == String::from("--debug-trace") || prev == String::from("--filter") || prev == String::from("--timeout") || prev == String::from("--solver") || prev == String::from("--encoding") || prev == String::from("--vec-max") || prev == String::from("--string-max") || prev == String::from("--hashmap-max") || prev == String::from("--verify-jobs") {
+                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--max-k-step") || prev == String::from("--debug-trace") || prev == String::from("--filter") || prev == String::from("--timeout") || prev == String::from("--solver") || prev == String::from("--encoding") || prev == String::from("--vec-max") || prev == String::from("--string-max") || prev == String::from("--hashmap-max") || prev == String::from("--btreemap-max") || prev == String::from("--verify-jobs") {
                     i = i - 1;
                 } else {
                     return a;
@@ -235,7 +235,7 @@ fn skip_if_non_modelable(f: IrFunction, ir_mod: IrModule, const_fn_indices: Vec<
 }
 
 fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
-                   vec_max: i64, string_max: i64, hashmap_max: i64, jobs: i64) -> i64 [io] {
+                   vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64) -> i64 [io] {
     let mut all_proven: i64 = 1;
     // Bounded pool: ≤ jobs ESBMC processes in flight, FIFO drain. See #175.
     let in_flight_h: Vec<i64> = Vec::new();
@@ -252,7 +252,7 @@ fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec
                 let oldest_f: IrFunction = fns[oldest_fi];
                 vec_i64_remove_front(in_flight_h);
                 vec_i64_remove_front(in_flight_fi);
-                let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max);
+                let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
                 if proven == 0 {
                     all_proven = 0;
                 }
@@ -262,7 +262,7 @@ fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec
                     // Skipped: do not enqueue ESBMC. Build/run continues with the warning.
                 } else {
                     eprintln_str(str3(String::from("Verifying "), f.name, String::from("...")));
-                    let h: i64 = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max);
+                    let h: i64 = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
                     in_flight_h.push(h);
                     in_flight_fi.push(fi);
                 }
@@ -276,7 +276,7 @@ fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec
         let oldest_f: IrFunction = fns[oldest_fi];
         vec_i64_remove_front(in_flight_h);
         vec_i64_remove_front(in_flight_fi);
-        let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max);
+        let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
         if proven == 0 {
             all_proven = 0;
         }
@@ -295,9 +295,9 @@ fn emit_ir_warnings(ir_mod: IrModule, dctx: DiagCtx) [io] {
     }
 }
 
-fn validate_limits(vec_max: i64, string_max: i64, hashmap_max: i64) [io] {
-    if vec_max <= 0 || string_max <= 0 || hashmap_max <= 0 {
-        eprintln_str(String::from("error: --vec-max, --string-max, and --hashmap-max must be >= 1"));
+fn validate_limits(vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) [io] {
+    if vec_max <= 0 || string_max <= 0 || hashmap_max <= 0 || btreemap_max <= 0 {
+        eprintln_str(String::from("error: --vec-max, --string-max, --hashmap-max, and --btreemap-max must be >= 1"));
         process_exit(1);
     }
 }
@@ -335,7 +335,7 @@ fn vec_i64_remove_front(v: Vec<i64>) {
 fn verify_collect_and_report(
     h: i64, f: IrFunction, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>,
     max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
-    vec_max: i64, string_max: i64, hashmap_max: i64,
+    vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64,
 ) -> i64 [io] {
     if h == -1 {
         // process_start failed (fork/exec error, OOM, rlimit, etc.) — this
@@ -369,7 +369,7 @@ fn verify_collect_and_report(
         let auto_enc: bool = is_auto_encoding(encoding);
         if auto_enc && bv_solver != String::from("bitwuzla") {
             eprintln_str(str3(String::from("  "), f.name, String::from(": BV timeout, retrying with --z3 --ir...")));
-            let vr2: VerifyResult = verify_function_ir_fallback(f, ir_mod, max_k_step, use_cache, timeout_secs, vec_max, string_max, hashmap_max);
+            let vr2: VerifyResult = verify_function_ir_fallback(f, ir_mod, max_k_step, use_cache, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
             let st2: i64 = vr2.status;
             if st2 == VERIFY_PROVEN_IR() {
                 eprintln_str(str3(String::from("  "), f.name, String::from(": PROVEN (IR)")));
@@ -427,7 +427,9 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
     let string_max: i64 = { if string_max_str.len() > 0 { parse_i64(string_max_str) } else { 256 } };
     let hashmap_max_str: String = get_flag_arg(argv, String::from("--hashmap-max"));
     let hashmap_max: i64 = { if hashmap_max_str.len() > 0 { parse_i64(hashmap_max_str) } else { 64 } };
-    validate_limits(vec_max, string_max, hashmap_max);
+    let btreemap_max_str: String = get_flag_arg(argv, String::from("--btreemap-max"));
+    let btreemap_max: i64 = { if btreemap_max_str.len() > 0 { parse_i64(btreemap_max_str) } else { 64 } };
+    validate_limits(vec_max, string_max, hashmap_max, btreemap_max);
     let jobs: i64 = resolve_verify_jobs(argv);
     let use_cache: bool = !has_flag(argv, String::from("--no-cache"));
     let mut solver: String = get_flag_arg(argv, String::from("--solver"));
@@ -452,7 +454,7 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
     let fns: Vec<IrFunction> = ir_mod.functions;
     let ces: Vec<VerifyCE> = Vec::new();
     let const_fn_indices: Vec<i64> = detect_const_fns(ir_mod);
-    let all_proven: i64 = run_verify_loop(fns, ir_mod, const_fn_indices, dctx, path, ces, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, jobs);
+    let all_proven: i64 = run_verify_loop(fns, ir_mod, const_fn_indices, dctx, path, ces, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs);
     let status_str: String = {
         if all_proven == 1 {
             String::from("Verified")
@@ -534,7 +536,9 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
     let string_max: i64 = { if string_max_str.len() > 0 { parse_i64(string_max_str) } else { 256 } };
     let hashmap_max_str: String = get_flag_arg(argv, String::from("--hashmap-max"));
     let hashmap_max: i64 = { if hashmap_max_str.len() > 0 { parse_i64(hashmap_max_str) } else { 64 } };
-    validate_limits(vec_max, string_max, hashmap_max);
+    let btreemap_max_str: String = get_flag_arg(argv, String::from("--btreemap-max"));
+    let btreemap_max: i64 = { if btreemap_max_str.len() > 0 { parse_i64(btreemap_max_str) } else { 64 } };
+    validate_limits(vec_max, string_max, hashmap_max, btreemap_max);
     let jobs: i64 = resolve_verify_jobs(argv);
     let fns: Vec<IrFunction> = ir_mod.functions;
     let ces: Vec<VerifyCE> = Vec::new();
@@ -556,7 +560,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
                     let oldest_f: IrFunction = fns[oldest_fi];
                     vec_i64_remove_front(in_flight_h);
                     vec_i64_remove_front(in_flight_fi);
-                    let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max);
+                    let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
                     if proven == 0 {
                         all_proven = 0;
                     }
@@ -566,7 +570,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
                         // Skipped: do not enqueue ESBMC. Build continues with the warning.
                     } else {
                         eprintln_str(str3(String::from("Starting verification of "), f.name, String::from("...")));
-                        let h: i64 = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max);
+                        let h: i64 = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
                         in_flight_h.push(h);
                         in_flight_fi.push(fi);
                     }
@@ -597,7 +601,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         let oldest_f: IrFunction = fns[oldest_fi];
         vec_i64_remove_front(in_flight_h);
         vec_i64_remove_front(in_flight_fi);
-        let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max);
+        let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
         if proven == 0 {
             all_proven = 0;
         }
@@ -688,7 +692,9 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
     let t_string_max: i64 = { if t_sm_str.len() > 0 { parse_i64(t_sm_str) } else { 256 } };
     let t_hm_str: String = get_flag_arg(argv, String::from("--hashmap-max"));
     let t_hashmap_max: i64 = { if t_hm_str.len() > 0 { parse_i64(t_hm_str) } else { 64 } };
-    validate_limits(t_vec_max, t_string_max, t_hashmap_max);
+    let t_bm_str: String = get_flag_arg(argv, String::from("--btreemap-max"));
+    let t_btreemap_max: i64 = { if t_bm_str.len() > 0 { parse_i64(t_bm_str) } else { 64 } };
+    validate_limits(t_vec_max, t_string_max, t_hashmap_max, t_btreemap_max);
     let t_jobs: i64 = resolve_verify_jobs(argv);
 
     // Validate path exists
@@ -800,7 +806,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                                     verify_failed = true;
                                 } else if ovr.status == VERIFY_TIMEOUT() {
                                     // BV timed out; retry with IR before failing.
-                                    let ovr2: VerifyResult = verify_function_ir_fallback(ovf, ir_mod, t_max_k_step, false, String::from(""), t_vec_max, t_string_max, t_hashmap_max);
+                                    let ovr2: VerifyResult = verify_function_ir_fallback(ovf, ir_mod, t_max_k_step, false, String::from(""), t_vec_max, t_string_max, t_hashmap_max, t_btreemap_max);
                                     if ovr2.status != VERIFY_PROVEN() && ovr2.status != VERIFY_PROVEN_IR() {
                                         verify_failed = true;
                                     }
@@ -808,7 +814,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                             }
                         }
                         if !verify_failed {
-                            let vh: i64 = verify_start(vf, ir_mod, t_max_k_step, vfi, false, String::from(""), String::from(""), String::from(""), t_vec_max, t_string_max, t_hashmap_max);
+                            let vh: i64 = verify_start(vf, ir_mod, t_max_k_step, vfi, false, String::from(""), String::from(""), String::from(""), t_vec_max, t_string_max, t_hashmap_max, t_btreemap_max);
                             vin_flight_h.push(vh);
                             vin_flight_fi.push(vfi);
                         }
@@ -986,14 +992,15 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
             let vec_max_leg: i64 = { let s: String = get_flag_arg(argv, String::from("--vec-max")); if s.len() > 0 { parse_i64(s) } else { 128 } };
             let string_max_leg: i64 = { let s: String = get_flag_arg(argv, String::from("--string-max")); if s.len() > 0 { parse_i64(s) } else { 256 } };
             let hashmap_max_leg: i64 = { let s: String = get_flag_arg(argv, String::from("--hashmap-max")); if s.len() > 0 { parse_i64(s) } else { 64 } };
-            validate_limits(vec_max_leg, string_max_leg, hashmap_max_leg);
+            let btreemap_max_leg: i64 = { let s: String = get_flag_arg(argv, String::from("--btreemap-max")); if s.len() > 0 { parse_i64(s) } else { 64 } };
+            validate_limits(vec_max_leg, string_max_leg, hashmap_max_leg, btreemap_max_leg);
             emit_ir_warnings(ir_mod, dctx);
             let fns: Vec<IrFunction> = ir_mod.functions;
             let ces: Vec<VerifyCE> = Vec::new();
             let use_cache_leg: bool = !has_flag(argv, String::from("--no-cache"));
             let jobs_leg: i64 = resolve_verify_jobs(argv);
             let const_fn_indices_leg: Vec<i64> = detect_const_fns(ir_mod);
-            let all_proven: i64 = run_verify_loop(fns, ir_mod, const_fn_indices_leg, dctx, path, ces, max_k_step, use_cache_leg, String::from(""), String::from(""), String::from(""), vec_max_leg, string_max_leg, hashmap_max_leg, jobs_leg);
+            let all_proven: i64 = run_verify_loop(fns, ir_mod, const_fn_indices_leg, dctx, path, ces, max_k_step, use_cache_leg, String::from(""), String::from(""), String::from(""), vec_max_leg, string_max_leg, hashmap_max_leg, btreemap_max_leg, jobs_leg);
             let status_str: String = {
                 if all_proven == 1 {
                     String::from("Verified")
@@ -1223,6 +1230,14 @@ fn skill_json() -> String {
     r.push_str(String::from("          \"default\": 64\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--btreemap-max <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"Max BTreeMap capacity for verification model (default: 64)\",\n"));
+    r.push_str(String::from("          \"long\": \"--btreemap-max\",\n"));
+    r.push_str(String::from("          \"value_name\": \"N\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
+    r.push_str(String::from("          \"default\": \"64\"\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
     r.push_str(String::from("          \"form\": \"--verify-jobs <N>\",\n"));
     r.push_str(String::from("          \"description\": \"Max concurrent ESBMC verification jobs (default: num_cpus/2)\",\n"));
     r.push_str(String::from("          \"long\": \"--verify-jobs\",\n"));
@@ -1336,6 +1351,14 @@ fn skill_json() -> String {
     r.push_str(String::from("          \"default\": 64\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--btreemap-max <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"Max BTreeMap capacity for verification model (default: 64)\",\n"));
+    r.push_str(String::from("          \"long\": \"--btreemap-max\",\n"));
+    r.push_str(String::from("          \"value_name\": \"N\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
+    r.push_str(String::from("          \"default\": \"64\"\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
     r.push_str(String::from("          \"form\": \"--verify-jobs <N>\",\n"));
     r.push_str(String::from("          \"description\": \"Max concurrent ESBMC verification jobs (default: num_cpus/2)\",\n"));
     r.push_str(String::from("          \"long\": \"--verify-jobs\",\n"));
@@ -1433,6 +1456,14 @@ fn skill_json() -> String {
     r.push_str(String::from("          \"value_name\": \"N\",\n"));
     r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
     r.push_str(String::from("          \"default\": 64\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--btreemap-max <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"Max BTreeMap capacity for verification model (default: 64)\",\n"));
+    r.push_str(String::from("          \"long\": \"--btreemap-max\",\n"));
+    r.push_str(String::from("          \"value_name\": \"N\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
+    r.push_str(String::from("          \"default\": \"64\"\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
     r.push_str(String::from("          \"form\": \"--verify-jobs <N>\",\n"));
@@ -1568,6 +1599,14 @@ fn skill_json() -> String {
     r.push_str(String::from("          \"default\": 64\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--btreemap-max <N>\",\n"));
+    r.push_str(String::from("          \"description\": \"Max BTreeMap capacity for verification model (default: 64)\",\n"));
+    r.push_str(String::from("          \"long\": \"--btreemap-max\",\n"));
+    r.push_str(String::from("          \"value_name\": \"N\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
+    r.push_str(String::from("          \"default\": \"64\"\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
     r.push_str(String::from("          \"form\": \"--verify-jobs <N>\",\n"));
     r.push_str(String::from("          \"description\": \"Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial)\",\n"));
     r.push_str(String::from("          \"long\": \"--verify-jobs\",\n"));
@@ -1600,6 +1639,7 @@ fn skill_json() -> String {
     r.push_str(String::from("    \"--vec-max <N>\": \"Max Vec capacity for verification model (default: 128)\",\n"));
     r.push_str(String::from("    \"--string-max <N>\": \"Max String capacity for verification model (default: 256)\",\n"));
     r.push_str(String::from("    \"--hashmap-max <N>\": \"Max HashMap capacity for verification model (default: 64)\",\n"));
+    r.push_str(String::from("    \"--btreemap-max <N>\": \"Max BTreeMap capacity for verification model (default: 64)\",\n"));
     r.push_str(String::from("    \"--verify-jobs <N>\": \"Max concurrent ESBMC verification jobs (default: num_cpus/2)\"\n"));
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"verify_options\": {\n"));
@@ -1611,6 +1651,7 @@ fn skill_json() -> String {
     r.push_str(String::from("    \"--vec-max <N>\": \"Max Vec capacity for verification model (default: 128)\",\n"));
     r.push_str(String::from("    \"--string-max <N>\": \"Max String capacity for verification model (default: 256)\",\n"));
     r.push_str(String::from("    \"--hashmap-max <N>\": \"Max HashMap capacity for verification model (default: 64)\",\n"));
+    r.push_str(String::from("    \"--btreemap-max <N>\": \"Max BTreeMap capacity for verification model (default: 64)\",\n"));
     r.push_str(String::from("    \"--verify-jobs <N>\": \"Max concurrent ESBMC verification jobs (default: num_cpus/2)\"\n"));
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"test_options\": {\n"));
@@ -1622,6 +1663,7 @@ fn skill_json() -> String {
     r.push_str(String::from("    \"--vec-max <N>\": \"Max Vec capacity for verification model (default: 128)\",\n"));
     r.push_str(String::from("    \"--string-max <N>\": \"Max String capacity for verification model (default: 256)\",\n"));
     r.push_str(String::from("    \"--hashmap-max <N>\": \"Max HashMap capacity for verification model (default: 64)\",\n"));
+    r.push_str(String::from("    \"--btreemap-max <N>\": \"Max BTreeMap capacity for verification model (default: 64)\",\n"));
     r.push_str(String::from("    \"--verify-jobs <N>\": \"Max concurrent ESBMC verification jobs (with --verify)\"\n"));
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"decl_options\": {\n"));
@@ -1636,6 +1678,7 @@ fn skill_json() -> String {
     r.push_str(String::from("    \"--vec-max <N>\": \"Max Vec capacity for verification model (default: 128)\",\n"));
     r.push_str(String::from("    \"--string-max <N>\": \"Max String capacity for verification model (default: 256)\",\n"));
     r.push_str(String::from("    \"--hashmap-max <N>\": \"Max HashMap capacity for verification model (default: 64)\",\n"));
+    r.push_str(String::from("    \"--btreemap-max <N>\": \"Max BTreeMap capacity for verification model (default: 64)\",\n"));
     r.push_str(String::from("    \"--verify-jobs <N>\": \"Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial)\"\n"));
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"global_options\": {\n"));
@@ -1993,6 +2036,7 @@ fn skill_human() -> String {
     r.push_str(String::from("  --vec-max <N>           Max Vec capacity for verification model (default: 128)\n"));
     r.push_str(String::from("  --string-max <N>        Max String capacity for verification model (default: 256)\n"));
     r.push_str(String::from("  --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)\n"));
+    r.push_str(String::from("  --btreemap-max <N>      Max BTreeMap capacity for verification model (default: 64)\n"));
     r.push_str(String::from("  --verify-jobs <N>       Max concurrent ESBMC verification jobs (default: num_cpus/2)\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("VERIFY OPTIONS\n"));
@@ -2004,6 +2048,7 @@ fn skill_human() -> String {
     r.push_str(String::from("  --vec-max <N>           Max Vec capacity for verification model (default: 128)\n"));
     r.push_str(String::from("  --string-max <N>        Max String capacity for verification model (default: 256)\n"));
     r.push_str(String::from("  --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)\n"));
+    r.push_str(String::from("  --btreemap-max <N>      Max BTreeMap capacity for verification model (default: 64)\n"));
     r.push_str(String::from("  --verify-jobs <N>       Max concurrent ESBMC verification jobs (default: num_cpus/2)\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("TEST OPTIONS\n"));
@@ -2015,6 +2060,7 @@ fn skill_human() -> String {
     r.push_str(String::from("  --vec-max <N>           Max Vec capacity for verification model (default: 128)\n"));
     r.push_str(String::from("  --string-max <N>        Max String capacity for verification model (default: 256)\n"));
     r.push_str(String::from("  --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)\n"));
+    r.push_str(String::from("  --btreemap-max <N>      Max BTreeMap capacity for verification model (default: 64)\n"));
     r.push_str(String::from("  --verify-jobs <N>       Max concurrent ESBMC verification jobs (with --verify)\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("CONTRACTS OPTIONS\n"));
@@ -2026,6 +2072,7 @@ fn skill_human() -> String {
     r.push_str(String::from("  --vec-max <N>           Max Vec capacity for verification model (default: 128)\n"));
     r.push_str(String::from("  --string-max <N>        Max String capacity for verification model (default: 256)\n"));
     r.push_str(String::from("  --hashmap-max <N>       Max HashMap capacity for verification model (default: 64)\n"));
+    r.push_str(String::from("  --btreemap-max <N>      Max BTreeMap capacity for verification model (default: 64)\n"));
     r.push_str(String::from("  --verify-jobs <N>       Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial)\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("DECL OPTIONS\n"));
@@ -3015,6 +3062,7 @@ fn skill_full() -> String {
     r.push_str(String::from("| `--vec-max <N>` | `128`       | Max Vec capacity for verification model      |\n"));
     r.push_str(String::from("| `--string-max <N>` | `256`    | Max String capacity for verification model   |\n"));
     r.push_str(String::from("| `--hashmap-max <N>` | `64`    | Max HashMap capacity for verification model  |\n"));
+    r.push_str(String::from("| `--btreemap-max <N>` | `64`   | Max BTreeMap capacity for verification model |\n"));
     r.push_str(String::from("| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever ESBMC verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.\n"));
@@ -3039,6 +3087,7 @@ fn skill_full() -> String {
     r.push_str(String::from("| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |\n"));
     r.push_str(String::from("| `--string-max <N>`| `256`       | Max String capacity for verification model |\n"));
     r.push_str(String::from("| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|\n"));
+    r.push_str(String::from("| `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|\n"));
     r.push_str(String::from("| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow contracts`\n"));
@@ -3061,6 +3110,7 @@ fn skill_full() -> String {
     r.push_str(String::from("| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |\n"));
     r.push_str(String::from("| `--string-max <N>`| `256`       | Max String capacity for verification model |\n"));
     r.push_str(String::from("| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|\n"));
+    r.push_str(String::from("| `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|\n"));
     r.push_str(String::from("| `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow skill`\n"));
@@ -3099,6 +3149,7 @@ fn skill_full() -> String {
     r.push_str(String::from("| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |\n"));
     r.push_str(String::from("| `--string-max <N>`| `256`       | Max String capacity for verification model |\n"));
     r.push_str(String::from("| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|\n"));
+    r.push_str(String::from("| `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|\n"));
     r.push_str(String::from("| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs (with --verify) |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Test discovery: files matching `test_*.vow` or `*_test.vow` in the given directory, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.\n"));
@@ -5070,7 +5121,8 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     let vec_max_c: i64 = { let s: String = get_flag_arg(argv, String::from("--vec-max")); if s.len() > 0 { parse_i64(s) } else { 128 } };
     let string_max_c: i64 = { let s: String = get_flag_arg(argv, String::from("--string-max")); if s.len() > 0 { parse_i64(s) } else { 256 } };
     let hashmap_max_c: i64 = { let s: String = get_flag_arg(argv, String::from("--hashmap-max")); if s.len() > 0 { parse_i64(s) } else { 64 } };
-    validate_limits(vec_max_c, string_max_c, hashmap_max_c);
+    let btreemap_max_c: i64 = { let s: String = get_flag_arg(argv, String::from("--btreemap-max")); if s.len() > 0 { parse_i64(s) } else { 64 } };
+    validate_limits(vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
     // Accepted for CLI parity with build/verify/test; validates a 0 rejection
     // uniformly, then is discarded because the contracts verify loop is serial.
     let _cjobs: i64 = resolve_verify_jobs(argv);
@@ -5133,7 +5185,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
                         ei = ei + 1;
                     }
                 } else {
-                    let vr: VerifyResult = verify_function_full(func, ir_mod, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c);
+                    let vr: VerifyResult = verify_function_full(func, ir_mod, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
                     let st: i64 = vr.status;
                     let mut ei: i64 = 0;
                     while ei < e_func_ids.len() {
