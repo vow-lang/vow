@@ -511,7 +511,7 @@ fn skill_json() -> String {
           "long": "--btreemap-max",
           "value_name": "N",
           "value_kind": "integer",
-          "default": "64"
+          "default": 64
         },
         {
           "form": "--verify-jobs <N>",
@@ -632,7 +632,7 @@ fn skill_json() -> String {
           "long": "--btreemap-max",
           "value_name": "N",
           "value_kind": "integer",
-          "default": "64"
+          "default": 64
         },
         {
           "form": "--verify-jobs <N>",
@@ -739,7 +739,7 @@ fn skill_json() -> String {
           "long": "--btreemap-max",
           "value_name": "N",
           "value_kind": "integer",
-          "default": "64"
+          "default": 64
         },
         {
           "form": "--verify-jobs <N>",
@@ -880,7 +880,7 @@ fn skill_json() -> String {
           "long": "--btreemap-max",
           "value_name": "N",
           "value_kind": "integer",
-          "default": "64"
+          "default": 64
         },
         {
           "form": "--verify-jobs <N>",
@@ -1278,7 +1278,8 @@ fn skill_json() -> String {
     "max_k_step": 50,
     "vec_max": 128,
     "string_max": 256,
-    "hashmap_max": 64
+    "hashmap_max": 64,
+    "btreemap_max": 64
   }
 }"##
     .to_string()
@@ -1402,12 +1403,13 @@ METHODS   : Vec: Vec::new/Vec::from_raw_parts_copy/push/pop/len/clear/truncate/v
             HashMap: HashMap::new/insert/get/contains_key/remove/len   Option: unwrap
 OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! & ?
 
-VERIFICATION DEFAULTS (configurable via --max-k-step, --vec-max, --string-max, --hashmap-max)
+VERIFICATION DEFAULTS (configurable via --max-k-step, --vec-max, --string-max, --hashmap-max, --btreemap-max)
   Strategy        : k-induction-parallel (incremental BMC + k-induction)
   Incremental BMC : 50 max iterations (--max-k-step)
   Vec<T>          : 128 max capacity
   String          : 256 max capacity
-  HashMap<K, V>   : 64 max capacity"##
+  HashMap<K, V>   : 64 max capacity
+  BTreeMap<K, V>  : 64 max capacity"##
         .to_string()
 }
 // GENERATE:SKILL_HUMAN:END

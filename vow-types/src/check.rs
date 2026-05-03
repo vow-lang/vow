@@ -369,7 +369,10 @@ impl<'e> Checker<'e> {
                         .params
                         .iter()
                         .map(|p| match self.env.resolve(&p.ty) {
-                            Ok(ty) => ty,
+                            Ok(ty) => {
+                                self.check_btreemap_key_in_ty(&ty, p.span);
+                                ty
+                            }
                             Err(msg) => {
                                 self.emit_error(ErrorCode::TypeMismatch, msg, p.span);
                                 Ty::Unit
@@ -377,7 +380,10 @@ impl<'e> Checker<'e> {
                         })
                         .collect();
                     let return_ty = match self.env.resolve(&fn_def.return_ty) {
-                        Ok(ty) => ty,
+                        Ok(ty) => {
+                            self.check_btreemap_key_in_ty(&ty, fn_def.return_ty.span());
+                            ty
+                        }
                         Err(msg) => {
                             self.emit_error(ErrorCode::TypeMismatch, msg, fn_def.return_ty.span());
                             Ty::Unit
@@ -582,6 +588,7 @@ impl<'e> Checker<'e> {
                 let binding_ty = if let Some(ann) = ty {
                     match self.env.resolve(ann) {
                         Ok(ann_ty) => {
+                            self.check_btreemap_key_in_ty(&ann_ty, ann.span());
                             let coercible = init_ty == Ty::Never
                                 || ann_ty == init_ty
                                 || (init_ty == Ty::I32 && ann_ty.is_integer());
@@ -1823,6 +1830,42 @@ impl<'e> Checker<'e> {
                 }
             }
             PatKind::Lit(_) => {}
+        }
+    }
+
+    // Recursively walk `ty` for BTreeMap<K, V> shapes where K is neither i64
+    // nor Never (the placeholder produced by BTreeMap::new() before inference).
+    // Emits BTreeMapKeyTypeMustBeI64 at `span` for each occurrence. Called from
+    // the major type-resolution sites (Stmt::Let annotations, function param /
+    // return / field types) so the error fires at type formation rather than
+    // only at method-call sites.
+    fn check_btreemap_key_in_ty(&mut self, ty: &Ty, span: vow_syntax::span::Span) {
+        if let Ty::Applied(base, args) = ty
+            && matches!(base.as_ref(), Ty::Struct(n) if n == "BTreeMap")
+            && let Some(key_ty) = args.first()
+            && !matches!(key_ty, Ty::I64 | Ty::Never)
+        {
+            self.emit_error(
+                ErrorCode::BTreeMapKeyTypeMustBeI64,
+                format!("BTreeMap key type must be i64; found `{key_ty}`"),
+                span,
+            );
+        }
+        // Recurse through composite types so nested maps (e.g. Vec<BTreeMap<bool, i64>>)
+        // are also caught.
+        match ty {
+            Ty::Applied(_, args) => {
+                for a in args {
+                    self.check_btreemap_key_in_ty(a, span);
+                }
+            }
+            Ty::Tuple(tys) => {
+                for t in tys {
+                    self.check_btreemap_key_in_ty(t, span);
+                }
+            }
+            Ty::Reference(inner) => self.check_btreemap_key_in_ty(inner, span),
+            _ => {}
         }
     }
 }

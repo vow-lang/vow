@@ -1057,9 +1057,11 @@ fn emit_inst(
             }
         }
 
-        // BTreeMap operations — sorted parallel-array model (binary-search lookup,
-        // sorted-insert maintains ascending key order). Returns Option-typed
-        // results for insert/get matching the runtime ABI.
+        // BTreeMap operations — sorted parallel-array model. The C model uses
+        // linear scan with `keys[i] > k → break` early-exit (cheaper to unwind
+        // for ESBMC than open-coded binary search); the runtime uses true
+        // binary search. `insert` keeps the array sorted via shift-insert.
+        // Returns Option-typed results for insert/get matching the runtime ABI.
         Opcode::Call if matches!(&inst.data, InstData::CallExtern(n) if n.starts_with("__vow_btreemap_")) =>
         {
             if let InstData::CallExtern(ref name) = inst.data {
@@ -1110,6 +1112,7 @@ fn emit_inst(
                             "  v{id}.tag = 0; v{id}.payload = 0;\n\
                              \x20 for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
                              \x20   if (v{m}.keys[__i] == v{k}) {{ v{id}.tag = 1; v{id}.payload = v{m}.vals[__i]; break; }}\n\
+                             \x20   if (v{m}.keys[__i] > v{k}) {{ break; }}\n\
                              \x20 }}\n"
                         ));
                     }
@@ -1120,6 +1123,7 @@ fn emit_inst(
                             "  v{id} = 0;\n\
                              \x20 for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
                              \x20   if (v{m}.keys[__i] == v{k}) {{ v{id} = 1; break; }}\n\
+                             \x20   if (v{m}.keys[__i] > v{k}) {{ break; }}\n\
                              \x20 }}\n"
                         ));
                     }

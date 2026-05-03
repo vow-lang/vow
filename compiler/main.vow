@@ -1235,7 +1235,7 @@ fn skill_json() -> String {
     r.push_str(String::from("          \"long\": \"--btreemap-max\",\n"));
     r.push_str(String::from("          \"value_name\": \"N\",\n"));
     r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
-    r.push_str(String::from("          \"default\": \"64\"\n"));
+    r.push_str(String::from("          \"default\": 64\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
     r.push_str(String::from("          \"form\": \"--verify-jobs <N>\",\n"));
@@ -1356,7 +1356,7 @@ fn skill_json() -> String {
     r.push_str(String::from("          \"long\": \"--btreemap-max\",\n"));
     r.push_str(String::from("          \"value_name\": \"N\",\n"));
     r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
-    r.push_str(String::from("          \"default\": \"64\"\n"));
+    r.push_str(String::from("          \"default\": 64\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
     r.push_str(String::from("          \"form\": \"--verify-jobs <N>\",\n"));
@@ -1463,7 +1463,7 @@ fn skill_json() -> String {
     r.push_str(String::from("          \"long\": \"--btreemap-max\",\n"));
     r.push_str(String::from("          \"value_name\": \"N\",\n"));
     r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
-    r.push_str(String::from("          \"default\": \"64\"\n"));
+    r.push_str(String::from("          \"default\": 64\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
     r.push_str(String::from("          \"form\": \"--verify-jobs <N>\",\n"));
@@ -1604,7 +1604,7 @@ fn skill_json() -> String {
     r.push_str(String::from("          \"long\": \"--btreemap-max\",\n"));
     r.push_str(String::from("          \"value_name\": \"N\",\n"));
     r.push_str(String::from("          \"value_kind\": \"integer\",\n"));
-    r.push_str(String::from("          \"default\": \"64\"\n"));
+    r.push_str(String::from("          \"default\": 64\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
     r.push_str(String::from("          \"form\": \"--verify-jobs <N>\",\n"));
@@ -2002,7 +2002,8 @@ fn skill_json() -> String {
     r.push_str(String::from("    \"max_k_step\": 50,\n"));
     r.push_str(String::from("    \"vec_max\": 128,\n"));
     r.push_str(String::from("    \"string_max\": 256,\n"));
-    r.push_str(String::from("    \"hashmap_max\": 64\n"));
+    r.push_str(String::from("    \"hashmap_max\": 64,\n"));
+    r.push_str(String::from("    \"btreemap_max\": 64\n"));
     r.push_str(String::from("  }\n"));
     r.push_str(String::from("}\n"));
     r
@@ -2126,12 +2127,13 @@ fn skill_human() -> String {
     r.push_str(String::from("            HashMap: HashMap::new/insert/get/contains_key/remove/len   Option: unwrap\n"));
     r.push_str(String::from("OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! & ?\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("VERIFICATION DEFAULTS (configurable via --max-k-step, --vec-max, --string-max, --hashmap-max)\n"));
+    r.push_str(String::from("VERIFICATION DEFAULTS (configurable via --max-k-step, --vec-max, --string-max, --hashmap-max, --btreemap-max)\n"));
     r.push_str(String::from("  Strategy        : k-induction-parallel (incremental BMC + k-induction)\n"));
     r.push_str(String::from("  Incremental BMC : 50 max iterations (--max-k-step)\n"));
     r.push_str(String::from("  Vec<T>          : 128 max capacity\n"));
     r.push_str(String::from("  String          : 256 max capacity\n"));
     r.push_str(String::from("  HashMap<K, V>   : 64 max capacity\n"));
+    r.push_str(String::from("  BTreeMap<K, V>  : 64 max capacity\n"));
     r
 }
 // GENERATE:SKILL_HUMAN:END
