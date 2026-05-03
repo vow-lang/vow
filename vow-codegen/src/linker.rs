@@ -17,20 +17,30 @@ pub fn find_shim_lib() -> Option<PathBuf> {
 }
 
 fn find_lib(name: &str, env_var: &str) -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    find_lib_for_exe(name, env_var, &exe)
+    let exe = std::env::current_exe().ok();
+    find_lib_from_parts(name, std::env::var_os(env_var), exe.as_deref())
 }
 
-fn find_lib_for_exe(name: &str, env_var: &str, exe: &Path) -> Option<PathBuf> {
-    if let Ok(p) = std::env::var(env_var) {
+fn find_lib_from_parts(
+    name: &str,
+    env_value: Option<std::ffi::OsString>,
+    exe: Option<&Path>,
+) -> Option<PathBuf> {
+    if let Some(p) = env_value {
         let path = PathBuf::from(p);
         if path.exists() {
             return Some(path);
         }
     }
 
+    find_lib_for_exe(name, exe?)
+}
+
+fn find_lib_for_exe(name: &str, exe: &Path) -> Option<PathBuf> {
     let exe_dir = exe.parent();
     let prefix_dir = exe_dir.and_then(|dir| dir.parent());
+    // Preserve the legacy adjacent-to-exe lookup before prefix paths so manual
+    // installs that co-locate the static libraries with vowc keep working.
     let candidates = [
         exe_dir.map(|dir| dir.join(name)),
         prefix_dir.map(|prefix| prefix.join("lib").join("vow").join(name)),
@@ -100,7 +110,7 @@ mod tests {
         std::fs::write(&exe, b"").unwrap();
         std::fs::write(&lib, b"").unwrap();
 
-        let found = find_lib_for_exe("libvow_runtime.a", "VOW_TEST_RUNTIME_PATH", &exe);
+        let found = find_lib_for_exe("libvow_runtime.a", &exe);
         assert_eq!(found.as_deref(), Some(lib.as_path()));
     }
 
@@ -116,7 +126,18 @@ mod tests {
         std::fs::write(&exe, b"").unwrap();
         std::fs::write(&lib, b"").unwrap();
 
-        let found = find_lib_for_exe("libvow_runtime.a", "VOW_TEST_RUNTIME_PATH", &exe);
+        let found = find_lib_for_exe("libvow_runtime.a", &exe);
+        assert_eq!(found.as_deref(), Some(lib.as_path()));
+    }
+
+    #[test]
+    fn env_override_does_not_require_current_exe() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let lib = dir.path().join("libvow_runtime.a");
+        std::fs::write(&lib, b"").unwrap();
+
+        let found =
+            find_lib_from_parts("libvow_runtime.a", Some(lib.clone().into_os_string()), None);
         assert_eq!(found.as_deref(), Some(lib.as_path()));
     }
 

@@ -24,6 +24,8 @@ fn support_lib(name: &str) -> PathBuf {
         return path;
     }
 
+    // Build the support libraries on demand so this integration test can run
+    // in isolation without requiring the caller to pre-build the workspace.
     let status = Command::new("cargo")
         .args(["build", "-p", "vow-runtime", "-p", "vow-clif-shim"])
         .status()
