@@ -881,7 +881,11 @@ fn emit_inst(
                     "__vow_string_push_str" => {
                         let dest = inst.args[0].0;
                         let src = inst.args[1].0;
-                        out.push_str(&format!("  v{dest}.len += v{src}.len;\n"));
+                        let string_max = limits.string_max;
+                        out.push_str(&format!(
+                            "  __ESBMC_assert(v{dest}.len + v{src}.len <= {string_max}, \"string capacity\");\n\
+                             \x20 v{dest}.len += v{src}.len;\n",
+                        ));
                         emit_string_eq_invalidate(dest, eq_pairs, out);
                     }
                     "__vow_string_push_byte" => {
@@ -3349,7 +3353,15 @@ mod tests {
             ],
         );
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
-        assert!(c.contains("v1.len += v3.len;"), "push_str: {c}");
+        assert!(
+            c.contains("string capacity"),
+            "push_str must have capacity assertion: {c}"
+        );
+        assert!(
+            c.contains("v1.len + v3.len <= 256"),
+            "push_str capacity expression: {c}"
+        );
+        assert!(c.contains("v1.len += v3.len;"), "push_str mutation: {c}");
     }
 
     #[test]

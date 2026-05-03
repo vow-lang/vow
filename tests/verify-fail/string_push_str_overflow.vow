@@ -1,0 +1,22 @@
+// TEST: counterexample-fn "over"
+// TEST: counterexample-blame none
+// String capacity assertion: a.len + b.len can exceed string_max (both
+// nondet in [0, string_max-1] from from_cstr), and push_str's capacity
+// assertion fires. The check is a raw C-level guard, not a vow block,
+// so blame is "none" (mirrors off_by_one_bounds.vow).
+module StringPushStrOverflow
+
+fn over() -> String vow {
+  ensures: result.len() >= 0
+} {
+  let a: String = String::from("a");
+  let b: String = String::from("b");
+  a.push_str(b);
+  a
+}
+
+fn main() -> i32 [io] {
+  let r: String = over();
+  print_i64(r.len());
+  0
+}
