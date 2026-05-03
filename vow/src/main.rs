@@ -3843,7 +3843,8 @@ When stdin is exhausted, `stdin_read_line()` returns `""` (length 0), the `while
 module BTreeMapExample
 
 fn fetch(m: BTreeMap<i64, i64>) -> Option<i64> [io] {
-    let v: i64 = m.get(7)?;
+    let r: Option<i64> = m.get(7);
+    let v: i64 = r?;
     print_i64(v);
     print_str(String::from("\n"));
     Option::Some(v)
@@ -3992,7 +3993,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
           },
           "status": {
             "type": "string",
-            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified"],
+            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
             "description": "Verification status"
           }
         },
@@ -4001,7 +4002,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     },
     "summary": {
       "type": "object",
-      "required": ["total", "proven", "failed", "unknown", "timeout", "error", "not_verified"],
+      "required": ["total", "proven", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
       "properties": {
         "total": { "type": "integer" },
         "proven": { "type": "integer" },
@@ -4009,7 +4010,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "unknown": { "type": "integer" },
         "timeout": { "type": "integer" },
         "error": { "type": "integer" },
-        "not_verified": { "type": "integer" }
+        "not_verified": { "type": "integer" },
+        "skipped": { "type": "integer" }
       },
       "additionalProperties": false
     }
@@ -6080,8 +6082,12 @@ fn run_test_command(
 // ---------------------------------------------------------------------------
 
 fn validate_limits(limits: &VerifyLimits) {
-    if limits.vec_max == 0 || limits.string_max == 0 || limits.hashmap_max == 0 {
-        eprintln!("error: --vec-max, --string-max, and --hashmap-max must be >= 1");
+    if limits.vec_max == 0
+        || limits.string_max == 0
+        || limits.hashmap_max == 0
+        || limits.btreemap_max == 0
+    {
+        eprintln!("error: --vec-max, --string-max, --hashmap-max, and --btreemap-max must be >= 1");
         std::process::exit(1);
     }
 }

@@ -153,6 +153,7 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
     let string_vars: Vec<i64> = collect_string_vars(f);
     let hashmap_vars: Vec<i64> = collect_hashmap_vars(f);
     let btreemap_vars: Vec<i64> = collect_btreemap_vars(f);
+    let option_vars: Vec<i64> = collect_option_vars(f);
 
     let blocks: Vec<IrBlock> = f.blocks;
     let mut bi: i64 = 0;
@@ -220,10 +221,12 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
                     }
                 } else if op == IOP_FIELD_GET() {
                     let iid: i64 = inst.id;
+                    let iargs: Vec<i64> = inst.args;
                     vec_contains_i64(vec_vars, iid)
                     || vec_contains_i64(string_vars, iid)
                     || vec_contains_i64(hashmap_vars, iid)
                     || vec_contains_i64(btreemap_vars, iid)
+                    || (iargs.len() > 0 && vec_contains_i64(option_vars, iargs[0]))
                 } else if op == IOP_REM_F32() || op == IOP_REM_F64()
                    || op == IOP_LOAD() || op == IOP_STORE()
                    || op == IOP_REGION_ALLOC()
@@ -703,7 +706,8 @@ fn emit_cmp(out: String, id: i64, a: i64, b: i64, op: String) {
 }
 
 fn emit_inst(out: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64>,
-             hashmap_vars: Vec<i64>, btreemap_vars: Vec<i64>, const_fn_indices: Vec<i64>, modelable_fi_set: Vec<i64>, m: IrModule,
+             hashmap_vars: Vec<i64>, btreemap_vars: Vec<i64>, option_vars: Vec<i64>,
+             const_fn_indices: Vec<i64>, modelable_fi_set: Vec<i64>, m: IrModule,
              eq_lo: Vec<i64>, eq_hi: Vec<i64>,
              vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) {
     let id: i64 = inst.id;
@@ -917,7 +921,7 @@ fn emit_inst(out: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64
     if op == IOP_RETURN() {
         if iargs.len() > 0 {
             let val_id: i64 = iargs[0];
-            if vec_contains_i64(vec_vars, val_id) || vec_contains_i64(string_vars, val_id) || vec_contains_i64(hashmap_vars, val_id) || vec_contains_i64(btreemap_vars, val_id) {
+            if vec_contains_i64(vec_vars, val_id) || vec_contains_i64(string_vars, val_id) || vec_contains_i64(hashmap_vars, val_id) || vec_contains_i64(btreemap_vars, val_id) || vec_contains_i64(option_vars, val_id) {
                 out.push_str(String::from("  return 0; /* modelled type return */\n"));
             } else {
                 out.push_str(str3(String::from("  return v"), i64_to_str(val_id), String::from(";\n")));
@@ -1032,6 +1036,19 @@ fn emit_inst(out: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64
             out.push_str(str3(String::from("  /* FieldGet -> btreemap */ v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
             out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len >= 0 && v")));
             out.push_str(str4(ids, String::from(".len <= "), i64_to_str(btreemap_max), String::from(");\n")));
+            return;
+        }
+        // Option projection: FieldGet[0] -> .tag, FieldGet[1+] -> .payload.
+        // Triggered by `?`, `match Option::Some(x) => ...`, and explicit field reads
+        // on Option-returning calls (parse_i64_opt, btreemap_insert, btreemap_get).
+        if iargs.len() > 0 && vec_contains_i64(option_vars, iargs[0]) && inst.dk == IDATA_FIELD() {
+            let ids: String = i64_to_str(id);
+            let srcs: String = i64_to_str(iargs[0]);
+            if inst.dv == 0 {
+                out.push_str(str5(String::from("  v"), ids, String::from(" = v"), srcs, String::from(".tag;\n")));
+            } else {
+                out.push_str(str5(String::from("  v"), ids, String::from(" = v"), srcs, String::from(".payload;\n")));
+            }
             return;
         }
         emit_unmodelled(out, inst);
@@ -1759,7 +1776,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
         let mut ri: i64 = 0;
         while ri < regular.len() {
             let inst: IrInst = insts[regular[ri]];
-            emit_inst(out, inst, vec_vars, string_vars, hashmap_vars, btreemap_vars, const_fn_indices, modelable_fi_set, m, eq_lo, eq_hi, vec_max, string_max, hashmap_max, btreemap_max);
+            emit_inst(out, inst, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars, const_fn_indices, modelable_fi_set, m, eq_lo, eq_hi, vec_max, string_max, hashmap_max, btreemap_max);
             ri = ri + 1;
         }
 
@@ -1783,7 +1800,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
 
         if terminal_idx >= 0 {
             let term: IrInst = insts[terminal_idx];
-            emit_inst(out, term, vec_vars, string_vars, hashmap_vars, btreemap_vars, const_fn_indices, modelable_fi_set, m, eq_lo, eq_hi, vec_max, string_max, hashmap_max, btreemap_max);
+            emit_inst(out, term, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars, const_fn_indices, modelable_fi_set, m, eq_lo, eq_hi, vec_max, string_max, hashmap_max, btreemap_max);
         }
 
         bi = bi + 1;

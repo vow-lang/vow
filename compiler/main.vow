@@ -4560,7 +4560,8 @@ fn skill_full() -> String {
     r.push_str(String::from("module BTreeMapExample\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("fn fetch(m: BTreeMap<i64, i64>) -> Option<i64> [io] {\n"));
-    r.push_str(String::from("    let v: i64 = m.get(7)?;\n"));
+    r.push_str(String::from("    let r: Option<i64> = m.get(7);\n"));
+    r.push_str(String::from("    let v: i64 = r?;\n"));
     r.push_str(String::from("    print_i64(v);\n"));
     r.push_str(String::from("    print_str(String::from(\"\\n\"));\n"));
     r.push_str(String::from("    Option::Some(v)\n"));
@@ -4709,7 +4710,7 @@ fn skill_full() -> String {
     r.push_str(String::from("          },\n"));
     r.push_str(String::from("          \"status\": {\n"));
     r.push_str(String::from("            \"type\": \"string\",\n"));
-    r.push_str(String::from("            \"enum\": [\"proven\", \"proven-ir\", \"failed\", \"unknown\", \"timeout\", \"error\", \"not_verified\"],\n"));
+    r.push_str(String::from("            \"enum\": [\"proven\", \"proven-ir\", \"failed\", \"unknown\", \"timeout\", \"error\", \"not_verified\", \"skipped\"],\n"));
     r.push_str(String::from("            \"description\": \"Verification status\"\n"));
     r.push_str(String::from("          }\n"));
     r.push_str(String::from("        },\n"));
@@ -4718,7 +4719,7 @@ fn skill_full() -> String {
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"summary\": {\n"));
     r.push_str(String::from("      \"type\": \"object\",\n"));
-    r.push_str(String::from("      \"required\": [\"total\", \"proven\", \"failed\", \"unknown\", \"timeout\", \"error\", \"not_verified\"],\n"));
+    r.push_str(String::from("      \"required\": [\"total\", \"proven\", \"failed\", \"unknown\", \"timeout\", \"error\", \"not_verified\", \"skipped\"],\n"));
     r.push_str(String::from("      \"properties\": {\n"));
     r.push_str(String::from("        \"total\": { \"type\": \"integer\" },\n"));
     r.push_str(String::from("        \"proven\": { \"type\": \"integer\" },\n"));
@@ -4726,7 +4727,8 @@ fn skill_full() -> String {
     r.push_str(String::from("        \"unknown\": { \"type\": \"integer\" },\n"));
     r.push_str(String::from("        \"timeout\": { \"type\": \"integer\" },\n"));
     r.push_str(String::from("        \"error\": { \"type\": \"integer\" },\n"));
-    r.push_str(String::from("        \"not_verified\": { \"type\": \"integer\" }\n"));
+    r.push_str(String::from("        \"not_verified\": { \"type\": \"integer\" },\n"));
+    r.push_str(String::from("        \"skipped\": { \"type\": \"integer\" }\n"));
     r.push_str(String::from("      },\n"));
     r.push_str(String::from("      \"additionalProperties\": false\n"));
     r.push_str(String::from("    }\n"));
