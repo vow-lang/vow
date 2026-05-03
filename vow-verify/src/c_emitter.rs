@@ -1518,7 +1518,15 @@ pub fn emit_c_function_full(
         }
         ups_sources.sort();
         for src in ups_sources {
-            out.push_str(&format!("  int64_t __ups_{};\n", src));
+            // Match the temp's C type to the source's tagged type so the
+            // `__ups_src = vsrc; vphi = __ups_src;` assignment doesn't tear
+            // a struct payload into an int64. Today only Option flows
+            // through phi as a struct.
+            if option_vars.contains(&src) {
+                out.push_str(&format!("  __vow_option_t __ups_{};\n", src));
+            } else {
+                out.push_str(&format!("  int64_t __ups_{};\n", src));
+            }
         }
     }
 

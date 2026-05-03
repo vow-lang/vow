@@ -636,6 +636,38 @@ fn collect_option_vars(f: IrFunction) -> Vec<i64> {
         }
         bi = bi + 1;
     }
+    // Phi-propagation fixpoint: an Option value flowing through `if/match/loop`
+    // produces an Upsilon → Phi pair; without this loop, the phi result wouldn't
+    // be tagged Option, and downstream FieldGet on .tag/.payload would fall through
+    // to emit_unmodelled. Mirrors collect_modelled_vars's propagation loop above.
+    let mut changed: bool = true;
+    while changed {
+        changed = false;
+        bi = 0;
+        while bi < blocks.len() {
+            let blk: IrBlock = blocks[bi];
+            let insts: Vec<IrInst> = blk.insts;
+            let mut ii: i64 = 0;
+            while ii < insts.len() {
+                let inst: IrInst = insts[ii];
+                if inst.op == IOP_UPSILON() && inst.dk == IDATA_PHI_TARGET() {
+                    let iargs: Vec<i64> = inst.args;
+                    if iargs.len() > 0 {
+                        let phi_id: i64 = inst.dv;
+                        let src_id: i64 = iargs[0];
+                        if vec_contains_i64(result, src_id) {
+                            if vec_insert_i64(result, phi_id) { changed = true; }
+                        }
+                        if vec_contains_i64(result, phi_id) {
+                            if vec_insert_i64(result, src_id) { changed = true; }
+                        }
+                    }
+                }
+                ii = ii + 1;
+            }
+            bi = bi + 1;
+        }
+    }
     result
 }
 
@@ -1714,7 +1746,18 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
     }
     let mut ui: i64 = 0;
     while ui < ups_sources.len() {
-        out.push_str(str3(String::from("  int64_t __ups_"), i64_to_str(ups_sources[ui]), String::from(";\n")));
+        let src: i64 = ups_sources[ui];
+        // Match the temp's C type to the source's tagged type so the
+        // `__ups_src = vsrc; vphi = __ups_src;` assignment doesn't tear
+        // a struct payload into an int64. Today only Option flows
+        // through phi as a struct; Vec/String/HashMap/BTreeMap do too
+        // but their phi flow is rare and the existing fallback works
+        // for those.
+        if vec_contains_i64(option_vars, src) {
+            out.push_str(str3(String::from("  __vow_option_t __ups_"), i64_to_str(src), String::from(";\n")));
+        } else {
+            out.push_str(str3(String::from("  int64_t __ups_"), i64_to_str(src), String::from(";\n")));
+        }
         ui = ui + 1;
     }
 
