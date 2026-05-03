@@ -1853,16 +1853,11 @@ impl<'e> Checker<'e> {
         }
     }
 
-    // Recursively walk `ty` for BTreeMap<K, V> shapes where K or V is neither
-    // i64 nor Never. Phase 1's runtime helpers and ESBMC C model are hard-coded
-    // to i64 keys and i64 values (`__vow_btreemap_insert(map, key:i64, val:i64)`
-    // and `int64_t vals[BTREEMAP_MAX]`), so any other K or V silently routes
-    // through the i64 ABI and produces invalid codegen. Both restrictions
-    // surface as `BTreeMapKeyTypeMustBeI64` (the error code is the only one we
-    // have for this constraint; the message distinguishes K vs V). Called from
-    // the major type-resolution sites (Stmt::Let annotations, function param /
-    // return / field / alias / const types) so the error fires at type
-    // formation rather than only at method-call sites.
+    // K violations use BTreeMapKeyTypeMustBeI64; V violations use
+    // BTreeMapValueTypeMustBeI64. Called from the major type-resolution sites
+    // (Stmt::Let annotations, function param / return / field / alias / const
+    // types) so the error fires at type formation rather than only at
+    // method-call sites.
     fn check_btreemap_key_in_ty(&mut self, ty: &Ty, span: vow_syntax::span::Span) {
         if let Ty::Applied(base, args) = ty
             && matches!(base.as_ref(), Ty::Struct(n) if n == "BTreeMap")
