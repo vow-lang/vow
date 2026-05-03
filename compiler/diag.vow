@@ -31,6 +31,7 @@ fn EC_REGION_LINEAR() -> i64 vow { ensures: result >= 0 } { 19 }
 // Emitted as a Warning when a vowed function's body cannot be modeled by
 // the verifier. Mirrors `vow_diag::ErrorCode::VerificationSkipped`.
 fn EC_VERIFICATION_SKIPPED() -> i64 vow { ensures: result >= 0 } { 20 }
+fn EC_BTREEMAP_KEY_TYPE_MUST_BE_I64() -> i64 vow { ensures: result >= 0 } { 21 }
 
 struct Diagnostic {
     severity: i64,
@@ -222,8 +223,11 @@ fn ec_name(code: i64) -> String {
     if code == EC_VERIFICATION_SKIPPED() {
         String::from("VerificationSkipped")
     } else {
+    if code == EC_BTREEMAP_KEY_TYPE_MUST_BE_I64() {
+        String::from("BTreeMapKeyTypeMustBeI64")
+    } else {
         String::from("IoError")
-    }}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}
 }
 
 fn sev_name_lower(s: i64) -> String {

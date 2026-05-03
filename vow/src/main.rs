@@ -120,6 +120,8 @@ struct Args {
     string_max: usize,
     #[arg(long, default_value = "64")]
     hashmap_max: usize,
+    #[arg(long, default_value = "64")]
+    btreemap_max: usize,
     #[arg(long, value_enum, default_value = "auto")]
     solver: SolverArg,
     #[arg(long, value_enum, default_value = "auto")]
@@ -174,6 +176,8 @@ struct BuildArgs {
     string_max: usize,
     #[arg(long, default_value = "64")]
     hashmap_max: usize,
+    #[arg(long, default_value = "64")]
+    btreemap_max: usize,
     #[arg(long, value_enum, default_value = "auto")]
     solver: SolverArg,
     #[arg(long, value_enum, default_value = "auto")]
@@ -206,6 +210,8 @@ struct VerifyArgs {
     string_max: usize,
     #[arg(long, default_value = "64")]
     hashmap_max: usize,
+    #[arg(long, default_value = "64")]
+    btreemap_max: usize,
     #[arg(long, value_enum, default_value = "auto")]
     solver: SolverArg,
     #[arg(long, value_enum, default_value = "auto")]
@@ -242,6 +248,8 @@ struct TestArgs {
     string_max: usize,
     #[arg(long, default_value = "64")]
     hashmap_max: usize,
+    #[arg(long, default_value = "64")]
+    btreemap_max: usize,
     #[arg(long)]
     verify_jobs: Option<u32>,
     #[arg(long)]
@@ -278,6 +286,8 @@ struct ContractsArgs {
     string_max: usize,
     #[arg(long, default_value = "64")]
     hashmap_max: usize,
+    #[arg(long, default_value = "64")]
+    btreemap_max: usize,
     #[arg(long, value_enum, default_value = "auto")]
     solver: SolverArg,
     #[arg(long, value_enum, default_value = "auto")]
@@ -1007,7 +1017,8 @@ fn skill_json() -> String {
       "Option<T>",
       "Result<T, E>",
       "String",
-      "HashMap<K, V>"
+      "HashMap<K, V>",
+      "BTreeMap<K, V>"
     ],
     "effects": [
       "io",
@@ -1343,7 +1354,7 @@ LANGUAGE SUMMARY
     0
   }
 
-TYPES     : i32  i64  u8  u64  f32  f64  bool  ()  !  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>
+TYPES     : i32  i64  u8  u64  f32  f64  bool  ()  !  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>  BTreeMap<K, V>
 EFFECTS   : io  read  write  panic  unsafe
 BUILTINS  : pin_to_root: fn(value: String) -> String and fn<T>(value: Vec<T>) -> Vec<T> for flat scalar T []   print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [io]
             print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   parse_i64: fn(s: String) -> i64 []   i64_to_string: fn(v: i64) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
@@ -1562,6 +1573,7 @@ pub fn api_function(x: i64) -> i64 {
 | `Result<T, E>`     | Success or error                |
 | `String`           | UTF-8 string (backed by Vec<u8>)|
 | `HashMap<K, V>`    | Key-value map (linear scan)     |
+| `BTreeMap<K, V>`   | Sorted key-value map (binary search; ascending iteration). Phase 1: `K = i64` only |
 
 ### User-Defined Types
 
@@ -1990,6 +2002,21 @@ m.contains_key(k)
 | `.get(k)`           | `(K) -> V`                  |
 | `.contains_key(k)`  | `(K) -> bool`               |
 | `.remove(k)`        | `(K) -> ()`                 |
+| `.len()`            | `() -> i64`                 |
+
+### BTreeMap<K, V> Methods
+
+In Phase 1, `K` must be `i64` (other key types raise `BTreeMapKeyTypeMustBeI64`).
+Storage is two parallel sorted arrays (binary-search lookup, sorted-insert writes).
+Iteration order is ascending by key and is **deterministic across runs and compilers** —
+prefer `BTreeMap` over `HashMap` for any map whose iteration affects compiler output.
+
+| Method              | Signature                   |
+|---------------------|-----------------------------|
+| `BTreeMap::new()`   | `() -> BTreeMap<K, V>`      |
+| `.insert(k, v)`     | `(K, V) -> Option<V>` (returns the previous value bound to `k`, if any) |
+| `.get(k)`           | `(K) -> Option<V>` (returns the value bound to `k`, or `None`)          |
+| `.contains(k)`      | `(K) -> bool`               |
 | `.len()`            | `() -> i64`                 |
 
 ### Option<T> Methods
@@ -3204,6 +3231,22 @@ trait Foo {
 
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
 
+### BTreeMapKeyTypeMustBeI64
+
+**Phase:** Type Checker
+**Meaning:** A `BTreeMap<K, V>` was instantiated with a key type other than `i64`. Phase 1 of the BTreeMap stdlib only supports `i64` keys.
+
+```vow
+fn f() -> () {
+    let m: BTreeMap<bool, i64> = BTreeMap::new();
+    m.insert(true, 1);
+}
+```
+
+**Output:** `BTreeMap key type must be i64; found 'bool'`
+
+**Fix:** Use `BTreeMap<i64, V>`. If you need string or struct keys, hash them to `i64` at the call site and store the original key alongside the value.
+
 ### MissingContract
 
 **Phase:** Type Checker
@@ -3792,6 +3835,37 @@ When stdin is exhausted, `stdin_read_line()` returns `""` (length 0), the `while
 - **Effects:** `stdin_read_line()` requires `[read]`; `print_str()` requires `[io]`. The `main` function declares both.
 - **CI-safe:** No blocking reads, no prompts — the program processes whatever stdin provides and exits at EOF. Safe to run in pipelines and test harnesses.
 
+## 6. BTreeMap basic usage
+
+`BTreeMap<i64, V>` is the deterministic alternative to `HashMap` — sorted ascending by key, binary-search lookup. Use it when iteration order affects program output (codegen, serialization, or any reproducible build).
+
+```vow
+module BTreeMapExample
+
+fn fetch(m: BTreeMap<i64, i64>) -> Option<i64> [io] {
+    let v: i64 = m.get(7)?;
+    print_i64(v);
+    print_str(String::from("\n"));
+    Option::Some(v)
+}
+
+fn main() -> i32 [io] {
+    let m: BTreeMap<i64, i64> = BTreeMap::new();
+    m.insert(7, 42);
+    let prev: Option<i64> = m.insert(7, 99);
+    // prev is Some(42); the second insert overwrote the first.
+    fetch(m);
+    print_i64(m.len());
+    0
+}
+```
+
+Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get` returns `Option<V>`. Use `?` to short-circuit on `None`. Phase 1 only supports `i64` keys; using any other key type raises `BTreeMapKeyTypeMustBeI64`.
+
+### Why BTreeMap and not HashMap
+
+`HashMap.insert` returns `()` and its iteration order is unspecified. For maps whose iteration is observable in the output binary, the byte-identical bootstrap requirement (`stage1 == stage2` sha256) demands deterministic order. `BTreeMap` provides it; `HashMap` does not.
+
 ---
 
 # JSON Schemas
@@ -3918,7 +3992,7 @@ When stdin is exhausted, `stdin_read_line()` returns `""` (length 0), the `while
           },
           "status": {
             "type": "string",
-            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
+            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified"],
             "description": "Verification status"
           }
         },
@@ -3927,7 +4001,7 @@ When stdin is exhausted, `stdin_read_line()` returns `""` (length 0), the `while
     },
     "summary": {
       "type": "object",
-      "required": ["total", "proven", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
+      "required": ["total", "proven", "failed", "unknown", "timeout", "error", "not_verified"],
       "properties": {
         "total": { "type": "integer" },
         "proven": { "type": "integer" },
@@ -3935,8 +4009,7 @@ When stdin is exhausted, `stdin_read_line()` returns `""` (length 0), the `while
         "unknown": { "type": "integer" },
         "timeout": { "type": "integer" },
         "error": { "type": "integer" },
-        "not_verified": { "type": "integer" },
-        "skipped": { "type": "integer" }
+        "not_verified": { "type": "integer" }
       },
       "additionalProperties": false
     }
@@ -6369,6 +6442,7 @@ fn main() {
                 vec_max: b.vec_max,
                 string_max: b.string_max,
                 hashmap_max: b.hashmap_max,
+                btreemap_max: b.btreemap_max,
             };
             validate_limits(&limits);
             let jobs = resolve_verify_jobs(b.verify_jobs);
@@ -6407,6 +6481,7 @@ fn main() {
                 vec_max: v.vec_max,
                 string_max: v.string_max,
                 hashmap_max: v.hashmap_max,
+                btreemap_max: v.btreemap_max,
             };
             validate_limits(&limits);
             let jobs = resolve_verify_jobs(v.verify_jobs);
@@ -6437,6 +6512,7 @@ fn main() {
                 vec_max: t.vec_max,
                 string_max: t.string_max,
                 hashmap_max: t.hashmap_max,
+                btreemap_max: t.btreemap_max,
             };
             validate_limits(&limits);
             let jobs = resolve_verify_jobs(t.verify_jobs);
@@ -6489,6 +6565,7 @@ fn main() {
                 vec_max: c.vec_max,
                 string_max: c.string_max,
                 hashmap_max: c.hashmap_max,
+                btreemap_max: c.btreemap_max,
             };
             validate_limits(&limits);
             // Accepted for CLI parity; validates a 0 rejection via the same path
@@ -6551,6 +6628,7 @@ fn main() {
                 vec_max: args.vec_max,
                 string_max: args.string_max,
                 hashmap_max: args.hashmap_max,
+                btreemap_max: args.btreemap_max,
             };
             validate_limits(&limits);
             let jobs = resolve_verify_jobs(args.verify_jobs);

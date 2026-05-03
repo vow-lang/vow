@@ -162,6 +162,22 @@ trait Foo {
 
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
 
+### BTreeMapKeyTypeMustBeI64
+
+**Phase:** Type Checker
+**Meaning:** A `BTreeMap<K, V>` was instantiated with a key type other than `i64`. Phase 1 of the BTreeMap stdlib only supports `i64` keys.
+
+```vow
+fn f() -> () {
+    let m: BTreeMap<bool, i64> = BTreeMap::new();
+    m.insert(true, 1);
+}
+```
+
+**Output:** `BTreeMap key type must be i64; found 'bool'`
+
+**Fix:** Use `BTreeMap<i64, V>`. If you need string or struct keys, hash them to `i64` at the call site and store the original key alongside the value.
+
 ### MissingContract
 
 **Phase:** Type Checker

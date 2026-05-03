@@ -74,6 +74,9 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
         if name == String::from("Vec") {
             return ts_make_applied(e.ts, ts_make_enum(e.ts, name), arg_tids);
         }
+        if name == String::from("HashMap") || name == String::from("BTreeMap") {
+            return ts_make_applied(e.ts, ts_make_struct(e.ts, name), arg_tids);
+        }
         let sidx: i64 = env_lookup_struct(e, name);
         if sidx != -1 {
             return ts_make_applied(e.ts, ts_make_struct(e.ts, name), arg_tids);
@@ -860,6 +863,43 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     herr_msg.push_str(mname);
                     herr_msg.push_str(String::from("' on type 'HashMap'"));
                     env_emit_error_code(e, EC_UNKNOWN_METHOD(), herr_msg, expr_span(a, eid));
+                    return CTY_UNIT();
+                }
+                if base_name == String::from("BTreeMap") {
+                    let bargs_lid: i64 = ty_b(e.ts, recv_tid);
+                    let bkey_tid: i64 = if ts_arg_len(e.ts, bargs_lid) > 0 {
+                        ts_arg_get(e.ts, bargs_lid, 0)
+                    } else {
+                        CTY_I64()
+                    };
+                    let bval_tid: i64 = if ts_arg_len(e.ts, bargs_lid) > 1 {
+                        ts_arg_get(e.ts, bargs_lid, 1)
+                    } else {
+                        CTY_I64()
+                    };
+                    let bkey_tag: i64 = ty_tag(e.ts, bkey_tid);
+                    if bkey_tag != CTY_I64() && bkey_tag != CTY_NEVER() {
+                        let kerr_msg: String = String::from("BTreeMap key type must be i64");
+                        env_emit_error_code(e, EC_BTREEMAP_KEY_TYPE_MUST_BE_I64(), kerr_msg, expr_span(a, eid));
+                    }
+                    if mname == String::from("len") { return CTY_I64(); }
+                    if mname == String::from("contains") { return CTY_BOOL(); }
+                    if mname == String::from("insert") {
+                        let opt_base: i64 = ts_make_enum(e.ts, String::from("Option"));
+                        let opt_args: Vec<i64> = Vec::new();
+                        opt_args.push(bval_tid);
+                        return ts_make_applied(e.ts, opt_base, opt_args);
+                    }
+                    if mname == String::from("get") {
+                        let opt_base: i64 = ts_make_enum(e.ts, String::from("Option"));
+                        let opt_args: Vec<i64> = Vec::new();
+                        opt_args.push(bval_tid);
+                        return ts_make_applied(e.ts, opt_base, opt_args);
+                    }
+                    let bterr_msg: String = String::from("unknown method '");
+                    bterr_msg.push_str(mname);
+                    bterr_msg.push_str(String::from("' on type 'BTreeMap'"));
+                    env_emit_error_code(e, EC_UNKNOWN_METHOD(), bterr_msg, expr_span(a, eid));
                     return CTY_UNIT();
                 }
             }

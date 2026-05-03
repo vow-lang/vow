@@ -1,0 +1,23 @@
+// TEST: stdout "len_before=0\nlen_after=1\nv=42\n"
+module BTreeMapBasic
+
+fn fetch(m: BTreeMap<i64, i64>) -> Option<i64> [io] {
+    let v: i64 = m.get(7)?;
+    print_str(String::from("v="));
+    print_i64(v);
+    print_str(String::from("\n"));
+    Option::Some(v)
+}
+
+fn main() -> i32 [io] {
+    let m: BTreeMap<i64, i64> = BTreeMap::new();
+    print_str(String::from("len_before="));
+    print_i64(m.len());
+    print_str(String::from("\n"));
+    m.insert(7, 42);
+    print_str(String::from("len_after="));
+    print_i64(m.len());
+    print_str(String::from("\n"));
+    fetch(m);
+    0
+}

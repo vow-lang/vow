@@ -372,3 +372,34 @@ When stdin is exhausted, `stdin_read_line()` returns `""` (length 0), the `while
 - **Empty line handling:** After trimming, `cmd.len() == 0` means the line was blank — skip it.
 - **Effects:** `stdin_read_line()` requires `[read]`; `print_str()` requires `[io]`. The `main` function declares both.
 - **CI-safe:** No blocking reads, no prompts — the program processes whatever stdin provides and exits at EOF. Safe to run in pipelines and test harnesses.
+
+## 6. BTreeMap basic usage
+
+`BTreeMap<i64, V>` is the deterministic alternative to `HashMap` — sorted ascending by key, binary-search lookup. Use it when iteration order affects program output (codegen, serialization, or any reproducible build).
+
+```vow
+module BTreeMapExample
+
+fn fetch(m: BTreeMap<i64, i64>) -> Option<i64> [io] {
+    let v: i64 = m.get(7)?;
+    print_i64(v);
+    print_str(String::from("\n"));
+    Option::Some(v)
+}
+
+fn main() -> i32 [io] {
+    let m: BTreeMap<i64, i64> = BTreeMap::new();
+    m.insert(7, 42);
+    let prev: Option<i64> = m.insert(7, 99);
+    // prev is Some(42); the second insert overwrote the first.
+    fetch(m);
+    print_i64(m.len());
+    0
+}
+```
+
+Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get` returns `Option<V>`. Use `?` to short-circuit on `None`. Phase 1 only supports `i64` keys; using any other key type raises `BTreeMapKeyTypeMustBeI64`.
+
+### Why BTreeMap and not HashMap
+
+`HashMap.insert` returns `()` and its iteration order is unspecified. For maps whose iteration is observable in the output binary, the byte-identical bootstrap requirement (`stage1 == stage2` sha256) demands deterministic order. `BTreeMap` provides it; `HashMap` does not.

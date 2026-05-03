@@ -144,7 +144,10 @@ fn expand_ptr_bindings(
             Some(s) => s.clone(),
             None => continue,
         };
-        if matches!(struct_name.as_str(), "String" | "Vec" | "HashMap") {
+        if matches!(
+            struct_name.as_str(),
+            "String" | "Vec" | "HashMap" | "BTreeMap"
+        ) {
             continue;
         }
         let field_names = match ctx.struct_field_map.get(&struct_name) {

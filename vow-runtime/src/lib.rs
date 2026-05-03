@@ -2240,6 +2240,142 @@ pub unsafe extern "C" fn __vow_map_len(map: *const u8) -> usize {
 }
 
 // ---------------------------------------------------------------------------
+// BTreeMap runtime — sorted parallel-Vec backing (i64 keys, i64 values).
+// Iteration is ascending-by-key; binary search for lookup, sorted-insert for
+// writes. Lives in the root arena (no explicit free), matching HashMap.
+// ---------------------------------------------------------------------------
+
+#[repr(C)]
+pub struct VowBTreeMap {
+    pub keys_ptr: *mut u8,
+    pub keys_len: usize,
+    pub keys_cap: usize,
+    pub vals_ptr: *mut u8,
+    pub vals_cap: usize,
+}
+
+const BTREEMAP_INITIAL_CAP: usize = 8;
+const BTREEMAP_ENTRY_BYTES: usize = 8;
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_btreemap_new() -> *mut u8 {
+    let header_ptr = unsafe { root_arena_alloc_zeroed(std::mem::size_of::<VowBTreeMap>(), 8) }
+        as *mut VowBTreeMap;
+    let buf_size = BTREEMAP_INITIAL_CAP * BTREEMAP_ENTRY_BYTES;
+    let keys_buf = unsafe { root_arena_alloc_zeroed(buf_size, 8) };
+    let vals_buf = unsafe { root_arena_alloc_zeroed(buf_size, 8) };
+    unsafe {
+        (*header_ptr).keys_ptr = keys_buf;
+        (*header_ptr).keys_len = 0;
+        (*header_ptr).keys_cap = BTREEMAP_INITIAL_CAP;
+        (*header_ptr).vals_ptr = vals_buf;
+        (*header_ptr).vals_cap = BTREEMAP_INITIAL_CAP;
+    }
+    header_ptr as *mut u8
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_btreemap_len(map: *const u8) -> usize {
+    let m = unsafe { &*(map as *const VowBTreeMap) };
+    m.keys_len
+}
+
+// Binary-search the keys array for `key`. Returns Ok(index of equal key) or
+// Err(insertion point that preserves ascending order).
+fn btreemap_search(keys: &[i64], key: i64) -> Result<usize, usize> {
+    let mut lo: usize = 0;
+    let mut hi: usize = keys.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let mid_key = keys[mid];
+        if mid_key == key {
+            return Ok(mid);
+        } else if mid_key < key {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    Err(lo)
+}
+
+// Allocate an Option<i64> using the same layout as `__vow_string_parse_i64_opt`:
+// a `*mut i64` pointing at [tag, payload] (tag=1 Some, tag=0 None).
+unsafe fn alloc_option_i64(tag: i64, payload: i64) -> *mut u8 {
+    let ptr = __vow_vec_new(8, 8) as *mut i64;
+    unsafe {
+        *ptr = tag;
+        *ptr.add(1) = payload;
+    }
+    ptr as *mut u8
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_btreemap_insert(map: *mut u8, key: i64, val: i64) -> *mut u8 {
+    let m = unsafe { &mut *(map as *mut VowBTreeMap) };
+    let keys = unsafe { std::slice::from_raw_parts(m.keys_ptr as *const i64, m.keys_len) };
+    match btreemap_search(keys, key) {
+        Ok(idx) => {
+            let vals =
+                unsafe { std::slice::from_raw_parts_mut(m.vals_ptr as *mut i64, m.keys_len) };
+            let prev = vals[idx];
+            vals[idx] = val;
+            unsafe { alloc_option_i64(1, prev) }
+        }
+        Err(idx) => {
+            if m.keys_len == m.keys_cap {
+                let old_size = m.keys_cap * BTREEMAP_ENTRY_BYTES;
+                let new_cap = if m.keys_cap == 0 {
+                    BTREEMAP_INITIAL_CAP
+                } else {
+                    m.keys_cap * 2
+                };
+                let new_size = new_cap * BTREEMAP_ENTRY_BYTES;
+                m.keys_ptr = unsafe { root_arena_grow_backing(m.keys_ptr, old_size, new_size, 8) };
+                m.vals_ptr = unsafe { root_arena_grow_backing(m.vals_ptr, old_size, new_size, 8) };
+                m.keys_cap = new_cap;
+                m.vals_cap = new_cap;
+            }
+            let keys =
+                unsafe { std::slice::from_raw_parts_mut(m.keys_ptr as *mut i64, m.keys_len + 1) };
+            let vals =
+                unsafe { std::slice::from_raw_parts_mut(m.vals_ptr as *mut i64, m.keys_len + 1) };
+            // Shift right to make room at idx.
+            let mut i = m.keys_len;
+            while i > idx {
+                keys[i] = keys[i - 1];
+                vals[i] = vals[i - 1];
+                i -= 1;
+            }
+            keys[idx] = key;
+            vals[idx] = val;
+            m.keys_len += 1;
+            unsafe { alloc_option_i64(0, 0) }
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_btreemap_get(map: *const u8, key: i64) -> *mut u8 {
+    let m = unsafe { &*(map as *const VowBTreeMap) };
+    let keys = unsafe { std::slice::from_raw_parts(m.keys_ptr as *const i64, m.keys_len) };
+    match btreemap_search(keys, key) {
+        Ok(idx) => {
+            let vals = unsafe { std::slice::from_raw_parts(m.vals_ptr as *const i64, m.keys_len) };
+            unsafe { alloc_option_i64(1, vals[idx]) }
+        }
+        Err(_) => unsafe { alloc_option_i64(0, 0) },
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_btreemap_contains(map: *const u8, key: i64) -> bool {
+    let m = unsafe { &*(map as *const VowBTreeMap) };
+    let keys = unsafe { std::slice::from_raw_parts(m.keys_ptr as *const i64, m.keys_len) };
+    btreemap_search(keys, key).is_ok()
+}
+
+// ---------------------------------------------------------------------------
 // Sanitize mode — Vec provenance tracking
 // ---------------------------------------------------------------------------
 

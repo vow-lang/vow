@@ -7,6 +7,7 @@ use ir_printer
 fn VOW_VEC_MAX() -> i64 vow { ensures: result >= 0 } { 128 }
 fn VOW_STRING_MAX() -> i64 vow { ensures: result >= 0 } { 256 }
 fn VOW_HASHMAP_MAX() -> i64 vow { ensures: result >= 0 } { 64 }
+fn VOW_BTREEMAP_MAX() -> i64 vow { ensures: result >= 0 } { 64 }
 
 fn str3(a: String, b: String, c: String) -> String {
     let r: String = String::from("");
@@ -114,6 +115,11 @@ fn is_known_builtin(name: String) -> bool {
     || name == String::from("__vow_map_get")
     || name == String::from("__vow_map_contains")
     || name == String::from("__vow_map_remove")
+    || name == String::from("__vow_btreemap_new")
+    || name == String::from("__vow_btreemap_len")
+    || name == String::from("__vow_btreemap_insert")
+    || name == String::from("__vow_btreemap_get")
+    || name == String::from("__vow_btreemap_contains")
 }
 
 fn is_reserved_verifier_symbol(name: String) -> bool {
@@ -145,6 +151,7 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
     let vec_vars: Vec<i64> = collect_vec_vars(f);
     let string_vars: Vec<i64> = collect_string_vars(f);
     let hashmap_vars: Vec<i64> = collect_hashmap_vars(f);
+    let btreemap_vars: Vec<i64> = collect_btreemap_vars(f);
 
     let blocks: Vec<IrBlock> = f.blocks;
     let mut bi: i64 = 0;
@@ -215,6 +222,7 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
                     vec_contains_i64(vec_vars, iid)
                     || vec_contains_i64(string_vars, iid)
                     || vec_contains_i64(hashmap_vars, iid)
+                    || vec_contains_i64(btreemap_vars, iid)
                 } else if op == IOP_REM_F32() || op == IOP_REM_F64()
                    || op == IOP_LOAD() || op == IOP_STORE()
                    || op == IOP_REGION_ALLOC()
@@ -596,6 +604,37 @@ fn collect_hashmap_vars(f: IrFunction) -> Vec<i64> {
     collect_modelled_vars(f, String::from("__vow_map_new"), String::from("__vow_map_"))
 }
 
+fn collect_btreemap_vars(f: IrFunction) -> Vec<i64> {
+    collect_modelled_vars(f, String::from("__vow_btreemap_new"), String::from("__vow_btreemap_"))
+}
+
+fn is_option_returning_extern(name: String) -> bool {
+    name == String::from("__vow_string_parse_i64_opt")
+    || name == String::from("__vow_string_parse_u64_opt")
+    || name == String::from("__vow_btreemap_insert")
+    || name == String::from("__vow_btreemap_get")
+}
+
+fn collect_option_vars(f: IrFunction) -> Vec<i64> {
+    let result: Vec<i64> = Vec::new();
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: i64 = 0;
+    while bi < blocks.len() {
+        let blk: IrBlock = blocks[bi];
+        let insts: Vec<IrInst> = blk.insts;
+        let mut ii: i64 = 0;
+        while ii < insts.len() {
+            let inst: IrInst = insts[ii];
+            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && is_option_returning_extern(inst.ds) {
+                result.push(inst.id);
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    result
+}
+
 fn emit_unmodelled(out: String, inst: IrInst) {
     let id: i64 = inst.id;
     out.push_str(str3(String::from("  /* opcode "), opcode_name(inst.op), String::from(" not modelled */\n")));
@@ -663,8 +702,8 @@ fn emit_cmp(out: String, id: i64, a: i64, b: i64, op: String) {
 }
 
 fn emit_inst(out: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64>,
-             hashmap_vars: Vec<i64>, const_fn_indices: Vec<i64>, modelable_fi_set: Vec<i64>, m: IrModule,
-             vec_max: i64, string_max: i64, hashmap_max: i64) {
+             hashmap_vars: Vec<i64>, btreemap_vars: Vec<i64>, const_fn_indices: Vec<i64>, modelable_fi_set: Vec<i64>, m: IrModule,
+             vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) {
     let id: i64 = inst.id;
     let op: i64 = inst.op;
     let ty: i64 = inst.ty;
@@ -876,7 +915,7 @@ fn emit_inst(out: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64
     if op == IOP_RETURN() {
         if iargs.len() > 0 {
             let val_id: i64 = iargs[0];
-            if vec_contains_i64(vec_vars, val_id) || vec_contains_i64(string_vars, val_id) || vec_contains_i64(hashmap_vars, val_id) {
+            if vec_contains_i64(vec_vars, val_id) || vec_contains_i64(string_vars, val_id) || vec_contains_i64(hashmap_vars, val_id) || vec_contains_i64(btreemap_vars, val_id) {
                 out.push_str(String::from("  return 0; /* modelled type return */\n"));
             } else {
                 out.push_str(str3(String::from("  return v"), i64_to_str(val_id), String::from(";\n")));
@@ -908,6 +947,10 @@ fn emit_inst(out: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64
             }
             if str_starts_with(ds, String::from("__vow_map_")) {
                 emit_map_op(out, inst, hashmap_max);
+                return;
+            }
+            if str_starts_with(ds, String::from("__vow_btreemap_")) {
+                emit_btreemap_op(out, inst, btreemap_max);
                 return;
             }
             emit_unsupported_for_verification(out, inst);
@@ -980,6 +1023,13 @@ fn emit_inst(out: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64
             out.push_str(str3(String::from("  /* FieldGet -> hashmap */ v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
             out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len >= 0 && v")));
             out.push_str(str4(ids, String::from(".len <= "), i64_to_str(hashmap_max), String::from(");\n")));
+            return;
+        }
+        if vec_contains_i64(btreemap_vars, id) {
+            let ids: String = i64_to_str(id);
+            out.push_str(str3(String::from("  /* FieldGet -> btreemap */ v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
+            out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len >= 0 && v")));
+            out.push_str(str4(ids, String::from(".len <= "), i64_to_str(btreemap_max), String::from(");\n")));
             return;
         }
         emit_unmodelled(out, inst);
@@ -1292,11 +1342,98 @@ fn emit_map_op(out: String, inst: IrInst, hashmap_max: i64) {
     emit_unmodelled(out, inst);
 }
 
+fn emit_btreemap_op(out: String, inst: IrInst, btreemap_max: i64) {
+    let id: i64 = inst.id;
+    let ds: String = inst.ds;
+    let iargs: Vec<i64> = inst.args;
+    let ids: String = i64_to_str(id);
+
+    if ds == String::from("__vow_btreemap_new") {
+        out.push_str(str3(String::from("  v"), ids, String::from(".len = 0;\n")));
+        return;
+    }
+    if ds == String::from("__vow_btreemap_len") {
+        let mp: i64 = iargs[0];
+        out.push_str(str5(String::from("  v"), ids,
+            String::from(" = v"), i64_to_str(mp), String::from(".len;\n")));
+        return;
+    }
+    if ds == String::from("__vow_btreemap_insert") {
+        let mp: i64 = iargs[0];
+        let k: i64 = iargs[1];
+        let v: i64 = iargs[2];
+        let ms: String = i64_to_str(mp);
+        let ks: String = i64_to_str(k);
+        let vs: String = i64_to_str(v);
+        let bms: String = i64_to_str(btreemap_max);
+        out.push_str(str3(String::from("  v"), ids, String::from(".tag = 0; v")));
+        out.push_str(str3(ids, String::from(".payload = 0;\n"), String::from("")));
+        out.push_str(String::from("  {\n"));
+        out.push_str(String::from("    _Bool __found = 0;\n"));
+        out.push_str(str3(String::from("    int64_t __pos = v"), ms, String::from(".len;\n")));
+        out.push_str(str3(String::from("    for (int64_t __i = 0; __i < v"), ms, String::from(".len; __i++) {\n")));
+        out.push_str(str3(String::from("      if (v"), ms, String::from(".keys[__i] == v")));
+        out.push_str(str3(ks, String::from(") { v"), ids));
+        out.push_str(str3(String::from(".tag = 1; v"), ids, String::from(".payload = v")));
+        out.push_str(str3(ms, String::from(".vals[__i]; v"), ms));
+        out.push_str(str3(String::from(".vals[__i] = v"), vs, String::from("; __found = 1; break; }\n")));
+        out.push_str(str3(String::from("      if (v"), ms, String::from(".keys[__i] > v")));
+        out.push_str(str2(ks, String::from(") { __pos = __i; break; }\n")));
+        out.push_str(String::from("    }\n"));
+        out.push_str(String::from("    if (!__found) {\n"));
+        out.push_str(str5(String::from("      __ESBMC_assert(v"), ms,
+            String::from(".len < "), bms, String::from(", \"btreemap capacity\");\n")));
+        out.push_str(str3(String::from("      for (int64_t __j = v"), ms, String::from(".len; __j > __pos; __j--) {\n")));
+        out.push_str(str3(String::from("        v"), ms, String::from(".keys[__j] = v")));
+        out.push_str(str3(ms, String::from(".keys[__j - 1]; v"), ms));
+        out.push_str(str3(String::from(".vals[__j] = v"), ms, String::from(".vals[__j - 1];\n")));
+        out.push_str(String::from("      }\n"));
+        out.push_str(str3(String::from("      v"), ms, String::from(".keys[__pos] = v")));
+        out.push_str(str3(ks, String::from("; v"), ms));
+        out.push_str(str3(String::from(".vals[__pos] = v"), vs, String::from(";\n")));
+        out.push_str(str3(String::from("      v"), ms, String::from(".len++;\n")));
+        out.push_str(String::from("    }\n"));
+        out.push_str(String::from("  }\n"));
+        return;
+    }
+    if ds == String::from("__vow_btreemap_get") {
+        let mp: i64 = iargs[0];
+        let k: i64 = iargs[1];
+        let ms: String = i64_to_str(mp);
+        let ks: String = i64_to_str(k);
+        out.push_str(str3(String::from("  v"), ids, String::from(".tag = 0; v")));
+        out.push_str(str3(ids, String::from(".payload = 0;\n"), String::from("")));
+        out.push_str(str3(String::from("  for (int64_t __i = 0; __i < v"), ms, String::from(".len; __i++) {\n")));
+        out.push_str(str3(String::from("    if (v"), ms, String::from(".keys[__i] == v")));
+        out.push_str(str3(ks, String::from(") { v"), ids));
+        out.push_str(str3(String::from(".tag = 1; v"), ids, String::from(".payload = v")));
+        out.push_str(str3(ms, String::from(".vals[__i]; break; }\n"), String::from("")));
+        out.push_str(String::from("  }\n"));
+        return;
+    }
+    if ds == String::from("__vow_btreemap_contains") {
+        let mp: i64 = iargs[0];
+        let k: i64 = iargs[1];
+        let ms: String = i64_to_str(mp);
+        let ks: String = i64_to_str(k);
+        out.push_str(str3(String::from("  v"), ids, String::from(" = 0;\n")));
+        out.push_str(str3(String::from("  for (int64_t __i = 0; __i < v"), ms, String::from(".len; __i++) {\n")));
+        out.push_str(str3(String::from("    if (v"), ms, String::from(".keys[__i] == v")));
+        out.push_str(str3(ks, String::from(") { v"), ids));
+        out.push_str(String::from(" = 1; break; }\n"));
+        out.push_str(String::from("  }\n"));
+        return;
+    }
+    emit_unmodelled(out, inst);
+}
+
 fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, modelable_fi_set: Vec<i64>, m: IrModule,
-                   vec_max: i64, string_max: i64, hashmap_max: i64) {
+                   vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) {
     let vec_vars: Vec<i64> = collect_vec_vars(f);
     let string_vars: Vec<i64> = collect_string_vars(f);
     let hashmap_vars: Vec<i64> = collect_hashmap_vars(f);
+    let btreemap_vars: Vec<i64> = collect_btreemap_vars(f);
+    let option_vars: Vec<i64> = collect_option_vars(f);
 
     let ret_c: String = {
         if f.return_ty == ITY_UNIT() {
@@ -1378,6 +1515,12 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
                         out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
                         out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len >= 0 && v")));
                         out.push_str(str4(ids, String::from(".len <= "), i64_to_str(hashmap_max), String::from(");\n")));
+                    } else if vec_contains_i64(btreemap_vars, iid) {
+                        let ids: String = i64_to_str(iid);
+                        out.push_str(str3(String::from("  __vow_btreemap_t v"), ids, String::from(";\n")));
+                        out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
+                        out.push_str(str3(String::from("  __ESBMC_assume(v"), ids, String::from(".len >= 0 && v")));
+                        out.push_str(str4(ids, String::from(".len <= "), i64_to_str(btreemap_max), String::from(");\n")));
                     } else {
                         let c_ty: String = {
                             if inst.ty == ITY_PTR() || inst.ty == ITY_LPTR() {
@@ -1421,6 +1564,10 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
                     out.push_str(str3(String::from("  __vow_string_t v"), i64_to_str(iid), String::from(";\n")));
                 } else if vec_contains_i64(hashmap_vars, iid) {
                     out.push_str(str3(String::from("  __vow_hashmap_t v"), i64_to_str(iid), String::from(";\n")));
+                } else if vec_contains_i64(btreemap_vars, iid) {
+                    out.push_str(str3(String::from("  __vow_btreemap_t v"), i64_to_str(iid), String::from(";\n")));
+                } else if vec_contains_i64(option_vars, iid) {
+                    out.push_str(str3(String::from("  __vow_option_t v"), i64_to_str(iid), String::from(";\n")));
                 } else {
                     let c_ty: String = {
                         if inst.ty == ITY_UNIT() {
@@ -1568,7 +1715,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
         let mut ri: i64 = 0;
         while ri < regular.len() {
             let inst: IrInst = insts[regular[ri]];
-            emit_inst(out, inst, vec_vars, string_vars, hashmap_vars, const_fn_indices, modelable_fi_set, m, vec_max, string_max, hashmap_max);
+            emit_inst(out, inst, vec_vars, string_vars, hashmap_vars, btreemap_vars, const_fn_indices, modelable_fi_set, m, vec_max, string_max, hashmap_max, btreemap_max);
             ri = ri + 1;
         }
 
@@ -1592,7 +1739,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
 
         if terminal_idx >= 0 {
             let term: IrInst = insts[terminal_idx];
-            emit_inst(out, term, vec_vars, string_vars, hashmap_vars, const_fn_indices, modelable_fi_set, m, vec_max, string_max, hashmap_max);
+            emit_inst(out, term, vec_vars, string_vars, hashmap_vars, btreemap_vars, const_fn_indices, modelable_fi_set, m, vec_max, string_max, hashmap_max, btreemap_max);
         }
 
         bi = bi + 1;
@@ -1633,7 +1780,7 @@ fn scan_shift_needs_in_fns(fns: Vec<IrFunction>, start: i64, end: i64, target_op
 }
 
 fn cemit_preamble_with_limits(need_shl_i64: i64, need_shr_i64: i64, need_shl_u64: i64, need_shr_u64: i64,
-                              vec_max: i64, string_max: i64, hashmap_max: i64) -> String {
+                              vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> String {
     let out: String = String::from("");
     out.push_str(String::from("#include <stdint.h>\n"));
     out.push_str(String::from("#include <stdlib.h>\n"));
@@ -1660,8 +1807,16 @@ fn cemit_preamble_with_limits(need_shl_i64: i64, need_shr_i64: i64, need_shl_u64
         i64_to_str(hashmap_max),
         String::from("]; int64_t vals["),
         i64_to_str(hashmap_max),
-        String::from("]; } __vow_hashmap_t;\n\n")
+        String::from("]; } __vow_hashmap_t;\n")
     ));
+    out.push_str(str5(
+        String::from("typedef struct { int64_t len; int64_t keys["),
+        i64_to_str(btreemap_max),
+        String::from("]; int64_t vals["),
+        i64_to_str(btreemap_max),
+        String::from("]; } __vow_btreemap_t;\n")
+    ));
+    out.push_str(String::from("typedef struct { int64_t tag; int64_t payload; } __vow_option_t;\n\n"));
     if need_shl_i64 != 0 {
         out.push_str(String::from("static inline int64_t __vow_shl_i64(int64_t value, int64_t count) {\n"));
         out.push_str(String::from("  uint64_t shift = ((uint64_t)count) & 63ULL;\n"));
@@ -1694,7 +1849,7 @@ fn cemit_preamble_with_limits(need_shl_i64: i64, need_shr_i64: i64, need_shl_u64
 }
 
 fn cemit_preamble(need_shl_i64: i64, need_shr_i64: i64, need_shl_u64: i64, need_shr_u64: i64) -> String {
-    cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, VOW_VEC_MAX(), VOW_STRING_MAX(), VOW_HASHMAP_MAX())
+    cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, VOW_VEC_MAX(), VOW_STRING_MAX(), VOW_HASHMAP_MAX(), VOW_BTREEMAP_MAX())
 }
 
 fn emit_forward_declaration(out: String, f: IrFunction) {
@@ -1732,14 +1887,14 @@ fn emit_forward_declaration(out: String, f: IrFunction) {
     out.push_str(str5(ret_c, String::from(" "), f.name, String::from("("), str2(param_str, String::from(");\n"))));
 }
 
-fn emit_c_module(m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64) -> String {
+fn emit_c_module(m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> String {
     let fns: Vec<IrFunction> = m.functions;
     let n: i64 = fns.len();
     let need_shl_i64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHL_I64());
     let need_shr_i64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHR_I64());
     let need_shl_u64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHL_U64());
     let need_shr_u64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHR_U64());
-    let out: String = cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, vec_max, string_max, hashmap_max);
+    let out: String = cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, vec_max, string_max, hashmap_max, btreemap_max);
 
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
     let empty_modelable: Vec<i64> = Vec::new();
@@ -1747,7 +1902,7 @@ fn emit_c_module(m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64) -
     let mut fi: i64 = 0;
     while fi < fns.len() {
         let f: IrFunction = fns[fi];
-        emit_c_function(out, f, const_fn_indices, empty_modelable, m, vec_max, string_max, hashmap_max);
+        emit_c_function(out, f, const_fn_indices, empty_modelable, m, vec_max, string_max, hashmap_max, btreemap_max);
         out.push_byte(10);
         fi = fi + 1;
     }
@@ -1776,13 +1931,13 @@ fn scan_shift_op_in_module_fns(fns: Vec<IrFunction>, target_fi: i64, callee_fis:
 }
 
 fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>, modelable_fi_set: Vec<i64>,
-                              vec_max: i64, string_max: i64, hashmap_max: i64) -> String {
+                              vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> String {
     let fns: Vec<IrFunction> = m.functions;
     let need_shl_i64: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHL_I64());
     let need_shr_i64: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHR_I64());
     let need_shl_u64: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHL_U64());
     let need_shr_u64: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHR_U64());
-    let out: String = cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, vec_max, string_max, hashmap_max);
+    let out: String = cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, vec_max, string_max, hashmap_max, btreemap_max);
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
 
     let mut ci: i64 = 0;
@@ -1810,7 +1965,7 @@ fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>,
         while fi < fns.len() {
             let callee: IrFunction = fns[fi];
             if callee.id == cfid {
-                emit_c_function(out, callee, const_fn_indices, modelable_fi_set, m, vec_max, string_max, hashmap_max);
+                emit_c_function(out, callee, const_fn_indices, modelable_fi_set, m, vec_max, string_max, hashmap_max, btreemap_max);
                 out.push_byte(10);
                 fi = fns.len();
             }
@@ -1823,7 +1978,7 @@ fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>,
     while fi < fns.len() {
         let f: IrFunction = fns[fi];
         if f.id == target_fi {
-            emit_c_function(out, f, const_fn_indices, modelable_fi_set, m, vec_max, string_max, hashmap_max);
+            emit_c_function(out, f, const_fn_indices, modelable_fi_set, m, vec_max, string_max, hashmap_max, btreemap_max);
             out.push_byte(10);
             fi = fns.len();
         }

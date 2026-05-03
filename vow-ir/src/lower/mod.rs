@@ -1944,6 +1944,18 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ctx.inst_struct_type.insert(result, "HashMap".to_string());
                 return result;
             }
+            // BTreeMap::new() builtin
+            if enum_name == "BTreeMap" && variant_name == "new" {
+                let result = ctx.emit(
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![],
+                    InstData::CallExtern("__vow_btreemap_new".to_string()),
+                    span,
+                );
+                ctx.inst_struct_type.insert(result, "BTreeMap".to_string());
+                return result;
+            }
             // Vec::new() builtin
             if enum_name == "Vec" && variant_name == "new" {
                 let size_val = ctx.emit(
@@ -2430,6 +2442,68 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     InstData::CallExtern("__vow_map_len".to_string()),
                     span,
                 ),
+                (Some("BTreeMap"), "len") => ctx.emit(
+                    Opcode::Call,
+                    Ty::I64,
+                    vec![recv_id],
+                    InstData::CallExtern("__vow_btreemap_len".to_string()),
+                    span,
+                ),
+                (Some("BTreeMap"), "insert") => {
+                    let k_id = args
+                        .first()
+                        .map(|e| lower_consumed_expr(ctx, e))
+                        .unwrap_or_else(|| {
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                        });
+                    let v_id = args
+                        .get(1)
+                        .map(|e| lower_consumed_expr(ctx, e))
+                        .unwrap_or_else(|| {
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                        });
+                    let result = ctx.emit(
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![recv_id, k_id, v_id],
+                        InstData::CallExtern("__vow_btreemap_insert".to_string()),
+                        span,
+                    );
+                    ctx.inst_struct_type.insert(result, "Option".to_string());
+                    result
+                }
+                (Some("BTreeMap"), "get") => {
+                    let k_id = args
+                        .first()
+                        .map(|e| lower_consumed_expr(ctx, e))
+                        .unwrap_or_else(|| {
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                        });
+                    let result = ctx.emit(
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![recv_id, k_id],
+                        InstData::CallExtern("__vow_btreemap_get".to_string()),
+                        span,
+                    );
+                    ctx.inst_struct_type.insert(result, "Option".to_string());
+                    result
+                }
+                (Some("BTreeMap"), "contains") => {
+                    let k_id = args
+                        .first()
+                        .map(|e| lower_consumed_expr(ctx, e))
+                        .unwrap_or_else(|| {
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                        });
+                    ctx.emit(
+                        Opcode::Call,
+                        Ty::Bool,
+                        vec![recv_id, k_id],
+                        InstData::CallExtern("__vow_btreemap_contains".to_string()),
+                        span,
+                    )
+                }
                 (Some("HashMap"), "insert") => {
                     let k_id = args
                         .first()
@@ -3026,6 +3100,9 @@ pub(crate) fn lower_function(
             }
             AstType::Generic { name, .. } if name == "HashMap" => {
                 ctx.inst_struct_type.insert(arg_id, "HashMap".to_string());
+            }
+            AstType::Generic { name, .. } if name == "BTreeMap" => {
+                ctx.inst_struct_type.insert(arg_id, "BTreeMap".to_string());
             }
             AstType::Generic { name, args, .. } if name == "Vec" => {
                 ctx.inst_struct_type.insert(arg_id, "Vec".to_string());

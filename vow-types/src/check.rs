@@ -892,6 +892,9 @@ impl<'e> Checker<'e> {
                 let is_hashmap = matches!(&recv_ty,
                     Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Struct(n) if n == "HashMap")
                 );
+                let is_btreemap = matches!(&recv_ty,
+                    Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Struct(n) if n == "BTreeMap")
+                );
                 let (known_methods, result_ty): (&[&str], Option<Ty>) = if is_str {
                     let methods: &[&str] = &[
                         "len",
@@ -933,6 +936,37 @@ impl<'e> Checker<'e> {
                         "get" => Some(Ty::I64),
                         "contains_key" => Some(Ty::Bool),
                         "remove" => Some(Ty::Unit),
+                        _ => None,
+                    };
+                    (methods, ty)
+                } else if is_btreemap {
+                    let methods: &[&str] = &["len", "insert", "get", "contains"];
+                    if let Ty::Applied(_, args) = &recv_ty
+                        && let Some(key_ty) = args.first()
+                        && !matches!(key_ty, Ty::I64 | Ty::Never)
+                    {
+                        self.emit_error(
+                            ErrorCode::BTreeMapKeyTypeMustBeI64,
+                            format!("BTreeMap key type must be i64; found `{key_ty}`"),
+                            expr.span,
+                        );
+                    }
+                    let value_ty = if let Ty::Applied(_, args) = &recv_ty {
+                        args.get(1).cloned().unwrap_or(Ty::I64)
+                    } else {
+                        Ty::I64
+                    };
+                    let ty = match method.as_str() {
+                        "len" => Some(Ty::I64),
+                        "insert" => Some(Ty::Applied(
+                            Box::new(Ty::Enum("Option".to_string())),
+                            vec![value_ty.clone()],
+                        )),
+                        "get" => Some(Ty::Applied(
+                            Box::new(Ty::Enum("Option".to_string())),
+                            vec![value_ty],
+                        )),
+                        "contains" => Some(Ty::Bool),
                         _ => None,
                     };
                     (methods, ty)
@@ -980,6 +1014,8 @@ impl<'e> Checker<'e> {
                             "String".to_string()
                         } else if is_hashmap {
                             "HashMap".to_string()
+                        } else if is_btreemap {
+                            "BTreeMap".to_string()
                         } else if is_vec {
                             "Vec".to_string()
                         } else if matches!(&recv_ty, Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Enum(n) if n == "Option"))
@@ -1506,6 +1542,9 @@ impl<'e> Checker<'e> {
                         return Ty::Str;
                     }
                     ("HashMap", "new") => {
+                        return Ty::Never;
+                    }
+                    ("BTreeMap", "new") => {
                         return Ty::Never;
                     }
                     ("Option", "None") => {

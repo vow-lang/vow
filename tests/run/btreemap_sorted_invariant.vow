@@ -1,0 +1,31 @@
+// Insert keys in non-sorted order [5, 2, 8, 1, 9] and verify each can be
+// retrieved with its associated value. Exercises sorted-insert + binary search.
+// TEST: stdout "len=5\n1=>10\n2=>20\n5=>50\n8=>80\n9=>90\n"
+module BTreeMapSortedInvariant
+
+fn fetch(m: BTreeMap<i64, i64>, k: i64) -> Option<i64> [io] {
+    let v: i64 = m.get(k)?;
+    print_i64(k);
+    print_str(String::from("=>"));
+    print_i64(v);
+    print_str(String::from("\n"));
+    Option::Some(v)
+}
+
+fn main() -> i32 [io] {
+    let m: BTreeMap<i64, i64> = BTreeMap::new();
+    m.insert(5, 50);
+    m.insert(2, 20);
+    m.insert(8, 80);
+    m.insert(1, 10);
+    m.insert(9, 90);
+    print_str(String::from("len="));
+    print_i64(m.len());
+    print_str(String::from("\n"));
+    fetch(m, 1);
+    fetch(m, 2);
+    fetch(m, 5);
+    fetch(m, 8);
+    fetch(m, 9);
+    0
+}
