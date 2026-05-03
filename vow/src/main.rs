@@ -1622,7 +1622,7 @@ pub fn api_function(x: i64) -> i64 {
 | `Result<T, E>`     | Success or error                |
 | `String`           | UTF-8 string (backed by Vec<u8>)|
 | `HashMap<K, V>`    | Key-value map (linear scan)     |
-| `BTreeMap<K, V>`   | Sorted key-value map (binary search; ascending iteration). Phase 1: `K = i64` only |
+| `BTreeMap<K, V>`   | Sorted key-value map (binary search; ascending iteration). Phase 1: `K = V = i64` only |
 
 ### User-Defined Types
 
@@ -2055,7 +2055,9 @@ m.contains_key(k)
 
 ### BTreeMap<K, V> Methods
 
-In Phase 1, `K` must be `i64` (other key types raise `BTreeMapKeyTypeMustBeI64`).
+In Phase 1, both `K` and `V` must be `i64` (other types raise `BTreeMapKeyTypeMustBeI64`).
+The runtime helpers and ESBMC C model are hard-coded to i64 keys + i64 values; widening V
+to support struct payloads is a planned follow-up.
 Storage is two parallel sorted arrays (binary-search lookup, sorted-insert writes).
 Iteration order is ascending by key and is **deterministic across runs and compilers** —
 prefer `BTreeMap` over `HashMap` for any map whose iteration affects compiler output.
@@ -3287,18 +3289,20 @@ trait Foo {
 ### BTreeMapKeyTypeMustBeI64
 
 **Phase:** Type Checker
-**Meaning:** A `BTreeMap<K, V>` was instantiated with a key type other than `i64`. Phase 1 of the BTreeMap stdlib only supports `i64` keys.
+**Meaning:** A `BTreeMap<K, V>` was instantiated with `K` or `V` not equal to `i64`. Phase 1 of the BTreeMap stdlib only supports `BTreeMap<i64, i64>` — both the runtime helpers and the ESBMC C model are hard-coded to i64 keys and i64 values; widening V to struct payloads is a planned follow-up. The same error code is used for both K and V violations; the message disambiguates.
 
 ```vow
 fn f() -> () {
-    let m: BTreeMap<bool, i64> = BTreeMap::new();
+    let m: BTreeMap<bool, i64> = BTreeMap::new();   // K violation
     m.insert(true, 1);
+    let n: BTreeMap<i64, String> = BTreeMap::new(); // V violation
 }
 ```
 
-**Output:** `BTreeMap key type must be i64; found 'bool'`
+**Output (K):** `BTreeMap key type must be i64; found 'bool'`
+**Output (V):** `BTreeMap value type must be i64 in Phase 1; found 'String'`
 
-**Fix:** Use `BTreeMap<i64, V>`. If you need string or struct keys, hash them to `i64` at the call site and store the original key alongside the value.
+**Fix:** Use `BTreeMap<i64, i64>`. If you need string or struct keys/values, hash or intern them to `i64` at the call site and keep a side-table for the originals. Generic V is tracked as a follow-up to the BTreeMap stdlib work.
 
 ### MissingContract
 
