@@ -3014,10 +3014,10 @@ fn skill_full() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**`process_kill`:** `process_kill(pid)` sends a kill signal to a running process and waits for it to exit. Returns 0 on success, -1 on error. No-op (returns 0) if the process has already completed.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**`stdin_read` vs `stdin_read_line`:** `stdin_read()` reads the entire stdin stream into a single String (unbounded memory). `stdin_read_line()` reads one line at a time, including the trailing newline. Returns `\"\"` (empty string) at EOF. Use `stdin_read_line` for line-at-a-time processing with bounded memory:\n"));
+    r.push_str(String::from("**`stdin_read` vs `stdin_read_line`:** `stdin_read()` reads the entire stdin stream into a single String (unbounded memory). `stdin_read_line()` reads one line at a time, including the trailing newline. Returns `\"\"` (empty string) at EOF. The returned String is runtime scratch storage valid until the next `stdin_read_line()` call. Process each line before reading the next one for bounded memory; use `pin_to_root(line)` before the next read when a line must be stored, returned, mutated, or otherwise retained. The direct scratch line is read-only.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
-    r.push_str(String::from("let line: String = stdin_read_line();\n"));
+    r.push_str(String::from("let mut line: String = stdin_read_line();\n"));
     r.push_str(String::from("while str_len(line) > 0 {\n"));
     r.push_str(String::from("    // process line (has trailing \\n)\n"));
     r.push_str(String::from("    line = stdin_read_line();\n"));

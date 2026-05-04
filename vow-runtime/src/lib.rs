@@ -4,8 +4,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{CStr, c_char};
 use std::io::Write as _;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 thread_local! {
     static LAST_STDOUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
@@ -836,6 +836,57 @@ pub struct VowVec {
     pub ptr: *mut u8,
     pub len: usize,
     pub cap: usize,
+}
+
+struct StdinLineScratch {
+    desc: VowVec,
+    bytes: Vec<u8>,
+}
+
+// SAFETY: access is serialized by STDIN_LINE_SCRATCH's Mutex, and desc.ptr is
+// either dangling for len=0 or points into bytes owned by the same scratch.
+unsafe impl Send for StdinLineScratch {}
+
+impl StdinLineScratch {
+    fn new() -> Self {
+        Self {
+            desc: VowVec {
+                ptr: std::ptr::dangling_mut::<u8>(),
+                len: 0,
+                cap: VOW_CAP_RODATA,
+            },
+            bytes: Vec::new(),
+        }
+    }
+}
+
+static STDIN_LINE_SCRATCH: OnceLock<Mutex<StdinLineScratch>> = OnceLock::new();
+
+fn stdin_line_scratch() -> &'static Mutex<StdinLineScratch> {
+    STDIN_LINE_SCRATCH.get_or_init(|| Mutex::new(StdinLineScratch::new()))
+}
+
+fn read_stdin_line_into_scratch<R: std::io::BufRead>(
+    reader: &mut R,
+    scratch: &mut StdinLineScratch,
+) -> *mut u8 {
+    scratch.bytes.clear();
+    let bytes_read = match reader.read_until(b'\n', &mut scratch.bytes) {
+        Ok(n) => n,
+        Err(_) => {
+            scratch.bytes.clear();
+            0
+        }
+    };
+    if bytes_read == 0 {
+        scratch.desc.ptr = std::ptr::dangling_mut::<u8>();
+        scratch.desc.len = 0;
+    } else {
+        scratch.desc.ptr = scratch.bytes.as_mut_ptr();
+        scratch.desc.len = scratch.bytes.len();
+    }
+    scratch.desc.cap = VOW_CAP_RODATA;
+    &mut scratch.desc as *mut VowVec as *mut u8
 }
 
 const VEC_INITIAL_CAP: usize = 8;
@@ -1834,16 +1885,10 @@ pub extern "C" fn __vow_stdin_read() -> *mut u8 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_stdin_read_line() -> *mut u8 {
-    use std::io::BufRead;
     let stdin = std::io::stdin();
     let mut handle = stdin.lock();
-    let mut line = String::new();
-    let bytes_read = handle.read_line(&mut line).unwrap_or(0);
-    if bytes_read == 0 {
-        unsafe { __vow_string_new(std::ptr::null(), 0) }
-    } else {
-        unsafe { __vow_string_new(line.as_ptr() as *const i8, line.len()) }
-    }
+    let mut scratch = stdin_line_scratch().lock().unwrap();
+    read_stdin_line_into_scratch(&mut handle, &mut scratch)
 }
 
 #[unsafe(no_mangle)]
@@ -2963,6 +3008,64 @@ mod tests {
         assert_ne!(pv.ptr, bytes.as_ptr() as *mut u8);
         let pinned_bytes = unsafe { std::slice::from_raw_parts(pv.ptr, pv.len) };
         assert_eq!(pinned_bytes, b"rooted");
+    }
+
+    #[test]
+    fn stdin_read_line_scratch_reuses_capacity_for_many_lines() {
+        let line_len = 4096;
+        let line_count = 512;
+        let mut input = Vec::with_capacity((line_len + 1) * line_count);
+        for _ in 0..line_count {
+            input.extend(std::iter::repeat_n(b'x', line_len));
+            input.push(b'\n');
+        }
+
+        let mut reader = std::io::Cursor::new(input);
+        let mut scratch = StdinLineScratch::new();
+        for _ in 0..line_count {
+            let ptr = read_stdin_line_into_scratch(&mut reader, &mut scratch);
+            let line = unsafe { &*(ptr as *const VowVec) };
+            assert_eq!(line.len, line_len + 1);
+            assert_eq!(line.cap, VOW_CAP_RODATA);
+        }
+
+        assert!(
+            scratch.bytes.capacity() < (line_len + 1) * line_count / 4,
+            "scratch capacity should track max line size, not total input"
+        );
+    }
+
+    #[test]
+    fn stdin_read_line_scratch_descriptor_is_reused_and_read_only() {
+        let mut reader = std::io::Cursor::new(b"first\nsecond\n".as_slice());
+        let mut scratch = StdinLineScratch::new();
+
+        let first = read_stdin_line_into_scratch(&mut reader, &mut scratch);
+        let first_desc = unsafe { &*(first as *const VowVec) };
+        let first_bytes = unsafe { std::slice::from_raw_parts(first_desc.ptr, first_desc.len) };
+        assert_eq!(first_bytes, b"first\n");
+        assert_eq!(first_desc.cap, VOW_CAP_RODATA);
+
+        let second = read_stdin_line_into_scratch(&mut reader, &mut scratch);
+        assert_eq!(first, second, "stdin scratch descriptor should be stable");
+        let second_desc = unsafe { &*(second as *const VowVec) };
+        let second_bytes = unsafe { std::slice::from_raw_parts(second_desc.ptr, second_desc.len) };
+        assert_eq!(second_bytes, b"second\n");
+        assert_eq!(second_desc.cap, VOW_CAP_RODATA);
+    }
+
+    #[test]
+    fn stdin_read_line_pin_to_root_preserves_previous_line() {
+        let mut reader = std::io::Cursor::new(b"alpha\nbeta\n".as_slice());
+        let mut scratch = StdinLineScratch::new();
+
+        let first = read_stdin_line_into_scratch(&mut reader, &mut scratch);
+        let pinned = unsafe { __vow_string_pin_to_root(first) };
+        let _second = read_stdin_line_into_scratch(&mut reader, &mut scratch);
+
+        let pinned_desc = unsafe { &*(pinned as *const VowVec) };
+        let pinned_bytes = unsafe { std::slice::from_raw_parts(pinned_desc.ptr, pinned_desc.len) };
+        assert_eq!(pinned_bytes, b"alpha\n");
     }
 
     #[test]

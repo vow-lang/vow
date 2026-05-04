@@ -798,10 +798,10 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 
 **`process_kill`:** `process_kill(pid)` sends a kill signal to a running process and waits for it to exit. Returns 0 on success, -1 on error. No-op (returns 0) if the process has already completed.
 
-**`stdin_read` vs `stdin_read_line`:** `stdin_read()` reads the entire stdin stream into a single String (unbounded memory). `stdin_read_line()` reads one line at a time, including the trailing newline. Returns `""` (empty string) at EOF. Use `stdin_read_line` for line-at-a-time processing with bounded memory:
+**`stdin_read` vs `stdin_read_line`:** `stdin_read()` reads the entire stdin stream into a single String (unbounded memory). `stdin_read_line()` reads one line at a time, including the trailing newline. Returns `""` (empty string) at EOF. The returned String is runtime scratch storage valid until the next `stdin_read_line()` call. Process each line before reading the next one for bounded memory; use `pin_to_root(line)` before the next read when a line must be stored, returned, mutated, or otherwise retained. The direct scratch line is read-only.
 
 ```vow
-let line: String = stdin_read_line();
+let mut line: String = stdin_read_line();
 while str_len(line) > 0 {
     // process line (has trailing \n)
     line = stdin_read_line();

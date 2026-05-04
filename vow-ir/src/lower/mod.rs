@@ -87,6 +87,20 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
     }
 }
 
+fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId) {
+    match name {
+        "fs_read" | "stdin_read" | "stdin_read_line" | "string_substr" | "string_trim"
+        | "string_to_upper" | "string_to_lower" | "string_replace" | "string_join"
+        | "i64_to_string" | "hex_encode" => {
+            ctx.inst_struct_type.insert(result, "String".to_string());
+        }
+        "args" | "fs_listdir" | "string_split" | "vec_sort" | "hex_decode" => {
+            ctx.inst_struct_type.insert(result, "Vec".to_string());
+        }
+        _ => {}
+    }
+}
+
 fn lower_ty_with_linear(ast_ty: &AstType, linear_struct_names: &HashSet<String>) -> Ty {
     match ast_ty {
         AstType::Named { name, .. } => match name.as_str() {
@@ -837,13 +851,15 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 )
             } else if let Some((sym, ret_ty)) = vow_builtin_to_runtime(&callee_name) {
-                ctx.emit(
+                let result = ctx.emit(
                     Opcode::Call,
                     ret_ty,
                     arg_ids,
                     InstData::CallExtern(sym.to_string()),
                     span,
-                )
+                );
+                tag_builtin_result(ctx, &callee_name, result);
+                result
             } else {
                 ctx.emit(
                     Opcode::Call,
