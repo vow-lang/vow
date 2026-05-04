@@ -878,6 +878,8 @@ fn read_stdin_line_into_scratch<R: std::io::BufRead>(
     // clear preserves capacity: scratch memory follows the largest line seen,
     // not total input, and may retain that high-water mark for process lifetime.
     scratch.bytes.clear();
+    // Vow strings are byte strings: accept arbitrary stdin bytes, including
+    // invalid UTF-8, while still splitting on newline bytes.
     let bytes_read = match reader.read_until(b'\n', &mut scratch.bytes) {
         Ok(n) => n,
         Err(_) => {
