@@ -844,12 +844,10 @@ struct StdinLineScratch {
 }
 
 // SAFETY: desc.ptr is either dangling for len=0 or points into bytes owned by
-// the same scratch value. Moving StdinLineScratch keeps that internal pointer
-// valid because Vec backing storage does not move with the struct. The pointer
-// returned from stdin_read_line points at scratch.desc, whose address is stable
-// because STDIN_LINE_SCRATCH lives in a static OnceLock. The mutex serializes
-// mutation; after the lock is dropped, soundness relies on Vow programs calling
-// stdin_read_line from one thread.
+// the same scratch value. The pointer returned from stdin_read_line points at
+// scratch.desc, whose address is stable because STDIN_LINE_SCRATCH lives in a
+// static OnceLock. The mutex serializes mutation; after the lock is dropped,
+// soundness relies on Vow programs calling stdin_read_line from one thread.
 unsafe impl Send for StdinLineScratch {}
 
 impl StdinLineScratch {
