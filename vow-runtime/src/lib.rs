@@ -4,8 +4,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{CStr, c_char};
 use std::io::Write as _;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
 
 thread_local! {
     static LAST_STDOUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
@@ -843,13 +843,6 @@ struct StdinLineScratch {
     bytes: Vec<u8>,
 }
 
-// SAFETY: desc.ptr is either dangling for len=0 or points into bytes owned by
-// the same scratch value. The pointer returned from stdin_read_line points at
-// scratch.desc, whose address is stable because STDIN_LINE_SCRATCH lives in a
-// static OnceLock. The mutex serializes mutation; after the lock is dropped,
-// soundness relies on Vow programs calling stdin_read_line from one thread.
-unsafe impl Send for StdinLineScratch {}
-
 impl StdinLineScratch {
     fn new() -> Self {
         Self {
@@ -863,10 +856,12 @@ impl StdinLineScratch {
     }
 }
 
-static STDIN_LINE_SCRATCH: OnceLock<Mutex<StdinLineScratch>> = OnceLock::new();
-
-fn stdin_line_scratch() -> &'static Mutex<StdinLineScratch> {
-    STDIN_LINE_SCRATCH.get_or_init(|| Mutex::new(StdinLineScratch::new()))
+thread_local! {
+    // Each OS thread owns one stable descriptor. The returned pointer remains
+    // valid until that same thread's next stdin_read_line call, and concurrent
+    // callers never share descriptor or backing-buffer state.
+    static STDIN_LINE_SCRATCH: RefCell<StdinLineScratch> =
+        RefCell::new(StdinLineScratch::new());
 }
 
 fn read_stdin_line_into_scratch<R: std::io::BufRead>(
@@ -1898,8 +1893,10 @@ pub extern "C" fn __vow_stdin_read() -> *mut u8 {
 pub extern "C" fn __vow_stdin_read_line() -> *mut u8 {
     let stdin = std::io::stdin();
     let mut handle = stdin.lock();
-    let mut scratch = stdin_line_scratch().lock().unwrap();
-    read_stdin_line_into_scratch(&mut handle, &mut scratch)
+    STDIN_LINE_SCRATCH.with(|cell| {
+        let mut scratch = cell.borrow_mut();
+        read_stdin_line_into_scratch(&mut handle, &mut scratch)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -3041,9 +3038,44 @@ mod tests {
         }
 
         assert!(
-            scratch.bytes.capacity() < (line_len + 1) * line_count / 4,
+            scratch.bytes.capacity() <= 2 * (line_len + 1),
             "scratch capacity should track max line size, not total input"
         );
+    }
+
+    #[test]
+    fn stdin_read_line_scratch_descriptor_is_thread_local() {
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut handles = Vec::new();
+
+        for byte in [b'a', b'b'] {
+            let barrier = std::sync::Arc::clone(&barrier);
+            let tx = tx.clone();
+            handles.push(std::thread::spawn(move || {
+                let input = [byte, b'\n'];
+                let mut reader = std::io::Cursor::new(input.as_slice());
+                let ptr = STDIN_LINE_SCRATCH.with(|cell| {
+                    let mut scratch = cell.borrow_mut();
+                    read_stdin_line_into_scratch(&mut reader, &mut scratch) as usize
+                });
+                tx.send(ptr).unwrap();
+                barrier.wait();
+            }));
+        }
+        drop(tx);
+
+        let first = rx.recv().unwrap();
+        let second = rx.recv().unwrap();
+        assert_ne!(
+            first, second,
+            "stdin scratch descriptor should be per-thread"
+        );
+        barrier.wait();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
     }
 
     #[test]
