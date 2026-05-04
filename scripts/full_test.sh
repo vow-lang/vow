@@ -367,6 +367,10 @@ for vow_file in tests/run/*.vow; do
     stdin_path=""
     if [ -n "$test_stdin_file" ]; then
         stdin_path="$(dirname "$vow_file")/$test_stdin_file"
+        if [ ! -f "$stdin_path" ]; then
+            fail "${name}/test-run" "stdin fixture not found: $stdin_path"
+            continue
+        fi
     elif [ -n "$test_stdin" ]; then
         stdin_path="$TMPDIR/stdin_${name}.txt"
         printf '%b' "$test_stdin" > "$stdin_path"
