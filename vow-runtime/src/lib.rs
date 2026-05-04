@@ -187,10 +187,12 @@ fn oom_trap(operation: &'static str) -> ! {
 
 fn region_literal_mutation_trap(operation: &'static str) -> ! {
     use std::io::Write;
+    // VOW_CAP_RODATA marks read-only descriptors, including literals and
+    // stdin_read_line scratch storage. Keep the hint useful for both origins.
     let hint: &[u8] = if operation.starts_with("String::") {
-        b"hint: use String::from(literal) to obtain a mutable copy\n"
+        b"hint: use String::from(literal) for literals; use pin_to_root(value) for read-only scratch strings\n"
     } else if operation.starts_with("Vec::") {
-        b"hint: use Vec::from(literal) to obtain a mutable copy\n"
+        b"hint: use Vec::from(literal) for literals; use pin_to_root(value) for read-only vectors\n"
     } else if operation.starts_with("HashMap::") {
         b"hint: construct a mutable HashMap and copy entries before mutating\n"
     } else {
@@ -892,6 +894,10 @@ fn read_stdin_line_into_scratch<R: std::io::BufRead>(
         scratch.desc.len = scratch.bytes.len();
     }
     scratch.desc.cap = VOW_CAP_RODATA;
+    // SAFETY: this raw pointer escapes the RefCell borrow in
+    // __vow_stdin_read_line, but it targets this thread's stable thread-local
+    // descriptor. The descriptor remains live for the thread lifetime; its
+    // contents are semantically invalidated by the next call on this thread.
     &mut scratch.desc as *mut VowVec as *mut u8
 }
 
@@ -3318,6 +3324,12 @@ mod tests {
                 || stderr.contains("hint: construct a mutable HashMap"),
             "stderr missing hint line:\n{stderr}"
         );
+        if expected_op_in_json.starts_with("String::") || expected_op_in_json.starts_with("Vec::") {
+            assert!(
+                stderr.contains("pin_to_root(value)"),
+                "stderr missing pin_to_root hint for read-only heap value:\n{stderr}"
+            );
+        }
     }
 
     #[test]
