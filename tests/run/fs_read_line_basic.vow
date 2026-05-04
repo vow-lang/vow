@@ -28,6 +28,7 @@ fn main() -> i32 [read, io] {
         return fail(String::from("third"));
     }
 
+    fs_close(h);
     print_str(String::from("ok\n"));
     0
 }
