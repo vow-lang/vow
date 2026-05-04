@@ -3020,7 +3020,7 @@ fn skill_full() -> String {
     r.push_str(String::from("let lines: Vec<String> = Vec::new();\n"));
     r.push_str(String::from("let mut line: String = stdin_read_line();\n"));
     r.push_str(String::from("while str_len(line) > 0 {\n"));
-    r.push_str(String::from("    // WRONG: lines.push(line) stores the scratch alias, not a copy.\n"));
+    r.push_str(String::from("    // Without pin_to_root, lines.push(line) would store the scratch alias, not a copy.\n"));
     r.push_str(String::from("    lines.push(pin_to_root(line));\n"));
     r.push_str(String::from("    line = stdin_read_line();\n"));
     r.push_str(String::from("}\n"));

@@ -804,7 +804,7 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 let lines: Vec<String> = Vec::new();
 let mut line: String = stdin_read_line();
 while str_len(line) > 0 {
-    // WRONG: lines.push(line) stores the scratch alias, not a copy.
+    // Without pin_to_root, lines.push(line) would store the scratch alias, not a copy.
     lines.push(pin_to_root(line));
     line = stdin_read_line();
 }
