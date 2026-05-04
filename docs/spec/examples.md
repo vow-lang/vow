@@ -407,7 +407,10 @@ fn main() -> i32 [read, io] {
         eprintln_str(String::from("read error"));
         return 1;
     }
-    fs_close(h);
+    if fs_close(h) != 0 {
+        eprintln_str(String::from("close error"));
+        return 1;
+    }
 
     print_i64(lines);
     print_str(String::from("\n"));
@@ -422,7 +425,7 @@ Key points:
 - `fs_read_line(handle)` includes the trailing newline when present.
 - Blank lines are returned as `"\n"`; EOF returns `""`.
 - Check `fs_status(handle)` after `fs_read_line(handle)` returns `""`: `1` means EOF, `-1` means invalid handle or read error.
-- Close each successful handle with `fs_close(handle)`.
+- Close each successful handle with `fs_close(handle)` and check for a non-zero close result.
 
 ## 7. BTreeMap basic usage
 
