@@ -702,6 +702,10 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 | Function         | Signature                                  | Effects    |
 |------------------|--------------------------------------------|------------|
 | `fs_read`        | `fn(path: String) -> String`               | `[read]`   |
+| `fs_open`        | `fn(path: String) -> i64`                  | `[read]`   |
+| `fs_read_line`   | `fn(handle: i64) -> String`                | `[read]`   |
+| `fs_status`      | `fn(handle: i64) -> i64`                   | `[read]`   |
+| `fs_close`       | `fn(handle: i64) -> i64`                   | `[read]`   |
 | `fs_write`       | `fn(path: String, data: String) -> i64`    | `[write]`  |
 | `fs_exists`      | `fn(path: String) -> i64`                  | `[read]`   |
 | `fs_mkdir`       | `fn(path: String) -> i64`                  | `[io]`     |
@@ -788,7 +792,9 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 
 **`fs_read` semantics:** `fs_read(path)` opens the file at `path`, reads its entire contents, and returns a String. Returns `""` (empty String) on any error (file not found, permission denied, I/O error, non-UTF-8 path). Does not block on regular files. Callers should check `result.len() == 0` to detect failure.
 
-**Filesystem return values:** `fs_write`, `fs_mkdir`, `fs_remove`, `fs_remove_dir`, and `fs_rename` return `i64`: 0 on success, non-zero on failure. `fs_exists` and `fs_is_dir` are predicates: they return 1 for true, 0 for false. Errors (null pointer, invalid UTF-8) also return 0, so callers cannot distinguish "false" from "error".
+**Streaming file input:** `fs_open(path)` opens a file for incremental reading and returns a positive handle, or `-1` on path/open error. `fs_read_line(handle)` reads one line from the current cursor and returns it as a String, including the trailing newline when present. It returns `""` at EOF, for an invalid handle, or after a read error. A blank line is returned as `"\n"`, so newline-delimited callers can distinguish a real blank line from EOF by content. After `fs_read_line(handle)` returns `""`, call `fs_status(handle)` to distinguish EOF from error: `0` means the handle is open with no EOF/error state, `1` means EOF, and `-1` means invalid handle or read error. `fs_close(handle)` releases the handle and returns `0` on success or `-1` for an invalid/already-closed handle. Long-running programs must close handles they no longer need.
+
+**Filesystem return values:** `fs_write`, `fs_mkdir`, `fs_remove`, `fs_remove_dir`, and `fs_rename` return `i64`: 0 on success, non-zero on failure. `fs_open`, `fs_status`, and `fs_close` use the streaming status codes above. `fs_exists` and `fs_is_dir` are predicates: they return 1 for true, 0 for false. Errors (null pointer, invalid UTF-8) also return 0, so callers cannot distinguish "false" from "error".
 
 **`string_starts_with` / `string_ends_with` return values:** Return `i64`: 1 if true, 0 if false.
 

@@ -1926,6 +1926,22 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // path C-string
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8> or null
         }
+        "__vow_fs_open" => {
+            sig.params.push(AbiParam::new(types::I64)); // path *VowVec<u8>
+            sig.returns.push(AbiParam::new(types::I64)); // positive handle or -1
+        }
+        "__vow_fs_read_line" => {
+            sig.params.push(AbiParam::new(types::I64)); // file handle
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_fs_status" => {
+            sig.params.push(AbiParam::new(types::I64)); // file handle
+            sig.returns.push(AbiParam::new(types::I64)); // 0=active, 1=EOF, -1=err
+        }
+        "__vow_fs_close" => {
+            sig.params.push(AbiParam::new(types::I64)); // file handle
+            sig.returns.push(AbiParam::new(types::I64)); // 0=ok, -1=err
+        }
         "__vow_fs_write" => {
             sig.params.push(AbiParam::new(types::I64)); // path C-string
             sig.params.push(AbiParam::new(types::I64)); // data *VowVec<u8>

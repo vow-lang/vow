@@ -1,0 +1,33 @@
+// TEST: stdout "ok\n"
+module FsReadLineBasic
+
+fn fail(msg: String) -> i32 [io] {
+    print_str(msg);
+    print_str(String::from("\n"));
+    1
+}
+
+fn main() -> i32 [read, io] {
+    let h: i64 = fs_open(String::from("tests/fixtures/fs_stream_lines.txt"));
+    if h <= 0 {
+        return fail(String::from("open"));
+    }
+
+    let first: String = fs_read_line(h);
+    if first != String::from("alpha\n") {
+        return fail(String::from("first"));
+    }
+
+    let blank: String = fs_read_line(h);
+    if blank != String::from("\n") {
+        return fail(String::from("blank"));
+    }
+
+    let third: String = fs_read_line(h);
+    if third != String::from("omega\n") {
+        return fail(String::from("third"));
+    }
+
+    print_str(String::from("ok\n"));
+    0
+}

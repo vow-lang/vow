@@ -152,6 +152,38 @@ impl TypeEnv {
             },
         );
         env.define_fn(
+            "fs_open",
+            FnSig {
+                params: vec![Ty::Str],
+                return_ty: Ty::I64,
+                effects: [Effect::Read].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "fs_read_line",
+            FnSig {
+                params: vec![Ty::I64],
+                return_ty: Ty::Str,
+                effects: [Effect::Read].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "fs_status",
+            FnSig {
+                params: vec![Ty::I64],
+                return_ty: Ty::I64,
+                effects: [Effect::Read].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "fs_close",
+            FnSig {
+                params: vec![Ty::I64],
+                return_ty: Ty::I64,
+                effects: [Effect::Read].into_iter().collect(),
+            },
+        );
+        env.define_fn(
             "fs_write",
             FnSig {
                 params: vec![Ty::Str, Ty::Str],

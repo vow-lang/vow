@@ -17,12 +17,25 @@ enum ProcessState {
     Completed { stdout: Vec<u8>, stderr: Vec<u8> },
 }
 
+struct FileReadState {
+    reader: std::io::BufReader<std::fs::File>,
+    status: i64,
+}
+
 static PROCESS_MAP: Mutex<Option<HashMap<i64, ProcessState>>> = Mutex::new(None);
 static NEXT_PROCESS_HANDLE: AtomicI64 = AtomicI64::new(1);
+static FILE_READ_MAP: Mutex<Option<HashMap<i64, FileReadState>>> = Mutex::new(None);
+static NEXT_FILE_READ_HANDLE: AtomicI64 = AtomicI64::new(1);
 
 fn process_map_init(
     map: &mut Option<HashMap<i64, ProcessState>>,
 ) -> &mut HashMap<i64, ProcessState> {
+    map.get_or_insert_with(HashMap::new)
+}
+
+fn file_read_map_init(
+    map: &mut Option<HashMap<i64, FileReadState>>,
+) -> &mut HashMap<i64, FileReadState> {
     map.get_or_insert_with(HashMap::new)
 }
 
@@ -1706,6 +1719,85 @@ pub unsafe extern "C" fn __vow_fs_read(path_ptr: *const u8) -> *mut u8 {
         Ok(bytes) => unsafe { __vow_string_new(bytes.as_ptr() as *const i8, bytes.len()) },
         Err(_) => __vow_vec_new(1, 1),
     }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_fs_open(path_ptr: *const u8) -> i64 {
+    if path_ptr.is_null() {
+        return -1;
+    }
+    sanitize_on_read(path_ptr as usize, 0);
+    let v = unsafe { &*(path_ptr as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let path = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return -1,
+    };
+    let handle = NEXT_FILE_READ_HANDLE.fetch_add(1, Ordering::Relaxed);
+    if handle <= 0 {
+        return -1;
+    }
+    let state = FileReadState {
+        reader: std::io::BufReader::new(file),
+        status: 0,
+    };
+    let mut map_guard = FILE_READ_MAP.lock().unwrap();
+    let map = file_read_map_init(&mut map_guard);
+    map.insert(handle, state);
+    handle
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_fs_read_line(handle: i64) -> *mut u8 {
+    use std::io::BufRead;
+
+    let mut map_guard = FILE_READ_MAP.lock().unwrap();
+    let Some(map) = map_guard.as_mut() else {
+        return unsafe { __vow_string_new(std::ptr::null(), 0) };
+    };
+    let Some(state) = map.get_mut(&handle) else {
+        return unsafe { __vow_string_new(std::ptr::null(), 0) };
+    };
+    let mut line = Vec::new();
+    match state.reader.read_until(b'\n', &mut line) {
+        Ok(0) => {
+            state.status = 1;
+            unsafe { __vow_string_new(std::ptr::null(), 0) }
+        }
+        Ok(_) => {
+            state.status = 0;
+            unsafe { __vow_string_new(line.as_ptr() as *const i8, line.len()) }
+        }
+        Err(_) => {
+            state.status = -1;
+            unsafe { __vow_string_new(std::ptr::null(), 0) }
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_fs_status(handle: i64) -> i64 {
+    let map_guard = FILE_READ_MAP.lock().unwrap();
+    let Some(map) = map_guard.as_ref() else {
+        return -1;
+    };
+    match map.get(&handle) {
+        Some(state) => state.status,
+        None => -1,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_fs_close(handle: i64) -> i64 {
+    let mut map_guard = FILE_READ_MAP.lock().unwrap();
+    let Some(map) = map_guard.as_mut() else {
+        return -1;
+    };
+    if map.remove(&handle).is_some() { 0 } else { -1 }
 }
 
 #[unsafe(no_mangle)]

@@ -1,6 +1,6 @@
 # Worked Examples
 
-Verification workflow examples. The first three demonstrate Counterexample-Guided Inductive Synthesis (CEGIS) cycles: write spec, build, read JSON, diagnose, fix, verify. The fourth shows break-with-value in loop expressions. The fifth shows an EOF-safe interactive command loop using `stdin_read_line()`.
+Verification workflow examples. The first three demonstrate Counterexample-Guided Inductive Synthesis (CEGIS) cycles: write spec, build, read JSON, diagnose, fix, verify. The fourth shows break-with-value in loop expressions. The fifth shows an EOF-safe interactive command loop using `stdin_read_line()`. The sixth shows bounded-memory streaming file input.
 
 ## 1. Safe Division — Requires Pattern
 
@@ -373,7 +373,58 @@ When stdin is exhausted, `stdin_read_line()` returns `""` (length 0), the `while
 - **Effects:** `stdin_read_line()` requires `[read]`; `print_str()` requires `[io]`. The `main` function declares both.
 - **CI-safe:** No blocking reads, no prompts — the program processes whatever stdin provides and exits at EOF. Safe to run in pipelines and test harnesses.
 
-## 6. BTreeMap basic usage
+## 6. Streaming File Input
+
+`fs_read(path)` materializes the entire file as one `String`. Use `fs_open` plus `fs_read_line` for newline-delimited files that may be large.
+
+```vow
+module StreamingFile
+
+fn main() -> i32 [read, io] {
+    let argv: Vec<String> = args();
+    if argv.len() < 2 {
+        eprintln_str(String::from("usage: streaming_file <path>"));
+        return 1;
+    }
+
+    let h: i64 = fs_open(argv[1]);
+    if h <= 0 {
+        eprintln_str(String::from("could not open input"));
+        return 1;
+    }
+
+    let mut lines: i64 = 0;
+    let mut bytes: i64 = 0;
+    let mut line: String = fs_read_line(h);
+    while line.len() > 0 {
+        lines = lines + 1;
+        bytes = bytes + line.len();
+        line = fs_read_line(h);
+    }
+
+    if fs_status(h) != 1 {
+        fs_close(h);
+        eprintln_str(String::from("read error"));
+        return 1;
+    }
+    fs_close(h);
+
+    print_i64(lines);
+    print_str(String::from("\n"));
+    print_i64(bytes);
+    print_str(String::from("\n"));
+    0
+}
+```
+
+Key points:
+
+- `fs_read_line(handle)` includes the trailing newline when present.
+- Blank lines are returned as `"\n"`; EOF returns `""`.
+- Check `fs_status(handle)` after `fs_read_line(handle)` returns `""`: `1` means EOF, `-1` means invalid handle or read error.
+- Close each successful handle with `fs_close(handle)`.
+
+## 7. BTreeMap basic usage
 
 `BTreeMap<i64, V>` is the deterministic alternative to `HashMap` — sorted ascending by key, binary-search lookup. Use it when iteration order affects program output (codegen, serialization, or any reproducible build).
 
