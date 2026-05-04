@@ -93,7 +93,8 @@ fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId) {
     match name {
         "fs_read" | "stdin_read" | "stdin_read_line" | "string_substr" | "string_trim"
         | "string_to_upper" | "string_to_lower" | "string_replace" | "string_join"
-        | "i64_to_string" | "hex_encode" => {
+        | "i64_to_string" | "hex_encode" | "process_get_stdout" | "process_get_stderr"
+        | "process_stdout_for" | "process_stderr_for" => {
             ctx.inst_struct_type.insert(result, "String".to_string());
         }
         "args" | "fs_listdir" | "string_split" | "vec_sort" | "hex_decode" => {
@@ -3440,6 +3441,13 @@ mod tests {
         }
     }
 
+    fn string_ty() -> Type {
+        Type::Named {
+            name: "String".to_string(),
+            span: sp(),
+        }
+    }
+
     fn int_expr(v: i128) -> Expr {
         Expr {
             kind: ExprKind::Lit(Lit::Int(v)),
@@ -3457,6 +3465,16 @@ mod tests {
     fn ident_expr(name: &str) -> Expr {
         Expr {
             kind: ExprKind::Ident(name.to_string()),
+            span: sp(),
+        }
+    }
+
+    fn call_expr(callee: &str, args: Vec<Expr>) -> Expr {
+        Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(ident_expr(callee)),
+                args,
+            },
             span: sp(),
         }
     }
@@ -3707,6 +3725,53 @@ mod tests {
         let ret = all_insts.iter().find(|i| i.opcode == Opcode::Return);
         assert!(ret.is_some(), "expected Return instruction");
         assert_eq!(func.return_ty, Ty::Unit);
+    }
+
+    #[test]
+    fn pin_to_root_process_stdout_lowers_to_string_pin() {
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(call_expr(
+                "pin_to_root",
+                vec![call_expr("process_get_stdout", vec![])],
+            ))),
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "pin_process_stdout",
+            vec![],
+            string_ty(),
+            body,
+            vec![Effect::IO],
+        );
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
+        assert!(
+            all_insts
+                .iter()
+                .any(|inst| inst.data
+                    == InstData::CallExtern("__vow_process_get_stdout".to_string())),
+            "expected process_get_stdout extern call"
+        );
+        assert!(
+            all_insts
+                .iter()
+                .any(|inst| inst.data
+                    == InstData::CallExtern("__vow_string_pin_to_root".to_string())),
+            "direct pin_to_root(process_get_stdout()) must lower to string pin"
+        );
     }
 
     #[test]

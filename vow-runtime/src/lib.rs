@@ -843,8 +843,10 @@ struct StdinLineScratch {
     bytes: Vec<u8>,
 }
 
-// SAFETY: access is serialized by STDIN_LINE_SCRATCH's Mutex, and desc.ptr is
-// either dangling for len=0 or points into bytes owned by the same scratch.
+// SAFETY: mutation is serialized by STDIN_LINE_SCRATCH's Mutex, and desc.ptr is
+// either dangling for len=0 or points into bytes owned by the same scratch. The
+// returned pointer stays sound because Vow programs call stdin_read_line on one
+// thread; concurrent calls would alias scratch storage after the lock is dropped.
 unsafe impl Send for StdinLineScratch {}
 
 impl StdinLineScratch {

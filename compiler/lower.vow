@@ -1076,6 +1076,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             if fn_name == String::from("hex_encode") {
                 lctx_tag(ctx, result, String::from("String"));
             }
+            if fn_name == String::from("process_get_stdout") || fn_name == String::from("process_get_stderr") || fn_name == String::from("process_stdout_for") || fn_name == String::from("process_stderr_for") {
+                lctx_tag(ctx, result, String::from("String"));
+            }
             if fn_name == String::from("vec_sort") || fn_name == String::from("hex_decode") {
                 lctx_tag(ctx, result, String::from("Vec"));
             }
