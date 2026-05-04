@@ -824,6 +824,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     }
                     return result;
                 }
+                // pin_to_root relies on lowering-time String/Vec tags. Keep
+                // tag_builtin_result in sync for heap-returning builtins, or a
+                // direct pin_to_root(builtin_call()) becomes a no-op here.
                 return source_id;
             }
             let call_info = ctx.func_index.get(&callee_name).cloned();

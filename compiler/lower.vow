@@ -1025,6 +1025,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     }
                     return result;
                 }
+                // pin_to_root relies on lowering-time String/Vec tags. Keep builtin result
+                // tags in sync with the Rust lowerer, or pin_to_root(expr) becomes a no-op here.
                 return source_id;
             }
         }

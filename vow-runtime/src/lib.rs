@@ -874,6 +874,7 @@ fn read_stdin_line_into_scratch<R: std::io::BufRead>(
     let bytes_read = match reader.read_until(b'\n', &mut scratch.bytes) {
         Ok(n) => n,
         Err(_) => {
+            // Preserve the historical stdin_read_line contract: IO errors look like EOF.
             scratch.bytes.clear();
             0
         }
