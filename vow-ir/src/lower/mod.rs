@@ -87,6 +87,8 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
     }
 }
 
+// Keep this list in sync with the builtin result tags in compiler/lower.vow.
+// pin_to_root depends on these heap tags for direct builtin call results.
 fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId) {
     match name {
         "fs_read" | "stdin_read" | "stdin_read_line" | "string_substr" | "string_trim"
