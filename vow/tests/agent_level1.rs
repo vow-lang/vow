@@ -1,6 +1,9 @@
+#[cfg(target_os = "linux")]
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
+#[cfg(target_os = "linux")]
+use std::process::Stdio;
 use std::sync::OnceLock;
 
 static SUPPORT_LIBS_BUILT: OnceLock<()> = OnceLock::new();
@@ -158,6 +161,7 @@ fn compile_success() {
     assert_eq!(run.status.code(), Some(0), "compiled binary should exit 0");
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn stdin_read_line_processes_large_stream_under_memory_cap() {
     build_support_libs();
