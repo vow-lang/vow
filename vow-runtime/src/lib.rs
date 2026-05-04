@@ -872,6 +872,8 @@ fn read_stdin_line_into_scratch<R: std::io::BufRead>(
     reader: &mut R,
     scratch: &mut StdinLineScratch,
 ) -> *mut u8 {
+    // clear preserves capacity: scratch memory follows the largest line seen,
+    // not total input, and may retain that high-water mark for process lifetime.
     scratch.bytes.clear();
     let bytes_read = match reader.read_until(b'\n', &mut scratch.bytes) {
         Ok(n) => n,
@@ -881,6 +883,9 @@ fn read_stdin_line_into_scratch<R: std::io::BufRead>(
             0
         }
     };
+    // bytes may reallocate while reading a longer line. Vow callers hold this
+    // stable descriptor address, so refresh ptr/len after each read; unpinned
+    // old values then observe the current scratch line instead of freed memory.
     if bytes_read == 0 {
         scratch.desc.ptr = std::ptr::dangling_mut::<u8>();
         scratch.desc.len = 0;
