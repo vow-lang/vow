@@ -1,0 +1,35 @@
+module FsReadCount
+
+fn usage() -> i32 [io] {
+    eprintln_str(String::from("usage: fs_read_count <path>"));
+    1
+}
+
+fn main() -> i32 [read, io] {
+    let argv: Vec<String> = args();
+    if argv.len() < 2 {
+        return usage();
+    }
+
+    let data: String = fs_read(argv[1]);
+    let bytes: i64 = data.len();
+    let mut lines: i64 = 0;
+    let mut i: i64 = 0;
+    while i < bytes {
+        if data.byte_at(i) == 10 {
+            lines = lines + 1;
+        }
+        i = i + 1;
+    }
+    if bytes > 0 {
+        if data.byte_at(bytes - 1) != 10 {
+            lines = lines + 1;
+        }
+    }
+
+    print_i64(lines);
+    print_str(String::from("\n"));
+    print_i64(bytes);
+    print_str(String::from("\n"));
+    0
+}

@@ -103,7 +103,7 @@ fn make_sample_module() -> IrModule {
     variants.push(IrVariantLayout { name: String::from("Some"), tag: 1, payload: some_payload });
     m.enum_layouts.push(IrEnumLayout { name: String::from("MaybeU64"), variants: variants });
 
-    let f: IrFunction = ir_function_new(3, String::from("alloc_caller"), ITY_PTR(), EFFECT_READ() + EFFECT_WRITE());
+    let f: IrFunction = ir_function_new(3, String::from("alloc_caller"), ITY_PTR(), EFFECT_READ() + EFFECT_WRITE(), String::from(""));
     f.params.push(ITY_PTR());
     f.params.push(ITY_U64());
     f.param_names.push(String::from("dst"));

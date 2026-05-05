@@ -610,6 +610,10 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("print_u64") { return String::from("__vow_print_u64"); }
     if name == String::from("eprintln_str") { return String::from("__vow_eprintln_str"); }
     if name == String::from("fs_read") { return String::from("__vow_fs_read"); }
+    if name == String::from("fs_open") { return String::from("__vow_fs_open"); }
+    if name == String::from("fs_read_line") { return String::from("__vow_fs_read_line"); }
+    if name == String::from("fs_status") { return String::from("__vow_fs_status"); }
+    if name == String::from("fs_close") { return String::from("__vow_fs_close"); }
     if name == String::from("fs_write") { return String::from("__vow_fs_write"); }
     if name == String::from("fs_exists") { return String::from("__vow_fs_exists"); }
     if name == String::from("fs_mkdir") { return String::from("__vow_fs_mkdir"); }
@@ -665,6 +669,10 @@ fn builtin_ret_ty(name: String) -> i64 {
     if name == String::from("print_u64") { return ITY_UNIT(); }
     if name == String::from("eprintln_str") { return ITY_UNIT(); }
     if name == String::from("fs_read") { return ITY_PTR(); }
+    if name == String::from("fs_open") { return ITY_I64(); }
+    if name == String::from("fs_read_line") { return ITY_PTR(); }
+    if name == String::from("fs_status") { return ITY_I64(); }
+    if name == String::from("fs_close") { return ITY_I64(); }
     if name == String::from("fs_write") { return ITY_I64(); }
     if name == String::from("fs_exists") { return ITY_I64(); }
     if name == String::from("fs_mkdir") { return ITY_I64(); }
@@ -1058,7 +1066,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             }
             let result: i64 = lctx_emit(ctx, IOP_CALL(), ret_ty, call_args, IDATA_CALL_EXTERN(), 0, 0, ext);
             // Keep these builtin result tags in sync with tag_builtin_result in the Rust lowerer.
-            if fn_name == String::from("fs_read") || fn_name == String::from("stdin_read") || fn_name == String::from("stdin_read_line") {
+            if fn_name == String::from("fs_read") || fn_name == String::from("fs_read_line") || fn_name == String::from("stdin_read") || fn_name == String::from("stdin_read_line") {
                 lctx_tag(ctx, result, String::from("String"));
             }
             if fn_name == String::from("args") {

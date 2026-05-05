@@ -32,6 +32,10 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "print_u64" => Some(("__vow_print_u64", Ty::Unit)),
         "eprintln_str" => Some(("__vow_eprintln_str", Ty::Unit)),
         "fs_read" => Some(("__vow_fs_read", Ty::Ptr)),
+        "fs_open" => Some(("__vow_fs_open", Ty::I64)),
+        "fs_read_line" => Some(("__vow_fs_read_line", Ty::Ptr)),
+        "fs_status" => Some(("__vow_fs_status", Ty::I64)),
+        "fs_close" => Some(("__vow_fs_close", Ty::I64)),
         "fs_write" => Some(("__vow_fs_write", Ty::I64)),
         "fs_exists" => Some(("__vow_fs_exists", Ty::I64)),
         "fs_mkdir" => Some(("__vow_fs_mkdir", Ty::I64)),
@@ -91,10 +95,10 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
 // pin_to_root depends on these heap tags for direct builtin call results.
 fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId) {
     match name {
-        "fs_read" | "stdin_read" | "stdin_read_line" | "string_substr" | "string_trim"
-        | "string_to_upper" | "string_to_lower" | "string_replace" | "string_join"
-        | "i64_to_string" | "hex_encode" | "process_get_stdout" | "process_get_stderr"
-        | "process_stdout_for" | "process_stderr_for" => {
+        "fs_read" | "fs_read_line" | "stdin_read" | "stdin_read_line" | "string_substr"
+        | "string_trim" | "string_to_upper" | "string_to_lower" | "string_replace"
+        | "string_join" | "i64_to_string" | "hex_encode" | "process_get_stdout"
+        | "process_get_stderr" | "process_stdout_for" | "process_stderr_for" => {
             ctx.inst_struct_type.insert(result, "String".to_string());
         }
         "args" | "fs_listdir" | "string_split" | "vec_sort" | "hex_decode" => {
