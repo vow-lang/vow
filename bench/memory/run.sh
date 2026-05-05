@@ -68,6 +68,29 @@ expected_value() {
   ' "$EXPECTED_FILE"
 }
 
+expected_tables() {
+  awk '/^\[[^]]+\]$/ {
+    name = $0
+    sub(/^\[/, "", name)
+    sub(/\]$/, "", name)
+    print name
+  }' "$EXPECTED_FILE"
+}
+
+check_expected_orphans() {
+  local table
+  local overall=0
+
+  while IFS= read -r table; do
+    if [[ ! -f "$PROGRAM_DIR/$table.vow" ]]; then
+      echo "expected.toml drift: table [$table] has no matching programs/$table.vow" >&2
+      overall=1
+    fi
+  done < <(expected_tables)
+
+  return "$overall"
+}
+
 check_expected_sync() {
   local source="$1"
   local name="$2"
@@ -216,6 +239,9 @@ fi
 if [[ "$RECORD" == false && ! -f "$EXPECTED_FILE" ]]; then
   echo "error: $EXPECTED_FILE not found" >&2
   exit 1
+fi
+if [[ "$RECORD" == false ]]; then
+  check_expected_orphans
 fi
 
 RECORD_NAMES=()
