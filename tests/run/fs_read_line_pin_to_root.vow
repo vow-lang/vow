@@ -3,7 +3,7 @@ module FsReadLinePinToRoot
 
 fn main() -> i32 [read, io] {
     let h: i64 = fs_open(String::from("tests/fixtures/fs_stream_lines.txt"));
-    if h <= 0 {
+    if h < 0 {
         return 1;
     }
 

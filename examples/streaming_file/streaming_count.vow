@@ -12,7 +12,7 @@ fn main() -> i32 [read, io] {
     }
 
     let h: i64 = fs_open(argv[1]);
-    if h <= 0 {
+    if h < 0 {
         eprintln_str(String::from("could not open input"));
         return 1;
     }

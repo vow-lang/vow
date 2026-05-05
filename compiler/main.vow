@@ -4664,7 +4664,7 @@ fn skill_full() -> String {
     r.push_str(String::from("    }\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("    let h: i64 = fs_open(argv[1]);\n"));
-    r.push_str(String::from("    if h <= 0 {\n"));
+    r.push_str(String::from("    if h < 0 {\n"));
     r.push_str(String::from("        eprintln_str(String::from(\"could not open input\"));\n"));
     r.push_str(String::from("        return 1;\n"));
     r.push_str(String::from("    }\n"));
