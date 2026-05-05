@@ -1,8 +1,10 @@
 // BENCH: max-rss-kb 8528
 module AllocCallStore
 
-// Mirrors compiler/module_io.vow sink helpers: pushing through a Vec parameter
-// mutates the caller-visible vector, so the stored strings must stay live.
+// Vow Vec<T> values are pointer-typed runtime values. Passing one as a
+// parameter copies the pointer; push mutates the shared Vec header visible to
+// the caller. This mirrors compiler/module_io.vow sink helpers and keeps the
+// stored strings live.
 fn store_line(out: Vec<String>, line: String) {
     out.push(line);
 }
