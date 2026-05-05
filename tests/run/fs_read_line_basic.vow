@@ -28,7 +28,9 @@ fn main() -> i32 [read, io] {
         return fail(String::from("third"));
     }
 
-    fs_close(h);
+    if fs_close(h) != 0 {
+        return fail(String::from("close"));
+    }
     print_str(String::from("ok\n"));
     0
 }
