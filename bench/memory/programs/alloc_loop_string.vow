@@ -1,0 +1,22 @@
+// BENCH: max-rss-kb 46608
+module AllocLoopString
+
+fn make_piece() -> String {
+    let s: String = String::from("abcdefghijklmnopqrstuvwxyz-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+    s.push_str(String::from("-abcdefghijklmnopqrstuvwxyz-0123456789"));
+    s.push_str(String::from("-ABCDEFGHIJKLMNOPQRSTUVWXYZ-abcdefghijklmnopqrstuvwxyz"));
+    s
+}
+
+fn main() -> i32 [io] {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 60000 {
+        let s: String = make_piece();
+        total = total + s.len();
+        i = i + 1;
+    }
+    print_i64(total);
+    print_str("\n");
+    0
+}

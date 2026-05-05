@@ -1,0 +1,22 @@
+// BENCH: max-rss-kb 23884
+module AllocLoopParser
+
+fn parse_line() -> i64 {
+    let line: String = String::from("parser-field:abcdefghijklmnopqrstuvwxyz-0123456789");
+    line.push_str(String::from(":tail-field"));
+    let prefix: String = line.substring(0, 12);
+    let payload: String = line.substring(13, 49);
+    prefix.len() + payload.len()
+}
+
+fn main() -> i32 [io] {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 70000 {
+        total = total + parse_line();
+        i = i + 1;
+    }
+    print_i64(total);
+    print_str("\n");
+    0
+}

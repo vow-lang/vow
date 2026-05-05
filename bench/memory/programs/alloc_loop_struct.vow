@@ -1,0 +1,25 @@
+// BENCH: max-rss-kb 16160
+module AllocLoopStruct
+
+struct Entry {
+    a: i64,
+    b: i64,
+    label: String,
+}
+
+fn main() -> i32 [io] {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 80000 {
+        let e: Entry = Entry {
+            a: i,
+            b: i + 1,
+            label: String::from("struct-entry-abcdefghijklmnopqrstuvwxyz-0123456789"),
+        };
+        total = total + e.a + e.b + e.label.len();
+        i = i + 1;
+    }
+    print_i64(total);
+    print_str("\n");
+    0
+}

@@ -1,0 +1,26 @@
+// BENCH: max-rss-kb 11336
+module AllocReturnFromLoop
+
+fn chosen_payload() -> String {
+    let mut i: i64 = 0;
+    let result: String = loop {
+        let s: String = String::from("break-retained-abcdefghijklmnopqrstuvwxyz-0123456789");
+        if i >= 3 {
+            break s;
+        }
+        i = i + 1;
+    };
+    result
+}
+
+fn main() -> i32 [io] {
+    let held: Vec<String> = Vec::new();
+    let mut i: i64 = 0;
+    while i < 12000 {
+        held.push(chosen_payload());
+        i = i + 1;
+    }
+    print_i64(held.len() + held[0].len() + held[11999].len());
+    print_str("\n");
+    0
+}

@@ -1,0 +1,27 @@
+// BENCH: max-rss-kb 8528
+module AllocCallStore
+
+// Vow Vec<T> values are pointer-typed runtime values. Passing one as a
+// parameter copies the pointer; push mutates the shared Vec header visible to
+// the caller.
+fn store_line(out: Vec<String>, line: String) {
+    out.push(line);
+}
+
+fn make_line() -> String {
+    let s: String = String::from("callee-store-abcdefghijklmnopqrstuvwxyz-0123456789");
+    s.push_str(String::from("-payload"));
+    s
+}
+
+fn main() -> i32 [io] {
+    let held: Vec<String> = Vec::new();
+    let mut i: i64 = 0;
+    while i < 10000 {
+        store_line(held, make_line());
+        i = i + 1;
+    }
+    print_i64(held.len() + held[0].len() + held[9999].len());
+    print_str("\n");
+    0
+}

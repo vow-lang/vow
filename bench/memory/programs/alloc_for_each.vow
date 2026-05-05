@@ -1,0 +1,24 @@
+// BENCH: max-rss-kb 15016
+module AllocForEach
+
+fn main() -> i32 [io] {
+    let items: Vec<i64> = Vec::new();
+    let mut seed: i64 = 0;
+    while seed < 64 {
+        items.push(seed);
+        seed = seed + 1;
+    }
+
+    let mut round: i64 = 0;
+    let mut total: i64 = 0;
+    while round < 1500 {
+        for item in items {
+            let s: String = String::from("foreach-body-abcdefghijklmnopqrstuvwxyz-0123456789");
+            total = total + item + s.len();
+        }
+        round = round + 1;
+    }
+    print_i64(total);
+    print_str("\n");
+    0
+}

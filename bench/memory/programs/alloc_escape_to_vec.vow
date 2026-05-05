@@ -1,0 +1,21 @@
+// BENCH: max-rss-kb 8708
+module AllocEscapeToVec
+
+fn make_entry() -> String {
+    let s: String = String::from("outer-vec-abcdefghijklmnopqrstuvwxyz-0123456789");
+    s.push_str(String::from("-retained-entry"));
+    s
+}
+
+fn main() -> i32 [io] {
+    let held: Vec<String> = Vec::new();
+    let mut i: i64 = 0;
+    while i < 16000 {
+        let s: String = make_entry();
+        held.push(s);
+        i = i + 1;
+    }
+    print_i64(held.len() + held[0].len() + held[15999].len());
+    print_str("\n");
+    0
+}
