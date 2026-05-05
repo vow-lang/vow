@@ -1765,6 +1765,8 @@ pub extern "C" fn __vow_fs_read_line(handle: i64) -> *mut u8 {
         return unsafe { __vow_string_new(std::ptr::null(), 0) };
     };
     state.line_buf.clear();
+    // The process-global handle table lock is intentionally held while reading;
+    // docs/spec/grammar.md documents the concurrency tradeoff for this API.
     match state.reader.read_until(b'\n', &mut state.line_buf) {
         Ok(0) => {
             state.status = 1;
