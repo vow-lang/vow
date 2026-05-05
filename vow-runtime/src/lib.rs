@@ -19,6 +19,7 @@ enum ProcessState {
 
 struct FileReadState {
     reader: std::io::BufReader<std::fs::File>,
+    line_buf: Vec<u8>,
     status: i64,
 }
 
@@ -1743,6 +1744,7 @@ pub unsafe extern "C" fn __vow_fs_open(path_ptr: *const u8) -> i64 {
     }
     let state = FileReadState {
         reader: std::io::BufReader::new(file),
+        line_buf: Vec::new(),
         status: 0,
     };
     let mut map_guard = FILE_READ_MAP.lock().unwrap();
@@ -1762,15 +1764,15 @@ pub extern "C" fn __vow_fs_read_line(handle: i64) -> *mut u8 {
     let Some(state) = map.get_mut(&handle) else {
         return unsafe { __vow_string_new(std::ptr::null(), 0) };
     };
-    let mut line = Vec::new();
-    match state.reader.read_until(b'\n', &mut line) {
+    state.line_buf.clear();
+    match state.reader.read_until(b'\n', &mut state.line_buf) {
         Ok(0) => {
             state.status = 1;
             unsafe { __vow_string_new(std::ptr::null(), 0) }
         }
         Ok(_) => {
             state.status = 0;
-            unsafe { __vow_string_new(line.as_ptr() as *const i8, line.len()) }
+            unsafe { __vow_string_new(state.line_buf.as_ptr() as *const i8, state.line_buf.len()) }
         }
         Err(_) => {
             state.status = -1;
