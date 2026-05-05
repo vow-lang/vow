@@ -11,7 +11,6 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PROGRAM_DIR="$SCRIPT_DIR/programs"
 EXPECTED_FILE="$SCRIPT_DIR/expected.toml"
 VOW="$ROOT_DIR/target/release/vow"
-RUNTIME_LIB="$ROOT_DIR/target/release/libvow_runtime.a"
 ULIMIT_KB=2000000
 CUSHION_KB=4096
 RECORD=false
@@ -230,10 +229,6 @@ fi
 
 if [[ ! -x "$VOW" ]]; then
   echo "error: target/release/vow not found; build it with: cargo build --release -p vow" >&2
-  exit 1
-fi
-if [[ ! -f "$RUNTIME_LIB" ]]; then
-  echo "error: target/release/libvow_runtime.a not found; build it with: cargo build --release -p vow-runtime" >&2
   exit 1
 fi
 
