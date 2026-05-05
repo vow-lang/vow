@@ -1,5 +1,12 @@
+#[cfg(target_os = "linux")]
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
+#[cfg(target_os = "linux")]
+use std::process::Stdio;
+use std::sync::OnceLock;
+
+static SUPPORT_LIBS_BUILT: OnceLock<()> = OnceLock::new();
 
 fn vow_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_vow"))
@@ -20,23 +27,23 @@ fn workspace_root() -> PathBuf {
 }
 
 fn support_lib(name: &str) -> PathBuf {
-    if let Some(path) = find_support_lib(name) {
-        return path;
-    }
-
-    // Build the support libraries on demand so this integration test can run
-    // in isolation without requiring the caller to pre-build the workspace.
-    let status = Command::new("cargo")
-        .args(["build", "-p", "vow-runtime", "-p", "vow-clif-shim"])
-        .status()
-        .expect("failed to invoke cargo to build support libraries");
-    assert!(
-        status.success(),
-        "cargo build -p vow-runtime -p vow-clif-shim failed"
-    );
+    build_support_libs();
 
     find_support_lib(name)
         .unwrap_or_else(|| panic!("missing {name} after building support libraries"))
+}
+
+fn build_support_libs() {
+    SUPPORT_LIBS_BUILT.get_or_init(|| {
+        let status = Command::new("cargo")
+            .args(["build", "-p", "vow-runtime", "-p", "vow-clif-shim"])
+            .status()
+            .expect("failed to invoke cargo to build support libraries");
+        assert!(
+            status.success(),
+            "cargo build -p vow-runtime -p vow-clif-shim failed"
+        );
+    });
 }
 
 fn find_support_lib(name: &str) -> Option<PathBuf> {
@@ -152,6 +159,83 @@ fn compile_success() {
         .output()
         .expect("failed to run compiled binary");
     assert_eq!(run.status.code(), Some(0), "compiled binary should exit 0");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn stdin_read_line_processes_large_stream_under_memory_cap() {
+    build_support_libs();
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let src_path = dir.path().join("stdin_large.vow");
+    let out_path = dir.path().join("stdin_large");
+    let src = r#"module StdinLarge
+
+fn main() -> i32 [read, io] {
+    let mut count: u64 = 0;
+    let mut line: String = stdin_read_line();
+    while line.len() > 0 {
+        count = count + 1;
+        line = stdin_read_line();
+    }
+    print_str(String::from("total: "));
+    print_u64(count);
+    print_str(String::from("\n"));
+    0
+}
+"#;
+    std::fs::write(&src_path, src).unwrap();
+
+    let result = Command::new(vow_bin())
+        .args([
+            "build",
+            "--no-verify",
+            "--no-cache",
+            src_path.to_str().unwrap(),
+            "-o",
+            out_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run vow");
+    assert_eq!(
+        result.status.code(),
+        Some(0),
+        "expected build success\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg("ulimit -v 131072; exec \"$1\"")
+        .arg("sh")
+        .arg(out_path.to_str().unwrap())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to run compiled binary under memory cap");
+
+    {
+        let stdin = child.stdin.as_mut().expect("child stdin");
+        let payload = vec![b'x'; 128 * 1024 - 1];
+        for _ in 0..2000 {
+            stdin
+                .write_all(&payload)
+                .expect("failed to write line payload");
+            stdin.write_all(b"\n").expect("failed to write newline");
+        }
+    }
+
+    let run = child.wait_with_output().expect("failed to wait for child");
+    assert_eq!(
+        run.status.code(),
+        Some(0),
+        "expected bounded line processing to finish\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "total: 2000\n");
 }
 
 #[test]

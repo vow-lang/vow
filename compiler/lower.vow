@@ -1025,6 +1025,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     }
                     return result;
                 }
+                // pin_to_root relies on lowering-time String/Vec tags. Keep builtin result
+                // tags in sync with the Rust lowerer, or pin_to_root(expr) becomes a no-op here.
                 return source_id;
             }
         }
@@ -1055,6 +1057,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 ai = ai + 1;
             }
             let result: i64 = lctx_emit(ctx, IOP_CALL(), ret_ty, call_args, IDATA_CALL_EXTERN(), 0, 0, ext);
+            // Keep these builtin result tags in sync with tag_builtin_result in the Rust lowerer.
             if fn_name == String::from("fs_read") || fn_name == String::from("stdin_read") || fn_name == String::from("stdin_read_line") {
                 lctx_tag(ctx, result, String::from("String"));
             }
@@ -1071,6 +1074,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 lctx_tag(ctx, result, String::from("Vec"));
             }
             if fn_name == String::from("hex_encode") {
+                lctx_tag(ctx, result, String::from("String"));
+            }
+            if fn_name == String::from("process_get_stdout") || fn_name == String::from("process_get_stderr") || fn_name == String::from("process_stdout_for") || fn_name == String::from("process_stderr_for") {
                 lctx_tag(ctx, result, String::from("String"));
             }
             if fn_name == String::from("vec_sort") || fn_name == String::from("hex_decode") {

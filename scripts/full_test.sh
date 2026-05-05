@@ -154,7 +154,7 @@ else:
 }
 
 compare_runtime() {
-    local label="$1" rust_bin="$2" self_bin="$3"
+    local label="$1" rust_bin="$2" self_bin="$3" stdin_file="${4:-}"
 
     if [ ! -x "$rust_bin" ] || [ ! -x "$self_bin" ]; then
         skip "$label" "binary not found"
@@ -162,8 +162,13 @@ compare_runtime() {
     fi
 
     local rust_out="" self_out="" rust_exit=0 self_exit=0
-    rust_out=$("$rust_bin" </dev/null 2>/dev/null) || rust_exit=$?
-    self_out=$(run_self_bin "$self_bin" </dev/null 2>/dev/null) || self_exit=$?
+    if [ -n "$stdin_file" ]; then
+        rust_out=$("$rust_bin" < "$stdin_file" 2>/dev/null) || rust_exit=$?
+        self_out=$(run_self_bin "$self_bin" < "$stdin_file" 2>/dev/null) || self_exit=$?
+    else
+        rust_out=$("$rust_bin" </dev/null 2>/dev/null) || rust_exit=$?
+        self_out=$(run_self_bin "$self_bin" </dev/null 2>/dev/null) || self_exit=$?
+    fi
 
     local errors=()
     if [ "$rust_exit" != "$self_exit" ]; then
@@ -177,6 +182,24 @@ compare_runtime() {
         pass "$label"
     else
         fail "$label" "$(IFS='; '; echo "${errors[*]}")"
+    fi
+}
+
+run_stdout_with_optional_stdin() {
+    local bin="$1" stdin_file="${2:-}"
+    if [ -n "$stdin_file" ]; then
+        "$bin" < "$stdin_file" 2>/dev/null
+    else
+        "$bin" </dev/null 2>/dev/null
+    fi
+}
+
+run_discard_with_optional_stdin() {
+    local bin="$1" stdin_file="${2:-}"
+    if [ -n "$stdin_file" ]; then
+        "$bin" < "$stdin_file" >/dev/null 2>/dev/null
+    else
+        "$bin" </dev/null >/dev/null 2>/dev/null
     fi
 }
 
@@ -339,13 +362,27 @@ for vow_file in tests/run/*.vow; do
         continue
     fi
 
+    test_stdin=$(sed -n 's|^// TEST: stdin "\(.*\)"$|\1|p' "$vow_file" | head -1)
+    test_stdin_file=$(sed -n 's|^// TEST: stdin-file \(.*\)$|\1|p' "$vow_file" | head -1)
+    stdin_path=""
+    if [ -n "$test_stdin_file" ]; then
+        stdin_path="$(dirname "$vow_file")/$test_stdin_file"
+        if [ ! -f "$stdin_path" ]; then
+            fail "${name}/test-run" "stdin fixture not found: $stdin_path"
+            continue
+        fi
+    elif [ -n "$test_stdin" ]; then
+        stdin_path="$TMPDIR/stdin_${name}.txt"
+        printf '%b' "$test_stdin" > "$stdin_path"
+    fi
+
     # Compare runtime output between compilers
-    compare_runtime "${name}/test-run" "$TMPDIR/test_rust_${name}" "$TMPDIR/test_self_${name}"
+    compare_runtime "${name}/test-run" "$TMPDIR/test_rust_${name}" "$TMPDIR/test_self_${name}" "$stdin_path"
 
     # Validate against // TEST: stdout directive if present
     expected=$(sed -n 's|^// TEST: stdout "\(.*\)"$|\1|p' "$vow_file" | head -1)
     if [ -n "$expected" ]; then
-        actual=$("$TMPDIR/test_rust_${name}" </dev/null 2>/dev/null) || true
+        actual=$(run_stdout_with_optional_stdin "$TMPDIR/test_rust_${name}" "$stdin_path") || true
         # Interpret \n escapes in expected string
         expected_decoded=$(printf '%b' "$expected")
         if [ "$actual" = "$expected_decoded" ]; then
@@ -359,7 +396,7 @@ for vow_file in tests/run/*.vow; do
     expected_exit=$(sed -n 's|^// TEST: exit \([0-9]*\)$|\1|p' "$vow_file" | head -1)
     if [ -n "$expected_exit" ]; then
         actual_exit=0
-        "$TMPDIR/test_rust_${name}" </dev/null >/dev/null 2>/dev/null || actual_exit=$?
+        run_discard_with_optional_stdin "$TMPDIR/test_rust_${name}" "$stdin_path" || actual_exit=$?
         if [ "$actual_exit" = "$expected_exit" ]; then
             pass "${name}/test-exit"
         else
