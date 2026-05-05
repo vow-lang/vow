@@ -97,7 +97,7 @@ check_expected_sync() {
 
 parse_max_rss() {
   local time_log="$1"
-  awk '/Maximum resident set size/ { print $6; exit }' "$time_log"
+  awk -F': ' '/Maximum resident set size/ { print $2; exit }' "$time_log"
 }
 
 parse_wall_seconds() {
@@ -131,7 +131,7 @@ emit_result() {
   local max_rss="$7"
   local bound="$8"
   local wall="$9"
-  local rel_source="${source#$ROOT_DIR/}"
+  local rel_source="${source#"$ROOT_DIR/"}"
   local label="FAIL"
 
   if [[ "$status" == "pass" ]]; then
