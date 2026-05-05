@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if (( BASH_VERSINFO[0] < 4 )); then
+  echo "bench/memory/run.sh requires bash 4.0+ (mapfile/readarray); macOS /bin/bash is usually 3.2. Install a newer bash and rerun this script with it." >&2
+  exit 2
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PROGRAM_DIR="$SCRIPT_DIR/programs"
