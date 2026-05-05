@@ -36,6 +36,8 @@ json_escape() {
   s="${s//\\/\\\\}"
   s="${s//\"/\\\"}"
   s="${s//$'\n'/\\n}"
+  s="${s//$'\t'/\\t}"
+  s="${s//$'\r'/\\r}"
   printf '%s' "$s"
 }
 
@@ -50,7 +52,7 @@ json_number_or_null() {
 
 bench_bound() {
   local source="$1"
-  sed -n 's#^// BENCH: max-rss-kb \([0-9][0-9]*\)$#\1#p' "$source" | head -n 1
+  sed -n '1s#^// BENCH: max-rss-kb \([0-9][0-9]*\)$#\1#p' "$source"
 }
 
 expected_value() {

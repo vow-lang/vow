@@ -3,8 +3,7 @@ module AllocCallStore
 
 // Vow Vec<T> values are pointer-typed runtime values. Passing one as a
 // parameter copies the pointer; push mutates the shared Vec header visible to
-// the caller. This mirrors compiler/module_io.vow sink helpers and keeps the
-// stored strings live.
+// the caller.
 fn store_line(out: Vec<String>, line: String) {
     out.push(line);
 }

@@ -29,6 +29,8 @@ For each program the harness prints a human `PASS` or `FAIL` line and a machine-
 {"program":"string_scope_churn","source":"bench/memory/programs/string_scope_churn.vow","binary":"/tmp/tmp.x/string_scope_churn","build_exit":0,"run_exit":0,"max_rss_kb":1234,"bound_kb":5678,"wall_seconds":0.04,"status":"pass"}
 ```
 
+If a binary is killed by the `ulimit -v` memory cap, the harness reports `status = "run_failed"` and preserves the process exit code in `run_exit`. Automation that needs to distinguish OOM-shaped exits from ordinary nonzero program exits should inspect `run_exit`; Linux `SIGKILL` exits commonly appear as `137`.
+
 `expected.toml` mirrors the annotations with one table per program:
 
 ```toml
