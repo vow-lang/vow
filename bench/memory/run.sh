@@ -110,6 +110,10 @@ check_expected_sync() {
   expected_bound="$(expected_value "$name" "max_rss_kb")"
   expected_status="$(expected_value "$name" "expected")"
 
+  if [[ -z "$expected_file" && -z "$expected_bound" && -z "$expected_status" ]]; then
+    echo "expected.toml drift: $rel_source has no [$name] table in expected.toml" >&2
+    return 1
+  fi
   if [[ "$expected_file" != "$rel_source" ]]; then
     echo "expected.toml drift for $name: file=$expected_file annotation=$rel_source" >&2
     return 1

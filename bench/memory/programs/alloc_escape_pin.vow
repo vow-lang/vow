@@ -1,6 +1,7 @@
 // BENCH: max-rss-kb 9152
 module AllocEscapePin
 
+// pin_to_root deep-copies the String into root storage so held.push keeps a live copy.
 fn make_rooted() -> String {
     let s: String = String::from("rooted-abcdefghijklmnopqrstuvwxyz-0123456789");
     s.push_str(String::from("-must-live"));
