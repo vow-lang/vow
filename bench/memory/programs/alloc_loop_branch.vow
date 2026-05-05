@@ -1,0 +1,27 @@
+// BENCH: max-rss-kb 20016
+module AllocLoopBranch
+
+fn branch_len(i: i64) -> i64 {
+    let n: i64 = if i < 30000 {
+        let s: String = String::from("branch-left-abcdefghijklmnopqrstuvwxyz-0123456789");
+        let t: String = String::from("branch-left-extra-ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+        s.len() + t.len()
+    } else {
+        let s: String = String::from("branch-right-abcdefghijklmnopqrstuvwxyz-0123456789");
+        s.push_str(String::from("-expanded-right-side-payload"));
+        s.len()
+    };
+    n
+}
+
+fn main() -> i32 [io] {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 60000 {
+        total = total + branch_len(i);
+        i = i + 1;
+    }
+    print_i64(total);
+    print_str("\n");
+    0
+}

@@ -1,0 +1,20 @@
+// BENCH: max-rss-kb 9152
+module AllocEscapePin
+
+fn make_rooted() -> String {
+    let s: String = String::from("rooted-abcdefghijklmnopqrstuvwxyz-0123456789");
+    s.push_str(String::from("-must-live"));
+    pin_to_root(s)
+}
+
+fn main() -> i32 [io] {
+    let held: Vec<String> = Vec::new();
+    let mut i: i64 = 0;
+    while i < 10000 {
+        held.push(make_rooted());
+        i = i + 1;
+    }
+    print_i64(held.len() + held[0].len() + held[9999].len());
+    print_str("\n");
+    0
+}
