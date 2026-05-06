@@ -2293,6 +2293,7 @@ fn extern_fresh_in_caller(sym: String) -> bool {
 
 fn extern_store_edge_count(sym: String) -> i64 {
     if sym == String::from("__vow_vec_push_val") { return 1; }
+    if sym == String::from("__vow_vec_push_val_in_arena") { return 1; }
     if sym == String::from("__vow_vec_set_val") { return 1; }
     if sym == String::from("__vow_map_insert") { return 2; }
     if sym == String::from("__vow_btreemap_insert") { return 2; }
@@ -2303,11 +2304,13 @@ fn extern_store_target_pos(sym: String, edge_idx: i64) -> i64 {
     if edge_idx < 0 || edge_idx >= extern_store_edge_count(sym) {
         return -1;
     }
+    if sym == String::from("__vow_vec_push_val_in_arena") && edge_idx == 0 { return 1; }
     0
 }
 
 fn extern_store_source_pos(sym: String, edge_idx: i64) -> i64 {
     if sym == String::from("__vow_vec_push_val") && edge_idx == 0 { return 1; }
+    if sym == String::from("__vow_vec_push_val_in_arena") && edge_idx == 0 { return 2; }
     if sym == String::from("__vow_vec_set_val") && edge_idx == 0 { return 2; }
     if (sym == String::from("__vow_map_insert") || sym == String::from("__vow_btreemap_insert"))
         && edge_idx == 0
