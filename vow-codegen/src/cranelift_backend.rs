@@ -1869,6 +1869,19 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // elem_align
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec
         }
+        "__vow_vec_new_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // elem_size
+            sig.params.push(AbiParam::new(types::I64)); // elem_align
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec
+        }
+        "__vow_vec_new_val" => {
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<i64>
+        }
+        "__vow_vec_new_val_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<i64>
+        }
         "__vow_vec_from_raw_parts_copy_val" => {
             sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // raw i64 ptr
@@ -1886,6 +1899,25 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_vec_push_val" => {
             sig.params.push(AbiParam::new(types::I64)); // vec ptr
             sig.params.push(AbiParam::new(types::I64)); // value (i64)
+        }
+        "__vow_vec_push_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // vec ptr
+            sig.params.push(AbiParam::new(types::I64)); // value ptr
+            sig.params.push(AbiParam::new(types::I64)); // elem_size
+            sig.params.push(AbiParam::new(types::I64)); // elem_align
+        }
+        "__vow_vec_push_val_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // vec ptr
+            sig.params.push(AbiParam::new(types::I64)); // value (i64)
+        }
+        "__vow_vec_reserve_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // vec ptr
+            sig.params.push(AbiParam::new(types::I64)); // additional
+            sig.params.push(AbiParam::new(types::I64)); // elem_size
+            sig.params.push(AbiParam::new(types::I64)); // elem_align
         }
         "__vow_vec_get_val" => {
             sig.params.push(AbiParam::new(types::I64)); // vec ptr

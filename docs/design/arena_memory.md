@@ -220,6 +220,48 @@ If `__vow_arena_alloc`'s fallback `malloc` for a new chunk fails,
 the runtime traps with the same structured OOM error as
 `__vow_arena_open` (§16).
 
+#### Vec runtime allocation API
+
+The existing root-region Vec symbols remain ABI-stable:
+
+```c
+void* __vow_vec_new(uintptr_t elem_size, uintptr_t align);
+void* __vow_vec_new_val(void);
+void  __vow_vec_push(void* vec, const void* value_ptr,
+                     uintptr_t elem_size, uintptr_t elem_align);
+void  __vow_vec_push_val(void* vec, int64_t value);
+```
+
+These are root wrappers: they open `__vow_root_arena` if needed, then
+delegate to the corresponding explicit-arena primitive with
+`&__vow_root_arena`.
+
+The explicit-arena forms are:
+
+```c
+void* __vow_vec_new_in_arena(struct VowArena* arena,
+                             uintptr_t elem_size, uintptr_t align);
+void* __vow_vec_new_val_in_arena(struct VowArena* arena);
+void  __vow_vec_push_in_arena(struct VowArena* arena, void* vec,
+                              const void* value_ptr,
+                              uintptr_t elem_size, uintptr_t elem_align);
+void  __vow_vec_push_val_in_arena(struct VowArena* arena, void* vec,
+                                  int64_t value);
+void  __vow_vec_reserve_in_arena(struct VowArena* arena, void* vec,
+                                 uintptr_t additional,
+                                 uintptr_t elem_size,
+                                 uintptr_t elem_align);
+```
+
+Every explicit-arena Vec entry traps with
+`RuntimeInvariantViolation` and `reason = "null arena"` before
+dereferencing a null arena pointer. Growth for both root and
+explicit-arena Vecs uses the shared arena grow path: first
+`__vow_arena_try_extend`, then `__vow_arena_alloc` + copy + zero-fill
+on fallback. `__vow_vec_from_raw_parts_copy_val(arena, ptr, len)`
+already has the explicit-arena shape and copies the raw slots into the
+supplied arena.
+
 ### 3.4. Determinism
 
 The arena **allocation strategy**, the **chunk-size policy**, and

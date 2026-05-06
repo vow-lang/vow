@@ -2422,7 +2422,17 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_vec_new_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_vec_new_val" => {
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_vec_new_val_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_vec_from_raw_parts_copy_val" => {
@@ -2440,6 +2450,25 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_vec_push_val" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        "__vow_vec_push_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        "__vow_vec_push_val_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        "__vow_vec_reserve_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
         }
