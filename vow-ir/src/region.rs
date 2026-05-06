@@ -738,6 +738,18 @@ fn extern_fresh_in_caller(sym: &str) -> bool {
     )
 }
 
+fn for_each_extern_store_edge(sym: &str, args: &[InstId], mut visit: impl FnMut(InstId, InstId)) {
+    match sym {
+        "__vow_vec_push_val" if args.len() >= 2 => visit(args[0], args[1]),
+        "__vow_vec_set_val" if args.len() >= 3 => visit(args[0], args[2]),
+        "__vow_map_insert" | "__vow_btreemap_insert" if args.len() >= 3 => {
+            visit(args[0], args[1]);
+            visit(args[0], args[2]);
+        }
+        _ => {}
+    }
+}
+
 fn is_heap_producing(inst: &Inst, summaries: &[InternalSummary]) -> bool {
     matches!(inst.opcode, Opcode::RegionAlloc)
         || matches!(
@@ -823,6 +835,24 @@ fn handle_inst(
             }
         }
         Opcode::Call => {
+            if let InstData::CallExtern(sym) = &inst.data {
+                for_each_extern_store_edge(sym, &inst.args, |target_id, source_id| {
+                    add_marker(
+                        must_outlive,
+                        source_id,
+                        target_region_marker(target_id, inst_lookup, summaries),
+                    );
+                    if let Some(target_param) = trace_param(target_id, inst_lookup) {
+                        let source_origin = trace_origin(source_id, inst_lookup);
+                        let source_constraint = origin_to_constraint(&source_origin);
+                        summary.store_effects.insert((
+                            target_param,
+                            InternalReturnRegion::Published(source_constraint),
+                        ));
+                    }
+                });
+            }
+
             // Look up callee summary and apply store-effects + return aliasing.
             let callee_summary: Option<&InternalSummary> = if let InstData::CallTarget(callee_id) =
                 &inst.data
@@ -943,56 +973,63 @@ fn propagate_alias_markers(
                     // use-derived markers such as `Return(target)`.
                     alias_edges.push((inst.args[0], inst.args[1]));
                 }
-                Opcode::Call => {
-                    let InstData::CallTarget(callee_id) = &inst.data else {
-                        continue;
-                    };
-                    let Some(summary) = summaries.get(callee_id.0 as usize) else {
-                        continue;
-                    };
-                    for (target_param, source_constraint) in &summary.store_effects {
-                        let target_idx = *target_param as usize;
-                        if target_idx >= inst.args.len() {
+                Opcode::Call => match &inst.data {
+                    InstData::CallExtern(sym) => {
+                        for_each_extern_store_edge(sym, &inst.args, |target_id, source_id| {
+                            alias_edges.push((target_id, source_id));
+                        });
+                    }
+                    InstData::CallTarget(callee_id) => {
+                        let Some(summary) = summaries.get(callee_id.0 as usize) else {
                             continue;
-                        }
-                        let target_arg = inst.args[target_idx];
-                        match source_constraint {
-                            InternalReturnRegion::Published(RegionConstraint::AliasOf(p)) => {
-                                let p_idx = *p as usize;
-                                if p_idx < inst.args.len() {
-                                    alias_edges.push((target_arg, inst.args[p_idx]));
-                                }
+                        };
+                        for (target_param, source_constraint) in &summary.store_effects {
+                            let target_idx = *target_param as usize;
+                            if target_idx >= inst.args.len() {
+                                continue;
                             }
-                            InternalReturnRegion::Published(RegionConstraint::AliasOfAny(ps)) => {
-                                for p in ps {
+                            let target_arg = inst.args[target_idx];
+                            match source_constraint {
+                                InternalReturnRegion::Published(RegionConstraint::AliasOf(p)) => {
                                     let p_idx = *p as usize;
                                     if p_idx < inst.args.len() {
                                         alias_edges.push((target_arg, inst.args[p_idx]));
+                                    }
+                                }
+                                InternalReturnRegion::Published(RegionConstraint::AliasOfAny(
+                                    ps,
+                                )) => {
+                                    for p in ps {
+                                        let p_idx = *p as usize;
+                                        if p_idx < inst.args.len() {
+                                            alias_edges.push((target_arg, inst.args[p_idx]));
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        match &summary.return_region {
+                            InternalReturnRegion::Published(RegionConstraint::AliasOf(j)) => {
+                                let j_idx = *j as usize;
+                                if j_idx < inst.args.len() {
+                                    alias_edges.push((inst.id, inst.args[j_idx]));
+                                }
+                            }
+                            InternalReturnRegion::Published(RegionConstraint::AliasOfAny(js)) => {
+                                for j in js {
+                                    let j_idx = *j as usize;
+                                    if j_idx < inst.args.len() {
+                                        alias_edges.push((inst.id, inst.args[j_idx]));
                                     }
                                 }
                             }
                             _ => {}
                         }
                     }
-
-                    match &summary.return_region {
-                        InternalReturnRegion::Published(RegionConstraint::AliasOf(j)) => {
-                            let j_idx = *j as usize;
-                            if j_idx < inst.args.len() {
-                                alias_edges.push((inst.id, inst.args[j_idx]));
-                            }
-                        }
-                        InternalReturnRegion::Published(RegionConstraint::AliasOfAny(js)) => {
-                            for j in js {
-                                let j_idx = *j as usize;
-                                if j_idx < inst.args.len() {
-                                    alias_edges.push((inst.id, inst.args[j_idx]));
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+                    _ => {}
+                },
                 _ => {}
             }
         }
@@ -2638,6 +2675,56 @@ mod tests {
             source.region,
             RegionId::Caller(HiddenRegionIdx(0)),
             "caller source arg should inherit later escapes from the store-effect target"
+        );
+    }
+
+    #[test]
+    fn extern_vec_push_into_escaping_target_widens_source_to_caller_region() {
+        let insts = vec![
+            inst(
+                0,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                1,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Unit,
+                vec![0, 1],
+                InstData::CallExtern("__vow_vec_push_val".to_string()),
+            ),
+            inst(3, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+        ];
+        let f = function(
+            0,
+            "extern_vec_push_escape",
+            vec![],
+            Ty::Ptr,
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        let target = &m.functions[0].blocks[0].insts[0];
+        let source = &m.functions[0].blocks[0].insts[1];
+        assert_eq!(
+            target.region,
+            RegionId::Caller(HiddenRegionIdx(0)),
+            "returned extern-mutated target should be caller-region allocated"
+        );
+        assert_eq!(
+            source.region,
+            RegionId::Caller(HiddenRegionIdx(0)),
+            "source stored by an extern container mutator must inherit target escapes"
         );
     }
 
