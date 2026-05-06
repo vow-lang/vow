@@ -184,9 +184,8 @@ the header.
 **`__vow_arena_open(a)`**: initializes `*a` to an arena with one
 freshly-allocated chunk of 4 KB plus the 8-byte next-chunk link
 (4104 bytes total, per §3.2). If `a` already names an open arena,
-`__vow_arena_open(a)` is a no-op; this makes the loop back-edge
-`close`+`open` refresh sequence robust when the next loop-body entry
-also executes the block's entry `open`. If the underlying `malloc`
+`__vow_arena_open(a)` is a no-op; this protects structured entries
+that reach an already-open region root. If the underlying `malloc`
 fails, the runtime traps with a structured OOM error (consistent with
 the root-region OOM policy in §16); the trap is not recoverable from
 within Vow.
@@ -1271,13 +1270,15 @@ Two new IR opcodes mark region boundaries:
   has the same open/close cadence as one iteration of its body.
 
   At the IR level, every loop back-edge `P -> H` refreshes each
-  non-empty block region `Block(B)` on that loop-body path:
-  `RegionClose(B)` is emitted immediately followed by
-  `RegionOpen(B)` before `P`'s terminator. `B` is selected only
-  when it is reachable from `H` through non-back-edge forward
-  edges and can reach `P`; multiple refreshed regions on the same
-  predecessor are ordered by `BlockId`. Empty loop-body regions
-  remain elided by §3.5.
+  non-empty block region `Block(B)` on that loop-body path by
+  emitting `RegionClose(B)` before `P`'s terminator. The matching
+  `RegionOpen(B)` is the normal entry marker at `B`; it fires only
+  if the next trip actually re-enters the region, so a header exit
+  immediately after a back-edge cannot leave a freshly reopened body
+  arena live. `B` is selected only when it is reachable from `H`
+  through non-back-edge forward edges and can reach `P`; multiple
+  refreshed regions on the same predecessor are ordered by `BlockId`.
+  Empty loop-body regions remain elided by §3.5.
 
 Empty-region blocks do not emit these opcodes.
 

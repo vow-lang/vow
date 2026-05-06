@@ -2033,8 +2033,6 @@ fn append_region_markers(
     while ri < refresh_regions.len() {
         insts.push(region_marker_inst(id, IOP_REGION_CLOSE(), refresh_regions[ri]));
         id = id + 1;
-        insts.push(region_marker_inst(id, IOP_REGION_OPEN(), refresh_regions[ri]));
-        id = id + 1;
         ri = ri + 1;
     }
     id

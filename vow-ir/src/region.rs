@@ -888,7 +888,7 @@ fn edge_region_markers(
 }
 
 fn marker_insts(next_id: &mut u32, markers: &EdgeRegionMarkers, span: Span) -> Vec<Inst> {
-    let mut insts = Vec::with_capacity(markers.closes.len() + markers.refreshes.len() * 2);
+    let mut insts = Vec::with_capacity(markers.closes.len() + markers.refreshes.len());
     for &close_block in &markers.closes {
         insts.push(region_marker_inst(
             *next_id,
@@ -902,13 +902,6 @@ fn marker_insts(next_id: &mut u32, markers: &EdgeRegionMarkers, span: Span) -> V
         insts.push(region_marker_inst(
             *next_id,
             Opcode::RegionClose,
-            refresh_block,
-            span,
-        ));
-        *next_id += 1;
-        insts.push(region_marker_inst(
-            *next_id,
-            Opcode::RegionOpen,
             refresh_block,
             span,
         ));
@@ -1155,7 +1148,7 @@ pub fn insert_region_markers(module: &mut Module) {
                 old_insts.len()
                     + usize::from(opens_here)
                     + before_term_markers.closes.len()
-                    + before_term_markers.refreshes.len() * 2,
+                    + before_term_markers.refreshes.len(),
             );
             if opens_here {
                 new_insts.push(region_marker_inst(
@@ -3140,23 +3133,23 @@ mod tests {
         insert_region_markers(&mut m);
 
         let block_insts = &m.functions[0].blocks[0].insts;
+        let opens: Vec<_> = block_insts
+            .iter()
+            .filter(|i| i.opcode == Opcode::RegionOpen && i.region == RegionId::Block(BlockId(0)))
+            .collect();
+        assert_eq!(
+            opens.len(),
+            1,
+            "self-loop header should reopen only when control reaches the block entry"
+        );
         let jump_pos = block_insts
             .iter()
             .position(|i| i.opcode == Opcode::Jump)
             .expect("self-loop should end in a back-edge jump");
         assert_eq!(
-            block_insts[jump_pos - 2].opcode,
+            block_insts[jump_pos - 1].opcode,
             Opcode::RegionClose,
             "self-loop backedge should close the header-owned region before jumping"
-        );
-        assert_eq!(
-            block_insts[jump_pos - 2].region,
-            RegionId::Block(BlockId(0))
-        );
-        assert_eq!(
-            block_insts[jump_pos - 1].opcode,
-            Opcode::RegionOpen,
-            "self-loop backedge should reopen the header-owned region immediately"
         );
         assert_eq!(
             block_insts[jump_pos - 1].region,
@@ -3203,17 +3196,17 @@ mod tests {
             .position(|i| i.opcode == Opcode::Jump)
             .expect("body should end in a back-edge jump");
         assert_eq!(
-            body[jump_pos - 2].opcode,
+            body[jump_pos - 1].opcode,
             Opcode::RegionClose,
             "back-edge predecessor should close the body region before jumping to the header"
         );
-        assert_eq!(body[jump_pos - 2].region, RegionId::Block(BlockId(2)));
-        assert_eq!(
-            body[jump_pos - 1].opcode,
-            Opcode::RegionOpen,
-            "back-edge predecessor should reopen the body region immediately after closing it"
-        );
         assert_eq!(body[jump_pos - 1].region, RegionId::Block(BlockId(2)));
+        assert!(
+            !body[jump_pos..]
+                .iter()
+                .any(|i| i.opcode == Opcode::RegionOpen && i.region == RegionId::Block(BlockId(2))),
+            "back-edge refresh must not reopen the body region before the header can exit"
+        );
     }
 
     #[test]
@@ -3265,12 +3258,7 @@ mod tests {
             .iter()
             .position(|i| i.opcode == Opcode::Jump)
             .expect("inner body should jump back to inner header");
-        assert_eq!(inner_body[inner_jump - 2].opcode, Opcode::RegionClose);
-        assert_eq!(
-            inner_body[inner_jump - 2].region,
-            RegionId::Block(BlockId(4))
-        );
-        assert_eq!(inner_body[inner_jump - 1].opcode, Opcode::RegionOpen);
+        assert_eq!(inner_body[inner_jump - 1].opcode, Opcode::RegionClose);
         assert_eq!(
             inner_body[inner_jump - 1].region,
             RegionId::Block(BlockId(4))
@@ -3281,12 +3269,7 @@ mod tests {
             .iter()
             .position(|i| i.opcode == Opcode::Jump)
             .expect("outer body should jump back to outer header");
-        assert_eq!(outer_backedge[outer_jump - 2].opcode, Opcode::RegionClose);
-        assert_eq!(
-            outer_backedge[outer_jump - 2].region,
-            RegionId::Block(BlockId(2))
-        );
-        assert_eq!(outer_backedge[outer_jump - 1].opcode, Opcode::RegionOpen);
+        assert_eq!(outer_backedge[outer_jump - 1].opcode, Opcode::RegionClose);
         assert_eq!(
             outer_backedge[outer_jump - 1].region,
             RegionId::Block(BlockId(2))
@@ -3294,7 +3277,7 @@ mod tests {
         assert!(
             !outer_backedge
                 .iter()
-                .any(|i| i.region == RegionId::Block(BlockId(4))),
+                .any(|i| i.opcode == Opcode::RegionClose && i.region == RegionId::Block(BlockId(4))),
             "outer back-edge must not refresh the inner loop body's region"
         );
     }
@@ -3352,12 +3335,7 @@ mod tests {
             .iter()
             .position(|i| i.opcode == Opcode::Jump)
             .expect("natural loop path should jump back to header");
-        assert_eq!(backedge_block[jump_pos - 2].opcode, Opcode::RegionClose);
-        assert_eq!(
-            backedge_block[jump_pos - 2].region,
-            RegionId::Block(BlockId(2))
-        );
-        assert_eq!(backedge_block[jump_pos - 1].opcode, Opcode::RegionOpen);
+        assert_eq!(backedge_block[jump_pos - 1].opcode, Opcode::RegionClose);
         assert_eq!(
             backedge_block[jump_pos - 1].region,
             RegionId::Block(BlockId(2))
@@ -3455,8 +3433,13 @@ mod tests {
             .expect("backedge split block should exist");
         assert_eq!(then_split.insts[0].opcode, Opcode::RegionClose);
         assert_eq!(then_split.insts[0].region, RegionId::Block(BlockId(2)));
-        assert_eq!(then_split.insts[1].opcode, Opcode::RegionOpen);
-        assert_eq!(then_split.insts[1].region, RegionId::Block(BlockId(2)));
+        assert!(
+            !then_split
+                .insts
+                .iter()
+                .any(|i| i.opcode == Opcode::RegionOpen && i.region == RegionId::Block(BlockId(2))),
+            "backedge split must not reopen before the header can exit"
+        );
         assert!(
             !then_split
                 .insts
@@ -3540,12 +3523,7 @@ mod tests {
                 .iter()
                 .position(|i| i.opcode == Opcode::Jump)
                 .expect("continue path should jump back to header");
-            assert_eq!(backedge_block[jump_pos - 2].opcode, Opcode::RegionClose);
-            assert_eq!(
-                backedge_block[jump_pos - 2].region,
-                RegionId::Block(BlockId(2))
-            );
-            assert_eq!(backedge_block[jump_pos - 1].opcode, Opcode::RegionOpen);
+            assert_eq!(backedge_block[jump_pos - 1].opcode, Opcode::RegionClose);
             assert_eq!(
                 backedge_block[jump_pos - 1].region,
                 RegionId::Block(BlockId(2))
