@@ -2904,6 +2904,7 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
             }
 
             let mut new_insts: Vec<IrInst> = Vec::new();
+            let mut block_changed: bool = opens_here;
             if opens_here {
                 let mut open_inst: IrInst = region_marker_inst(next_id, IOP_REGION_OPEN(), blk3.id);
                 next_id = next_id + 1;
@@ -2937,6 +2938,7 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
                             next_id = split.next_id;
                             then_target = split.block.id;
                             extra_blocks.push(split.block);
+                            block_changed = true;
                         }
                         if else_close.len() > 0 || else_refresh.len() > 0 {
                             let split2: EdgeSplitBlock = build_edge_split_block(
@@ -2946,6 +2948,7 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
                             next_id = split2.next_id;
                             else_target = split2.block.id;
                             extra_blocks.push(split2.block);
+                            block_changed = true;
                         }
                         new_insts.push(branch_inst_with_targets(term, then_target, else_target));
                     } else if term.op == IOP_JUMP() && term.dk == IDATA_JUMP_TARGET() {
@@ -2955,6 +2958,9 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
                         let jump_close: Vec<i64> = close_regions_for_edge(
                             blk3.id, term.dv, true, block_regions, block_parent, block_depth, jump_refresh
                         );
+                        if jump_close.len() > 0 || jump_refresh.len() > 0 {
+                            block_changed = true;
+                        }
                         next_id = append_region_markers(new_insts, next_id, jump_close, jump_refresh);
                         new_insts.push(term);
                     } else {
@@ -2963,6 +2969,9 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
                             blk3.id, 0, false, block_regions, block_parent, block_depth, no_refresh
                         );
                         let no_succ_refresh: Vec<i64> = Vec::new();
+                        if no_succ_close.len() > 0 {
+                            block_changed = true;
+                        }
                         next_id = append_region_markers(new_insts, next_id, no_succ_close, no_succ_refresh);
                         new_insts.push(term);
                     }
@@ -2977,9 +2986,12 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
                     blk3.id, 0, false, block_regions, block_parent, block_depth, no_refresh2
                 );
                 let no_succ_refresh2: Vec<i64> = Vec::new();
+                if no_succ_close2.len() > 0 {
+                    block_changed = true;
+                }
                 next_id = append_region_markers(new_insts, next_id, no_succ_close2, no_succ_refresh2);
             }
-            if opens_here || new_insts.len() != blk3.insts.len() {
+            if block_changed {
                 blk3.insts = new_insts;
                 f.blocks[bi4] = blk3;
             }
