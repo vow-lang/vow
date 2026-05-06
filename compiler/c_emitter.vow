@@ -92,9 +92,15 @@ fn vec_insert_i64(v: Vec<i64>, val: i64) -> bool {
 
 fn is_known_builtin(name: String) -> bool {
     name == String::from("__vow_vec_new")
+    || name == String::from("__vow_vec_new_val")
+    || name == String::from("__vow_vec_new_in_arena")
+    || name == String::from("__vow_vec_new_val_in_arena")
     || name == String::from("__vow_vec_from_raw_parts_copy_val")
     || name == String::from("__vow_vec_pin_to_root_val")
     || name == String::from("__vow_vec_push_val")
+    || name == String::from("__vow_vec_push_in_arena")
+    || name == String::from("__vow_vec_push_val_in_arena")
+    || name == String::from("__vow_vec_reserve_in_arena")
     || name == String::from("__vow_vec_get_val")
     || name == String::from("__vow_vec_len")
     || name == String::from("__vow_vec_pop")
@@ -433,6 +439,27 @@ fn c_nondet_suffix(ty: i64) -> String {
     String::from("int")
 }
 
+fn is_vec_model_constructor(name: String) -> bool {
+    name == String::from("__vow_vec_new")
+    || name == String::from("__vow_vec_new_val")
+    || name == String::from("__vow_vec_new_in_arena")
+    || name == String::from("__vow_vec_new_val_in_arena")
+    || name == String::from("__vow_vec_from_raw_parts_copy_val")
+    || name == String::from("__vow_vec_pin_to_root_val")
+}
+
+fn vec_model_receiver_arg(name: String) -> i64 {
+    if name == String::from("__vow_vec_push_val") { return 0; }
+    if name == String::from("__vow_vec_get_val") { return 0; }
+    if name == String::from("__vow_vec_len") { return 0; }
+    if name == String::from("__vow_vec_pop") { return 0; }
+    if name == String::from("__vow_vec_set_val") { return 0; }
+    if name == String::from("__vow_vec_push_in_arena") { return 1; }
+    if name == String::from("__vow_vec_push_val_in_arena") { return 1; }
+    if name == String::from("__vow_vec_reserve_in_arena") { return 1; }
+    -1
+}
+
 fn detect_const_fns(m: IrModule) -> Vec<i64> {
     let result: Vec<i64> = Vec::new();
     let fns: Vec<IrFunction> = m.functions;
@@ -531,7 +558,9 @@ fn collect_modelled_vars(f: IrFunction, constructor: String, prefix: String) -> 
                     || (prefix == String::from("__vow_string_")
                         && (ds == String::from("__vow_string_from_raw_parts_copy")
                             || ds == String::from("__vow_string_pin_to_root")));
-                if ds == constructor || alt_creator {
+                let is_creator: bool = ds == constructor || alt_creator
+                    || (prefix == String::from("__vow_vec_") && is_vec_model_constructor(ds));
+                if is_creator {
                     vec_insert_i64(vars, inst.id);
                 }
             }
@@ -554,10 +583,19 @@ fn collect_modelled_vars(f: IrFunction, constructor: String, prefix: String) -> 
                     || (prefix == String::from("__vow_string_")
                         && (ds == String::from("__vow_string_from_raw_parts_copy")
                             || ds == String::from("__vow_string_pin_to_root")));
-                if str_starts_with(ds, prefix) && !(ds == constructor) && !alt_creator {
+                let is_creator: bool = ds == constructor || alt_creator
+                    || (prefix == String::from("__vow_vec_") && is_vec_model_constructor(ds));
+                if str_starts_with(ds, prefix) && !is_creator {
                     let iargs: Vec<i64> = inst.args;
-                    if iargs.len() > 0 {
-                        vec_insert_i64(vars, iargs[0]);
+                    let receiver_arg: i64 = {
+                        if prefix == String::from("__vow_vec_") {
+                            vec_model_receiver_arg(ds)
+                        } else {
+                            0
+                        }
+                    };
+                    if receiver_arg >= 0 && iargs.len() > receiver_arg {
+                        vec_insert_i64(vars, iargs[receiver_arg]);
                     }
                 }
             }
@@ -1103,7 +1141,10 @@ fn emit_vec_op(out: String, inst: IrInst, vec_max: i64) {
     let ds: String = inst.ds;
     let iargs: Vec<i64> = inst.args;
 
-    if ds == String::from("__vow_vec_new") {
+    if ds == String::from("__vow_vec_new")
+       || ds == String::from("__vow_vec_new_val")
+       || ds == String::from("__vow_vec_new_in_arena")
+       || ds == String::from("__vow_vec_new_val_in_arena") {
         let ids: String = i64_to_str(id);
         out.push_str(str3(String::from("  v"), ids, String::from(".len = 0;\n")));
         return;
@@ -1124,9 +1165,12 @@ fn emit_vec_op(out: String, inst: IrInst, vec_max: i64) {
             String::from(" = v"), i64_to_str(src), String::from(";\n")));
         return;
     }
-    if ds == String::from("__vow_vec_push_val") {
-        let vec: i64 = iargs[0];
-        let val: i64 = iargs[1];
+    if ds == String::from("__vow_vec_push_val")
+       || ds == String::from("__vow_vec_push_val_in_arena") {
+        let vec_arg: i64 = { if ds == String::from("__vow_vec_push_val_in_arena") { 1 } else { 0 } };
+        let val_arg: i64 = { if ds == String::from("__vow_vec_push_val_in_arena") { 2 } else { 1 } };
+        let vec: i64 = iargs[vec_arg];
+        let val: i64 = iargs[val_arg];
         let vs: String = i64_to_str(vec);
         let vas: String = i64_to_str(val);
         out.push_str(str5(String::from("  __ESBMC_assert(v"), vs,
@@ -1134,6 +1178,19 @@ fn emit_vec_op(out: String, inst: IrInst, vec_max: i64) {
         out.push_str(str6(String::from("  v"), vs, String::from(".data[v"), vs,
             String::from(".len] = v"), str2(vas, String::from(";\n"))));
         out.push_str(str3(String::from("  v"), vs, String::from(".len++;\n")));
+        return;
+    }
+    if ds == String::from("__vow_vec_push_in_arena") {
+        let vec: i64 = iargs[1];
+        let vs: String = i64_to_str(vec);
+        out.push_str(str5(String::from("  __ESBMC_assert(v"), vs,
+            String::from(".len < "), i64_to_str(vec_max), String::from(", \"vec capacity\");\n")));
+        out.push_str(str5(String::from("  v"), vs, String::from(".data[v"), vs,
+            String::from(".len] = __VERIFIER_nondet_long();\n")));
+        out.push_str(str3(String::from("  v"), vs, String::from(".len++;\n")));
+        return;
+    }
+    if ds == String::from("__vow_vec_reserve_in_arena") {
         return;
     }
     if ds == String::from("__vow_vec_get_val") {

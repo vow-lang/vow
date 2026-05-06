@@ -93,6 +93,29 @@ fn ir_ty_to_c(ty: Ty) -> &'static str {
 // Typed variable analysis (Vec, String, HashMap)
 // ---------------------------------------------------------------------------
 
+fn is_vec_model_creator(name: &str) -> bool {
+    matches!(
+        name,
+        "__vow_vec_new"
+            | "__vow_vec_new_val"
+            | "__vow_vec_new_in_arena"
+            | "__vow_vec_new_val_in_arena"
+            | "__vow_vec_from_raw_parts_copy_val"
+            | "__vow_vec_pin_to_root_val"
+    )
+}
+
+fn vec_model_receiver_arg(name: &str) -> Option<usize> {
+    match name {
+        "__vow_vec_push_val" | "__vow_vec_get_val" | "__vow_vec_len" | "__vow_vec_pop"
+        | "__vow_vec_set_val" => Some(0),
+        "__vow_vec_push_in_arena"
+        | "__vow_vec_push_val_in_arena"
+        | "__vow_vec_reserve_in_arena" => Some(1),
+        _ => None,
+    }
+}
+
 fn collect_typed_vars(func: &Function, creator: &str, prefix: &str) -> HashSet<u32> {
     let mut vars = HashSet::new();
 
@@ -107,10 +130,22 @@ fn collect_typed_vars(func: &Function, creator: &str, prefix: &str) -> HashSet<u
                     || (prefix == "__vow_string_"
                         && (name == "__vow_string_from_raw_parts_copy"
                             || name == "__vow_string_pin_to_root"));
-                if name == creator || is_alt_creator {
+                let is_creator = name == creator
+                    || is_alt_creator
+                    || (prefix == "__vow_vec_" && is_vec_model_creator(name));
+                if is_creator {
                     vars.insert(inst.id.0);
-                } else if name.starts_with(prefix) && !inst.args.is_empty() {
-                    vars.insert(inst.args[0].0);
+                } else if name.starts_with(prefix) {
+                    let receiver_arg = if prefix == "__vow_vec_" {
+                        vec_model_receiver_arg(name)
+                    } else {
+                        Some(0)
+                    };
+                    if let Some(arg_idx) = receiver_arg
+                        && let Some(arg) = inst.args.get(arg_idx)
+                    {
+                        vars.insert(arg.0);
+                    }
                 }
             }
         }
@@ -191,7 +226,13 @@ fn is_known_builtin(name: &str) -> bool {
     matches!(
         name,
         "__vow_vec_new"
+            | "__vow_vec_new_val"
+            | "__vow_vec_new_in_arena"
+            | "__vow_vec_new_val_in_arena"
             | "__vow_vec_push_val"
+            | "__vow_vec_push_in_arena"
+            | "__vow_vec_push_val_in_arena"
+            | "__vow_vec_reserve_in_arena"
             | "__vow_vec_get_val"
             | "__vow_vec_from_raw_parts_copy_val"
             | "__vow_vec_pin_to_root_val"
@@ -811,7 +852,10 @@ fn emit_inst(
         Opcode::Call if matches!(&inst.data, InstData::CallExtern(n) if n.starts_with("__vow_vec_")) => {
             if let InstData::CallExtern(ref name) = inst.data {
                 match name.as_str() {
-                    "__vow_vec_new" => {
+                    "__vow_vec_new"
+                    | "__vow_vec_new_val"
+                    | "__vow_vec_new_in_arena"
+                    | "__vow_vec_new_val_in_arena" => {
                         out.push_str(&format!("  v{id}.len = 0;\n"));
                     }
                     "__vow_vec_from_raw_parts_copy_val" => {
@@ -825,15 +869,29 @@ fn emit_inst(
                         let source = inst.args[0].0;
                         out.push_str(&format!("  v{id} = v{source};\n"));
                     }
-                    "__vow_vec_push_val" => {
-                        let vec = inst.args[0].0;
-                        let val = inst.args[1].0;
+                    "__vow_vec_push_val" | "__vow_vec_push_val_in_arena" => {
+                        let (vec_arg, val_arg) = if name == "__vow_vec_push_val_in_arena" {
+                            (1, 2)
+                        } else {
+                            (0, 1)
+                        };
+                        let vec = inst.args[vec_arg].0;
+                        let val = inst.args[val_arg].0;
                         let vec_max = limits.vec_max;
                         out.push_str(&format!(
                             "  __ESBMC_assert(v{vec}.len < {vec_max}, \"vec capacity\");\n\
                              \x20 v{vec}.data[v{vec}.len] = v{val};\n  v{vec}.len++;\n",
                         ));
                     }
+                    "__vow_vec_push_in_arena" => {
+                        let vec = inst.args[1].0;
+                        let vec_max = limits.vec_max;
+                        out.push_str(&format!(
+                            "  __ESBMC_assert(v{vec}.len < {vec_max}, \"vec capacity\");\n\
+                             \x20 v{vec}.data[v{vec}.len] = __VERIFIER_nondet_long();\n  v{vec}.len++;\n",
+                        ));
+                    }
+                    "__vow_vec_reserve_in_arena" => {}
                     "__vow_vec_get_val" => {
                         let vec = inst.args[0].0;
                         let idx = inst.args[1].0;
@@ -2751,6 +2809,123 @@ mod tests {
         );
         assert!(c.contains("v2.data[v2.len] = v3;"), "push store: {c}");
         assert!(c.contains("v2.len++;"), "push increment: {c}");
+    }
+
+    #[test]
+    fn emit_explicit_arena_vec_push_val() {
+        use vow_ir::InstId;
+        let func = make_func(
+            "push_one_in_arena",
+            vec![],
+            Ty::Ptr,
+            vec![
+                inst(
+                    0,
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    vec![],
+                    InstData::ConstI64(1000),
+                ),
+                inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0), InstId(1), InstId(2)],
+                    data: InstData::CallExtern("__vow_vec_new_in_arena".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(42)),
+                Inst {
+                    id: InstId(5),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(0), InstId(3), InstId(4)],
+                    data: InstData::CallExtern("__vow_vec_push_val_in_arena".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(6, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(c.contains("__vow_vec_t v3;"), "arena vec decl: {c}");
+        assert!(
+            !c.contains("__vow_vec_t v0;"),
+            "arena pointer must not be tracked as vec: {c}"
+        );
+        assert!(c.contains("v3.len = 0;"), "arena vec init: {c}");
+        assert!(
+            c.contains("v3.data[v3.len] = v4;"),
+            "arena push value store: {c}"
+        );
+        assert!(c.contains("v3.len++;"), "arena push increment: {c}");
+        assert!(
+            !c.contains("not modelled"),
+            "arena vec calls should be modelled: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_explicit_arena_vec_reserve_and_generic_push() {
+        use vow_ir::InstId;
+        let func = make_func(
+            "reserve_and_push_in_arena",
+            vec![],
+            Ty::Ptr,
+            vec![
+                inst(
+                    0,
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    vec![],
+                    InstData::ConstI64(1000),
+                ),
+                inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0)],
+                    data: InstData::CallExtern("__vow_vec_new_val_in_arena".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                Inst {
+                    id: InstId(5),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(0), InstId(3), InstId(4), InstId(1), InstId(2)],
+                    data: InstData::CallExtern("__vow_vec_reserve_in_arena".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(6),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(0), InstId(3), InstId(4), InstId(1), InstId(2)],
+                    data: InstData::CallExtern("__vow_vec_push_in_arena".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(7, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            c.contains("v3.data[v3.len] = __VERIFIER_nondet_long();"),
+            "generic arena push should over-approximate element value: {c}"
+        );
+        assert!(c.contains("v3.len++;"), "generic arena push increment: {c}");
+        assert!(
+            !c.contains("not modelled"),
+            "reserve/generic arena push should be modelled: {c}"
+        );
     }
 
     #[test]

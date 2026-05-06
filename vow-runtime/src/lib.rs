@@ -221,6 +221,22 @@ fn region_literal_mutation_trap(operation: &'static str) -> ! {
     std::process::exit(1);
 }
 
+fn runtime_invariant_trap(operation: &'static str, reason: &'static str) -> ! {
+    use std::io::Write;
+    let stderr = std::io::stderr();
+    let mut lock = stderr.lock();
+    let _ = lock.write_all(b"{\"error\":\"RuntimeInvariantViolation\",\"operation\":\"");
+    let _ = lock.write_all(operation.as_bytes());
+    let _ = lock.write_all(b"\",\"reason\":\"");
+    let _ = lock.write_all(reason.as_bytes());
+    let _ = lock.write_all(b"\"}\n");
+    std::process::exit(1);
+}
+
+fn null_arena_trap(operation: &'static str) -> ! {
+    runtime_invariant_trap(operation, "null arena");
+}
+
 // ---------------------------------------------------------------------------
 // Trace instrumentation
 // ---------------------------------------------------------------------------
@@ -820,19 +836,31 @@ unsafe fn root_arena_alloc_zeroed(bytes: usize, align: usize) -> *mut u8 {
     ptr
 }
 
-/// Grow a backing buffer that lives in `__vow_root_arena`. Implements the
-/// spec §7.2 zero-copy fast path: try `__vow_arena_try_extend` first; if
-/// the backing is the most recent allocation in the chunk and the new
-/// size still fits, growth is O(1) with no copy and no orphaned backing.
-/// Otherwise fall back to a fresh allocation + memcpy of the prefix.
-///
-/// Phase 4 / S6 status: this fast path is wired for **root-arena-backed**
-/// containers — the only kind today, since `__vow_vec_new` /
-/// `__vow_string_new` / `__vow_map_new` all allocate from
-/// `__vow_root_arena`. Threading a per-container arena pointer through
-/// the descriptor (so block-arena-backed `Vec`/`String`/`HashMap` also
-/// benefit from try_extend) is a much larger API change deferred to
-/// Phase 9 (performance), per `docs/design/arena_memory.md` §15.
+/// Grow a backing buffer that lives in `arena`. Implements the spec §7.2
+/// zero-copy fast path: try `__vow_arena_try_extend` first; if the backing
+/// is the most recent allocation in the chunk and the new size still fits,
+/// growth is O(1) with no copy and no orphaned backing. Otherwise fall back
+/// to a fresh allocation + memcpy of the prefix.
+unsafe fn arena_grow_backing(
+    arena: *mut VowArena,
+    ptr: *mut u8,
+    old_size: usize,
+    new_size: usize,
+    align: usize,
+) -> *mut u8 {
+    if old_size > 0 && unsafe { __vow_arena_try_extend(arena, ptr, old_size, new_size) != 0 } {
+        unsafe { std::ptr::write_bytes(ptr.add(old_size), 0, new_size - old_size) };
+        return ptr;
+    }
+
+    let new_ptr = unsafe { __vow_arena_alloc(arena, new_size, align) };
+    if old_size > 0 {
+        unsafe { std::ptr::copy_nonoverlapping(ptr, new_ptr, old_size) };
+    }
+    unsafe { std::ptr::write_bytes(new_ptr.add(old_size), 0, new_size - old_size) };
+    new_ptr
+}
+
 unsafe fn root_arena_grow_backing(
     ptr: *mut u8,
     old_size: usize,
@@ -841,21 +869,7 @@ unsafe fn root_arena_grow_backing(
 ) -> *mut u8 {
     let _guard = ROOT_ARENA_LOCK.lock().unwrap();
     unsafe { ensure_root_arena_locked() };
-    if old_size > 0
-        && unsafe {
-            __vow_arena_try_extend(&raw mut __vow_root_arena, ptr, old_size, new_size) != 0
-        }
-    {
-        unsafe { std::ptr::write_bytes(ptr.add(old_size), 0, new_size - old_size) };
-        return ptr;
-    }
-
-    let new_ptr = unsafe { __vow_arena_alloc(&raw mut __vow_root_arena, new_size, align) };
-    if old_size > 0 {
-        unsafe { std::ptr::copy_nonoverlapping(ptr, new_ptr, old_size) };
-    }
-    unsafe { std::ptr::write_bytes(new_ptr.add(old_size), 0, new_size - old_size) };
-    new_ptr
+    unsafe { arena_grow_backing(&raw mut __vow_root_arena, ptr, old_size, new_size, align) }
 }
 
 #[unsafe(no_mangle)]
@@ -934,9 +948,16 @@ fn read_stdin_line_into_scratch<R: std::io::BufRead>(
 const VEC_INITIAL_CAP: usize = 8;
 
 #[unsafe(no_mangle)]
-pub extern "C" fn __vow_vec_new(elem_size: usize, align: usize) -> *mut u8 {
+pub unsafe extern "C" fn __vow_vec_new_in_arena(
+    arena: *mut VowArena,
+    elem_size: usize,
+    align: usize,
+) -> *mut u8 {
     let _ = elem_size;
-    let header_ptr = unsafe { root_arena_alloc_zeroed(24, 8) } as *mut VowVec;
+    if arena.is_null() {
+        null_arena_trap("Vec::new");
+    }
+    let header_ptr = unsafe { __vow_arena_alloc(arena, 24, 8) } as *mut VowVec;
     // Lazy allocation: don't allocate buffer until first push.
     // Use a dangling aligned pointer so from_raw_parts with len=0 is safe.
     unsafe {
@@ -949,19 +970,22 @@ pub extern "C" fn __vow_vec_new(elem_size: usize, align: usize) -> *mut u8 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn __vow_vec_new_val() -> *mut u8 {
-    __vow_vec_new(8, 8)
+pub extern "C" fn __vow_vec_new(elem_size: usize, align: usize) -> *mut u8 {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { __vow_vec_new_in_arena(&raw mut __vow_root_arena, elem_size, align) }
 }
 
-unsafe fn __vow_vec_new_val_in_arena(arena: *mut VowArena) -> *mut u8 {
-    let header_ptr = unsafe { __vow_arena_alloc(arena, 24, 8) } as *mut VowVec;
-    unsafe {
-        (*header_ptr).ptr = 8 as *mut u8;
-        (*header_ptr).len = 0;
-        (*header_ptr).cap = 0;
-    }
-    sanitize_on_vec_new(header_ptr as usize);
-    header_ptr as *mut u8
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_new_val_in_arena(arena: *mut VowArena) -> *mut u8 {
+    unsafe { __vow_vec_new_in_arena(arena, 8, 8) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_vec_new_val() -> *mut u8 {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { __vow_vec_new_val_in_arena(&raw mut __vow_root_arena) }
 }
 
 #[unsafe(no_mangle)]
@@ -970,6 +994,9 @@ pub unsafe extern "C" fn __vow_vec_from_raw_parts_copy_val(
     ptr: *const i64,
     len: usize,
 ) -> *mut u8 {
+    if arena.is_null() {
+        null_arena_trap("Vec::from_raw_parts_copy");
+    }
     let vec = unsafe { __vow_vec_new_val_in_arena(arena) };
     if len == 0 || ptr.is_null() {
         return vec;
@@ -999,7 +1026,13 @@ pub unsafe extern "C" fn __vow_vec_pin_to_root_val(source: *const u8) -> *mut u8
     }
 }
 
-unsafe fn __vow_vec_reserve(vec: *mut u8, additional: usize, elem_size: usize, elem_align: usize) {
+unsafe fn vec_reserve_in_arena_no_null_check(
+    arena: *mut VowArena,
+    vec: *mut u8,
+    additional: usize,
+    elem_size: usize,
+    elem_align: usize,
+) {
     let v = unsafe { &mut *(vec as *mut VowVec) };
     if v.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("Vec::reserve");
@@ -1014,9 +1047,55 @@ unsafe fn __vow_vec_reserve(vec: *mut u8, additional: usize, elem_size: usize, e
     }
     let old_size = v.cap * elem_size;
     let new_size = new_cap * elem_size;
-    let new_ptr = unsafe { root_arena_grow_backing(v.ptr, old_size, new_size, elem_align) };
+    let new_ptr = unsafe { arena_grow_backing(arena, v.ptr, old_size, new_size, elem_align) };
     v.ptr = new_ptr;
     v.cap = new_cap;
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_reserve_in_arena(
+    arena: *mut VowArena,
+    vec: *mut u8,
+    additional: usize,
+    elem_size: usize,
+    elem_align: usize,
+) {
+    if arena.is_null() {
+        null_arena_trap("Vec::reserve");
+    }
+    unsafe { vec_reserve_in_arena_no_null_check(arena, vec, additional, elem_size, elem_align) };
+}
+
+unsafe fn __vow_vec_reserve(vec: *mut u8, additional: usize, elem_size: usize, elem_align: usize) {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe {
+        vec_reserve_in_arena_no_null_check(
+            &raw mut __vow_root_arena,
+            vec,
+            additional,
+            elem_size,
+            elem_align,
+        )
+    };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_push_in_arena(
+    arena: *mut VowArena,
+    vec: *mut u8,
+    elem: *const u8,
+    elem_size: usize,
+    elem_align: usize,
+) {
+    if arena.is_null() {
+        null_arena_trap("Vec::push");
+    }
+    // Sanitizer first — consults the shadow table by pointer value and
+    // diagnoses UseAfterFree without dereferencing. The cap check must
+    // dereference, so it has to run after the sanitizer.
+    sanitize_on_push(vec as usize);
+    unsafe { vec_push_no_sanitize_in_arena(arena, vec, elem, elem_size, elem_align, "Vec::push") };
 }
 
 #[unsafe(no_mangle)]
@@ -1026,11 +1105,28 @@ pub unsafe extern "C" fn __vow_vec_push(
     elem_size: usize,
     elem_align: usize,
 ) {
-    // Sanitizer first — consults the shadow table by pointer value and
-    // diagnoses UseAfterFree without dereferencing. The cap check must
-    // dereference, so it has to run after the sanitizer.
-    sanitize_on_push(vec as usize);
-    unsafe { vec_push_no_sanitize(vec, elem, elem_size, elem_align, "Vec::push") };
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { __vow_vec_push_in_arena(&raw mut __vow_root_arena, vec, elem, elem_size, elem_align) };
+}
+
+unsafe fn vec_push_no_sanitize_in_arena(
+    arena: *mut VowArena,
+    vec: *mut u8,
+    elem: *const u8,
+    elem_size: usize,
+    elem_align: usize,
+    op: &'static str,
+) {
+    let v = unsafe { &*(vec as *const VowVec) };
+    if v.cap == VOW_CAP_RODATA {
+        region_literal_mutation_trap(op);
+    }
+    unsafe { vec_reserve_in_arena_no_null_check(arena, vec, 1, elem_size, elem_align) };
+    let v = unsafe { &mut *(vec as *mut VowVec) };
+    let dest = unsafe { v.ptr.add(v.len * elem_size) };
+    unsafe { std::ptr::copy_nonoverlapping(elem, dest, elem_size) };
+    v.len += 1;
 }
 
 // Inner push that assumes the caller has already run sanitize_on_push for
@@ -1043,15 +1139,18 @@ unsafe fn vec_push_no_sanitize(
     elem_align: usize,
     op: &'static str,
 ) {
-    let v = unsafe { &*(vec as *const VowVec) };
-    if v.cap == VOW_CAP_RODATA {
-        region_literal_mutation_trap(op);
-    }
-    unsafe { __vow_vec_reserve(vec, 1, elem_size, elem_align) };
-    let v = unsafe { &mut *(vec as *mut VowVec) };
-    let dest = unsafe { v.ptr.add(v.len * elem_size) };
-    unsafe { std::ptr::copy_nonoverlapping(elem, dest, elem_size) };
-    v.len += 1;
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe {
+        vec_push_no_sanitize_in_arena(
+            &raw mut __vow_root_arena,
+            vec,
+            elem,
+            elem_size,
+            elem_align,
+            op,
+        )
+    };
 }
 
 #[unsafe(no_mangle)]
@@ -1062,7 +1161,14 @@ pub unsafe extern "C" fn __vow_vec_len(vec: *const u8) -> usize {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_vec_push_val(vec: *mut u8, value: i64) {
+pub unsafe extern "C" fn __vow_vec_push_val_in_arena(
+    arena: *mut VowArena,
+    vec: *mut u8,
+    value: i64,
+) {
+    if arena.is_null() {
+        null_arena_trap("Vec::push_val");
+    }
     // Sanitize + cap-check here with the precise operation name. Delegating
     // the whole path to __vow_vec_push would (a) double-sanitize and (b)
     // report the trap as "Vec::push" instead of "Vec::push_val". Delegate
@@ -1070,7 +1176,14 @@ pub unsafe extern "C" fn __vow_vec_push_val(vec: *mut u8, value: i64) {
     // a single generation per appended element.
     sanitize_on_push(vec as usize);
     let bytes = value.to_ne_bytes();
-    unsafe { vec_push_no_sanitize(vec, bytes.as_ptr(), 8, 8, "Vec::push_val") };
+    unsafe { vec_push_no_sanitize_in_arena(arena, vec, bytes.as_ptr(), 8, 8, "Vec::push_val") };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_vec_push_val(vec: *mut u8, value: i64) {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { __vow_vec_push_val_in_arena(&raw mut __vow_root_arena, vec, value) };
 }
 
 #[unsafe(no_mangle)]
@@ -3103,6 +3216,111 @@ mod tests {
     }
 
     #[test]
+    fn explicit_arena_vec_pushes_values() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+
+        let v = unsafe { __vow_vec_new_in_arena(&mut a, 8, 8) };
+        let header = unsafe { &*(v as *const VowVec) };
+        assert_eq!(header.len, 0);
+        assert_eq!(header.cap, 0);
+
+        let first = 17_i64;
+        let second = 23_i64;
+        unsafe { __vow_vec_push_in_arena(&mut a, v, &first as *const _ as *const u8, 8, 8) };
+        unsafe { __vow_vec_push_in_arena(&mut a, v, &second as *const _ as *const u8, 8, 8) };
+
+        assert_eq!(unsafe { __vow_vec_len(v) }, 2);
+        assert_eq!(unsafe { __vow_vec_get_val(v, 0) }, 17);
+        assert_eq!(unsafe { __vow_vec_get_val(v, 1) }, 23);
+
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn explicit_arena_vec_new_val_reserve_and_push_val() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+
+        let v = unsafe { __vow_vec_new_val_in_arena(&mut a) };
+        unsafe { __vow_vec_reserve_in_arena(&mut a, v, 12, 8, 8) };
+        let header = unsafe { &*(v as *const VowVec) };
+        assert_eq!(header.len, 0, "reserve must not change len");
+        assert!(header.cap >= 12);
+
+        unsafe { __vow_vec_push_val_in_arena(&mut a, v, 99) };
+        assert_eq!(unsafe { __vow_vec_len(v) }, 1);
+        assert_eq!(unsafe { __vow_vec_get_val(v, 0) }, 99);
+
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn explicit_arena_vec_growth_preserves_values_after_copy_fallback() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+
+        let v = unsafe { __vow_vec_new_val_in_arena(&mut a) };
+        for i in 0..8 {
+            unsafe { __vow_vec_push_val_in_arena(&mut a, v, i) };
+        }
+        let before = unsafe { &*(v as *const VowVec) }.ptr;
+        let _intervening = unsafe { __vow_arena_alloc(&mut a, 16, 8) };
+        unsafe { __vow_vec_push_val_in_arena(&mut a, v, 8) };
+
+        let after = unsafe { &*(v as *const VowVec) }.ptr;
+        assert_ne!(
+            after, before,
+            "intervening allocation should force allocate-copy growth"
+        );
+        for i in 0..9 {
+            assert_eq!(unsafe { __vow_vec_get_val(v, i as usize) }, i);
+        }
+
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn explicit_arena_vecs_remain_independent_across_two_open_arenas() {
+        let mut a = empty_arena_header();
+        let mut b = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        unsafe { __vow_arena_open(&mut b) };
+
+        let va = unsafe { __vow_vec_new_val_in_arena(&mut a) };
+        let vb = unsafe { __vow_vec_new_val_in_arena(&mut b) };
+        unsafe { __vow_vec_push_val_in_arena(&mut a, va, 1) };
+        unsafe { __vow_vec_push_val_in_arena(&mut b, vb, 10) };
+        unsafe { __vow_vec_push_val_in_arena(&mut b, vb, 20) };
+
+        assert_eq!(unsafe { __vow_vec_get_val(va, 0) }, 1);
+        assert_eq!(unsafe { __vow_vec_get_val(vb, 0) }, 10);
+        assert_eq!(unsafe { __vow_vec_get_val(vb, 1) }, 20);
+
+        unsafe { __vow_arena_close(&mut a) };
+        unsafe { __vow_vec_push_val_in_arena(&mut b, vb, 30) };
+        assert_eq!(unsafe { __vow_vec_len(vb) }, 3);
+        assert_eq!(unsafe { __vow_vec_get_val(vb, 2) }, 30);
+        unsafe { __vow_arena_close(&mut b) };
+    }
+
+    #[test]
+    fn explicit_arena_vec_allocation_works_after_close_and_reopen() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+        let first = unsafe { __vow_vec_new_val_in_arena(&mut a) };
+        unsafe { __vow_vec_push_val_in_arena(&mut a, first, 1) };
+        unsafe { __vow_arena_close(&mut a) };
+
+        unsafe { __vow_arena_open(&mut a) };
+        let second = unsafe { __vow_vec_new_val_in_arena(&mut a) };
+        unsafe { __vow_vec_push_val_in_arena(&mut a, second, 2) };
+        assert_eq!(unsafe { __vow_vec_len(second) }, 1);
+        assert_eq!(unsafe { __vow_vec_get_val(second, 0) }, 2);
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
     fn string_clone_into_arena_copies_bytes() {
         // Phase 4 / S5 return materialization: clones a String descriptor's
         // backing into the supplied arena, returning a fresh, mutable
@@ -3349,10 +3567,10 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // VOW_CAP_RODATA trap tests. These use the subprocess pattern:
+    // Runtime trap tests. These use the subprocess pattern:
     // rodata_trap_worker reruns itself with an env var and invokes the
-    // appropriate mutation on a rodata-backed descriptor; it exits(1) via
-    // the trap. Parent tests spawn the worker and assert exit status + stderr.
+    // appropriate trap path; it exits(1) via the trap. Parent tests spawn
+    // the worker and assert exit status + stderr.
     // -----------------------------------------------------------------------
 
     fn make_rodata_vec_val() -> VowVec {
@@ -3386,6 +3604,30 @@ mod tests {
             unsafe { __vow_arena_open(&mut arena) };
             let _ = unsafe { __vow_arena_alloc(&mut arena, usize::MAX, 8) };
             eprintln!("rodata_trap_worker: arena overflow did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "Vec::new_in_arena_null" {
+            let _ = unsafe { __vow_vec_new_in_arena(std::ptr::null_mut(), 8, 8) };
+            eprintln!("rodata_trap_worker: null arena constructor did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "Vec::push_in_arena_null" {
+            let mut v = VowVec {
+                ptr: 8 as *mut u8,
+                len: 0,
+                cap: 0,
+            };
+            let elem = 0_i64;
+            unsafe {
+                __vow_vec_push_in_arena(
+                    std::ptr::null_mut(),
+                    &mut v as *mut _ as *mut u8,
+                    &elem as *const _ as *const u8,
+                    8,
+                    8,
+                )
+            };
+            eprintln!("rodata_trap_worker: null arena push did NOT trap");
             std::process::exit(42);
         }
         let mut v = make_rodata_vec_val();
@@ -3462,6 +3704,26 @@ mod tests {
         }
     }
 
+    fn assert_runtime_invariant_null_arena(op: &str, expected_op_in_json: &str) {
+        let (out, stderr) = spawn_trap_worker(op);
+        assert!(
+            !out.status.success(),
+            "worker for {op} should have exited non-zero; stderr:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(r#""error":"RuntimeInvariantViolation""#),
+            "stderr missing RuntimeInvariantViolation for {op}:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(&format!(r#""operation":"{expected_op_in_json}""#)),
+            "stderr missing operation={expected_op_in_json}:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(r#""reason":"null arena""#),
+            "stderr missing null arena reason:\n{stderr}"
+        );
+    }
+
     #[test]
     fn arena_alloc_rejects_overflow() {
         // Verifies the isize::MAX size-limit guard: passing bytes=usize::MAX
@@ -3476,6 +3738,16 @@ mod tests {
             stderr.contains(r#""error":"OutOfMemory""#),
             "stderr missing OutOfMemory trap:\n{stderr}"
         );
+    }
+
+    #[test]
+    fn explicit_arena_vec_new_null_arena_traps() {
+        assert_runtime_invariant_null_arena("Vec::new_in_arena_null", "Vec::new");
+    }
+
+    #[test]
+    fn explicit_arena_vec_push_null_arena_traps() {
+        assert_runtime_invariant_null_arena("Vec::push_in_arena_null", "Vec::push");
     }
 
     #[test]

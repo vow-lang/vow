@@ -1456,6 +1456,7 @@ fn extern_fresh_in_caller(sym: &str) -> bool {
 fn for_each_extern_store_edge(sym: &str, args: &[InstId], mut visit: impl FnMut(InstId, InstId)) {
     match sym {
         "__vow_vec_push_val" if args.len() >= 2 => visit(args[0], args[1]),
+        "__vow_vec_push_val_in_arena" if args.len() >= 3 => visit(args[1], args[2]),
         "__vow_vec_set_val" if args.len() >= 3 => visit(args[0], args[2]),
         "__vow_map_insert" | "__vow_btreemap_insert" if args.len() >= 3 => {
             visit(args[0], args[1]);
@@ -4276,6 +4277,57 @@ mod tests {
             source.region,
             RegionId::Caller(HiddenRegionIdx(0)),
             "source stored by an extern container mutator must inherit target escapes"
+        );
+    }
+
+    #[test]
+    fn explicit_arena_vec_push_val_into_escaping_target_widens_source_to_caller_region() {
+        let insts = vec![
+            inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(
+                1,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                2,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                3,
+                Opcode::Call,
+                Ty::Unit,
+                vec![0, 1, 2],
+                InstData::CallExtern("__vow_vec_push_val_in_arena".to_string()),
+            ),
+            inst(4, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+        ];
+        let f = function(
+            0,
+            "extern_arena_vec_push_escape",
+            vec![],
+            Ty::Ptr,
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        let target = &m.functions[0].blocks[0].insts[1];
+        let source = &m.functions[0].blocks[0].insts[2];
+        assert_eq!(
+            target.region,
+            RegionId::Caller(HiddenRegionIdx(0)),
+            "returned explicit-arena extern-mutated target should be caller-region allocated"
+        );
+        assert_eq!(
+            source.region,
+            RegionId::Caller(HiddenRegionIdx(0)),
+            "source stored by explicit-arena Vec::push_val must inherit target escapes"
         );
     }
 
