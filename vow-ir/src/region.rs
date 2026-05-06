@@ -496,10 +496,10 @@ fn reachable_from(
     reachable
 }
 
-fn backedge_refresh_regions_by_block(
+fn backedge_refresh_regions_by_edge(
     func: &Function,
     block_regions: &BTreeSet<BlockId>,
-) -> BTreeMap<BlockId, Vec<BlockId>> {
+) -> BTreeMap<(BlockId, BlockId), Vec<BlockId>> {
     let mut back_edges = detect_loop_back_edges(func);
     back_edges.sort_unstable();
     back_edges.dedup();
@@ -509,14 +509,17 @@ fn backedge_refresh_regions_by_block(
 
     let forward = forward_graph_without_back_edges(func, &back_edges);
     let reverse = reverse_graph(&forward);
-    let mut by_pred: BTreeMap<BlockId, BTreeSet<BlockId>> = BTreeMap::new();
+    let mut by_pred: BTreeMap<(BlockId, BlockId), BTreeSet<BlockId>> = BTreeMap::new();
     for (pred, header) in back_edges {
         let reachable_from_header = reachable_from([header], &forward);
         let reaches_pred = reachable_from([pred], &reverse);
         for &region_block in block_regions {
             if reachable_from_header.contains(&region_block) && reaches_pred.contains(&region_block)
             {
-                by_pred.entry(pred).or_default().insert(region_block);
+                by_pred
+                    .entry((pred, header))
+                    .or_default()
+                    .insert(region_block);
             }
         }
     }
@@ -525,6 +528,18 @@ fn backedge_refresh_regions_by_block(
         .into_iter()
         .map(|(pred, regions)| (pred, regions.into_iter().collect()))
         .collect()
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct EdgeRegionMarkers {
+    closes: Vec<BlockId>,
+    refreshes: Vec<BlockId>,
+}
+
+impl EdgeRegionMarkers {
+    fn is_empty(&self) -> bool {
+        self.closes.is_empty() && self.refreshes.is_empty()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -841,6 +856,107 @@ fn emit_live_linear_errors(
     }
 }
 
+fn edge_region_markers(
+    pred: BlockId,
+    succ: Option<BlockId>,
+    block_regions: &BTreeSet<BlockId>,
+    block_tree: &BlockTree,
+    refresh_regions_by_edge: &BTreeMap<(BlockId, BlockId), Vec<BlockId>>,
+) -> EdgeRegionMarkers {
+    let refreshes = succ
+        .and_then(|target| refresh_regions_by_edge.get(&(pred, target)).cloned())
+        .unwrap_or_default();
+    let mut closes = Vec::new();
+    for &region_block in block_regions {
+        if !block_tree.is_ancestor(region_block, pred) {
+            continue;
+        }
+        let exits_region = succ
+            .map(|target| !block_tree.is_ancestor(region_block, target))
+            .unwrap_or(true);
+        if exits_region && !refreshes.contains(&region_block) {
+            closes.push(region_block);
+        }
+    }
+    closes.sort_by(|a, b| {
+        block_tree
+            .depth_of(*b)
+            .cmp(&block_tree.depth_of(*a))
+            .then_with(|| b.cmp(a))
+    });
+    EdgeRegionMarkers { closes, refreshes }
+}
+
+fn marker_insts(next_id: &mut u32, markers: &EdgeRegionMarkers, span: Span) -> Vec<Inst> {
+    let mut insts = Vec::with_capacity(markers.closes.len() + markers.refreshes.len() * 2);
+    for &close_block in &markers.closes {
+        insts.push(region_marker_inst(
+            *next_id,
+            Opcode::RegionClose,
+            close_block,
+            span,
+        ));
+        *next_id += 1;
+    }
+    for &refresh_block in &markers.refreshes {
+        insts.push(region_marker_inst(
+            *next_id,
+            Opcode::RegionClose,
+            refresh_block,
+            span,
+        ));
+        *next_id += 1;
+        insts.push(region_marker_inst(
+            *next_id,
+            Opcode::RegionOpen,
+            refresh_block,
+            span,
+        ));
+        *next_id += 1;
+    }
+    insts
+}
+
+fn split_edge_with_markers(
+    target: BlockId,
+    markers: &EdgeRegionMarkers,
+    edge_upsilons: &[Inst],
+    span: Span,
+    next_id: &mut u32,
+    next_block_id: &mut u32,
+    split_blocks: &mut Vec<crate::types::BasicBlock>,
+) -> BlockId {
+    if markers.is_empty() {
+        return target;
+    }
+    let split_id = BlockId(*next_block_id);
+    *next_block_id = next_block_id
+        .checked_add(1)
+        .expect("BlockId overflow while splitting region-marker edge");
+    let mut insts = marker_insts(next_id, markers, span);
+    for upsilon in edge_upsilons {
+        let mut cloned = upsilon.clone();
+        cloned.id = InstId(*next_id);
+        *next_id += 1;
+        insts.push(cloned);
+    }
+    insts.push(Inst {
+        id: InstId(*next_id),
+        opcode: Opcode::Jump,
+        ty: Ty::Unit,
+        args: vec![],
+        data: InstData::JumpTarget(target),
+        origin: span,
+        region: RegionId::Root,
+    });
+    *next_id += 1;
+    split_blocks.push(crate::types::BasicBlock {
+        id: split_id,
+        insts,
+    });
+    split_id
+}
+
 /// Insert `RegionOpen` / `RegionClose` markers around basic blocks whose
 /// region is non-empty (spec §3.5). Must run AFTER `infer_regions` so that
 /// every `RegionAlloc` inst carries its inferred `region: RegionId`.
@@ -888,65 +1004,117 @@ pub fn insert_region_markers(module: &mut Module) {
         }
 
         let block_tree = BlockTree::from_function(func);
-        let refresh_regions_by_block = backedge_refresh_regions_by_block(func, &block_regions);
-        let mut close_regions_by_block: BTreeMap<BlockId, Vec<BlockId>> = BTreeMap::new();
-        for block in &func.blocks {
-            let succs = block_successors(block);
-            let mut close_regions = Vec::new();
-            let refresh_regions = refresh_regions_by_block
-                .get(&block.id)
-                .cloned()
-                .unwrap_or_default();
-            for &region_block in &block_regions {
-                if !block_tree.is_ancestor(region_block, block.id) {
-                    continue;
-                }
-                let exits_region = succs.is_empty()
-                    || succs
-                        .iter()
-                        .any(|&succ| !block_tree.is_ancestor(region_block, succ));
-                if exits_region && !refresh_regions.contains(&region_block) {
-                    close_regions.push(region_block);
-                }
-            }
-            close_regions.sort_by(|a, b| {
-                block_tree
-                    .depth_of(*b)
-                    .cmp(&block_tree.depth_of(*a))
-                    .then_with(|| b.cmp(a))
-            });
-            if !close_regions.is_empty() {
-                close_regions_by_block.insert(block.id, close_regions);
-            }
-        }
+        let refresh_regions_by_edge = backedge_refresh_regions_by_edge(func, &block_regions);
 
         let mut next_id = next_inst_id(func);
+        let mut next_block_id = next_block_id(func);
+        let mut split_blocks = Vec::new();
         for block in &mut func.blocks {
             let old_insts = std::mem::take(&mut block.insts);
             let span = old_insts
                 .first()
                 .map(|i| i.origin)
                 .unwrap_or(Span { start: 0, len: 0 });
-            let closes = close_regions_by_block
-                .get(&block.id)
-                .cloned()
-                .unwrap_or_default();
-            let refreshes = refresh_regions_by_block
-                .get(&block.id)
-                .cloned()
-                .unwrap_or_default();
             let opens_here = block_regions.contains(&block.id);
-            if !opens_here && closes.is_empty() && refreshes.is_empty() {
-                block.insts = old_insts;
-                continue;
-            }
 
             let term_pos = old_insts
                 .iter()
                 .position(|i| i.opcode.is_terminal())
                 .unwrap_or(old_insts.len());
+            let term_span = old_insts.get(term_pos).map(|i| i.origin).unwrap_or(span);
+            let edge_upsilons: Vec<Inst> = old_insts[term_pos.saturating_add(1)..]
+                .iter()
+                .filter(|inst| inst.opcode == Opcode::Upsilon)
+                .cloned()
+                .collect();
+            let mut before_term_markers = EdgeRegionMarkers::default();
+            let mut rewritten_term: Option<Inst> = None;
+            if let Some(term) = old_insts.get(term_pos) {
+                match &term.data {
+                    InstData::JumpTarget(target) if term.opcode == Opcode::Jump => {
+                        before_term_markers = edge_region_markers(
+                            block.id,
+                            Some(*target),
+                            &block_regions,
+                            &block_tree,
+                            &refresh_regions_by_edge,
+                        );
+                    }
+                    InstData::BranchTargets {
+                        then_block,
+                        else_block,
+                    } if term.opcode == Opcode::Branch => {
+                        let then_markers = edge_region_markers(
+                            block.id,
+                            Some(*then_block),
+                            &block_regions,
+                            &block_tree,
+                            &refresh_regions_by_edge,
+                        );
+                        let else_markers = edge_region_markers(
+                            block.id,
+                            Some(*else_block),
+                            &block_regions,
+                            &block_tree,
+                            &refresh_regions_by_edge,
+                        );
+                        let new_then = split_edge_with_markers(
+                            *then_block,
+                            &then_markers,
+                            &edge_upsilons,
+                            term_span,
+                            &mut next_id,
+                            &mut next_block_id,
+                            &mut split_blocks,
+                        );
+                        let new_else = split_edge_with_markers(
+                            *else_block,
+                            &else_markers,
+                            &edge_upsilons,
+                            term_span,
+                            &mut next_id,
+                            &mut next_block_id,
+                            &mut split_blocks,
+                        );
+                        if new_then != *then_block || new_else != *else_block {
+                            let mut new_term = term.clone();
+                            new_term.data = InstData::BranchTargets {
+                                then_block: new_then,
+                                else_block: new_else,
+                            };
+                            rewritten_term = Some(new_term);
+                        }
+                    }
+                    _ => {
+                        before_term_markers = edge_region_markers(
+                            block.id,
+                            None,
+                            &block_regions,
+                            &block_tree,
+                            &refresh_regions_by_edge,
+                        );
+                    }
+                }
+            } else {
+                before_term_markers = edge_region_markers(
+                    block.id,
+                    None,
+                    &block_regions,
+                    &block_tree,
+                    &refresh_regions_by_edge,
+                );
+            }
+
+            if !opens_here && before_term_markers.is_empty() && rewritten_term.is_none() {
+                block.insts = old_insts;
+                continue;
+            }
+
             let mut new_insts = Vec::with_capacity(
-                old_insts.len() + usize::from(opens_here) + closes.len() + refreshes.len() * 2,
+                old_insts.len()
+                    + usize::from(opens_here)
+                    + before_term_markers.closes.len()
+                    + before_term_markers.refreshes.len() * 2,
             );
             if opens_here {
                 new_insts.push(region_marker_inst(
@@ -958,34 +1126,16 @@ pub fn insert_region_markers(module: &mut Module) {
                 next_id += 1;
             }
             new_insts.extend(old_insts[..term_pos].iter().cloned());
-            for close_block in closes {
-                new_insts.push(region_marker_inst(
-                    next_id,
-                    Opcode::RegionClose,
-                    close_block,
-                    span,
-                ));
-                next_id += 1;
+            new_insts.extend(marker_insts(&mut next_id, &before_term_markers, term_span));
+            if let Some(term) = rewritten_term {
+                new_insts.push(term);
+                new_insts.extend(old_insts[term_pos + 1..].iter().cloned());
+            } else {
+                new_insts.extend(old_insts[term_pos..].iter().cloned());
             }
-            for refresh_block in refreshes {
-                new_insts.push(region_marker_inst(
-                    next_id,
-                    Opcode::RegionClose,
-                    refresh_block,
-                    span,
-                ));
-                next_id += 1;
-                new_insts.push(region_marker_inst(
-                    next_id,
-                    Opcode::RegionOpen,
-                    refresh_block,
-                    span,
-                ));
-                next_id += 1;
-            }
-            new_insts.extend(old_insts[term_pos..].iter().cloned());
             block.insts = new_insts;
         }
+        func.blocks.extend(split_blocks);
     }
 }
 
@@ -1017,6 +1167,18 @@ fn next_inst_id(func: &Function) -> u32 {
     max_id
         .checked_add(1)
         .expect("InstId overflow in insert_region_markers — function too large")
+}
+
+fn next_block_id(func: &Function) -> u32 {
+    let mut max_id = 0u32;
+    for block in &func.blocks {
+        if block.id.0 > max_id {
+            max_id = block.id.0;
+        }
+    }
+    max_id
+        .checked_add(1)
+        .expect("BlockId overflow in insert_region_markers — function too large")
 }
 
 fn internal_compiler_error(message: &str) -> Diagnostic {
@@ -2954,7 +3116,10 @@ mod tests {
     #[test]
     fn backedge_single_loop_refreshes_body_region() {
         let b0_insts = vec![jump_inst(0, 1)];
-        let b1_insts = vec![branch_inst(1, 2, 3)];
+        let b1_insts = vec![
+            inst(5, Opcode::Phi, Ty::Ptr, vec![], InstData::None),
+            branch_inst(1, 2, 3),
+        ];
         let mut alloc = inst(
             2,
             Opcode::RegionAlloc,
@@ -3146,6 +3311,125 @@ mod tests {
             backedge_block[jump_pos - 1].region,
             RegionId::Block(BlockId(2))
         );
+    }
+
+    #[test]
+    fn backedge_mixed_branch_splits_exit_and_refresh_edges() {
+        let b0_insts = vec![jump_inst(0, 1)];
+        let b1_insts = vec![branch_inst(1, 2, 3)];
+        let mut alloc = inst(
+            2,
+            Opcode::RegionAlloc,
+            Ty::Ptr,
+            vec![],
+            InstData::AllocSize { size: 16, align: 8 },
+        );
+        alloc.region = RegionId::Block(BlockId(2));
+        let b2_insts = vec![
+            alloc,
+            branch_inst(3, 1, 3),
+            inst(
+                4,
+                Opcode::Upsilon,
+                Ty::Unit,
+                vec![2],
+                InstData::PhiTarget(InstId(5)),
+            ),
+        ];
+        let b3_insts = vec![return_unit_inst(6)];
+        let f = function(
+            0,
+            "mixed_backedge_exit",
+            vec![],
+            Ty::Unit,
+            vec![
+                block(0, b0_insts),
+                block(1, b1_insts),
+                block(2, b2_insts),
+                block(3, b3_insts),
+            ],
+        );
+        let mut m = module(vec![f]);
+
+        insert_region_markers(&mut m);
+
+        let pred = m.functions[0]
+            .blocks
+            .iter()
+            .find(|block| block.id == BlockId(2))
+            .expect("predecessor block should remain present");
+        let branch = pred
+            .insts
+            .iter()
+            .find(|inst| inst.opcode == Opcode::Branch)
+            .expect("predecessor should keep a conditional branch");
+        let InstData::BranchTargets {
+            then_block,
+            else_block,
+        } = branch.data
+        else {
+            panic!("branch should carry targets");
+        };
+        assert_ne!(
+            then_block,
+            BlockId(1),
+            "backedge must route via split block"
+        );
+        assert_ne!(
+            else_block,
+            BlockId(3),
+            "exit edge must route via split block"
+        );
+        assert!(
+            !pred.insts
+                .iter()
+                .any(|i| i.opcode == Opcode::RegionClose && i.region == RegionId::Block(BlockId(2))),
+            "mixed branch predecessor must not emit one block-wide close before both edges"
+        );
+
+        let then_split = m.functions[0]
+            .blocks
+            .iter()
+            .find(|block| block.id == then_block)
+            .expect("backedge split block should exist");
+        assert_eq!(then_split.insts[0].opcode, Opcode::RegionClose);
+        assert_eq!(then_split.insts[0].region, RegionId::Block(BlockId(2)));
+        assert_eq!(then_split.insts[1].opcode, Opcode::RegionOpen);
+        assert_eq!(then_split.insts[1].region, RegionId::Block(BlockId(2)));
+        assert!(
+            then_split
+                .insts
+                .iter()
+                .any(|i| i.opcode == Opcode::Upsilon && i.id != InstId(4)),
+            "split edge should preserve phi feeds with fresh instruction ids"
+        );
+        let then_jump = then_split
+            .insts
+            .last()
+            .expect("split block should not be empty");
+        assert_eq!(then_jump.opcode, Opcode::Jump);
+        assert_eq!(then_jump.data, InstData::JumpTarget(BlockId(1)));
+
+        let else_split = m.functions[0]
+            .blocks
+            .iter()
+            .find(|block| block.id == else_block)
+            .expect("exit split block should exist");
+        assert_eq!(else_split.insts[0].opcode, Opcode::RegionClose);
+        assert_eq!(else_split.insts[0].region, RegionId::Block(BlockId(2)));
+        assert!(
+            !else_split
+                .insts
+                .iter()
+                .any(|i| i.opcode == Opcode::RegionOpen),
+            "exit split block must not reopen the region it is leaving"
+        );
+        let else_jump = else_split
+            .insts
+            .last()
+            .expect("split block should not be empty");
+        assert_eq!(else_jump.opcode, Opcode::Jump);
+        assert_eq!(else_jump.data, InstData::JumpTarget(BlockId(3)));
     }
 
     #[test]

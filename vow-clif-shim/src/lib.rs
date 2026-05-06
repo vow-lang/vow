@@ -1173,8 +1173,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     }
 
     let mut block_arena_ids: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
-    for ii in 0..n_insts {
-        let rgn = inst_rgns[ii];
+    for &rgn in inst_rgns.iter().take(n_insts) {
         if (rgn & 3) == REGION_KIND_BLOCK {
             block_arena_ids.insert(rgn >> 2);
         }

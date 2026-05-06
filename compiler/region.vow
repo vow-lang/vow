@@ -1683,24 +1683,17 @@ fn block_tree_is_ancestor(parent: Vec<i64>, ancestor: i64, block: i64) -> bool {
     false
 }
 
-fn close_regions_for_block(
-    blk: IrBlock, block_regions: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>
+fn close_regions_for_edge(
+    pred: i64, succ: i64, has_succ: bool, block_regions: Vec<i64>,
+    block_parent: Vec<i64>, block_depth: Vec<i64>, refresh_regions: Vec<i64>
 ) -> Vec<i64> {
     let close_regions: Vec<i64> = Vec::new();
-    let succs: Vec<i64> = linear_successors(blk);
     let mut i: i64 = 0;
     while i < block_regions.len() {
         let region_block: i64 = block_regions[i];
-        if block_tree_is_ancestor(block_parent, region_block, blk.id) {
-            let mut exits_region: bool = succs.len() == 0;
-            let mut si: i64 = 0;
-            while si < succs.len() && !exits_region {
-                if !block_tree_is_ancestor(block_parent, region_block, succs[si]) {
-                    exits_region = true;
-                }
-                si = si + 1;
-            }
-            if exits_region {
+        if block_tree_is_ancestor(block_parent, region_block, pred) {
+            let exits_region: bool = !has_succ || !block_tree_is_ancestor(block_parent, region_block, succ);
+            if exits_region && !region_vec_contains_i64(refresh_regions, region_block) {
                 linear_insert_i64(close_regions, region_block);
             }
         }
@@ -1966,14 +1959,14 @@ fn reachable_from_blocks(starts: Vec<i64>, graph: Vec<Vec<i64>>) -> Vec<i64> {
     reachable
 }
 
-fn refresh_regions_for_block(
-    pred: i64, block_regions: Vec<i64>, edges: BackEdges,
+fn refresh_regions_for_edge(
+    pred: i64, succ: i64, block_regions: Vec<i64>, edges: BackEdges,
     forward: Vec<Vec<i64>>, reverse: Vec<Vec<i64>>
 ) -> Vec<i64> {
     let refresh: Vec<i64> = Vec::new();
     let mut ei: i64 = 0;
     while ei < edges.preds.len() {
-        if edges.preds[ei] == pred {
+        if edges.preds[ei] == pred && edges.headers[ei] == succ {
             let header: i64 = edges.headers[ei];
             let header_succs: Vec<i64> = Vec::new();
             header_succs.push(header);
@@ -2016,6 +2009,90 @@ fn remove_regions(regions: Vec<i64>, remove: Vec<i64>) -> Vec<i64> {
         i = i + 1;
     }
     kept
+}
+
+fn region_marker_inst(id: i64, op: i64, region_block: i64) -> IrInst {
+    let mut marker: IrInst = ir_inst_new(
+        id, op, ITY_UNIT(), Vec::new(), 0, 0, 0, String::from("")
+    );
+    marker = ir_inst_set_region(marker, region_pack(REGION_KIND_BLOCK(), region_block));
+    marker
+}
+
+fn append_region_markers(
+    insts: Vec<IrInst>, next_id: i64, close_regions: Vec<i64>, refresh_regions: Vec<i64>
+) -> i64 {
+    let mut id: i64 = next_id;
+    let mut ci: i64 = 0;
+    while ci < close_regions.len() {
+        insts.push(region_marker_inst(id, IOP_REGION_CLOSE(), close_regions[ci]));
+        id = id + 1;
+        ci = ci + 1;
+    }
+    let mut ri: i64 = 0;
+    while ri < refresh_regions.len() {
+        insts.push(region_marker_inst(id, IOP_REGION_CLOSE(), refresh_regions[ri]));
+        id = id + 1;
+        insts.push(region_marker_inst(id, IOP_REGION_OPEN(), refresh_regions[ri]));
+        id = id + 1;
+        ri = ri + 1;
+    }
+    id
+}
+
+struct EdgeSplitBlock {
+    block: IrBlock,
+    next_id: i64,
+}
+
+fn build_edge_split_block(
+    block_id: i64, next_id: i64, close_regions: Vec<i64>, refresh_regions: Vec<i64>,
+    edge_upsilons: Vec<IrInst>, target: i64
+) -> EdgeSplitBlock {
+    let blk: IrBlock = ir_block_new(block_id);
+    let mut id: i64 = append_region_markers(blk.insts, next_id, close_regions, refresh_regions);
+    let mut ui: i64 = 0;
+    while ui < edge_upsilons.len() {
+        let src: IrInst = edge_upsilons[ui];
+        let copied: IrInst = IrInst {
+            id: id,
+            op: src.op,
+            ty: src.ty,
+            args: src.args,
+            dk: src.dk,
+            dv: src.dv,
+            dv2: src.dv2,
+            ds: src.ds,
+            ostart: src.ostart,
+            olen: src.olen,
+            rgn: src.rgn,
+        };
+        id = id + 1;
+        blk.insts.push(copied);
+        ui = ui + 1;
+    }
+    let jump_inst: IrInst = ir_inst_new(
+        id, IOP_JUMP(), ITY_UNIT(), Vec::new(), IDATA_JUMP_TARGET(), target, 0, String::from("")
+    );
+    id = id + 1;
+    blk.insts.push(jump_inst);
+    EdgeSplitBlock { block: blk, next_id: id }
+}
+
+fn branch_inst_with_targets(inst: IrInst, then_block: i64, else_block: i64) -> IrInst {
+    IrInst {
+        id: inst.id,
+        op: inst.op,
+        ty: inst.ty,
+        args: inst.args,
+        dk: inst.dk,
+        dv: then_block,
+        dv2: else_block,
+        ds: inst.ds,
+        ostart: inst.ostart,
+        olen: inst.olen,
+        rgn: inst.rgn,
+    }
 }
 
 fn build_id_to_inst(f: IrFunction) -> Vec<IrInst> {
@@ -2795,131 +2872,124 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
         let forward_no_backedges: Vec<Vec<i64>> = forward_graph_without_back_edges(f, back_edges);
         let reverse_no_backedges: Vec<Vec<i64>> = reverse_graph(forward_no_backedges);
 
-        // Pass 2: insert RegionOpen at each region root and RegionClose
-        // before terminators that leave that region's block-tree subtree.
+        let mut next_block_id: i64 = max_block_id(f) + 1;
+        let extra_blocks: Vec<IrBlock> = Vec::new();
+
+        // Pass 2: insert RegionOpen at each region root, and materialize
+        // close/refresh markers on the exact control-flow edge that needs
+        // them. Branches with mixed exit/backedge successors split only the
+        // marked edges so exit paths do not reopen a region they are leaving.
         let mut bi4: i64 = 0;
         while bi4 < f.blocks.len() {
             let blk3: IrBlock = f.blocks[bi4];
-            let refresh_regions: Vec<i64> = refresh_regions_for_block(
-                blk3.id, block_regions, back_edges, forward_no_backedges, reverse_no_backedges
-            );
-            let close_regions0: Vec<i64> = close_regions_for_block(blk3, block_regions, block_parent, block_depth);
-            let close_regions: Vec<i64> = remove_regions(close_regions0, refresh_regions);
             let opens_here: bool = region_vec_contains_i64(block_regions, blk3.id);
-            if opens_here || close_regions.len() > 0 || refresh_regions.len() > 0 {
-                let mut open_inst: IrInst = ir_inst_new(
-                    next_id, IOP_REGION_OPEN(), ITY_UNIT(),
-                    Vec::new(), 0, 0, 0, String::from(""),
-                );
-                if opens_here {
-                    open_inst = ir_inst_set_region(open_inst, region_pack(REGION_KIND_BLOCK(), blk3.id));
-                    next_id = next_id + 1;
-                }
 
-                let mut term_pos: i64 = blk3.insts.len();
-                let mut k: i64 = 0;
-                while k < blk3.insts.len() {
-                    if iop_is_terminal(blk3.insts[k].op) {
-                        term_pos = k;
-                        k = blk3.insts.len();
+            let mut term_pos: i64 = blk3.insts.len();
+            let mut k: i64 = 0;
+            while k < blk3.insts.len() {
+                if iop_is_terminal(blk3.insts[k].op) {
+                    term_pos = k;
+                    k = blk3.insts.len();
+                } else {
+                    k = k + 1;
+                }
+            }
+            let edge_upsilons: Vec<IrInst> = Vec::new();
+            let mut ui0: i64 = term_pos + 1;
+            while ui0 < blk3.insts.len() {
+                if blk3.insts[ui0].op == IOP_UPSILON() {
+                    edge_upsilons.push(blk3.insts[ui0]);
+                }
+                ui0 = ui0 + 1;
+            }
+
+            let mut new_insts: Vec<IrInst> = Vec::new();
+            if opens_here {
+                let mut open_inst: IrInst = region_marker_inst(next_id, IOP_REGION_OPEN(), blk3.id);
+                next_id = next_id + 1;
+                new_insts.push(open_inst);
+            }
+
+            let mut copy_i: i64 = 0;
+            while copy_i < blk3.insts.len() {
+                if copy_i == term_pos {
+                    let term: IrInst = blk3.insts[copy_i];
+                    if term.op == IOP_BRANCH() && term.dk == IDATA_BRANCH_TARGETS() {
+                        let then_refresh: Vec<i64> = refresh_regions_for_edge(
+                            blk3.id, term.dv, block_regions, back_edges, forward_no_backedges, reverse_no_backedges
+                        );
+                        let then_close: Vec<i64> = close_regions_for_edge(
+                            blk3.id, term.dv, true, block_regions, block_parent, block_depth, then_refresh
+                        );
+                        let else_refresh: Vec<i64> = refresh_regions_for_edge(
+                            blk3.id, term.dv2, block_regions, back_edges, forward_no_backedges, reverse_no_backedges
+                        );
+                        let else_close: Vec<i64> = close_regions_for_edge(
+                            blk3.id, term.dv2, true, block_regions, block_parent, block_depth, else_refresh
+                        );
+                        let mut then_target: i64 = term.dv;
+                        let mut else_target: i64 = term.dv2;
+                        if then_close.len() > 0 || then_refresh.len() > 0 {
+                            let split: EdgeSplitBlock = build_edge_split_block(
+                                next_block_id, next_id, then_close, then_refresh, edge_upsilons, term.dv
+                            );
+                            next_block_id = next_block_id + 1;
+                            next_id = split.next_id;
+                            then_target = split.block.id;
+                            extra_blocks.push(split.block);
+                        }
+                        if else_close.len() > 0 || else_refresh.len() > 0 {
+                            let split2: EdgeSplitBlock = build_edge_split_block(
+                                next_block_id, next_id, else_close, else_refresh, edge_upsilons, term.dv2
+                            );
+                            next_block_id = next_block_id + 1;
+                            next_id = split2.next_id;
+                            else_target = split2.block.id;
+                            extra_blocks.push(split2.block);
+                        }
+                        new_insts.push(branch_inst_with_targets(term, then_target, else_target));
+                    } else if term.op == IOP_JUMP() && term.dk == IDATA_JUMP_TARGET() {
+                        let jump_refresh: Vec<i64> = refresh_regions_for_edge(
+                            blk3.id, term.dv, block_regions, back_edges, forward_no_backedges, reverse_no_backedges
+                        );
+                        let jump_close: Vec<i64> = close_regions_for_edge(
+                            blk3.id, term.dv, true, block_regions, block_parent, block_depth, jump_refresh
+                        );
+                        next_id = append_region_markers(new_insts, next_id, jump_close, jump_refresh);
+                        new_insts.push(term);
                     } else {
-                        k = k + 1;
+                        let no_refresh: Vec<i64> = Vec::new();
+                        let no_succ_close: Vec<i64> = close_regions_for_edge(
+                            blk3.id, 0, false, block_regions, block_parent, block_depth, no_refresh
+                        );
+                        let no_succ_refresh: Vec<i64> = Vec::new();
+                        next_id = append_region_markers(new_insts, next_id, no_succ_close, no_succ_refresh);
+                        new_insts.push(term);
                     }
+                } else {
+                    new_insts.push(blk3.insts[copy_i]);
                 }
-
-                let mut new_insts: Vec<IrInst> = Vec::new();
-                if opens_here {
-                    new_insts.push(open_inst);
-                }
-                let mut copy_i: i64 = 0;
-                while copy_i < blk3.insts.len() {
-                    if copy_i == term_pos {
-                        let mut ci: i64 = 0;
-	                    while ci < close_regions.len() {
-	                        let mut close_inst: IrInst = ir_inst_new(
-	                            next_id, IOP_REGION_CLOSE(), ITY_UNIT(),
-	                            Vec::new(), 0, 0, 0, String::from(""),
-                            );
-                            close_inst = ir_inst_set_region(
-                                close_inst,
-                                region_pack(REGION_KIND_BLOCK(), close_regions[ci])
-                            );
-                            next_id = next_id + 1;
-	                        new_insts.push(close_inst);
-	                        ci = ci + 1;
-	                    }
-	                    let mut ri: i64 = 0;
-	                    while ri < refresh_regions.len() {
-	                        let mut refresh_close: IrInst = ir_inst_new(
-	                            next_id, IOP_REGION_CLOSE(), ITY_UNIT(),
-	                            Vec::new(), 0, 0, 0, String::from(""),
-	                        );
-	                        refresh_close = ir_inst_set_region(
-	                            refresh_close,
-	                            region_pack(REGION_KIND_BLOCK(), refresh_regions[ri])
-	                        );
-	                        next_id = next_id + 1;
-	                        new_insts.push(refresh_close);
-	                        let mut refresh_open: IrInst = ir_inst_new(
-	                            next_id, IOP_REGION_OPEN(), ITY_UNIT(),
-	                            Vec::new(), 0, 0, 0, String::from(""),
-	                        );
-	                        refresh_open = ir_inst_set_region(
-	                            refresh_open,
-	                            region_pack(REGION_KIND_BLOCK(), refresh_regions[ri])
-	                        );
-	                        next_id = next_id + 1;
-	                        new_insts.push(refresh_open);
-	                        ri = ri + 1;
-	                    }
-	                }
-	                new_insts.push(blk3.insts[copy_i]);
-	                copy_i = copy_i + 1;
-	            }
-	            if term_pos == blk3.insts.len() {
-                    let mut ci2: i64 = 0;
-                    while ci2 < close_regions.len() {
-                        let mut close_inst2: IrInst = ir_inst_new(
-                            next_id, IOP_REGION_CLOSE(), ITY_UNIT(),
-                            Vec::new(), 0, 0, 0, String::from(""),
-                        );
-                        close_inst2 = ir_inst_set_region(
-                            close_inst2,
-                            region_pack(REGION_KIND_BLOCK(), close_regions[ci2])
-                        );
-                        next_id = next_id + 1;
-	                    new_insts.push(close_inst2);
-	                    ci2 = ci2 + 1;
-	                }
-	                let mut ri2: i64 = 0;
-	                while ri2 < refresh_regions.len() {
-	                    let mut refresh_close2: IrInst = ir_inst_new(
-	                        next_id, IOP_REGION_CLOSE(), ITY_UNIT(),
-	                        Vec::new(), 0, 0, 0, String::from(""),
-	                    );
-	                    refresh_close2 = ir_inst_set_region(
-	                        refresh_close2,
-	                        region_pack(REGION_KIND_BLOCK(), refresh_regions[ri2])
-	                    );
-	                    next_id = next_id + 1;
-	                    new_insts.push(refresh_close2);
-	                    let mut refresh_open2: IrInst = ir_inst_new(
-	                        next_id, IOP_REGION_OPEN(), ITY_UNIT(),
-	                        Vec::new(), 0, 0, 0, String::from(""),
-	                    );
-	                    refresh_open2 = ir_inst_set_region(
-	                        refresh_open2,
-	                        region_pack(REGION_KIND_BLOCK(), refresh_regions[ri2])
-	                    );
-	                    next_id = next_id + 1;
-	                    new_insts.push(refresh_open2);
-	                    ri2 = ri2 + 1;
-	                }
-	            }
-	            blk3.insts = new_insts;
-	            f.blocks[bi4] = blk3;
-	        }
+                copy_i = copy_i + 1;
+            }
+            if term_pos == blk3.insts.len() {
+                let no_refresh2: Vec<i64> = Vec::new();
+                let no_succ_close2: Vec<i64> = close_regions_for_edge(
+                    blk3.id, 0, false, block_regions, block_parent, block_depth, no_refresh2
+                );
+                let no_succ_refresh2: Vec<i64> = Vec::new();
+                next_id = append_region_markers(new_insts, next_id, no_succ_close2, no_succ_refresh2);
+            }
+            if opens_here || new_insts.len() != blk3.insts.len() {
+                blk3.insts = new_insts;
+                f.blocks[bi4] = blk3;
+            }
             bi4 = bi4 + 1;
+        }
+
+        let mut ebi: i64 = 0;
+        while ebi < extra_blocks.len() {
+            f.blocks.push(extra_blocks[ebi]);
+            ebi = ebi + 1;
         }
 
         m.functions[fi] = f;
