@@ -1,0 +1,21 @@
+module AmicableNumbers
+
+fn sum_divisors(n: i64) -> i64 vow {
+  requires: n >= 1,
+  ensures: result >= 0
+} {
+  0
+}
+
+fn sum_amicable(limit: i64) -> i64 vow {
+  requires: limit >= 1,
+  ensures: result >= 0
+} {
+  0
+}
+
+fn main() -> i32 [io] {
+  let answer: i64 = sum_amicable(10000);
+  print_i64(answer);
+  0
+}

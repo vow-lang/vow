@@ -1,0 +1,22 @@
+module LongestCollatz
+
+fn collatz_length(n: i64) -> i64 vow {
+  requires: n >= 1,
+  ensures: result >= 1
+} {
+  1
+}
+
+fn longest_collatz(limit: i64) -> i64 vow {
+  requires: limit >= 2,
+  ensures: result >= 1,
+  ensures: result < limit
+} {
+  1
+}
+
+fn main() -> i32 [io] {
+  let answer: i64 = longest_collatz(1000000);
+  print_i64(answer);
+  0
+}
