@@ -11,7 +11,7 @@ use cranelift_module::{
     DataDescription, DataId, FuncId as CraneliftFuncId, Linkage, Module as CraneliftModule,
 };
 use cranelift_object::{ObjectBuilder, ObjectModule};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use vow_ir::{
     BlockId, FuncId as IrFuncId, Function as IrFunction, Inst, InstData, InstId,
@@ -289,13 +289,36 @@ fn block_arena_slot(
     slots: &mut BTreeMap<BlockId, StackSlot>,
     block_id: BlockId,
 ) -> StackSlot {
-    *slots.entry(block_id).or_insert_with(|| {
-        builder.create_sized_stack_slot(StackSlotData::new(
-            StackSlotKind::ExplicitSlot,
-            VOW_ARENA_HEADER_SIZE,
-            VOW_ARENA_HEADER_ALIGN_LOG2,
-        ))
-    })
+    block_arena_slot_with_created(builder, slots, block_id).0
+}
+
+fn block_arena_slot_with_created(
+    builder: &mut FunctionBuilder,
+    slots: &mut BTreeMap<BlockId, StackSlot>,
+    block_id: BlockId,
+) -> (StackSlot, bool) {
+    if let Some(&slot) = slots.get(&block_id) {
+        return (slot, false);
+    }
+    let slot = builder.create_sized_stack_slot(StackSlotData::new(
+        StackSlotKind::ExplicitSlot,
+        VOW_ARENA_HEADER_SIZE,
+        VOW_ARENA_HEADER_ALIGN_LOG2,
+    ));
+    slots.insert(block_id, slot);
+    (slot, true)
+}
+
+fn collect_block_arena_ids(func: &IrFunction) -> BTreeSet<BlockId> {
+    let mut ids = BTreeSet::new();
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if let RegionId::Block(block_id) = inst.region {
+                ids.insert(block_id);
+            }
+        }
+    }
+    ids
 }
 
 /// Materialise the Cranelift `Value` (`*VowArena`) representing `region` in
@@ -1264,12 +1287,12 @@ fn lower_inst(
             };
             let slot = block_arena_slot(builder, ctx.block_arena_slots, block_id);
             let arena_addr = builder.ins().stack_addr(types::I64, slot, 0);
-            let func_ref = if inst.opcode == Opcode::RegionOpen {
-                ctx.arena_open_ref
+
+            if inst.opcode == Opcode::RegionOpen {
+                builder.ins().call(ctx.arena_open_ref, &[arena_addr]);
             } else {
-                ctx.arena_close_ref
-            };
-            builder.ins().call(func_ref, &[arena_addr]);
+                builder.ins().call(ctx.arena_close_ref, &[arena_addr]);
+            }
             let unit = builder.ins().iconst(types::I32, 0);
             ctx.value_map.insert(inst.id, unit);
         }
@@ -1512,6 +1535,7 @@ struct RuntimeIds {
     vow_violation_id: Option<CraneliftFuncId>,
     overflow_id: Option<CraneliftFuncId>,
     arena_alloc_id: CraneliftFuncId,
+    arena_init_id: CraneliftFuncId,
     arena_open_id: CraneliftFuncId,
     arena_close_id: CraneliftFuncId,
     string_clone_id: Option<CraneliftFuncId>,
@@ -1579,6 +1603,7 @@ fn compile_ir_function(
         vow_violation_id.map(|id| obj_module.declare_func_in_func(id, builder.func));
     let overflow_ref = overflow_id.map(|id| obj_module.declare_func_in_func(id, builder.func));
     let arena_alloc_ref = obj_module.declare_func_in_func(runtime.arena_alloc_id, builder.func);
+    let arena_init_ref = obj_module.declare_func_in_func(runtime.arena_init_id, builder.func);
     let arena_open_ref = obj_module.declare_func_in_func(runtime.arena_open_id, builder.func);
     let arena_close_ref = obj_module.declare_func_in_func(runtime.arena_close_id, builder.func);
     let string_clone_ref = runtime
@@ -1760,6 +1785,11 @@ fn compile_ir_function(
 
     let mut value_map: HashMap<InstId, Value> = HashMap::new();
     let mut block_arena_slots: BTreeMap<BlockId, StackSlot> = BTreeMap::new();
+    for block_id in collect_block_arena_ids(ir_func) {
+        let slot = block_arena_slot(&mut builder, &mut block_arena_slots, block_id);
+        let arena_addr = builder.ins().stack_addr(types::I64, slot, 0);
+        builder.ins().call(arena_init_ref, &[arena_addr]);
+    }
 
     // Emit each block
     let mut first_block = true;
@@ -2361,6 +2391,13 @@ impl Backend for CraneliftBackend {
         let arena_close_id = obj_module
             .declare_function("__vow_arena_close", Linkage::Import, &arena_open_close_sig)
             .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+        let arena_init_id = obj_module
+            .declare_function(
+                "__vow_arena_init_closed",
+                Linkage::Import,
+                &arena_open_close_sig,
+            )
+            .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
 
         // `__vow_string_clone_into_arena` is only imported when some function
         // in the module actually emits a return-materialisation call. This
@@ -2533,6 +2570,7 @@ impl Backend for CraneliftBackend {
                     vow_violation_id,
                     overflow_id,
                     arena_alloc_id,
+                    arena_init_id,
                     arena_open_id,
                     arena_close_id,
                     string_clone_id,

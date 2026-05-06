@@ -369,6 +369,170 @@ fn block_successors(block: &crate::types::BasicBlock) -> Vec<BlockId> {
     }
 }
 
+fn detect_loop_back_edges(func: &Function) -> Vec<(BlockId, BlockId)> {
+    let blocks: BTreeMap<BlockId, &crate::types::BasicBlock> =
+        func.blocks.iter().map(|block| (block.id, block)).collect();
+    let mut visited = BTreeSet::new();
+    let mut on_stack = BTreeSet::new();
+    let mut back_edges = BTreeSet::new();
+    let mut starts = Vec::new();
+    if let Some(entry) = func.blocks.first() {
+        starts.push(entry.id);
+    }
+    for &block in blocks.keys() {
+        if !starts.contains(&block) {
+            starts.push(block);
+        }
+    }
+
+    for start in starts {
+        if visited.contains(&start) {
+            continue;
+        }
+        let mut stack = vec![BlockDfsFrame::Enter(start, 0)];
+        while let Some(frame) = stack.pop() {
+            match frame {
+                BlockDfsFrame::Enter(id, _) => {
+                    if visited.contains(&id) {
+                        continue;
+                    }
+                    let Some(block) = blocks.get(&id) else {
+                        continue;
+                    };
+                    visited.insert(id);
+                    on_stack.insert(id);
+                    stack.push(BlockDfsFrame::Exit(id));
+
+                    let mut succs = block_successors(block);
+                    succs.sort_unstable();
+                    succs.dedup();
+                    for succ in succs.into_iter().rev() {
+                        if !blocks.contains_key(&succ) {
+                            continue;
+                        }
+                        if on_stack.contains(&succ) {
+                            back_edges.insert((id, succ));
+                            continue;
+                        }
+                        if !visited.contains(&succ) {
+                            stack.push(BlockDfsFrame::Enter(succ, 0));
+                        }
+                    }
+                }
+                BlockDfsFrame::Exit(id) => {
+                    on_stack.remove(&id);
+                }
+            }
+        }
+    }
+
+    back_edges.into_iter().collect()
+}
+
+fn forward_graph_without_back_edges(
+    func: &Function,
+    back_edges: &[(BlockId, BlockId)],
+) -> BTreeMap<BlockId, BTreeSet<BlockId>> {
+    let back_edge_set: BTreeSet<(BlockId, BlockId)> = back_edges.iter().copied().collect();
+    let mut graph: BTreeMap<BlockId, BTreeSet<BlockId>> = func
+        .blocks
+        .iter()
+        .map(|block| (block.id, BTreeSet::new()))
+        .collect();
+    let block_ids: BTreeSet<BlockId> = graph.keys().copied().collect();
+
+    for block in &func.blocks {
+        let mut succs = block_successors(block);
+        succs.sort_unstable();
+        succs.dedup();
+        for succ in succs {
+            if block_ids.contains(&succ) && !back_edge_set.contains(&(block.id, succ)) {
+                graph.entry(block.id).or_default().insert(succ);
+            }
+        }
+    }
+
+    graph
+}
+
+fn reverse_graph(
+    graph: &BTreeMap<BlockId, BTreeSet<BlockId>>,
+) -> BTreeMap<BlockId, BTreeSet<BlockId>> {
+    let mut reverse: BTreeMap<BlockId, BTreeSet<BlockId>> = graph
+        .keys()
+        .copied()
+        .map(|block| (block, BTreeSet::new()))
+        .collect();
+    for (&pred, succs) in graph {
+        reverse.entry(pred).or_default();
+        for &succ in succs {
+            reverse.entry(succ).or_default().insert(pred);
+        }
+    }
+    reverse
+}
+
+fn reachable_from(
+    starts: impl IntoIterator<Item = BlockId>,
+    graph: &BTreeMap<BlockId, BTreeSet<BlockId>>,
+) -> BTreeSet<BlockId> {
+    let mut reachable = BTreeSet::new();
+    let mut stack: Vec<BlockId> = starts.into_iter().collect();
+    stack.sort_unstable();
+    stack.dedup();
+    while let Some(block) = stack.pop() {
+        if !reachable.insert(block) {
+            continue;
+        }
+        let Some(succs) = graph.get(&block) else {
+            continue;
+        };
+        for &succ in succs.iter().rev() {
+            if !reachable.contains(&succ) {
+                stack.push(succ);
+            }
+        }
+    }
+    reachable
+}
+
+fn backedge_refresh_regions_by_block(
+    func: &Function,
+    block_regions: &BTreeSet<BlockId>,
+) -> BTreeMap<BlockId, Vec<BlockId>> {
+    let mut back_edges = detect_loop_back_edges(func);
+    back_edges.sort_unstable();
+    back_edges.dedup();
+    if back_edges.is_empty() {
+        return BTreeMap::new();
+    }
+
+    let forward = forward_graph_without_back_edges(func, &back_edges);
+    let reverse = reverse_graph(&forward);
+    let mut by_pred: BTreeMap<BlockId, BTreeSet<BlockId>> = BTreeMap::new();
+    for (pred, header) in back_edges {
+        let header_succs = forward
+            .get(&header)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let reachable_from_header = reachable_from(header_succs, &forward);
+        let reaches_pred = reachable_from([pred], &reverse);
+        for &region_block in block_regions {
+            if reachable_from_header.contains(&region_block) && reaches_pred.contains(&region_block)
+            {
+                by_pred.entry(pred).or_default().insert(region_block);
+            }
+        }
+    }
+
+    by_pred
+        .into_iter()
+        .map(|(pred, regions)| (pred, regions.into_iter().collect()))
+        .collect()
+}
+
 #[derive(Debug, Clone)]
 struct BlockTree {
     parent: BTreeMap<BlockId, Option<BlockId>>,
@@ -730,10 +894,15 @@ pub fn insert_region_markers(module: &mut Module) {
         }
 
         let block_tree = BlockTree::from_function(func);
+        let refresh_regions_by_block = backedge_refresh_regions_by_block(func, &block_regions);
         let mut close_regions_by_block: BTreeMap<BlockId, Vec<BlockId>> = BTreeMap::new();
         for block in &func.blocks {
             let succs = block_successors(block);
             let mut close_regions = Vec::new();
+            let refresh_regions = refresh_regions_by_block
+                .get(&block.id)
+                .cloned()
+                .unwrap_or_default();
             for &region_block in &block_regions {
                 if !block_tree.is_ancestor(region_block, block.id) {
                     continue;
@@ -742,7 +911,7 @@ pub fn insert_region_markers(module: &mut Module) {
                     || succs
                         .iter()
                         .any(|&succ| !block_tree.is_ancestor(region_block, succ));
-                if exits_region {
+                if exits_region && !refresh_regions.contains(&region_block) {
                     close_regions.push(region_block);
                 }
             }
@@ -768,8 +937,12 @@ pub fn insert_region_markers(module: &mut Module) {
                 .get(&block.id)
                 .cloned()
                 .unwrap_or_default();
+            let refreshes = refresh_regions_by_block
+                .get(&block.id)
+                .cloned()
+                .unwrap_or_default();
             let opens_here = block_regions.contains(&block.id);
-            if !opens_here && closes.is_empty() {
+            if !opens_here && closes.is_empty() && refreshes.is_empty() {
                 block.insts = old_insts;
                 continue;
             }
@@ -778,8 +951,9 @@ pub fn insert_region_markers(module: &mut Module) {
                 .iter()
                 .position(|i| i.opcode.is_terminal())
                 .unwrap_or(old_insts.len());
-            let mut new_insts =
-                Vec::with_capacity(old_insts.len() + usize::from(opens_here) + closes.len());
+            let mut new_insts = Vec::with_capacity(
+                old_insts.len() + usize::from(opens_here) + closes.len() + refreshes.len() * 2,
+            );
             if opens_here {
                 new_insts.push(region_marker_inst(
                     next_id,
@@ -795,6 +969,22 @@ pub fn insert_region_markers(module: &mut Module) {
                     next_id,
                     Opcode::RegionClose,
                     close_block,
+                    span,
+                ));
+                next_id += 1;
+            }
+            for refresh_block in refreshes {
+                new_insts.push(region_marker_inst(
+                    next_id,
+                    Opcode::RegionClose,
+                    refresh_block,
+                    span,
+                ));
+                next_id += 1;
+                new_insts.push(region_marker_inst(
+                    next_id,
+                    Opcode::RegionOpen,
+                    refresh_block,
                     span,
                 ));
                 next_id += 1;
@@ -2719,6 +2909,256 @@ mod tests {
             term_pos,
             "RegionClose must immediately precede the block's terminator"
         );
+    }
+
+    #[test]
+    fn backedge_single_loop_refreshes_body_region() {
+        let b0_insts = vec![jump_inst(0, 1)];
+        let b1_insts = vec![branch_inst(1, 2, 3)];
+        let mut alloc = inst(
+            2,
+            Opcode::RegionAlloc,
+            Ty::Ptr,
+            vec![],
+            InstData::AllocSize { size: 16, align: 8 },
+        );
+        alloc.region = RegionId::Block(BlockId(2));
+        let b2_insts = vec![alloc, jump_inst(3, 1)];
+        let b3_insts = vec![return_unit_inst(4)];
+        let f = function(
+            0,
+            "single_loop",
+            vec![],
+            Ty::Unit,
+            vec![
+                block(0, b0_insts),
+                block(1, b1_insts),
+                block(2, b2_insts),
+                block(3, b3_insts),
+            ],
+        );
+        let mut m = module(vec![f]);
+
+        insert_region_markers(&mut m);
+
+        let body = &m.functions[0].blocks[2].insts;
+        let jump_pos = body
+            .iter()
+            .position(|i| i.opcode == Opcode::Jump)
+            .expect("body should end in a back-edge jump");
+        assert_eq!(
+            body[jump_pos - 2].opcode,
+            Opcode::RegionClose,
+            "back-edge predecessor should close the body region before jumping to the header"
+        );
+        assert_eq!(body[jump_pos - 2].region, RegionId::Block(BlockId(2)));
+        assert_eq!(
+            body[jump_pos - 1].opcode,
+            Opcode::RegionOpen,
+            "back-edge predecessor should reopen the body region immediately after closing it"
+        );
+        assert_eq!(body[jump_pos - 1].region, RegionId::Block(BlockId(2)));
+    }
+
+    #[test]
+    fn backedge_nested_loops_refresh_inner_and_outer_regions() {
+        let b0_insts = vec![jump_inst(0, 1)];
+        let b1_insts = vec![branch_inst(1, 2, 7)];
+        let mut outer_alloc = inst(
+            2,
+            Opcode::RegionAlloc,
+            Ty::Ptr,
+            vec![],
+            InstData::AllocSize { size: 16, align: 8 },
+        );
+        outer_alloc.region = RegionId::Block(BlockId(2));
+        let b2_insts = vec![outer_alloc, jump_inst(3, 3)];
+        let b3_insts = vec![branch_inst(4, 4, 6)];
+        let mut inner_alloc = inst(
+            5,
+            Opcode::RegionAlloc,
+            Ty::Ptr,
+            vec![],
+            InstData::AllocSize { size: 16, align: 8 },
+        );
+        inner_alloc.region = RegionId::Block(BlockId(4));
+        let b4_insts = vec![inner_alloc, jump_inst(6, 3)];
+        let b6_insts = vec![jump_inst(7, 1)];
+        let b7_insts = vec![return_unit_inst(8)];
+        let f = function(
+            0,
+            "nested_loops",
+            vec![],
+            Ty::Unit,
+            vec![
+                block(0, b0_insts),
+                block(1, b1_insts),
+                block(2, b2_insts),
+                block(3, b3_insts),
+                block(4, b4_insts),
+                block(6, b6_insts),
+                block(7, b7_insts),
+            ],
+        );
+        let mut m = module(vec![f]);
+
+        insert_region_markers(&mut m);
+
+        let inner_body = &m.functions[0].blocks[4].insts;
+        let inner_jump = inner_body
+            .iter()
+            .position(|i| i.opcode == Opcode::Jump)
+            .expect("inner body should jump back to inner header");
+        assert_eq!(inner_body[inner_jump - 2].opcode, Opcode::RegionClose);
+        assert_eq!(
+            inner_body[inner_jump - 2].region,
+            RegionId::Block(BlockId(4))
+        );
+        assert_eq!(inner_body[inner_jump - 1].opcode, Opcode::RegionOpen);
+        assert_eq!(
+            inner_body[inner_jump - 1].region,
+            RegionId::Block(BlockId(4))
+        );
+
+        let outer_backedge = &m.functions[0].blocks[5].insts;
+        let outer_jump = outer_backedge
+            .iter()
+            .position(|i| i.opcode == Opcode::Jump)
+            .expect("outer body should jump back to outer header");
+        assert_eq!(outer_backedge[outer_jump - 2].opcode, Opcode::RegionClose);
+        assert_eq!(
+            outer_backedge[outer_jump - 2].region,
+            RegionId::Block(BlockId(2))
+        );
+        assert_eq!(outer_backedge[outer_jump - 1].opcode, Opcode::RegionOpen);
+        assert_eq!(
+            outer_backedge[outer_jump - 1].region,
+            RegionId::Block(BlockId(2))
+        );
+        assert!(
+            !outer_backedge
+                .iter()
+                .any(|i| i.region == RegionId::Block(BlockId(4))),
+            "outer back-edge must not refresh the inner loop body's region"
+        );
+    }
+
+    #[test]
+    fn backedge_break_predecessor_does_not_refresh_body_region() {
+        let b0_insts = vec![jump_inst(0, 1)];
+        let b1_insts = vec![branch_inst(1, 2, 4)];
+        let mut alloc = inst(
+            2,
+            Opcode::RegionAlloc,
+            Ty::Ptr,
+            vec![],
+            InstData::AllocSize { size: 16, align: 8 },
+        );
+        alloc.region = RegionId::Block(BlockId(2));
+        let b2_insts = vec![alloc, branch_inst(3, 3, 5)];
+        let b3_insts = vec![jump_inst(4, 4)];
+        let b4_insts = vec![return_unit_inst(5)];
+        let b5_insts = vec![jump_inst(6, 1)];
+        let f = function(
+            0,
+            "break_loop",
+            vec![],
+            Ty::Unit,
+            vec![
+                block(0, b0_insts),
+                block(1, b1_insts),
+                block(2, b2_insts),
+                block(3, b3_insts),
+                block(4, b4_insts),
+                block(5, b5_insts),
+            ],
+        );
+        let mut m = module(vec![f]);
+
+        insert_region_markers(&mut m);
+
+        let break_block = &m.functions[0].blocks[3].insts;
+        assert!(
+            !break_block
+                .iter()
+                .any(|i| i.opcode == Opcode::RegionOpen && i.region == RegionId::Block(BlockId(2))),
+            "break edge exits the loop and must not reopen the body region"
+        );
+        assert!(
+            break_block
+                .iter()
+                .any(|i| i.opcode == Opcode::RegionClose && i.region == RegionId::Block(BlockId(2))),
+            "break edge still keeps the ordinary exit close"
+        );
+
+        let backedge_block = &m.functions[0].blocks[5].insts;
+        let jump_pos = backedge_block
+            .iter()
+            .position(|i| i.opcode == Opcode::Jump)
+            .expect("natural loop path should jump back to header");
+        assert_eq!(backedge_block[jump_pos - 2].opcode, Opcode::RegionClose);
+        assert_eq!(
+            backedge_block[jump_pos - 2].region,
+            RegionId::Block(BlockId(2))
+        );
+        assert_eq!(backedge_block[jump_pos - 1].opcode, Opcode::RegionOpen);
+        assert_eq!(
+            backedge_block[jump_pos - 1].region,
+            RegionId::Block(BlockId(2))
+        );
+    }
+
+    #[test]
+    fn backedge_continue_predecessors_each_refresh_body_region() {
+        let b0_insts = vec![jump_inst(0, 1)];
+        let b1_insts = vec![branch_inst(1, 2, 6)];
+        let mut alloc = inst(
+            2,
+            Opcode::RegionAlloc,
+            Ty::Ptr,
+            vec![],
+            InstData::AllocSize { size: 16, align: 8 },
+        );
+        alloc.region = RegionId::Block(BlockId(2));
+        let b2_insts = vec![alloc, branch_inst(3, 3, 4)];
+        let b3_insts = vec![jump_inst(4, 1)];
+        let b4_insts = vec![jump_inst(5, 1)];
+        let b6_insts = vec![return_unit_inst(6)];
+        let f = function(
+            0,
+            "continue_loop",
+            vec![],
+            Ty::Unit,
+            vec![
+                block(0, b0_insts),
+                block(1, b1_insts),
+                block(2, b2_insts),
+                block(3, b3_insts),
+                block(4, b4_insts),
+                block(6, b6_insts),
+            ],
+        );
+        let mut m = module(vec![f]);
+
+        insert_region_markers(&mut m);
+
+        for block_idx in [3usize, 4usize] {
+            let backedge_block = &m.functions[0].blocks[block_idx].insts;
+            let jump_pos = backedge_block
+                .iter()
+                .position(|i| i.opcode == Opcode::Jump)
+                .expect("continue path should jump back to header");
+            assert_eq!(backedge_block[jump_pos - 2].opcode, Opcode::RegionClose);
+            assert_eq!(
+                backedge_block[jump_pos - 2].region,
+                RegionId::Block(BlockId(2))
+            );
+            assert_eq!(backedge_block[jump_pos - 1].opcode, Opcode::RegionOpen);
+            assert_eq!(
+                backedge_block[jump_pos - 1].region,
+                RegionId::Block(BlockId(2))
+            );
+        }
     }
 
     #[test]

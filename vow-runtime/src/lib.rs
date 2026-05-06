@@ -659,7 +659,23 @@ unsafe fn chunk_usable_start(base: *mut u8, align: usize) -> usize {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_arena_init_closed(a: *mut VowArena) {
+    let arena = unsafe { &mut *a };
+    arena.first_chunk = core::ptr::null_mut();
+    arena.current_chunk = core::ptr::null_mut();
+    arena.cursor = 0;
+    arena.chunk_end = 0;
+    arena.last_alloc_start = core::ptr::null_mut();
+    arena.last_alloc_size = 0;
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_arena_open(a: *mut VowArena) {
+    let arena = unsafe { &mut *a };
+    if !arena.first_chunk.is_null() {
+        return;
+    }
+
     let total = normal_chunk_total();
     let base = unsafe { alloc_chunk(total) };
     if base.is_null() {
@@ -2948,11 +2964,29 @@ mod tests {
     #[test]
     fn arena_open_close_roundtrip() {
         let mut a = empty_arena_header();
+        unsafe { __vow_arena_init_closed(&mut a) };
         unsafe { __vow_arena_open(&mut a) };
         assert!(!a.first_chunk.is_null());
         assert_eq!(a.first_chunk, a.current_chunk);
         assert!(a.cursor >= a.first_chunk as usize + CHUNK_LINK_BYTES);
         assert_eq!(a.chunk_end, a.first_chunk as usize + normal_chunk_total());
+        unsafe { __vow_arena_close(&mut a) };
+        assert!(a.first_chunk.is_null());
+    }
+
+    #[test]
+    fn arena_open_on_open_arena_is_noop() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_init_closed(&mut a) };
+        unsafe { __vow_arena_open(&mut a) };
+        let first = a.first_chunk;
+        let p = unsafe { __vow_arena_alloc(&mut a, 64, 8) };
+        unsafe { __vow_arena_open(&mut a) };
+        assert!(!a.first_chunk.is_null());
+        assert_eq!(a.first_chunk, first);
+        assert_eq!(a.first_chunk, a.current_chunk);
+        assert_eq!(a.last_alloc_start, p);
+        assert_eq!(a.last_alloc_size, 64);
         unsafe { __vow_arena_close(&mut a) };
         assert!(a.first_chunk.is_null());
     }

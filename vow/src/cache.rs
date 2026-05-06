@@ -8,7 +8,7 @@ use crate::frontend::DependencyManifest;
 // Bump this whenever generated object files are no longer ABI-compatible with
 // existing cached artifacts. Phase 7 adds FFI wrapper stdlib intrinsics and
 // runtime helper imports, so pre-cutover objects must not be reused.
-const COMPILE_CACHE_ABI_VERSION: &str = "arena-phase7-ffi-wrapper-v1";
+const COMPILE_CACHE_ABI_VERSION: &str = "arena-loop-refresh-v2";
 
 pub struct CompileCache {
     dir: PathBuf,
