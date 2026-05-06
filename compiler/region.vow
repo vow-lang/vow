@@ -1683,24 +1683,17 @@ fn block_tree_is_ancestor(parent: Vec<i64>, ancestor: i64, block: i64) -> bool {
     false
 }
 
-fn close_regions_for_block(
-    blk: IrBlock, block_regions: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>
+fn close_regions_for_edge(
+    pred: i64, succ: i64, has_succ: bool, block_regions: Vec<i64>,
+    block_parent: Vec<i64>, block_depth: Vec<i64>, refresh_regions: Vec<i64>
 ) -> Vec<i64> {
     let close_regions: Vec<i64> = Vec::new();
-    let succs: Vec<i64> = linear_successors(blk);
     let mut i: i64 = 0;
     while i < block_regions.len() {
         let region_block: i64 = block_regions[i];
-        if block_tree_is_ancestor(block_parent, region_block, blk.id) {
-            let mut exits_region: bool = succs.len() == 0;
-            let mut si: i64 = 0;
-            while si < succs.len() && !exits_region {
-                if !block_tree_is_ancestor(block_parent, region_block, succs[si]) {
-                    exits_region = true;
-                }
-                si = si + 1;
-            }
-            if exits_region {
+        if block_tree_is_ancestor(block_parent, region_block, pred) {
+            let exits_region: bool = !has_succ || !block_tree_is_ancestor(block_parent, region_block, succ);
+            if exits_region && !region_vec_contains_i64(refresh_regions, region_block) {
                 linear_insert_i64(close_regions, region_block);
             }
         }
@@ -1744,6 +1737,445 @@ fn block_depth_at(depth: Vec<i64>, id: i64) -> i64 {
         return depth[id];
     }
     -1
+}
+
+struct BackEdges {
+    preds: Vec<i64>,
+    headers: Vec<i64>,
+}
+
+fn back_edges_new() -> BackEdges {
+    BackEdges {
+        preds: Vec::new(),
+        headers: Vec::new(),
+    }
+}
+
+fn back_edges_contains(edges: BackEdges, pred: i64, header: i64) -> bool {
+    let mut i: i64 = 0;
+    while i < edges.preds.len() {
+        if edges.preds[i] == pred && edges.headers[i] == header {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn back_edges_push_unique(edges: BackEdges, pred: i64, header: i64) {
+    if !back_edges_contains(edges, pred, header) {
+        edges.preds.push(pred);
+        edges.headers.push(header);
+    }
+}
+
+fn sort_back_edges(edges: BackEdges) {
+    let n: i64 = edges.preds.len();
+    let mut i: i64 = 1;
+    while i < n {
+        let mut j: i64 = i;
+        while j > 0 {
+            let lp: i64 = edges.preds[j - 1];
+            let lh: i64 = edges.headers[j - 1];
+            let rp: i64 = edges.preds[j];
+            let rh: i64 = edges.headers[j];
+            if lp < rp || (lp == rp && lh <= rh) {
+                j = 0;
+            } else {
+                edges.preds[j - 1] = rp;
+                edges.headers[j - 1] = rh;
+                edges.preds[j] = lp;
+                edges.headers[j] = lh;
+                j = j - 1;
+            }
+        }
+        i = i + 1;
+    }
+}
+
+fn detect_loop_back_edges(f: IrFunction) -> BackEdges {
+    let edges: BackEdges = back_edges_new();
+    let starts: Vec<i64> = Vec::new();
+    if f.blocks.len() > 0 {
+        starts.push(f.blocks[0].id);
+    }
+    let rest: Vec<i64> = Vec::new();
+    let mut bi: i64 = 0;
+    while bi < f.blocks.len() {
+        let id: i64 = f.blocks[bi].id;
+        if !region_vec_contains_i64(starts, id) {
+            rest.push(id);
+        }
+        bi = bi + 1;
+    }
+    sort_i64_vec_inplace(rest);
+    let mut ri: i64 = 0;
+    while ri < rest.len() {
+        starts.push(rest[ri]);
+        ri = ri + 1;
+    }
+
+    let visited: Vec<i64> = Vec::new();
+    let on_stack: Vec<i64> = Vec::new();
+    let mut si: i64 = 0;
+    while si < starts.len() {
+        let start: i64 = starts[si];
+        if region_vec_contains_i64(visited, start) {
+            si = si + 1;
+            continue;
+        }
+        let ids: Vec<i64> = Vec::new();
+        let kinds: Vec<i64> = Vec::new();
+        ids.push(start);
+        kinds.push(0);
+        while ids.len() > 0 {
+            let top: i64 = ids.len() - 1;
+            let id2: i64 = ids[top];
+            let kind: i64 = kinds[top];
+            ids.pop();
+            kinds.pop();
+
+            if kind == 1 {
+                linear_remove_i64(on_stack, id2);
+                continue;
+            }
+            if region_vec_contains_i64(visited, id2) {
+                continue;
+            }
+            if !block_id_exists(f, id2) {
+                continue;
+            }
+
+            visited.push(id2);
+            linear_insert_i64(on_stack, id2);
+            ids.push(id2);
+            kinds.push(1);
+
+            let succs: Vec<i64> = block_successors_by_id(f, id2);
+            sort_i64_vec_inplace(succs);
+            let mut succ_i: i64 = succs.len();
+            while succ_i > 0 {
+                succ_i = succ_i - 1;
+                let succ: i64 = succs[succ_i];
+                if !block_id_exists(f, succ) {
+                    continue;
+                }
+                if region_vec_contains_i64(on_stack, succ) {
+                    back_edges_push_unique(edges, id2, succ);
+                    continue;
+                }
+                if !region_vec_contains_i64(visited, succ) {
+                    ids.push(succ);
+                    kinds.push(0);
+                }
+            }
+        }
+        si = si + 1;
+    }
+    sort_back_edges(edges);
+    edges
+}
+
+fn forward_graph_without_back_edges(f: IrFunction, edges: BackEdges) -> Vec<Vec<i64>> {
+    let graph: Vec<Vec<i64>> = Vec::new();
+    let max_id: i64 = max_block_id(f);
+    let mut i: i64 = 0;
+    while i <= max_id {
+        graph.push(Vec::new());
+        i = i + 1;
+    }
+    let mut bi: i64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        if blk.id >= 0 && blk.id < graph.len() {
+            let succs: Vec<i64> = linear_successors(blk);
+            sort_i64_vec_inplace(succs);
+            let mut si: i64 = 0;
+            while si < succs.len() {
+                let succ: i64 = succs[si];
+                if succ >= 0 && succ < graph.len() && !back_edges_contains(edges, blk.id, succ) {
+                    linear_insert_i64(graph[blk.id], succ);
+                }
+                si = si + 1;
+            }
+        }
+        bi = bi + 1;
+    }
+    graph
+}
+
+fn reverse_graph(graph: Vec<Vec<i64>>) -> Vec<Vec<i64>> {
+    let rev: Vec<Vec<i64>> = Vec::new();
+    let mut i: i64 = 0;
+    while i < graph.len() {
+        rev.push(Vec::new());
+        i = i + 1;
+    }
+    let mut pred: i64 = 0;
+    while pred < graph.len() {
+        let succs: Vec<i64> = graph[pred];
+        let mut si: i64 = 0;
+        while si < succs.len() {
+            let succ: i64 = succs[si];
+            if succ >= 0 && succ < rev.len() {
+                linear_insert_i64(rev[succ], pred);
+            }
+            si = si + 1;
+        }
+        pred = pred + 1;
+    }
+    rev
+}
+
+fn reachable_from_blocks(starts: Vec<i64>, graph: Vec<Vec<i64>>) -> Vec<i64> {
+    let reachable: Vec<i64> = Vec::new();
+    let stack: Vec<i64> = Vec::new();
+    let mut si: i64 = 0;
+    while si < starts.len() {
+        stack.push(starts[si]);
+        si = si + 1;
+    }
+    sort_i64_vec_inplace(stack);
+    while stack.len() > 0 {
+        let block: i64 = stack[stack.len() - 1];
+        stack.pop();
+        if region_vec_contains_i64(reachable, block) {
+            continue;
+        }
+        reachable.push(block);
+        if block >= 0 && block < graph.len() {
+            let succs: Vec<i64> = graph[block];
+            let mut gi: i64 = succs.len();
+            while gi > 0 {
+                gi = gi - 1;
+                let succ: i64 = succs[gi];
+                if !region_vec_contains_i64(reachable, succ) {
+                    stack.push(succ);
+                }
+            }
+        }
+    }
+    sort_i64_vec_inplace(reachable);
+    reachable
+}
+
+fn refresh_regions_for_edge(
+    pred: i64, succ: i64, block_regions: Vec<i64>, edges: BackEdges,
+    forward: Vec<Vec<i64>>, reverse: Vec<Vec<i64>>
+) -> Vec<i64> {
+    let refresh: Vec<i64> = Vec::new();
+    let mut ei: i64 = 0;
+    while ei < edges.preds.len() {
+        if edges.preds[ei] == pred && edges.headers[ei] == succ {
+            let header: i64 = edges.headers[ei];
+            let header_succs: Vec<i64> = Vec::new();
+            header_succs.push(header);
+            if header >= 0 && header < forward.len() {
+                let src: Vec<i64> = forward[header];
+                let mut si: i64 = 0;
+                while si < src.len() {
+                    header_succs.push(src[si]);
+                    si = si + 1;
+                }
+            }
+            let reachable_from_header: Vec<i64> = reachable_from_blocks(header_succs, forward);
+            let pred_start: Vec<i64> = Vec::new();
+            pred_start.push(pred);
+            let reaches_pred: Vec<i64> = reachable_from_blocks(pred_start, reverse);
+            let mut ri: i64 = 0;
+            while ri < block_regions.len() {
+                let region_block: i64 = block_regions[ri];
+                if region_vec_contains_i64(reachable_from_header, region_block)
+                    && region_vec_contains_i64(reaches_pred, region_block)
+                {
+                    linear_insert_i64(refresh, region_block);
+                }
+                ri = ri + 1;
+            }
+        }
+        ei = ei + 1;
+    }
+    sort_i64_vec_inplace(refresh);
+    refresh
+}
+
+fn remove_regions(regions: Vec<i64>, remove: Vec<i64>) -> Vec<i64> {
+    let kept: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < regions.len() {
+        if !region_vec_contains_i64(remove, regions[i]) {
+            kept.push(regions[i]);
+        }
+        i = i + 1;
+    }
+    kept
+}
+
+fn region_marker_inst(id: i64, op: i64, region_block: i64) -> IrInst {
+    let mut marker: IrInst = ir_inst_new(
+        id, op, ITY_UNIT(), Vec::new(), 0, 0, 0, String::from("")
+    );
+    marker = ir_inst_set_region(marker, region_pack(REGION_KIND_BLOCK(), region_block));
+    marker
+}
+
+fn append_region_markers(
+    insts: Vec<IrInst>, next_id: i64, close_regions: Vec<i64>, refresh_regions: Vec<i64>
+) -> i64 {
+    let mut id: i64 = next_id;
+    let mut ci: i64 = 0;
+    while ci < close_regions.len() {
+        insts.push(region_marker_inst(id, IOP_REGION_CLOSE(), close_regions[ci]));
+        id = id + 1;
+        ci = ci + 1;
+    }
+    let mut ri: i64 = 0;
+    while ri < refresh_regions.len() {
+        insts.push(region_marker_inst(id, IOP_REGION_CLOSE(), refresh_regions[ri]));
+        id = id + 1;
+        ri = ri + 1;
+    }
+    id
+}
+
+fn build_phi_home_blocks(f: IrFunction) -> Vec<i64> {
+    let mut max_id: i64 = -1;
+    let mut bi: i64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: i64 = 0;
+        while ii < blk.insts.len() {
+            if blk.insts[ii].id > max_id {
+                max_id = blk.insts[ii].id;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+
+    let homes: Vec<i64> = Vec::new();
+    let mut hi: i64 = 0;
+    while hi <= max_id {
+        homes.push(-1);
+        hi = hi + 1;
+    }
+
+    bi = 0;
+    while bi < f.blocks.len() {
+        let blk2: IrBlock = f.blocks[bi];
+        let mut ii2: i64 = 0;
+        while ii2 < blk2.insts.len() {
+            let inst: IrInst = blk2.insts[ii2];
+            if inst.op == IOP_PHI() && inst.id >= 0 && inst.id < homes.len() {
+                homes[inst.id] = blk2.id;
+            }
+            ii2 = ii2 + 1;
+        }
+        bi = bi + 1;
+    }
+    homes
+}
+
+fn upsilon_targets_block(inst: IrInst, target: i64, phi_home: Vec<i64>) -> bool {
+    if inst.op != IOP_UPSILON() || inst.dk != IDATA_PHI_TARGET() {
+        return false;
+    }
+    let phi_id: i64 = inst.dv;
+    if phi_id < 0 || phi_id >= phi_home.len() {
+        return false;
+    }
+    phi_home[phi_id] == target
+}
+
+fn collect_edge_upsilons_for_target(
+    insts: Vec<IrInst>, target: i64, phi_home: Vec<i64>
+) -> Vec<IrInst> {
+    let result: Vec<IrInst> = Vec::new();
+    let mut i: i64 = 0;
+    while i < insts.len() {
+        let inst: IrInst = insts[i];
+        if upsilon_targets_block(inst, target, phi_home) {
+            result.push(inst);
+        }
+        i = i + 1;
+    }
+    result
+}
+
+fn append_moved_upsilon_ids(moved_ids: Vec<i64>, upsilons: Vec<IrInst>) {
+    let mut i: i64 = 0;
+    while i < upsilons.len() {
+        linear_insert_i64(moved_ids, upsilons[i].id);
+        i = i + 1;
+    }
+}
+
+fn filter_out_moved_upsilons(insts: Vec<IrInst>, moved_ids: Vec<i64>) -> Vec<IrInst> {
+    let kept: Vec<IrInst> = Vec::new();
+    let mut i: i64 = 0;
+    while i < insts.len() {
+        let inst: IrInst = insts[i];
+        if !region_vec_contains_i64(moved_ids, inst.id) {
+            kept.push(inst);
+        }
+        i = i + 1;
+    }
+    kept
+}
+
+struct EdgeSplitBlock {
+    block: IrBlock,
+    next_id: i64,
+}
+
+fn build_edge_split_block(
+    block_id: i64, next_id: i64, close_regions: Vec<i64>, refresh_regions: Vec<i64>,
+    edge_upsilons: Vec<IrInst>, target: i64
+) -> EdgeSplitBlock {
+    let blk: IrBlock = ir_block_new(block_id);
+    let mut id: i64 = append_region_markers(blk.insts, next_id, close_regions, refresh_regions);
+    let mut ui: i64 = 0;
+    while ui < edge_upsilons.len() {
+        let src: IrInst = edge_upsilons[ui];
+        let copied: IrInst = IrInst {
+            id: id,
+            op: src.op,
+            ty: src.ty,
+            args: src.args,
+            dk: src.dk,
+            dv: src.dv,
+            dv2: src.dv2,
+            ds: src.ds,
+            ostart: src.ostart,
+            olen: src.olen,
+            rgn: src.rgn,
+        };
+        id = id + 1;
+        blk.insts.push(copied);
+        ui = ui + 1;
+    }
+    let jump_inst: IrInst = ir_inst_new(
+        id, IOP_JUMP(), ITY_UNIT(), Vec::new(), IDATA_JUMP_TARGET(), target, 0, String::from("")
+    );
+    id = id + 1;
+    blk.insts.push(jump_inst);
+    EdgeSplitBlock { block: blk, next_id: id }
+}
+
+fn branch_inst_with_targets(inst: IrInst, then_block: i64, else_block: i64) -> IrInst {
+    IrInst {
+        id: inst.id,
+        op: inst.op,
+        ty: inst.ty,
+        args: inst.args,
+        dk: inst.dk,
+        dv: then_block,
+        dv2: else_block,
+        ds: inst.ds,
+        ostart: inst.ostart,
+        olen: inst.olen,
+        rgn: inst.rgn,
+    }
 }
 
 fn build_id_to_inst(f: IrFunction) -> Vec<IrInst> {
@@ -2519,80 +2951,147 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
 
         let block_parent: Vec<i64> = build_block_parent(f);
         let block_depth: Vec<i64> = build_block_depth(block_parent);
+        let back_edges: BackEdges = detect_loop_back_edges(f);
+        let forward_no_backedges: Vec<Vec<i64>> = forward_graph_without_back_edges(f, back_edges);
+        let reverse_no_backedges: Vec<Vec<i64>> = reverse_graph(forward_no_backedges);
+        let phi_home: Vec<i64> = build_phi_home_blocks(f);
 
-        // Pass 2: insert RegionOpen at each region root and RegionClose
-        // before terminators that leave that region's block-tree subtree.
+        let mut next_block_id: i64 = max_block_id(f) + 1;
+        let extra_blocks: Vec<IrBlock> = Vec::new();
+
+        // Pass 2: insert RegionOpen at each region root, and materialize
+        // close/refresh markers on the exact control-flow edge that needs
+        // them. Branches with mixed exit/backedge successors split only the
+        // marked edges so exit paths do not reopen a region they are leaving.
         let mut bi4: i64 = 0;
         while bi4 < f.blocks.len() {
             let blk3: IrBlock = f.blocks[bi4];
-            let close_regions: Vec<i64> = close_regions_for_block(blk3, block_regions, block_parent, block_depth);
             let opens_here: bool = region_vec_contains_i64(block_regions, blk3.id);
-            if opens_here || close_regions.len() > 0 {
-                let mut open_inst: IrInst = ir_inst_new(
-                    next_id, IOP_REGION_OPEN(), ITY_UNIT(),
-                    Vec::new(), 0, 0, 0, String::from(""),
-                );
-                if opens_here {
-                    open_inst = ir_inst_set_region(open_inst, region_pack(REGION_KIND_BLOCK(), blk3.id));
-                    next_id = next_id + 1;
-                }
 
-                let mut term_pos: i64 = blk3.insts.len();
-                let mut k: i64 = 0;
-                while k < blk3.insts.len() {
-                    if iop_is_terminal(blk3.insts[k].op) {
-                        term_pos = k;
-                        k = blk3.insts.len();
-                    } else {
-                        k = k + 1;
-                    }
+            let mut term_pos: i64 = blk3.insts.len();
+            let mut k: i64 = 0;
+            while k < blk3.insts.len() {
+                if iop_is_terminal(blk3.insts[k].op) {
+                    term_pos = k;
+                    k = blk3.insts.len();
+                } else {
+                    k = k + 1;
                 }
+            }
+            let mut new_insts: Vec<IrInst> = Vec::new();
+            let mut block_changed: bool = opens_here;
+            let moved_upsilon_ids: Vec<i64> = Vec::new();
+            if opens_here {
+                let mut open_inst: IrInst = region_marker_inst(next_id, IOP_REGION_OPEN(), blk3.id);
+                next_id = next_id + 1;
+                new_insts.push(open_inst);
+            }
 
-                let mut new_insts: Vec<IrInst> = Vec::new();
-                if opens_here {
-                    new_insts.push(open_inst);
-                }
-                let mut copy_i: i64 = 0;
-                while copy_i < blk3.insts.len() {
-                    if copy_i == term_pos {
-                        let mut ci: i64 = 0;
-                        while ci < close_regions.len() {
-                            let mut close_inst: IrInst = ir_inst_new(
-                                next_id, IOP_REGION_CLOSE(), ITY_UNIT(),
-                                Vec::new(), 0, 0, 0, String::from(""),
+            let mut copy_i: i64 = 0;
+            while copy_i < blk3.insts.len() {
+                if copy_i == term_pos {
+                    let term: IrInst = blk3.insts[copy_i];
+                    if term.op == IOP_BRANCH() && term.dk == IDATA_BRANCH_TARGETS() {
+                        let then_refresh: Vec<i64> = refresh_regions_for_edge(
+                            blk3.id, term.dv, block_regions, back_edges, forward_no_backedges, reverse_no_backedges
+                        );
+                        let then_close: Vec<i64> = close_regions_for_edge(
+                            blk3.id, term.dv, true, block_regions, block_parent, block_depth, then_refresh
+                        );
+                        let else_refresh: Vec<i64> = refresh_regions_for_edge(
+                            blk3.id, term.dv2, block_regions, back_edges, forward_no_backedges, reverse_no_backedges
+                        );
+                        let else_close: Vec<i64> = close_regions_for_edge(
+                            blk3.id, term.dv2, true, block_regions, block_parent, block_depth, else_refresh
+                        );
+                        let then_upsilons: Vec<IrInst> = collect_edge_upsilons_for_target(
+                            blk3.insts, term.dv, phi_home
+                        );
+                        let else_upsilons: Vec<IrInst> = collect_edge_upsilons_for_target(
+                            blk3.insts, term.dv2, phi_home
+                        );
+                        let mut then_target: i64 = term.dv;
+                        let mut else_target: i64 = term.dv2;
+                        if then_close.len() > 0 || then_refresh.len() > 0 {
+                            let split: EdgeSplitBlock = build_edge_split_block(
+                                next_block_id, next_id, then_close, then_refresh, then_upsilons, term.dv
                             );
-                            close_inst = ir_inst_set_region(
-                                close_inst,
-                                region_pack(REGION_KIND_BLOCK(), close_regions[ci])
-                            );
-                            next_id = next_id + 1;
-                            new_insts.push(close_inst);
-                            ci = ci + 1;
+                            next_block_id = next_block_id + 1;
+                            next_id = split.next_id;
+                            then_target = split.block.id;
+                            extra_blocks.push(split.block);
+                            append_moved_upsilon_ids(moved_upsilon_ids, then_upsilons);
+                            block_changed = true;
                         }
-                    }
-                    new_insts.push(blk3.insts[copy_i]);
-                    copy_i = copy_i + 1;
-                }
-                if term_pos == blk3.insts.len() {
-                    let mut ci2: i64 = 0;
-                    while ci2 < close_regions.len() {
-                        let mut close_inst2: IrInst = ir_inst_new(
-                            next_id, IOP_REGION_CLOSE(), ITY_UNIT(),
-                            Vec::new(), 0, 0, 0, String::from(""),
+                        if else_close.len() > 0 || else_refresh.len() > 0 {
+                            let split2: EdgeSplitBlock = build_edge_split_block(
+                                next_block_id, next_id, else_close, else_refresh, else_upsilons, term.dv2
+                            );
+                            next_block_id = next_block_id + 1;
+                            next_id = split2.next_id;
+                            else_target = split2.block.id;
+                            extra_blocks.push(split2.block);
+                            append_moved_upsilon_ids(moved_upsilon_ids, else_upsilons);
+                            block_changed = true;
+                        }
+                        if moved_upsilon_ids.len() > 0 {
+                            new_insts = filter_out_moved_upsilons(new_insts, moved_upsilon_ids);
+                        }
+                        new_insts.push(branch_inst_with_targets(term, then_target, else_target));
+                    } else if term.op == IOP_JUMP() && term.dk == IDATA_JUMP_TARGET() {
+                        let jump_refresh: Vec<i64> = refresh_regions_for_edge(
+                            blk3.id, term.dv, block_regions, back_edges, forward_no_backedges, reverse_no_backedges
                         );
-                        close_inst2 = ir_inst_set_region(
-                            close_inst2,
-                            region_pack(REGION_KIND_BLOCK(), close_regions[ci2])
+                        let jump_close: Vec<i64> = close_regions_for_edge(
+                            blk3.id, term.dv, true, block_regions, block_parent, block_depth, jump_refresh
                         );
-                        next_id = next_id + 1;
-                        new_insts.push(close_inst2);
-                        ci2 = ci2 + 1;
+                        if jump_close.len() > 0 || jump_refresh.len() > 0 {
+                            block_changed = true;
+                        }
+                        next_id = append_region_markers(new_insts, next_id, jump_close, jump_refresh);
+                        new_insts.push(term);
+                    } else {
+                        let no_refresh: Vec<i64> = Vec::new();
+                        let no_succ_close: Vec<i64> = close_regions_for_edge(
+                            blk3.id, 0, false, block_regions, block_parent, block_depth, no_refresh
+                        );
+                        let no_succ_refresh: Vec<i64> = Vec::new();
+                        if no_succ_close.len() > 0 {
+                            block_changed = true;
+                        }
+                        next_id = append_region_markers(new_insts, next_id, no_succ_close, no_succ_refresh);
+                        new_insts.push(term);
+                    }
+                } else {
+                    let copied_inst: IrInst = blk3.insts[copy_i];
+                    if !region_vec_contains_i64(moved_upsilon_ids, copied_inst.id) {
+                        new_insts.push(copied_inst);
                     }
                 }
+                copy_i = copy_i + 1;
+            }
+            if term_pos == blk3.insts.len() {
+                let no_refresh2: Vec<i64> = Vec::new();
+                let no_succ_close2: Vec<i64> = close_regions_for_edge(
+                    blk3.id, 0, false, block_regions, block_parent, block_depth, no_refresh2
+                );
+                let no_succ_refresh2: Vec<i64> = Vec::new();
+                if no_succ_close2.len() > 0 {
+                    block_changed = true;
+                }
+                next_id = append_region_markers(new_insts, next_id, no_succ_close2, no_succ_refresh2);
+            }
+            if block_changed {
                 blk3.insts = new_insts;
                 f.blocks[bi4] = blk3;
             }
             bi4 = bi4 + 1;
+        }
+
+        let mut ebi: i64 = 0;
+        while ebi < extra_blocks.len() {
+            f.blocks.push(extra_blocks[ebi]);
+            ebi = ebi + 1;
         }
 
         m.functions[fi] = f;

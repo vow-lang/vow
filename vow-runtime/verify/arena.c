@@ -72,7 +72,22 @@ static uintptr_t chunk_usable_start(void* base, uintptr_t align) {
     return align_up((uintptr_t)base + CHUNK_LINK_BYTES, align);
 }
 
+void __vow_arena_close(struct VowArena* a);
+
+void __vow_arena_init_closed(struct VowArena* a) {
+    a->first_chunk = NULL;
+    a->current_chunk = NULL;
+    a->cursor = 0;
+    a->chunk_end = 0;
+    a->last_alloc_start = NULL;
+    a->last_alloc_size = 0;
+}
+
 void __vow_arena_open(struct VowArena* a) {
+    if (a->first_chunk != NULL) {
+        return;
+    }
+
     uintptr_t total = normal_total();
     void* base = alloc_chunk(total);
     __ESBMC_assume(base != NULL);  /* OOM is out of scope for §10.4; covered by OutOfMemory trap */
@@ -136,9 +151,19 @@ int64_t __vow_arena_try_extend(struct VowArena* a, void* ptr,
 
 int main(void) {
     struct VowArena a;
+    __vow_arena_init_closed(&a);
     __vow_arena_open(&a);
     /* Invariant at open: cursor <= chunk_end. */
     assert(a.cursor <= a.chunk_end);
+    void* opened_first_chunk = a.first_chunk;
+    void* opened_current_chunk = a.current_chunk;
+    uintptr_t opened_cursor = a.cursor;
+    uintptr_t opened_chunk_end = a.chunk_end;
+    __vow_arena_open(&a);
+    assert(a.first_chunk == opened_first_chunk);
+    assert(a.current_chunk == opened_current_chunk);
+    assert(a.cursor == opened_cursor);
+    assert(a.chunk_end == opened_chunk_end);
 
     /* Perform up to two symbolic allocations bounded in size. With large
      * symbolic alignments each alloc may take the oversized path (own

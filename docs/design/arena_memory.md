@@ -159,6 +159,7 @@ The following C-callable primitives MUST be provided by `vow-runtime`:
 ```c
 void     __vow_arena_open(struct VowArena* a);
 void     __vow_arena_close(struct VowArena* a);
+void     __vow_arena_init_closed(struct VowArena* a);
 void*    __vow_arena_alloc(struct VowArena* a, uintptr_t bytes, uintptr_t align);
 int64_t  __vow_arena_try_extend(struct VowArena* a, void* ptr,
                                 uintptr_t old_size, uintptr_t new_size);
@@ -175,11 +176,18 @@ same convention. In the C header the type is written `int64_t`
 (from `<stdint.h>`); in the Rust definition and in Vow FFI bindings
 the corresponding `i64` ABI-compatible type is used.
 
+**`__vow_arena_init_closed(a)`**: initializes `*a` to the closed
+all-zero state. The compiler emits this once when a block-arena stack
+slot is first materialized, before the first open or close can observe
+the header.
+
 **`__vow_arena_open(a)`**: initializes `*a` to an arena with one
 freshly-allocated chunk of 4 KB plus the 8-byte next-chunk link
-(4104 bytes total, per §3.2). If the underlying `malloc` fails, the
-runtime traps with a structured OOM error (consistent with the
-root-region OOM policy in §16); the trap is not recoverable from
+(4104 bytes total, per §3.2). If `a` already names an open arena,
+`__vow_arena_open(a)` is a no-op; this protects structured entries
+that reach an already-open region root. If the underlying `malloc`
+fails, the runtime traps with a structured OOM error (consistent with
+the root-region OOM policy in §16); the trap is not recoverable from
 within Vow.
 
 **`__vow_arena_close(a)`**: walks the chunk chain, calls `free` on
@@ -1260,6 +1268,17 @@ Two new IR opcodes mark region boundaries:
   header on the next iteration's `RegionOpen`, which is
   undefined in the runtime model. The loop body's region thus
   has the same open/close cadence as one iteration of its body.
+
+  At the IR level, every loop back-edge `P -> H` refreshes each
+  non-empty block region `Block(B)` on that loop-body path by
+  emitting `RegionClose(B)` before `P`'s terminator. The matching
+  `RegionOpen(B)` is the normal entry marker at `B`; it fires only
+  if the next trip actually re-enters the region, so a header exit
+  immediately after a back-edge cannot leave a freshly reopened body
+  arena live. `B` is selected only when it is reachable from `H`
+  through non-back-edge forward edges and can reach `P`; multiple
+  refreshed regions on the same predecessor are ordered by `BlockId`.
+  Empty loop-body regions remain elided by §3.5.
 
 Empty-region blocks do not emit these opcodes.
 

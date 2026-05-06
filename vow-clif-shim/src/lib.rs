@@ -782,6 +782,14 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
         .obj_module
         .declare_function("__vow_arena_close", Linkage::Import, &arena_open_close_sig)
         .expect("declare __vow_arena_close");
+    let arena_init_id = ctx
+        .obj_module
+        .declare_function(
+            "__vow_arena_init_closed",
+            Linkage::Import,
+            &arena_open_close_sig,
+        )
+        .expect("declare __vow_arena_init_closed");
 
     let root_arena_id = ctx
         .obj_module
@@ -944,6 +952,9 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     let arena_close_ref = ctx
         .obj_module
         .declare_func_in_func(arena_close_id, builder.func);
+    let arena_init_ref = ctx
+        .obj_module
+        .declare_func_in_func(arena_init_id, builder.func);
     let root_arena_gv = ctx
         .obj_module
         .declare_data_in_func(root_arena_id, builder.func);
@@ -1161,6 +1172,13 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
         }
     }
 
+    let mut block_arena_ids: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
+    for &rgn in inst_rgns.iter().take(n_insts) {
+        if (rgn & 3) == REGION_KIND_BLOCK {
+            block_arena_ids.insert(rgn >> 2);
+        }
+    }
+
     // Zero-initialize all stack slots to match C's typical behavior (GCC
     // zero-initializes locals). The self-hosted IR has uninitialized cross-block
     // refs that happen to work in C codegen due to this.
@@ -1168,6 +1186,17 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
         let zero = builder.ins().iconst(types::I64, 0);
         for &slot in slot_map.values() {
             builder.ins().stack_store(zero, slot, 0);
+        }
+        for payload in block_arena_ids {
+            let slot = *block_arena_slots.entry(payload).or_insert_with(|| {
+                builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    VOW_ARENA_HEADER_SIZE,
+                    VOW_ARENA_HEADER_ALIGN_LOG2,
+                ))
+            });
+            let arena_addr = builder.ins().stack_addr(types::I64, slot, 0);
+            builder.ins().call(arena_init_ref, &[arena_addr]);
         }
         // Emit stack_guard_init at main entry (all modes)
         if ctx.func_decls[fi].is_main {
@@ -1960,13 +1989,23 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                         return -1;
                     }
                     let payload = rgn >> 2;
-                    let slot = *block_arena_slots.entry(payload).or_insert_with(|| {
-                        builder.create_sized_stack_slot(StackSlotData::new(
+                    let (slot, created) = if let Some(&slot) = block_arena_slots.get(&payload) {
+                        (slot, false)
+                    } else {
+                        let slot = builder.create_sized_stack_slot(StackSlotData::new(
                             StackSlotKind::ExplicitSlot,
                             VOW_ARENA_HEADER_SIZE,
                             VOW_ARENA_HEADER_ALIGN_LOG2,
-                        ))
-                    });
+                        ));
+                        block_arena_slots.insert(payload, slot);
+                        (slot, true)
+                    };
+                    if created {
+                        let zero = builder.ins().iconst(types::I64, 0);
+                        for offset in (0..VOW_ARENA_HEADER_SIZE as i32).step_by(8) {
+                            builder.ins().stack_store(zero, slot, offset);
+                        }
+                    }
                     let arena_addr = builder.ins().stack_addr(types::I64, slot, 0);
                     let func_ref = if op == IOP_REGION_OPEN {
                         arena_open_ref
