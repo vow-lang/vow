@@ -511,13 +511,7 @@ fn backedge_refresh_regions_by_block(
     let reverse = reverse_graph(&forward);
     let mut by_pred: BTreeMap<BlockId, BTreeSet<BlockId>> = BTreeMap::new();
     for (pred, header) in back_edges {
-        let header_succs = forward
-            .get(&header)
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .collect::<Vec<_>>();
-        let reachable_from_header = reachable_from(header_succs, &forward);
+        let reachable_from_header = reachable_from([header], &forward);
         let reaches_pred = reachable_from([pred], &reverse);
         for &region_block in block_regions {
             if reachable_from_header.contains(&region_block) && reaches_pred.contains(&region_block)
@@ -2908,6 +2902,52 @@ mod tests {
             close_pos + 1,
             term_pos,
             "RegionClose must immediately precede the block's terminator"
+        );
+    }
+
+    #[test]
+    fn backedge_self_loop_refreshes_header_region() {
+        let mut alloc = inst(
+            0,
+            Opcode::RegionAlloc,
+            Ty::Ptr,
+            vec![],
+            InstData::AllocSize { size: 16, align: 8 },
+        );
+        alloc.region = RegionId::Block(BlockId(0));
+        let f = function(
+            0,
+            "self_loop",
+            vec![],
+            Ty::Unit,
+            vec![block(0, vec![alloc, jump_inst(1, 0)])],
+        );
+        let mut m = module(vec![f]);
+
+        insert_region_markers(&mut m);
+
+        let block_insts = &m.functions[0].blocks[0].insts;
+        let jump_pos = block_insts
+            .iter()
+            .position(|i| i.opcode == Opcode::Jump)
+            .expect("self-loop should end in a back-edge jump");
+        assert_eq!(
+            block_insts[jump_pos - 2].opcode,
+            Opcode::RegionClose,
+            "self-loop backedge should close the header-owned region before jumping"
+        );
+        assert_eq!(
+            block_insts[jump_pos - 2].region,
+            RegionId::Block(BlockId(0))
+        );
+        assert_eq!(
+            block_insts[jump_pos - 1].opcode,
+            Opcode::RegionOpen,
+            "self-loop backedge should reopen the header-owned region immediately"
+        );
+        assert_eq!(
+            block_insts[jump_pos - 1].region,
+            RegionId::Block(BlockId(0))
         );
     }
 

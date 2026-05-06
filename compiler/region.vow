@@ -1976,6 +1976,7 @@ fn refresh_regions_for_block(
         if edges.preds[ei] == pred {
             let header: i64 = edges.headers[ei];
             let header_succs: Vec<i64> = Vec::new();
+            header_succs.push(header);
             if header >= 0 && header < forward.len() {
                 let src: Vec<i64> = forward[header];
                 let mut si: i64 = 0;
