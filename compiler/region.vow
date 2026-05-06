@@ -2040,6 +2040,91 @@ fn append_region_markers(
     id
 }
 
+fn build_phi_home_blocks(f: IrFunction) -> Vec<i64> {
+    let mut max_id: i64 = -1;
+    let mut bi: i64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: i64 = 0;
+        while ii < blk.insts.len() {
+            if blk.insts[ii].id > max_id {
+                max_id = blk.insts[ii].id;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+
+    let homes: Vec<i64> = Vec::new();
+    let mut hi: i64 = 0;
+    while hi <= max_id {
+        homes.push(-1);
+        hi = hi + 1;
+    }
+
+    bi = 0;
+    while bi < f.blocks.len() {
+        let blk2: IrBlock = f.blocks[bi];
+        let mut ii2: i64 = 0;
+        while ii2 < blk2.insts.len() {
+            let inst: IrInst = blk2.insts[ii2];
+            if inst.op == IOP_PHI() && inst.id >= 0 && inst.id < homes.len() {
+                homes[inst.id] = blk2.id;
+            }
+            ii2 = ii2 + 1;
+        }
+        bi = bi + 1;
+    }
+    homes
+}
+
+fn upsilon_targets_block(inst: IrInst, target: i64, phi_home: Vec<i64>) -> bool {
+    if inst.op != IOP_UPSILON() || inst.dk != IDATA_PHI_TARGET() {
+        return false;
+    }
+    let phi_id: i64 = inst.dv;
+    if phi_id < 0 || phi_id >= phi_home.len() {
+        return false;
+    }
+    phi_home[phi_id] == target
+}
+
+fn collect_edge_upsilons_for_target(
+    insts: Vec<IrInst>, target: i64, phi_home: Vec<i64>
+) -> Vec<IrInst> {
+    let result: Vec<IrInst> = Vec::new();
+    let mut i: i64 = 0;
+    while i < insts.len() {
+        let inst: IrInst = insts[i];
+        if upsilon_targets_block(inst, target, phi_home) {
+            result.push(inst);
+        }
+        i = i + 1;
+    }
+    result
+}
+
+fn append_moved_upsilon_ids(moved_ids: Vec<i64>, upsilons: Vec<IrInst>) {
+    let mut i: i64 = 0;
+    while i < upsilons.len() {
+        linear_insert_i64(moved_ids, upsilons[i].id);
+        i = i + 1;
+    }
+}
+
+fn filter_out_moved_upsilons(insts: Vec<IrInst>, moved_ids: Vec<i64>) -> Vec<IrInst> {
+    let kept: Vec<IrInst> = Vec::new();
+    let mut i: i64 = 0;
+    while i < insts.len() {
+        let inst: IrInst = insts[i];
+        if !region_vec_contains_i64(moved_ids, inst.id) {
+            kept.push(inst);
+        }
+        i = i + 1;
+    }
+    kept
+}
+
 struct EdgeSplitBlock {
     block: IrBlock,
     next_id: i64,
@@ -2871,6 +2956,7 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
         let back_edges: BackEdges = detect_loop_back_edges(f);
         let forward_no_backedges: Vec<Vec<i64>> = forward_graph_without_back_edges(f, back_edges);
         let reverse_no_backedges: Vec<Vec<i64>> = reverse_graph(forward_no_backedges);
+        let phi_home: Vec<i64> = build_phi_home_blocks(f);
 
         let mut next_block_id: i64 = max_block_id(f) + 1;
         let extra_blocks: Vec<IrBlock> = Vec::new();
@@ -2894,17 +2980,9 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
                     k = k + 1;
                 }
             }
-            let edge_upsilons: Vec<IrInst> = Vec::new();
-            let mut ui0: i64 = term_pos + 1;
-            while ui0 < blk3.insts.len() {
-                if blk3.insts[ui0].op == IOP_UPSILON() {
-                    edge_upsilons.push(blk3.insts[ui0]);
-                }
-                ui0 = ui0 + 1;
-            }
-
             let mut new_insts: Vec<IrInst> = Vec::new();
             let mut block_changed: bool = opens_here;
+            let moved_upsilon_ids: Vec<i64> = Vec::new();
             if opens_here {
                 let mut open_inst: IrInst = region_marker_inst(next_id, IOP_REGION_OPEN(), blk3.id);
                 next_id = next_id + 1;
@@ -2928,27 +3006,38 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
                         let else_close: Vec<i64> = close_regions_for_edge(
                             blk3.id, term.dv2, true, block_regions, block_parent, block_depth, else_refresh
                         );
+                        let then_upsilons: Vec<IrInst> = collect_edge_upsilons_for_target(
+                            blk3.insts, term.dv, phi_home
+                        );
+                        let else_upsilons: Vec<IrInst> = collect_edge_upsilons_for_target(
+                            blk3.insts, term.dv2, phi_home
+                        );
                         let mut then_target: i64 = term.dv;
                         let mut else_target: i64 = term.dv2;
                         if then_close.len() > 0 || then_refresh.len() > 0 {
                             let split: EdgeSplitBlock = build_edge_split_block(
-                                next_block_id, next_id, then_close, then_refresh, edge_upsilons, term.dv
+                                next_block_id, next_id, then_close, then_refresh, then_upsilons, term.dv
                             );
                             next_block_id = next_block_id + 1;
                             next_id = split.next_id;
                             then_target = split.block.id;
                             extra_blocks.push(split.block);
+                            append_moved_upsilon_ids(moved_upsilon_ids, then_upsilons);
                             block_changed = true;
                         }
                         if else_close.len() > 0 || else_refresh.len() > 0 {
                             let split2: EdgeSplitBlock = build_edge_split_block(
-                                next_block_id, next_id, else_close, else_refresh, edge_upsilons, term.dv2
+                                next_block_id, next_id, else_close, else_refresh, else_upsilons, term.dv2
                             );
                             next_block_id = next_block_id + 1;
                             next_id = split2.next_id;
                             else_target = split2.block.id;
                             extra_blocks.push(split2.block);
+                            append_moved_upsilon_ids(moved_upsilon_ids, else_upsilons);
                             block_changed = true;
+                        }
+                        if moved_upsilon_ids.len() > 0 {
+                            new_insts = filter_out_moved_upsilons(new_insts, moved_upsilon_ids);
                         }
                         new_insts.push(branch_inst_with_targets(term, then_target, else_target));
                     } else if term.op == IOP_JUMP() && term.dk == IDATA_JUMP_TARGET() {
@@ -2976,7 +3065,10 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
                         new_insts.push(term);
                     }
                 } else {
-                    new_insts.push(blk3.insts[copy_i]);
+                    let copied_inst: IrInst = blk3.insts[copy_i];
+                    if !region_vec_contains_i64(moved_upsilon_ids, copied_inst.id) {
+                        new_insts.push(copied_inst);
+                    }
                 }
                 copy_i = copy_i + 1;
             }

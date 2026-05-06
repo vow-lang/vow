@@ -917,6 +917,40 @@ fn marker_insts(next_id: &mut u32, markers: &EdgeRegionMarkers, span: Span) -> V
     insts
 }
 
+fn phi_home_blocks(func: &Function) -> BTreeMap<InstId, BlockId> {
+    let mut homes = BTreeMap::new();
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.opcode == Opcode::Phi {
+                homes.insert(inst.id, block.id);
+            }
+        }
+    }
+    homes
+}
+
+fn upsilon_target_block(inst: &Inst, phi_homes: &BTreeMap<InstId, BlockId>) -> Option<BlockId> {
+    if inst.opcode == Opcode::Upsilon
+        && let InstData::PhiTarget(phi_id) = inst.data
+    {
+        phi_homes.get(&phi_id).copied()
+    } else {
+        None
+    }
+}
+
+fn edge_upsilons_for_target(
+    insts: &[Inst],
+    target: BlockId,
+    phi_homes: &BTreeMap<InstId, BlockId>,
+) -> Vec<Inst> {
+    insts
+        .iter()
+        .filter(|inst| upsilon_target_block(inst, phi_homes) == Some(target))
+        .cloned()
+        .collect()
+}
+
 fn split_edge_with_markers(
     target: BlockId,
     markers: &EdgeRegionMarkers,
@@ -1005,6 +1039,7 @@ pub fn insert_region_markers(module: &mut Module) {
 
         let block_tree = BlockTree::from_function(func);
         let refresh_regions_by_edge = backedge_refresh_regions_by_edge(func, &block_regions);
+        let phi_homes = phi_home_blocks(func);
 
         let mut next_id = next_inst_id(func);
         let mut next_block_id = next_block_id(func);
@@ -1022,13 +1057,9 @@ pub fn insert_region_markers(module: &mut Module) {
                 .position(|i| i.opcode.is_terminal())
                 .unwrap_or(old_insts.len());
             let term_span = old_insts.get(term_pos).map(|i| i.origin).unwrap_or(span);
-            let edge_upsilons: Vec<Inst> = old_insts[term_pos.saturating_add(1)..]
-                .iter()
-                .filter(|inst| inst.opcode == Opcode::Upsilon)
-                .cloned()
-                .collect();
             let mut before_term_markers = EdgeRegionMarkers::default();
             let mut rewritten_term: Option<Inst> = None;
+            let mut moved_upsilons = BTreeSet::new();
             if let Some(term) = old_insts.get(term_pos) {
                 match &term.data {
                     InstData::JumpTarget(target) if term.opcode == Opcode::Jump => {
@@ -1051,6 +1082,8 @@ pub fn insert_region_markers(module: &mut Module) {
                             &block_tree,
                             &refresh_regions_by_edge,
                         );
+                        let then_upsilons =
+                            edge_upsilons_for_target(&old_insts, *then_block, &phi_homes);
                         let else_markers = edge_region_markers(
                             block.id,
                             Some(*else_block),
@@ -1058,10 +1091,12 @@ pub fn insert_region_markers(module: &mut Module) {
                             &block_tree,
                             &refresh_regions_by_edge,
                         );
+                        let else_upsilons =
+                            edge_upsilons_for_target(&old_insts, *else_block, &phi_homes);
                         let new_then = split_edge_with_markers(
                             *then_block,
                             &then_markers,
-                            &edge_upsilons,
+                            &then_upsilons,
                             term_span,
                             &mut next_id,
                             &mut next_block_id,
@@ -1070,13 +1105,19 @@ pub fn insert_region_markers(module: &mut Module) {
                         let new_else = split_edge_with_markers(
                             *else_block,
                             &else_markers,
-                            &edge_upsilons,
+                            &else_upsilons,
                             term_span,
                             &mut next_id,
                             &mut next_block_id,
                             &mut split_blocks,
                         );
                         if new_then != *then_block || new_else != *else_block {
+                            if new_then != *then_block {
+                                moved_upsilons.extend(then_upsilons.iter().map(|inst| inst.id));
+                            }
+                            if new_else != *else_block {
+                                moved_upsilons.extend(else_upsilons.iter().map(|inst| inst.id));
+                            }
                             let mut new_term = term.clone();
                             new_term.data = InstData::BranchTargets {
                                 then_block: new_then,
@@ -1125,11 +1166,21 @@ pub fn insert_region_markers(module: &mut Module) {
                 ));
                 next_id += 1;
             }
-            new_insts.extend(old_insts[..term_pos].iter().cloned());
+            new_insts.extend(
+                old_insts[..term_pos]
+                    .iter()
+                    .filter(|inst| !moved_upsilons.contains(&inst.id))
+                    .cloned(),
+            );
             new_insts.extend(marker_insts(&mut next_id, &before_term_markers, term_span));
             if let Some(term) = rewritten_term {
                 new_insts.push(term);
-                new_insts.extend(old_insts[term_pos + 1..].iter().cloned());
+                new_insts.extend(
+                    old_insts[term_pos + 1..]
+                        .iter()
+                        .filter(|inst| !moved_upsilons.contains(&inst.id))
+                        .cloned(),
+                );
             } else {
                 new_insts.extend(old_insts[term_pos..].iter().cloned());
             }
@@ -3327,7 +3378,6 @@ mod tests {
         alloc.region = RegionId::Block(BlockId(2));
         let b2_insts = vec![
             alloc,
-            branch_inst(3, 1, 3),
             inst(
                 4,
                 Opcode::Upsilon,
@@ -3335,8 +3385,12 @@ mod tests {
                 vec![2],
                 InstData::PhiTarget(InstId(5)),
             ),
+            branch_inst(3, 1, 3),
         ];
-        let b3_insts = vec![return_unit_inst(6)];
+        let b3_insts = vec![
+            inst(5, Opcode::Phi, Ty::Ptr, vec![], InstData::None),
+            return_unit_inst(6),
+        ];
         let f = function(
             0,
             "mixed_backedge_exit",
@@ -3386,6 +3440,13 @@ mod tests {
                 .any(|i| i.opcode == Opcode::RegionClose && i.region == RegionId::Block(BlockId(2))),
             "mixed branch predecessor must not emit one block-wide close before both edges"
         );
+        assert!(
+            !pred
+                .insts
+                .iter()
+                .any(|i| i.opcode == Opcode::Upsilon && i.data == InstData::PhiTarget(InstId(5))),
+            "exit phi feed should move from the predecessor onto the split exit edge"
+        );
 
         let then_split = m.functions[0]
             .blocks
@@ -3397,11 +3458,11 @@ mod tests {
         assert_eq!(then_split.insts[1].opcode, Opcode::RegionOpen);
         assert_eq!(then_split.insts[1].region, RegionId::Block(BlockId(2)));
         assert!(
-            then_split
+            !then_split
                 .insts
                 .iter()
-                .any(|i| i.opcode == Opcode::Upsilon && i.id != InstId(4)),
-            "split edge should preserve phi feeds with fresh instruction ids"
+                .any(|i| i.opcode == Opcode::Upsilon && i.data == InstData::PhiTarget(InstId(5))),
+            "backedge split must not steal exit phi feeds"
         );
         let then_jump = then_split
             .insts
@@ -3423,6 +3484,13 @@ mod tests {
                 .iter()
                 .any(|i| i.opcode == Opcode::RegionOpen),
             "exit split block must not reopen the region it is leaving"
+        );
+        assert!(
+            else_split.insts.iter().any(|i| i.opcode == Opcode::Upsilon
+                && i.id != InstId(4)
+                && i.args == vec![InstId(2)]
+                && i.data == InstData::PhiTarget(InstId(5))),
+            "exit split should preserve pre-branch phi feeds with fresh instruction ids"
         );
         let else_jump = else_split
             .insts
