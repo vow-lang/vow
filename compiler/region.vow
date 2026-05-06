@@ -90,15 +90,21 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
     let id_to_inst_per_fn: Vec<Vec<IrInst>> = Vec::new();
     let id_to_block_per_fn: Vec<Vec<i64>> = Vec::new();
     let phi_arms_per_fn: Vec<Vec<Vec<i64>>> = Vec::new();
+    let block_parent_per_fn: Vec<Vec<i64>> = Vec::new();
+    let block_depth_per_fn: Vec<Vec<i64>> = Vec::new();
     let mut bxi: i64 = 0;
     while bxi < n_funcs {
         let f0: IrFunction = m.functions[bxi];
         let it: Vec<IrInst> = build_id_to_inst(f0);
         let ib: Vec<i64> = build_id_to_block(f0, it.len());
         let pa: Vec<Vec<i64>> = build_phi_arms(f0, it.len());
+        let bp: Vec<i64> = build_block_parent(f0);
+        let bd: Vec<i64> = build_block_depth(bp);
         id_to_inst_per_fn.push(it);
         id_to_block_per_fn.push(ib);
         phi_arms_per_fn.push(pa);
+        block_parent_per_fn.push(bp);
+        block_depth_per_fn.push(bd);
         bxi = bxi + 1;
     }
 
@@ -135,6 +141,7 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
                 let did_change: bool = analyze_function(
                     m, fidx,
                     id_to_inst_per_fn[fidx], id_to_block_per_fn[fidx], phi_arms_per_fn[fidx],
+                    block_parent_per_fn[fidx], block_depth_per_fn[fidx],
                     int_kinds, int_auxs, int_aliases_list,
                     int_se_targets, int_se_src_kinds, int_se_src_aux, int_se_src_aliases,
                     region_keys, region_vals,
@@ -864,6 +871,7 @@ fn check_store_conflict(
 fn analyze_function(
     m: IrModule, fidx: i64,
     id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, phi_arms: Vec<Vec<i64>>,
+    block_parent: Vec<i64>, block_depth: Vec<i64>,
     int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
     int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>,
     int_se_src_aux: Vec<Vec<i64>>, int_se_src_aliases: Vec<Vec<Vec<i64>>>,
@@ -962,43 +970,44 @@ fn analyze_function(
     }
 
     // 2. Tag heap-producing instructions whose per-destination marker LUB
-    // stays in the defining block. This mirrors the Rust pass's marker model
+    // resolves to a concrete block. This mirrors the Rust pass's marker model
     // without materializing a must_outlive set for every value: for each heap
-    // producer, scan its direct uses plus Phi/call return-alias users and
-    // reject the block placement as soon as any marker would LUB wider than
-    // the defining block. That keeps stage-2 bootstrap from allocating the
-    // full marker lattice inside the self-hosted arena.
+    // producer, gather concrete block markers from direct uses plus Phi/call
+    // return-alias users, then compute the cached block-tree LCA.
     let mut rbi: i64 = 0;
     while rbi < n_bks {
         let rb: IrBlock = bks[rbi];
         let mut rii: i64 = 0;
         while rii < rb.insts.len() {
             let rinst: IrInst = rb.insts[rii];
-            if is_heap_producing_for_region(rinst, int_kinds)
-                && value_lub_stays_in_block(
+            if rinst.op == IOP_REGION_ALLOC() {
+                let concrete_lca: i64 = value_lub_concrete_block(
                     f, rinst.id, rb.id, id_to_inst, id_to_block,
+                    block_parent, block_depth,
+                    is_scalar_ity(f.return_ty),
                     int_kinds, int_auxs, int_aliases_list,
                     int_se_targets, int_se_src_kinds, int_se_src_aux,
-                )
-            {
-                put_inst_region(
-                    region_keys[fidx],
-                    region_vals[fidx],
-                    rinst.id,
-                    region_pack(REGION_KIND_BLOCK(), rb.id)
                 );
+                if concrete_lca >= 0 {
+                    put_inst_region(
+                        region_keys[fidx],
+                        region_vals[fidx],
+                        rinst.id,
+                        region_pack(REGION_KIND_BLOCK(), concrete_lca)
+                    );
+                }
             }
             rii = rii + 1;
         }
         rbi = rbi + 1;
     }
 
-    // Escaping RegionAlloc instructions still deliberately stay Root.
+    // Non-concrete RegionAlloc instructions still deliberately stay Root.
     //
-    // Phase 9 status: the self-hosted Cranelift shim can lower block regions,
+    // Current self-hosted status: the Cranelift shim can lower block regions,
     // but `IOP_REGION_ALLOC` still has no hidden-caller-region plumbing.
     // Emitting `region_caller0()` here would break self-hosted codegen for any
-    // program with an escaping allocation. We therefore leave escaping
+    // allocation whose LUB is the virtual caller. We therefore leave those
     // allocations at their Phase-2 default (Root). The summary itself is still
     // set to FreshInCaller where appropriate so the metadata remains correct
     // for downstream consumers; only the per-inst region tag is degraded for
@@ -1058,14 +1067,18 @@ fn lookup_inst_block(id_to_block: Vec<i64>, id: i64) -> i64 {
     -1
 }
 
-fn value_lub_stays_in_block(
+fn value_lub_concrete_block(
     f: IrFunction, id: i64, defining_block: i64,
     id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>,
+    block_parent: Vec<i64>, block_depth: Vec<i64>,
+    return_is_scalar: bool,
     int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
     int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>
-) -> bool {
+) -> i64 {
     let work: Vec<i64> = Vec::new();
     let seen: Vec<i64> = Vec::new();
+    let markers: Vec<i64> = Vec::new();
+    linear_insert_i64(markers, defining_block);
     work.push(id);
     while work.len() > 0 {
         let cur: i64 = work[work.len() - 1];
@@ -1074,12 +1087,13 @@ fn value_lub_stays_in_block(
             continue;
         }
         seen.push(cur);
-        if !direct_markers_stay_in_block(
+        if !direct_markers_collect_concrete_blocks(
             f,
             cur,
-            defining_block,
             id_to_inst,
             id_to_block,
+            markers,
+            return_is_scalar,
             int_kinds,
             int_auxs,
             int_aliases_list,
@@ -1089,15 +1103,18 @@ fn value_lub_stays_in_block(
             work,
             seen
         ) {
-            return false;
+            return -1;
         }
     }
-    true
+    sort_i64_vec_inplace(markers);
+    block_tree_lca_all(block_parent, block_depth, markers)
 }
 
-fn direct_markers_stay_in_block(
-    f: IrFunction, id: i64, defining_block: i64,
+fn direct_markers_collect_concrete_blocks(
+    f: IrFunction, id: i64,
     id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>,
+    markers: Vec<i64>,
+    return_is_scalar: bool,
     int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
     int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>,
     work: Vec<i64>, seen: Vec<i64>
@@ -1113,22 +1130,21 @@ fn direct_markers_stay_in_block(
             while ai < inst.args.len() {
                 if inst.args[ai] == id {
                     // Every argument use contributes the use-block marker.
-                    if blk.id != defining_block {
-                        return false;
-                    }
-                    if inst.op == IOP_RETURN() {
+                    linear_insert_i64(markers, blk.id);
+                    if inst.op == IOP_RETURN() && !return_is_scalar {
                         return false;
                     }
                     if (inst.op == IOP_STORE() || inst.op == IOP_FIELD_SET()) && ai == 1 {
-                        if !target_marker_is_defining_block(
+                        let target_block: i64 = target_marker_concrete_block(
                             id_to_inst,
                             id_to_block,
                             inst.args[0],
-                            int_kinds,
-                            defining_block
-                        ) {
+                            int_kinds
+                        );
+                        if target_block < 0 {
                             return false;
                         }
+                        linear_insert_i64(markers, target_block);
                         // Stored values must follow later widening of their
                         // target container. The target-marker check above
                         // handles the target's origin; the work item catches
@@ -1137,25 +1153,32 @@ fn direct_markers_stay_in_block(
                     }
                     if inst.op == IOP_UPSILON() && ai == 0 && inst.dk == IDATA_PHI_TARGET() {
                         let phi_block: i64 = lookup_inst_block(id_to_block, inst.dv);
-                        if phi_block != defining_block {
+                        if phi_block < 0 {
                             return false;
                         }
+                        linear_insert_i64(markers, phi_block);
                         push_region_work(work, seen, inst.dv);
+                    }
+                    if inst.op == IOP_FIELD_GET() && ai == 0 {
+                        push_region_work(work, seen, inst.id);
+                    }
+                    if inst.op == IOP_LOAD() && ai == 0 && !is_scalar_ity(inst.ty) {
+                        push_region_work(work, seen, inst.id);
                     }
                     if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
                         let callee_idx: i64 = inst.dv;
-                        if !call_store_effects_keep_source_in_block(
+                        if !call_store_effects_collect_concrete_blocks(
                             inst,
                             ai,
                             id_to_inst,
                             id_to_block,
                             int_kinds,
+                            markers,
                             int_se_targets,
                             int_se_src_kinds,
                             int_se_src_aux,
                             work,
-                            seen,
-                            defining_block
+                            seen
                         ) {
                             return false;
                         }
@@ -1169,21 +1192,22 @@ fn direct_markers_stay_in_block(
                             push_region_work(work, seen, inst.id);
                         }
                     }
-                    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
-                        let target_pos2: i64 = extern_store_target_for_source(inst.ds, ai);
-                        if target_pos2 >= 0 && target_pos2 < inst.args.len() {
-                            if !target_marker_is_defining_block(
-                                id_to_inst,
-                                id_to_block,
-                                inst.args[target_pos2],
-                                int_kinds,
-                                defining_block
-                            ) {
-                                return false;
-                            }
-                            push_region_work(work, seen, inst.args[target_pos2]);
-                        }
-                    }
+	                    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
+	                        let target_pos2: i64 = extern_store_target_for_source(inst.ds, ai);
+	                        if target_pos2 >= 0 && target_pos2 < inst.args.len() {
+	                            let target_block2: i64 = target_marker_concrete_block(
+	                                id_to_inst,
+	                                id_to_block,
+	                                inst.args[target_pos2],
+	                                int_kinds
+	                            );
+	                            if target_block2 < 0 {
+	                                return false;
+	                            }
+	                            linear_insert_i64(markers, target_block2);
+	                            push_region_work(work, seen, inst.args[target_pos2]);
+	                        }
+	                    }
                 }
                 ai = ai + 1;
             }
@@ -1207,29 +1231,29 @@ fn push_region_work(work: Vec<i64>, seen: Vec<i64>, id: i64) {
     work.push(id);
 }
 
-fn target_marker_is_defining_block(
+fn target_marker_concrete_block(
     id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, target_id: i64,
-    int_kinds: Vec<i64>, defining_block: i64
-) -> bool {
+    int_kinds: Vec<i64>
+) -> i64 {
     let inst: IrInst = lookup_inst_or_default(id_to_inst, target_id);
     if inst.id < 0 {
-        return false;
+        return -1;
     }
     if inst.op == IOP_GET_ARG() {
-        return false;
+        return -1;
     }
     if is_heap_producing_for_region(inst, int_kinds) {
-        return lookup_inst_block(id_to_block, target_id) == defining_block;
+        return lookup_inst_block(id_to_block, target_id);
     }
-    false
+    -1
 }
 
-fn call_store_effects_keep_source_in_block(
+fn call_store_effects_collect_concrete_blocks(
     call_inst: IrInst, source_arg_pos: i64,
     id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, int_kinds: Vec<i64>,
+    markers: Vec<i64>,
     int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>,
-    work: Vec<i64>, seen: Vec<i64>,
-    defining_block: i64
+    work: Vec<i64>, seen: Vec<i64>
 ) -> bool {
     let callee_idx: i64 = call_inst.dv;
     if callee_idx < 0 || callee_idx >= int_se_targets.len() {
@@ -1243,15 +1267,16 @@ fn call_store_effects_keep_source_in_block(
         if kinds[i] == RSUM_KIND_ALIAS_OF() && auxs[i] == source_arg_pos {
             let target_param: i64 = targets[i];
             if target_param >= 0 && target_param < call_inst.args.len() {
-                if !target_marker_is_defining_block(
+                let target_block: i64 = target_marker_concrete_block(
                     id_to_inst,
                     id_to_block,
                     call_inst.args[target_param],
-                    int_kinds,
-                    defining_block
-                ) {
+                    int_kinds
+                );
+                if target_block < 0 {
                     return false;
                 }
+                linear_insert_i64(markers, target_block);
                 push_region_work(work, seen, call_inst.args[target_param]);
             }
         } else if kinds[i] == RSUM_KIND_ALIAS_OF_ANY() {
@@ -1309,6 +1334,418 @@ fn is_scalar_ity(ty: i64) -> bool {
 // `id_to_block[id]` is the block containing that inst, or -1 for no inst.
 // `phi_arms[id]` is the list of upsilon-arm value ids targeting the
 // phi with `phi.id == id`; empty for non-phi ids.
+// `block_parent[block_id]` is the parent in the DFS-forward dominator
+// block tree, -1 for a virtual-caller child root, and -2 for a
+// missing/nonexistent block id. Back-edges are removed while collecting the
+// forward graph; joins are then parented by their real common dominator
+// instead of whichever branch DFS happened to visit first.
+// `block_depth[block_id]` is the concrete depth from that virtual caller
+// child root, or -1 for missing ids.
+fn build_block_parent(f: IrFunction) -> Vec<i64> {
+    let parent: Vec<i64> = Vec::new();
+    let max_id: i64 = max_block_id(f);
+    let mut i: i64 = 0;
+    while i <= max_id {
+        parent.push(-2);
+        i = i + 1;
+    }
+    if f.blocks.len() == 0 {
+        return parent;
+    }
+
+    let forward: Vec<Vec<i64>> = Vec::new();
+    let component: Vec<i64> = Vec::new();
+    let mut fi: i64 = 0;
+    while fi <= max_id {
+        forward.push(Vec::new());
+        component.push(-1);
+        fi = fi + 1;
+    }
+    let visited: Vec<i64> = Vec::new();
+    let on_stack: Vec<i64> = Vec::new();
+    let roots: Vec<i64> = Vec::new();
+
+    block_tree_visit_root(f, f.blocks[0].id, roots.len(), parent, component, forward, visited, on_stack);
+    roots.push(f.blocks[0].id);
+
+    let mut bi: i64 = 0;
+    while bi < f.blocks.len() {
+        let id: i64 = f.blocks[bi].id;
+        if !region_vec_contains_i64(visited, id) {
+            block_tree_visit_root(f, id, roots.len(), parent, component, forward, visited, on_stack);
+            roots.push(id);
+        }
+        bi = bi + 1;
+    }
+    block_tree_dominance_parent(parent, forward, component, roots);
+    parent
+}
+
+fn max_block_id(f: IrFunction) -> i64 {
+    let mut max_id: i64 = -1;
+    let mut i: i64 = 0;
+    while i < f.blocks.len() {
+        let id: i64 = f.blocks[i].id;
+        if id > max_id {
+            max_id = id;
+        }
+        i = i + 1;
+    }
+    max_id
+}
+
+fn block_tree_visit_root(
+    f: IrFunction, root: i64, comp: i64,
+    parent: Vec<i64>, component: Vec<i64>, forward: Vec<Vec<i64>>,
+    visited: Vec<i64>, on_stack: Vec<i64>
+) {
+    let ids: Vec<i64> = Vec::new();
+    let kinds: Vec<i64> = Vec::new();
+    ids.push(root);
+    kinds.push(0);
+    if root >= 0 && root < parent.len() {
+        parent[root] = -1;
+    }
+
+    while ids.len() > 0 {
+        let top: i64 = ids.len() - 1;
+        let id: i64 = ids[top];
+        let kind: i64 = kinds[top];
+        ids.pop();
+        kinds.pop();
+
+        if kind == 1 {
+            linear_remove_i64(on_stack, id);
+            continue;
+        }
+        if region_vec_contains_i64(visited, id) {
+            continue;
+        }
+        if !block_id_exists(f, id) {
+            continue;
+        }
+
+        visited.push(id);
+        linear_insert_i64(on_stack, id);
+        if id >= 0 && id < component.len() {
+            component[id] = comp;
+        }
+
+        ids.push(id);
+        kinds.push(1);
+
+        let succs: Vec<i64> = block_successors_by_id(f, id);
+        sort_i64_vec_inplace(succs);
+        let mut si: i64 = succs.len();
+        while si > 0 {
+            si = si - 1;
+            let succ: i64 = succs[si];
+            if !block_id_exists(f, succ) {
+                continue;
+            }
+            if region_vec_contains_i64(on_stack, succ) {
+                continue;
+            }
+            if succ >= 0 && succ < component.len() && component[succ] >= 0 && component[succ] != comp {
+                continue;
+            }
+            if id >= 0 && id < forward.len() {
+                linear_insert_i64(forward[id], succ);
+            }
+            if succ >= 0 && succ < parent.len() && parent[succ] == -2 {
+                parent[succ] = id;
+            }
+            if !region_vec_contains_i64(visited, succ) {
+                ids.push(succ);
+                kinds.push(0);
+            }
+        }
+    }
+}
+
+fn block_tree_dominance_parent(
+    parent: Vec<i64>, forward: Vec<Vec<i64>>, component: Vec<i64>, roots: Vec<i64>
+) {
+    let mut ri: i64 = 0;
+    while ri < roots.len() {
+        let root: i64 = roots[ri];
+        if root >= 0 && root < parent.len() {
+            parent[root] = -1;
+        }
+        ri = ri + 1;
+    }
+
+    let bound: i64 = forward.len() * forward.len() + 1;
+    let mut iter: i64 = 0;
+    let mut changed: bool = true;
+    while changed && iter < bound {
+        changed = false;
+        iter = iter + 1;
+        let mut pred: i64 = 0;
+        while pred < forward.len() {
+            let succs: Vec<i64> = forward[pred];
+            let mut si: i64 = 0;
+            while si < succs.len() {
+                let succ: i64 = succs[si];
+                if succ >= 0 && succ < parent.len()
+                    && pred >= 0 && pred < component.len()
+                    && succ < component.len()
+                    && component[pred] == component[succ]
+                    && parent[succ] != -1
+                {
+                    let old_parent: i64 = parent[succ];
+                    let next_parent: i64 = if old_parent == -2 {
+                        pred
+                    } else {
+                        block_tree_parent_lca(parent, old_parent, pred)
+                    };
+                    if next_parent != old_parent {
+                        parent[succ] = next_parent;
+                        changed = true;
+                    }
+                }
+                si = si + 1;
+            }
+            pred = pred + 1;
+        }
+    }
+}
+
+fn block_tree_parent_lca(parent: Vec<i64>, left0: i64, right0: i64) -> i64 {
+    let mut left: i64 = left0;
+    let mut right: i64 = right0;
+    let mut left_depth: i64 = block_parent_depth(parent, left);
+    let mut right_depth: i64 = block_parent_depth(parent, right);
+    if left_depth < 0 || right_depth < 0 {
+        return -1;
+    }
+
+    while left_depth > right_depth {
+        left = block_parent_at(parent, left);
+        left_depth = left_depth - 1;
+    }
+    while right_depth > left_depth {
+        right = block_parent_at(parent, right);
+        right_depth = right_depth - 1;
+    }
+    while left != right {
+        left = block_parent_at(parent, left);
+        right = block_parent_at(parent, right);
+        if left < 0 || right < 0 {
+            return -1;
+        }
+    }
+    left
+}
+
+fn block_parent_depth(parent: Vec<i64>, id: i64) -> i64 {
+    let seen: Vec<i64> = Vec::new();
+    let mut cur: i64 = id;
+    let mut depth: i64 = 0;
+    while cur >= 0 && cur < parent.len() {
+        if region_vec_contains_i64(seen, cur) {
+            return -1;
+        }
+        seen.push(cur);
+        let p: i64 = parent[cur];
+        if p == -1 {
+            return depth;
+        }
+        if p < 0 || p >= parent.len() {
+            return -1;
+        }
+        cur = p;
+        depth = depth + 1;
+    }
+    -1
+}
+
+fn block_id_exists(f: IrFunction, id: i64) -> bool {
+    let mut i: i64 = 0;
+    while i < f.blocks.len() {
+        if f.blocks[i].id == id {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn block_successors_by_id(f: IrFunction, id: i64) -> Vec<i64> {
+    let mut i: i64 = 0;
+    while i < f.blocks.len() {
+        let blk: IrBlock = f.blocks[i];
+        if blk.id == id {
+            return linear_successors(blk);
+        }
+        i = i + 1;
+    }
+    Vec::new()
+}
+
+fn build_block_depth(parent: Vec<i64>) -> Vec<i64> {
+    let depth: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < parent.len() {
+        depth.push(-1);
+        i = i + 1;
+    }
+    let mut j: i64 = 0;
+    while j < parent.len() {
+        if parent[j] != -2 {
+            depth[j] = block_depth_for(parent, j);
+        }
+        j = j + 1;
+    }
+    depth
+}
+
+fn block_depth_for(parent: Vec<i64>, id: i64) -> i64 {
+    let seen: Vec<i64> = Vec::new();
+    let mut cur: i64 = id;
+    let mut depth: i64 = 0;
+    while cur >= 0 && cur < parent.len() {
+        if region_vec_contains_i64(seen, cur) {
+            return -1;
+        }
+        seen.push(cur);
+        let p: i64 = parent[cur];
+        if p == -1 {
+            return depth;
+        }
+        if p < 0 || p >= parent.len() {
+            return -1;
+        }
+        cur = p;
+        depth = depth + 1;
+    }
+    -1
+}
+
+fn block_tree_lca_all(parent: Vec<i64>, depth: Vec<i64>, blocks: Vec<i64>) -> i64 {
+    if blocks.len() == 0 {
+        return -1;
+    }
+    let mut acc: i64 = blocks[0];
+    let mut i: i64 = 1;
+    while i < blocks.len() {
+        acc = block_tree_lca(parent, depth, acc, blocks[i]);
+        if acc < 0 {
+            return -1;
+        }
+        i = i + 1;
+    }
+    acc
+}
+
+fn block_tree_lca(parent: Vec<i64>, depth: Vec<i64>, left0: i64, right0: i64) -> i64 {
+    let mut left: i64 = left0;
+    let mut right: i64 = right0;
+    let mut left_depth: i64 = block_depth_at(depth, left);
+    let mut right_depth: i64 = block_depth_at(depth, right);
+    if left_depth < 0 || right_depth < 0 {
+        return -1;
+    }
+
+    while left_depth > right_depth {
+        left = block_parent_at(parent, left);
+        if left < 0 {
+            return -1;
+        }
+        left_depth = left_depth - 1;
+    }
+    while right_depth > left_depth {
+        right = block_parent_at(parent, right);
+        if right < 0 {
+            return -1;
+        }
+        right_depth = right_depth - 1;
+    }
+
+    while left != right {
+        left = block_parent_at(parent, left);
+        right = block_parent_at(parent, right);
+        if left < 0 || right < 0 {
+            return -1;
+        }
+    }
+    left
+}
+
+fn block_tree_is_ancestor(parent: Vec<i64>, ancestor: i64, block: i64) -> bool {
+    let mut cur: i64 = block;
+    while cur >= 0 {
+        if cur == ancestor {
+            return true;
+        }
+        cur = block_parent_at(parent, cur);
+    }
+    false
+}
+
+fn close_regions_for_block(
+    blk: IrBlock, block_regions: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>
+) -> Vec<i64> {
+    let close_regions: Vec<i64> = Vec::new();
+    let succs: Vec<i64> = linear_successors(blk);
+    let mut i: i64 = 0;
+    while i < block_regions.len() {
+        let region_block: i64 = block_regions[i];
+        if block_tree_is_ancestor(block_parent, region_block, blk.id) {
+            let mut exits_region: bool = succs.len() == 0;
+            let mut si: i64 = 0;
+            while si < succs.len() && !exits_region {
+                if !block_tree_is_ancestor(block_parent, region_block, succs[si]) {
+                    exits_region = true;
+                }
+                si = si + 1;
+            }
+            if exits_region {
+                linear_insert_i64(close_regions, region_block);
+            }
+        }
+        i = i + 1;
+    }
+    sort_block_regions_by_depth(close_regions, block_depth);
+    close_regions
+}
+
+fn sort_block_regions_by_depth(regions: Vec<i64>, depth: Vec<i64>) {
+    let n: i64 = regions.len();
+    let mut i: i64 = 1;
+    while i < n {
+        let mut j: i64 = i;
+        while j > 0 {
+            let left: i64 = regions[j - 1];
+            let right: i64 = regions[j];
+            let left_depth: i64 = block_depth_at(depth, left);
+            let right_depth: i64 = block_depth_at(depth, right);
+            if left_depth > right_depth || (left_depth == right_depth && left > right) {
+                j = 0;
+            } else {
+                regions[j - 1] = right;
+                regions[j] = left;
+                j = j - 1;
+            }
+        }
+        i = i + 1;
+    }
+}
+
+fn block_parent_at(parent: Vec<i64>, id: i64) -> i64 {
+    if id >= 0 && id < parent.len() {
+        return parent[id];
+    }
+    -2
+}
+
+fn block_depth_at(depth: Vec<i64>, id: i64) -> i64 {
+    if id >= 0 && id < depth.len() {
+        return depth[id];
+    }
+    -1
+}
+
 fn build_id_to_inst(f: IrFunction) -> Vec<IrInst> {
     let bks: Vec<IrBlock> = f.blocks;
     let mut max_id: i64 = -1;
@@ -2009,9 +2446,9 @@ fn tarjan_sccs(cg: Vec<Vec<i64>>, n: i64) -> Vec<Vec<i64>> {
 // `REGION_KIND_BLOCK` heap-producing instruction with `IOP_REGION_OPEN` /
 // `IOP_REGION_CLOSE` markers per spec §3.5 criterion 1.
 //
-// Phase 9 status: this is live for safe local block regions. It intentionally
-// does not retag `IOP_REGION_ALLOC` by itself; inference decides which values
-// are safe to place in a block region, and this pass only materializes markers.
+// This intentionally does not retag `IOP_REGION_ALLOC` by itself; inference
+// decides which values are safe to place in a block region, and this pass only
+// materializes markers.
 // ---------------------------------------------------------------------------
 
 fn insert_region_markers_module(m: IrModule) -> IrModule {
@@ -2063,50 +2500,43 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
         }
         let mut next_id: i64 = max_id + 1;
 
-        // Pass 1: collect blocks that contain a Block-tagged heap producer.
+        // Pass 1: collect concrete block regions named by heap producers.
         let block_regions: Vec<i64> = Vec::new();
         let mut bi3: i64 = 0;
         while bi3 < f.blocks.len() {
             let blk2: IrBlock = f.blocks[bi3];
             let mut ii3: i64 = 0;
-            let mut found: bool = false;
             while ii3 < blk2.insts.len() {
                 let inst3: IrInst = blk2.insts[ii3];
                 if region_kind(inst3.rgn) == REGION_KIND_BLOCK() {
-                    found = true;
+                    let rb: i64 = region_val(inst3.rgn);
+                    linear_insert_i64(block_regions, rb);
                 }
                 ii3 = ii3 + 1;
-            }
-            if found {
-                block_regions.push(blk2.id);
             }
             bi3 = bi3 + 1;
         }
 
-        // Pass 2: insert RegionOpen at start of marked blocks and
-        // RegionClose just before the terminator.
+        let block_parent: Vec<i64> = build_block_parent(f);
+        let block_depth: Vec<i64> = build_block_depth(block_parent);
+
+        // Pass 2: insert RegionOpen at each region root and RegionClose
+        // before terminators that leave that region's block-tree subtree.
         let mut bi4: i64 = 0;
         while bi4 < f.blocks.len() {
             let blk3: IrBlock = f.blocks[bi4];
-            if region_vec_contains_i64(block_regions, blk3.id) {
-                let block_rgn: i64 = region_pack(REGION_KIND_BLOCK(), blk3.id);
-
+            let close_regions: Vec<i64> = close_regions_for_block(blk3, block_regions, block_parent, block_depth);
+            let opens_here: bool = region_vec_contains_i64(block_regions, blk3.id);
+            if opens_here || close_regions.len() > 0 {
                 let mut open_inst: IrInst = ir_inst_new(
                     next_id, IOP_REGION_OPEN(), ITY_UNIT(),
                     Vec::new(), 0, 0, 0, String::from(""),
                 );
-                open_inst = ir_inst_set_region(open_inst, block_rgn);
-                next_id = next_id + 1;
+                if opens_here {
+                    open_inst = ir_inst_set_region(open_inst, region_pack(REGION_KIND_BLOCK(), blk3.id));
+                    next_id = next_id + 1;
+                }
 
-                let mut close_inst: IrInst = ir_inst_new(
-                    next_id, IOP_REGION_CLOSE(), ITY_UNIT(),
-                    Vec::new(), 0, 0, 0, String::from(""),
-                );
-                close_inst = ir_inst_set_region(close_inst, block_rgn);
-                next_id = next_id + 1;
-
-                // Find terminator position. The block always has one terminal
-                // inst at the tail; defensive scan covers a missing terminator.
                 let mut term_pos: i64 = blk3.insts.len();
                 let mut k: i64 = 0;
                 while k < blk3.insts.len() {
@@ -2118,20 +2548,46 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
                     }
                 }
 
-                // Splice: insert close before terminator first (so the open
-                // insertion at index 0 doesn't shift term_pos).
                 let mut new_insts: Vec<IrInst> = Vec::new();
-                new_insts.push(open_inst);
+                if opens_here {
+                    new_insts.push(open_inst);
+                }
                 let mut copy_i: i64 = 0;
                 while copy_i < blk3.insts.len() {
                     if copy_i == term_pos {
-                        new_insts.push(close_inst);
+                        let mut ci: i64 = 0;
+                        while ci < close_regions.len() {
+                            let mut close_inst: IrInst = ir_inst_new(
+                                next_id, IOP_REGION_CLOSE(), ITY_UNIT(),
+                                Vec::new(), 0, 0, 0, String::from(""),
+                            );
+                            close_inst = ir_inst_set_region(
+                                close_inst,
+                                region_pack(REGION_KIND_BLOCK(), close_regions[ci])
+                            );
+                            next_id = next_id + 1;
+                            new_insts.push(close_inst);
+                            ci = ci + 1;
+                        }
                     }
                     new_insts.push(blk3.insts[copy_i]);
                     copy_i = copy_i + 1;
                 }
                 if term_pos == blk3.insts.len() {
-                    new_insts.push(close_inst);
+                    let mut ci2: i64 = 0;
+                    while ci2 < close_regions.len() {
+                        let mut close_inst2: IrInst = ir_inst_new(
+                            next_id, IOP_REGION_CLOSE(), ITY_UNIT(),
+                            Vec::new(), 0, 0, 0, String::from(""),
+                        );
+                        close_inst2 = ir_inst_set_region(
+                            close_inst2,
+                            region_pack(REGION_KIND_BLOCK(), close_regions[ci2])
+                        );
+                        next_id = next_id + 1;
+                        new_insts.push(close_inst2);
+                        ci2 = ci2 + 1;
+                    }
                 }
                 blk3.insts = new_insts;
                 f.blocks[bi4] = blk3;

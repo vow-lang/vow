@@ -97,6 +97,14 @@ fn ity_to_cranelift(ty: i64) -> Option<types::Type> {
     }
 }
 
+fn signature_return_ty(ret_ty: i64, is_main: bool) -> Option<types::Type> {
+    if is_main && ret_ty == ITY_UNIT {
+        Some(types::I32)
+    } else {
+        ity_to_cranelift(ret_ty)
+    }
+}
+
 const IOP_CONST_I32: i64 = 0;
 const IOP_CONST_I64: i64 = 1;
 const IOP_CONST_F32: i64 = 2;
@@ -521,7 +529,7 @@ pub unsafe extern "C" fn __vow_clif_declare_function(
             sig.params.push(AbiParam::new(cl_ty));
         }
     }
-    if let Some(cl_ty) = ity_to_cranelift(ret_ty) {
+    if let Some(cl_ty) = signature_return_ty(ret_ty, is_main != 0) {
         sig.returns.push(AbiParam::new(cl_ty));
     }
 
@@ -882,7 +890,8 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
             sig.params.push(AbiParam::new(cl_ty));
         }
     }
-    if let Some(cl_ty) = ity_to_cranelift(ret_ty) {
+    let is_main = ctx.func_decls[fi].is_main;
+    if let Some(cl_ty) = signature_return_ty(ret_ty, is_main) {
         sig.returns.push(AbiParam::new(cl_ty));
     }
 
@@ -1650,7 +1659,12 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                         builder.ins().call(se_ref, &[]);
                     }
                     if ret_ty == ITY_UNIT {
-                        builder.ins().return_(&[]);
+                        if is_main {
+                            let zero = builder.ins().iconst(types::I32, 0);
+                            builder.ins().return_(&[zero]);
+                        } else {
+                            builder.ins().return_(&[]);
+                        }
                     } else if alen > 0 {
                         let val_id = all_args[aoff];
                         if let Some(&val) = value_map.get(&val_id) {

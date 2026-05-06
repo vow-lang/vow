@@ -258,14 +258,13 @@ fn add(a: i64, b: i64) -> i64 vow {
 **Phase:** Region Inference (arena-per-scope, Phase 3)
 **Meaning:** A heap-typed value's required lifetime cannot be satisfied by the regions the surrounding code provides. This fires when an interprocedural store-effect constraint is unsatisfiable — for example, a value allocated in an inner block is stored into a container that outlives that block.
 
-> **Coverage note (as of Phase 5):** the alloc→param-via-callee shape is
+> **Coverage note (as of issue #289):** the alloc→param-via-callee shape is
 > detected and emits this code with `Blame: Callee` and a hint pointing
 > at the three resolution strategies (copy into outer arena, hoist the
 > allocation, or restructure the data flow). Cross-parameter cases that
-> require a published store-effect, Phi-of-mixed-origins, and the full
-> block-tree LUB stay deferred to Phase 9 (issue #204). The spec shape
-> below is stable; the residual cases above silently promote to a
-> conservative `Root` region today rather than emitting a diagnostic.
+> require a published store-effect and Phi-of-mixed-origins remain partial.
+> Concrete block-marker sets now use the block-tree LUB from spec §4.1
+> step 3; they no longer silently promote to `Root`.
 
 ```vow
 fn store_into(out: Vec<String>, prefix: String) [io] {

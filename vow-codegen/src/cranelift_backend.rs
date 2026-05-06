@@ -169,6 +169,14 @@ fn ir_ty_to_cranelift(ty: IrTy) -> Option<types::Type> {
     }
 }
 
+fn signature_return_ty(ir_func: &IrFunction) -> Option<types::Type> {
+    if ir_func.name == "main" && ir_func.return_ty == IrTy::Unit {
+        Some(types::I32)
+    } else {
+        ir_ty_to_cranelift(ir_func.return_ty)
+    }
+}
+
 fn build_signature(ir_func: &IrFunction, call_conv: cranelift_codegen::isa::CallConv) -> Signature {
     let mut sig = Signature::new(call_conv);
     for &param_ty in &ir_func.params {
@@ -179,7 +187,7 @@ fn build_signature(ir_func: &IrFunction, call_conv: cranelift_codegen::isa::Call
     for _ in 0..hidden_region_param_count(ir_func) {
         sig.params.push(AbiParam::new(types::I64));
     }
-    if let Some(cl_ty) = ir_ty_to_cranelift(ir_func.return_ty) {
+    if let Some(cl_ty) = signature_return_ty(ir_func) {
         sig.returns.push(AbiParam::new(cl_ty));
     }
     sig
@@ -888,7 +896,12 @@ fn lower_inst(
                 builder.ins().call(se_ref, &[]);
             }
             if ctx.return_ty == IrTy::Unit {
-                builder.ins().return_(&[]);
+                if ctx.ir_func.name == "main" {
+                    let zero = builder.ins().iconst(types::I32, 0);
+                    builder.ins().return_(&[zero]);
+                } else {
+                    builder.ins().return_(&[]);
+                }
             } else if let Some(&val_id) = inst.args.first() {
                 if let Some(&val) = ctx.value_map.get(&val_id) {
                     // Phase 4 / S5 return materialization (spec §5.1).
