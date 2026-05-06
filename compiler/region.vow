@@ -1100,6 +1100,11 @@ fn direct_markers_stay_in_block(
                         ) {
                             return false;
                         }
+                        // Stored values must follow later widening of their
+                        // target container. The target-marker check above
+                        // handles the target's origin; the work item catches
+                        // use-derived widening such as returning the target.
+                        push_region_work(work, seen, inst.args[0]);
                     }
                     if inst.op == IOP_UPSILON() && ai == 0 && inst.dk == IDATA_PHI_TARGET() {
                         let phi_block: i64 = lookup_inst_block(id_to_block, inst.dv);
@@ -1119,6 +1124,8 @@ fn direct_markers_stay_in_block(
                             int_se_targets,
                             int_se_src_kinds,
                             int_se_src_aux,
+                            work,
+                            seen,
                             defining_block
                         ) {
                             return false;
@@ -1177,6 +1184,7 @@ fn call_store_effects_keep_source_in_block(
     call_inst: IrInst, source_arg_pos: i64,
     id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, int_kinds: Vec<i64>,
     int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>,
+    work: Vec<i64>, seen: Vec<i64>,
     defining_block: i64
 ) -> bool {
     let callee_idx: i64 = call_inst.dv;
@@ -1200,6 +1208,7 @@ fn call_store_effects_keep_source_in_block(
                 ) {
                     return false;
                 }
+                push_region_work(work, seen, call_inst.args[target_param]);
             }
         } else if kinds[i] == RSUM_KIND_ALIAS_OF_ANY() {
             return false;
