@@ -88,13 +88,16 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
     // this cache it drops to ~2s. See #252 for the BTreeMap stdlib that
     // would replace this Vec<IrInst>-indexed-by-id workaround.
     let id_to_inst_per_fn: Vec<Vec<IrInst>> = Vec::new();
+    let id_to_block_per_fn: Vec<Vec<i64>> = Vec::new();
     let phi_arms_per_fn: Vec<Vec<Vec<i64>>> = Vec::new();
     let mut bxi: i64 = 0;
     while bxi < n_funcs {
         let f0: IrFunction = m.functions[bxi];
         let it: Vec<IrInst> = build_id_to_inst(f0);
+        let ib: Vec<i64> = build_id_to_block(f0, it.len());
         let pa: Vec<Vec<i64>> = build_phi_arms(f0, it.len());
         id_to_inst_per_fn.push(it);
+        id_to_block_per_fn.push(ib);
         phi_arms_per_fn.push(pa);
         bxi = bxi + 1;
     }
@@ -131,7 +134,7 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
                 let fidx: i64 = scc[ii];
                 let did_change: bool = analyze_function(
                     m, fidx,
-                    id_to_inst_per_fn[fidx], phi_arms_per_fn[fidx],
+                    id_to_inst_per_fn[fidx], id_to_block_per_fn[fidx], phi_arms_per_fn[fidx],
                     int_kinds, int_auxs, int_aliases_list,
                     int_se_targets, int_se_src_kinds, int_se_src_aux, int_se_src_aliases,
                     region_keys, region_vals,
@@ -860,7 +863,7 @@ fn check_store_conflict(
 // Returns true if the function's internal summary changed.
 fn analyze_function(
     m: IrModule, fidx: i64,
-    id_to_inst: Vec<IrInst>, phi_arms: Vec<Vec<i64>>,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, phi_arms: Vec<Vec<i64>>,
     int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
     int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>,
     int_se_src_aux: Vec<Vec<i64>>, int_se_src_aliases: Vec<Vec<Vec<i64>>>,
@@ -929,21 +932,25 @@ fn analyze_function(
         bi = bi + 1;
     }
 
-    // Tag local heap-producing instructions with block regions when all direct
-    // uses stay in the defining block. The self-hosted Phase 9 subset routes
-    // three cases through `REGION_KIND_BLOCK`: `IOP_REGION_ALLOC`, FreshInCaller
-    // extern wrappers, and `IOP_CALL` + `IDATA_CALL_TARGET` whose callee
-    // summary is `FRESH_IN_CALLER`. The block-region tag uses
-    // `REGION_KIND_BLOCK`, not `REGION_KIND_CALLER`, so the shim's pending
-    // hidden-caller-region work is irrelevant here.
+    // 2. Tag heap-producing instructions whose per-destination marker LUB
+    // stays in the defining block. This mirrors the Rust pass's marker model
+    // without materializing a must_outlive set for every value: for each heap
+    // producer, scan its direct uses plus Phi/call return-alias users and
+    // reject the block placement as soon as any marker would LUB wider than
+    // the defining block. That keeps stage-2 bootstrap from allocating the
+    // full marker lattice inside the self-hosted arena.
     let mut rbi: i64 = 0;
     while rbi < n_bks {
         let rb: IrBlock = bks[rbi];
         let mut rii: i64 = 0;
         while rii < rb.insts.len() {
             let rinst: IrInst = rb.insts[rii];
-            if is_heap_producing_for_block_region(rinst, int_kinds)
-                && value_used_only_in_block(f, rinst.id, rb.id)
+            if is_heap_producing_for_region(rinst, int_kinds)
+                && value_lub_stays_in_block(
+                    f, rinst.id, rb.id, id_to_inst, id_to_block,
+                    int_kinds, int_auxs, int_aliases_list,
+                    int_se_targets, int_se_src_kinds, int_se_src_aux,
+                )
             {
                 put_inst_region(
                     region_keys[fidx],
@@ -999,7 +1006,7 @@ fn analyze_function(
     false
 }
 
-fn is_heap_producing_for_block_region(inst: IrInst, int_kinds: Vec<i64>) -> bool {
+fn is_heap_producing_for_region(inst: IrInst, int_kinds: Vec<i64>) -> bool {
     if inst.op == IOP_REGION_ALLOC() {
         return true;
     }
@@ -1015,18 +1022,57 @@ fn is_heap_producing_for_block_region(inst: IrInst, int_kinds: Vec<i64>) -> bool
     false
 }
 
-// TODO(scalability, follow-up to #204): this is O(blocks × insts × args)
-// per call, and `analyze_function` invokes it once per heap-producing
-// inst. Rough total per function: O(h × n) where h = heap producers,
-// n = total insts. The Rust pass achieves the same effect in O(n) by
-// folding all uses into a `must_outlive` map in a single forward sweep
-// (`collect_regular_use_markers` at vow-ir/src/region.rs:909-926) and
-// then reading per-id markers in O(markers) per producer. That refactor
-// is structural — it would change the analyze_function signature and
-// touch the bootstrap fixed point — and is intentionally deferred so
-// this PR stays scoped to Phase 9 routing. See CLAUDE.md "Scalability is
-// a requirement" for the long-term direction.
-fn value_used_only_in_block(f: IrFunction, id: i64, defining_block: i64) -> bool {
+fn lookup_inst_block(id_to_block: Vec<i64>, id: i64) -> i64 {
+    if id >= 0 && id < id_to_block.len() {
+        return id_to_block[id];
+    }
+    -1
+}
+
+fn value_lub_stays_in_block(
+    f: IrFunction, id: i64, defining_block: i64,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>,
+    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
+    int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>
+) -> bool {
+    let work: Vec<i64> = Vec::new();
+    let seen: Vec<i64> = Vec::new();
+    work.push(id);
+    while work.len() > 0 {
+        let cur: i64 = work[work.len() - 1];
+        work.pop();
+        if region_vec_contains_i64(seen, cur) {
+            continue;
+        }
+        seen.push(cur);
+        if !direct_markers_stay_in_block(
+            f,
+            cur,
+            defining_block,
+            id_to_inst,
+            id_to_block,
+            int_kinds,
+            int_auxs,
+            int_aliases_list,
+            int_se_targets,
+            int_se_src_kinds,
+            int_se_src_aux,
+            work,
+            seen
+        ) {
+            return false;
+        }
+    }
+    true
+}
+
+fn direct_markers_stay_in_block(
+    f: IrFunction, id: i64, defining_block: i64,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>,
+    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
+    int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>,
+    work: Vec<i64>, seen: Vec<i64>
+) -> bool {
     let bks: Vec<IrBlock> = f.blocks;
     let mut bi: i64 = 0;
     while bi < bks.len() {
@@ -1037,16 +1083,55 @@ fn value_used_only_in_block(f: IrFunction, id: i64, defining_block: i64) -> bool
             let mut ai: i64 = 0;
             while ai < inst.args.len() {
                 if inst.args[ai] == id {
+                    // Every argument use contributes the use-block marker.
                     if blk.id != defining_block {
                         return false;
                     }
-                    if inst.op == IOP_RETURN()
-                        || inst.op == IOP_UPSILON()
-                        || inst.op == IOP_CALL()
-                        || inst.op == IOP_STORE()
-                        || inst.op == IOP_FIELD_SET()
-                    {
+                    if inst.op == IOP_RETURN() {
                         return false;
+                    }
+                    if (inst.op == IOP_STORE() || inst.op == IOP_FIELD_SET()) && ai == 1 {
+                        if !target_marker_is_defining_block(
+                            id_to_inst,
+                            id_to_block,
+                            inst.args[0],
+                            int_kinds,
+                            defining_block
+                        ) {
+                            return false;
+                        }
+                    }
+                    if inst.op == IOP_UPSILON() && ai == 0 && inst.dk == IDATA_PHI_TARGET() {
+                        let phi_block: i64 = lookup_inst_block(id_to_block, inst.dv);
+                        if phi_block != defining_block {
+                            return false;
+                        }
+                        push_region_work(work, seen, inst.dv);
+                    }
+                    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
+                        let callee_idx: i64 = inst.dv;
+                        if !call_store_effects_keep_source_in_block(
+                            inst,
+                            ai,
+                            id_to_inst,
+                            id_to_block,
+                            int_kinds,
+                            int_se_targets,
+                            int_se_src_kinds,
+                            int_se_src_aux,
+                            defining_block
+                        ) {
+                            return false;
+                        }
+                        if callee_return_aliases_arg(
+                            callee_idx,
+                            ai,
+                            int_kinds,
+                            int_auxs,
+                            int_aliases_list
+                        ) {
+                            push_region_work(work, seen, inst.id);
+                        }
                     }
                 }
                 ai = ai + 1;
@@ -1058,10 +1143,89 @@ fn value_used_only_in_block(f: IrFunction, id: i64, defining_block: i64) -> bool
     true
 }
 
-// Currently unused (intentional scaffolding). Becomes live once the
-// `vow-clif-shim` learns hidden-caller-region routing for `IOP_REGION_ALLOC`.
-// Until then, escaping allocations stay at the Phase-2 default (Root) — see
-// the comment in `analyze_function` where these would otherwise be wired.
+fn push_region_work(work: Vec<i64>, seen: Vec<i64>, id: i64) {
+    if id < 0 {
+        return;
+    }
+    if region_vec_contains_i64(seen, id) {
+        return;
+    }
+    if region_vec_contains_i64(work, id) {
+        return;
+    }
+    work.push(id);
+}
+
+fn target_marker_is_defining_block(
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, target_id: i64,
+    int_kinds: Vec<i64>, defining_block: i64
+) -> bool {
+    let inst: IrInst = lookup_inst_or_default(id_to_inst, target_id);
+    if inst.id < 0 {
+        return false;
+    }
+    if inst.op == IOP_GET_ARG() {
+        return false;
+    }
+    if is_heap_producing_for_region(inst, int_kinds) {
+        return lookup_inst_block(id_to_block, target_id) == defining_block;
+    }
+    false
+}
+
+fn call_store_effects_keep_source_in_block(
+    call_inst: IrInst, source_arg_pos: i64,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, int_kinds: Vec<i64>,
+    int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>,
+    defining_block: i64
+) -> bool {
+    let callee_idx: i64 = call_inst.dv;
+    if callee_idx < 0 || callee_idx >= int_se_targets.len() {
+        return true;
+    }
+    let targets: Vec<i64> = int_se_targets[callee_idx];
+    let kinds: Vec<i64> = int_se_src_kinds[callee_idx];
+    let auxs: Vec<i64> = int_se_src_aux[callee_idx];
+    let mut i: i64 = 0;
+    while i < targets.len() && i < kinds.len() && i < auxs.len() {
+        if kinds[i] == RSUM_KIND_ALIAS_OF() && auxs[i] == source_arg_pos {
+            let target_param: i64 = targets[i];
+            if target_param >= 0 && target_param < call_inst.args.len() {
+                if !target_marker_is_defining_block(
+                    id_to_inst,
+                    id_to_block,
+                    call_inst.args[target_param],
+                    int_kinds,
+                    defining_block
+                ) {
+                    return false;
+                }
+            }
+        } else if kinds[i] == RSUM_KIND_ALIAS_OF_ANY() {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+fn callee_return_aliases_arg(
+    callee_idx: i64, arg_pos: i64,
+    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>
+) -> bool {
+    if callee_idx < 0 || callee_idx >= int_kinds.len() {
+        return false;
+    }
+    if int_kinds[callee_idx] == RSUM_KIND_ALIAS_OF() {
+        return int_auxs[callee_idx] == arg_pos;
+    }
+    if int_kinds[callee_idx] == RSUM_KIND_ALIAS_OF_ANY() {
+        let aliases: Vec<i64> = int_aliases_list[callee_idx];
+        return region_vec_contains_i64(aliases, arg_pos);
+    }
+    false
+}
+
 fn region_caller0() -> i64 {
     // RegionId::Caller(HiddenRegionIdx(0)) packed: kind=CALLER, val=0.
     region_pack(REGION_KIND_CALLER(), 0)
@@ -1089,6 +1253,7 @@ fn is_scalar_ity(ty: i64) -> bool {
 //
 // `id_to_inst[id]` is the inst with `inst.id == id`, or a sentinel
 // (`inst.id < 0`) when no such inst exists in the function.
+// `id_to_block[id]` is the block containing that inst, or -1 for no inst.
 // `phi_arms[id]` is the list of upsilon-arm value ids targeting the
 // phi with `phi.id == id`; empty for non-phi ids.
 fn build_id_to_inst(f: IrFunction) -> Vec<IrInst> {
@@ -1124,6 +1289,30 @@ fn build_id_to_inst(f: IrFunction) -> Vec<IrInst> {
             ii = ii + 1;
         }
         bi2 = bi2 + 1;
+    }
+    tbl
+}
+
+fn build_id_to_block(f: IrFunction, n_ids: i64) -> Vec<i64> {
+    let tbl: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n_ids {
+        tbl.push(-1);
+        i = i + 1;
+    }
+    let bks: Vec<IrBlock> = f.blocks;
+    let mut bi: i64 = 0;
+    while bi < bks.len() {
+        let blk: IrBlock = bks[bi];
+        let mut ii: i64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.id >= 0 && inst.id < n_ids {
+                tbl[inst.id] = blk.id;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
     }
     tbl
 }

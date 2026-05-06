@@ -783,13 +783,9 @@ fn handle_inst(
         Opcode::Store | Opcode::FieldSet
             // Store/FieldSet: source must outlive target's region. We model
             // this as: source's must_outlive includes the region of the
-            // target. For Phase 3 the target's region is approximated by
-            // tracing it back to its definition (parameter, alloc, etc.).
-            //
-            // For now we conservatively add the target's *containing block*
-            // region as a marker on the source, surfacing
-            // RegionConflict only when the source's region statically
-            // strictly outlives the target.
+            // target. Unknown/root-pinned targets still fall back to Root;
+            // local heap targets and parameter targets get their precise
+            // marker.
             if inst.args.len() >= 2 => {
                 // IR convention for Store / FieldSet: args = [target, source].
                 // - Store: codegen emits `store(value=arg!(1), address=arg!(0))`
@@ -800,9 +796,11 @@ fn handle_inst(
                 // source (value being stored).
                 let target_id = inst.args[0];
                 let source_id = inst.args[1];
-                if let Some(target_block) = trace_target_block(target_id, inst_lookup) {
-                    add_marker(must_outlive, source_id, MustOutliveMarker::Block(target_block));
-                }
+                add_marker(
+                    must_outlive,
+                    source_id,
+                    target_region_marker(target_id, inst_lookup, summaries),
+                );
                 // If the target traces to a parameter, record a store_effect.
                 if let Some(target_param) = trace_param(target_id, inst_lookup) {
                     let source_origin = trace_origin(source_id, inst_lookup);
@@ -812,6 +810,18 @@ fn handle_inst(
                         .insert((target_param, InternalReturnRegion::Published(source_constraint)));
                 }
             }
+        Opcode::Upsilon => {
+            if let InstData::PhiTarget(target_phi) = inst.data
+                && let Some(&source_id) = inst.args.first()
+                && let Some((target_block, _)) = inst_lookup.get(&target_phi)
+            {
+                add_marker(
+                    must_outlive,
+                    source_id,
+                    MustOutliveMarker::Block(*target_block),
+                );
+            }
+        }
         Opcode::Call => {
             // Look up callee summary and apply store-effects + return aliasing.
             let callee_summary: Option<&InternalSummary> = if let InstData::CallTarget(callee_id) =
@@ -824,10 +834,10 @@ fn handle_inst(
 
             if let Some(cs) = callee_summary {
                 // Apply store_effects: for each (target, source) effect on
-                // the callee, the caller's argument at position `target`
-                // receives values constrained by `source`. If `source` aliases
-                // a callee parameter, propagate the corresponding caller
-                // argument's must_outlive contribution back to the target arg.
+                // the callee, values constrained by `source` are stored into
+                // the region of argument `target`. If `source` aliases a callee
+                // parameter, make the corresponding caller source argument
+                // inherit the caller target argument's region marker.
                 for (target_param, source_constraint) in &cs.store_effects {
                     let target_idx = *target_param as usize;
                     if target_idx >= inst.args.len() {
@@ -840,6 +850,11 @@ fn handle_inst(
                             let p_idx = *p as usize;
                             if p_idx < inst.args.len() {
                                 let source_arg_id = inst.args[p_idx];
+                                add_marker(
+                                    must_outlive,
+                                    source_arg_id,
+                                    target_region_marker(target_arg_id, inst_lookup, summaries),
+                                );
                                 // target must outlive source — if conflict, emit.
                                 check_store_conflict(
                                     source_file,
@@ -851,12 +866,7 @@ fn handle_inst(
                                 );
                             }
                         }
-                        InternalReturnRegion::Published(RegionConstraint::FreshInCaller) => {
-                            // Callee allocates fresh and stores into target. Caller
-                            // must place the alloc in target's region; mark target
-                            // for downstream LUB.
-                            add_marker(must_outlive, target_arg_id, MustOutliveMarker::VirtualCaller);
-                        }
+                        InternalReturnRegion::Published(RegionConstraint::FreshInCaller) => {}
                         _ => {}
                     }
                 }
@@ -906,12 +916,6 @@ fn collect_regular_use_markers(
         for inst in &block.insts {
             for &arg_id in &inst.args {
                 add_marker(must_outlive, arg_id, MustOutliveMarker::Block(block.id));
-                if matches!(
-                    inst.opcode,
-                    Opcode::Call | Opcode::Store | Opcode::FieldSet | Opcode::Upsilon
-                ) {
-                    add_marker(must_outlive, arg_id, MustOutliveMarker::Root);
-                }
             }
         }
     }
@@ -1272,11 +1276,19 @@ fn trace_origin(id: InstId, inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>) ->
     }
 }
 
-fn trace_target_block(
+fn target_region_marker(
     id: InstId,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
-) -> Option<BlockId> {
-    inst_lookup.get(&id).map(|(b, _)| *b)
+    summaries: &[InternalSummary],
+) -> MustOutliveMarker {
+    let Some((block_id, inst)) = inst_lookup.get(&id) else {
+        return MustOutliveMarker::Root;
+    };
+    match inst.opcode {
+        Opcode::GetArg => MustOutliveMarker::VirtualCaller,
+        _ if is_heap_producing(inst, summaries) => MustOutliveMarker::Block(*block_id),
+        _ => MustOutliveMarker::Root,
+    }
 }
 
 fn trace_param(id: InstId, inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>) -> Option<u32> {
@@ -2244,6 +2256,258 @@ mod tests {
             call.region,
             RegionId::Block(BlockId(0)),
             "FreshInCaller call result should allocate in the caller's local block"
+        );
+    }
+
+    #[test]
+    fn field_set_into_local_alloc_keeps_source_in_target_block() {
+        let insts = vec![
+            inst(
+                0,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                1,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                2,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![0, 1],
+                InstData::FieldIndex(0),
+            ),
+            inst(3, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+        ];
+        let f = function(0, "field_store", vec![], Ty::I64, vec![block(0, insts)]);
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        let source = &m.functions[0].blocks[0].insts[1];
+        assert_eq!(
+            source.region,
+            RegionId::Block(BlockId(0)),
+            "source stored into a local target should inherit the target's block region"
+        );
+    }
+
+    #[test]
+    fn store_into_local_alloc_keeps_source_in_target_block() {
+        let insts = vec![
+            inst(
+                0,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                1,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(2, Opcode::Store, Ty::Unit, vec![0, 1], InstData::None),
+            inst(3, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+        ];
+        let f = function(0, "store_local", vec![], Ty::I64, vec![block(0, insts)]);
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        let source = &m.functions[0].blocks[0].insts[1];
+        assert_eq!(
+            source.region,
+            RegionId::Block(BlockId(0)),
+            "source stored into a local target should inherit the target's block region"
+        );
+    }
+
+    #[test]
+    fn store_into_param_routes_source_to_caller_region() {
+        let insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(
+                1,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(2, Opcode::Store, Ty::Unit, vec![0, 1], InstData::None),
+            inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(
+            0,
+            "store_param",
+            vec![Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        let source = &m.functions[0].blocks[0].insts[1];
+        assert_eq!(
+            source.region,
+            RegionId::Caller(HiddenRegionIdx(0)),
+            "source stored into a parameter target must outlive this function"
+        );
+    }
+
+    #[test]
+    fn upsilon_source_inherits_phi_target_block() {
+        let phi_id = 10u32;
+        let b0_insts = vec![
+            inst(
+                0,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                1,
+                Opcode::Upsilon,
+                Ty::Unit,
+                vec![0],
+                InstData::PhiTarget(InstId(phi_id)),
+            ),
+            inst(
+                2,
+                Opcode::Jump,
+                Ty::Unit,
+                vec![],
+                InstData::JumpTarget(BlockId(1)),
+            ),
+        ];
+        let b1_insts = vec![
+            inst(phi_id, Opcode::Phi, Ty::Ptr, vec![], InstData::None),
+            inst(11, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(12, Opcode::Return, Ty::Unit, vec![11], InstData::None),
+        ];
+        let f = function(
+            0,
+            "upsilon_target",
+            vec![],
+            Ty::I64,
+            vec![block(0, b0_insts), block(1, b1_insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        let source = &m.functions[0].blocks[0].insts[0];
+        assert_eq!(
+            source.region,
+            RegionId::Root,
+            "source feeding a Phi in another block must inherit the Phi block marker"
+        );
+    }
+
+    #[test]
+    fn store_into_root_pinned_target_routes_source_to_root() {
+        let insts = vec![
+            inst(
+                0,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                1,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0],
+                InstData::CallExtern("__vow_string_pin_to_root".to_string()),
+            ),
+            inst(
+                2,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(3, Opcode::Store, Ty::Unit, vec![1, 2], InstData::None),
+            inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
+        ];
+        let f = function(0, "store_root", vec![], Ty::I64, vec![block(0, insts)]);
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        let source = &m.functions[0].blocks[0].insts[2];
+        assert_eq!(
+            source.region,
+            RegionId::Root,
+            "source stored into a root-pinned target must route to Root"
+        );
+    }
+
+    #[test]
+    fn callee_store_effect_routes_source_arg_to_target_marker() {
+        let callee_insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(2, Opcode::Store, Ty::Unit, vec![0, 1], InstData::None),
+            inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let callee = function(
+            0,
+            "copy_param",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, callee_insts)],
+        );
+
+        let caller_insts = vec![
+            inst(
+                4,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                5,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![4],
+                InstData::CallExtern("__vow_string_pin_to_root".to_string()),
+            ),
+            inst(
+                6,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                7,
+                Opcode::Call,
+                Ty::Unit,
+                vec![5, 6],
+                InstData::CallTarget(FuncId(0)),
+            ),
+            inst(8, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let caller = function(1, "caller", vec![], Ty::Unit, vec![block(0, caller_insts)]);
+        let mut m = module(vec![callee, caller]);
+        infer_regions(&mut m);
+
+        let source = &m.functions[1].blocks[0].insts[2];
+        assert_eq!(
+            source.region,
+            RegionId::Root,
+            "caller source arg should inherit the callee store-effect target marker"
         );
     }
 
