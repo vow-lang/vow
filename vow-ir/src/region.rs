@@ -369,6 +369,281 @@ fn block_successors(block: &crate::types::BasicBlock) -> Vec<BlockId> {
     }
 }
 
+#[derive(Debug, Clone)]
+struct BlockTree {
+    parent: BTreeMap<BlockId, Option<BlockId>>,
+    depth: BTreeMap<BlockId, u32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BlockDfsFrame {
+    Enter(BlockId, usize),
+    Exit(BlockId),
+}
+
+impl BlockTree {
+    fn from_function(func: &Function) -> Self {
+        let blocks: BTreeMap<BlockId, &crate::types::BasicBlock> =
+            func.blocks.iter().map(|block| (block.id, block)).collect();
+        let mut forward_successors: BTreeMap<BlockId, BTreeSet<BlockId>> = blocks
+            .keys()
+            .copied()
+            .map(|id| (id, BTreeSet::new()))
+            .collect();
+        let mut visited = BTreeSet::new();
+        let mut on_stack = BTreeSet::new();
+        let mut component: BTreeMap<BlockId, usize> = BTreeMap::new();
+        let mut roots: Vec<BlockId> = Vec::new();
+
+        if let Some(entry) = func.blocks.first() {
+            Self::visit_root(
+                entry.id,
+                roots.len(),
+                &blocks,
+                &mut visited,
+                &mut on_stack,
+                &mut component,
+                &mut forward_successors,
+            );
+            roots.push(entry.id);
+        }
+
+        for block in &func.blocks {
+            if !visited.contains(&block.id) {
+                Self::visit_root(
+                    block.id,
+                    roots.len(),
+                    &blocks,
+                    &mut visited,
+                    &mut on_stack,
+                    &mut component,
+                    &mut forward_successors,
+                );
+                roots.push(block.id);
+            }
+        }
+
+        let mut tree = Self {
+            parent: Self::dominance_parent(&blocks, &forward_successors, &component, &roots),
+            depth: BTreeMap::new(),
+        };
+        for &block in blocks.keys() {
+            tree.depth.insert(block, tree.compute_depth(block));
+        }
+        tree
+    }
+
+    fn visit_root(
+        root: BlockId,
+        comp: usize,
+        blocks: &BTreeMap<BlockId, &crate::types::BasicBlock>,
+        visited: &mut BTreeSet<BlockId>,
+        on_stack: &mut BTreeSet<BlockId>,
+        component: &mut BTreeMap<BlockId, usize>,
+        forward_successors: &mut BTreeMap<BlockId, BTreeSet<BlockId>>,
+    ) {
+        let mut stack = vec![BlockDfsFrame::Enter(root, comp)];
+        while let Some(frame) = stack.pop() {
+            match frame {
+                BlockDfsFrame::Enter(id, comp) => {
+                    if visited.contains(&id) {
+                        continue;
+                    }
+                    let Some(block) = blocks.get(&id) else {
+                        continue;
+                    };
+                    visited.insert(id);
+                    on_stack.insert(id);
+                    component.insert(id, comp);
+                    stack.push(BlockDfsFrame::Exit(id));
+
+                    let mut succs = block_successors(block);
+                    succs.sort_unstable();
+                    succs.dedup();
+                    for succ in succs.into_iter().rev() {
+                        if !blocks.contains_key(&succ) {
+                            continue;
+                        }
+                        if on_stack.contains(&succ) {
+                            continue;
+                        }
+                        if component
+                            .get(&succ)
+                            .is_some_and(|&succ_comp| succ_comp != comp)
+                        {
+                            continue;
+                        }
+                        forward_successors.entry(id).or_default().insert(succ);
+                        if !visited.contains(&succ) {
+                            stack.push(BlockDfsFrame::Enter(succ, comp));
+                        }
+                    }
+                }
+                BlockDfsFrame::Exit(id) => {
+                    on_stack.remove(&id);
+                }
+            }
+        }
+    }
+
+    fn dominance_parent(
+        blocks: &BTreeMap<BlockId, &crate::types::BasicBlock>,
+        forward_successors: &BTreeMap<BlockId, BTreeSet<BlockId>>,
+        component: &BTreeMap<BlockId, usize>,
+        roots: &[BlockId],
+    ) -> BTreeMap<BlockId, Option<BlockId>> {
+        let mut predecessors: BTreeMap<BlockId, Vec<BlockId>> =
+            blocks.keys().copied().map(|id| (id, Vec::new())).collect();
+        for (&pred, succs) in forward_successors {
+            for &succ in succs {
+                predecessors.entry(succ).or_default().push(pred);
+            }
+        }
+        for preds in predecessors.values_mut() {
+            preds.sort_unstable();
+            preds.dedup();
+        }
+
+        let mut by_component: BTreeMap<usize, Vec<BlockId>> = BTreeMap::new();
+        for (&block, &comp) in component {
+            by_component.entry(comp).or_default().push(block);
+        }
+
+        let mut parent: BTreeMap<BlockId, Option<BlockId>> = BTreeMap::new();
+        for (comp, mut nodes) in by_component {
+            nodes.sort_unstable();
+            let Some(&root) = roots.get(comp) else {
+                continue;
+            };
+            let all_nodes: BTreeSet<BlockId> = nodes.iter().copied().collect();
+            let mut dom: BTreeMap<BlockId, BTreeSet<BlockId>> = BTreeMap::new();
+            for &node in &nodes {
+                if node == root {
+                    dom.insert(node, BTreeSet::from([node]));
+                } else {
+                    dom.insert(node, all_nodes.clone());
+                }
+            }
+
+            let bound = nodes.len().saturating_mul(nodes.len().max(1)).max(1);
+            for _ in 0..bound {
+                let mut changed = false;
+                for &node in &nodes {
+                    if node == root {
+                        continue;
+                    }
+                    let preds: Vec<BlockId> = predecessors
+                        .get(&node)
+                        .into_iter()
+                        .flat_map(|ps| ps.iter().copied())
+                        .filter(|pred| component.get(pred) == Some(&comp))
+                        .collect();
+                    let mut pred_iter = preds.into_iter();
+                    let mut new_dom = if let Some(first_pred) = pred_iter.next() {
+                        dom.get(&first_pred).cloned().unwrap_or_default()
+                    } else {
+                        BTreeSet::new()
+                    };
+                    for pred in pred_iter {
+                        let pred_dom = dom.get(&pred).cloned().unwrap_or_default();
+                        new_dom = new_dom.intersection(&pred_dom).copied().collect();
+                    }
+                    new_dom.insert(node);
+                    if dom.get(&node) != Some(&new_dom) {
+                        dom.insert(node, new_dom);
+                        changed = true;
+                    }
+                }
+                if !changed {
+                    break;
+                }
+            }
+
+            for &node in &nodes {
+                if node == root {
+                    parent.insert(node, None);
+                    continue;
+                }
+                let mut strict_doms = dom.get(&node).cloned().unwrap_or_default();
+                strict_doms.remove(&node);
+                let idom = strict_doms
+                    .into_iter()
+                    .max_by_key(|candidate| dom.get(candidate).map(|s| s.len()).unwrap_or(0));
+                parent.insert(node, idom);
+            }
+        }
+
+        parent
+    }
+
+    fn compute_depth(&self, block: BlockId) -> u32 {
+        let mut depth = 0u32;
+        let mut seen = BTreeSet::new();
+        let mut cur = block;
+        while seen.insert(cur) {
+            let Some(parent) = self.parent.get(&cur).copied().flatten() else {
+                return depth;
+            };
+            depth = depth.saturating_add(1);
+            cur = parent;
+        }
+        0
+    }
+
+    fn lca_all(&self, blocks: &[BlockId]) -> Option<BlockId> {
+        let (&first, rest) = blocks.split_first()?;
+        let mut acc = first;
+        for &block in rest {
+            acc = self.lca(acc, block)?;
+        }
+        Some(acc)
+    }
+
+    fn lca(&self, mut left: BlockId, mut right: BlockId) -> Option<BlockId> {
+        let mut left_depth = *self.depth.get(&left)?;
+        let mut right_depth = *self.depth.get(&right)?;
+
+        while left_depth > right_depth {
+            left = self.parent.get(&left).copied().flatten()?;
+            left_depth -= 1;
+        }
+        while right_depth > left_depth {
+            right = self.parent.get(&right).copied().flatten()?;
+            right_depth -= 1;
+        }
+
+        while left != right {
+            let left_parent = self.parent.get(&left).copied().flatten();
+            let right_parent = self.parent.get(&right).copied().flatten();
+            match (left_parent, right_parent) {
+                (Some(l), Some(r)) => {
+                    left = l;
+                    right = r;
+                }
+                _ => return None,
+            }
+        }
+
+        Some(left)
+    }
+
+    fn is_ancestor(&self, ancestor: BlockId, mut block: BlockId) -> bool {
+        loop {
+            if ancestor == block {
+                return true;
+            }
+            let Some(parent) = self.parent.get(&block).copied().flatten() else {
+                return false;
+            };
+            block = parent;
+        }
+    }
+
+    fn depth_of(&self, block: BlockId) -> u32 {
+        self.depth.get(&block).copied().unwrap_or(0)
+    }
+}
+
 fn emit_live_linear_errors(
     func: &Function,
     live: &BTreeSet<InstId>,
@@ -417,7 +692,7 @@ fn emit_live_linear_errors(
 ///   `RegionId::Block(B)` on any inst's `region` field within the function.
 /// - For each such `B`, prepend `RegionOpen { region: Block(B) }` to basic
 ///   block `B`'s instruction list and insert `RegionClose { region:
-///   Block(B) }` immediately before the block's terminator.
+///   Block(B) }` before every terminator that exits `B`'s block-tree subtree.
 ///
 /// Spec §3.5 criteria 2 (call store-effects) and 3 (call FreshInCaller
 /// hidden `target_region` routing) are wired in S4 alongside the call-site
@@ -454,53 +729,91 @@ pub fn insert_region_markers(module: &mut Module) {
             continue;
         }
 
+        let block_tree = BlockTree::from_function(func);
+        let mut close_regions_by_block: BTreeMap<BlockId, Vec<BlockId>> = BTreeMap::new();
+        for block in &func.blocks {
+            let succs = block_successors(block);
+            let mut close_regions = Vec::new();
+            for &region_block in &block_regions {
+                if !block_tree.is_ancestor(region_block, block.id) {
+                    continue;
+                }
+                let exits_region = succs.is_empty()
+                    || succs
+                        .iter()
+                        .any(|&succ| !block_tree.is_ancestor(region_block, succ));
+                if exits_region {
+                    close_regions.push(region_block);
+                }
+            }
+            close_regions.sort_by(|a, b| {
+                block_tree
+                    .depth_of(*b)
+                    .cmp(&block_tree.depth_of(*a))
+                    .then_with(|| b.cmp(a))
+            });
+            if !close_regions.is_empty() {
+                close_regions_by_block.insert(block.id, close_regions);
+            }
+        }
+
         let mut next_id = next_inst_id(func);
         for block in &mut func.blocks {
-            if !block_regions.contains(&block.id) {
-                continue;
-            }
-            // Pick a span for the synthesised markers from a real inst in
-            // the block, falling back to the empty span.
-            let span = block
-                .insts
+            let old_insts = std::mem::take(&mut block.insts);
+            let span = old_insts
                 .first()
                 .map(|i| i.origin)
                 .unwrap_or(Span { start: 0, len: 0 });
+            let closes = close_regions_by_block
+                .get(&block.id)
+                .cloned()
+                .unwrap_or_default();
+            let opens_here = block_regions.contains(&block.id);
+            if !opens_here && closes.is_empty() {
+                block.insts = old_insts;
+                continue;
+            }
 
-            let open = Inst {
-                id: InstId(next_id),
-                opcode: Opcode::RegionOpen,
-                ty: Ty::Unit,
-                args: vec![],
-                data: InstData::None,
-                origin: span,
-                region: RegionId::Block(block.id),
-            };
-            next_id += 1;
-            let close = Inst {
-                id: InstId(next_id),
-                opcode: Opcode::RegionClose,
-                ty: Ty::Unit,
-                args: vec![],
-                data: InstData::None,
-                origin: span,
-                region: RegionId::Block(block.id),
-            };
-            next_id += 1;
-
-            // Insert RegionClose just before the terminator. Every
-            // well-formed block ends with a terminal opcode; spec §12.3
-            // requires close on every exit edge, which inside a single
-            // basic block reduces to "right before the terminator."
-            let term_pos = block
-                .insts
+            let term_pos = old_insts
                 .iter()
                 .position(|i| i.opcode.is_terminal())
-                .unwrap_or(block.insts.len());
-            block.insts.insert(term_pos, close);
-            // RegionOpen at the very start of the block.
-            block.insts.insert(0, open);
+                .unwrap_or(old_insts.len());
+            let mut new_insts =
+                Vec::with_capacity(old_insts.len() + usize::from(opens_here) + closes.len());
+            if opens_here {
+                new_insts.push(region_marker_inst(
+                    next_id,
+                    Opcode::RegionOpen,
+                    block.id,
+                    span,
+                ));
+                next_id += 1;
+            }
+            new_insts.extend(old_insts[..term_pos].iter().cloned());
+            for close_block in closes {
+                new_insts.push(region_marker_inst(
+                    next_id,
+                    Opcode::RegionClose,
+                    close_block,
+                    span,
+                ));
+                next_id += 1;
+            }
+            new_insts.extend(old_insts[term_pos..].iter().cloned());
+            block.insts = new_insts;
         }
+    }
+}
+
+fn region_marker_inst(id: u32, opcode: Opcode, block: BlockId, origin: Span) -> Inst {
+    Inst {
+        id: InstId(id),
+        opcode,
+        ty: Ty::Unit,
+        args: vec![],
+        data: InstData::None,
+        origin,
+        region: RegionId::Block(block),
     }
 }
 
@@ -690,6 +1003,7 @@ fn analyze_function(
 
     // Pre-collect Pizlo-SSA Upsilon→Phi arms for deep origin walks.
     let phi_arms = collect_phi_arms(func);
+    let block_tree = BlockTree::from_function(func);
 
     // Forward sweep collecting use-set contributions.
     for block in &func.blocks {
@@ -700,6 +1014,7 @@ fn analyze_function(
                 block.id,
                 &inst_lookup,
                 summaries,
+                is_scalar_ty(func.return_ty),
                 &mut must_outlive,
                 &mut summary,
                 diagnostics,
@@ -723,7 +1038,17 @@ fn analyze_function(
                 continue;
             }
             let markers = must_outlive.get(&inst.id).cloned().unwrap_or_default();
-            let region_id = lub_to_region_id(&markers, block.id);
+            let mut region_id = lub_to_region_id(&markers, block.id, &block_tree);
+            if inst.opcode == Opcode::Call {
+                // Hidden caller-region codegen is still too shallow for
+                // aggregate FreshInCaller call results that are immediately
+                // projected and repackaged. Keep call materialisation
+                // conservative; issue #289 is about concrete block LUB for
+                // RegionAlloc producers.
+                if matches!(region_id, RegionId::Block(_) | RegionId::Caller(_)) {
+                    region_id = RegionId::Root;
+                }
+            }
             region_map.insert(inst.id, region_id);
         }
     }
@@ -775,6 +1100,7 @@ fn handle_inst(
     _block_id: BlockId,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
     summaries: &[InternalSummary],
+    return_is_scalar: bool,
     must_outlive: &mut BTreeMap<InstId, BTreeSet<MustOutliveMarker>>,
     summary: &mut InternalSummary,
     diagnostics: &mut Vec<Diagnostic>,
@@ -784,7 +1110,7 @@ fn handle_inst(
             // The returned value escapes to the virtual caller. Mark it so
             // the inst.region populate pass tags any RegionAlloc that flows
             // into the return as Caller(0).
-            if let Some(&arg_id) = inst.args.first() {
+            if !return_is_scalar && let Some(&arg_id) = inst.args.first() {
                 add_marker(must_outlive, arg_id, MustOutliveMarker::VirtualCaller);
             }
             // The actual return-region summary contribution is computed in a
@@ -837,11 +1163,12 @@ fn handle_inst(
         Opcode::Call => {
             if let InstData::CallExtern(sym) = &inst.data {
                 for_each_extern_store_edge(sym, &inst.args, |target_id, source_id| {
-                    add_marker(
-                        must_outlive,
-                        source_id,
-                        target_region_marker(target_id, inst_lookup, summaries),
-                    );
+                    let marker = if trace_param(target_id, inst_lookup).is_some() {
+                        MustOutliveMarker::Root
+                    } else {
+                        target_region_marker(target_id, inst_lookup, summaries)
+                    };
+                    add_marker(must_outlive, source_id, marker);
                     if let Some(target_param) = trace_param(target_id, inst_lookup) {
                         let source_origin = trace_origin(source_id, inst_lookup);
                         let source_constraint = origin_to_constraint(&source_origin);
@@ -966,6 +1293,16 @@ fn propagate_alias_markers(
     for block in &func.blocks {
         for inst in &block.insts {
             match inst.opcode {
+                Opcode::FieldGet => {
+                    if let Some(&source) = inst.args.first() {
+                        alias_edges.push((inst.id, source));
+                    }
+                }
+                Opcode::Load if matches!(inst.ty, Ty::Ptr | Ty::LinearPtr) => {
+                    if let Some(&source) = inst.args.first() {
+                        alias_edges.push((inst.id, source));
+                    }
+                }
                 Opcode::Store | Opcode::FieldSet if inst.args.len() >= 2 => {
                     // Stored values must follow later widening of their target
                     // container. The direct store handler already contributes
@@ -973,63 +1310,61 @@ fn propagate_alias_markers(
                     // use-derived markers such as `Return(target)`.
                     alias_edges.push((inst.args[0], inst.args[1]));
                 }
-                Opcode::Call => match &inst.data {
-                    InstData::CallExtern(sym) => {
+                Opcode::Call => {
+                    if let InstData::CallExtern(sym) = &inst.data {
                         for_each_extern_store_edge(sym, &inst.args, |target_id, source_id| {
                             alias_edges.push((target_id, source_id));
                         });
                     }
-                    InstData::CallTarget(callee_id) => {
-                        let Some(summary) = summaries.get(callee_id.0 as usize) else {
+                    let InstData::CallTarget(callee_id) = &inst.data else {
+                        continue;
+                    };
+                    let Some(summary) = summaries.get(callee_id.0 as usize) else {
+                        continue;
+                    };
+                    for (target_param, source_constraint) in &summary.store_effects {
+                        let target_idx = *target_param as usize;
+                        if target_idx >= inst.args.len() {
                             continue;
-                        };
-                        for (target_param, source_constraint) in &summary.store_effects {
-                            let target_idx = *target_param as usize;
-                            if target_idx >= inst.args.len() {
-                                continue;
+                        }
+                        let target_arg = inst.args[target_idx];
+                        match source_constraint {
+                            InternalReturnRegion::Published(RegionConstraint::AliasOf(p)) => {
+                                let p_idx = *p as usize;
+                                if p_idx < inst.args.len() {
+                                    alias_edges.push((target_arg, inst.args[p_idx]));
+                                }
                             }
-                            let target_arg = inst.args[target_idx];
-                            match source_constraint {
-                                InternalReturnRegion::Published(RegionConstraint::AliasOf(p)) => {
+                            InternalReturnRegion::Published(RegionConstraint::AliasOfAny(ps)) => {
+                                for p in ps {
                                     let p_idx = *p as usize;
                                     if p_idx < inst.args.len() {
                                         alias_edges.push((target_arg, inst.args[p_idx]));
-                                    }
-                                }
-                                InternalReturnRegion::Published(RegionConstraint::AliasOfAny(
-                                    ps,
-                                )) => {
-                                    for p in ps {
-                                        let p_idx = *p as usize;
-                                        if p_idx < inst.args.len() {
-                                            alias_edges.push((target_arg, inst.args[p_idx]));
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-
-                        match &summary.return_region {
-                            InternalReturnRegion::Published(RegionConstraint::AliasOf(j)) => {
-                                let j_idx = *j as usize;
-                                if j_idx < inst.args.len() {
-                                    alias_edges.push((inst.id, inst.args[j_idx]));
-                                }
-                            }
-                            InternalReturnRegion::Published(RegionConstraint::AliasOfAny(js)) => {
-                                for j in js {
-                                    let j_idx = *j as usize;
-                                    if j_idx < inst.args.len() {
-                                        alias_edges.push((inst.id, inst.args[j_idx]));
                                     }
                                 }
                             }
                             _ => {}
                         }
                     }
-                    _ => {}
-                },
+
+                    match &summary.return_region {
+                        InternalReturnRegion::Published(RegionConstraint::AliasOf(j)) => {
+                            let j_idx = *j as usize;
+                            if j_idx < inst.args.len() {
+                                alias_edges.push((inst.id, inst.args[j_idx]));
+                            }
+                        }
+                        InternalReturnRegion::Published(RegionConstraint::AliasOfAny(js)) => {
+                            for j in js {
+                                let j_idx = *j as usize;
+                                if j_idx < inst.args.len() {
+                                    alias_edges.push((inst.id, inst.args[j_idx]));
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 _ => {}
             }
         }
@@ -1088,7 +1423,11 @@ enum MustOutliveMarker {
 /// `defining_block` is the basic block where the allocation lives — used as
 /// the default region when the marker set yields no narrower constraint
 /// (empty set, or pure block markers reducible to the defining block).
-fn lub_to_region_id(markers: &BTreeSet<MustOutliveMarker>, defining_block: BlockId) -> RegionId {
+fn lub_to_region_id(
+    markers: &BTreeSet<MustOutliveMarker>,
+    defining_block: BlockId,
+    block_tree: &BlockTree,
+) -> RegionId {
     let mut has_caller = false;
     let mut has_root = false;
     let mut has_rodata = false;
@@ -1115,15 +1454,16 @@ fn lub_to_region_id(markers: &BTreeSet<MustOutliveMarker>, defining_block: Block
     if has_caller {
         return RegionId::Caller(HiddenRegionIdx(0));
     }
+    blocks.push(defining_block);
     blocks.sort_unstable();
     blocks.dedup();
-    if blocks.is_empty() || (blocks.len() == 1 && blocks[0] == defining_block) {
+    if blocks.len() == 1 && blocks[0] == defining_block {
         return RegionId::Block(defining_block);
     }
-    // Conservative Phase 9 rule: a concrete-block use outside the defining
-    // block needs full block-tree dominance/LUB to place safely. Until that
-    // exists, Root outlives all blocks without risking a premature close.
-    RegionId::Root
+    match block_tree.lca_all(&blocks) {
+        Some(block) => RegionId::Block(block),
+        None => RegionId::Caller(HiddenRegionIdx(0)),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1418,9 +1758,6 @@ fn origin_to_constraint(origin: &ValueOrigin) -> RegionConstraint {
 ///   flow per §4.4 + issue #200.
 ///
 /// Still outside this partial checker:
-///   * Full block-tree LUB requires a dominator tree (`lub_to_region_id`
-///     currently routes undecidable block-marker sets to `Root` — the
-///     pre-existing §4.4 compliance gap shipped with Phase 4).
 ///   * Cross-param without published spanning effect (`source = Param(p)`,
 ///     `target = Param(q)`, `p != q`): needs the caller's full summary,
 ///     which is built up forward through this same pass.
@@ -1710,6 +2047,37 @@ mod tests {
             id: BlockId(id),
             insts,
         }
+    }
+
+    fn jump_inst(id: u32, target: u32) -> Inst {
+        inst(
+            id,
+            Opcode::Jump,
+            Ty::Unit,
+            vec![],
+            InstData::JumpTarget(BlockId(target)),
+        )
+    }
+
+    fn branch_inst(id: u32, then_block: u32, else_block: u32) -> Inst {
+        inst(
+            id,
+            Opcode::Branch,
+            Ty::Unit,
+            vec![],
+            InstData::BranchTargets {
+                then_block: BlockId(then_block),
+                else_block: BlockId(else_block),
+            },
+        )
+    }
+
+    fn return_unit_inst(id: u32) -> Inst {
+        inst(id, Opcode::Return, Ty::Unit, vec![], InstData::None)
+    }
+
+    fn marker_set(markers: &[MustOutliveMarker]) -> BTreeSet<MustOutliveMarker> {
+        markers.iter().cloned().collect()
     }
 
     fn function(
@@ -2126,10 +2494,150 @@ mod tests {
     }
 
     #[test]
+    fn block_tree_lub_of_siblings_routes_to_parent_block() {
+        let f = function(
+            0,
+            "siblings",
+            vec![],
+            Ty::Unit,
+            vec![
+                block(0, vec![branch_inst(0, 1, 2)]),
+                block(1, vec![return_unit_inst(1)]),
+                block(2, vec![return_unit_inst(2)]),
+            ],
+        );
+        let tree = BlockTree::from_function(&f);
+        let markers = marker_set(&[
+            MustOutliveMarker::Block(BlockId(1)),
+            MustOutliveMarker::Block(BlockId(2)),
+        ]);
+
+        assert_eq!(
+            lub_to_region_id(&markers, BlockId(0), &tree),
+            RegionId::Block(BlockId(0))
+        );
+    }
+
+    #[test]
+    fn block_tree_lub_of_block_and_descendant_routes_to_ancestor_block() {
+        let f = function(
+            0,
+            "descendant",
+            vec![],
+            Ty::Unit,
+            vec![
+                block(0, vec![jump_inst(0, 1)]),
+                block(1, vec![jump_inst(1, 2)]),
+                block(2, vec![return_unit_inst(2)]),
+            ],
+        );
+        let tree = BlockTree::from_function(&f);
+        let markers = marker_set(&[
+            MustOutliveMarker::Block(BlockId(1)),
+            MustOutliveMarker::Block(BlockId(2)),
+        ]);
+
+        assert_eq!(
+            lub_to_region_id(&markers, BlockId(1), &tree),
+            RegionId::Block(BlockId(1))
+        );
+    }
+
+    #[test]
+    fn block_tree_lub_of_branch_and_merge_routes_to_common_parent() {
+        let f = function(
+            0,
+            "diamond",
+            vec![],
+            Ty::Unit,
+            vec![
+                block(0, vec![branch_inst(0, 1, 2)]),
+                block(1, vec![jump_inst(1, 3)]),
+                block(2, vec![jump_inst(2, 3)]),
+                block(3, vec![return_unit_inst(3)]),
+            ],
+        );
+        let tree = BlockTree::from_function(&f);
+        let markers = marker_set(&[
+            MustOutliveMarker::Block(BlockId(1)),
+            MustOutliveMarker::Block(BlockId(3)),
+        ]);
+
+        assert_eq!(
+            lub_to_region_id(&markers, BlockId(1), &tree),
+            RegionId::Block(BlockId(0))
+        );
+    }
+
+    #[test]
+    fn block_tree_lub_of_disconnected_roots_routes_to_virtual_caller() {
+        let f = function(
+            0,
+            "disconnected",
+            vec![],
+            Ty::Unit,
+            vec![
+                block(0, vec![return_unit_inst(0)]),
+                block(10, vec![return_unit_inst(10)]),
+                block(20, vec![return_unit_inst(20)]),
+            ],
+        );
+        let tree = BlockTree::from_function(&f);
+        let markers = marker_set(&[
+            MustOutliveMarker::Block(BlockId(10)),
+            MustOutliveMarker::Block(BlockId(20)),
+        ]);
+
+        assert_eq!(
+            lub_to_region_id(&markers, BlockId(10), &tree),
+            RegionId::Caller(HiddenRegionIdx(0))
+        );
+    }
+
+    #[test]
+    fn block_tree_lub_single_defining_block_marker_stays_in_defining_block() {
+        let f = function(
+            0,
+            "single",
+            vec![],
+            Ty::Unit,
+            vec![block(0, vec![return_unit_inst(0)])],
+        );
+        let tree = BlockTree::from_function(&f);
+        let markers = marker_set(&[MustOutliveMarker::Block(BlockId(0))]);
+
+        assert_eq!(
+            lub_to_region_id(&markers, BlockId(0), &tree),
+            RegionId::Block(BlockId(0))
+        );
+    }
+
+    #[test]
+    fn block_tree_lub_root_marker_forces_root() {
+        let f = function(
+            0,
+            "root",
+            vec![],
+            Ty::Unit,
+            vec![block(0, vec![return_unit_inst(0)])],
+        );
+        let tree = BlockTree::from_function(&f);
+        let markers = marker_set(&[
+            MustOutliveMarker::Root,
+            MustOutliveMarker::Block(BlockId(0)),
+        ]);
+
+        assert_eq!(
+            lub_to_region_id(&markers, BlockId(0), &tree),
+            RegionId::Root
+        );
+    }
+
+    #[test]
     fn local_alloc_used_only_locally() {
         // Allocation that does NOT escape (no return, no store-into-param):
-        // its LUB stays in the local block. Conservative Phase 3 leaves it
-        // at Block(0). We assert the inst.region was set (not Root/default).
+        // its LUB stays in the local block. We assert the inst.region was
+        // set (not Root/default).
         let insts = vec![
             inst(
                 0,
@@ -2176,8 +2684,8 @@ mod tests {
         ];
         let f = function(0, "local", vec![], Ty::I64, vec![block(0, insts)]);
         let mut m = module(vec![f]);
-        // Skip infer_regions — it would overwrite the hand-set region with
-        // `Root` while Block emission is deferred.
+        // Skip infer_regions so this test stays focused on marker insertion
+        // rather than on the inference pass shape.
         insert_region_markers(&mut m);
 
         let block_insts = &m.functions[0].blocks[0].insts;
@@ -2267,7 +2775,7 @@ mod tests {
     }
 
     #[test]
-    fn alloc_used_from_another_block_stays_root() {
+    fn alloc_used_from_descendant_block_routes_to_lca_block() {
         let b0_insts = vec![
             inst(
                 0,
@@ -2300,13 +2808,197 @@ mod tests {
         let inst0 = &m.functions[0].blocks[0].insts[0];
         assert_eq!(
             inst0.region,
-            RegionId::Root,
-            "uses outside the defining block must stay conservative"
+            RegionId::Block(BlockId(0)),
+            "a value defined in an ancestor and used in a descendant should stay in the ancestor block"
         );
     }
 
     #[test]
-    fn fresh_in_caller_call_result_used_locally_routes_to_block_region() {
+    fn ancestor_block_region_closes_at_subtree_exit() {
+        let b0_insts = vec![
+            inst(
+                0,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            jump_inst(1, 1),
+        ];
+        let b1_insts = vec![
+            inst(2, Opcode::Load, Ty::I64, vec![0], InstData::None),
+            inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+        ];
+        let f = function(
+            0,
+            "cross_block",
+            vec![],
+            Ty::I64,
+            vec![block(0, b0_insts), block(1, b1_insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+        insert_region_markers(&mut m);
+
+        let block0 = &m.functions[0].blocks[0].insts;
+        let block1 = &m.functions[0].blocks[1].insts;
+        assert_eq!(block0[0].opcode, Opcode::RegionOpen);
+        assert_eq!(block0[0].region, RegionId::Block(BlockId(0)));
+        assert!(
+            !block0.iter().any(|i| i.opcode == Opcode::RegionClose),
+            "ancestor region must not close before jumping into its subtree"
+        );
+        let close_pos = block1
+            .iter()
+            .position(|i| i.opcode == Opcode::RegionClose)
+            .expect("subtree exit should close ancestor region");
+        let return_pos = block1
+            .iter()
+            .position(|i| i.opcode == Opcode::Return)
+            .expect("test block has return");
+        assert_eq!(close_pos + 1, return_pos);
+        assert_eq!(block1[close_pos].region, RegionId::Block(BlockId(0)));
+    }
+
+    #[test]
+    fn branch_alloc_used_at_merge_opens_at_common_parent() {
+        let b0_insts = vec![branch_inst(0, 1, 2)];
+        let b1_insts = vec![
+            inst(
+                1,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            jump_inst(2, 3),
+        ];
+        let b2_insts = vec![jump_inst(3, 3)];
+        let b3_insts = vec![
+            inst(4, Opcode::Load, Ty::I64, vec![1], InstData::None),
+            inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
+        ];
+        let f = function(
+            0,
+            "diamond_merge_use",
+            vec![],
+            Ty::I64,
+            vec![
+                block(0, b0_insts),
+                block(1, b1_insts),
+                block(2, b2_insts),
+                block(3, b3_insts),
+            ],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+        assert_eq!(
+            m.functions[0].blocks[1].insts[0].region,
+            RegionId::Block(BlockId(0)),
+            "a branch allocation used after merge must use the merge dominator"
+        );
+
+        insert_region_markers(&mut m);
+        let block0 = &m.functions[0].blocks[0].insts;
+        let block1 = &m.functions[0].blocks[1].insts;
+        let block2 = &m.functions[0].blocks[2].insts;
+        let block3 = &m.functions[0].blocks[3].insts;
+        assert_eq!(block0[0].opcode, Opcode::RegionOpen);
+        assert_eq!(block0[0].region, RegionId::Block(BlockId(0)));
+        assert!(
+            !block1.iter().any(|i| i.opcode == Opcode::RegionOpen),
+            "the non-dominating branch must not own the region open"
+        );
+        assert!(
+            !block2.iter().any(|i| i.opcode == Opcode::RegionClose),
+            "the sibling branch must not close a region it did not open"
+        );
+        let close_pos = block3
+            .iter()
+            .position(|i| i.opcode == Opcode::RegionClose)
+            .expect("merge exit should close the common-parent region");
+        assert_eq!(block3[close_pos].region, RegionId::Block(BlockId(0)));
+    }
+
+    #[test]
+    fn vec_push_val_routes_source_to_vector_target_region() {
+        let insts = vec![
+            inst(
+                0,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![],
+                InstData::CallExtern("__vow_vec_new".to_string()),
+            ),
+            inst(
+                1,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Unit,
+                vec![0, 1],
+                InstData::CallExtern("__vow_vec_push_val".to_string()),
+            ),
+            inst(3, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+        ];
+        let f = function(0, "vec_push", vec![], Ty::I64, vec![block(0, insts)]);
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert_eq!(
+            m.functions[0].blocks[0].insts[1].region,
+            RegionId::Root,
+            "a value copied into an externally-managed vector must outlive the vector target"
+        );
+    }
+
+    #[test]
+    fn vec_push_val_into_param_vector_routes_source_to_root_without_conflict() {
+        let insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(
+                1,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Unit,
+                vec![0, 1],
+                InstData::CallExtern("__vow_vec_push_val".to_string()),
+            ),
+            inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(
+            0,
+            "vec_push_param",
+            vec![Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert_eq!(m.functions[0].blocks[0].insts[1].region, RegionId::Root);
+        assert!(
+            m.warnings
+                .iter()
+                .all(|d| d.code != ErrorCode::RegionConflict),
+            "extern vector stores into parameter vectors should widen to Root, not reject"
+        );
+    }
+
+    #[test]
+    fn fresh_in_caller_call_result_used_locally_remains_root_until_aggregate_codegen() {
         let callee = build_returning_alloc();
         let caller_insts = vec![
             inst(
@@ -2325,8 +3017,8 @@ mod tests {
         let call = &m.functions[1].blocks[0].insts[0];
         assert_eq!(
             call.region,
-            RegionId::Block(BlockId(0)),
-            "FreshInCaller call result should allocate in the caller's local block"
+            RegionId::Root,
+            "FreshInCaller call result materialization remains conservative until aggregate hidden-region codegen is complete"
         );
     }
 
@@ -2441,6 +3133,55 @@ mod tests {
     }
 
     #[test]
+    fn field_get_escape_widens_container_and_stored_source() {
+        let insts = vec![
+            inst(
+                0,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                1,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                2,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![0, 1],
+                InstData::FieldIndex(0),
+            ),
+            inst(
+                3,
+                Opcode::FieldGet,
+                Ty::Ptr,
+                vec![0],
+                InstData::FieldIndex(0),
+            ),
+            inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+        ];
+        let f = function(0, "field_escape", vec![], Ty::Ptr, vec![block(0, insts)]);
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert_eq!(
+            m.functions[0].blocks[0].insts[0].region,
+            RegionId::Caller(HiddenRegionIdx(0)),
+            "container read by an escaping FieldGet must be widened"
+        );
+        assert_eq!(
+            m.functions[0].blocks[0].insts[1].region,
+            RegionId::Caller(HiddenRegionIdx(0)),
+            "stored source must follow the widened container"
+        );
+    }
+
+    #[test]
     fn store_into_param_routes_source_to_caller_region() {
         let insts = vec![
             inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
@@ -2473,7 +3214,7 @@ mod tests {
     }
 
     #[test]
-    fn upsilon_source_inherits_phi_target_block() {
+    fn upsilon_source_inherits_phi_target_block_lca() {
         let phi_id = 10u32;
         let b0_insts = vec![
             inst(
@@ -2516,8 +3257,8 @@ mod tests {
         let source = &m.functions[0].blocks[0].insts[0];
         assert_eq!(
             source.region,
-            RegionId::Root,
-            "source feeding a Phi in another block must inherit the Phi block marker"
+            RegionId::Block(BlockId(0)),
+            "source feeding a Phi in a descendant block should use the concrete LCA"
         );
     }
 

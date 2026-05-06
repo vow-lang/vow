@@ -503,6 +503,12 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         else { 0 }
     };
     let ir_mod: IrModule = fr.ir_mod;
+    if has_flag(argv, String::from("--dump-ir")) {
+        emit_ir_warnings(ir_mod, dctx);
+        let ir_text: String = print_module(ir_mod);
+        print_str(ir_text);
+        return 0;
+    }
     emit_ir_warnings(ir_mod, dctx);
     let do_verify: bool = !has_flag(argv, String::from("--no-verify"));
     if do_verify {
@@ -4126,14 +4132,13 @@ fn skill_full() -> String {
     r.push_str(String::from("**Phase:** Region Inference (arena-per-scope, Phase 3)\n"));
     r.push_str(String::from("**Meaning:** A heap-typed value's required lifetime cannot be satisfied by the regions the surrounding code provides. This fires when an interprocedural store-effect constraint is unsatisfiable -- for example, a value allocated in an inner block is stored into a container that outlives that block.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("> **Coverage note (as of Phase 5):** the alloc→param-via-callee shape is\n"));
+    r.push_str(String::from("> **Coverage note (as of issue #289):** the alloc→param-via-callee shape is\n"));
     r.push_str(String::from("> detected and emits this code with `Blame: Callee` and a hint pointing\n"));
     r.push_str(String::from("> at the three resolution strategies (copy into outer arena, hoist the\n"));
     r.push_str(String::from("> allocation, or restructure the data flow). Cross-parameter cases that\n"));
-    r.push_str(String::from("> require a published store-effect, Phi-of-mixed-origins, and the full\n"));
-    r.push_str(String::from("> block-tree LUB stay deferred to Phase 9 (issue #204). The spec shape\n"));
-    r.push_str(String::from("> below is stable; the residual cases above silently promote to a\n"));
-    r.push_str(String::from("> conservative `Root` region today rather than emitting a diagnostic.\n"));
+    r.push_str(String::from("> require a published store-effect and Phi-of-mixed-origins remain partial.\n"));
+    r.push_str(String::from("> Concrete block-marker sets now use the block-tree LUB from spec §4.1\n"));
+    r.push_str(String::from("> step 3; they no longer silently promote to `Root`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn store_into(out: Vec<String>, prefix: String) [io] {\n"));
