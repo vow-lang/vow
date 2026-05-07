@@ -199,6 +199,7 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
                    || op == IOP_VOW_REQ() || op == IOP_VOW_ENS() || op == IOP_VOW_INV()
                    || op == IOP_BRANCH() || op == IOP_JUMP() || op == IOP_RETURN() || op == IOP_UNREACHABLE()
                    || op == IOP_PHI() || op == IOP_UPSILON()
+                   || op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE()
                    || op == IOP_DEBUG_CALL() {
                     true
                 } else if op == IOP_CALL() {
@@ -236,7 +237,6 @@ fn is_modelable(f: IrFunction, m: IrModule, const_fn_indices: Vec<i64>, modelabl
                 } else if op == IOP_REM_F32() || op == IOP_REM_F64()
                    || op == IOP_LOAD() || op == IOP_STORE()
                    || op == IOP_REGION_ALLOC()
-                   || op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE()
                    || op == IOP_LINEAR_CONSUME() || op == IOP_LINEAR_BORROW()
                    || op == IOP_FIELD_SET() {
                     false
@@ -1126,8 +1126,12 @@ fn emit_inst(out: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64
         return;
     }
 
+    if op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE() {
+        out.push_str(String::from("  /* verifier no-op: region scope marker */\n"));
+        return;
+    }
+
     if op == IOP_LOAD() || op == IOP_STORE() || op == IOP_REGION_ALLOC()
-       || op == IOP_REGION_OPEN() || op == IOP_REGION_CLOSE()
        || op == IOP_LINEAR_CONSUME() || op == IOP_LINEAR_BORROW() || op == IOP_FIELD_SET() {
         emit_unsupported_for_verification(out, inst);
         return;

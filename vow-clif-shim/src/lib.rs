@@ -203,11 +203,148 @@ const REGION_KIND_CALLER: i64 = 1;
 const REGION_KIND_ROOT: i64 = 2;
 const REGION_KIND_RODATA: i64 = 3;
 
+const RSUM_KIND_FRESH_IN_CALLER: i64 = 0;
+const RSUM_KIND_ALIAS_OF: i64 = 1;
+const RSUM_KIND_ALIAS_OF_ANY: i64 = 2;
+const RSUM_KIND_CONSTANT_GLOBAL: i64 = 3;
+
+fn region_pack(kind: i64, val: i64) -> i64 {
+    val * 4 + kind
+}
+
+fn region_root() -> i64 {
+    region_pack(REGION_KIND_ROOT, 0)
+}
+
 fn extern_uses_target_region(sym: &str) -> bool {
     matches!(
         sym,
         "__vow_string_from_raw_parts_copy" | "__vow_vec_from_raw_parts_copy_val"
     )
+}
+
+fn hidden_region_store_targets(flat: &[i64]) -> Vec<i64> {
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i + 1 < flat.len() {
+        let target = flat[i];
+        let kind = flat[i + 1];
+        i += 2;
+        out.push(target);
+        match kind {
+            RSUM_KIND_ALIAS_OF => i += 1,
+            RSUM_KIND_ALIAS_OF_ANY => {
+                if i >= flat.len() {
+                    break;
+                }
+                let n = flat[i].max(0) as usize;
+                i = i.saturating_add(1).saturating_add(n);
+            }
+            RSUM_KIND_FRESH_IN_CALLER | RSUM_KIND_CONSTANT_GLOBAL => {}
+            _ => {}
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+fn hidden_region_count(return_kind: i64, store_effects: &[i64], is_main: bool) -> usize {
+    if is_main {
+        return 0;
+    }
+    let mut count = 0usize;
+    if return_kind == RSUM_KIND_FRESH_IN_CALLER {
+        count += 1;
+    }
+    count + hidden_region_store_targets(store_effects).len()
+}
+
+fn block_arena_value(
+    builder: &mut FunctionBuilder<'_>,
+    block_arena_slots: &mut BTreeMap<i64, StackSlot>,
+    block_id: i64,
+) -> Value {
+    let slot = *block_arena_slots.entry(block_id).or_insert_with(|| {
+        builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            VOW_ARENA_HEADER_SIZE,
+            VOW_ARENA_HEADER_ALIGN_LOG2,
+        ))
+    });
+    builder.ins().stack_addr(types::I64, slot, 0)
+}
+
+fn arena_value_for_region(
+    builder: &mut FunctionBuilder<'_>,
+    rgn: i64,
+    hidden_region_values: &[Value],
+    block_arena_slots: &mut BTreeMap<i64, StackSlot>,
+    root_arena_gv: GlobalValue,
+) -> Option<Value> {
+    let kind = rgn & 3;
+    let payload = rgn >> 2;
+    match kind {
+        REGION_KIND_ROOT => Some(builder.ins().global_value(types::I64, root_arena_gv)),
+        REGION_KIND_BLOCK => Some(block_arena_value(builder, block_arena_slots, payload)),
+        REGION_KIND_CALLER => hidden_region_values
+            .get(payload as usize)
+            .copied()
+            .or_else(|| {
+                eprintln!("clif_shim: missing hidden arena parameter k={payload}");
+                None
+            }),
+        REGION_KIND_RODATA => {
+            eprintln!("clif_shim: cannot allocate into REGION_KIND_RODATA");
+            None
+        }
+        _ => {
+            eprintln!("clif_shim: unknown region kind {kind}");
+            None
+        }
+    }
+}
+
+fn routed_vec_extern<'a>(sym: &'a str, inst_rgn: i64, receiver_rgn: i64) -> (&'a str, Option<i64>) {
+    match sym {
+        "__vow_vec_new" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_vec_new_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_vec_new_val" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_vec_new_val_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_vec_push_val" => {
+            let kind = receiver_rgn & 3;
+            if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
+                ("__vow_vec_push_val_in_arena", Some(receiver_rgn))
+            } else {
+                (sym, None)
+            }
+        }
+        "__vow_vec_push" => {
+            let kind = receiver_rgn & 3;
+            if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
+                ("__vow_vec_push_in_arena", Some(receiver_rgn))
+            } else {
+                (sym, None)
+            }
+        }
+        _ => {
+            if extern_uses_target_region(sym) {
+                (sym, Some(inst_rgn))
+            } else {
+                (sym, None)
+            }
+        }
+    }
 }
 
 /// Size of `vow_runtime::VowArena` in bytes — asserted in
@@ -299,6 +436,8 @@ struct FuncDecl {
     param_tys: Vec<i64>,
     ret_ty: i64,
     is_main: bool,
+    return_kind: i64,
+    store_effects: Vec<i64>,
 }
 
 struct ModuleContext {
@@ -512,6 +651,8 @@ pub unsafe extern "C" fn __vow_clif_declare_function(
     n_params: i64,
     ret_ty: i64,
     is_main: i64,
+    return_kind: i64,
+    store_effects_ptr: i64,
 ) {
     let ctx = unsafe { &mut *(ctx_ptr as *mut ModuleContext) };
     let name = unsafe { read_vow_string(name_ptr) };
@@ -521,6 +662,11 @@ pub unsafe extern "C" fn __vow_clif_declare_function(
         &[]
     };
     let param_tys: Vec<i64> = param_slice.to_vec();
+    let store_effects = if store_effects_ptr != 0 {
+        unsafe { read_i64_slice(store_effects_ptr) }.to_vec()
+    } else {
+        Vec::new()
+    };
 
     let call_conv = ctx.isa.default_call_conv();
     let mut sig = Signature::new(call_conv);
@@ -528,6 +674,9 @@ pub unsafe extern "C" fn __vow_clif_declare_function(
         if let Some(cl_ty) = ity_to_cranelift(pty) {
             sig.params.push(AbiParam::new(cl_ty));
         }
+    }
+    for _ in 0..hidden_region_count(return_kind, &store_effects, is_main != 0) {
+        sig.params.push(AbiParam::new(types::I64));
     }
     if let Some(cl_ty) = signature_return_ty(ret_ty, is_main != 0) {
         sig.returns.push(AbiParam::new(cl_ty));
@@ -549,6 +698,8 @@ pub unsafe extern "C" fn __vow_clif_declare_function(
         param_tys,
         ret_ty,
         is_main: is_main != 0,
+        return_kind,
+        store_effects,
     });
 }
 
@@ -753,11 +904,15 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
 
     // Build inst_id → block_index map
     let mut inst_block: HashMap<i64, usize> = HashMap::new();
+    let mut inst_region_by_id: HashMap<i64, i64> = HashMap::new();
     for bi in 0..nb {
         let start = block_starts[bi] as usize;
         let len = block_lengths[bi] as usize;
         for &iid in &inst_ids[start..start + len] {
             inst_block.insert(iid, bi);
+        }
+        for idx in start..start + len {
+            inst_region_by_id.insert(inst_ids[idx], inst_rgns[idx]);
         }
     }
 
@@ -899,6 +1054,13 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
         }
     }
     let is_main = ctx.func_decls[fi].is_main;
+    for _ in 0..hidden_region_count(
+        ctx.func_decls[fi].return_kind,
+        &ctx.func_decls[fi].store_effects,
+        is_main,
+    ) {
+        sig.params.push(AbiParam::new(types::I64));
+    }
     if let Some(cl_ty) = signature_return_ty(ret_ty, is_main) {
         sig.returns.push(AbiParam::new(cl_ty));
     }
@@ -1118,6 +1280,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
 
     // Set up entry block arg values
     let mut arg_values: HashMap<i64, Value> = HashMap::new(); // arg_index → Value
+    let mut hidden_region_values: Vec<Value> = Vec::new();
     if nb > 0 {
         builder.switch_to_block(cl_blocks[0]);
         let entry_params = builder.block_params(cl_blocks[0]).to_vec();
@@ -1129,6 +1292,13 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                 }
                 cl_idx += 1;
             }
+        }
+        if !ctx.func_decls[fi].is_main && cl_idx < entry_params.len() {
+            hidden_region_values.extend(entry_params[cl_idx..].iter().copied());
+        }
+        if ctx.func_decls[fi].is_main {
+            let root_arena = builder.ins().global_value(types::I64, root_arena_gv);
+            hidden_region_values.push(root_arena);
         }
     }
 
@@ -1775,6 +1945,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
 
                 // Function calls
                 IOP_CALL => {
+                    let mut extern_target_region: Option<i64> = None;
                     let func_ref = match dk {
                         IDATA_CALL_TARGET => {
                             let target_idx = dv;
@@ -1787,10 +1958,22 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                         }
                         IDATA_CALL_EXTERN => {
                             let sym = unsafe { read_vow_string(inst_ds_ptrs[ii]) };
-                            if let Some(&fr) = extern_func_refs.get(sym) {
+                            let receiver_rgn = if alen > 0 {
+                                let receiver_id = all_args[aoff];
+                                inst_region_by_id
+                                    .get(&receiver_id)
+                                    .copied()
+                                    .unwrap_or_else(region_root)
+                            } else {
+                                region_root()
+                            };
+                            let (routed_sym, target_region) =
+                                routed_vec_extern(sym, inst_rgns[ii], receiver_rgn);
+                            extern_target_region = target_region;
+                            if let Some(&fr) = extern_func_refs.get(routed_sym) {
                                 fr
                             } else {
-                                eprintln!("clif_shim: unknown extern symbol: {sym}");
+                                eprintln!("clif_shim: unknown extern symbol: {routed_sym}");
                                 return -1;
                             }
                         }
@@ -1806,31 +1989,17 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                         .map(|p| p.value_type)
                         .collect();
                     let mut call_args: Vec<Value> = Vec::new();
-                    if dk == IDATA_CALL_EXTERN {
-                        let sym = unsafe { read_vow_string(inst_ds_ptrs[ii]) };
-                        if extern_uses_target_region(sym) {
-                            let rgn = inst_rgns[ii];
-                            let kind = rgn & 3;
-                            let payload = rgn >> 2;
-                            let arena = match kind {
-                                REGION_KIND_ROOT | REGION_KIND_CALLER => {
-                                    builder.ins().global_value(types::I64, root_arena_gv)
-                                }
-                                REGION_KIND_BLOCK => {
-                                    let slot =
-                                        *block_arena_slots.entry(payload).or_insert_with(|| {
-                                            builder.create_sized_stack_slot(StackSlotData::new(
-                                                StackSlotKind::ExplicitSlot,
-                                                48,
-                                                3,
-                                            ))
-                                        });
-                                    builder.ins().stack_addr(types::I64, slot, 0)
-                                }
-                                _ => builder.ins().global_value(types::I64, root_arena_gv),
-                            };
-                            call_args.push(arena);
-                        }
+                    if let Some(rgn) = extern_target_region {
+                        let Some(arena) = arena_value_for_region(
+                            &mut builder,
+                            rgn,
+                            &hidden_region_values,
+                            &mut block_arena_slots,
+                            root_arena_gv,
+                        ) else {
+                            return -1;
+                        };
+                        call_args.push(arena);
                     }
                     let hidden_arg_offset = call_args.len();
                     for i in 0..alen {
@@ -1854,6 +2023,51 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                 v
                             };
                         call_args.push(v);
+                    }
+                    if dk == IDATA_CALL_TARGET {
+                        let target_idx = dv;
+                        if let Some(decl) = ctx.func_decls.get(target_idx as usize) {
+                            let mut push_hidden = |builder: &mut FunctionBuilder<'_>,
+                                                   call_args: &mut Vec<Value>,
+                                                   rgn: i64|
+                             -> bool {
+                                if call_args.len() >= expected_types.len() {
+                                    return true;
+                                }
+                                let Some(arena) = arena_value_for_region(
+                                    builder,
+                                    rgn,
+                                    &hidden_region_values,
+                                    &mut block_arena_slots,
+                                    root_arena_gv,
+                                ) else {
+                                    return false;
+                                };
+                                call_args.push(arena);
+                                true
+                            };
+                            if decl.return_kind == RSUM_KIND_FRESH_IN_CALLER
+                                && !push_hidden(&mut builder, &mut call_args, inst_rgns[ii])
+                            {
+                                return -1;
+                            }
+                            let store_targets = hidden_region_store_targets(&decl.store_effects);
+                            for target_param in store_targets {
+                                let arg_rgn = if target_param >= 0 && (target_param as usize) < alen
+                                {
+                                    let arg_id = all_args[aoff + target_param as usize];
+                                    inst_region_by_id
+                                        .get(&arg_id)
+                                        .copied()
+                                        .unwrap_or_else(region_root)
+                                } else {
+                                    region_root()
+                                };
+                                if !push_hidden(&mut builder, &mut call_args, arg_rgn) {
+                                    return -1;
+                                }
+                            }
+                        }
                     }
                     let call_inst = builder.ins().call(func_ref, &call_args);
                     let results = builder.inst_results(call_inst);
@@ -1907,57 +2121,19 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                 // Region / linear
                 IOP_REGION_ALLOC => {
                     let rgn = inst_rgns[ii];
-                    let kind = rgn & 3;
-                    let payload = rgn >> 2;
                     let (size, align) = if dk == IDATA_ALLOC_SIZE {
                         (dv, dv2)
                     } else {
                         (0, 8)
                     };
-                    let arena = match kind {
-                        REGION_KIND_ROOT => builder.ins().global_value(types::I64, root_arena_gv),
-                        REGION_KIND_BLOCK => {
-                            let slot = *block_arena_slots.entry(payload).or_insert_with(|| {
-                                builder.create_sized_stack_slot(StackSlotData::new(
-                                    StackSlotKind::ExplicitSlot,
-                                    VOW_ARENA_HEADER_SIZE,
-                                    VOW_ARENA_HEADER_ALIGN_LOG2,
-                                ))
-                            });
-                            builder.ins().stack_addr(types::I64, slot, 0)
-                        }
-                        REGION_KIND_CALLER => {
-                            // Hidden-region plumbing (spec §5.2) is not yet
-                            // wired in the shim — `__vow_clif_declare_function`
-                            // does not accept a hidden-param count, so the
-                            // self-hosted compiler cannot emit any
-                            // `Caller`-routed allocation regardless of `k`.
-                            // Reject all `k` values rather than silently
-                            // routing into the root arena. Phase 5 (#200)
-                            // extends the declare API and lifts this reject.
-                            eprintln!(
-                                "clif_shim: IOP_REGION_ALLOC with REGION_KIND_CALLER \
-                                 (k={}) is not yet wired — self-hosted compiler must \
-                                 not emit Caller-routed allocations until hidden-param \
-                                 plumbing lands",
-                                payload,
-                            );
-                            return -1;
-                        }
-                        REGION_KIND_RODATA => {
-                            eprintln!(
-                                "clif_shim: IOP_REGION_ALLOC with REGION_KIND_RODATA \
-                                 is invalid — rodata-backed values are static, not \
-                                 allocated"
-                            );
-                            return -1;
-                        }
-                        _ => {
-                            eprintln!(
-                                "clif_shim: IOP_REGION_ALLOC with unknown region kind {kind}"
-                            );
-                            return -1;
-                        }
+                    let Some(arena) = arena_value_for_region(
+                        &mut builder,
+                        rgn,
+                        &hidden_region_values,
+                        &mut block_arena_slots,
+                        root_arena_gv,
+                    ) else {
+                        return -1;
                     };
                     let size_val = builder.ins().iconst(types::I64, size);
                     let align_val = builder.ins().iconst(types::I64, align);
@@ -2802,7 +2978,7 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
         }
         "__vow_clif_declare_function" => {
-            for _ in 0..7 {
+            for _ in 0..9 {
                 sig.params.push(AbiParam::new(types::I64));
             }
         }

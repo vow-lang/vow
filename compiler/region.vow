@@ -770,14 +770,6 @@ fn check_region_store_conflicts_module(
 fn check_store_effects_at_call(
     flat: Vec<i64>, call_inst: IrInst, id_to_inst: Vec<IrInst>, dctx: DiagCtx, source_file: String
 ) {
-    // Divergence note: the Rust path (`vow-ir/src/region.rs::handle_inst`,
-    // `Opcode::Call` arm) adds a `VirtualCaller` marker on the target arg
-    // for `RSUM_KIND_FRESH_IN_CALLER` store effects, routing the target
-    // toward `Caller(0)`. The self-hosted compiler has no `VirtualCaller`
-    // marker mechanism — targets of FreshInCaller store effects stay at
-    // their default `Root`. No diagnostic effect (region routing only),
-    // but worth promoting to true parity once hidden-caller-region
-    // plumbing for `IOP_REGION_ALLOC` lands in `vow-clif-shim`.
     let mut i: i64 = 0;
     while i < flat.len() {
         let target: i64 = flat[i];
@@ -833,12 +825,15 @@ fn check_store_conflict(
     if source.kind != RSUM_KIND_FRESH_IN_CALLER() {
         return;
     }
+    let source_inst: IrInst = lookup_inst_or_default(id_to_inst, source_arg_id);
+    if source_inst.op != IOP_REGION_ALLOC() {
+        return;
+    }
     let target_param: i64 = trace_param_shallow(id_to_inst, target_arg_id);
     if target_param < 0 {
         return;
     }
 
-    let source_inst: IrInst = lookup_inst_or_default(id_to_inst, source_arg_id);
     let span_start: i64 = if source_inst.id >= 0 && source_inst.olen > 0 { source_inst.ostart } else { call_inst.ostart };
     let span_len: i64 = if source_inst.id >= 0 && source_inst.olen > 0 { source_inst.olen } else { call_inst.olen };
     // Diagnostic shape divergence from the Rust pass: the Rust
@@ -922,16 +917,15 @@ fn analyze_function(
                 let source_id: i64 = inst.args[1];
                 let target_param: i64 = trace_param_shallow(id_to_inst, target_id);
                 if target_param >= 0 {
-                    let source: DeepRet = trace_origin_shallow(id_to_inst, source_id);
-                    add_store_effect(
+                    add_store_effect_source_constraints(
+                        id_to_inst,
+                        source_id,
+                        target_param,
+                        int_kinds,
                         int_se_targets[fidx],
                         int_se_src_kinds[fidx],
                         int_se_src_aux[fidx],
                         int_se_src_aliases[fidx],
-                        target_param,
-                        source.kind,
-                        source.aux,
-                        source.aliases,
                     );
                 }
             }
@@ -948,75 +942,72 @@ fn analyze_function(
                         let source_id2: i64 = inst.args[source_pos];
                         let target_param2: i64 = trace_param_shallow(id_to_inst, target_id2);
                         if target_param2 >= 0 {
-                            let source2: DeepRet = trace_origin_shallow(id_to_inst, source_id2);
-                            add_store_effect(
+                            add_store_effect_source_constraints(
+                                id_to_inst,
+                                source_id2,
+                                target_param2,
+                                int_kinds,
                                 int_se_targets[fidx],
                                 int_se_src_kinds[fidx],
                                 int_se_src_aux[fidx],
                                 int_se_src_aliases[fidx],
-                                target_param2,
-                                source2.kind,
-                                source2.aux,
-                                source2.aliases,
                             );
                         }
                     }
                     edge_idx = edge_idx + 1;
                 }
             }
+            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
+                publish_transitive_store_effects(
+                    inst,
+                    id_to_inst,
+                    int_kinds,
+                    int_se_targets,
+                    int_se_src_kinds,
+                    int_se_src_aux,
+                    int_se_src_aliases,
+                    int_se_targets[fidx],
+                    int_se_src_kinds[fidx],
+                    int_se_src_aux[fidx],
+                    int_se_src_aliases[fidx],
+                );
+            }
             ii = ii + 1;
         }
         bi = bi + 1;
     }
 
-    // 2. Tag heap-producing instructions whose per-destination marker LUB
-    // resolves to a concrete block. This mirrors the Rust pass's marker model
-    // without materializing a must_outlive set for every value: for each heap
-    // producer, gather concrete block markers from direct uses plus Phi/call
-    // return-alias users, then compute the cached block-tree LCA.
+    // 2. Tag heap-producing instructions with the Block / Caller / Root LUB
+    // of their use markers. This mirrors the Rust pass's marker model without
+    // materializing a must_outlive set for every value: for each heap producer,
+    // gather direct-use markers plus Phi/call return-alias users, then compute
+    // the cached block-tree LCA when only block markers remain.
     let mut rbi: i64 = 0;
     while rbi < n_bks {
         let rb: IrBlock = bks[rbi];
         let mut rii: i64 = 0;
         while rii < rb.insts.len() {
             let rinst: IrInst = rb.insts[rii];
-            if rinst.op == IOP_REGION_ALLOC() {
-                let concrete_lca: i64 = value_lub_concrete_block(
+            if is_heap_producing_for_region(rinst, int_kinds) {
+                let mut rgn: i64 = value_lub_region(
                     f, rinst.id, rb.id, id_to_inst, id_to_block,
                     block_parent, block_depth,
                     is_scalar_ity(f.return_ty),
                     int_kinds, int_auxs, int_aliases_list,
                     int_se_targets, int_se_src_kinds, int_se_src_aux,
                 );
-                if concrete_lca >= 0 {
-                    put_inst_region(
-                        region_keys[fidx],
-                        region_vals[fidx],
-                        rinst.id,
-                        region_pack(REGION_KIND_BLOCK(), concrete_lca)
-                    );
+                if rinst.op == IOP_CALL() && rinst.dk != IDATA_CALL_EXTERN() {
+                    let rk: i64 = region_kind(rgn);
+                    if rk == REGION_KIND_BLOCK() || rk == REGION_KIND_CALLER() {
+                        rgn = region_root();
+                    }
                 }
+                put_inst_region(region_keys[fidx], region_vals[fidx], rinst.id, rgn);
             }
             rii = rii + 1;
         }
         rbi = rbi + 1;
     }
-
-    // Non-concrete RegionAlloc instructions still deliberately stay Root.
-    //
-    // Current self-hosted status: the Cranelift shim can lower block regions,
-    // but `IOP_REGION_ALLOC` still has no hidden-caller-region plumbing.
-    // Emitting `region_caller0()` here would break self-hosted codegen for any
-    // allocation whose LUB is the virtual caller. We therefore leave those
-    // allocations at their Phase-2 default (Root). The summary itself is still
-    // set to FreshInCaller where appropriate so the metadata remains correct
-    // for downstream consumers; only the per-inst region tag is degraded for
-    // codegen compatibility.
-    //
-    // Rust codegen accepts Caller(0) via `cranelift_backend.rs` + Phase 4's
-    // hidden-arena projection, so the Rust pass emits `Caller(0)` on escaping
-    // allocs. This is the remaining intentional divergence between the two
-    // compilers until the self-hosted shim catches up.
 
     let new_kind: i64 = acc_kind;
     let new_aux: i64 = acc_aux;
@@ -1048,7 +1039,7 @@ fn is_heap_producing_for_region(inst: IrInst, int_kinds: Vec<i64>) -> bool {
     if inst.op == IOP_REGION_ALLOC() {
         return true;
     }
-    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && extern_fresh_in_caller(inst.ds) {
+    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && heap_producing_extern(inst.ds) {
         return true;
     }
     if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET()
@@ -1060,11 +1051,350 @@ fn is_heap_producing_for_region(inst: IrInst, int_kinds: Vec<i64>) -> bool {
     false
 }
 
+fn add_store_effect_source_constraints(
+    id_to_inst: Vec<IrInst>, source_id: i64, target_param: i64,
+    int_kinds: Vec<i64>,
+    targets: Vec<i64>, kinds: Vec<i64>, auxs: Vec<i64>, aliases_list: Vec<Vec<i64>>
+) {
+    let source: DeepRet = trace_origin_shallow(id_to_inst, source_id);
+    add_store_effect(
+        targets,
+        kinds,
+        auxs,
+        aliases_list,
+        target_param,
+        source.kind,
+        source.aux,
+        source.aliases,
+    );
+    publish_embedded_param_aliases(
+        id_to_inst,
+        source_id,
+        target_param,
+        targets,
+        kinds,
+        auxs,
+        aliases_list,
+    );
+
+    let source_inst: IrInst = lookup_inst_or_default(id_to_inst, source_id);
+    if source_inst.op != IOP_CALL() || source_inst.dk != IDATA_CALL_TARGET() {
+        return;
+    }
+    let callee_idx: i64 = source_inst.dv;
+    if callee_idx < 0 || callee_idx >= int_kinds.len() {
+        return;
+    }
+    if int_kinds[callee_idx] != RSUM_KIND_FRESH_IN_CALLER() {
+        return;
+    }
+    let mut ai: i64 = 0;
+    while ai < source_inst.args.len() {
+        let param_idx: i64 = trace_param_shallow(id_to_inst, source_inst.args[ai]);
+        if param_idx >= 0 {
+            add_store_effect(
+                targets,
+                kinds,
+                auxs,
+                aliases_list,
+                target_param,
+                RSUM_KIND_ALIAS_OF(),
+                param_idx,
+                source_inst.args,
+            );
+        }
+        ai = ai + 1;
+    }
+}
+
+fn publish_embedded_param_aliases(
+    id_to_inst: Vec<IrInst>, aggregate_id: i64, target_param: i64,
+    targets: Vec<i64>, kinds: Vec<i64>, auxs: Vec<i64>, aliases_list: Vec<Vec<i64>>
+) {
+    let mut i: i64 = 0;
+    while i < id_to_inst.len() {
+        let inst: IrInst = id_to_inst[i];
+        if (inst.op == IOP_STORE() || inst.op == IOP_FIELD_SET())
+            && inst.args.len() >= 2 && inst.args[0] == aggregate_id
+        {
+            let param_idx: i64 = trace_param_shallow(id_to_inst, inst.args[1]);
+            if param_idx >= 0 {
+                add_store_effect(
+                    targets,
+                    kinds,
+                    auxs,
+                    aliases_list,
+                    target_param,
+                    RSUM_KIND_ALIAS_OF(),
+                    param_idx,
+                    inst.args,
+                );
+            }
+        }
+        i = i + 1;
+    }
+}
+
+fn publish_transitive_store_effects(
+    call_inst: IrInst, id_to_inst: Vec<IrInst>, int_kinds: Vec<i64>,
+    all_targets: Vec<Vec<i64>>, all_kinds: Vec<Vec<i64>>,
+    all_auxs: Vec<Vec<i64>>, all_aliases: Vec<Vec<Vec<i64>>>,
+    targets: Vec<i64>, kinds: Vec<i64>, auxs: Vec<i64>, aliases_list: Vec<Vec<i64>>
+) {
+    let callee_idx: i64 = call_inst.dv;
+    if callee_idx < 0 || callee_idx >= all_targets.len() {
+        return;
+    }
+    let callee_targets: Vec<i64> = all_targets[callee_idx];
+    let callee_kinds: Vec<i64> = all_kinds[callee_idx];
+    let callee_auxs: Vec<i64> = all_auxs[callee_idx];
+    let callee_aliases: Vec<Vec<i64>> = all_aliases[callee_idx];
+    let mut i: i64 = 0;
+    while i < callee_targets.len() && i < callee_kinds.len() && i < callee_auxs.len() {
+        let target_pos: i64 = callee_targets[i];
+        if target_pos >= 0 && target_pos < call_inst.args.len() {
+            let current_target_param: i64 = trace_param_shallow(id_to_inst, call_inst.args[target_pos]);
+            if current_target_param >= 0 {
+                let kind: i64 = callee_kinds[i];
+                if kind == RSUM_KIND_ALIAS_OF() {
+                    let source_pos: i64 = callee_auxs[i];
+                    if source_pos >= 0 && source_pos < call_inst.args.len() {
+                        add_store_effect_source_constraints(
+                            id_to_inst,
+                            call_inst.args[source_pos],
+                            current_target_param,
+                            int_kinds,
+                            targets,
+                            kinds,
+                            auxs,
+                            aliases_list,
+                        );
+                    }
+                } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
+                    let als: Vec<i64> = if i < callee_aliases.len() { callee_aliases[i] } else { call_inst.args };
+                    let mut ai: i64 = 0;
+                    while ai < als.len() {
+                        let source_pos2: i64 = als[ai];
+                        if source_pos2 >= 0 && source_pos2 < call_inst.args.len() {
+                            add_store_effect_source_constraints(
+                                id_to_inst,
+                                call_inst.args[source_pos2],
+                                current_target_param,
+                                int_kinds,
+                                targets,
+                                kinds,
+                                auxs,
+                                aliases_list,
+                            );
+                        }
+                        ai = ai + 1;
+                    }
+                } else {
+                    let empty_aliases: Vec<i64> = if i < callee_aliases.len() { callee_aliases[i] } else { call_inst.args };
+                    add_store_effect(
+                        targets,
+                        kinds,
+                        auxs,
+                        aliases_list,
+                        current_target_param,
+                        kind,
+                        callee_auxs[i],
+                        empty_aliases,
+                    );
+                }
+            }
+        }
+        i = i + 1;
+    }
+}
+
 fn lookup_inst_block(id_to_block: Vec<i64>, id: i64) -> i64 {
     if id >= 0 && id < id_to_block.len() {
         return id_to_block[id];
     }
     -1
+}
+
+fn value_lub_region(
+    f: IrFunction, id: i64, defining_block: i64,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>,
+    block_parent: Vec<i64>, block_depth: Vec<i64>,
+    return_is_scalar: bool,
+    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
+    int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>
+) -> i64 {
+    let work: Vec<i64> = Vec::new();
+    let seen: Vec<i64> = Vec::new();
+    let markers: Vec<i64> = Vec::new();
+    linear_insert_i64(markers, region_pack(REGION_KIND_BLOCK(), defining_block));
+    work.push(id);
+    while work.len() > 0 {
+        let cur: i64 = work[work.len() - 1];
+        work.pop();
+        if region_vec_contains_i64(seen, cur) {
+            continue;
+        }
+        seen.push(cur);
+        direct_markers_collect_regions(
+            f,
+            cur,
+            id_to_inst,
+            id_to_block,
+            markers,
+            return_is_scalar,
+            int_kinds,
+            int_auxs,
+            int_aliases_list,
+            int_se_targets,
+            int_se_src_kinds,
+            int_se_src_aux,
+            work,
+            seen
+        );
+    }
+    region_lub_from_markers(markers, defining_block, block_parent, block_depth)
+}
+
+fn region_lub_from_markers(
+    markers: Vec<i64>, defining_block: i64, block_parent: Vec<i64>, block_depth: Vec<i64>
+) -> i64 {
+    let blocks: Vec<i64> = Vec::new();
+    let mut has_caller: bool = false;
+    let mut has_root: bool = false;
+    let mut i: i64 = 0;
+    while i < markers.len() {
+        let marker: i64 = markers[i];
+        let kind: i64 = region_kind(marker);
+        if kind == REGION_KIND_ROOT() {
+            has_root = true;
+        } else if kind == REGION_KIND_CALLER() {
+            has_caller = true;
+        } else if kind == REGION_KIND_BLOCK() {
+            linear_insert_i64(blocks, region_val(marker));
+        }
+        i = i + 1;
+    }
+    if has_root {
+        return region_root();
+    }
+    if has_caller {
+        return region_caller0();
+    }
+    linear_insert_i64(blocks, defining_block);
+    sort_i64_vec_inplace(blocks);
+    let lca: i64 = block_tree_lca_all(block_parent, block_depth, blocks);
+    if lca >= 0 {
+        return region_pack(REGION_KIND_BLOCK(), lca);
+    }
+    region_caller0()
+}
+
+fn direct_markers_collect_regions(
+    f: IrFunction, id: i64,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>,
+    markers: Vec<i64>,
+    return_is_scalar: bool,
+    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
+    int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>,
+    work: Vec<i64>, seen: Vec<i64>
+) {
+    let bks: Vec<IrBlock> = f.blocks;
+    let mut bi: i64 = 0;
+    while bi < bks.len() {
+        let blk: IrBlock = bks[bi];
+        let mut ii: i64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            let mut ai: i64 = 0;
+            while ai < inst.args.len() {
+                if inst.args[ai] == id {
+                    // Every argument use contributes the use-block marker.
+                    linear_insert_i64(markers, region_pack(REGION_KIND_BLOCK(), blk.id));
+                    if inst.op == IOP_RETURN() && !return_is_scalar {
+                        linear_insert_i64(markers, region_caller0());
+                    }
+                    if (inst.op == IOP_STORE() || inst.op == IOP_FIELD_SET()) && ai == 1 {
+                        let target_marker: i64 = target_marker_region(
+                            id_to_inst,
+                            id_to_block,
+                            inst.args[0],
+                            int_kinds
+                        );
+                        linear_insert_i64(markers, target_marker);
+                        push_region_work(work, seen, inst.args[0]);
+                    }
+                    if inst.op == IOP_UPSILON() && ai == 0 && inst.dk == IDATA_PHI_TARGET() {
+                        let phi_block: i64 = lookup_inst_block(id_to_block, inst.dv);
+                        if phi_block >= 0 {
+                            linear_insert_i64(markers, region_pack(REGION_KIND_BLOCK(), phi_block));
+                            push_region_work(work, seen, inst.dv);
+                        } else {
+                            linear_insert_i64(markers, region_root());
+                        }
+                    }
+                    if inst.op == IOP_FIELD_GET() && ai == 0 {
+                        push_region_work(work, seen, inst.id);
+                    }
+                    if inst.op == IOP_LOAD() && ai == 0 && !is_scalar_ity(inst.ty) {
+                        push_region_work(work, seen, inst.id);
+                    }
+                    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
+                        let callee_idx: i64 = inst.dv;
+                        call_store_effects_collect_regions(
+                            inst,
+                            ai,
+                            id_to_inst,
+                            id_to_block,
+                            int_kinds,
+                            markers,
+                            int_se_targets,
+                            int_se_src_kinds,
+                            int_se_src_aux,
+                            work,
+                            seen
+                        );
+                        if callee_idx >= 0 && callee_idx < int_kinds.len()
+                            && int_kinds[callee_idx] == RSUM_KIND_FRESH_IN_CALLER()
+                        {
+                            // Fresh aggregate results may embed heap descriptors
+                            // passed as constructor arguments. Let later widening
+                            // of the call result flow back to this argument.
+                            push_region_work(work, seen, inst.id);
+                        }
+                        if callee_return_aliases_arg(
+                            callee_idx,
+                            ai,
+                            int_kinds,
+                            int_auxs,
+                            int_aliases_list
+                        ) {
+                            push_region_work(work, seen, inst.id);
+                        }
+                    }
+                    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
+                        let target_pos2: i64 = extern_store_target_for_source(inst.ds, ai);
+                        if target_pos2 >= 0 && target_pos2 < inst.args.len() {
+                            let target_marker2: i64 = if trace_param_shallow(id_to_inst, inst.args[target_pos2]) >= 0 {
+                                region_root()
+                            } else {
+                                target_marker_region(
+                                    id_to_inst,
+                                    id_to_block,
+                                    inst.args[target_pos2],
+                                    int_kinds
+                                )
+                            };
+                            linear_insert_i64(markers, target_marker2);
+                            push_region_work(work, seen, inst.args[target_pos2]);
+                        }
+                    }
+                }
+                ai = ai + 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
 }
 
 fn value_lub_concrete_block(
@@ -1182,6 +1512,11 @@ fn direct_markers_collect_concrete_blocks(
                         ) {
                             return false;
                         }
+                        if callee_idx >= 0 && callee_idx < int_kinds.len()
+                            && int_kinds[callee_idx] == RSUM_KIND_FRESH_IN_CALLER()
+                        {
+                            push_region_work(work, seen, inst.id);
+                        }
                         if callee_return_aliases_arg(
                             callee_idx,
                             ai,
@@ -1246,6 +1581,61 @@ fn target_marker_concrete_block(
         return lookup_inst_block(id_to_block, target_id);
     }
     -1
+}
+
+fn target_marker_region(
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, target_id: i64,
+    int_kinds: Vec<i64>
+) -> i64 {
+    let inst: IrInst = lookup_inst_or_default(id_to_inst, target_id);
+    if inst.id < 0 {
+        return region_root();
+    }
+    if inst.op == IOP_GET_ARG() {
+        return region_caller0();
+    }
+    if is_heap_producing_for_region(inst, int_kinds) {
+        let blk: i64 = lookup_inst_block(id_to_block, target_id);
+        if blk >= 0 {
+            return region_pack(REGION_KIND_BLOCK(), blk);
+        }
+    }
+    region_root()
+}
+
+fn call_store_effects_collect_regions(
+    call_inst: IrInst, source_arg_pos: i64,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, int_kinds: Vec<i64>,
+    markers: Vec<i64>,
+    int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>,
+    work: Vec<i64>, seen: Vec<i64>
+) {
+    let callee_idx: i64 = call_inst.dv;
+    if callee_idx < 0 || callee_idx >= int_se_targets.len() {
+        return;
+    }
+    let targets: Vec<i64> = int_se_targets[callee_idx];
+    let kinds: Vec<i64> = int_se_src_kinds[callee_idx];
+    let auxs: Vec<i64> = int_se_src_aux[callee_idx];
+    let mut i: i64 = 0;
+    while i < targets.len() && i < kinds.len() && i < auxs.len() {
+        if kinds[i] == RSUM_KIND_ALIAS_OF() && auxs[i] == source_arg_pos {
+            let target_param: i64 = targets[i];
+            if target_param >= 0 && target_param < call_inst.args.len() {
+                let target_marker: i64 = target_marker_region(
+                    id_to_inst,
+                    id_to_block,
+                    call_inst.args[target_param],
+                    int_kinds
+                );
+                linear_insert_i64(markers, target_marker);
+                push_region_work(work, seen, call_inst.args[target_param]);
+            }
+        } else if kinds[i] == RSUM_KIND_ALIAS_OF_ANY() {
+            linear_insert_i64(markers, region_root());
+        }
+        i = i + 1;
+    }
 }
 
 fn call_store_effects_collect_concrete_blocks(
@@ -2291,6 +2681,15 @@ fn extern_fresh_in_caller(sym: String) -> bool {
         || sym == String::from("__vow_vec_from_raw_parts_copy_val")
 }
 
+fn vec_creation_extern(sym: String) -> bool {
+    sym == String::from("__vow_vec_new")
+        || sym == String::from("__vow_vec_new_val")
+}
+
+fn heap_producing_extern(sym: String) -> bool {
+    extern_fresh_in_caller(sym) || vec_creation_extern(sym)
+}
+
 fn extern_store_edge_count(sym: String) -> i64 {
     if sym == String::from("__vow_vec_push_val") { return 1; }
     if sym == String::from("__vow_vec_push_val_in_arena") { return 1; }
@@ -2359,6 +2758,9 @@ fn trace_origin_shallow(id_to_inst: Vec<IrInst>, id: i64) -> DeepRet {
     if inst.op == IOP_REGION_ALLOC() {
         return DeepRet { kind: RSUM_KIND_FRESH_IN_CALLER(), aux: 0, aliases: Vec::new() };
     }
+    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && heap_producing_extern(inst.ds) {
+        return DeepRet { kind: RSUM_KIND_FRESH_IN_CALLER(), aux: 0, aliases: Vec::new() };
+    }
     if is_const_op(inst.op) {
         return deep_ret_const_global();
     }
@@ -2366,9 +2768,31 @@ fn trace_origin_shallow(id_to_inst: Vec<IrInst>, id: i64) -> DeepRet {
 }
 
 fn trace_param_shallow(id_to_inst: Vec<IrInst>, id: i64) -> i64 {
+    let visiting: Vec<i64> = Vec::new();
+    trace_param_inner(id_to_inst, id, visiting)
+}
+
+fn trace_param_inner(id_to_inst: Vec<IrInst>, id: i64, visiting: Vec<i64>) -> i64 {
+    if region_vec_contains_i64(visiting, id) {
+        return -1;
+    }
     let inst: IrInst = lookup_inst_or_default(id_to_inst, id);
     if inst.id >= 0 && inst.op == IOP_GET_ARG() {
         return inst.dv;
+    }
+    if inst.id >= 0 && (inst.op == IOP_FIELD_GET() || inst.op == IOP_LOAD()) && inst.args.len() > 0 {
+        visiting.push(id);
+        let r: i64 = trace_param_inner(id_to_inst, inst.args[0], visiting);
+        visiting.pop();
+        return r;
+    }
+    if inst.id >= 0 && inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
+        && inst.ds == String::from("__vow_vec_get_val") && inst.args.len() > 0
+    {
+        visiting.push(id);
+        let r2: i64 = trace_param_inner(id_to_inst, inst.args[0], visiting);
+        visiting.pop();
+        return r2;
     }
     -1
 }
@@ -2410,7 +2834,7 @@ fn deep_origin_inner(
         return deep_ret_const_global();
     }
     if inst.op == IOP_CALL() {
-        if inst.dk == IDATA_CALL_EXTERN() && extern_fresh_in_caller(inst.ds) {
+        if inst.dk == IDATA_CALL_EXTERN() && heap_producing_extern(inst.ds) {
             return DeepRet { kind: RSUM_KIND_FRESH_IN_CALLER(), aux: 0, aliases: Vec::new() };
         }
         if inst.dk == IDATA_CALL_TARGET() {

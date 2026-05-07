@@ -10,6 +10,63 @@ fn str2(a: String, b: String) -> String {
     r
 }
 
+fn clif_find_inst_region(f: IrFunction, id: i64) -> i64 {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: i64 = 0;
+    while bi < blocks.len() {
+        let insts: Vec<IrInst> = blocks[bi].insts;
+        let mut ii: i64 = 0;
+        while ii < insts.len() {
+            if insts[ii].id == id {
+                return insts[ii].rgn;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    region_root()
+}
+
+fn clif_receiver_region(f: IrFunction, inst: IrInst) -> i64 {
+    if inst.args.len() == 0 {
+        return region_root();
+    }
+    clif_find_inst_region(f, inst.args[0])
+}
+
+fn clif_routed_extern_symbol(f: IrFunction, inst: IrInst) -> String {
+    let sym: String = inst.ds;
+    if sym == String::from("__vow_vec_new") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_vec_new_in_arena");
+    }
+    if sym == String::from("__vow_vec_new_val") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_vec_new_val_in_arena");
+    }
+    if sym == String::from("__vow_vec_push_val") {
+        let rr: i64 = clif_receiver_region(f, inst);
+        let rk: i64 = region_kind(rr);
+        if rk == REGION_KIND_BLOCK() || rk == REGION_KIND_CALLER() {
+            return String::from("__vow_vec_push_val_in_arena");
+        }
+        return sym;
+    }
+    if sym == String::from("__vow_vec_push") {
+        let rr2: i64 = clif_receiver_region(f, inst);
+        let rk2: i64 = region_kind(rr2);
+        if rk2 == REGION_KIND_BLOCK() || rk2 == REGION_KIND_CALLER() {
+            return String::from("__vow_vec_push_in_arena");
+        }
+        return sym;
+    }
+    sym
+}
+
 fn collect_extern_syms(m: IrModule, mode: i64) -> Vec<String> {
     let result: Vec<String> = Vec::new();
     let has_debug: bool = mode == 1 || mode == 3;
@@ -27,7 +84,7 @@ fn collect_extern_syms(m: IrModule, mode: i64) -> Vec<String> {
                 let inst: IrInst = insts[ii];
                 let skip: bool = inst.op == IOP_DEBUG_CALL() && !has_debug;
                 if inst.dk == IDATA_CALL_EXTERN() && !skip {
-                    let sym: String = inst.ds;
+                    let sym: String = clif_routed_extern_symbol(f, inst);
                     if !vec_contains_str(result, sym) {
                         result.push(sym);
                     }
@@ -132,7 +189,17 @@ fn clif_emit_module(m: IrModule, output_path: String, mode: i64, trace: i64) -> 
                 0
             }
         };
-        __vow_clif_declare_function(ctx, fi, f.name, f.params, f.params.len(), f.return_ty, is_main);
+        __vow_clif_declare_function(
+            ctx,
+            fi,
+            f.name,
+            f.params,
+            f.params.len(),
+            f.return_ty,
+            is_main,
+            f.rsum_return_kind,
+            f.rsum_store_effects
+        );
         fi = fi + 1;
     }
 

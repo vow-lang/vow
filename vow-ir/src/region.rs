@@ -14,8 +14,9 @@
 //!    monotone fixed-point seeded at the internal `Uninit` ⊥ element
 //!    (spec §4.3 step 1).
 //! 3. Per function, walk every block / inst, collecting `must_outlive(I)`
-//!    sets. Heap-producing instructions (today: `Opcode::RegionAlloc`) get
-//!    their `region` field set from the LUB.
+//!    sets. Heap-producing instructions (`Opcode::RegionAlloc` plus
+//!    recognised fresh runtime allocation extern calls) get their `region`
+//!    field set from the LUB.
 //! 4. Per function, derive a `RegionSummary` from the `Return` arg's
 //!    `must_outlive` set + per-call store-effect contributions.
 //! 5. After fixed point, every still-`Uninit` summary is resolved by
@@ -1429,12 +1430,15 @@ fn analyze_function(
             }
             let markers = must_outlive.get(&inst.id).cloned().unwrap_or_default();
             let mut region_id = lub_to_region_id(&markers, block.id, &block_tree);
-            if inst.opcode == Opcode::Call {
+            if inst.opcode == Opcode::Call
+                && !matches!(&inst.data, InstData::CallExtern(sym) if heap_producing_extern(sym))
+            {
                 // Hidden caller-region codegen is still too shallow for
-                // aggregate FreshInCaller call results that are immediately
-                // projected and repackaged. Keep call materialisation
-                // conservative; issue #289 is about concrete block LUB for
-                // RegionAlloc producers.
+                // unresolved/internal aggregate FreshInCaller call results
+                // that are immediately projected and repackaged. Keep those
+                // materialisations conservative, while allowing recognised
+                // runtime heap producers to route through their explicit
+                // arena-aware ABI.
                 if matches!(region_id, RegionId::Block(_) | RegionId::Caller(_)) {
                     region_id = RegionId::Root;
                 }
@@ -1451,6 +1455,14 @@ fn extern_fresh_in_caller(sym: &str) -> bool {
         sym,
         "__vow_string_from_raw_parts_copy" | "__vow_vec_from_raw_parts_copy_val"
     )
+}
+
+fn vec_creation_extern(sym: &str) -> bool {
+    matches!(sym, "__vow_vec_new" | "__vow_vec_new_val")
+}
+
+fn heap_producing_extern(sym: &str) -> bool {
+    extern_fresh_in_caller(sym) || vec_creation_extern(sym)
 }
 
 fn for_each_extern_store_edge(sym: &str, args: &[InstId], mut visit: impl FnMut(InstId, InstId)) {
@@ -1470,7 +1482,7 @@ fn is_heap_producing(inst: &Inst, summaries: &[InternalSummary]) -> bool {
     matches!(inst.opcode, Opcode::RegionAlloc)
         || matches!(
             (&inst.opcode, &inst.data),
-            (Opcode::Call, InstData::CallExtern(sym)) if extern_fresh_in_caller(sym)
+            (Opcode::Call, InstData::CallExtern(sym)) if heap_producing_extern(sym)
         )
         || matches!(
             (&inst.opcode, &inst.data),
@@ -1532,11 +1544,13 @@ fn handle_inst(
                 );
                 // If the target traces to a parameter, record a store_effect.
                 if let Some(target_param) = trace_param(target_id, inst_lookup) {
-                    let source_origin = trace_origin(source_id, inst_lookup);
-                    let source_constraint = origin_to_constraint(&source_origin);
-                    summary
-                        .store_effects
-                        .insert((target_param, InternalReturnRegion::Published(source_constraint)));
+                    add_store_effect_source_constraints(
+                        summary,
+                        target_param,
+                        source_id,
+                        inst_lookup,
+                        summaries,
+                    );
                 }
             }
         Opcode::Upsilon => {
@@ -1561,12 +1575,13 @@ fn handle_inst(
                     };
                     add_marker(must_outlive, source_id, marker);
                     if let Some(target_param) = trace_param(target_id, inst_lookup) {
-                        let source_origin = trace_origin(source_id, inst_lookup);
-                        let source_constraint = origin_to_constraint(&source_origin);
-                        summary.store_effects.insert((
+                        add_store_effect_source_constraints(
+                            summary,
                             target_param,
-                            InternalReturnRegion::Published(source_constraint),
-                        ));
+                            source_id,
+                            inst_lookup,
+                            summaries,
+                        );
                     }
                 });
             }
@@ -1592,6 +1607,16 @@ fn handle_inst(
                         continue;
                     }
                     let target_arg_id = inst.args[target_idx];
+                    if let Some(current_target_param) = trace_param(target_arg_id, inst_lookup) {
+                        publish_transitive_store_effect(
+                            summary,
+                            current_target_param,
+                            source_constraint,
+                            inst,
+                            inst_lookup,
+                            summaries,
+                        );
+                    }
                     match source_constraint {
                         InternalReturnRegion::Published(RegionConstraint::AliasOf(p)) => {
                             // The callee writes argument-at-position-p into argument-at-position-target.
@@ -1648,12 +1673,126 @@ fn handle_inst(
     }
 }
 
+fn publish_transitive_store_effect(
+    summary: &mut InternalSummary,
+    current_target_param: u32,
+    source_constraint: &InternalReturnRegion,
+    call_inst: &Inst,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+    summaries: &[InternalSummary],
+) {
+    match source_constraint {
+        InternalReturnRegion::Published(RegionConstraint::AliasOf(p)) => {
+            let p_idx = *p as usize;
+            if p_idx < call_inst.args.len() {
+                add_store_effect_source_constraints(
+                    summary,
+                    current_target_param,
+                    call_inst.args[p_idx],
+                    inst_lookup,
+                    summaries,
+                );
+            }
+        }
+        InternalReturnRegion::Published(RegionConstraint::AliasOfAny(ps)) => {
+            for p in ps {
+                let p_idx = *p as usize;
+                if p_idx < call_inst.args.len() {
+                    add_store_effect_source_constraints(
+                        summary,
+                        current_target_param,
+                        call_inst.args[p_idx],
+                        inst_lookup,
+                        summaries,
+                    );
+                }
+            }
+        }
+        InternalReturnRegion::Published(RegionConstraint::FreshInCaller) => {
+            summary.store_effects.insert((
+                current_target_param,
+                InternalReturnRegion::Published(RegionConstraint::FreshInCaller),
+            ));
+        }
+        InternalReturnRegion::Published(RegionConstraint::ConstantGlobal) => {
+            summary.store_effects.insert((
+                current_target_param,
+                InternalReturnRegion::Published(RegionConstraint::ConstantGlobal),
+            ));
+        }
+        InternalReturnRegion::Uninit => {}
+    }
+}
+
 fn add_marker(
     must_outlive: &mut BTreeMap<InstId, BTreeSet<MustOutliveMarker>>,
     inst_id: InstId,
     marker: MustOutliveMarker,
 ) {
     must_outlive.entry(inst_id).or_default().insert(marker);
+}
+
+fn add_store_effect_source_constraints(
+    summary: &mut InternalSummary,
+    target_param: u32,
+    source_id: InstId,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+    summaries: &[InternalSummary],
+) {
+    let source_origin = trace_origin(source_id, inst_lookup);
+    let source_constraint = origin_to_constraint(&source_origin);
+    summary.store_effects.insert((
+        target_param,
+        InternalReturnRegion::Published(source_constraint),
+    ));
+    publish_embedded_param_aliases(summary, target_param, source_id, inst_lookup);
+
+    let Some((_, source_inst)) = inst_lookup.get(&source_id) else {
+        return;
+    };
+    let Opcode::Call = source_inst.opcode else {
+        return;
+    };
+    let InstData::CallTarget(callee_id) = &source_inst.data else {
+        return;
+    };
+    let Some(callee) = summaries.get(callee_id.0 as usize) else {
+        return;
+    };
+    if callee.return_region != InternalReturnRegion::Published(RegionConstraint::FreshInCaller) {
+        return;
+    }
+
+    for &arg_id in &source_inst.args {
+        if let Some(param_idx) = trace_param(arg_id, inst_lookup) {
+            summary.store_effects.insert((
+                target_param,
+                InternalReturnRegion::Published(RegionConstraint::AliasOf(param_idx)),
+            ));
+        }
+    }
+}
+
+fn publish_embedded_param_aliases(
+    summary: &mut InternalSummary,
+    target_param: u32,
+    aggregate_id: InstId,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+) {
+    for (_, inst) in inst_lookup.values() {
+        if !matches!(inst.opcode, Opcode::Store | Opcode::FieldSet) || inst.args.len() < 2 {
+            continue;
+        }
+        if inst.args[0] != aggregate_id {
+            continue;
+        }
+        if let Some(param_idx) = trace_param(inst.args[1], inst_lookup) {
+            summary.store_effects.insert((
+                target_param,
+                InternalReturnRegion::Published(RegionConstraint::AliasOf(param_idx)),
+            ));
+        }
+    }
 }
 
 fn collect_regular_use_markers(
@@ -1751,6 +1890,17 @@ fn propagate_alias_markers(
                                 if j_idx < inst.args.len() {
                                     alias_edges.push((inst.id, inst.args[j_idx]));
                                 }
+                            }
+                        }
+                        InternalReturnRegion::Published(RegionConstraint::FreshInCaller) => {
+                            // A fresh aggregate can still contain borrowed
+                            // heap descriptors passed as constructor args
+                            // (`IrInst { args: ... }` is the bootstrap
+                            // stress case). Any later widening of the call
+                            // result must therefore widen the heap-producing
+                            // arguments that may have been embedded in it.
+                            for &arg_id in &inst.args {
+                                alias_edges.push((inst.id, arg_id));
                             }
                         }
                         _ => {}
@@ -1961,7 +2111,7 @@ fn origin_to_internal_inner(
         | Opcode::ConstUnit => InternalReturnRegion::Published(RegionConstraint::ConstantGlobal),
         Opcode::Call => {
             if let InstData::CallExtern(sym) = &inst.data
-                && extern_fresh_in_caller(sym)
+                && heap_producing_extern(sym)
             {
                 return InternalReturnRegion::Published(RegionConstraint::FreshInCaller);
             }
@@ -2066,6 +2216,9 @@ fn trace_origin(id: InstId, inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>) ->
             }
         }
         Opcode::RegionAlloc => ValueOrigin::RegionAlloc,
+        Opcode::Call if matches!(&inst.data, InstData::CallExtern(sym) if heap_producing_extern(sym)) => {
+            ValueOrigin::RegionAlloc
+        }
         Opcode::ConstStr
         | Opcode::ConstI32
         | Opcode::ConstI64
@@ -2094,11 +2247,38 @@ fn target_region_marker(
 }
 
 fn trace_param(id: InstId, inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>) -> Option<u32> {
+    let mut visiting = VecDeque::new();
+    trace_param_inner(id, inst_lookup, &mut visiting)
+}
+
+fn trace_param_inner(
+    id: InstId,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+    visiting: &mut VecDeque<InstId>,
+) -> Option<u32> {
+    if visiting.contains(&id) {
+        return None;
+    }
     let (_, inst) = inst_lookup.get(&id)?;
-    if let (Opcode::GetArg, InstData::ArgIndex(i)) = (inst.opcode, &inst.data) {
-        Some(*i)
-    } else {
-        None
+    match (&inst.opcode, &inst.data) {
+        (Opcode::GetArg, InstData::ArgIndex(i)) => Some(*i),
+        (Opcode::FieldGet, _) | (Opcode::Load, _) => {
+            let source = *inst.args.first()?;
+            visiting.push_back(id);
+            let result = trace_param_inner(source, inst_lookup, visiting);
+            visiting.pop_back();
+            result
+        }
+        (Opcode::Call, InstData::CallExtern(sym))
+            if matches!(sym.as_str(), "__vow_vec_get_val" | "__vow_vec_get") =>
+        {
+            let source = *inst.args.first()?;
+            visiting.push_back(id);
+            let result = trace_param_inner(source, inst_lookup, visiting);
+            visiting.pop_back();
+            result
+        }
+        _ => None,
     }
 }
 
@@ -2166,6 +2346,12 @@ fn check_store_conflict(
     let target_origin = trace_origin(target_arg_id, inst_lookup);
 
     if !matches!(source_origin, ValueOrigin::RegionAlloc) {
+        return;
+    }
+    let Some((_, source_inst)) = inst_lookup.get(&source_arg_id) else {
+        return;
+    };
+    if source_inst.opcode != Opcode::RegionAlloc {
         return;
     }
     let ValueOrigin::Param(_) = target_origin else {
@@ -3732,7 +3918,7 @@ mod tests {
     }
 
     #[test]
-    fn vec_push_val_routes_source_to_vector_target_region() {
+    fn vec_push_val_routes_source_to_local_vector_region() {
         let insts = vec![
             inst(
                 0,
@@ -3764,8 +3950,109 @@ mod tests {
 
         assert_eq!(
             m.functions[0].blocks[0].insts[1].region,
-            RegionId::Root,
-            "a value copied into an externally-managed vector must outlive the vector target"
+            RegionId::Block(BlockId(0)),
+            "a value copied into a local vector should inherit the vector target's region"
+        );
+    }
+
+    #[test]
+    fn vec_new_local_result_routes_to_block_region() {
+        let insts = vec![
+            inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+            inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0, 1],
+                InstData::CallExtern("__vow_vec_new".to_string()),
+            ),
+            inst(
+                3,
+                Opcode::Call,
+                Ty::I64,
+                vec![2],
+                InstData::CallExtern("__vow_vec_len".to_string()),
+            ),
+            inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+        ];
+        let f = function(0, "vec_local", vec![], Ty::I64, vec![block(0, insts)]);
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert_eq!(
+            m.functions[0].blocks[0].insts[2].region,
+            RegionId::Block(BlockId(0))
+        );
+    }
+
+    #[test]
+    fn returned_vec_new_routes_to_caller_region() {
+        let insts = vec![
+            inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+            inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0, 1],
+                InstData::CallExtern("__vow_vec_new".to_string()),
+            ),
+            inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+        ];
+        let f = function(0, "vec_return", vec![], Ty::Ptr, vec![block(0, insts)]);
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert_eq!(
+            m.functions[0].summary.return_region,
+            RegionConstraint::FreshInCaller
+        );
+        assert_eq!(
+            m.functions[0].blocks[0].insts[2].region,
+            RegionId::Caller(HiddenRegionIdx(0))
+        );
+    }
+
+    #[test]
+    fn vec_push_into_returned_vec_lifts_source_to_outer_region() {
+        let insts = vec![
+            inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+            inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0, 1],
+                InstData::CallExtern("__vow_vec_new".to_string()),
+            ),
+            inst(
+                3,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0, 1],
+                InstData::CallExtern("__vow_vec_new".to_string()),
+            ),
+            inst(
+                4,
+                Opcode::Call,
+                Ty::Unit,
+                vec![2, 3],
+                InstData::CallExtern("__vow_vec_push_val".to_string()),
+            ),
+            inst(5, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+        ];
+        let f = function(0, "vec_push_escape", vec![], Ty::Ptr, vec![block(0, insts)]);
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert_eq!(
+            m.functions[0].blocks[0].insts[2].region,
+            RegionId::Caller(HiddenRegionIdx(0))
+        );
+        assert_eq!(
+            m.functions[0].blocks[0].insts[3].region,
+            RegionId::Caller(HiddenRegionIdx(0))
         );
     }
 
@@ -3830,6 +4117,323 @@ mod tests {
             call.region,
             RegionId::Root,
             "FreshInCaller call result materialization remains conservative until aggregate hidden-region codegen is complete"
+        );
+    }
+
+    #[test]
+    fn fresh_aggregate_call_widens_argument_stored_in_result() {
+        let callee_insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(
+                1,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                2,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![1, 0],
+                InstData::FieldIndex(0),
+            ),
+            inst(3, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+        ];
+        let callee = function(
+            0,
+            "wrap_arg",
+            vec![Ty::Ptr],
+            Ty::Ptr,
+            vec![block(0, callee_insts)],
+        );
+        let caller_insts = vec![
+            inst(
+                10,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![],
+                InstData::CallExtern("__vow_vec_new".to_string()),
+            ),
+            inst(
+                11,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![10],
+                InstData::CallTarget(FuncId(0)),
+            ),
+            inst(12, Opcode::Return, Ty::Unit, vec![11], InstData::None),
+        ];
+        let caller = function(1, "caller", vec![], Ty::Ptr, vec![block(0, caller_insts)]);
+        let mut m = module(vec![callee, caller]);
+        infer_regions(&mut m);
+
+        assert_eq!(
+            m.functions[1].blocks[0].insts[0].region,
+            RegionId::Caller(HiddenRegionIdx(0)),
+            "argument embedded in a returned fresh aggregate must follow the aggregate escape"
+        );
+    }
+
+    #[test]
+    fn fresh_aggregate_store_effect_preserves_embedded_argument_alias() {
+        let wrap_insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(
+                1,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                2,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![1, 0],
+                InstData::FieldIndex(0),
+            ),
+            inst(3, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+        ];
+        let wrap = function(
+            0,
+            "wrap_arg",
+            vec![Ty::Ptr],
+            Ty::Ptr,
+            vec![block(0, wrap_insts)],
+        );
+        let store_insts = vec![
+            inst(10, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(11, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(
+                12,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![11],
+                InstData::CallTarget(FuncId(0)),
+            ),
+            inst(
+                13,
+                Opcode::Call,
+                Ty::Unit,
+                vec![10, 12],
+                InstData::CallExtern("__vow_vec_push_val".to_string()),
+            ),
+            inst(14, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let store = function(
+            1,
+            "store_wrapped_arg",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, store_insts)],
+        );
+        let mut m = module(vec![wrap, store]);
+        infer_regions(&mut m);
+
+        assert!(
+            m.functions[1].summary.store_effects.iter().any(|effect| {
+                effect.target == 0 && effect.source == RegionConstraint::AliasOf(1)
+            }),
+            "storing a fresh aggregate into a target must also publish aliases embedded in that aggregate"
+        );
+    }
+
+    #[test]
+    fn nested_parameter_container_store_publishes_store_effect() {
+        let insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(
+                2,
+                Opcode::FieldGet,
+                Ty::Ptr,
+                vec![0],
+                InstData::FieldIndex(0),
+            ),
+            inst(
+                3,
+                Opcode::Call,
+                Ty::Unit,
+                vec![2, 1],
+                InstData::CallExtern("__vow_vec_push_val".to_string()),
+            ),
+            inst(4, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(
+            0,
+            "store_nested",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert!(
+            m.functions[0].summary.store_effects.iter().any(|effect| {
+                effect.target == 0 && effect.source == RegionConstraint::AliasOf(1)
+            }),
+            "stores through parameter-owned fields must publish a store effect for the owning parameter"
+        );
+    }
+
+    #[test]
+    fn vec_new_through_callee_store_effect_lifts_without_conflict() {
+        let callee_insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Unit,
+                vec![0, 1],
+                InstData::CallExtern("__vow_vec_push_val".to_string()),
+            ),
+            inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let callee = function(
+            0,
+            "push_arg",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, callee_insts)],
+        );
+        let caller_insts = vec![
+            inst(10, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(
+                11,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![],
+                InstData::CallExtern("__vow_vec_new".to_string()),
+            ),
+            inst(
+                12,
+                Opcode::Call,
+                Ty::Unit,
+                vec![10, 11],
+                InstData::CallTarget(FuncId(0)),
+            ),
+            inst(13, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let caller = function(
+            1,
+            "caller",
+            vec![Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, caller_insts)],
+        );
+        let mut m = module(vec![callee, caller]);
+        infer_regions(&mut m);
+
+        assert_eq!(
+            m.functions[1].blocks[0].insts[1].region,
+            RegionId::Caller(HiddenRegionIdx(0)),
+            "Vec creation passed through a store-effecting callee should lift to the target parameter region"
+        );
+        assert!(
+            m.warnings
+                .iter()
+                .all(|d| d.code != ErrorCode::RegionConflict),
+            "routable Vec creation should not trip the block-local RegionAlloc conflict"
+        );
+    }
+
+    #[test]
+    fn internal_call_republishes_callee_store_effect_for_parameter_target() {
+        let callee_insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Unit,
+                vec![0, 1],
+                InstData::CallExtern("__vow_vec_push_val".to_string()),
+            ),
+            inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let callee = function(
+            0,
+            "push_arg",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, callee_insts)],
+        );
+        let wrapper_insts = vec![
+            inst(10, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(11, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(
+                12,
+                Opcode::Call,
+                Ty::Unit,
+                vec![10, 11],
+                InstData::CallTarget(FuncId(0)),
+            ),
+            inst(13, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let wrapper = function(
+            1,
+            "wrapper",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, wrapper_insts)],
+        );
+        let mut m = module(vec![callee, wrapper]);
+        infer_regions(&mut m);
+
+        assert!(
+            m.functions[1].summary.store_effects.iter().any(|effect| {
+                effect.target == 0 && effect.source == RegionConstraint::AliasOf(1)
+            }),
+            "internal wrappers must republish callee store effects for their own parameter targets"
+        );
+    }
+
+    #[test]
+    fn fresh_aggregate_stored_into_param_publishes_field_aliases() {
+        let insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(
+                2,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                3,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![2, 1],
+                InstData::FieldIndex(0),
+            ),
+            inst(
+                4,
+                Opcode::Call,
+                Ty::Unit,
+                vec![0, 2],
+                InstData::CallExtern("__vow_vec_push_val".to_string()),
+            ),
+            inst(5, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(
+            0,
+            "store_aggregate_with_param_field",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert!(
+            m.functions[0].summary.store_effects.iter().any(|effect| {
+                effect.target == 0 && effect.source == RegionConstraint::AliasOf(1)
+            }),
+            "fresh aggregates stored into parameter containers must publish parameter aliases in their fields"
         );
     }
 
