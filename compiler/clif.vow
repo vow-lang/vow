@@ -139,6 +139,18 @@ fn clif_value_receiver_region(f: IrFunction, receiver: IrInst, seen: Vec<i64>) -
             return hidden;
         }
     }
+    if (receiver.op == IOP_FIELD_GET() || receiver.op == IOP_LOAD()) && receiver.args.len() > 0 {
+        let src0: IrInst = clif_find_inst(f, receiver.args[0]);
+        return clif_value_receiver_region(f, src0, next_seen);
+    }
+    if receiver.op == IOP_CALL()
+        && receiver.dk == IDATA_CALL_EXTERN()
+        && (receiver.ds == String::from("__vow_vec_get_val") || receiver.ds == String::from("__vow_vec_get"))
+        && receiver.args.len() > 0
+    {
+        let src1: IrInst = clif_find_inst(f, receiver.args[0]);
+        return clif_value_receiver_region(f, src1, next_seen);
+    }
     if receiver.op == IOP_PHI() {
         let blocks: Vec<IrBlock> = f.blocks;
         let mut have: bool = false;

@@ -396,6 +396,17 @@ fn source_value_region(
     {
         return RegionId::Caller(hidden_idx);
     }
+    if matches!(source.opcode, Opcode::FieldGet | Opcode::Load)
+        && let Some(source_id) = source.args.first()
+    {
+        return arg_region_inner(*source_id, inst_index, current_summary, phi_data, seen);
+    }
+    if let (Opcode::Call, InstData::CallExtern(sym)) = (&source.opcode, &source.data)
+        && matches!(sym.as_str(), "__vow_vec_get_val" | "__vow_vec_get")
+        && let Some(source_id) = source.args.first()
+    {
+        return arg_region_inner(*source_id, inst_index, current_summary, phi_data, seen);
+    }
     if source.opcode == Opcode::Phi {
         let mut merged: Option<RegionId> = None;
         for upsilons in phi_data.block_upsilons.values() {
@@ -4569,6 +4580,100 @@ mod tests {
             source_file: String::new(),
         };
         let module = make_module("test", vec![grow_param]);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(symbols.contains("__vow_string_push_byte_in_arena"));
+        assert!(!symbols.contains("__vow_string_push_byte"));
+    }
+
+    #[test]
+    fn projected_parameter_region_string_push_byte_imports_arena_variant() {
+        let grow_projection = Function {
+            id: FuncId(0),
+            name: "grow_projection".to_string(),
+            params: vec![Ty::Ptr, Ty::Ptr],
+            param_names: vec!["strings".to_string(), "holder".to_string()],
+            return_ty: Ty::Unit,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(
+                        2,
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![0, 1],
+                        InstData::CallExtern("__vow_vec_get_val".to_string()),
+                    ),
+                    inst(3, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+                    inst(
+                        4,
+                        Opcode::FieldGet,
+                        Ty::Ptr,
+                        vec![3],
+                        InstData::FieldIndex(0),
+                    ),
+                    inst(
+                        5,
+                        Opcode::ConstI64,
+                        Ty::I64,
+                        vec![],
+                        InstData::ConstI64(120),
+                    ),
+                    inst(
+                        6,
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![2, 5],
+                        InstData::CallExtern("__vow_string_push_byte".to_string()),
+                    ),
+                    inst(
+                        7,
+                        Opcode::ConstI64,
+                        Ty::I64,
+                        vec![],
+                        InstData::ConstI64(121),
+                    ),
+                    inst(
+                        8,
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![4, 7],
+                        InstData::CallExtern("__vow_string_push_byte".to_string()),
+                    ),
+                    inst(9, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary {
+                param_regions: vec![],
+                return_region: RegionConstraint::ConstantGlobal,
+                store_effects: vec![
+                    StoreEffect {
+                        target: 0,
+                        source: RegionConstraint::ConstantGlobal,
+                    },
+                    StoreEffect {
+                        target: 1,
+                        source: RegionConstraint::ConstantGlobal,
+                    },
+                ],
+            },
+            source_file: String::new(),
+        };
+        let module = make_module("test", vec![grow_projection]);
         let result =
             CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
