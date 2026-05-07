@@ -829,7 +829,7 @@ fn check_store_conflict(
     if source_inst.op != IOP_REGION_ALLOC() {
         return;
     }
-    let target_param: i64 = trace_param_shallow(id_to_inst, target_arg_id);
+    let target_param: i64 = trace_param(id_to_inst, target_arg_id);
     if target_param < 0 {
         return;
     }
@@ -915,7 +915,7 @@ fn analyze_function(
             if (inst.op == IOP_STORE() || inst.op == IOP_FIELD_SET()) && inst.args.len() >= 2 {
                 let target_id: i64 = inst.args[0];
                 let source_id: i64 = inst.args[1];
-                let target_param: i64 = trace_param_shallow(id_to_inst, target_id);
+                let target_param: i64 = trace_param(id_to_inst, target_id);
                 if target_param >= 0 {
                     add_store_effect_source_constraints(
                         id_to_inst,
@@ -940,7 +940,7 @@ fn analyze_function(
                     {
                         let target_id2: i64 = inst.args[target_pos];
                         let source_id2: i64 = inst.args[source_pos];
-                        let target_param2: i64 = trace_param_shallow(id_to_inst, target_id2);
+                        let target_param2: i64 = trace_param(id_to_inst, target_id2);
                         if target_param2 >= 0 {
                             add_store_effect_source_constraints(
                                 id_to_inst,
@@ -958,7 +958,7 @@ fn analyze_function(
                 }
                 let growth_target_pos: i64 = extern_growth_target_pos(inst.ds);
                 if growth_target_pos >= 0 && growth_target_pos < inst.args.len() {
-                    let growth_target_param: i64 = trace_param_shallow(id_to_inst, inst.args[growth_target_pos]);
+                    let growth_target_param: i64 = trace_param(id_to_inst, inst.args[growth_target_pos]);
                     if growth_target_param >= 0 {
                         add_store_effect(
                             int_se_targets[fidx],
@@ -1106,7 +1106,7 @@ fn add_store_effect_source_constraints(
     }
     let mut ai: i64 = 0;
     while ai < source_inst.args.len() {
-        let param_idx: i64 = trace_param_shallow(id_to_inst, source_inst.args[ai]);
+        let param_idx: i64 = trace_param(id_to_inst, source_inst.args[ai]);
         if param_idx >= 0 {
             add_store_effect(
                 targets,
@@ -1133,7 +1133,7 @@ fn publish_embedded_param_aliases(
         if (inst.op == IOP_STORE() || inst.op == IOP_FIELD_SET())
             && inst.args.len() >= 2 && inst.args[0] == aggregate_id
         {
-            let param_idx: i64 = trace_param_shallow(id_to_inst, inst.args[1]);
+            let param_idx: i64 = trace_param(id_to_inst, inst.args[1]);
             if param_idx >= 0 {
                 add_store_effect(
                     targets,
@@ -1169,7 +1169,7 @@ fn publish_transitive_store_effects(
     while i < callee_targets.len() && i < callee_kinds.len() && i < callee_auxs.len() {
         let target_pos: i64 = callee_targets[i];
         if target_pos >= 0 && target_pos < call_inst.args.len() {
-            let current_target_param: i64 = trace_param_shallow(id_to_inst, call_inst.args[target_pos]);
+            let current_target_param: i64 = trace_param(id_to_inst, call_inst.args[target_pos]);
             if current_target_param >= 0 {
                 let kind: i64 = callee_kinds[i];
                 if kind == RSUM_KIND_ALIAS_OF() {
@@ -1390,7 +1390,7 @@ fn direct_markers_collect_regions(
                     if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
                         let target_pos2: i64 = extern_store_target_for_source(inst.ds, ai);
                         if target_pos2 >= 0 && target_pos2 < inst.args.len() {
-                            let target_marker2: i64 = if trace_param_shallow(id_to_inst, inst.args[target_pos2]) >= 0 {
+                            let target_marker2: i64 = if trace_param(id_to_inst, inst.args[target_pos2]) >= 0 {
                                 region_root()
                             } else {
                                 target_marker_region(
@@ -2807,7 +2807,8 @@ fn trace_origin_shallow(id_to_inst: Vec<IrInst>, id: i64) -> DeepRet {
     deep_ret_const_global()
 }
 
-fn trace_param_shallow(id_to_inst: Vec<IrInst>, id: i64) -> i64 {
+fn trace_param(id_to_inst: Vec<IrInst>, id: i64) -> i64 {
+    // Mirrors Rust trace_param: walk through field/load and Vec get wrappers back to GetArg.
     let visiting: Vec<i64> = Vec::new();
     trace_param_inner(id_to_inst, id, visiting)
 }
@@ -2827,7 +2828,8 @@ fn trace_param_inner(id_to_inst: Vec<IrInst>, id: i64, visiting: Vec<i64>) -> i6
         return r;
     }
     if inst.id >= 0 && inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
-        && inst.ds == String::from("__vow_vec_get_val") && inst.args.len() > 0
+        && (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
+        && inst.args.len() > 0
     {
         visiting.push(id);
         let r2: i64 = trace_param_inner(id_to_inst, inst.args[0], visiting);

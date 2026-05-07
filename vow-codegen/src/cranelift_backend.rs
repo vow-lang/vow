@@ -194,6 +194,8 @@ fn build_signature(ir_func: &IrFunction, call_conv: cranelift_codegen::isa::Call
 }
 
 fn hidden_region_store_targets(ir_func: &IrFunction) -> Vec<u32> {
+    // Keep this slot order in sync with compiler/clif.vow's clif_hidden_store_targets.
+    // The self-hosted path dedups before sorting; both paths must return sorted unique targets.
     let mut targets: Vec<u32> = ir_func
         .summary
         .store_effects
