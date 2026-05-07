@@ -171,6 +171,8 @@ fn clif_value_receiver_region(f: IrFunction, receiver: IrInst, seen: Vec<i64>) -
                         have = true;
                         merged = rgn;
                     } else if merged != rgn {
+                        // Divergent Phi arms cannot be unified safely. Fall back to the
+                        // receiver's own region, which is conservatively Root before routing.
                         return receiver.rgn;
                     }
                 }

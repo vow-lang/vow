@@ -3398,6 +3398,14 @@ mod tests {
             hidden_region_for_store_target(RSUM_KIND_CONSTANT_GLOBAL, &flat, 1),
             Some(region_pack(REGION_KIND_CALLER, 1))
         );
+        assert_eq!(
+            hidden_region_for_store_target(RSUM_KIND_FRESH_IN_CALLER, &flat, 0),
+            Some(region_pack(REGION_KIND_CALLER, 1))
+        );
+        assert_eq!(
+            hidden_region_for_store_target(RSUM_KIND_FRESH_IN_CALLER, &flat, 1),
+            Some(region_pack(REGION_KIND_CALLER, 2))
+        );
     }
 
     #[test]
