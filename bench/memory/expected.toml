@@ -26,6 +26,11 @@ file = "programs/alloc_loop_branch.vow"
 max_rss_kb = 20016
 expected = "pass"
 
+[alloc_loop_map]
+file = "programs/alloc_loop_map.vow"
+max_rss_kb = 6984
+expected = "pass"
+
 [alloc_loop_nested]
 file = "programs/alloc_loop_nested.vow"
 max_rss_kb = 12132

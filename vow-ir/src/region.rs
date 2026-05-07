@@ -1489,8 +1489,15 @@ fn string_creation_extern(sym: &str) -> bool {
     )
 }
 
+fn map_creation_extern(sym: &str) -> bool {
+    matches!(sym, "__vow_map_new" | "__vow_map_new_in_arena")
+}
+
 fn heap_producing_extern(sym: &str) -> bool {
-    extern_fresh_in_caller(sym) || vec_creation_extern(sym) || string_creation_extern(sym)
+    extern_fresh_in_caller(sym)
+        || vec_creation_extern(sym)
+        || string_creation_extern(sym)
+        || map_creation_extern(sym)
 }
 
 fn for_each_extern_store_edge(sym: &str, args: &[InstId], mut visit: impl FnMut(InstId, InstId)) {
@@ -1501,6 +1508,10 @@ fn for_each_extern_store_edge(sym: &str, args: &[InstId], mut visit: impl FnMut(
         "__vow_map_insert" | "__vow_btreemap_insert" if args.len() >= 3 => {
             visit(args[0], args[1]);
             visit(args[0], args[2]);
+        }
+        "__vow_map_insert_in_arena" if args.len() >= 4 => {
+            visit(args[1], args[2]);
+            visit(args[1], args[3]);
         }
         _ => {}
     }
@@ -1516,6 +1527,8 @@ fn extern_growth_target(sym: &str, args: &[InstId]) -> Option<InstId> {
         "__vow_string_push_str_in_arena" | "__vow_string_push_byte_in_arena" if args.len() >= 2 => {
             Some(args[1])
         }
+        "__vow_map_insert" if !args.is_empty() => Some(args[0]),
+        "__vow_map_insert_in_arena" if args.len() >= 2 => Some(args[1]),
         _ => None,
     }
 }

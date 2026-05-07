@@ -581,6 +581,21 @@ fn routed_vec_extern(sym: &str, inst_rgn: i64, receiver_rgn: i64) -> (&str, Opti
                 (sym, None)
             }
         }
+        "__vow_map_new" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_map_new_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_map_insert" => {
+            let kind = receiver_rgn & 3;
+            if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
+                ("__vow_map_insert_in_arena", Some(receiver_rgn))
+            } else {
+                (sym, None)
+            }
+        }
         _ => {
             if extern_uses_target_region(sym) {
                 (sym, Some(inst_rgn))
@@ -3251,7 +3266,17 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_map_new" => {
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_map_new_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_map_insert" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        "__vow_map_insert_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
@@ -3267,6 +3292,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.returns.push(AbiParam::new(types::I8));
         }
         "__vow_map_remove" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        "__vow_map_remove_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
         }

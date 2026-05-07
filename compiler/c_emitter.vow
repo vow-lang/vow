@@ -144,11 +144,14 @@ fn is_known_builtin(name: String) -> bool {
     || name == String::from("__vow_string_from_i64_in_arena")
     || name == String::from("__vow_string_print")
     || name == String::from("__vow_map_new")
+    || name == String::from("__vow_map_new_in_arena")
     || name == String::from("__vow_map_len")
     || name == String::from("__vow_map_insert")
+    || name == String::from("__vow_map_insert_in_arena")
     || name == String::from("__vow_map_get")
     || name == String::from("__vow_map_contains")
     || name == String::from("__vow_map_remove")
+    || name == String::from("__vow_map_remove_in_arena")
     || name == String::from("__vow_btreemap_new")
     || name == String::from("__vow_btreemap_len")
     || name == String::from("__vow_btreemap_insert")
@@ -493,6 +496,22 @@ fn is_string_model_constructor(name: String) -> bool {
     || name == String::from("__vow_string_from_i64_in_arena")
 }
 
+fn is_map_model_constructor(name: String) -> bool {
+    name == String::from("__vow_map_new")
+    || name == String::from("__vow_map_new_in_arena")
+}
+
+fn map_model_receiver_arg(name: String) -> i64 {
+    if name == String::from("__vow_map_insert_in_arena") { return 1; }
+    if name == String::from("__vow_map_remove_in_arena") { return 1; }
+    if name == String::from("__vow_map_insert") { return 0; }
+    if name == String::from("__vow_map_remove") { return 0; }
+    if name == String::from("__vow_map_get") { return 0; }
+    if name == String::from("__vow_map_contains") { return 0; }
+    if name == String::from("__vow_map_len") { return 0; }
+    -1
+}
+
 fn vec_model_receiver_arg(name: String) -> i64 {
     if name == String::from("__vow_vec_push_val") { return 0; }
     if name == String::from("__vow_vec_get_val") { return 0; }
@@ -618,7 +637,9 @@ fn collect_modelled_vars(f: IrFunction, constructor: String, prefix: String) -> 
                 let alt_creator: bool = (prefix == String::from("__vow_vec_")
                     && is_vec_model_constructor(ds))
                     || (prefix == String::from("__vow_string_")
-                        && is_string_model_constructor(ds));
+                        && is_string_model_constructor(ds))
+                    || (prefix == String::from("__vow_map_")
+                        && is_map_model_constructor(ds));
                 let is_creator: bool = ds == constructor || alt_creator;
                 if is_creator {
                     vec_insert_i64(vars, inst.id);
@@ -644,6 +665,8 @@ fn collect_modelled_vars(f: IrFunction, constructor: String, prefix: String) -> 
                             vec_model_receiver_arg(ds)
                         } else if prefix == String::from("__vow_string_") {
                             string_model_receiver_arg(ds)
+                        } else if prefix == String::from("__vow_map_") {
+                            map_model_receiver_arg(ds)
                         } else {
                             0
                         }
@@ -1595,7 +1618,16 @@ fn emit_map_op(out: String, inst: IrInst, hashmap_max: i64) {
     let ds: String = inst.ds;
     let iargs: Vec<i64> = inst.args;
 
-    if ds == String::from("__vow_map_new") {
+    // _in_arena variants share their bodies with the root forms; the leading
+    // arena pointer is opaque to the verifier and is consumed via arg_offset.
+    let arg_offset: i64 = {
+        if ds == String::from("__vow_map_new_in_arena") { 1 }
+        else if ds == String::from("__vow_map_insert_in_arena") { 1 }
+        else if ds == String::from("__vow_map_remove_in_arena") { 1 }
+        else { 0 }
+    };
+
+    if ds == String::from("__vow_map_new") || ds == String::from("__vow_map_new_in_arena") {
         let ids: String = i64_to_str(id);
         out.push_str(str3(String::from("  v"), ids, String::from(".len = 0;\n")));
         return;
@@ -1606,10 +1638,10 @@ fn emit_map_op(out: String, inst: IrInst, hashmap_max: i64) {
             String::from(" = v"), i64_to_str(mp), String::from(".len;\n")));
         return;
     }
-    if ds == String::from("__vow_map_insert") {
-        let mp: i64 = iargs[0];
-        let k: i64 = iargs[1];
-        let v: i64 = iargs[2];
+    if ds == String::from("__vow_map_insert") || ds == String::from("__vow_map_insert_in_arena") {
+        let mp: i64 = iargs[arg_offset];
+        let k: i64 = iargs[arg_offset + 1];
+        let v: i64 = iargs[arg_offset + 2];
         let ms: String = i64_to_str(mp);
         let ks: String = i64_to_str(k);
         let vs: String = i64_to_str(v);
@@ -1659,9 +1691,9 @@ fn emit_map_op(out: String, inst: IrInst, hashmap_max: i64) {
         out.push_str(String::from("  }\n"));
         return;
     }
-    if ds == String::from("__vow_map_remove") {
-        let mp: i64 = iargs[0];
-        let k: i64 = iargs[1];
+    if ds == String::from("__vow_map_remove") || ds == String::from("__vow_map_remove_in_arena") {
+        let mp: i64 = iargs[arg_offset];
+        let k: i64 = iargs[arg_offset + 1];
         let ms: String = i64_to_str(mp);
         let ks: String = i64_to_str(k);
         out.push_str(str3(String::from("  for (int64_t __i = 0; __i < v"), ms, String::from(".len; __i++) {\n")));
