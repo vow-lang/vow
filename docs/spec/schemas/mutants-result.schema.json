@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vow-lang.org/schemas/mutants-result.schema.json",
+  "title": "MutantsResult",
+  "description": "Output of `vow-mutants run` and `vow-mutants list`. JSON Lines format: one record per line, followed by a final Summary line.",
+  "oneOf": [
+    { "$ref": "#/$defs/Record" },
+    { "$ref": "#/$defs/Summary" }
+  ],
+  "$defs": {
+    "Record": {
+      "type": "object",
+      "required": ["file", "off", "len", "kind", "from", "to", "label", "clause_index"],
+      "properties": {
+        "file":         { "type": "string", "description": "Path of the source file relative to the project root." },
+        "off":          { "type": "integer", "minimum": 0, "description": "Byte offset of the mutation site." },
+        "len":          { "type": "integer", "minimum": 0, "description": "Byte length of the mutation span." },
+        "kind":         { "enum": ["op-flip", "const-flip", "body-replace", "contract-weaken"] },
+        "from":         { "type": "string", "description": "Original source text at the site (empty for body-replace)." },
+        "to":           { "type": "string", "description": "Replacement text spliced in for this mutation." },
+        "label":        { "type": "string", "description": "Human-readable summary of the mutation." },
+        "clause_index": { "type": "integer", "minimum": 0, "description": "Disambiguates sibling contract clauses on the same function. 0 for non-contract sites." },
+        "status":       { "enum": ["caught", "missed", "timeout", "unviable", "unrun"], "description": "Present only in `run` output." },
+        "tier":         { "enum": [1, 2], "description": "Oracle tier that produced the verdict. Present only in `run` output." },
+        "oracle_ms":    { "type": "integer", "minimum": 0, "description": "Per-mutant oracle wall-clock in milliseconds. Non-deterministic — excluded from the determinism guarantee. Present only in `run` output." }
+      },
+      "additionalProperties": false
+    },
+    "Summary": {
+      "type": "object",
+      "required": ["total", "caught", "missed", "timeout", "unviable", "unrun", "shard"],
+      "properties": {
+        "total":     { "type": "integer", "minimum": 0, "description": "Number of records emitted in this shard before the summary line." },
+        "caught":    { "type": "integer", "minimum": 0 },
+        "missed":    { "type": "integer", "minimum": 0 },
+        "timeout":   { "type": "integer", "minimum": 0 },
+        "unviable":  { "type": "integer", "minimum": 0 },
+        "unrun":     { "type": "integer", "minimum": 0, "description": "Tier-1 survivors not run because the Tier-2 budget was exhausted." },
+        "shard":     { "type": "string", "pattern": "^[0-9]+/[1-9][0-9]*$" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

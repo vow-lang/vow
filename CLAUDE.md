@@ -241,6 +241,22 @@ The `examples/` directory contains runnable `.vow` programs:
 - `bisect.vow` — loop invariant
 - `countdown.vow` — while loop
 
+## Mutation Testing (`tools/vow-mutants/`)
+
+`tools/vow-mutants/` is a `cargo-mutants`-style mutation testing tool, dogfooded as a self-hosted Vow program. It mutates `compiler/*.vow` (or any `--root` directory), runs a tiered oracle (`scripts/bootstrap.sh --skip-cargo` then `scripts/full_test.sh`), and emits JSONL records classifying each mutant as `caught`/`missed`/`timeout`/`unviable`/`unrun`.
+
+```bash
+build/vowc build --no-verify tools/vow-mutants/main.vow -o build/vow-mutants
+build/vow-mutants list                                  # enumerate sites only
+build/vow-mutants run --shard 0/8 --tier2-budget-secs 9000 > mutants.out
+```
+
+Mutation kinds: `op-flip` (binary operators), `const-flip` (`0`/`1`, `true`/`false`), `body-replace` (function bodies → default value for return type), `contract-weaken` (`requires`/`ensures`/`invariant` clauses → `true`).
+
+Skip-list: `// GENERATE:<NAME>:START`/`:END` blocks and `extern "C" { ... }` blocks are excluded. `test_*.vow` files are filtered before scanning.
+
+`.github/workflows/vow-mutants.yml` runs the suite nightly, sharded across 8 GitHub Actions runners, with each shard uploading its `mutants.out` artifact. Wall-clock note: full Tier-2 coverage does not fit in a single nightly run; shards exit with `unrun` records when the per-shard budget is exhausted. See `tools/vow-mutants/README.md` for the full output schema and known limitations.
+
 ## Vericoding Benchmark Suite
 
 `benchmarks/` contains 40 verification benchmarks (15 Easy, 15 Medium, 10 Hard; 4 Hard are Stretch).

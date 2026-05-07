@@ -1,0 +1,33 @@
+module Oracle
+
+// Status codes — match the JSON record's "status" field.
+fn ST_CAUGHT()   -> i64 { 0 }
+fn ST_MISSED()   -> i64 { 1 }
+fn ST_TIMEOUT()  -> i64 { 2 }
+fn ST_UNVIABLE() -> i64 { 3 }
+fn ST_UNRUN()    -> i64 { 4 }
+
+fn status_str(s: i64) -> String {
+    if s == ST_CAUGHT()   { return String::from("caught"); }
+    if s == ST_MISSED()   { return String::from("missed"); }
+    if s == ST_TIMEOUT()  { return String::from("timeout"); }
+    if s == ST_UNVIABLE() { return String::from("unviable"); }
+    if s == ST_UNRUN()    { return String::from("unrun"); }
+    String::from("unknown")
+}
+
+// Run a shell command via `sh -c`, return exit code (or -2 on timeout, -1 on
+// spawn error). Cmd is interpreted by the shell, so it can include flags,
+// pipes, redirections, etc.
+fn run_shell(cmd: String, timeout_ms: i64) -> i64 [io] {
+    let args: Vec<String> = Vec::new();
+    args.push(String::from("-c"));
+    args.push(cmd);
+    let pid: i64 = process_start(String::from("sh"), args);
+    if pid < 0 { return -1; }
+    let rc: i64 = process_wait_timeout(pid, timeout_ms);
+    if rc == -2 {
+        process_kill(pid);
+    }
+    rc
+}

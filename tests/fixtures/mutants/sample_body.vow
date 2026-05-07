@@ -1,0 +1,14 @@
+module SampleBody
+
+fn returns_i64(x: i64) -> i64 {
+    let y: i64 = x;
+    y
+}
+
+fn returns_bool(p: i64, q: i64) -> bool {
+    if p > q { true } else { false }
+}
+
+fn returns_unit() -> () [io] {
+    eprintln_str("noop");
+}
