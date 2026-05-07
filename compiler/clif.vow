@@ -75,6 +75,8 @@ fn clif_hidden_store_targets(flat: Vec<i64>) -> Vec<i64> {
     let mut i: i64 = 0;
     while i + 1 < flat.len() {
         let target: i64 = flat[i];
+        // Rust collects all targets then sorts/dedups; this dedups before sorting.
+        // Both paths produce the same sorted unique slot order.
         if !clif_i64_vec_contains(targets, target) {
             targets.push(target);
         }
@@ -122,6 +124,7 @@ fn clif_value_receiver_region(f: IrFunction, receiver: IrInst, depth: i64) -> i6
             return hidden;
         }
     }
+    // Rust uses an exact visited set; this depth cap is conservative for lowerer IR.
     if receiver.op == IOP_PHI() && depth < 32 {
         let blocks: Vec<IrBlock> = f.blocks;
         let mut have: bool = false;

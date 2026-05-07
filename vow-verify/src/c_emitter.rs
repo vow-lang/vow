@@ -1098,11 +1098,16 @@ fn emit_inst(
                         let len = inst.args[len_arg].0;
                         let string_max = limits.string_max;
                         out.push_str(&format!(
-                            "  __ESBMC_assert(v{start} >= 0 && v{start} <= v{s}.len, \"substr start\");\n\
-                             \x20 __ESBMC_assert(v{len} >= 0 && v{start} + v{len} <= v{s}.len, \"substr len\");\n\
-                             \x20 v{id}.len = v{len};\n\
+                            "  int64_t __substr_start_{id} = v{start};\n\
+                             \x20 if (__substr_start_{id} < 0) {{ __substr_start_{id} = 0; }}\n\
+                             \x20 if (__substr_start_{id} > v{s}.len) {{ __substr_start_{id} = v{s}.len; }}\n\
+                             \x20 int64_t __substr_len_{id} = v{len};\n\
+                             \x20 if (__substr_len_{id} < 0) {{ __substr_len_{id} = 0; }}\n\
+                             \x20 int64_t __substr_max_len_{id} = v{s}.len - __substr_start_{id};\n\
+                             \x20 if (__substr_len_{id} > __substr_max_len_{id}) {{ __substr_len_{id} = __substr_max_len_{id}; }}\n\
+                             \x20 v{id}.len = __substr_len_{id};\n\
                              \x20 for (int64_t __i = 0; __i < v{id}.len && __i < {string_max}; __i++) {{\n\
-                             \x20   v{id}.data[__i] = v{s}.data[v{start} + __i];\n\
+                             \x20   v{id}.data[__i] = v{s}.data[__substr_start_{id} + __i];\n\
                              \x20 }}\n",
                         ));
                     }
@@ -1118,11 +1123,15 @@ fn emit_inst(
                         let end = inst.args[end_arg].0;
                         let string_max = limits.string_max;
                         out.push_str(&format!(
-                            "  __ESBMC_assert(v{start} >= 0 && v{start} <= v{s}.len, \"substring start\");\n\
-                             \x20 __ESBMC_assert(v{end} >= v{start} && v{end} <= v{s}.len, \"substring end\");\n\
-                             \x20 v{id}.len = v{end} - v{start};\n\
+                            "  int64_t __substring_start_{id} = v{start};\n\
+                             \x20 if (__substring_start_{id} < 0) {{ __substring_start_{id} = 0; }}\n\
+                             \x20 if (__substring_start_{id} > v{s}.len) {{ __substring_start_{id} = v{s}.len; }}\n\
+                             \x20 int64_t __substring_end_{id} = v{end};\n\
+                             \x20 if (__substring_end_{id} < __substring_start_{id}) {{ __substring_end_{id} = __substring_start_{id}; }}\n\
+                             \x20 if (__substring_end_{id} > v{s}.len) {{ __substring_end_{id} = v{s}.len; }}\n\
+                             \x20 v{id}.len = __substring_end_{id} - __substring_start_{id};\n\
                              \x20 for (int64_t __i = 0; __i < v{id}.len && __i < {string_max}; __i++) {{\n\
-                             \x20   v{id}.data[__i] = v{s}.data[v{start} + __i];\n\
+                             \x20   v{id}.data[__i] = v{s}.data[__substring_start_{id} + __i];\n\
                              \x20 }}\n",
                         ));
                     }
@@ -3450,7 +3459,7 @@ mod tests {
             "substring source receiver must not be emitted as scalar int64_t: {c}"
         );
         assert!(
-            c.contains("v3.len = v2 - v1"),
+            c.contains("v3.len = __substring_end_3 - __substring_start_3"),
             "substring result model should still be emitted: {c}"
         );
     }
@@ -3499,8 +3508,116 @@ mod tests {
             "arena substr source receiver must not be emitted as scalar int64_t: {c}"
         );
         assert!(
-            c.contains("v4.len = v3"),
+            c.contains("v4.len = __substr_len_4"),
             "substr result model should still be emitted: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_string_substr_models_runtime_clamping() {
+        use vow_ir::InstId;
+        let func = Function {
+            id: FuncId(0),
+            name: "substr_clamp".to_string(),
+            params: vec![Ty::Ptr],
+            param_names: vec!["s".to_string()],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(-1)),
+                    inst(
+                        2,
+                        Opcode::ConstI64,
+                        Ty::I64,
+                        vec![],
+                        InstData::ConstI64(999),
+                    ),
+                    Inst {
+                        id: InstId(3),
+                        opcode: Opcode::Call,
+                        ty: Ty::Ptr,
+                        args: vec![InstId(0), InstId(1), InstId(2)],
+                        data: InstData::CallExtern("__vow_string_substr".to_string()),
+                        origin: sp(),
+                        region: RegionId::Root,
+                    },
+                    inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            !c.contains("\"substr start\"") && !c.contains("\"substr len\""),
+            "substr model should not assert inputs the runtime clamps: {c}"
+        );
+        assert!(
+            c.contains("__substr_start_3") && c.contains("__substr_len_3"),
+            "substr model should introduce clamped start/len temporaries: {c}"
+        );
+        assert!(
+            c.contains("v3.data[__i] = v0.data[__substr_start_3 + __i];"),
+            "substr copy should index with the clamped start: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_string_substring_models_runtime_clamping() {
+        use vow_ir::InstId;
+        let func = Function {
+            id: FuncId(0),
+            name: "substring_clamp".to_string(),
+            params: vec![Ty::Ptr],
+            param_names: vec!["s".to_string()],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(-5)),
+                    inst(
+                        2,
+                        Opcode::ConstI64,
+                        Ty::I64,
+                        vec![],
+                        InstData::ConstI64(999),
+                    ),
+                    Inst {
+                        id: InstId(3),
+                        opcode: Opcode::Call,
+                        ty: Ty::Ptr,
+                        args: vec![InstId(0), InstId(1), InstId(2)],
+                        data: InstData::CallExtern("__vow_string_substring".to_string()),
+                        origin: sp(),
+                        region: RegionId::Root,
+                    },
+                    inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            !c.contains("\"substring start\"") && !c.contains("\"substring end\""),
+            "substring model should not assert inputs the runtime clamps: {c}"
+        );
+        assert!(
+            c.contains("__substring_start_3") && c.contains("__substring_end_3"),
+            "substring model should introduce clamped start/end temporaries: {c}"
+        );
+        assert!(
+            c.contains("v3.data[__i] = v0.data[__substring_start_3 + __i];"),
+            "substring copy should index with the clamped start: {c}"
         );
     }
 

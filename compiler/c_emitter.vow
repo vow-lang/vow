@@ -1491,18 +1491,24 @@ fn emit_string_op(out: String, inst: IrInst, string_max: i64, eq_lo: Vec<i64>, e
         let starts: String = i64_to_str(start);
         let lens: String = i64_to_str(len);
         let ids: String = i64_to_str(id);
-        out.push_str(str7(String::from("  __ESBMC_assert(v"), starts,
-            String::from(" >= 0 && v"), starts,
-            String::from(" <= v"), ss, String::from(".len, \"substr start\");\n")));
-        out.push_str(str7(String::from("  __ESBMC_assert(v"), lens,
-            String::from(" >= 0 && v"), starts,
-            String::from(" + v"), lens, String::from(" <= v")));
-        out.push_str(str2(ss, String::from(".len, \"substr len\");\n")));
-        out.push_str(str5(String::from("  v"), ids, String::from(".len = v"), lens, String::from(";\n")));
+        let start_tmp: String = str2(String::from("__substr_start_"), ids);
+        let len_tmp: String = str2(String::from("__substr_len_"), ids);
+        let max_tmp: String = str2(String::from("__substr_max_len_"), ids);
+        out.push_str(str5(String::from("  int64_t "), start_tmp, String::from(" = v"), starts, String::from(";\n")));
+        out.push_str(str5(String::from("  if ("), start_tmp, String::from(" < 0) { "), start_tmp, String::from(" = 0; }\n")));
+        out.push_str(str7(String::from("  if ("), start_tmp, String::from(" > v"), ss, String::from(".len) { "), start_tmp, String::from(" = v")));
+        out.push_str(str2(ss, String::from(".len; }\n")));
+        out.push_str(str5(String::from("  int64_t "), len_tmp, String::from(" = v"), lens, String::from(";\n")));
+        out.push_str(str5(String::from("  if ("), len_tmp, String::from(" < 0) { "), len_tmp, String::from(" = 0; }\n")));
+        out.push_str(str5(String::from("  int64_t "), max_tmp, String::from(" = v"), ss, String::from(".len - ")));
+        out.push_str(str2(start_tmp, String::from(";\n")));
+        out.push_str(str5(String::from("  if ("), len_tmp, String::from(" > "), max_tmp, String::from(") { ")));
+        out.push_str(str5(len_tmp, String::from(" = "), max_tmp, String::from("; }\n"), String::from("")));
+        out.push_str(str5(String::from("  v"), ids, String::from(".len = "), len_tmp, String::from(";\n")));
         out.push_str(str5(String::from("  for (int64_t __i = 0; __i < v"), ids,
             String::from(".len && __i < "), i64_to_str(string_max), String::from("; __i++) {\n")));
-        out.push_str(str5(String::from("    v"), ids, String::from(".data[__i] = v"), ss, String::from(".data[v")));
-        out.push_str(str2(starts, String::from(" + __i];\n")));
+        out.push_str(str5(String::from("    v"), ids, String::from(".data[__i] = v"), ss, String::from(".data[")));
+        out.push_str(str2(start_tmp, String::from(" + __i];\n")));
         out.push_str(String::from("  }\n"));
         return;
     }
@@ -1514,19 +1520,23 @@ fn emit_string_op(out: String, inst: IrInst, string_max: i64, eq_lo: Vec<i64>, e
         let starts2: String = i64_to_str(start2);
         let ends2: String = i64_to_str(end2);
         let ids2: String = i64_to_str(id);
-        out.push_str(str7(String::from("  __ESBMC_assert(v"), starts2,
-            String::from(" >= 0 && v"), starts2,
-            String::from(" <= v"), ss2, String::from(".len, \"substring start\");\n")));
-        out.push_str(str7(String::from("  __ESBMC_assert(v"), ends2,
-            String::from(" >= v"), starts2,
-            String::from(" && v"), ends2, String::from(" <= v")));
-        out.push_str(str2(ss2, String::from(".len, \"substring end\");\n")));
-        out.push_str(str5(String::from("  v"), ids2, String::from(".len = v"), ends2, String::from(" - v")));
-        out.push_str(str2(starts2, String::from(";\n")));
+        let start_tmp2: String = str2(String::from("__substring_start_"), ids2);
+        let end_tmp2: String = str2(String::from("__substring_end_"), ids2);
+        out.push_str(str5(String::from("  int64_t "), start_tmp2, String::from(" = v"), starts2, String::from(";\n")));
+        out.push_str(str5(String::from("  if ("), start_tmp2, String::from(" < 0) { "), start_tmp2, String::from(" = 0; }\n")));
+        out.push_str(str7(String::from("  if ("), start_tmp2, String::from(" > v"), ss2, String::from(".len) { "), start_tmp2, String::from(" = v")));
+        out.push_str(str2(ss2, String::from(".len; }\n")));
+        out.push_str(str5(String::from("  int64_t "), end_tmp2, String::from(" = v"), ends2, String::from(";\n")));
+        out.push_str(str5(String::from("  if ("), end_tmp2, String::from(" < "), start_tmp2, String::from(") { ")));
+        out.push_str(str5(end_tmp2, String::from(" = "), start_tmp2, String::from("; }\n"), String::from("")));
+        out.push_str(str7(String::from("  if ("), end_tmp2, String::from(" > v"), ss2, String::from(".len) { "), end_tmp2, String::from(" = v")));
+        out.push_str(str2(ss2, String::from(".len; }\n")));
+        out.push_str(str5(String::from("  v"), ids2, String::from(".len = "), end_tmp2, String::from(" - ")));
+        out.push_str(str2(start_tmp2, String::from(";\n")));
         out.push_str(str5(String::from("  for (int64_t __i = 0; __i < v"), ids2,
             String::from(".len && __i < "), i64_to_str(string_max), String::from("; __i++) {\n")));
-        out.push_str(str5(String::from("    v"), ids2, String::from(".data[__i] = v"), ss2, String::from(".data[v")));
-        out.push_str(str2(starts2, String::from(" + __i];\n")));
+        out.push_str(str5(String::from("    v"), ids2, String::from(".data[__i] = v"), ss2, String::from(".data[")));
+        out.push_str(str2(start_tmp2, String::from(" + __i];\n")));
         out.push_str(String::from("  }\n"));
         return;
     }
