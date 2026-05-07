@@ -228,21 +228,8 @@ fn hidden_region_store_targets(flat: &[i64]) -> Vec<i64> {
     let mut i = 0usize;
     while i + 1 < flat.len() {
         let target = flat[i];
-        let kind = flat[i + 1];
-        i += 2;
         out.push(target);
-        match kind {
-            RSUM_KIND_ALIAS_OF => i += 1,
-            RSUM_KIND_ALIAS_OF_ANY => {
-                if i >= flat.len() {
-                    break;
-                }
-                let n = flat[i].max(0) as usize;
-                i = i.saturating_add(1).saturating_add(n);
-            }
-            RSUM_KIND_FRESH_IN_CALLER | RSUM_KIND_CONSTANT_GLOBAL => {}
-            _ => {}
-        }
+        i = store_effect_advance(flat, i);
     }
     out.sort_unstable();
     out.dedup();
@@ -276,18 +263,11 @@ fn hidden_region_for_store_target(
     if return_kind == RSUM_KIND_FRESH_IN_CALLER {
         hidden_idx += 1;
     }
-    let mut prev_target: Option<i64> = None;
-    let mut i = 0usize;
-    while i + 1 < store_effects.len() {
-        let target = store_effects[i];
-        if prev_target != Some(target) {
-            if target == target_param {
-                return Some(region_pack(REGION_KIND_CALLER, hidden_idx));
-            }
-            hidden_idx += 1;
-            prev_target = Some(target);
+    for target in hidden_region_store_targets(store_effects) {
+        if target == target_param {
+            return Some(region_pack(REGION_KIND_CALLER, hidden_idx));
         }
-        i = store_effect_advance(store_effects, i);
+        hidden_idx += 1;
     }
     None
 }
@@ -307,14 +287,76 @@ fn inst_region_for_value(
     inst_id: i64,
     inst_region_by_id: &HashMap<i64, i64>,
     inst_data_by_id: &HashMap<i64, (i64, i64)>,
+    inst_op_by_id: &HashMap<i64, i64>,
+    upsilon_sources_by_phi: &HashMap<i64, Vec<i64>>,
     return_kind: i64,
     store_effects: &[i64],
 ) -> i64 {
+    inst_region_for_value_inner(
+        inst_id,
+        inst_region_by_id,
+        inst_data_by_id,
+        inst_op_by_id,
+        upsilon_sources_by_phi,
+        return_kind,
+        store_effects,
+        &mut std::collections::HashSet::new(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn inst_region_for_value_inner(
+    inst_id: i64,
+    inst_region_by_id: &HashMap<i64, i64>,
+    inst_data_by_id: &HashMap<i64, (i64, i64)>,
+    inst_op_by_id: &HashMap<i64, i64>,
+    upsilon_sources_by_phi: &HashMap<i64, Vec<i64>>,
+    return_kind: i64,
+    store_effects: &[i64],
+    seen: &mut std::collections::HashSet<i64>,
+) -> i64 {
+    if !seen.insert(inst_id) {
+        return inst_region_by_id
+            .get(&inst_id)
+            .copied()
+            .unwrap_or_else(region_root);
+    }
     if let Some(&(dk, dv)) = inst_data_by_id.get(&inst_id)
         && dk == IDATA_ARG_INDEX
         && let Some(rgn) = hidden_region_for_store_target(return_kind, store_effects, dv)
     {
         return rgn;
+    }
+    if inst_op_by_id.get(&inst_id).copied() == Some(IOP_PHI)
+        && let Some(sources) = upsilon_sources_by_phi.get(&inst_id)
+    {
+        let mut merged: Option<i64> = None;
+        for &source_id in sources {
+            let mut source_seen = seen.clone();
+            let rgn = inst_region_for_value_inner(
+                source_id,
+                inst_region_by_id,
+                inst_data_by_id,
+                inst_op_by_id,
+                upsilon_sources_by_phi,
+                return_kind,
+                store_effects,
+                &mut source_seen,
+            );
+            match merged {
+                Some(existing) if existing != rgn => {
+                    return inst_region_by_id
+                        .get(&inst_id)
+                        .copied()
+                        .unwrap_or_else(region_root);
+                }
+                Some(_) => {}
+                None => merged = Some(rgn),
+            }
+        }
+        if let Some(rgn) = merged {
+            return rgn;
+        }
     }
     inst_region_by_id
         .get(&inst_id)
@@ -1019,6 +1061,8 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     let mut inst_block: HashMap<i64, usize> = HashMap::new();
     let mut inst_region_by_id: HashMap<i64, i64> = HashMap::new();
     let mut inst_data_by_id: HashMap<i64, (i64, i64)> = HashMap::new();
+    let mut inst_op_by_id: HashMap<i64, i64> = HashMap::new();
+    let mut upsilon_sources_by_phi: HashMap<i64, Vec<i64>> = HashMap::new();
     for bi in 0..nb {
         let start = block_starts[bi] as usize;
         let len = block_lengths[bi] as usize;
@@ -1028,6 +1072,15 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
         for idx in start..start + len {
             inst_region_by_id.insert(inst_ids[idx], inst_rgns[idx]);
             inst_data_by_id.insert(inst_ids[idx], (inst_dks[idx], inst_dvs[idx]));
+            inst_op_by_id.insert(inst_ids[idx], inst_ops[idx]);
+            let aoff = arg_offsets[idx] as usize;
+            let alen = arg_lengths[idx] as usize;
+            if inst_ops[idx] == IOP_UPSILON && inst_dks[idx] == IDATA_PHI_TARGET && alen > 0 {
+                upsilon_sources_by_phi
+                    .entry(inst_dvs[idx])
+                    .or_default()
+                    .push(all_args[aoff]);
+            }
         }
     }
 
@@ -2080,6 +2133,8 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                     receiver_id,
                                     &inst_region_by_id,
                                     &inst_data_by_id,
+                                    &inst_op_by_id,
+                                    &upsilon_sources_by_phi,
                                     decl.return_kind,
                                     &decl.store_effects,
                                 )
@@ -2180,6 +2235,8 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                         arg_id,
                                         &inst_region_by_id,
                                         &inst_data_by_id,
+                                        &inst_op_by_id,
+                                        &upsilon_sources_by_phi,
                                         current_decl.return_kind,
                                         &current_decl.store_effects,
                                     )
@@ -3199,6 +3256,19 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hidden_region_for_store_target_uses_sorted_target_slots() {
+        let flat = [1, RSUM_KIND_CONSTANT_GLOBAL, 0, RSUM_KIND_CONSTANT_GLOBAL];
+        assert_eq!(
+            hidden_region_for_store_target(RSUM_KIND_CONSTANT_GLOBAL, &flat, 0),
+            Some(region_pack(REGION_KIND_CALLER, 0))
+        );
+        assert_eq!(
+            hidden_region_for_store_target(RSUM_KIND_CONSTANT_GLOBAL, &flat, 1),
+            Some(region_pack(REGION_KIND_CALLER, 1))
+        );
+    }
 
     #[test]
     fn finds_lib_in_installed_lib_vow_dir() {

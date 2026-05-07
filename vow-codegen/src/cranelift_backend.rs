@@ -379,34 +379,77 @@ fn region_to_arena_value(
     }
 }
 
-fn source_value_region(source: &Inst, current_summary: &RegionSummary) -> RegionId {
+fn source_value_region(
+    source: &Inst,
+    inst_index: &HashMap<InstId, &Inst>,
+    current_summary: &RegionSummary,
+    phi_data: &PhiUpsilonData,
+    seen: &mut BTreeSet<InstId>,
+) -> RegionId {
+    if !seen.insert(source.id) {
+        return source.region;
+    }
     if let (Opcode::GetArg, InstData::ArgIndex(param_idx)) = (&source.opcode, &source.data)
         && let Some(hidden_idx) = hidden_region_idx_for_store_target(current_summary, *param_idx)
     {
         return RegionId::Caller(hidden_idx);
     }
+    if source.opcode == Opcode::Phi {
+        let mut merged: Option<RegionId> = None;
+        for upsilons in phi_data.block_upsilons.values() {
+            for &(phi_id, val_id) in upsilons {
+                if phi_id != source.id {
+                    continue;
+                }
+                let mut arm_seen = seen.clone();
+                let arm_region =
+                    arg_region_inner(val_id, inst_index, current_summary, phi_data, &mut arm_seen);
+                match merged {
+                    Some(existing) if existing != arm_region => return source.region,
+                    Some(_) => {}
+                    None => merged = Some(arm_region),
+                }
+            }
+        }
+        if let Some(region) = merged {
+            return region;
+        }
+    }
     source.region
+}
+
+fn arg_region_inner(
+    arg_id: InstId,
+    inst_index: &HashMap<InstId, &Inst>,
+    current_summary: &RegionSummary,
+    phi_data: &PhiUpsilonData,
+    seen: &mut BTreeSet<InstId>,
+) -> RegionId {
+    inst_index
+        .get(&arg_id)
+        .map(|src| source_value_region(src, inst_index, current_summary, phi_data, seen))
+        .unwrap_or(RegionId::Root)
 }
 
 fn arg_region(
     arg_id: InstId,
     inst_index: &HashMap<InstId, &Inst>,
     current_summary: &RegionSummary,
+    phi_data: &PhiUpsilonData,
 ) -> RegionId {
-    inst_index
-        .get(&arg_id)
-        .map(|src| source_value_region(src, current_summary))
-        .unwrap_or(RegionId::Root)
+    let mut seen = BTreeSet::new();
+    arg_region_inner(arg_id, inst_index, current_summary, phi_data, &mut seen)
 }
 
 fn first_arg_region(
     inst: &Inst,
     inst_index: &HashMap<InstId, &Inst>,
     current_summary: &RegionSummary,
+    phi_data: &PhiUpsilonData,
 ) -> RegionId {
     inst.args
         .first()
-        .map(|arg_id| arg_region(*arg_id, inst_index, current_summary))
+        .map(|arg_id| arg_region(*arg_id, inst_index, current_summary, phi_data))
         .unwrap_or(RegionId::Root)
 }
 
@@ -415,6 +458,7 @@ fn routed_vec_extern<'a>(
     inst: &Inst,
     inst_index: &HashMap<InstId, &Inst>,
     current_summary: &RegionSummary,
+    phi_data: &PhiUpsilonData,
 ) -> (&'a str, Option<RegionId>) {
     match sym {
         "__vow_vec_new" => match inst.region {
@@ -426,7 +470,7 @@ fn routed_vec_extern<'a>(
             region => ("__vow_vec_new_val_in_arena", Some(region)),
         },
         "__vow_vec_push_val" => {
-            let region = first_arg_region(inst, inst_index, current_summary);
+            let region = first_arg_region(inst, inst_index, current_summary, phi_data);
             match region {
                 RegionId::Block(_) | RegionId::Caller(_) => {
                     ("__vow_vec_push_val_in_arena", Some(region))
@@ -435,7 +479,7 @@ fn routed_vec_extern<'a>(
             }
         }
         "__vow_vec_push" => {
-            let region = first_arg_region(inst, inst_index, current_summary);
+            let region = first_arg_region(inst, inst_index, current_summary, phi_data);
             match region {
                 RegionId::Block(_) | RegionId::Caller(_) => {
                     ("__vow_vec_push_in_arena", Some(region))
@@ -464,7 +508,7 @@ fn routed_vec_extern<'a>(
             region => ("__vow_string_from_i64_in_arena", Some(region)),
         },
         "__vow_string_push_str" => {
-            let region = first_arg_region(inst, inst_index, current_summary);
+            let region = first_arg_region(inst, inst_index, current_summary, phi_data);
             match region {
                 RegionId::Block(_) | RegionId::Caller(_) => {
                     ("__vow_string_push_str_in_arena", Some(region))
@@ -473,7 +517,7 @@ fn routed_vec_extern<'a>(
             }
         }
         "__vow_string_push_byte" => {
-            let region = first_arg_region(inst, inst_index, current_summary);
+            let region = first_arg_region(inst, inst_index, current_summary, phi_data);
             match region {
                 RegionId::Block(_) | RegionId::Caller(_) => {
                     ("__vow_string_push_byte_in_arena", Some(region))
@@ -1234,8 +1278,13 @@ fn lower_inst(
                     fr
                 }
                 InstData::CallExtern(sym) => {
-                    let (routed_sym, target_region) =
-                        routed_vec_extern(sym, inst, ctx.inst_index, &ctx.ir_func.summary);
+                    let (routed_sym, target_region) = routed_vec_extern(
+                        sym,
+                        inst,
+                        ctx.inst_index,
+                        &ctx.ir_func.summary,
+                        ctx.phi_data,
+                    );
                     external_target_region = target_region;
                     let Some(&fr) = ctx.extern_func_refs.get(routed_sym) else {
                         return Err(CodegenError::UnsupportedOpcode(format!(
@@ -1362,7 +1411,9 @@ fn lower_inst(
                     let arg_region = inst
                         .args
                         .get(target_idx as usize)
-                        .map(|arg_id| arg_region(*arg_id, ctx.inst_index, &ctx.ir_func.summary))
+                        .map(|arg_id| {
+                            arg_region(*arg_id, ctx.inst_index, &ctx.ir_func.summary, ctx.phi_data)
+                        })
                         .unwrap_or(RegionId::Root);
                     push_hidden(builder, &mut call_args, arg_region)?;
                 }
@@ -2550,6 +2601,7 @@ impl Backend for CraneliftBackend {
         let mut extern_syms = HashSet::new();
         for func in &module.functions {
             let inst_index = build_inst_index(func);
+            let phi_data = build_phi_upsilon_data(func);
             for block in &func.blocks {
                 for inst in &block.insts {
                     if let InstData::CallExtern(sym) = &inst.data {
@@ -2557,7 +2609,7 @@ impl Backend for CraneliftBackend {
                             continue;
                         }
                         let (routed_sym, _) =
-                            routed_vec_extern(sym, inst, &inst_index, &func.summary);
+                            routed_vec_extern(sym, inst, &inst_index, &func.summary, &phi_data);
                         extern_syms.insert(routed_sym.to_string());
                     }
                 }
@@ -4409,6 +4461,130 @@ mod tests {
             source_file: String::new(),
         };
         let module = make_module("test", vec![grow_param]);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(symbols.contains("__vow_string_push_byte_in_arena"));
+        assert!(!symbols.contains("__vow_string_push_byte"));
+    }
+
+    #[test]
+    fn phi_parameter_region_string_push_byte_imports_arena_variant() {
+        let phi_id = InstId(8);
+        let grow_phi = Function {
+            id: FuncId(0),
+            name: "grow_phi".to_string(),
+            params: vec![Ty::Bool, Ty::Ptr],
+            param_names: vec!["cond".to_string(), "s".to_string()],
+            return_ty: Ty::Unit,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![
+                BasicBlock {
+                    id: BlockId(0),
+                    insts: vec![
+                        inst(0, Opcode::GetArg, Ty::Bool, vec![], InstData::ArgIndex(0)),
+                        inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+                        inst(
+                            2,
+                            Opcode::Branch,
+                            Ty::Unit,
+                            vec![0],
+                            InstData::BranchTargets {
+                                then_block: BlockId(1),
+                                else_block: BlockId(2),
+                            },
+                        ),
+                    ],
+                },
+                BasicBlock {
+                    id: BlockId(1),
+                    insts: vec![
+                        inst(
+                            3,
+                            Opcode::Upsilon,
+                            Ty::Unit,
+                            vec![1],
+                            InstData::PhiTarget(phi_id),
+                        ),
+                        inst(
+                            4,
+                            Opcode::Jump,
+                            Ty::Unit,
+                            vec![],
+                            InstData::JumpTarget(BlockId(3)),
+                        ),
+                    ],
+                },
+                BasicBlock {
+                    id: BlockId(2),
+                    insts: vec![
+                        inst(
+                            5,
+                            Opcode::Upsilon,
+                            Ty::Unit,
+                            vec![1],
+                            InstData::PhiTarget(phi_id),
+                        ),
+                        inst(
+                            6,
+                            Opcode::Jump,
+                            Ty::Unit,
+                            vec![],
+                            InstData::JumpTarget(BlockId(3)),
+                        ),
+                    ],
+                },
+                BasicBlock {
+                    id: BlockId(3),
+                    insts: vec![
+                        Inst {
+                            id: phi_id,
+                            opcode: Opcode::Phi,
+                            ty: Ty::Ptr,
+                            args: vec![],
+                            data: InstData::None,
+                            origin: sp(),
+                            region: RegionId::Root,
+                        },
+                        inst(
+                            9,
+                            Opcode::ConstI64,
+                            Ty::I64,
+                            vec![],
+                            InstData::ConstI64(120),
+                        ),
+                        inst(
+                            10,
+                            Opcode::Call,
+                            Ty::Unit,
+                            vec![8, 9],
+                            InstData::CallExtern("__vow_string_push_byte".to_string()),
+                        ),
+                        inst(11, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                    ],
+                },
+            ],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary {
+                param_regions: vec![],
+                return_region: RegionConstraint::ConstantGlobal,
+                store_effects: vec![StoreEffect {
+                    target: 1,
+                    source: RegionConstraint::ConstantGlobal,
+                }],
+            },
+            source_file: String::new(),
+        };
+        let module = make_module("test", vec![grow_phi]);
         let result =
             CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
