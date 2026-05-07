@@ -4347,6 +4347,60 @@ mod tests {
         assert!(m.warnings.is_empty());
     }
 
+    #[test]
+    fn build_call_graph_deduplicates_and_ignores_out_of_range_targets() {
+        let f0 = function(
+            0,
+            "caller",
+            vec![],
+            Ty::Unit,
+            vec![block(
+                0,
+                vec![
+                    inst(
+                        0,
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![],
+                        InstData::CallTarget(FuncId(1)),
+                    ),
+                    inst(
+                        1,
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![],
+                        InstData::CallTarget(FuncId(1)),
+                    ),
+                    inst(
+                        2,
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![],
+                        InstData::CallTarget(FuncId(99)),
+                    ),
+                    return_unit_inst(3),
+                ],
+            )],
+        );
+        let f1 = function(
+            1,
+            "callee",
+            vec![],
+            Ty::Unit,
+            vec![block(0, vec![return_unit_inst(4)])],
+        );
+        let graph = build_call_graph(&module(vec![f0, f1]));
+        assert_eq!(graph, vec![vec![1], vec![]]);
+    }
+
+    #[test]
+    fn tarjan_sccs_groups_cycles_and_leaves_first() {
+        let mut sccs = tarjan_sccs(&[vec![1], vec![2], vec![0, 3], vec![]]);
+        assert_eq!(sccs.remove(0), vec![3]);
+        assert_eq!(sccs.remove(0), vec![0, 1, 2]);
+        assert!(sccs.is_empty());
+    }
+
     /// A callee that stores its second arg into its first arg publishes
     /// `(0, AliasOf(1))` store-effect. A caller passing `(some_param,
     /// fresh_alloc)` exhibits the alloc→param-via-callee shape that

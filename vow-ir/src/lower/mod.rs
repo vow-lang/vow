@@ -3521,6 +3521,101 @@ mod tests {
     }
 
     #[test]
+    fn debug_builtins_lower_to_runtime_symbols() {
+        let cases = [
+            ("debug_str", "__vow_debug_str", Ty::Unit),
+            ("debug_i64", "__vow_debug_i64", Ty::Unit),
+            ("debug_u64", "__vow_debug_u64", Ty::Unit),
+        ];
+        for (name, symbol, ty) in cases {
+            assert_eq!(vow_debug_builtin_to_runtime(name), Some((symbol, ty)));
+        }
+        assert_eq!(vow_debug_builtin_to_runtime("debug_missing"), None);
+    }
+
+    #[test]
+    fn builtins_lower_to_runtime_symbols_and_return_types() {
+        let cases = [
+            ("print_str", "__vow_string_print", Ty::Unit),
+            ("print_i64", "__vow_print_i64", Ty::Unit),
+            ("print_u64", "__vow_print_u64", Ty::Unit),
+            ("eprintln_str", "__vow_eprintln_str", Ty::Unit),
+            ("fs_read", "__vow_fs_read", Ty::Ptr),
+            ("fs_open", "__vow_fs_open", Ty::I64),
+            ("fs_read_line", "__vow_fs_read_line", Ty::Ptr),
+            ("fs_status", "__vow_fs_status", Ty::I64),
+            ("fs_close", "__vow_fs_close", Ty::I64),
+            ("fs_write", "__vow_fs_write", Ty::I64),
+            ("fs_exists", "__vow_fs_exists", Ty::I64),
+            ("fs_mkdir", "__vow_fs_mkdir", Ty::I64),
+            ("fs_listdir", "__vow_fs_listdir", Ty::Ptr),
+            ("fs_remove", "__vow_fs_remove", Ty::I64),
+            ("fs_remove_dir", "__vow_fs_remove_dir", Ty::I64),
+            ("fs_is_dir", "__vow_fs_is_dir", Ty::I64),
+            ("fs_rename", "__vow_fs_rename", Ty::I64),
+            ("string_substr", "__vow_string_substr", Ty::Ptr),
+            ("string_split", "__vow_string_split", Ty::Ptr),
+            ("string_starts_with", "__vow_string_starts_with", Ty::I64),
+            ("string_ends_with", "__vow_string_ends_with", Ty::I64),
+            ("string_trim", "__vow_string_trim", Ty::Ptr),
+            ("string_to_upper", "__vow_string_to_upper", Ty::Ptr),
+            ("string_to_lower", "__vow_string_to_lower", Ty::Ptr),
+            ("string_replace", "__vow_string_replace", Ty::Ptr),
+            ("string_join", "__vow_string_join", Ty::Ptr),
+            ("parse_i64", "__vow_parse_i64", Ty::I64),
+            ("i64_to_string", "__vow_string_from_i64", Ty::Ptr),
+            ("vec_sort", "__vow_vec_sort", Ty::Ptr),
+            ("time_unix", "__vow_time_unix", Ty::I64),
+            ("time_unix_ms", "__vow_time_unix_ms", Ty::I64),
+            ("num_cpus", "__vow_num_cpus", Ty::I64),
+            ("hex_encode", "__vow_hex_encode", Ty::Ptr),
+            ("hex_decode", "__vow_hex_decode", Ty::Ptr),
+            ("args", "__vow_args", Ty::Ptr),
+            ("stdin_read", "__vow_stdin_read", Ty::Ptr),
+            ("stdin_read_line", "__vow_stdin_read_line", Ty::Ptr),
+            ("stdin_ready", "__vow_stdin_ready", Ty::Bool),
+            ("process_exit", "__vow_process_exit", Ty::Unit),
+            ("process_run", "__vow_process_run", Ty::I64),
+            ("process_get_stdout", "__vow_process_get_stdout", Ty::Ptr),
+            ("process_get_stderr", "__vow_process_get_stderr", Ty::Ptr),
+            ("process_start", "__vow_process_start", Ty::I64),
+            ("process_wait", "__vow_process_wait", Ty::I64),
+            (
+                "process_wait_timeout",
+                "__vow_process_wait_timeout",
+                Ty::I64,
+            ),
+            ("process_kill", "__vow_process_kill", Ty::I64),
+            ("process_stdout_for", "__vow_process_stdout_for", Ty::Ptr),
+            ("process_stderr_for", "__vow_process_stderr_for", Ty::Ptr),
+            ("__vow_clif_create", "__vow_clif_create", Ty::I64),
+            ("__vow_clif_add_string", "__vow_clif_add_string", Ty::Unit),
+            (
+                "__vow_clif_declare_extern",
+                "__vow_clif_declare_extern",
+                Ty::Unit,
+            ),
+            (
+                "__vow_clif_declare_function",
+                "__vow_clif_declare_function",
+                Ty::Unit,
+            ),
+            ("__vow_clif_fn_begin", "__vow_clif_fn_begin", Ty::I64),
+            ("__vow_clif_fn_block", "__vow_clif_fn_block", Ty::I64),
+            ("__vow_clif_fn_inst", "__vow_clif_fn_inst", Ty::I64),
+            ("__vow_clif_fn_vow", "__vow_clif_fn_vow", Ty::I64),
+            ("__vow_clif_fn_end", "__vow_clif_fn_end", Ty::I64),
+            ("__vow_clif_finish", "__vow_clif_finish", Ty::I64),
+            ("__vow_clif_link", "__vow_clif_link", Ty::I64),
+            ("__vow_clif_destroy", "__vow_clif_destroy", Ty::Unit),
+        ];
+        for (name, symbol, ty) in cases {
+            assert_eq!(vow_builtin_to_runtime(name), Some((symbol, ty)));
+        }
+        assert_eq!(vow_builtin_to_runtime("missing_builtin"), None);
+    }
+
+    #[test]
     fn lower_const_i64() {
         let body = Block {
             stmts: vec![],
@@ -3645,6 +3740,62 @@ mod tests {
         assert!(ret.is_some());
         let const_id = const_inst.unwrap().id;
         assert_eq!(ret.unwrap().args, vec![const_id]);
+    }
+
+    #[test]
+    fn lower_assignment_updates_identifier_binding() {
+        let let_stmt = Stmt::Let {
+            pattern: Pat {
+                kind: PatKind::Ident {
+                    name: "x".to_string(),
+                    is_mut: true,
+                },
+                span: sp(),
+            },
+            ty: None,
+            init: Box::new(int_expr(1)),
+            span: sp(),
+        };
+        let assign_stmt = Stmt::Expr {
+            expr: Expr {
+                kind: ExprKind::Assign {
+                    lhs: Box::new(ident_expr("x")),
+                    rhs: Box::new(int_expr(2)),
+                },
+                span: sp(),
+            },
+            has_semicolon: true,
+            span: sp(),
+        };
+        let body = Block {
+            stmts: vec![let_stmt, assign_stmt],
+            trailing_expr: Some(Box::new(ident_expr("x"))),
+            span: sp(),
+        };
+        let fn_def = make_fn("assign_fn", vec![], i64_ty(), body, vec![]);
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
+        let assigned_const = all_insts
+            .iter()
+            .find(|i| i.data == InstData::ConstI64(2))
+            .expect("assignment RHS should lower to ConstI64(2)");
+        let ret = all_insts
+            .iter()
+            .find(|i| i.opcode == Opcode::Return)
+            .expect("expected Return");
+        assert_eq!(ret.args, vec![assigned_const.id]);
     }
 
     #[test]

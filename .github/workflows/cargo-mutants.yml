@@ -1,0 +1,73 @@
+name: cargo-mutants
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  ESBMC_VERSION: "8.1"
+  ESBMC_SHA256: daec35870fdee07e1298676646ae6cf1d631c6272594e7e86479cdb9caa67ec5
+
+jobs:
+  cargo-mutants:
+    name: shard ${{ matrix.shard }}/8
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      - name: Cache ESBMC
+        id: cache-esbmc
+        uses: actions/cache@v5
+        with:
+          path: ~/esbmc
+          key: esbmc-${{ env.ESBMC_VERSION }}-${{ env.ESBMC_SHA256 }}-ubuntu-24.04
+      - name: Install ESBMC
+        if: steps.cache-esbmc.outputs.cache-hit != 'true'
+        env:
+          ESBMC_ZIP: release-ubuntu-24.04--b.RelWithDebInfo.-e.OFF.zip
+        run: |
+          ESBMC_URL="https://github.com/esbmc/esbmc/releases/download/v$ESBMC_VERSION/$ESBMC_ZIP"
+
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            -o "/tmp/$ESBMC_ZIP" "$ESBMC_URL"
+
+          echo "$ESBMC_SHA256  /tmp/$ESBMC_ZIP" | sha256sum --check --strict -
+
+          unzip -q "/tmp/$ESBMC_ZIP" -d ~/esbmc
+          rm "/tmp/$ESBMC_ZIP"
+      - run: echo "$HOME/esbmc/bin" >> "$GITHUB_PATH"
+      - name: Baseline build and tests
+        run: |
+          cargo build --all
+          cargo test --workspace
+      - name: Run cargo-mutants shard
+        continue-on-error: true
+        run: |
+          cargo mutants \
+            --workspace \
+            --test-workspace=true \
+            --no-shuffle \
+            -vV \
+            --shard "${{ matrix.shard }}/8" \
+            --sharding round-robin \
+            --baseline=skip \
+            --timeout 180 \
+            --in-place \
+            -- --workspace --all-targets
+      - name: Upload mutants.out
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mutants-shard-${{ matrix.shard }}
+          path: mutants.out
+          if-no-files-found: ignore
