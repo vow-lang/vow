@@ -339,7 +339,7 @@ pub fn is_modelable(
     }
 
     let vec_vars = collect_typed_vars(func, "__vow_vec_new", "__vow_vec_");
-    let string_vars = collect_typed_vars(func, "__vow_string_from_cstr", "__vow_string_");
+    let string_vars = collect_typed_vars(func, "__vow_string_new", "__vow_string_");
     let hashmap_vars = collect_typed_vars(func, "__vow_map_new", "__vow_map_");
     let btreemap_vars = collect_typed_vars(func, "__vow_btreemap_new", "__vow_btreemap_");
     let option_vars = collect_option_vars(func);
@@ -1533,7 +1533,7 @@ pub fn emit_c_function_full(
 ) -> String {
     let mut out = String::new();
     let vec_vars = collect_typed_vars(func, "__vow_vec_new", "__vow_vec_");
-    let string_vars = collect_typed_vars(func, "__vow_string_from_cstr", "__vow_string_");
+    let string_vars = collect_typed_vars(func, "__vow_string_new", "__vow_string_");
     let hashmap_vars = collect_typed_vars(func, "__vow_map_new", "__vow_map_");
     let btreemap_vars = collect_typed_vars(func, "__vow_btreemap_new", "__vow_btreemap_");
     let option_vars = collect_option_vars(func);

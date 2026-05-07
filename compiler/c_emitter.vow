@@ -674,7 +674,7 @@ fn collect_vec_vars(f: IrFunction) -> Vec<i64> {
 }
 
 fn collect_string_vars(f: IrFunction) -> Vec<i64> {
-    collect_modelled_vars(f, String::from("__vow_string_from_cstr"), String::from("__vow_string_"))
+    collect_modelled_vars(f, String::from("__vow_string_new"), String::from("__vow_string_"))
 }
 
 fn collect_hashmap_vars(f: IrFunction) -> Vec<i64> {

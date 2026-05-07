@@ -70,6 +70,16 @@ fn clif_i64_vec_contains(v: Vec<i64>, x: i64) -> bool {
     false
 }
 
+fn clif_clone_i64_vec(src: Vec<i64>) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < src.len() {
+        out.push(src[i]);
+        i = i + 1;
+    }
+    out
+}
+
 fn clif_hidden_store_targets(flat: Vec<i64>) -> Vec<i64> {
     let targets: Vec<i64> = Vec::new();
     let mut i: i64 = 0;
@@ -114,18 +124,22 @@ fn clif_hidden_store_target_region(f: IrFunction, target_param: i64) -> i64 {
     region_root()
 }
 
-fn clif_value_receiver_region(f: IrFunction, receiver: IrInst, depth: i64) -> i64 {
+fn clif_value_receiver_region(f: IrFunction, receiver: IrInst, seen: Vec<i64>) -> i64 {
     if receiver.id < 0 {
         return region_root();
     }
+    if clif_i64_vec_contains(seen, receiver.id) {
+        return receiver.rgn;
+    }
+    let next_seen: Vec<i64> = clif_clone_i64_vec(seen);
+    next_seen.push(receiver.id);
     if receiver.op == IOP_GET_ARG() && receiver.dk == IDATA_ARG_INDEX() {
         let hidden: i64 = clif_hidden_store_target_region(f, receiver.dv);
         if region_kind(hidden) == REGION_KIND_CALLER() {
             return hidden;
         }
     }
-    // Rust uses an exact visited set; this depth cap is conservative for lowerer IR.
-    if receiver.op == IOP_PHI() && depth < 32 {
+    if receiver.op == IOP_PHI() {
         let blocks: Vec<IrBlock> = f.blocks;
         let mut have: bool = false;
         let mut merged: i64 = region_root();
@@ -140,7 +154,7 @@ fn clif_value_receiver_region(f: IrFunction, receiver: IrInst, depth: i64) -> i6
                     && up.dv == receiver.id
                     && up.args.len() > 0 {
                     let src: IrInst = clif_find_inst(f, up.args[0]);
-                    let rgn: i64 = clif_value_receiver_region(f, src, depth + 1);
+                    let rgn: i64 = clif_value_receiver_region(f, src, clif_clone_i64_vec(next_seen));
                     if !have {
                         have = true;
                         merged = rgn;
@@ -164,7 +178,7 @@ fn clif_receiver_region(f: IrFunction, inst: IrInst) -> i64 {
         return region_root();
     }
     let receiver: IrInst = clif_find_inst(f, inst.args[0]);
-    clif_value_receiver_region(f, receiver, 0)
+    clif_value_receiver_region(f, receiver, Vec::new())
 }
 
 fn clif_routed_extern_symbol(f: IrFunction, inst: IrInst) -> String {
