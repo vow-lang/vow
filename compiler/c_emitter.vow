@@ -90,7 +90,21 @@ fn vec_insert_i64(v: Vec<i64>, val: i64) -> bool {
     true
 }
 
+fn is_string_fresh_helper(name: String) -> bool {
+    name == String::from("__vow_string_trim")
+    || name == String::from("__vow_string_trim_in_arena")
+    || name == String::from("__vow_string_to_upper")
+    || name == String::from("__vow_string_to_upper_in_arena")
+    || name == String::from("__vow_string_to_lower")
+    || name == String::from("__vow_string_to_lower_in_arena")
+    || name == String::from("__vow_string_replace")
+    || name == String::from("__vow_string_replace_in_arena")
+    || name == String::from("__vow_string_join")
+    || name == String::from("__vow_string_join_in_arena")
+}
+
 fn is_known_builtin(name: String) -> bool {
+    if is_string_fresh_helper(name) { return true; }
     name == String::from("__vow_vec_new")
     || name == String::from("__vow_vec_new_val")
     || name == String::from("__vow_vec_new_in_arena")
@@ -105,6 +119,8 @@ fn is_known_builtin(name: String) -> bool {
     || name == String::from("__vow_vec_len")
     || name == String::from("__vow_vec_pop")
     || name == String::from("__vow_vec_set_val")
+    || name == String::from("__vow_string_split")
+    || name == String::from("__vow_string_split_in_arena")
     || name == String::from("__vow_string_new")
     || name == String::from("__vow_string_new_in_arena")
     || name == String::from("__vow_string_from_cstr")
@@ -457,9 +473,12 @@ fn is_vec_model_constructor(name: String) -> bool {
     || name == String::from("__vow_vec_new_val_in_arena")
     || name == String::from("__vow_vec_from_raw_parts_copy_val")
     || name == String::from("__vow_vec_pin_to_root_val")
+    || name == String::from("__vow_string_split")
+    || name == String::from("__vow_string_split_in_arena")
 }
 
 fn is_string_model_constructor(name: String) -> bool {
+    if is_string_fresh_helper(name) { return true; }
     name == String::from("__vow_string_new")
     || name == String::from("__vow_string_new_in_arena")
     || name == String::from("__vow_string_from_cstr")
@@ -1050,7 +1069,7 @@ fn emit_inst(out: String, inst: IrInst, vec_vars: Vec<i64>, string_vars: Vec<i64
                 return;
             }
             if str_starts_with(ds, String::from("__vow_string_")) {
-                emit_string_op(out, inst, string_max, eq_lo, eq_hi);
+                emit_string_op(out, inst, vec_max, string_max, eq_lo, eq_hi);
                 return;
             }
             if str_starts_with(ds, String::from("__vow_map_")) {
@@ -1335,7 +1354,23 @@ fn emit_string_eq_invalidate(out: String, operand: i64, eq_lo: Vec<i64>, eq_hi: 
     }
 }
 
-fn emit_string_op(out: String, inst: IrInst, string_max: i64, eq_lo: Vec<i64>, eq_hi: Vec<i64>) {
+fn emit_nondet_string_len(out: String, id: i64, string_max: i64) {
+    let ids: String = i64_to_str(id);
+    out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
+    out.push_str(str5(String::from("  __ESBMC_assume(v"), ids,
+        String::from(".len >= 0 && v"), ids,
+        str3(String::from(".len < "), i64_to_str(string_max), String::from(");\n"))));
+}
+
+fn emit_nondet_vec_len(out: String, id: i64, vec_max: i64) {
+    let ids: String = i64_to_str(id);
+    out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
+    out.push_str(str5(String::from("  __ESBMC_assume(v"), ids,
+        String::from(".len >= 0 && v"), ids,
+        str3(String::from(".len < "), i64_to_str(vec_max), String::from(");\n"))));
+}
+
+fn emit_string_op(out: String, inst: IrInst, vec_max: i64, string_max: i64, eq_lo: Vec<i64>, eq_hi: Vec<i64>) {
     let id: i64 = inst.id;
     let ds: String = inst.ds;
     let iargs: Vec<i64> = inst.args;
@@ -1381,6 +1416,14 @@ fn emit_string_op(out: String, inst: IrInst, string_max: i64, eq_lo: Vec<i64>, e
         out.push_str(str5(String::from("  __ESBMC_assume(v"), ids,
             String::from(".len >= 0 && v"), ids,
             str3(String::from(".len < "), i64_to_str(string_max), String::from(");\n"))));
+        return;
+    }
+    if ds == String::from("__vow_string_split") || ds == String::from("__vow_string_split_in_arena") {
+        emit_nondet_vec_len(out, id, vec_max);
+        return;
+    }
+    if is_string_fresh_helper(ds) {
+        emit_nondet_string_len(out, id, string_max);
         return;
     }
     if ds == String::from("__vow_string_len") {
