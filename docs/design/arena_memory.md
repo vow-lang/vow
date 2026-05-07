@@ -265,6 +265,75 @@ on fallback. `__vow_vec_from_raw_parts_copy_val(arena, ptr, len)`
 already has the explicit-arena shape and copies the raw slots into the
 supplied arena.
 
+#### String runtime allocation API
+
+The existing root-region String symbols remain ABI-stable:
+
+```c
+void* __vow_string_new(const char* ptr, uintptr_t len);
+void* __vow_string_from_cstr(const char* ptr);
+void  __vow_string_push_str(void* dest, const void* src);
+void  __vow_string_push_byte(void* string, int64_t byte);
+void* __vow_string_substr(const void* string, int64_t start, int64_t len);
+void* __vow_string_substring(const void* string, int64_t start, int64_t end);
+void* __vow_string_from_i64(int64_t value);
+void* __vow_string_split(const void* haystack, const void* separator);
+void* __vow_string_trim(const void* string);
+void* __vow_string_to_upper(const void* string);
+void* __vow_string_to_lower(const void* string);
+void* __vow_string_replace(const void* string, const void* from, const void* to);
+void* __vow_string_join(const void* vec, const void* separator);
+```
+
+These are root wrappers: they open `__vow_root_arena` if needed, then
+delegate to the corresponding explicit-arena primitive with
+`&__vow_root_arena`.
+
+The explicit-arena forms are:
+
+```c
+void* __vow_string_new_in_arena(struct VowArena* arena,
+                                const char* ptr, uintptr_t len);
+void* __vow_string_from_cstr_in_arena(struct VowArena* arena,
+                                      const char* ptr);
+void  __vow_string_push_str_in_arena(struct VowArena* arena,
+                                     void* dest, const void* src);
+void  __vow_string_push_byte_in_arena(struct VowArena* arena,
+                                      void* string, int64_t byte);
+void* __vow_string_substr_in_arena(struct VowArena* arena,
+                                   const void* string,
+                                   int64_t start, int64_t len);
+void* __vow_string_substring_in_arena(struct VowArena* arena,
+                                      const void* string,
+                                      int64_t start, int64_t end);
+void* __vow_string_from_i64_in_arena(struct VowArena* arena,
+                                     int64_t value);
+void* __vow_string_split_in_arena(struct VowArena* arena,
+                                  const void* haystack,
+                                  const void* separator);
+void* __vow_string_trim_in_arena(struct VowArena* arena,
+                                 const void* string);
+void* __vow_string_to_upper_in_arena(struct VowArena* arena,
+                                     const void* string);
+void* __vow_string_to_lower_in_arena(struct VowArena* arena,
+                                     const void* string);
+void* __vow_string_replace_in_arena(struct VowArena* arena,
+                                    const void* string,
+                                    const void* from, const void* to);
+void* __vow_string_join_in_arena(struct VowArena* arena,
+                                 const void* vec,
+                                 const void* separator);
+```
+
+Every explicit-arena String entry traps with
+`RuntimeInvariantViolation` and `reason = "null arena"` before
+dereferencing a null arena pointer. String literals and C string
+payloads remain in `.rodata`; the arena owns the allocated String
+descriptor/header and any later growth allocation. Growth for both root
+and explicit-arena Strings uses the same arena grow path as Vec: try to
+extend in place, then allocate in the selected arena and copy on
+fallback.
+
 ### 3.4. Determinism
 
 The arena **allocation strategy**, the **chunk-size policy**, and
@@ -760,6 +829,13 @@ parameter itself (e.g., a `Vec<T>` descriptor) does not embed the
 arena header; per §3.1, block-region headers live in the caller's
 stack frame, so the caller must pass the address of the header
 the callee will allocate into.
+
+Receiver-growth effects use the same target projection even when
+no heap source is stored. For example, `String::push_byte`,
+`String::push_str`, and raw `Vec::push` on a parameter receiver
+publish a `StoreEffect` with `source = ConstantGlobal`; the source
+constraint is inert, but the target membership makes the receiver's
+arena available to growth code inside the callee.
 
 The hidden-region parameter set for a function is therefore:
 
@@ -1290,15 +1366,16 @@ opcodes. Phase 2 may rename `RegionAlloc` to, e.g., `HeapAlloc` if
 this neighborhood becomes confusing — the choice is a phase-2
 implementation detail and not load-bearing on the spec.
 
-Vec creation is intentionally not a new opcode. The lowerer may keep
-emitting canonical root-wrapper extern symbols (`__vow_vec_new`,
-`__vow_vec_new_val`). After `infer_regions`, codegen reads the call's
-`region` field: `Root` keeps the ABI-stable wrapper symbol, while
-`Block(_)` and `Caller(_)` prepend the selected `*VowArena` and call
-`__vow_vec_new_in_arena` / `__vow_vec_new_val_in_arena`. Vec growth
-calls follow the same rule using the receiver Vec's defining region:
-root-owned receivers keep `__vow_vec_push*`, and block/caller-owned
-receivers route to the matching `_in_arena` symbol.
+Vec and String creation are intentionally not new opcodes. The lowerer
+may keep emitting canonical root-wrapper extern symbols
+(`__vow_vec_new`, `__vow_vec_new_val`, `__vow_string_new`,
+`__vow_string_from_cstr`, and related String copy constructors). After
+`infer_regions`, codegen reads the call's `region` field: `Root` keeps
+the ABI-stable wrapper symbol, while `Block(_)` and `Caller(_)` prepend
+the selected `*VowArena` and call the matching `_in_arena` symbol. Vec
+and String growth calls follow the same rule using the receiver's
+defining region: root-owned receivers keep the wrapper symbol, and
+block/caller-owned receivers route to the matching `_in_arena` symbol.
 
 ### 12.3. Block region opcodes
 

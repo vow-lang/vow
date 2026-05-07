@@ -1461,8 +1461,36 @@ fn vec_creation_extern(sym: &str) -> bool {
     matches!(sym, "__vow_vec_new" | "__vow_vec_new_val")
 }
 
+fn string_creation_extern(sym: &str) -> bool {
+    matches!(
+        sym,
+        "__vow_string_new"
+            | "__vow_string_new_in_arena"
+            | "__vow_string_from_cstr"
+            | "__vow_string_from_cstr_in_arena"
+            | "__vow_string_substr"
+            | "__vow_string_substr_in_arena"
+            | "__vow_string_substring"
+            | "__vow_string_substring_in_arena"
+            | "__vow_string_from_i64"
+            | "__vow_string_from_i64_in_arena"
+            | "__vow_string_split"
+            | "__vow_string_split_in_arena"
+            | "__vow_string_trim"
+            | "__vow_string_trim_in_arena"
+            | "__vow_string_to_upper"
+            | "__vow_string_to_upper_in_arena"
+            | "__vow_string_to_lower"
+            | "__vow_string_to_lower_in_arena"
+            | "__vow_string_replace"
+            | "__vow_string_replace_in_arena"
+            | "__vow_string_join"
+            | "__vow_string_join_in_arena"
+    )
+}
+
 fn heap_producing_extern(sym: &str) -> bool {
-    extern_fresh_in_caller(sym) || vec_creation_extern(sym)
+    extern_fresh_in_caller(sym) || vec_creation_extern(sym) || string_creation_extern(sym)
 }
 
 fn for_each_extern_store_edge(sym: &str, args: &[InstId], mut visit: impl FnMut(InstId, InstId)) {
@@ -1475,6 +1503,20 @@ fn for_each_extern_store_edge(sym: &str, args: &[InstId], mut visit: impl FnMut(
             visit(args[0], args[2]);
         }
         _ => {}
+    }
+}
+
+fn extern_growth_target(sym: &str, args: &[InstId]) -> Option<InstId> {
+    match sym {
+        "__vow_vec_push" if !args.is_empty() => Some(args[0]),
+        "__vow_vec_push_in_arena" | "__vow_vec_reserve_in_arena" if args.len() >= 2 => {
+            Some(args[1])
+        }
+        "__vow_string_push_str" | "__vow_string_push_byte" if !args.is_empty() => Some(args[0]),
+        "__vow_string_push_str_in_arena" | "__vow_string_push_byte_in_arena" if args.len() >= 2 => {
+            Some(args[1])
+        }
+        _ => None,
     }
 }
 
@@ -1584,6 +1626,14 @@ fn handle_inst(
                         );
                     }
                 });
+                if let Some(target_id) = extern_growth_target(sym, &inst.args)
+                    && let Some(target_param) = trace_param(target_id, inst_lookup)
+                {
+                    summary.store_effects.insert((
+                        target_param,
+                        InternalReturnRegion::Published(RegionConstraint::ConstantGlobal),
+                    ));
+                }
             }
 
             // Look up callee summary and apply store-effects + return aliasing.
@@ -4341,6 +4391,120 @@ mod tests {
     }
 
     #[test]
+    fn string_from_cstr_non_escaping_allocates_in_block_region() {
+        let insts = vec![
+            inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+            inst(
+                1,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0],
+                InstData::CallExtern("__vow_string_from_cstr".to_string()),
+            ),
+            inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+        ];
+        let f = function(0, "make_string", vec![], Ty::I64, vec![block(0, insts)]);
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert_eq!(
+            m.functions[0].blocks[0].insts[1].region,
+            RegionId::Block(BlockId(0)),
+            "String::from_cstr should be treated as a fresh heap producer"
+        );
+    }
+
+    #[test]
+    fn fresh_string_runtime_helpers_non_escaping_allocate_in_block_region() {
+        let cases = [
+            ("__vow_string_split", 2),
+            ("__vow_string_trim", 1),
+            ("__vow_string_to_upper", 1),
+            ("__vow_string_to_lower", 1),
+            ("__vow_string_replace", 3),
+            ("__vow_string_join", 2),
+        ];
+
+        for (sym, arity) in cases {
+            let mut insts = vec![
+                inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+                inst(2, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(2)),
+            ];
+            let args: Vec<u32> = (0..arity).collect();
+            insts.push(inst(
+                3,
+                Opcode::Call,
+                Ty::Ptr,
+                args,
+                InstData::CallExtern(sym.to_string()),
+            ));
+            insts.push(inst(
+                4,
+                Opcode::ConstI64,
+                Ty::I64,
+                vec![],
+                InstData::ConstI64(0),
+            ));
+            insts.push(inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None));
+
+            let f = function(
+                0,
+                "fresh_string_helper",
+                vec![Ty::Ptr, Ty::Ptr, Ty::Ptr],
+                Ty::I64,
+                vec![block(0, insts)],
+            );
+            let mut m = module(vec![f]);
+            infer_regions(&mut m);
+
+            assert_eq!(
+                m.functions[0].blocks[0].insts[3].region,
+                RegionId::Block(BlockId(0)),
+                "{sym} should be treated as a fresh heap producer"
+            );
+        }
+    }
+
+    #[test]
+    fn string_substring_return_allocates_in_caller_region() {
+        let insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+            inst(
+                3,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0, 1, 2],
+                InstData::CallExtern("__vow_string_substring".to_string()),
+            ),
+            inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+        ];
+        let f = function(
+            0,
+            "slice_string",
+            vec![Ty::Ptr],
+            Ty::Ptr,
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert_eq!(
+            m.functions[0].blocks[0].insts[3].region,
+            RegionId::Caller(HiddenRegionIdx(0)),
+            "returned String::substring result should be caller-region allocated"
+        );
+        assert_eq!(
+            m.functions[0].summary.return_region,
+            RegionConstraint::FreshInCaller,
+            "String::substring return should publish FreshInCaller"
+        );
+    }
+
+    #[test]
     fn internal_call_republishes_callee_store_effect_for_parameter_target() {
         let callee_insts = vec![
             inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
@@ -4932,6 +5096,44 @@ mod tests {
             source.region,
             RegionId::Caller(HiddenRegionIdx(0)),
             "source stored by explicit-arena Vec::push_val must inherit target escapes"
+        );
+    }
+
+    #[test]
+    fn string_push_byte_parameter_receiver_publishes_growth_store_effect() {
+        let insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(
+                1,
+                Opcode::ConstI64,
+                Ty::I64,
+                vec![],
+                InstData::ConstI64(120),
+            ),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Unit,
+                vec![0, 1],
+                InstData::CallExtern("__vow_string_push_byte".to_string()),
+            ),
+            inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(
+            0,
+            "grow_string_param",
+            vec![Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert!(
+            m.functions[0].summary.store_effects.iter().any(|effect| {
+                effect.target == 0 && effect.source == RegionConstraint::ConstantGlobal
+            }),
+            "String::push_byte on a parameter receiver must request that receiver's hidden arena"
         );
     }
 

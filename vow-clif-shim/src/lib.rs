@@ -228,25 +228,48 @@ fn hidden_region_store_targets(flat: &[i64]) -> Vec<i64> {
     let mut i = 0usize;
     while i + 1 < flat.len() {
         let target = flat[i];
-        let kind = flat[i + 1];
-        i += 2;
         out.push(target);
-        match kind {
-            RSUM_KIND_ALIAS_OF => i += 1,
-            RSUM_KIND_ALIAS_OF_ANY => {
-                if i >= flat.len() {
-                    break;
-                }
-                let n = flat[i].max(0) as usize;
-                i = i.saturating_add(1).saturating_add(n);
-            }
-            RSUM_KIND_FRESH_IN_CALLER | RSUM_KIND_CONSTANT_GLOBAL => {}
-            _ => {}
-        }
+        i = store_effect_advance(flat, i);
     }
     out.sort_unstable();
     out.dedup();
     out
+}
+
+fn store_effect_advance(flat: &[i64], start: usize) -> usize {
+    if start + 1 >= flat.len() {
+        return flat.len();
+    }
+    let kind = flat[start + 1];
+    let mut i = start + 2;
+    match kind {
+        RSUM_KIND_ALIAS_OF => i += 1,
+        RSUM_KIND_ALIAS_OF_ANY if i < flat.len() => {
+            let n = flat[i].max(0) as usize;
+            i = i.saturating_add(1).saturating_add(n);
+        }
+        RSUM_KIND_FRESH_IN_CALLER | RSUM_KIND_CONSTANT_GLOBAL => {}
+        _ => {}
+    }
+    i.min(flat.len())
+}
+
+fn hidden_region_for_store_target(
+    return_kind: i64,
+    store_effects: &[i64],
+    target_param: i64,
+) -> Option<i64> {
+    let mut hidden_idx = 0i64;
+    if return_kind == RSUM_KIND_FRESH_IN_CALLER {
+        hidden_idx += 1;
+    }
+    for target in hidden_region_store_targets(store_effects) {
+        if target == target_param {
+            return Some(region_pack(REGION_KIND_CALLER, hidden_idx));
+        }
+        hidden_idx += 1;
+    }
+    None
 }
 
 fn hidden_region_count(return_kind: i64, store_effects: &[i64], is_main: bool) -> usize {
@@ -258,6 +281,134 @@ fn hidden_region_count(return_kind: i64, store_effects: &[i64], is_main: bool) -
         count += 1;
     }
     count + hidden_region_store_targets(store_effects).len()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn inst_region_for_value(
+    inst_id: i64,
+    inst_region_by_id: &HashMap<i64, i64>,
+    inst_data_by_id: &HashMap<i64, (i64, i64)>,
+    inst_op_by_id: &HashMap<i64, i64>,
+    inst_ds_by_id: &HashMap<i64, String>,
+    inst_first_arg_by_id: &HashMap<i64, i64>,
+    upsilon_sources_by_phi: &HashMap<i64, Vec<i64>>,
+    return_kind: i64,
+    store_effects: &[i64],
+) -> i64 {
+    inst_region_for_value_inner(
+        inst_id,
+        inst_region_by_id,
+        inst_data_by_id,
+        inst_op_by_id,
+        inst_ds_by_id,
+        inst_first_arg_by_id,
+        upsilon_sources_by_phi,
+        return_kind,
+        store_effects,
+        &mut std::collections::HashSet::new(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn inst_region_for_value_inner(
+    inst_id: i64,
+    inst_region_by_id: &HashMap<i64, i64>,
+    inst_data_by_id: &HashMap<i64, (i64, i64)>,
+    inst_op_by_id: &HashMap<i64, i64>,
+    inst_ds_by_id: &HashMap<i64, String>,
+    inst_first_arg_by_id: &HashMap<i64, i64>,
+    upsilon_sources_by_phi: &HashMap<i64, Vec<i64>>,
+    return_kind: i64,
+    store_effects: &[i64],
+    seen: &mut std::collections::HashSet<i64>,
+) -> i64 {
+    if !seen.insert(inst_id) {
+        return inst_region_by_id
+            .get(&inst_id)
+            .copied()
+            .unwrap_or_else(region_root);
+    }
+    if let Some(&(dk, dv)) = inst_data_by_id.get(&inst_id)
+        && dk == IDATA_ARG_INDEX
+        && let Some(rgn) = hidden_region_for_store_target(return_kind, store_effects, dv)
+    {
+        return rgn;
+    }
+    if matches!(
+        inst_op_by_id.get(&inst_id).copied(),
+        Some(IOP_FIELD_GET | IOP_LOAD)
+    ) && let Some(&source_id) = inst_first_arg_by_id.get(&inst_id)
+    {
+        return inst_region_for_value_inner(
+            source_id,
+            inst_region_by_id,
+            inst_data_by_id,
+            inst_op_by_id,
+            inst_ds_by_id,
+            inst_first_arg_by_id,
+            upsilon_sources_by_phi,
+            return_kind,
+            store_effects,
+            seen,
+        );
+    }
+    if inst_op_by_id.get(&inst_id).copied() == Some(IOP_CALL)
+        && let Some(&(dk, _)) = inst_data_by_id.get(&inst_id)
+        && dk == IDATA_CALL_EXTERN
+        && let Some(sym) = inst_ds_by_id.get(&inst_id)
+        && matches!(sym.as_str(), "__vow_vec_get_val" | "__vow_vec_get")
+        && let Some(&source_id) = inst_first_arg_by_id.get(&inst_id)
+    {
+        return inst_region_for_value_inner(
+            source_id,
+            inst_region_by_id,
+            inst_data_by_id,
+            inst_op_by_id,
+            inst_ds_by_id,
+            inst_first_arg_by_id,
+            upsilon_sources_by_phi,
+            return_kind,
+            store_effects,
+            seen,
+        );
+    }
+    if inst_op_by_id.get(&inst_id).copied() == Some(IOP_PHI)
+        && let Some(sources) = upsilon_sources_by_phi.get(&inst_id)
+    {
+        let mut merged: Option<i64> = None;
+        for &source_id in sources {
+            let mut source_seen = seen.clone();
+            let rgn = inst_region_for_value_inner(
+                source_id,
+                inst_region_by_id,
+                inst_data_by_id,
+                inst_op_by_id,
+                inst_ds_by_id,
+                inst_first_arg_by_id,
+                upsilon_sources_by_phi,
+                return_kind,
+                store_effects,
+                &mut source_seen,
+            );
+            match merged {
+                Some(existing) if existing != rgn => {
+                    return inst_region_by_id
+                        .get(&inst_id)
+                        .copied()
+                        .unwrap_or_else(region_root);
+                }
+                Some(_) => {}
+                None => merged = Some(rgn),
+            }
+        }
+        if let Some(rgn) = merged {
+            return rgn;
+        }
+    }
+    inst_region_by_id
+        .get(&inst_id)
+        .copied()
+        .unwrap_or_else(region_root)
 }
 
 fn block_arena_value(
@@ -333,6 +484,99 @@ fn routed_vec_extern(sym: &str, inst_rgn: i64, receiver_rgn: i64) -> (&str, Opti
             let kind = receiver_rgn & 3;
             if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
                 ("__vow_vec_push_in_arena", Some(receiver_rgn))
+            } else {
+                (sym, None)
+            }
+        }
+        "__vow_string_new" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_new_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_from_cstr" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_from_cstr_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_substr" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_substr_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_substring" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_substring_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_from_i64" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_from_i64_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_split" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_split_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_trim" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_trim_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_to_upper" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_to_upper_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_to_lower" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_to_lower_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_replace" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_replace_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_join" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_join_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_push_str" => {
+            let kind = receiver_rgn & 3;
+            if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
+                ("__vow_string_push_str_in_arena", Some(receiver_rgn))
+            } else {
+                (sym, None)
+            }
+        }
+        "__vow_string_push_byte" => {
+            let kind = receiver_rgn & 3;
+            if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
+                ("__vow_string_push_byte_in_arena", Some(receiver_rgn))
             } else {
                 (sym, None)
             }
@@ -905,6 +1149,11 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     // Build inst_id → block_index map
     let mut inst_block: HashMap<i64, usize> = HashMap::new();
     let mut inst_region_by_id: HashMap<i64, i64> = HashMap::new();
+    let mut inst_data_by_id: HashMap<i64, (i64, i64)> = HashMap::new();
+    let mut inst_op_by_id: HashMap<i64, i64> = HashMap::new();
+    let mut inst_ds_by_id: HashMap<i64, String> = HashMap::new();
+    let mut inst_first_arg_by_id: HashMap<i64, i64> = HashMap::new();
+    let mut upsilon_sources_by_phi: HashMap<i64, Vec<i64>> = HashMap::new();
     for bi in 0..nb {
         let start = block_starts[bi] as usize;
         let len = block_lengths[bi] as usize;
@@ -913,6 +1162,25 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
         }
         for idx in start..start + len {
             inst_region_by_id.insert(inst_ids[idx], inst_rgns[idx]);
+            inst_data_by_id.insert(inst_ids[idx], (inst_dks[idx], inst_dvs[idx]));
+            inst_op_by_id.insert(inst_ids[idx], inst_ops[idx]);
+            let aoff = arg_offsets[idx] as usize;
+            let alen = arg_lengths[idx] as usize;
+            if alen > 0 {
+                inst_first_arg_by_id.insert(inst_ids[idx], all_args[aoff]);
+            }
+            if inst_dks[idx] == IDATA_CALL_EXTERN {
+                inst_ds_by_id.insert(
+                    inst_ids[idx],
+                    unsafe { read_vow_string(inst_ds_ptrs[idx]) }.to_string(),
+                );
+            }
+            if inst_ops[idx] == IOP_UPSILON && inst_dks[idx] == IDATA_PHI_TARGET && alen > 0 {
+                upsilon_sources_by_phi
+                    .entry(inst_dvs[idx])
+                    .or_default()
+                    .push(all_args[aoff]);
+            }
         }
     }
 
@@ -1960,10 +2228,18 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                             let sym = unsafe { read_vow_string(inst_ds_ptrs[ii]) };
                             let receiver_rgn = if alen > 0 {
                                 let receiver_id = all_args[aoff];
-                                inst_region_by_id
-                                    .get(&receiver_id)
-                                    .copied()
-                                    .unwrap_or_else(region_root)
+                                let decl = &ctx.func_decls[fi];
+                                inst_region_for_value(
+                                    receiver_id,
+                                    &inst_region_by_id,
+                                    &inst_data_by_id,
+                                    &inst_op_by_id,
+                                    &inst_ds_by_id,
+                                    &inst_first_arg_by_id,
+                                    &upsilon_sources_by_phi,
+                                    decl.return_kind,
+                                    &decl.store_effects,
+                                )
                             } else {
                                 region_root()
                             };
@@ -2056,10 +2332,18 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                 let arg_rgn = if target_param >= 0 && (target_param as usize) < alen
                                 {
                                     let arg_id = all_args[aoff + target_param as usize];
-                                    inst_region_by_id
-                                        .get(&arg_id)
-                                        .copied()
-                                        .unwrap_or_else(region_root)
+                                    let current_decl = &ctx.func_decls[fi];
+                                    inst_region_for_value(
+                                        arg_id,
+                                        &inst_region_by_id,
+                                        &inst_data_by_id,
+                                        &inst_op_by_id,
+                                        &inst_ds_by_id,
+                                        &inst_first_arg_by_id,
+                                        &upsilon_sources_by_phi,
+                                        current_decl.return_kind,
+                                        &current_decl.store_effects,
+                                    )
                                 } else {
                                     region_root()
                                 };
@@ -2673,7 +2957,18 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_string_new_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_string_from_cstr" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_from_cstr_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
@@ -2708,6 +3003,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
         }
+        "__vow_string_push_str_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+        }
         "__vow_string_byte_at" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
@@ -2717,7 +3017,17 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
         }
+        "__vow_string_push_byte_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+        }
         "__vow_string_from_i64" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_from_i64_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
@@ -2784,7 +3094,21 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_string_substr_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_string_substring" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_substring_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
@@ -2799,6 +3123,12 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_string_split_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_string_starts_with" | "__vow_string_ends_with" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
@@ -2808,13 +3138,33 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_string_trim_in_arena"
+        | "__vow_string_to_upper_in_arena"
+        | "__vow_string_to_lower_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_string_replace" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_string_replace_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_string_join" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_join_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
@@ -3036,6 +3386,27 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hidden_region_for_store_target_uses_sorted_target_slots() {
+        let flat = [1, RSUM_KIND_CONSTANT_GLOBAL, 0, RSUM_KIND_CONSTANT_GLOBAL];
+        assert_eq!(
+            hidden_region_for_store_target(RSUM_KIND_CONSTANT_GLOBAL, &flat, 0),
+            Some(region_pack(REGION_KIND_CALLER, 0))
+        );
+        assert_eq!(
+            hidden_region_for_store_target(RSUM_KIND_CONSTANT_GLOBAL, &flat, 1),
+            Some(region_pack(REGION_KIND_CALLER, 1))
+        );
+        assert_eq!(
+            hidden_region_for_store_target(RSUM_KIND_FRESH_IN_CALLER, &flat, 0),
+            Some(region_pack(REGION_KIND_CALLER, 1))
+        );
+        assert_eq!(
+            hidden_region_for_store_target(RSUM_KIND_FRESH_IN_CALLER, &flat, 1),
+            Some(region_pack(REGION_KIND_CALLER, 2))
+        );
+    }
 
     #[test]
     fn finds_lib_in_installed_lib_vow_dir() {
