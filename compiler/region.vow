@@ -2713,6 +2713,18 @@ fn string_creation_extern(sym: String) -> bool {
         || sym == String::from("__vow_string_substring_in_arena")
         || sym == String::from("__vow_string_from_i64")
         || sym == String::from("__vow_string_from_i64_in_arena")
+        || sym == String::from("__vow_string_split")
+        || sym == String::from("__vow_string_split_in_arena")
+        || sym == String::from("__vow_string_trim")
+        || sym == String::from("__vow_string_trim_in_arena")
+        || sym == String::from("__vow_string_to_upper")
+        || sym == String::from("__vow_string_to_upper_in_arena")
+        || sym == String::from("__vow_string_to_lower")
+        || sym == String::from("__vow_string_to_lower_in_arena")
+        || sym == String::from("__vow_string_replace")
+        || sym == String::from("__vow_string_replace_in_arena")
+        || sym == String::from("__vow_string_join")
+        || sym == String::from("__vow_string_join_in_arena")
 }
 
 fn heap_producing_extern(sym: String) -> bool {

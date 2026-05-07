@@ -1474,6 +1474,18 @@ fn string_creation_extern(sym: &str) -> bool {
             | "__vow_string_substring_in_arena"
             | "__vow_string_from_i64"
             | "__vow_string_from_i64_in_arena"
+            | "__vow_string_split"
+            | "__vow_string_split_in_arena"
+            | "__vow_string_trim"
+            | "__vow_string_trim_in_arena"
+            | "__vow_string_to_upper"
+            | "__vow_string_to_upper_in_arena"
+            | "__vow_string_to_lower"
+            | "__vow_string_to_lower_in_arena"
+            | "__vow_string_replace"
+            | "__vow_string_replace_in_arena"
+            | "__vow_string_join"
+            | "__vow_string_join_in_arena"
     )
 }
 
@@ -4401,6 +4413,58 @@ mod tests {
             RegionId::Block(BlockId(0)),
             "String::from_cstr should be treated as a fresh heap producer"
         );
+    }
+
+    #[test]
+    fn fresh_string_runtime_helpers_non_escaping_allocate_in_block_region() {
+        let cases = [
+            ("__vow_string_split", 2),
+            ("__vow_string_trim", 1),
+            ("__vow_string_to_upper", 1),
+            ("__vow_string_to_lower", 1),
+            ("__vow_string_replace", 3),
+            ("__vow_string_join", 2),
+        ];
+
+        for (sym, arity) in cases {
+            let mut insts = vec![
+                inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+                inst(2, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(2)),
+            ];
+            let args: Vec<u32> = (0..arity).collect();
+            insts.push(inst(
+                3,
+                Opcode::Call,
+                Ty::Ptr,
+                args,
+                InstData::CallExtern(sym.to_string()),
+            ));
+            insts.push(inst(
+                4,
+                Opcode::ConstI64,
+                Ty::I64,
+                vec![],
+                InstData::ConstI64(0),
+            ));
+            insts.push(inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None));
+
+            let f = function(
+                0,
+                "fresh_string_helper",
+                vec![Ty::Ptr, Ty::Ptr, Ty::Ptr],
+                Ty::I64,
+                vec![block(0, insts)],
+            );
+            let mut m = module(vec![f]);
+            infer_regions(&mut m);
+
+            assert_eq!(
+                m.functions[0].blocks[0].insts[3].region,
+                RegionId::Block(BlockId(0)),
+                "{sym} should be treated as a fresh heap producer"
+            );
+        }
     }
 
     #[test]

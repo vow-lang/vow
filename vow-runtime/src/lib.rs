@@ -1597,8 +1597,15 @@ pub unsafe extern "C" fn __vow_string_substring(s: *const u8, start: i64, end: i
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_string_split(haystack: *const u8, separator: *const u8) -> *mut u8 {
-    let result_vec = __vow_vec_new_val();
+pub unsafe extern "C" fn __vow_string_split_in_arena(
+    arena: *mut VowArena,
+    haystack: *const u8,
+    separator: *const u8,
+) -> *mut u8 {
+    if arena.is_null() {
+        null_arena_trap("String::split");
+    }
+    let result_vec = unsafe { __vow_vec_new_val_in_arena(arena) };
     if haystack.is_null() || separator.is_null() {
         return result_vec;
     }
@@ -1610,26 +1617,36 @@ pub unsafe extern "C" fn __vow_string_split(haystack: *const u8, separator: *con
     let s = unsafe { std::slice::from_raw_parts(vs.ptr, vs.len) };
 
     if s.is_empty() {
-        let str_vec = unsafe { __vow_string_new(h.as_ptr() as *const i8, h.len()) } as i64;
-        unsafe { __vow_vec_push_val(result_vec, str_vec) };
+        let str_vec =
+            unsafe { __vow_string_new_in_arena(arena, h.as_ptr() as *const i8, h.len()) } as i64;
+        unsafe { __vow_vec_push_val_in_arena(arena, result_vec, str_vec) };
         return result_vec;
     }
 
     let mut start = 0;
     while start <= h.len() {
         if let Some(pos) = h[start..].windows(s.len()).position(|w| w == s) {
-            let piece = unsafe { __vow_string_new(h[start..].as_ptr() as *const i8, pos) } as i64;
-            unsafe { __vow_vec_push_val(result_vec, piece) };
+            let piece =
+                unsafe { __vow_string_new_in_arena(arena, h[start..].as_ptr() as *const i8, pos) }
+                    as i64;
+            unsafe { __vow_vec_push_val_in_arena(arena, result_vec, piece) };
             start += pos + s.len();
         } else {
-            let piece =
-                unsafe { __vow_string_new(h[start..].as_ptr() as *const i8, h.len() - start) }
-                    as i64;
-            unsafe { __vow_vec_push_val(result_vec, piece) };
+            let piece = unsafe {
+                __vow_string_new_in_arena(arena, h[start..].as_ptr() as *const i8, h.len() - start)
+            } as i64;
+            unsafe { __vow_vec_push_val_in_arena(arena, result_vec, piece) };
             break;
         }
     }
     result_vec
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_split(haystack: *const u8, separator: *const u8) -> *mut u8 {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { __vow_string_split_in_arena(&raw mut __vow_root_arena, haystack, separator) }
 }
 
 #[unsafe(no_mangle)]
@@ -1661,58 +1678,98 @@ pub unsafe extern "C" fn __vow_string_ends_with(s: *const u8, suffix: *const u8)
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_string_trim(s: *const u8) -> *mut u8 {
+pub unsafe extern "C" fn __vow_string_trim_in_arena(arena: *mut VowArena, s: *const u8) -> *mut u8 {
+    if arena.is_null() {
+        null_arena_trap("String::trim");
+    }
     if s.is_null() {
-        return __vow_vec_new(1, 1);
+        return unsafe { __vow_string_new_in_arena(arena, std::ptr::null(), 0) };
     }
     sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let trimmed = match std::str::from_utf8(bytes) {
         Ok(s) => s.trim(),
-        Err(_) => return __vow_vec_new(1, 1),
+        Err(_) => return unsafe { __vow_string_new_in_arena(arena, std::ptr::null(), 0) },
     };
-    unsafe { __vow_string_new(trimmed.as_ptr() as *const i8, trimmed.len()) }
+    unsafe { __vow_string_new_in_arena(arena, trimmed.as_ptr() as *const i8, trimmed.len()) }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_string_to_upper(s: *const u8) -> *mut u8 {
+pub unsafe extern "C" fn __vow_string_trim(s: *const u8) -> *mut u8 {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { __vow_string_trim_in_arena(&raw mut __vow_root_arena, s) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_to_upper_in_arena(
+    arena: *mut VowArena,
+    s: *const u8,
+) -> *mut u8 {
+    if arena.is_null() {
+        null_arena_trap("String::to_upper");
+    }
     if s.is_null() {
-        return __vow_vec_new(1, 1);
+        return unsafe { __vow_string_new_in_arena(arena, std::ptr::null(), 0) };
     }
     sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let upper = match std::str::from_utf8(bytes) {
         Ok(s) => s.to_uppercase(),
-        Err(_) => return __vow_vec_new(1, 1),
+        Err(_) => return unsafe { __vow_string_new_in_arena(arena, std::ptr::null(), 0) },
     };
-    unsafe { __vow_string_new(upper.as_ptr() as *const i8, upper.len()) }
+    unsafe { __vow_string_new_in_arena(arena, upper.as_ptr() as *const i8, upper.len()) }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_string_to_lower(s: *const u8) -> *mut u8 {
+pub unsafe extern "C" fn __vow_string_to_upper(s: *const u8) -> *mut u8 {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { __vow_string_to_upper_in_arena(&raw mut __vow_root_arena, s) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_to_lower_in_arena(
+    arena: *mut VowArena,
+    s: *const u8,
+) -> *mut u8 {
+    if arena.is_null() {
+        null_arena_trap("String::to_lower");
+    }
     if s.is_null() {
-        return __vow_vec_new(1, 1);
+        return unsafe { __vow_string_new_in_arena(arena, std::ptr::null(), 0) };
     }
     sanitize_on_read(s as usize, 0);
     let v = unsafe { &*(s as *const VowVec) };
     let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
     let lower = match std::str::from_utf8(bytes) {
         Ok(s) => s.to_lowercase(),
-        Err(_) => return __vow_vec_new(1, 1),
+        Err(_) => return unsafe { __vow_string_new_in_arena(arena, std::ptr::null(), 0) },
     };
-    unsafe { __vow_string_new(lower.as_ptr() as *const i8, lower.len()) }
+    unsafe { __vow_string_new_in_arena(arena, lower.as_ptr() as *const i8, lower.len()) }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_string_replace(
+pub unsafe extern "C" fn __vow_string_to_lower(s: *const u8) -> *mut u8 {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { __vow_string_to_lower_in_arena(&raw mut __vow_root_arena, s) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_replace_in_arena(
+    arena: *mut VowArena,
     s: *const u8,
     from: *const u8,
     to: *const u8,
 ) -> *mut u8 {
+    if arena.is_null() {
+        null_arena_trap("String::replace");
+    }
     if s.is_null() || from.is_null() || to.is_null() {
-        return __vow_vec_new(1, 1);
+        return unsafe { __vow_string_new_in_arena(arena, std::ptr::null(), 0) };
     }
     sanitize_on_read(s as usize, 0);
     sanitize_on_read(from as usize, 0);
@@ -1729,30 +1786,55 @@ pub unsafe extern "C" fn __vow_string_replace(
         std::str::from_utf8(st),
     ) {
         (Ok(a), Ok(b), Ok(c)) => (a, b, c),
-        _ => return __vow_vec_new(1, 1),
+        _ => return unsafe { __vow_string_new_in_arena(arena, std::ptr::null(), 0) },
     };
     let result = ss_str.replace(sf_str, st_str);
-    unsafe { __vow_string_new(result.as_ptr() as *const i8, result.len()) }
+    unsafe { __vow_string_new_in_arena(arena, result.as_ptr() as *const i8, result.len()) }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_string_join(vec_ptr: *const u8, sep: *const u8) -> *mut u8 {
+pub unsafe extern "C" fn __vow_string_replace(
+    s: *const u8,
+    from: *const u8,
+    to: *const u8,
+) -> *mut u8 {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { __vow_string_replace_in_arena(&raw mut __vow_root_arena, s, from, to) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_join_in_arena(
+    arena: *mut VowArena,
+    vec_ptr: *const u8,
+    sep: *const u8,
+) -> *mut u8 {
+    if arena.is_null() {
+        null_arena_trap("String::join");
+    }
     if vec_ptr.is_null() || sep.is_null() {
-        return __vow_vec_new(1, 1);
+        return unsafe { __vow_string_new_in_arena(arena, std::ptr::null(), 0) };
     }
     sanitize_on_read(vec_ptr as usize, 0);
     sanitize_on_read(sep as usize, 0);
     let v = unsafe { &*(vec_ptr as *const VowVec) };
     let ptrs = unsafe { std::slice::from_raw_parts(v.ptr as *const i64, v.len) };
 
-    let result = __vow_vec_new(1, 1);
+    let result = unsafe { __vow_string_new_in_arena(arena, std::ptr::null(), 0) };
     for (i, &str_ptr) in ptrs.iter().enumerate() {
         if i > 0 {
-            unsafe { __vow_string_push_str(result, sep) };
+            unsafe { __vow_string_push_str_in_arena(arena, result, sep) };
         }
-        unsafe { __vow_string_push_str(result, str_ptr as *const u8) };
+        unsafe { __vow_string_push_str_in_arena(arena, result, str_ptr as *const u8) };
     }
     result
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_join(vec_ptr: *const u8, sep: *const u8) -> *mut u8 {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { __vow_string_join_in_arena(&raw mut __vow_root_arena, vec_ptr, sep) }
 }
 
 #[unsafe(no_mangle)]
@@ -3809,6 +3891,53 @@ mod tests {
             eprintln!("rodata_trap_worker: null arena string from_i64 did NOT trap");
             std::process::exit(42);
         }
+        if op == "String::split_in_arena_null" {
+            let _ = unsafe {
+                __vow_string_split_in_arena(
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            };
+            eprintln!("rodata_trap_worker: null arena string split did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "String::trim_in_arena_null" {
+            let _ = unsafe { __vow_string_trim_in_arena(std::ptr::null_mut(), std::ptr::null()) };
+            eprintln!("rodata_trap_worker: null arena string trim did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "String::to_upper_in_arena_null" {
+            let _ =
+                unsafe { __vow_string_to_upper_in_arena(std::ptr::null_mut(), std::ptr::null()) };
+            eprintln!("rodata_trap_worker: null arena string to_upper did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "String::to_lower_in_arena_null" {
+            let _ =
+                unsafe { __vow_string_to_lower_in_arena(std::ptr::null_mut(), std::ptr::null()) };
+            eprintln!("rodata_trap_worker: null arena string to_lower did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "String::replace_in_arena_null" {
+            let _ = unsafe {
+                __vow_string_replace_in_arena(
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            };
+            eprintln!("rodata_trap_worker: null arena string replace did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "String::join_in_arena_null" {
+            let _ = unsafe {
+                __vow_string_join_in_arena(std::ptr::null_mut(), std::ptr::null(), std::ptr::null())
+            };
+            eprintln!("rodata_trap_worker: null arena string join did NOT trap");
+            std::process::exit(42);
+        }
         let mut v = make_rodata_vec_val();
         let vp = &mut v as *mut _ as *mut u8;
         let mut m = make_rodata_map();
@@ -3962,6 +4091,21 @@ mod tests {
     #[test]
     fn explicit_arena_string_from_i64_null_arena_traps() {
         assert_runtime_invariant_null_arena("String::from_i64_in_arena_null", "String::from_i64");
+    }
+
+    #[test]
+    fn explicit_arena_string_fresh_helper_null_arena_traps() {
+        let cases = [
+            ("String::split_in_arena_null", "String::split"),
+            ("String::trim_in_arena_null", "String::trim"),
+            ("String::to_upper_in_arena_null", "String::to_upper"),
+            ("String::to_lower_in_arena_null", "String::to_lower"),
+            ("String::replace_in_arena_null", "String::replace"),
+            ("String::join_in_arena_null", "String::join"),
+        ];
+        for (op, expected) in cases {
+            assert_runtime_invariant_null_arena(op, expected);
+        }
     }
 
     #[test]

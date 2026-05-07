@@ -241,6 +241,42 @@ fn clif_routed_extern_symbol(f: IrFunction, inst: IrInst) -> String {
         }
         return String::from("__vow_string_from_i64_in_arena");
     }
+    if sym == String::from("__vow_string_split") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_split_in_arena");
+    }
+    if sym == String::from("__vow_string_trim") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_trim_in_arena");
+    }
+    if sym == String::from("__vow_string_to_upper") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_to_upper_in_arena");
+    }
+    if sym == String::from("__vow_string_to_lower") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_to_lower_in_arena");
+    }
+    if sym == String::from("__vow_string_replace") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_replace_in_arena");
+    }
+    if sym == String::from("__vow_string_join") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_join_in_arena");
+    }
     if sym == String::from("__vow_string_push_str") {
         let sr: i64 = clif_receiver_region(f, inst);
         let sk: i64 = region_kind(sr);
