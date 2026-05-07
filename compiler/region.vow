@@ -956,6 +956,22 @@ fn analyze_function(
                     }
                     edge_idx = edge_idx + 1;
                 }
+                let growth_target_pos: i64 = extern_growth_target_pos(inst.ds);
+                if growth_target_pos >= 0 && growth_target_pos < inst.args.len() {
+                    let growth_target_param: i64 = trace_param_shallow(id_to_inst, inst.args[growth_target_pos]);
+                    if growth_target_param >= 0 {
+                        add_store_effect(
+                            int_se_targets[fidx],
+                            int_se_src_kinds[fidx],
+                            int_se_src_aux[fidx],
+                            int_se_src_aliases[fidx],
+                            growth_target_param,
+                            RSUM_KIND_CONSTANT_GLOBAL(),
+                            0,
+                            Vec::new(),
+                        );
+                    }
+                }
             }
             if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
                 publish_transitive_store_effects(
@@ -2734,6 +2750,17 @@ fn extern_store_source_pos(sym: String, edge_idx: i64) -> i64 {
     {
         return 2;
     }
+    -1
+}
+
+fn extern_growth_target_pos(sym: String) -> i64 {
+    if sym == String::from("__vow_vec_push") { return 0; }
+    if sym == String::from("__vow_vec_push_in_arena") { return 1; }
+    if sym == String::from("__vow_vec_reserve_in_arena") { return 1; }
+    if sym == String::from("__vow_string_push_str") { return 0; }
+    if sym == String::from("__vow_string_push_str_in_arena") { return 1; }
+    if sym == String::from("__vow_string_push_byte") { return 0; }
+    if sym == String::from("__vow_string_push_byte_in_arena") { return 1; }
     -1
 }
 

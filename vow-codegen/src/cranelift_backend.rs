@@ -14,7 +14,7 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use vow_ir::{
-    BlockId, FuncId as IrFuncId, Function as IrFunction, Inst, InstData, InstId,
+    BlockId, FuncId as IrFuncId, Function as IrFunction, HiddenRegionIdx, Inst, InstData, InstId,
     Module as IrModule, Opcode, RegionConstraint, RegionId, RegionSummary, Ty as IrTy,
 };
 
@@ -216,6 +216,30 @@ fn hidden_region_param_count(ir_func: &IrFunction) -> usize {
     count + hidden_region_store_targets(ir_func).len()
 }
 
+fn hidden_region_idx_for_store_target(
+    summary: &RegionSummary,
+    target_param: u32,
+) -> Option<HiddenRegionIdx> {
+    let mut idx = 0u32;
+    if summary.return_region == RegionConstraint::FreshInCaller {
+        idx += 1;
+    }
+    let mut targets: Vec<u32> = summary
+        .store_effects
+        .iter()
+        .map(|effect| effect.target)
+        .collect();
+    targets.sort_unstable();
+    targets.dedup();
+    for target in targets {
+        if target == target_param {
+            return Some(HiddenRegionIdx(idx));
+        }
+        idx += 1;
+    }
+    None
+}
+
 fn coerce_return_value(builder: &mut FunctionBuilder<'_>, val: Value, return_ty: IrTy) -> Value {
     let val_ty = builder.func.dfg.value_type(val);
     match (val_ty, ir_ty_to_cranelift(return_ty)) {
@@ -355,11 +379,34 @@ fn region_to_arena_value(
     }
 }
 
-fn first_arg_region(inst: &Inst, inst_index: &HashMap<InstId, &Inst>) -> RegionId {
+fn source_value_region(source: &Inst, current_summary: &RegionSummary) -> RegionId {
+    if let (Opcode::GetArg, InstData::ArgIndex(param_idx)) = (&source.opcode, &source.data)
+        && let Some(hidden_idx) = hidden_region_idx_for_store_target(current_summary, *param_idx)
+    {
+        return RegionId::Caller(hidden_idx);
+    }
+    source.region
+}
+
+fn arg_region(
+    arg_id: InstId,
+    inst_index: &HashMap<InstId, &Inst>,
+    current_summary: &RegionSummary,
+) -> RegionId {
+    inst_index
+        .get(&arg_id)
+        .map(|src| source_value_region(src, current_summary))
+        .unwrap_or(RegionId::Root)
+}
+
+fn first_arg_region(
+    inst: &Inst,
+    inst_index: &HashMap<InstId, &Inst>,
+    current_summary: &RegionSummary,
+) -> RegionId {
     inst.args
         .first()
-        .and_then(|arg_id| inst_index.get(arg_id))
-        .map(|src| src.region)
+        .map(|arg_id| arg_region(*arg_id, inst_index, current_summary))
         .unwrap_or(RegionId::Root)
 }
 
@@ -367,6 +414,7 @@ fn routed_vec_extern<'a>(
     sym: &'a str,
     inst: &Inst,
     inst_index: &HashMap<InstId, &Inst>,
+    current_summary: &RegionSummary,
 ) -> (&'a str, Option<RegionId>) {
     match sym {
         "__vow_vec_new" => match inst.region {
@@ -378,7 +426,7 @@ fn routed_vec_extern<'a>(
             region => ("__vow_vec_new_val_in_arena", Some(region)),
         },
         "__vow_vec_push_val" => {
-            let region = first_arg_region(inst, inst_index);
+            let region = first_arg_region(inst, inst_index, current_summary);
             match region {
                 RegionId::Block(_) | RegionId::Caller(_) => {
                     ("__vow_vec_push_val_in_arena", Some(region))
@@ -387,7 +435,7 @@ fn routed_vec_extern<'a>(
             }
         }
         "__vow_vec_push" => {
-            let region = first_arg_region(inst, inst_index);
+            let region = first_arg_region(inst, inst_index, current_summary);
             match region {
                 RegionId::Block(_) | RegionId::Caller(_) => {
                     ("__vow_vec_push_in_arena", Some(region))
@@ -416,7 +464,7 @@ fn routed_vec_extern<'a>(
             region => ("__vow_string_from_i64_in_arena", Some(region)),
         },
         "__vow_string_push_str" => {
-            let region = first_arg_region(inst, inst_index);
+            let region = first_arg_region(inst, inst_index, current_summary);
             match region {
                 RegionId::Block(_) | RegionId::Caller(_) => {
                     ("__vow_string_push_str_in_arena", Some(region))
@@ -425,7 +473,7 @@ fn routed_vec_extern<'a>(
             }
         }
         "__vow_string_push_byte" => {
-            let region = first_arg_region(inst, inst_index);
+            let region = first_arg_region(inst, inst_index, current_summary);
             match region {
                 RegionId::Block(_) | RegionId::Caller(_) => {
                     ("__vow_string_push_byte_in_arena", Some(region))
@@ -1186,7 +1234,8 @@ fn lower_inst(
                     fr
                 }
                 InstData::CallExtern(sym) => {
-                    let (routed_sym, target_region) = routed_vec_extern(sym, inst, ctx.inst_index);
+                    let (routed_sym, target_region) =
+                        routed_vec_extern(sym, inst, ctx.inst_index, &ctx.ir_func.summary);
                     external_target_region = target_region;
                     let Some(&fr) = ctx.extern_func_refs.get(routed_sym) else {
                         return Err(CodegenError::UnsupportedOpcode(format!(
@@ -1313,8 +1362,7 @@ fn lower_inst(
                     let arg_region = inst
                         .args
                         .get(target_idx as usize)
-                        .and_then(|arg_id| ctx.inst_index.get(arg_id))
-                        .map(|src_inst| src_inst.region)
+                        .map(|arg_id| arg_region(*arg_id, ctx.inst_index, &ctx.ir_func.summary))
                         .unwrap_or(RegionId::Root);
                     push_hidden(builder, &mut call_args, arg_region)?;
                 }
@@ -2508,7 +2556,8 @@ impl Backend for CraneliftBackend {
                         if inst.opcode == Opcode::DebugCall && !mode.has_debug_checks() {
                             continue;
                         }
-                        let (routed_sym, _) = routed_vec_extern(sym, inst, &inst_index);
+                        let (routed_sym, _) =
+                            routed_vec_extern(sym, inst, &inst_index, &func.summary);
                         extern_syms.insert(routed_sym.to_string());
                     }
                 }
@@ -4315,6 +4364,64 @@ mod tests {
             .collect();
         assert!(symbols.contains("__vow_string_push_str_in_arena"));
         assert!(!symbols.contains("__vow_string_push_str"));
+    }
+
+    #[test]
+    fn parameter_region_string_push_byte_imports_arena_variant() {
+        let grow_param = Function {
+            id: FuncId(0),
+            name: "grow_param".to_string(),
+            params: vec![Ty::Ptr],
+            param_names: vec!["s".to_string()],
+            return_ty: Ty::Unit,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    inst(
+                        1,
+                        Opcode::ConstI64,
+                        Ty::I64,
+                        vec![],
+                        InstData::ConstI64(120),
+                    ),
+                    inst(
+                        2,
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![0, 1],
+                        InstData::CallExtern("__vow_string_push_byte".to_string()),
+                    ),
+                    inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary {
+                param_regions: vec![],
+                return_region: RegionConstraint::ConstantGlobal,
+                store_effects: vec![StoreEffect {
+                    target: 0,
+                    source: RegionConstraint::ConstantGlobal,
+                }],
+            },
+            source_file: String::new(),
+        };
+        let module = make_module("test", vec![grow_param]);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(symbols.contains("__vow_string_push_byte_in_arena"));
+        assert!(!symbols.contains("__vow_string_push_byte"));
     }
 
     #[test]

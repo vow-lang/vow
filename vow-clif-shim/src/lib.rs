@@ -249,6 +249,49 @@ fn hidden_region_store_targets(flat: &[i64]) -> Vec<i64> {
     out
 }
 
+fn store_effect_advance(flat: &[i64], start: usize) -> usize {
+    if start + 1 >= flat.len() {
+        return flat.len();
+    }
+    let kind = flat[start + 1];
+    let mut i = start + 2;
+    match kind {
+        RSUM_KIND_ALIAS_OF => i += 1,
+        RSUM_KIND_ALIAS_OF_ANY if i < flat.len() => {
+            let n = flat[i].max(0) as usize;
+            i = i.saturating_add(1).saturating_add(n);
+        }
+        RSUM_KIND_FRESH_IN_CALLER | RSUM_KIND_CONSTANT_GLOBAL => {}
+        _ => {}
+    }
+    i.min(flat.len())
+}
+
+fn hidden_region_for_store_target(
+    return_kind: i64,
+    store_effects: &[i64],
+    target_param: i64,
+) -> Option<i64> {
+    let mut hidden_idx = 0i64;
+    if return_kind == RSUM_KIND_FRESH_IN_CALLER {
+        hidden_idx += 1;
+    }
+    let mut prev_target: Option<i64> = None;
+    let mut i = 0usize;
+    while i + 1 < store_effects.len() {
+        let target = store_effects[i];
+        if prev_target != Some(target) {
+            if target == target_param {
+                return Some(region_pack(REGION_KIND_CALLER, hidden_idx));
+            }
+            hidden_idx += 1;
+            prev_target = Some(target);
+        }
+        i = store_effect_advance(store_effects, i);
+    }
+    None
+}
+
 fn hidden_region_count(return_kind: i64, store_effects: &[i64], is_main: bool) -> usize {
     if is_main {
         return 0;
@@ -258,6 +301,25 @@ fn hidden_region_count(return_kind: i64, store_effects: &[i64], is_main: bool) -
         count += 1;
     }
     count + hidden_region_store_targets(store_effects).len()
+}
+
+fn inst_region_for_value(
+    inst_id: i64,
+    inst_region_by_id: &HashMap<i64, i64>,
+    inst_data_by_id: &HashMap<i64, (i64, i64)>,
+    return_kind: i64,
+    store_effects: &[i64],
+) -> i64 {
+    if let Some(&(dk, dv)) = inst_data_by_id.get(&inst_id)
+        && dk == IDATA_ARG_INDEX
+        && let Some(rgn) = hidden_region_for_store_target(return_kind, store_effects, dv)
+    {
+        return rgn;
+    }
+    inst_region_by_id
+        .get(&inst_id)
+        .copied()
+        .unwrap_or_else(region_root)
 }
 
 fn block_arena_value(
@@ -956,6 +1018,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     // Build inst_id → block_index map
     let mut inst_block: HashMap<i64, usize> = HashMap::new();
     let mut inst_region_by_id: HashMap<i64, i64> = HashMap::new();
+    let mut inst_data_by_id: HashMap<i64, (i64, i64)> = HashMap::new();
     for bi in 0..nb {
         let start = block_starts[bi] as usize;
         let len = block_lengths[bi] as usize;
@@ -964,6 +1027,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
         }
         for idx in start..start + len {
             inst_region_by_id.insert(inst_ids[idx], inst_rgns[idx]);
+            inst_data_by_id.insert(inst_ids[idx], (inst_dks[idx], inst_dvs[idx]));
         }
     }
 
@@ -2011,10 +2075,14 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                             let sym = unsafe { read_vow_string(inst_ds_ptrs[ii]) };
                             let receiver_rgn = if alen > 0 {
                                 let receiver_id = all_args[aoff];
-                                inst_region_by_id
-                                    .get(&receiver_id)
-                                    .copied()
-                                    .unwrap_or_else(region_root)
+                                let decl = &ctx.func_decls[fi];
+                                inst_region_for_value(
+                                    receiver_id,
+                                    &inst_region_by_id,
+                                    &inst_data_by_id,
+                                    decl.return_kind,
+                                    &decl.store_effects,
+                                )
                             } else {
                                 region_root()
                             };
@@ -2107,10 +2175,14 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                 let arg_rgn = if target_param >= 0 && (target_param as usize) < alen
                                 {
                                     let arg_id = all_args[aoff + target_param as usize];
-                                    inst_region_by_id
-                                        .get(&arg_id)
-                                        .copied()
-                                        .unwrap_or_else(region_root)
+                                    let current_decl = &ctx.func_decls[fi];
+                                    inst_region_for_value(
+                                        arg_id,
+                                        &inst_region_by_id,
+                                        &inst_data_by_id,
+                                        current_decl.return_kind,
+                                        &current_decl.store_effects,
+                                    )
                                 } else {
                                     region_root()
                                 };

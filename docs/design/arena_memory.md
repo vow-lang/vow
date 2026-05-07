@@ -809,6 +809,13 @@ arena header; per §3.1, block-region headers live in the caller's
 stack frame, so the caller must pass the address of the header
 the callee will allocate into.
 
+Receiver-growth effects use the same target projection even when
+no heap source is stored. For example, `String::push_byte`,
+`String::push_str`, and raw `Vec::push` on a parameter receiver
+publish a `StoreEffect` with `source = ConstantGlobal`; the source
+constraint is inert, but the target membership makes the receiver's
+arena available to growth code inside the callee.
+
 The hidden-region parameter set for a function is therefore:
 
 ```

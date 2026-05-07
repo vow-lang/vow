@@ -1494,6 +1494,20 @@ fn for_each_extern_store_edge(sym: &str, args: &[InstId], mut visit: impl FnMut(
     }
 }
 
+fn extern_growth_target(sym: &str, args: &[InstId]) -> Option<InstId> {
+    match sym {
+        "__vow_vec_push" if !args.is_empty() => Some(args[0]),
+        "__vow_vec_push_in_arena" | "__vow_vec_reserve_in_arena" if args.len() >= 2 => {
+            Some(args[1])
+        }
+        "__vow_string_push_str" | "__vow_string_push_byte" if !args.is_empty() => Some(args[0]),
+        "__vow_string_push_str_in_arena" | "__vow_string_push_byte_in_arena" if args.len() >= 2 => {
+            Some(args[1])
+        }
+        _ => None,
+    }
+}
+
 fn is_heap_producing(inst: &Inst, summaries: &[InternalSummary]) -> bool {
     matches!(inst.opcode, Opcode::RegionAlloc)
         || matches!(
@@ -1600,6 +1614,14 @@ fn handle_inst(
                         );
                     }
                 });
+                if let Some(target_id) = extern_growth_target(sym, &inst.args)
+                    && let Some(target_param) = trace_param(target_id, inst_lookup)
+                {
+                    summary.store_effects.insert((
+                        target_param,
+                        InternalReturnRegion::Published(RegionConstraint::ConstantGlobal),
+                    ));
+                }
             }
 
             // Look up callee summary and apply store-effects + return aliasing.
@@ -5010,6 +5032,44 @@ mod tests {
             source.region,
             RegionId::Caller(HiddenRegionIdx(0)),
             "source stored by explicit-arena Vec::push_val must inherit target escapes"
+        );
+    }
+
+    #[test]
+    fn string_push_byte_parameter_receiver_publishes_growth_store_effect() {
+        let insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(
+                1,
+                Opcode::ConstI64,
+                Ty::I64,
+                vec![],
+                InstData::ConstI64(120),
+            ),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Unit,
+                vec![0, 1],
+                InstData::CallExtern("__vow_string_push_byte".to_string()),
+            ),
+            inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(
+            0,
+            "grow_string_param",
+            vec![Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert!(
+            m.functions[0].summary.store_effects.iter().any(|effect| {
+                effect.target == 0 && effect.source == RegionConstraint::ConstantGlobal
+            }),
+            "String::push_byte on a parameter receiver must request that receiver's hidden arena"
         );
     }
 
