@@ -64,6 +64,52 @@ fn clif_routed_extern_symbol(f: IrFunction, inst: IrInst) -> String {
         }
         return sym;
     }
+    if sym == String::from("__vow_string_new") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_new_in_arena");
+    }
+    if sym == String::from("__vow_string_from_cstr") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_from_cstr_in_arena");
+    }
+    if sym == String::from("__vow_string_substr") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_substr_in_arena");
+    }
+    if sym == String::from("__vow_string_substring") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_substring_in_arena");
+    }
+    if sym == String::from("__vow_string_from_i64") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_from_i64_in_arena");
+    }
+    if sym == String::from("__vow_string_push_str") {
+        let sr: i64 = clif_receiver_region(f, inst);
+        let sk: i64 = region_kind(sr);
+        if sk == REGION_KIND_BLOCK() || sk == REGION_KIND_CALLER() {
+            return String::from("__vow_string_push_str_in_arena");
+        }
+        return sym;
+    }
+    if sym == String::from("__vow_string_push_byte") {
+        let br: i64 = clif_receiver_region(f, inst);
+        let bk: i64 = region_kind(br);
+        if bk == REGION_KIND_BLOCK() || bk == REGION_KIND_CALLER() {
+            return String::from("__vow_string_push_byte_in_arena");
+        }
+        return sym;
+    }
     sym
 }
 

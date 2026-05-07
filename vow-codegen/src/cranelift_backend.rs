@@ -355,7 +355,7 @@ fn region_to_arena_value(
     }
 }
 
-fn vec_receiver_region(inst: &Inst, inst_index: &HashMap<InstId, &Inst>) -> RegionId {
+fn first_arg_region(inst: &Inst, inst_index: &HashMap<InstId, &Inst>) -> RegionId {
     inst.args
         .first()
         .and_then(|arg_id| inst_index.get(arg_id))
@@ -378,7 +378,7 @@ fn routed_vec_extern<'a>(
             region => ("__vow_vec_new_val_in_arena", Some(region)),
         },
         "__vow_vec_push_val" => {
-            let region = vec_receiver_region(inst, inst_index);
+            let region = first_arg_region(inst, inst_index);
             match region {
                 RegionId::Block(_) | RegionId::Caller(_) => {
                     ("__vow_vec_push_val_in_arena", Some(region))
@@ -387,10 +387,48 @@ fn routed_vec_extern<'a>(
             }
         }
         "__vow_vec_push" => {
-            let region = vec_receiver_region(inst, inst_index);
+            let region = first_arg_region(inst, inst_index);
             match region {
                 RegionId::Block(_) | RegionId::Caller(_) => {
                     ("__vow_vec_push_in_arena", Some(region))
+                }
+                _ => (sym, None),
+            }
+        }
+        "__vow_string_new" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_string_new_in_arena", Some(region)),
+        },
+        "__vow_string_from_cstr" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_string_from_cstr_in_arena", Some(region)),
+        },
+        "__vow_string_substr" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_string_substr_in_arena", Some(region)),
+        },
+        "__vow_string_substring" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_string_substring_in_arena", Some(region)),
+        },
+        "__vow_string_from_i64" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_string_from_i64_in_arena", Some(region)),
+        },
+        "__vow_string_push_str" => {
+            let region = first_arg_region(inst, inst_index);
+            match region {
+                RegionId::Block(_) | RegionId::Caller(_) => {
+                    ("__vow_string_push_str_in_arena", Some(region))
+                }
+                _ => (sym, None),
+            }
+        }
+        "__vow_string_push_byte" => {
+            let region = first_arg_region(inst, inst_index);
+            match region {
+                RegionId::Block(_) | RegionId::Caller(_) => {
+                    ("__vow_string_push_byte_in_arena", Some(region))
                 }
                 _ => (sym, None),
             }
@@ -1996,7 +2034,18 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // len
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
+        "__vow_string_new_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // ptr
+            sig.params.push(AbiParam::new(types::I64)); // len
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
         "__vow_string_from_cstr" => {
+            sig.params.push(AbiParam::new(types::I64)); // C-string ptr
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_string_from_cstr_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // C-string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
@@ -2031,6 +2080,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // dest ptr
             sig.params.push(AbiParam::new(types::I64)); // src ptr
         }
+        "__vow_string_push_str_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // dest ptr
+            sig.params.push(AbiParam::new(types::I64)); // src ptr
+        }
         "__vow_string_byte_at" => {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.params.push(AbiParam::new(types::I64)); // index
@@ -2040,7 +2094,17 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.params.push(AbiParam::new(types::I64)); // byte value
         }
+        "__vow_string_push_byte_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.params.push(AbiParam::new(types::I64)); // byte value
+        }
         "__vow_string_from_i64" => {
+            sig.params.push(AbiParam::new(types::I64)); // value
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_string_from_i64_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // value
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
@@ -2108,7 +2172,21 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // len
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
+        "__vow_string_substr_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.params.push(AbiParam::new(types::I64)); // start
+            sig.params.push(AbiParam::new(types::I64)); // len
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
         "__vow_string_substring" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.params.push(AbiParam::new(types::I64)); // start
+            sig.params.push(AbiParam::new(types::I64)); // end (exclusive)
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_string_substring_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.params.push(AbiParam::new(types::I64)); // start
             sig.params.push(AbiParam::new(types::I64)); // end (exclusive)
@@ -4102,6 +4180,141 @@ mod tests {
             .collect();
         assert!(symbols.contains("__vow_vec_new"));
         assert!(!symbols.contains("__vow_vec_new_in_arena"));
+    }
+
+    #[test]
+    fn block_region_string_from_cstr_imports_arena_variant() {
+        let mut string_new = inst(
+            1,
+            Opcode::Call,
+            Ty::Ptr,
+            vec![0],
+            InstData::CallExtern("__vow_string_from_cstr".to_string()),
+        );
+        string_new.region = RegionId::Block(BlockId(0));
+        let module = make_module(
+            "test",
+            vec![simple_fn(
+                0,
+                "f",
+                vec![],
+                Ty::I64,
+                vec![
+                    inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                    string_new,
+                    inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                ],
+            )],
+        );
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(symbols.contains("__vow_string_from_cstr_in_arena"));
+        assert!(!symbols.contains("__vow_string_from_cstr"));
+    }
+
+    #[test]
+    fn root_region_string_from_cstr_keeps_wrapper_symbol() {
+        let module = make_module(
+            "test",
+            vec![simple_fn(
+                0,
+                "f",
+                vec![],
+                Ty::I64,
+                vec![
+                    inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                    inst(
+                        1,
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![0],
+                        InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    ),
+                    inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                ],
+            )],
+        );
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(symbols.contains("__vow_string_from_cstr"));
+        assert!(!symbols.contains("__vow_string_from_cstr_in_arena"));
+    }
+
+    #[test]
+    fn block_region_string_push_str_imports_arena_variant() {
+        let mut dest = inst(
+            1,
+            Opcode::Call,
+            Ty::Ptr,
+            vec![0],
+            InstData::CallExtern("__vow_string_from_cstr".to_string()),
+        );
+        dest.region = RegionId::Block(BlockId(0));
+        let mut src = inst(
+            3,
+            Opcode::Call,
+            Ty::Ptr,
+            vec![2],
+            InstData::CallExtern("__vow_string_from_cstr".to_string()),
+        );
+        src.region = RegionId::Block(BlockId(0));
+        let module = make_module(
+            "test",
+            vec![simple_fn(
+                0,
+                "f",
+                vec![],
+                Ty::I64,
+                vec![
+                    inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                    dest,
+                    inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
+                    src,
+                    inst(
+                        4,
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![1, 3],
+                        InstData::CallExtern("__vow_string_push_str".to_string()),
+                    ),
+                    inst(5, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
+                ],
+            )],
+        );
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(symbols.contains("__vow_string_push_str_in_arena"));
+        assert!(!symbols.contains("__vow_string_push_str"));
     }
 
     #[test]

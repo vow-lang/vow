@@ -337,6 +337,57 @@ fn routed_vec_extern(sym: &str, inst_rgn: i64, receiver_rgn: i64) -> (&str, Opti
                 (sym, None)
             }
         }
+        "__vow_string_new" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_new_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_from_cstr" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_from_cstr_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_substr" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_substr_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_substring" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_substring_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_from_i64" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_from_i64_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_push_str" => {
+            let kind = receiver_rgn & 3;
+            if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
+                ("__vow_string_push_str_in_arena", Some(receiver_rgn))
+            } else {
+                (sym, None)
+            }
+        }
+        "__vow_string_push_byte" => {
+            let kind = receiver_rgn & 3;
+            if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
+                ("__vow_string_push_byte_in_arena", Some(receiver_rgn))
+            } else {
+                (sym, None)
+            }
+        }
         _ => {
             if extern_uses_target_region(sym) {
                 (sym, Some(inst_rgn))
@@ -2673,7 +2724,18 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_string_new_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_string_from_cstr" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_from_cstr_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
@@ -2708,6 +2770,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
         }
+        "__vow_string_push_str_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+        }
         "__vow_string_byte_at" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
@@ -2717,7 +2784,17 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
         }
+        "__vow_string_push_byte_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+        }
         "__vow_string_from_i64" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_from_i64_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
@@ -2784,7 +2861,21 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_string_substr_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_string_substring" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_substring_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));

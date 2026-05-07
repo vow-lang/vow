@@ -1933,27 +1933,27 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ctx.inst_struct_type.insert(result, "String".to_string());
                 return result;
             }
-            // String::new() builtin — empty string via __vow_vec_new(1, 1)
+            // String::new() builtin — empty string via the String arena router.
             if enum_name == "String" && variant_name == "new" {
-                let size_val = ctx.emit(
+                let null_ptr = ctx.emit(
                     Opcode::ConstI64,
                     Ty::I64,
                     vec![],
-                    InstData::ConstI64(1),
+                    InstData::ConstI64(0),
                     span,
                 );
-                let align_val = ctx.emit(
+                let len_val = ctx.emit(
                     Opcode::ConstI64,
                     Ty::I64,
                     vec![],
-                    InstData::ConstI64(1),
+                    InstData::ConstI64(0),
                     span,
                 );
                 let result = ctx.emit(
                     Opcode::Call,
                     Ty::Ptr,
-                    vec![size_val, align_val],
-                    InstData::CallExtern("__vow_vec_new".to_string()),
+                    vec![null_ptr, len_val],
+                    InstData::CallExtern("__vow_string_new".to_string()),
                     span,
                 );
                 ctx.inst_struct_type.insert(result, "String".to_string());

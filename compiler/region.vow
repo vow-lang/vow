@@ -2686,8 +2686,21 @@ fn vec_creation_extern(sym: String) -> bool {
         || sym == String::from("__vow_vec_new_val")
 }
 
+fn string_creation_extern(sym: String) -> bool {
+    sym == String::from("__vow_string_new")
+        || sym == String::from("__vow_string_new_in_arena")
+        || sym == String::from("__vow_string_from_cstr")
+        || sym == String::from("__vow_string_from_cstr_in_arena")
+        || sym == String::from("__vow_string_substr")
+        || sym == String::from("__vow_string_substr_in_arena")
+        || sym == String::from("__vow_string_substring")
+        || sym == String::from("__vow_string_substring_in_arena")
+        || sym == String::from("__vow_string_from_i64")
+        || sym == String::from("__vow_string_from_i64_in_arena")
+}
+
 fn heap_producing_extern(sym: String) -> bool {
-    extern_fresh_in_caller(sym) || vec_creation_extern(sym)
+    extern_fresh_in_caller(sym) || vec_creation_extern(sym) || string_creation_extern(sym)
 }
 
 fn extern_store_edge_count(sym: String) -> i64 {

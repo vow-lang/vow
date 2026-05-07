@@ -1461,8 +1461,24 @@ fn vec_creation_extern(sym: &str) -> bool {
     matches!(sym, "__vow_vec_new" | "__vow_vec_new_val")
 }
 
+fn string_creation_extern(sym: &str) -> bool {
+    matches!(
+        sym,
+        "__vow_string_new"
+            | "__vow_string_new_in_arena"
+            | "__vow_string_from_cstr"
+            | "__vow_string_from_cstr_in_arena"
+            | "__vow_string_substr"
+            | "__vow_string_substr_in_arena"
+            | "__vow_string_substring"
+            | "__vow_string_substring_in_arena"
+            | "__vow_string_from_i64"
+            | "__vow_string_from_i64_in_arena"
+    )
+}
+
 fn heap_producing_extern(sym: &str) -> bool {
-    extern_fresh_in_caller(sym) || vec_creation_extern(sym)
+    extern_fresh_in_caller(sym) || vec_creation_extern(sym) || string_creation_extern(sym)
 }
 
 fn for_each_extern_store_edge(sym: &str, args: &[InstId], mut visit: impl FnMut(InstId, InstId)) {
@@ -4337,6 +4353,68 @@ mod tests {
                 .iter()
                 .all(|d| d.code != ErrorCode::RegionConflict),
             "routable Vec creation should not trip the block-local RegionAlloc conflict"
+        );
+    }
+
+    #[test]
+    fn string_from_cstr_non_escaping_allocates_in_block_region() {
+        let insts = vec![
+            inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+            inst(
+                1,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0],
+                InstData::CallExtern("__vow_string_from_cstr".to_string()),
+            ),
+            inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+        ];
+        let f = function(0, "make_string", vec![], Ty::I64, vec![block(0, insts)]);
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert_eq!(
+            m.functions[0].blocks[0].insts[1].region,
+            RegionId::Block(BlockId(0)),
+            "String::from_cstr should be treated as a fresh heap producer"
+        );
+    }
+
+    #[test]
+    fn string_substring_return_allocates_in_caller_region() {
+        let insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+            inst(
+                3,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0, 1, 2],
+                InstData::CallExtern("__vow_string_substring".to_string()),
+            ),
+            inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+        ];
+        let f = function(
+            0,
+            "slice_string",
+            vec![Ty::Ptr],
+            Ty::Ptr,
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert_eq!(
+            m.functions[0].blocks[0].insts[3].region,
+            RegionId::Caller(HiddenRegionIdx(0)),
+            "returned String::substring result should be caller-region allocated"
+        );
+        assert_eq!(
+            m.functions[0].summary.return_region,
+            RegionConstraint::FreshInCaller,
+            "String::substring return should publish FreshInCaller"
         );
     }
 

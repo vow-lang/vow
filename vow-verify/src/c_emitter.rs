@@ -105,6 +105,24 @@ fn is_vec_model_creator(name: &str) -> bool {
     )
 }
 
+fn is_string_model_creator(name: &str) -> bool {
+    matches!(
+        name,
+        "__vow_string_new"
+            | "__vow_string_new_in_arena"
+            | "__vow_string_from_cstr"
+            | "__vow_string_from_cstr_in_arena"
+            | "__vow_string_from_raw_parts_copy"
+            | "__vow_string_pin_to_root"
+            | "__vow_string_substr"
+            | "__vow_string_substr_in_arena"
+            | "__vow_string_substring"
+            | "__vow_string_substring_in_arena"
+            | "__vow_string_from_i64"
+            | "__vow_string_from_i64_in_arena"
+    )
+}
+
 fn vec_model_receiver_arg(name: &str) -> Option<usize> {
     match name {
         "__vow_vec_push_val" | "__vow_vec_get_val" | "__vow_vec_len" | "__vow_vec_pop"
@@ -112,6 +130,21 @@ fn vec_model_receiver_arg(name: &str) -> Option<usize> {
         "__vow_vec_push_in_arena"
         | "__vow_vec_push_val_in_arena"
         | "__vow_vec_reserve_in_arena" => Some(1),
+        _ => None,
+    }
+}
+
+fn string_model_receiver_arg(name: &str) -> Option<usize> {
+    match name {
+        "__vow_string_push_str_in_arena" | "__vow_string_push_byte_in_arena" => Some(1),
+        "__vow_string_push_str"
+        | "__vow_string_push_byte"
+        | "__vow_string_len"
+        | "__vow_string_clear"
+        | "__vow_string_byte_at"
+        | "__vow_string_eq"
+        | "__vow_string_contains"
+        | "__vow_string_print" => Some(0),
         _ => None,
     }
 }
@@ -124,20 +157,16 @@ fn collect_typed_vars(func: &Function, creator: &str, prefix: &str) -> HashSet<u
             if inst.opcode == Opcode::Call
                 && let InstData::CallExtern(ref name) = inst.data
             {
-                let is_alt_creator = (prefix == "__vow_vec_"
-                    && (name == "__vow_vec_from_raw_parts_copy_val"
-                        || name == "__vow_vec_pin_to_root_val"))
-                    || (prefix == "__vow_string_"
-                        && (name == "__vow_string_from_raw_parts_copy"
-                            || name == "__vow_string_pin_to_root"));
-                let is_creator = name == creator
-                    || is_alt_creator
-                    || (prefix == "__vow_vec_" && is_vec_model_creator(name));
+                let is_alt_creator = (prefix == "__vow_vec_" && is_vec_model_creator(name))
+                    || (prefix == "__vow_string_" && is_string_model_creator(name));
+                let is_creator = name == creator || is_alt_creator;
                 if is_creator {
                     vars.insert(inst.id.0);
                 } else if name.starts_with(prefix) {
                     let receiver_arg = if prefix == "__vow_vec_" {
                         vec_model_receiver_arg(name)
+                    } else if prefix == "__vow_string_" {
+                        string_model_receiver_arg(name)
                     } else {
                         Some(0)
                     };
@@ -239,17 +268,27 @@ fn is_known_builtin(name: &str) -> bool {
             | "__vow_vec_len"
             | "__vow_vec_pop"
             | "__vow_vec_set_val"
+            | "__vow_string_new"
+            | "__vow_string_new_in_arena"
             | "__vow_string_from_cstr"
+            | "__vow_string_from_cstr_in_arena"
             | "__vow_string_from_raw_parts_copy"
             | "__vow_string_pin_to_root"
             | "__vow_string_len"
             | "__vow_string_push_str"
+            | "__vow_string_push_str_in_arena"
             | "__vow_string_push_byte"
+            | "__vow_string_push_byte_in_arena"
             | "__vow_string_clear"
             | "__vow_string_byte_at"
             | "__vow_string_eq"
             | "__vow_string_contains"
+            | "__vow_string_substr"
+            | "__vow_string_substr_in_arena"
             | "__vow_string_substring"
+            | "__vow_string_substring_in_arena"
+            | "__vow_string_from_i64"
+            | "__vow_string_from_i64_in_arena"
             | "__vow_string_parse_i64_opt"
             | "__vow_string_parse_u64_opt"
             | "__vow_string_print"
@@ -926,7 +965,19 @@ fn emit_inst(
         Opcode::Call if matches!(&inst.data, InstData::CallExtern(n) if n.starts_with("__vow_string_")) => {
             if let InstData::CallExtern(ref name) = inst.data {
                 match name.as_str() {
-                    "__vow_string_from_cstr" => {
+                    "__vow_string_new" | "__vow_string_new_in_arena" => {
+                        let len_arg = if name == "__vow_string_new_in_arena" {
+                            2
+                        } else {
+                            1
+                        };
+                        let len = inst.args[len_arg].0;
+                        let string_max = limits.string_max;
+                        out.push_str(&format!(
+                            "  __ESBMC_assume(v{len} >= 0 && v{len} < {string_max});\n  v{id}.len = v{len};\n"
+                        ));
+                    }
+                    "__vow_string_from_cstr" | "__vow_string_from_cstr_in_arena" => {
                         let string_max = limits.string_max;
                         out.push_str(&format!(
                             "  v{id}.len = __VERIFIER_nondet_long();\n\
@@ -948,9 +999,21 @@ fn emit_inst(
                         let s = inst.args[0].0;
                         out.push_str(&format!("  v{id} = v{s}.len;\n"));
                     }
-                    "__vow_string_push_str" => {
-                        let dest = inst.args[0].0;
-                        let src = inst.args[1].0;
+                    "__vow_string_from_i64" | "__vow_string_from_i64_in_arena" => {
+                        let string_max = limits.string_max;
+                        out.push_str(&format!(
+                            "  v{id}.len = __VERIFIER_nondet_long();\n\
+                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < {string_max});\n",
+                        ));
+                    }
+                    "__vow_string_push_str" | "__vow_string_push_str_in_arena" => {
+                        let (dest_arg, src_arg) = if name == "__vow_string_push_str_in_arena" {
+                            (1, 2)
+                        } else {
+                            (0, 1)
+                        };
+                        let dest = inst.args[dest_arg].0;
+                        let src = inst.args[src_arg].0;
                         let string_max = limits.string_max;
                         out.push_str(&format!(
                             "  __ESBMC_assert(v{dest}.len + v{src}.len <= {string_max}, \"string capacity\");\n\
@@ -958,9 +1021,14 @@ fn emit_inst(
                         ));
                         emit_string_eq_invalidate(dest, eq_pairs, out);
                     }
-                    "__vow_string_push_byte" => {
-                        let s = inst.args[0].0;
-                        let byte = inst.args[1].0;
+                    "__vow_string_push_byte" | "__vow_string_push_byte_in_arena" => {
+                        let (s_arg, byte_arg) = if name == "__vow_string_push_byte_in_arena" {
+                            (1, 2)
+                        } else {
+                            (0, 1)
+                        };
+                        let s = inst.args[s_arg].0;
+                        let byte = inst.args[byte_arg].0;
                         let string_max = limits.string_max;
                         out.push_str(&format!(
                             "  __ESBMC_assert(v{s}.len < {string_max}, \"string capacity\");\n\
@@ -1012,10 +1080,36 @@ fn emit_inst(
                              \x20 }}\n"
                         ));
                     }
-                    "__vow_string_substring" => {
-                        let s = inst.args[0].0;
-                        let start = inst.args[1].0;
-                        let end = inst.args[2].0;
+                    "__vow_string_substr" | "__vow_string_substr_in_arena" => {
+                        let (s_arg, start_arg, len_arg) = if name == "__vow_string_substr_in_arena"
+                        {
+                            (1, 2, 3)
+                        } else {
+                            (0, 1, 2)
+                        };
+                        let s = inst.args[s_arg].0;
+                        let start = inst.args[start_arg].0;
+                        let len = inst.args[len_arg].0;
+                        let string_max = limits.string_max;
+                        out.push_str(&format!(
+                            "  __ESBMC_assert(v{start} >= 0 && v{start} <= v{s}.len, \"substr start\");\n\
+                             \x20 __ESBMC_assert(v{len} >= 0 && v{start} + v{len} <= v{s}.len, \"substr len\");\n\
+                             \x20 v{id}.len = v{len};\n\
+                             \x20 for (int64_t __i = 0; __i < v{id}.len && __i < {string_max}; __i++) {{\n\
+                             \x20   v{id}.data[__i] = v{s}.data[v{start} + __i];\n\
+                             \x20 }}\n",
+                        ));
+                    }
+                    "__vow_string_substring" | "__vow_string_substring_in_arena" => {
+                        let (s_arg, start_arg, end_arg) =
+                            if name == "__vow_string_substring_in_arena" {
+                                (1, 2, 3)
+                            } else {
+                                (0, 1, 2)
+                            };
+                        let s = inst.args[s_arg].0;
+                        let start = inst.args[start_arg].0;
+                        let end = inst.args[end_arg].0;
                         let string_max = limits.string_max;
                         out.push_str(&format!(
                             "  __ESBMC_assert(v{start} >= 0 && v{start} <= v{s}.len, \"substring start\");\n\
@@ -3660,6 +3754,66 @@ mod tests {
             "push_str capacity expression: {c}"
         );
         assert!(c.contains("v1.len += v3.len;"), "push_str mutation: {c}");
+    }
+
+    #[test]
+    fn emit_explicit_arena_string_from_cstr_and_push_str() {
+        use vow_ir::InstId;
+        let func = make_func(
+            "cat_in_arena",
+            vec![],
+            Ty::Ptr,
+            vec![
+                inst(
+                    0,
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    vec![],
+                    InstData::ConstI64(1000),
+                ),
+                inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                Inst {
+                    id: InstId(2),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0), InstId(1)],
+                    data: InstData::CallExtern("__vow_string_from_cstr_in_arena".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(3, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
+                Inst {
+                    id: InstId(4),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0), InstId(3)],
+                    data: InstData::CallExtern("__vow_string_from_cstr_in_arena".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(5),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(0), InstId(2), InstId(4)],
+                    data: InstData::CallExtern("__vow_string_push_str_in_arena".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(6, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(c.contains("__vow_string_t v2;"), "dest string decl: {c}");
+        assert!(c.contains("__vow_string_t v4;"), "src string decl: {c}");
+        assert!(
+            !c.contains("__vow_string_t v0;"),
+            "arena pointer must not be tracked as a string: {c}"
+        );
+        assert!(
+            c.contains("v2.len += v4.len;"),
+            "arena push_str must use shifted dest/src args: {c}"
+        );
     }
 
     #[test]

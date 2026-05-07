@@ -105,16 +105,27 @@ fn is_known_builtin(name: String) -> bool {
     || name == String::from("__vow_vec_len")
     || name == String::from("__vow_vec_pop")
     || name == String::from("__vow_vec_set_val")
+    || name == String::from("__vow_string_new")
+    || name == String::from("__vow_string_new_in_arena")
     || name == String::from("__vow_string_from_cstr")
+    || name == String::from("__vow_string_from_cstr_in_arena")
     || name == String::from("__vow_string_from_raw_parts_copy")
     || name == String::from("__vow_string_pin_to_root")
     || name == String::from("__vow_string_len")
     || name == String::from("__vow_string_push_str")
+    || name == String::from("__vow_string_push_str_in_arena")
     || name == String::from("__vow_string_push_byte")
+    || name == String::from("__vow_string_push_byte_in_arena")
     || name == String::from("__vow_string_clear")
     || name == String::from("__vow_string_byte_at")
     || name == String::from("__vow_string_eq")
     || name == String::from("__vow_string_contains")
+    || name == String::from("__vow_string_substr")
+    || name == String::from("__vow_string_substr_in_arena")
+    || name == String::from("__vow_string_substring")
+    || name == String::from("__vow_string_substring_in_arena")
+    || name == String::from("__vow_string_from_i64")
+    || name == String::from("__vow_string_from_i64_in_arena")
     || name == String::from("__vow_string_print")
     || name == String::from("__vow_map_new")
     || name == String::from("__vow_map_len")
@@ -448,6 +459,21 @@ fn is_vec_model_constructor(name: String) -> bool {
     || name == String::from("__vow_vec_pin_to_root_val")
 }
 
+fn is_string_model_constructor(name: String) -> bool {
+    name == String::from("__vow_string_new")
+    || name == String::from("__vow_string_new_in_arena")
+    || name == String::from("__vow_string_from_cstr")
+    || name == String::from("__vow_string_from_cstr_in_arena")
+    || name == String::from("__vow_string_from_raw_parts_copy")
+    || name == String::from("__vow_string_pin_to_root")
+    || name == String::from("__vow_string_substr")
+    || name == String::from("__vow_string_substr_in_arena")
+    || name == String::from("__vow_string_substring")
+    || name == String::from("__vow_string_substring_in_arena")
+    || name == String::from("__vow_string_from_i64")
+    || name == String::from("__vow_string_from_i64_in_arena")
+}
+
 fn vec_model_receiver_arg(name: String) -> i64 {
     if name == String::from("__vow_vec_push_val") { return 0; }
     if name == String::from("__vow_vec_get_val") { return 0; }
@@ -457,6 +483,20 @@ fn vec_model_receiver_arg(name: String) -> i64 {
     if name == String::from("__vow_vec_push_in_arena") { return 1; }
     if name == String::from("__vow_vec_push_val_in_arena") { return 1; }
     if name == String::from("__vow_vec_reserve_in_arena") { return 1; }
+    -1
+}
+
+fn string_model_receiver_arg(name: String) -> i64 {
+    if name == String::from("__vow_string_push_str_in_arena") { return 1; }
+    if name == String::from("__vow_string_push_byte_in_arena") { return 1; }
+    if name == String::from("__vow_string_push_str") { return 0; }
+    if name == String::from("__vow_string_push_byte") { return 0; }
+    if name == String::from("__vow_string_len") { return 0; }
+    if name == String::from("__vow_string_clear") { return 0; }
+    if name == String::from("__vow_string_byte_at") { return 0; }
+    if name == String::from("__vow_string_eq") { return 0; }
+    if name == String::from("__vow_string_contains") { return 0; }
+    if name == String::from("__vow_string_print") { return 0; }
     -1
 }
 
@@ -553,13 +593,10 @@ fn collect_modelled_vars(f: IrFunction, constructor: String, prefix: String) -> 
             if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
                 let ds: String = inst.ds;
                 let alt_creator: bool = (prefix == String::from("__vow_vec_")
-                    && (ds == String::from("__vow_vec_from_raw_parts_copy_val")
-                        || ds == String::from("__vow_vec_pin_to_root_val")))
+                    && is_vec_model_constructor(ds))
                     || (prefix == String::from("__vow_string_")
-                        && (ds == String::from("__vow_string_from_raw_parts_copy")
-                            || ds == String::from("__vow_string_pin_to_root")));
-                let is_creator: bool = ds == constructor || alt_creator
-                    || (prefix == String::from("__vow_vec_") && is_vec_model_constructor(ds));
+                        && is_string_model_constructor(ds));
+                let is_creator: bool = ds == constructor || alt_creator;
                 if is_creator {
                     vec_insert_i64(vars, inst.id);
                 }
@@ -578,18 +615,17 @@ fn collect_modelled_vars(f: IrFunction, constructor: String, prefix: String) -> 
             if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
                 let ds: String = inst.ds;
                 let alt_creator: bool = (prefix == String::from("__vow_vec_")
-                    && (ds == String::from("__vow_vec_from_raw_parts_copy_val")
-                        || ds == String::from("__vow_vec_pin_to_root_val")))
+                    && is_vec_model_constructor(ds))
                     || (prefix == String::from("__vow_string_")
-                        && (ds == String::from("__vow_string_from_raw_parts_copy")
-                            || ds == String::from("__vow_string_pin_to_root")));
-                let is_creator: bool = ds == constructor || alt_creator
-                    || (prefix == String::from("__vow_vec_") && is_vec_model_constructor(ds));
+                        && is_string_model_constructor(ds));
+                let is_creator: bool = ds == constructor || alt_creator;
                 if str_starts_with(ds, prefix) && !is_creator {
                     let iargs: Vec<i64> = inst.args;
                     let receiver_arg: i64 = {
                         if prefix == String::from("__vow_vec_") {
                             vec_model_receiver_arg(ds)
+                        } else if prefix == String::from("__vow_string_") {
+                            string_model_receiver_arg(ds)
                         } else {
                             0
                         }
@@ -1305,7 +1341,18 @@ fn emit_string_op(out: String, inst: IrInst, string_max: i64, eq_lo: Vec<i64>, e
     let ds: String = inst.ds;
     let iargs: Vec<i64> = inst.args;
 
-    if ds == String::from("__vow_string_from_cstr") {
+    if ds == String::from("__vow_string_new") || ds == String::from("__vow_string_new_in_arena") {
+        let len_arg: i64 = if ds == String::from("__vow_string_new_in_arena") { iargs[2] } else { iargs[1] };
+        let ids: String = i64_to_str(id);
+        let ls: String = i64_to_str(len_arg);
+        out.push_str(str5(String::from("  __ESBMC_assume(v"), ls,
+            String::from(" >= 0 && v"), ls,
+            str3(String::from(" < "), i64_to_str(string_max), String::from(");\n"))));
+        out.push_str(str5(String::from("  v"), ids, String::from(".len = v"), ls, String::from(";\n")));
+        return;
+    }
+    if ds == String::from("__vow_string_from_cstr")
+        || ds == String::from("__vow_string_from_cstr_in_arena") {
         let ids: String = i64_to_str(id);
         out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
         out.push_str(str5(String::from("  __ESBMC_assume(v"), ids,
@@ -1329,15 +1376,23 @@ fn emit_string_op(out: String, inst: IrInst, string_max: i64, eq_lo: Vec<i64>, e
             String::from(" = v"), i64_to_str(src), String::from(";\n")));
         return;
     }
+    if ds == String::from("__vow_string_from_i64") || ds == String::from("__vow_string_from_i64_in_arena") {
+        let ids: String = i64_to_str(id);
+        out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
+        out.push_str(str5(String::from("  __ESBMC_assume(v"), ids,
+            String::from(".len >= 0 && v"), ids,
+            str3(String::from(".len < "), i64_to_str(string_max), String::from(");\n"))));
+        return;
+    }
     if ds == String::from("__vow_string_len") {
         let s: i64 = iargs[0];
         out.push_str(str5(String::from("  v"), i64_to_str(id),
             String::from(" = v"), i64_to_str(s), String::from(".len;\n")));
         return;
     }
-    if ds == String::from("__vow_string_push_str") {
-        let dest: i64 = iargs[0];
-        let src: i64 = iargs[1];
+    if ds == String::from("__vow_string_push_str") || ds == String::from("__vow_string_push_str_in_arena") {
+        let dest: i64 = if ds == String::from("__vow_string_push_str_in_arena") { iargs[1] } else { iargs[0] };
+        let src: i64 = if ds == String::from("__vow_string_push_str_in_arena") { iargs[2] } else { iargs[1] };
         let dests: String = i64_to_str(dest);
         let srcs: String = i64_to_str(src);
         out.push_str(str7(String::from("  __ESBMC_assert(v"), dests,
@@ -1349,9 +1404,9 @@ fn emit_string_op(out: String, inst: IrInst, string_max: i64, eq_lo: Vec<i64>, e
         emit_string_eq_invalidate(out, dest, eq_lo, eq_hi);
         return;
     }
-    if ds == String::from("__vow_string_push_byte") {
-        let s: i64 = iargs[0];
-        let byte: i64 = iargs[1];
+    if ds == String::from("__vow_string_push_byte") || ds == String::from("__vow_string_push_byte_in_arena") {
+        let s: i64 = if ds == String::from("__vow_string_push_byte_in_arena") { iargs[1] } else { iargs[0] };
+        let byte: i64 = if ds == String::from("__vow_string_push_byte_in_arena") { iargs[2] } else { iargs[1] };
         let ss: String = i64_to_str(s);
         out.push_str(str5(String::from("  __ESBMC_assert(v"), ss,
             String::from(".len < "), i64_to_str(string_max), String::from(", \"string capacity\");\n")));
@@ -1426,6 +1481,53 @@ fn emit_string_op(out: String, inst: IrInst, string_max: i64, eq_lo: Vec<i64>, e
         out.push_str(String::from("      }\n"));
         out.push_str(str3(String::from("      if (__match) { v"), ids, String::from(" = 1; break; }\n")));
         out.push_str(String::from("    }\n"));
+        out.push_str(String::from("  }\n"));
+        return;
+    }
+    if ds == String::from("__vow_string_substr") || ds == String::from("__vow_string_substr_in_arena") {
+        let s: i64 = if ds == String::from("__vow_string_substr_in_arena") { iargs[1] } else { iargs[0] };
+        let start: i64 = if ds == String::from("__vow_string_substr_in_arena") { iargs[2] } else { iargs[1] };
+        let len: i64 = if ds == String::from("__vow_string_substr_in_arena") { iargs[3] } else { iargs[2] };
+        let ss: String = i64_to_str(s);
+        let starts: String = i64_to_str(start);
+        let lens: String = i64_to_str(len);
+        let ids: String = i64_to_str(id);
+        out.push_str(str7(String::from("  __ESBMC_assert(v"), starts,
+            String::from(" >= 0 && v"), starts,
+            String::from(" <= v"), ss, String::from(".len, \"substr start\");\n")));
+        out.push_str(str7(String::from("  __ESBMC_assert(v"), lens,
+            String::from(" >= 0 && v"), starts,
+            String::from(" + v"), lens, String::from(" <= v")));
+        out.push_str(str2(ss, String::from(".len, \"substr len\");\n")));
+        out.push_str(str5(String::from("  v"), ids, String::from(".len = v"), lens, String::from(";\n")));
+        out.push_str(str5(String::from("  for (int64_t __i = 0; __i < v"), ids,
+            String::from(".len && __i < "), i64_to_str(string_max), String::from("; __i++) {\n")));
+        out.push_str(str5(String::from("    v"), ids, String::from(".data[__i] = v"), ss, String::from(".data[v")));
+        out.push_str(str2(starts, String::from(" + __i];\n")));
+        out.push_str(String::from("  }\n"));
+        return;
+    }
+    if ds == String::from("__vow_string_substring") || ds == String::from("__vow_string_substring_in_arena") {
+        let s2: i64 = if ds == String::from("__vow_string_substring_in_arena") { iargs[1] } else { iargs[0] };
+        let start2: i64 = if ds == String::from("__vow_string_substring_in_arena") { iargs[2] } else { iargs[1] };
+        let end2: i64 = if ds == String::from("__vow_string_substring_in_arena") { iargs[3] } else { iargs[2] };
+        let ss2: String = i64_to_str(s2);
+        let starts2: String = i64_to_str(start2);
+        let ends2: String = i64_to_str(end2);
+        let ids2: String = i64_to_str(id);
+        out.push_str(str7(String::from("  __ESBMC_assert(v"), starts2,
+            String::from(" >= 0 && v"), starts2,
+            String::from(" <= v"), ss2, String::from(".len, \"substring start\");\n")));
+        out.push_str(str7(String::from("  __ESBMC_assert(v"), ends2,
+            String::from(" >= v"), starts2,
+            String::from(" && v"), ends2, String::from(" <= v")));
+        out.push_str(str2(ss2, String::from(".len, \"substring end\");\n")));
+        out.push_str(str5(String::from("  v"), ids2, String::from(".len = v"), ends2, String::from(" - v")));
+        out.push_str(str2(starts2, String::from(";\n")));
+        out.push_str(str5(String::from("  for (int64_t __i = 0; __i < v"), ids2,
+            String::from(".len && __i < "), i64_to_str(string_max), String::from("; __i++) {\n")));
+        out.push_str(str5(String::from("    v"), ids2, String::from(".data[__i] = v"), ss2, String::from(".data[v")));
+        out.push_str(str2(starts2, String::from(" + __i];\n")));
         out.push_str(String::from("  }\n"));
         return;
     }
