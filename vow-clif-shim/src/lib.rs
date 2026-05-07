@@ -305,7 +305,7 @@ fn arena_value_for_region(
     }
 }
 
-fn routed_vec_extern<'a>(sym: &'a str, inst_rgn: i64, receiver_rgn: i64) -> (&'a str, Option<i64>) {
+fn routed_vec_extern(sym: &str, inst_rgn: i64, receiver_rgn: i64) -> (&str, Option<i64>) {
     match sym {
         "__vow_vec_new" => {
             if (inst_rgn & 3) == REGION_KIND_ROOT {
