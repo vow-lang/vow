@@ -7,11 +7,48 @@ struct Site {
     file: String,
     off: i64,
     len: i64,
+    line: i64,            // 1-based source line of `off`
+    col: i64,             // 1-based source column of `off`
     kind: String,         // "op-flip", "const-flip", "body-replace", "contract-weaken"
     from_text: String,    // original byte content, for the label
     replacement: String,  // bytes to splice in
     label: String,        // human-readable summary (e.g., "+ → -")
     clause_index: i64,    // disambiguator for sibling contract clauses; 0 otherwise
+}
+
+// Compute 1-based (line, col) of byte offset `off` in `src`.
+// Returns Vec<i64> with two entries: [line, col].
+fn line_col_at(src: String, off: i64) -> Vec<i64> {
+    let mut line: i64 = 1;
+    let mut col: i64 = 1;
+    let mut i: i64 = 0;
+    while i < off {
+        if src.byte_at(i) == 10 {
+            line = line + 1;
+            col = 1;
+        } else {
+            col = col + 1;
+        }
+        i = i + 1;
+    }
+    let r: Vec<i64> = Vec::new();
+    r.push(line);
+    r.push(col);
+    r
+}
+
+// Stable mutant name in cargo-mutants format: "file:line:col: <label>".
+// Used for caught.txt / missed.txt / log filenames.
+fn mutant_name(file: String, line: i64, col: i64, label: String) -> String {
+    let r: String = String::from("");
+    r.push_str(file);
+    r.push_byte(58);
+    r.push_str(i64_to_string(line));
+    r.push_byte(58);
+    r.push_str(i64_to_string(col));
+    r.push_str(String::from(": "));
+    r.push_str(label);
+    r
 }
 
 // Skip-range list for a file: pairs of (start_byte, end_byte_exclusive).
@@ -62,9 +99,9 @@ fn scan_op_sites(src: String, file_path: String) -> Vec<Site> {
             }
             let word: String = string_substr(src, start, i - start);
             if word == String::from("true") {
-                sites.push(make_const_site(file_path, start, 4, String::from("true"), String::from("false"), String::from("true → false")));
+                sites.push(make_const_site(src, file_path, start, 4, String::from("true"), String::from("false"), String::from("true → false")));
             } else if word == String::from("false") {
-                sites.push(make_const_site(file_path, start, 5, String::from("false"), String::from("true"), String::from("false → true")));
+                sites.push(make_const_site(src, file_path, start, 5, String::from("false"), String::from("true"), String::from("false → true")));
             } else if word == String::from("requires") || word == String::from("ensures") || word == String::from("invariant") {
                 let after: i64 = parse_contract_clause(src, i, file_path, sites, word, clause_idx);
                 if after > i {
@@ -100,9 +137,9 @@ fn scan_op_sites(src: String, file_path: String) -> Vec<Site> {
             }
             let lit: String = string_substr(src, start, i - start);
             if lit == String::from("0") {
-                sites.push(make_const_site(file_path, start, 1, String::from("0"), String::from("1"), String::from("0 → 1")));
+                sites.push(make_const_site(src, file_path, start, 1, String::from("0"), String::from("1"), String::from("0 → 1")));
             } else if lit == String::from("1") {
-                sites.push(make_const_site(file_path, start, 1, String::from("1"), String::from("0"), String::from("1 → 0")));
+                sites.push(make_const_site(src, file_path, start, 1, String::from("1"), String::from("0"), String::from("1 → 0")));
             }
             continue;
         }
@@ -118,27 +155,27 @@ fn scan_op_sites(src: String, file_path: String) -> Vec<Site> {
         }
         // ==, !=, <=, >=, &&, ||
         if b == 61 && next == 61 {
-            sites.push(make_op_site(file_path, i, 2, String::from("=="), String::from("!="), String::from("== → !=")));
+            sites.push(make_op_site(src, file_path, i, 2, String::from("=="), String::from("!="), String::from("== → !=")));
             i = i + 2; continue;
         }
         if b == 33 && next == 61 {
-            sites.push(make_op_site(file_path, i, 2, String::from("!="), String::from("=="), String::from("!= → ==")));
+            sites.push(make_op_site(src, file_path, i, 2, String::from("!="), String::from("=="), String::from("!= → ==")));
             i = i + 2; continue;
         }
         if b == 60 && next == 61 {
-            sites.push(make_op_site(file_path, i, 2, String::from("<="), String::from(">"), String::from("<= → >")));
+            sites.push(make_op_site(src, file_path, i, 2, String::from("<="), String::from(">"), String::from("<= → >")));
             i = i + 2; continue;
         }
         if b == 62 && next == 61 {
-            sites.push(make_op_site(file_path, i, 2, String::from(">="), String::from("<"), String::from(">= → <")));
+            sites.push(make_op_site(src, file_path, i, 2, String::from(">="), String::from("<"), String::from(">= → <")));
             i = i + 2; continue;
         }
         if b == 38 && next == 38 {
-            sites.push(make_op_site(file_path, i, 2, String::from("&&"), String::from("||"), String::from("&& → ||")));
+            sites.push(make_op_site(src, file_path, i, 2, String::from("&&"), String::from("||"), String::from("&& → ||")));
             i = i + 2; continue;
         }
         if b == 124 && next == 124 {
-            sites.push(make_op_site(file_path, i, 2, String::from("||"), String::from("&&"), String::from("|| → &&")));
+            sites.push(make_op_site(src, file_path, i, 2, String::from("||"), String::from("&&"), String::from("|| → &&")));
             i = i + 2; continue;
         }
         // checked-arith forms: skip without emitting (different semantics)
@@ -147,33 +184,33 @@ fn scan_op_sites(src: String, file_path: String) -> Vec<Site> {
         }
         // 1-byte ops; skip < if followed by < or > (shift / not in vow but be safe), and =, !
         if b == 43 {
-            sites.push(make_op_site(file_path, i, 1, String::from("+"), String::from("-"), String::from("+ → -")));
+            sites.push(make_op_site(src, file_path, i, 1, String::from("+"), String::from("-"), String::from("+ → -")));
             i = i + 1; continue;
         }
         if b == 45 {
             // unary minus on numeric literal: heuristic — if previous non-space is operator/punct, skip
             // For v1, emit anyway; runner should treat duplicate-replacement after revert correctly.
-            sites.push(make_op_site(file_path, i, 1, String::from("-"), String::from("+"), String::from("- → +")));
+            sites.push(make_op_site(src, file_path, i, 1, String::from("-"), String::from("+"), String::from("- → +")));
             i = i + 1; continue;
         }
         if b == 42 {
-            sites.push(make_op_site(file_path, i, 1, String::from("*"), String::from("/"), String::from("* → /")));
+            sites.push(make_op_site(src, file_path, i, 1, String::from("*"), String::from("/"), String::from("* → /")));
             i = i + 1; continue;
         }
         if b == 47 {
-            sites.push(make_op_site(file_path, i, 1, String::from("/"), String::from("*"), String::from("/ → *")));
+            sites.push(make_op_site(src, file_path, i, 1, String::from("/"), String::from("*"), String::from("/ → *")));
             i = i + 1; continue;
         }
         if b == 37 {
-            sites.push(make_op_site(file_path, i, 1, String::from("%"), String::from("*"), String::from("% → *")));
+            sites.push(make_op_site(src, file_path, i, 1, String::from("%"), String::from("*"), String::from("% → *")));
             i = i + 1; continue;
         }
         if b == 60 {
-            sites.push(make_op_site(file_path, i, 1, String::from("<"), String::from(">="), String::from("< → >=")));
+            sites.push(make_op_site(src, file_path, i, 1, String::from("<"), String::from(">="), String::from("< → >=")));
             i = i + 1; continue;
         }
         if b == 62 {
-            sites.push(make_op_site(file_path, i, 1, String::from(">"), String::from("<="), String::from("> → <=")));
+            sites.push(make_op_site(src, file_path, i, 1, String::from(">"), String::from("<="), String::from("> → <=")));
             i = i + 1; continue;
         }
         i = i + 1;
@@ -181,11 +218,14 @@ fn scan_op_sites(src: String, file_path: String) -> Vec<Site> {
     sites
 }
 
-fn make_op_site(file: String, off: i64, len: i64, from_text: String, replacement: String, label: String) -> Site {
+fn make_op_site(src: String, file: String, off: i64, len: i64, from_text: String, replacement: String, label: String) -> Site {
+    let lc: Vec<i64> = line_col_at(src, off);
     Site {
         file: file,
         off: off,
         len: len,
+        line: lc[0],
+        col: lc[1],
         kind: String::from("op-flip"),
         from_text: from_text,
         replacement: replacement,
@@ -378,10 +418,13 @@ fn try_emit_body_replace(src: String, i_after_kw: i64, file_path: String, sites:
     let replacement: String = default_for_ty(ret_ty);
     if replacement.len() == 0 { return -1; }
     let label: String = str3(String::from("body → "), replacement, String::from(""));
+    let lc: Vec<i64> = line_col_at(src, body_inside);
     sites.push(Site {
         file: file_path,
         off: body_inside,
         len: body_len,
+        line: lc[0],
+        col: lc[1],
         kind: String::from("body-replace"),
         from_text: String::from(""),
         replacement: replacement,
@@ -442,10 +485,13 @@ fn parse_contract_clause(src: String, i: i64, file_path: String, sites: Vec<Site
     if expr_len <= 0 { return -1; }
     let original: String = string_substr(src, expr_start, expr_len);
     let label: String = str3(kw, String::from(": "), str2(original, String::from(" → true")));
+    let lc: Vec<i64> = line_col_at(src, expr_start);
     sites.push(Site {
         file: file_path,
         off: expr_start,
         len: expr_len,
+        line: lc[0],
+        col: lc[1],
         kind: String::from("contract-weaken"),
         from_text: original,
         replacement: String::from("true"),
@@ -470,11 +516,14 @@ fn str3(a: String, b: String, c: String) -> String {
     r
 }
 
-fn make_const_site(file: String, off: i64, len: i64, from_text: String, replacement: String, label: String) -> Site {
+fn make_const_site(src: String, file: String, off: i64, len: i64, from_text: String, replacement: String, label: String) -> Site {
+    let lc: Vec<i64> = line_col_at(src, off);
     Site {
         file: file,
         off: off,
         len: len,
+        line: lc[0],
+        col: lc[1],
         kind: String::from("const-flip"),
         from_text: from_text,
         replacement: replacement,

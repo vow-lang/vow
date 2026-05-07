@@ -84,46 +84,62 @@ t1_unknown_subcommand_exits_1() {
 
 # --- Tracer 2: list with empty root ---
 
-t10_run_round_trip_leaves_files_unchanged() {
-    local fixture="$TMP/run_root"
-    mkdir -p "$fixture"
-    cp tests/fixtures/mutants/sample_op.vow "$fixture/sample_op.vow"
-    local before_sum after_sum
-    before_sum=$(sha256sum "$fixture/sample_op.vow" | awk '{print $1}')
+do_run() {
+    local label="$1"; shift
+    local outdir="$TMP/out_$label"
+    rm -rf "$outdir"
     set +e
-    out=$(run_vowm run --root "$fixture" --tier1-cmd 'true' --tier2-cmd 'true' 2>&1)
-    rc=$?
+    run_vowm run --output-dir "$outdir" "$@" >/dev/null 2>&1
+    local rc=$?
     set -e
-    after_sum=$(sha256sum "$fixture/sample_op.vow" | awk '{print $1}')
+    echo "$rc:$outdir"
+}
+
+count_status_in_outcomes() {
+    local outdir="$1" status="$2"
+    grep -c "\"status\":\"$status\"" "$outdir/outcomes.json" 2>/dev/null || true
+}
+
+t10_run_round_trip_leaves_files_unchanged() {
+    local before_sum after_sum result outdir rc
+    before_sum=$(sha256sum tests/fixtures/mutants/sample_op.vow | awk '{print $1}')
+    result=$(do_run rt --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true')
+    rc="${result%%:*}"
+    outdir="${result#*:}"
+    after_sum=$(sha256sum tests/fixtures/mutants/sample_op.vow | awk '{print $1}')
     assert_eq "T10: run exit code" "0" "$rc"
-    assert_eq "T10: file content unchanged after run" "$before_sum" "$after_sum"
+    assert_eq "T10: source tree byte-identical after worktree-isolated run" "$before_sum" "$after_sum"
+    local stale_worktrees
+    stale_worktrees=$(git worktree list | grep -c '/tmp/vow-mutants-' || true)
+    assert_eq "T10: no /tmp/vow-mutants-* worktrees left registered" "0" "$stale_worktrees"
+    if [ -f "$outdir/mutants.json" ] && [ -f "$outdir/outcomes.json" ]; then
+        printf "  ${GREEN}PASS${RESET} T10: mutants.json and outcomes.json written to output dir\n"
+        PASS=$((PASS + 1))
+    else
+        printf "  ${RED}FAIL${RESET} T10: expected mutants.json and outcomes.json under %s\n" "$outdir"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("T10-output-files")
+    fi
 }
 
 t11_run_classifies_caught_and_missed() {
-    local fixture="$TMP/run_classify"
-    mkdir -p "$fixture"
-    cp tests/fixtures/mutants/sample_op.vow "$fixture/sample_op.vow"
-    # All-true oracle: every mutant survives Tier 1 and Tier 2 → "missed".
-    local out_missed
-    set +e
-    out_missed=$(run_vowm run --root "$fixture" --tier1-cmd 'true' --tier2-cmd 'true' 2>&1)
-    set -e
+    local result outdir
+    result=$(do_run miss --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true')
+    outdir="${result#*:}"
     local missed_count
-    missed_count=$(echo "$out_missed" | grep -c '"status":"missed"' || true)
+    missed_count=$(count_status_in_outcomes "$outdir" missed)
     if [ "$missed_count" -ge 1 ]; then
         printf "  ${GREEN}PASS${RESET} T11: all-true oracle yields missed records (got %d)\n" "$missed_count"
         PASS=$((PASS + 1))
     else
-        printf "  ${RED}FAIL${RESET} T11: expected >=1 missed, got %d\n    output:\n%s\n" "$missed_count" "$out_missed"
+        printf "  ${RED}FAIL${RESET} T11: expected >=1 missed, got %d\n    outcomes.json: %s\n" "$missed_count" "$(cat "$outdir/outcomes.json" 2>/dev/null)"
         FAIL=$((FAIL + 1))
         FAILURES+=("T11-missed")
     fi
-    # All-false Tier-1 oracle: every mutant caught at Tier 1.
-    local out_caught caught_t1
-    set +e
-    out_caught=$(run_vowm run --root "$fixture" --tier1-cmd 'false' --tier2-cmd 'true' 2>&1)
-    set -e
-    caught_t1=$(echo "$out_caught" | grep -c '"status":"caught","tier":1' || true)
+    result=$(do_run caught_t1 --root tests/fixtures/mutants --tier1-cmd 'false' --tier2-cmd 'true')
+    outdir="${result#*:}"
+    local caught_t1
+    caught_t1=$(grep -cE '"status":"caught","tier":1' "$outdir/outcomes.json" 2>/dev/null || true)
     if [ "$caught_t1" -ge 1 ]; then
         printf "  ${GREEN}PASS${RESET} T11: false-tier1 oracle yields tier-1 caught records (got %d)\n" "$caught_t1"
         PASS=$((PASS + 1))
@@ -132,12 +148,10 @@ t11_run_classifies_caught_and_missed() {
         FAIL=$((FAIL + 1))
         FAILURES+=("T11-caught-t1")
     fi
-    # Tier-1 pass + Tier-2 fail → caught at tier 2.
-    local out_caught_t2 caught_t2
-    set +e
-    out_caught_t2=$(run_vowm run --root "$fixture" --tier1-cmd 'true' --tier2-cmd 'false' 2>&1)
-    set -e
-    caught_t2=$(echo "$out_caught_t2" | grep -c '"status":"caught","tier":2' || true)
+    result=$(do_run caught_t2 --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'false')
+    outdir="${result#*:}"
+    local caught_t2
+    caught_t2=$(grep -cE '"status":"caught","tier":2' "$outdir/outcomes.json" 2>/dev/null || true)
     if [ "$caught_t2" -ge 1 ]; then
         printf "  ${GREEN}PASS${RESET} T11: false-tier2 oracle yields tier-2 caught records (got %d)\n" "$caught_t2"
         PASS=$((PASS + 1))
@@ -149,26 +163,115 @@ t11_run_classifies_caught_and_missed() {
 }
 
 t12_tier2_budget_zero_marks_remaining_unrun() {
-    local fixture="$TMP/run_budget"
-    mkdir -p "$fixture"
-    cp tests/fixtures/mutants/sample_op.vow "$fixture/sample_op.vow"
-    # Tier-1 passes ('true') on every mutant; Tier-2 budget is 0 seconds, so
-    # every Tier-1 survivor must be reported as "unrun".
-    local out unrun_count missed_count
-    set +e
-    out=$(run_vowm run --root "$fixture" --tier1-cmd 'true' --tier2-cmd 'true' --tier2-budget-secs 0 2>&1)
-    set -e
-    unrun_count=$(echo "$out" | grep -c '"status":"unrun"' || true)
-    missed_count=$(echo "$out" | grep -c '"status":"missed"' || true)
+    local result outdir
+    result=$(do_run unrun --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true' --tier2-budget-secs 0)
+    outdir="${result#*:}"
+    local unrun_count missed_count
+    unrun_count=$(count_status_in_outcomes "$outdir" unrun)
+    missed_count=$(count_status_in_outcomes "$outdir" missed)
     if [ "$unrun_count" -ge 1 ]; then
         printf "  ${GREEN}PASS${RESET} T12: zero-budget yields unrun records (got %d)\n" "$unrun_count"
         PASS=$((PASS + 1))
     else
-        printf "  ${RED}FAIL${RESET} T12: expected >=1 unrun, got %d\n    output:\n%s\n" "$unrun_count" "$out"
+        printf "  ${RED}FAIL${RESET} T12: expected >=1 unrun, got %d\n" "$unrun_count"
         FAIL=$((FAIL + 1))
         FAILURES+=("T12-unrun")
     fi
     assert_eq "T12: zero-budget produces zero missed records" "0" "$missed_count"
+    # Verify status txt files exist with expected line counts.
+    local unrun_txt_lines
+    unrun_txt_lines=$(wc -l < "$outdir/unrun.txt" 2>/dev/null || echo 0)
+    assert_eq "T12: unrun.txt line count matches outcomes count" "$unrun_count" "$unrun_txt_lines"
+}
+
+t15_lock_prevents_concurrent_runs() {
+    local outdir="$TMP/out_lock"
+    rm -rf "$outdir"
+    mkdir -p "$outdir/.lock"
+    set +e
+    run_vowm run --output-dir "$outdir" --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
+    local rc=$?
+    set -e
+    assert_eq "T15: stale .lock causes run to refuse with exit 1" "1" "$rc"
+    # --force-unlock recovers
+    set +e
+    run_vowm run --output-dir "$outdir" --force-unlock --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
+    rc=$?
+    set -e
+    assert_eq "T15: --force-unlock recovers stale lock" "0" "$rc"
+    # After successful run, lock is released
+    if [ ! -d "$outdir/.lock" ]; then
+        printf "  ${GREEN}PASS${RESET} T15: lock released after normal exit\n"
+        PASS=$((PASS + 1))
+    else
+        printf "  ${RED}FAIL${RESET} T15: lock still present after run\n"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("T15-release")
+    fi
+}
+
+t14_per_mutant_diff_and_log_captured() {
+    local result outdir
+    result=$(do_run difflog --root tests/fixtures/mutants --tier1-cmd 'echo TIER1 PROBE' --tier2-cmd 'echo TIER2 PROBE')
+    outdir="${result#*:}"
+    # diff/<id>.diff must exist for at least one mutant and contain unified diff markers
+    local any_diff
+    any_diff=$(ls "$outdir/diff/" 2>/dev/null | head -1)
+    if [ -n "$any_diff" ] && grep -qE '^(\+\+\+|---|diff )' "$outdir/diff/$any_diff"; then
+        printf "  ${GREEN}PASS${RESET} T14: per-mutant diff captured (%s contains unified diff)\n" "$any_diff"
+        PASS=$((PASS + 1))
+    else
+        printf "  ${RED}FAIL${RESET} T14: expected unified diff in %s/diff/, got %s\n" "$outdir" "$any_diff"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("T14-diff")
+    fi
+    # logs/<id>.log must contain the tier markers and probe text from the oracle
+    local any_log
+    any_log=$(ls "$outdir/logs/" 2>/dev/null | head -1)
+    if [ -n "$any_log" ] && grep -q "TIER1 PROBE" "$outdir/logs/$any_log" && grep -q "TIER2 PROBE" "$outdir/logs/$any_log"; then
+        printf "  ${GREEN}PASS${RESET} T14: per-mutant log captured oracle stdout from both tiers\n"
+        PASS=$((PASS + 1))
+    else
+        printf "  ${RED}FAIL${RESET} T14: expected TIER1/TIER2 probe lines in %s/logs/%s\n    log:\n%s\n" "$outdir" "$any_log" "$(cat "$outdir/logs/$any_log" 2>/dev/null)"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("T14-log")
+    fi
+}
+
+t13_records_carry_line_col_and_name() {
+    local out
+    set +e
+    out=$(run_vowm list --root tests/fixtures/mutants 2>&1)
+    set -e
+    # Every site record (not the summary) must have line, col, and name fields.
+    local missing_line missing_col missing_name
+    missing_line=$(echo "$out" | grep -v '"total"' | grep -cv '"line":[0-9]' || true)
+    missing_col=$(echo "$out" | grep -v '"total"' | grep -cv '"col":[0-9]' || true)
+    missing_name=$(echo "$out" | grep -v '"total"' | grep -cv '"name":"[^"]' || true)
+    assert_eq "T13: every site has line field" "0" "$missing_line"
+    assert_eq "T13: every site has col field" "0" "$missing_col"
+    assert_eq "T13: every site has name field" "0" "$missing_name"
+    # Sample the sample_op.vow site offsets and verify line/col plausible
+    # (sample_op.vow's `+` in `add` body should be on line 4, around col 7).
+    local op_record
+    op_record=$(echo "$out" | grep '"file":"tests/fixtures/mutants/sample_op.vow"' | grep '"kind":"op-flip","from":"+"' | head -1)
+    if echo "$op_record" | grep -qE '"line":[1-9][0-9]*,"col":[1-9][0-9]*'; then
+        printf "  ${GREEN}PASS${RESET} T13: sample_op.vow + has reasonable line/col\n"
+        PASS=$((PASS + 1))
+    else
+        printf "  ${RED}FAIL${RESET} T13: sample_op.vow + record missing positive line/col\n    record: %s\n" "$op_record"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("T13-line-col-values")
+    fi
+    # Name format: file:line:col: <label>
+    if echo "$op_record" | grep -qE '"name":"tests/fixtures/mutants/sample_op\.vow:[0-9]+:[0-9]+: \+ → -"'; then
+        printf "  ${GREEN}PASS${RESET} T13: name field has cargo-mutants format\n"
+        PASS=$((PASS + 1))
+    else
+        printf "  ${RED}FAIL${RESET} T13: name field doesn't match expected format\n    record: %s\n" "$op_record"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("T13-name-format")
+    fi
 }
 
 t9_sharding_is_deterministic_and_partitions_total() {
@@ -417,6 +520,9 @@ t9_sharding_is_deterministic_and_partitions_total
 t10_run_round_trip_leaves_files_unchanged
 t11_run_classifies_caught_and_missed
 t12_tier2_budget_zero_marks_remaining_unrun
+t13_records_carry_line_col_and_name
+t14_per_mutant_diff_and_log_captured
+t15_lock_prevents_concurrent_runs
 
 echo ""
 if [ "$FAIL" -eq 0 ]; then

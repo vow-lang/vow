@@ -19,17 +19,29 @@ vow-mutants run   [--root DIR] [--shard X/Y]
                   [--tier1-cmd 'cmd'] [--tier2-cmd 'cmd']
                   [--tier1-timeout-secs N] [--tier2-timeout-secs N]
                   [--tier2-budget-secs N]
+                  [--workdir DIR] [--output-dir DIR] [--force-unlock]
 ```
 
 | Flag | Default | Notes |
 |---|---|---|
-| `--root` | `compiler` | Directory whose `*.vow` files are mutated. `test_*.vow` files are excluded. |
+| `--root` | `compiler` | Directory whose `*.vow` files are mutated. `test_*.vow` files are excluded. Path is interpreted relative to the worktree (see Worktree mode below). |
 | `--shard X/Y` | `0/1` | Round-robin split of the deterministic mutant ID space. Mutant `id` is selected iff `id % Y == X`. |
 | `--tier1-cmd` | `scripts/bootstrap.sh --skip-cargo` | Fast oracle. Anything but exit 0 = caught at Tier 1. |
 | `--tier2-cmd` | `scripts/full_test.sh` | Full oracle. Only run on Tier-1 survivors. |
 | `--tier1-timeout-secs` | `180` | Per-mutant Tier-1 wall-clock cap. |
 | `--tier2-timeout-secs` | `3600` | Per-mutant Tier-2 wall-clock cap. |
 | `--tier2-budget-secs` | `7200` | Per-shard total Tier-2 budget. Once exhausted, surviving Tier-1 mutants are emitted with `status:"unrun"`. |
+| `--workdir` | `/tmp/vow-mutants-<ms>` | Path of the throwaway `git worktree` used for all mutations. Created at run start, removed at exit. |
+| `--output-dir` | `mutants.out` | Directory where `mutants.json`, `outcomes.json`, status text files, `diff/`, `logs/` are written. |
+| `--force-unlock` | off | Remove a stale `output_dir/.lock` before starting (recovery from a previous run that exited abnormally). |
+
+## Worktree mode
+
+`vow-mutants run` operates on a fresh `git worktree` (created via `git worktree add --detach`) instead of mutating the live source tree. This guarantees the original `compiler/` (or any `--root`) is byte-identical before and after the run, even on Ctrl-C or oracle crashes. The worktree is removed via `git worktree remove --force` at exit.
+
+**Caveats**:
+- The worktree's `target/` starts empty. The default Tier-1 oracle `scripts/bootstrap.sh --skip-cargo` requires `target/release/vow` to already exist, so it will fail in the worktree unless you (a) pass `--tier1-cmd 'scripts/bootstrap.sh'` to run the full bootstrap inside the worktree, or (b) symlink `target/` from the original tree before invoking. The bundled `.github/workflows/vow-mutants.yml` uses option (a).
+- The repo must be a git working tree. A non-git checkout is not supported in v1.
 
 ## Mutation kinds
 
@@ -48,34 +60,73 @@ Sites whose byte range falls inside any of the following ranges are dropped befo
 - `extern "C" { … }` blocks (brace-balanced; comment- and string-aware).
 - Files matching `test_*.vow` are filtered before scanning.
 
-## Output schema
+## Output: `mutants.out/`
 
-`run` emits one JSON object per line, plus a final summary line. See `docs/spec/schemas/mutants-result.schema.json` for the full schema. Example record:
+`run` populates a directory (default `mutants.out/`) with:
 
-```json
-{"file":"compiler/lower.vow","off":1234,"len":1,"kind":"op-flip","from":"+","to":"-","label":"+ → -","clause_index":0,"status":"missed","tier":2,"oracle_ms":2731000}
+```text
+mutants.out/
+├── .lock              # presence indicates a run is in progress
+├── mutants.json       # full catalog of this shard's mutants, written before testing
+├── outcomes.json      # per-mutant verdicts + summary, written after testing
+├── caught.txt         # newline-separated mutant names (cargo-mutants format)
+├── missed.txt
+├── timeout.txt
+├── unviable.txt
+├── unrun.txt          # Tier-1 survivors not run because Tier-2 budget was exhausted
+├── diff/<id>.diff     # per-mutant unified diff, captured from the worktree
+└── logs/<id>.log      # per-mutant oracle stdout+stderr (Tier 1 followed by Tier 2 if reached)
 ```
 
-Final line:
+`mutants.json` schema (abbreviated):
 
 ```json
-{"total":34,"caught":12,"missed":2,"timeout":0,"unviable":0,"unrun":20,"shard":"0/8"}
+{
+  "version": 1,
+  "tool": "vow-mutants",
+  "shard": "0/8",
+  "mutants": [
+    {"name": "compiler/lower.vow:1234:17: + → -",
+     "file": "compiler/lower.vow", "line": 1234, "col": 17,
+     "off": 12345, "len": 1,
+     "kind": "op-flip", "from": "+", "to": "-",
+     "label": "+ → -", "clause_index": 0},
+    …
+  ]
+}
 ```
 
-`oracle_ms` (per-mutant timing) is the only field that varies across runs; everything else is deterministic given a fixed compiler tree and shard configuration.
+`outcomes.json` schema:
+
+```json
+{
+  "version": 1,
+  "summary": {"total": 34, "caught": 12, "missed": 2, "timeout": 0, "unviable": 0, "unrun": 20, "shard": "0/8"},
+  "outcomes": [
+    {"id": 0, "name": "compiler/lower.vow:1234:17: + → -",
+     "status": "missed", "tier": 2, "oracle_ms": 2731000},
+    …
+  ]
+}
+```
+
+See `docs/spec/schemas/mutants-result.schema.json` for the formal schema.
+
+`stdout` carries only the one-line summary record (so CI logs surface the verdict at a glance).
 
 ## Determinism guarantee
 
-For a fixed source tree and shard configuration, `vow-mutants list` produces byte-identical output across runs. `vow-mutants run` produces output that differs only in the `oracle_ms` field. Mutant IDs are stable, so re-running a single shard's failing mutants is straightforward.
+For a fixed source tree and shard configuration, `vow-mutants list` produces byte-identical output across runs. `vow-mutants run` produces `mutants.json` byte-identically; `outcomes.json` differs only in the `oracle_ms` field per record. Mutant IDs are stable, so re-running a single shard's failing mutants is straightforward.
 
 ## CI
 
-`.github/workflows/vow-mutants.yml` runs the full mutation pass nightly, sharded across 8 GitHub Actions runners, with a 150-minute per-shard Tier-2 budget. Artifacts (`mutants.out` per shard) are uploaded for offline review.
+`.github/workflows/vow-mutants.yml` runs the full mutation pass nightly, sharded across 8 GitHub Actions runners with a 150-minute per-shard Tier-2 budget. Each shard uploads its `mutants.out/` directory as an artifact for offline review.
 
 ## Limitations (v1)
 
-- **Wall-clock**: full Tier-2 coverage of `compiler/*.vow` does not fit in a single nightly run. Many shards will exit with a non-trivial number of `unrun` records. See the plan at `.ultraplan/vow-mutants.md` Risks section for the math.
+- **Wall-clock at this scale, not specific to vow-mutants**: any mutation-testing pass on a codebase this size exceeds a single CI run, regardless of oracle. cargo-mutants on this repo is in the same position — its 90-min nightly with 8 shards and `cargo test` per mutant only reaches a fraction of the total mutant count, and the rest are silently absent from `mutants.out`. vow-mutants makes the unrun set explicit (`status:"unrun"` records when `--tier2-budget-secs` is exhausted) so coverage gaps are visible per shard. Full Tier-2 coverage takes multiple nightlies; the determinism guarantee above means the union across runs is well-defined.
 - **Equivalent mutants**: weakening a non-load-bearing `ensures` clause (e.g., a `result >= 0` clause on a constant function) yields a `missed` record even though the contract is functionally redundant. There is no equivalent-mutant detector in v1.
-- **Concurrency**: `run` mutates files in-place. Do not run locally with uncommitted changes in `--root`. The runner refuses to start if `--root` has uncommitted changes (use `--force` to override; not yet implemented).
+- **Lock TOCTOU race**: the `.lock` directory is created with `fs_mkdir` after an `fs_exists` probe; vow-runtime's `fs_mkdir` is `mkdir -p` semantics, not atomic. Two nearly-simultaneous invocations against the same `--output-dir` could both pass the existence check. In practice CI shards write to different output dirs, so the race window is acceptable.
 - **No JSON escaping** of `from`/`label` fields. The fields originate from compiler source, which currently uses ASCII-printable byte ranges; non-ASCII content in identifiers or comments would produce malformed JSON.
 - **Unsupported return types**: function bodies whose return type doesn't match the supported set produce no `body-replace` site (silent skip).
+- **Sequential within a shard**: one mutant at a time. Parallel workers per shard would require multiple worktrees; deferred to a follow-up.

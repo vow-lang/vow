@@ -69,19 +69,25 @@ jobs:
         continue-on-error: true
         run: |
           ulimit -v 2000000
+          # vow-mutants creates a throwaway git worktree at /tmp/vow-mutants-<ms>
+          # and applies all mutations there. The worktree's target/ starts empty,
+          # so the default `scripts/bootstrap.sh --skip-cargo` Tier-1 won't work
+          # in this context — we override to run the full bootstrap (cargo build
+          # cache lives in the worktree's target/ and is reused across mutants).
           # Tier-2 budget = 9000 s (150 min) leaves 30 min within the
-          # 180-min job timeout for setup, teardown, and the
-          # always-run baseline mutants beyond the budget.
+          # 180-min job timeout for setup, teardown, and any unrun-budget cleanup.
           build/vow-mutants run \
             --root compiler \
             --shard ${{ matrix.shard }}/8 \
+            --tier1-cmd 'scripts/bootstrap.sh' \
+            --tier1-timeout-secs 300 \
             --tier2-budget-secs 9000 \
-            > mutants.out
+            --output-dir mutants.out
 
       - name: Upload mutants.out
         uses: actions/upload-artifact@v7
         if: always()
         with:
           name: mutants-shard-${{ matrix.shard }}
-          path: mutants.out
+          path: mutants.out/
           if-no-files-found: ignore

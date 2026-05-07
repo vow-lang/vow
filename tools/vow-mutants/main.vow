@@ -24,6 +24,15 @@ fn get_flag_arg(argv: Vec<String>, flag: String) -> String {
     String::from("")
 }
 
+fn has_flag(argv: Vec<String>, flag: String) -> bool {
+    let mut i: i64 = 1;
+    while i < argv.len() {
+        if argv[i] == flag { return true; }
+        i = i + 1;
+    }
+    false
+}
+
 fn parse_shard(spec: String) -> Vec<i64> {
     // spec format: "X/Y"; defaults to 0/1 if empty or malformed.
     let result: Vec<i64> = Vec::new();
@@ -79,6 +88,41 @@ fn starts_with(s: String, prefix: String) -> bool {
     if string_starts_with(s, prefix) == 1 { true } else { false }
 }
 
+fn default_workdir() -> String [io] {
+    let r: String = String::from("/tmp/vow-mutants-");
+    r.push_str(i64_to_string(time_unix_ms()));
+    r
+}
+
+fn worktree_create(workdir: String) -> i64 [io] {
+    let args: Vec<String> = Vec::new();
+    args.push(String::from("worktree"));
+    args.push(String::from("add"));
+    args.push(String::from("--detach"));
+    args.push(workdir);
+    args.push(String::from("HEAD"));
+    process_run(String::from("git"), args)
+}
+
+fn worktree_remove(workdir: String) -> i64 [io] {
+    let args: Vec<String> = Vec::new();
+    args.push(String::from("worktree"));
+    args.push(String::from("remove"));
+    args.push(String::from("--force"));
+    args.push(workdir);
+    process_run(String::from("git"), args)
+}
+
+fn join_workdir(workdir: String, repo_relative: String) -> String {
+    let r: String = String::from("");
+    r.push_str(workdir);
+    if workdir.len() > 0 && workdir.byte_at(workdir.len() - 1) != 47 {
+        r.push_byte(47);
+    }
+    r.push_str(repo_relative);
+    r
+}
+
 fn join_path(dir: String, name: String) -> String {
     let r: String = String::from("");
     r.push_str(dir);
@@ -90,9 +134,15 @@ fn join_path(dir: String, name: String) -> String {
 }
 
 fn site_to_json(s: Site) -> String {
-    let r: String = String::from("{\"file\":\"");
+    let r: String = String::from("{\"name\":\"");
+    r.push_str(mutant_name(s.file, s.line, s.col, s.label));
+    r.push_str(String::from("\",\"file\":\""));
     r.push_str(s.file);
-    r.push_str(String::from("\",\"off\":"));
+    r.push_str(String::from("\",\"line\":"));
+    r.push_str(i64_to_string(s.line));
+    r.push_str(String::from(",\"col\":"));
+    r.push_str(i64_to_string(s.col));
+    r.push_str(String::from(",\"off\":"));
     r.push_str(i64_to_string(s.off));
     r.push_str(String::from(",\"len\":"));
     r.push_str(i64_to_string(s.len));
@@ -110,18 +160,24 @@ fn site_to_json(s: Site) -> String {
     r
 }
 
-fn enumerate_root(root: String) -> Vec<Site> [read] {
+// Enumerate all mutation sites from `<root>` (interpreted as a path
+// relative to either CWD or `workdir` — caller decides by passing the
+// already-joined absolute or workdir-prefixed path). Site.file is set to
+// the caller-supplied `repo_relative_root + "/" + name`, which is what
+// CI artifacts and `mutants.json` should display.
+fn enumerate_root(read_dir: String, repo_relative_root: String) -> Vec<Site> [read] {
     let all: Vec<Site> = Vec::new();
-    let entries: Vec<String> = fs_listdir(root);
+    let entries: Vec<String> = fs_listdir(read_dir);
     let n: i64 = entries.len();
     let mut i: i64 = 0;
     while i < n {
         let name: String = entries[i];
         if ends_with(name, String::from(".vow")) && !starts_with(name, String::from("test_")) {
-            let full: String = join_path(root, name);
-            let src: String = fs_read(full);
+            let read_full: String = join_path(read_dir, name);
+            let display_full: String = join_path(repo_relative_root, name);
+            let src: String = fs_read(read_full);
             if src.len() > 0 {
-                let file_sites: Vec<Site> = enumerate_sites(src, full);
+                let file_sites: Vec<Site> = enumerate_sites(src, display_full);
                 let m: i64 = file_sites.len();
                 let mut j: i64 = 0;
                 while j < m {
@@ -141,9 +197,15 @@ fn parse_i64_default(s: String, default: i64) -> i64 {
 }
 
 fn run_record_to_json(s: Site, status: i64, tier: i64, oracle_ms: i64) -> String {
-    let r: String = String::from("{\"file\":\"");
+    let r: String = String::from("{\"name\":\"");
+    r.push_str(mutant_name(s.file, s.line, s.col, s.label));
+    r.push_str(String::from("\",\"file\":\""));
     r.push_str(s.file);
-    r.push_str(String::from("\",\"off\":"));
+    r.push_str(String::from("\",\"line\":"));
+    r.push_str(i64_to_string(s.line));
+    r.push_str(String::from(",\"col\":"));
+    r.push_str(i64_to_string(s.col));
+    r.push_str(String::from(",\"off\":"));
     r.push_str(i64_to_string(s.off));
     r.push_str(String::from(",\"len\":"));
     r.push_str(i64_to_string(s.len));
@@ -174,6 +236,179 @@ fn classify_oracle_rc(rc: i64) -> i64 {
     ST_CAUGHT()
 }
 
+// Build a shell command that runs `cmd` with cwd = workdir and tees its
+// combined stdout+stderr into log_path. `tier_label` is a short string
+// printed before the command starts (e.g., "tier1") so the operator can
+// tell which tier produced which chunk of the log when both tiers ran.
+// `append` controls whether the redirection appends (>>) or truncates (>).
+fn cd_with_log(workdir: String, cmd: String, log_path: String, tier_label: String, append: bool) -> String {
+    let r: String = String::from("cd ");
+    r.push_str(workdir);
+    r.push_str(String::from(" && (echo \"--- "));
+    r.push_str(tier_label);
+    r.push_str(String::from(" ---\" && "));
+    r.push_str(cmd);
+    if append {
+        r.push_str(String::from(") >> "));
+    } else {
+        r.push_str(String::from(") > "));
+    }
+    r.push_str(log_path);
+    r.push_str(String::from(" 2>&1"));
+    r
+}
+
+// Capture `git diff --no-color -- <file>` from inside `workdir` and write
+// the patch text to `diff_path`. Best-effort: returns 0 on success, or
+// process_run's exit code on failure (we don't propagate to the verdict).
+fn capture_diff(workdir: String, repo_relative_file: String, diff_path: String) -> i64 [io, write] {
+    let cmd: String = String::from("cd ");
+    cmd.push_str(workdir);
+    cmd.push_str(String::from(" && git diff --no-color -- "));
+    cmd.push_str(repo_relative_file);
+    let args: Vec<String> = Vec::new();
+    args.push(String::from("-c"));
+    args.push(cmd);
+    let rc: i64 = process_run(String::from("sh"), args);
+    let diff_text: String = process_get_stdout();
+    fs_write(diff_path, diff_text);
+    rc
+}
+
+fn diff_path_for(output_dir: String, id: i64) -> String {
+    let r: String = String::from("");
+    r.push_str(output_dir);
+    r.push_str(String::from("/diff/"));
+    r.push_str(i64_to_string(id));
+    r.push_str(String::from(".diff"));
+    r
+}
+
+fn log_path_for(output_dir: String, id: i64) -> String {
+    let r: String = String::from("");
+    r.push_str(output_dir);
+    r.push_str(String::from("/logs/"));
+    r.push_str(i64_to_string(id));
+    r.push_str(String::from(".log"));
+    r
+}
+
+// Build a JSON array of site records. The opening `[`/closing `]` are
+// supplied here; per-record commas are added between entries.
+fn sites_array_json(sites: Vec<Site>) -> String {
+    let r: String = String::from("[\n");
+    let n: i64 = sites.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if i > 0 { r.push_str(String::from(",\n")); }
+        r.push_str(String::from("  "));
+        r.push_str(site_to_json(sites[i]));
+        i = i + 1;
+    }
+    r.push_str(String::from("\n]\n"));
+    r
+}
+
+// One outcome record per executed mutant. shard-relative `id` mirrors the
+// position in mutants.json so cross-referencing is trivial.
+fn outcome_record_json(id: i64, s: Site, status: i64, tier: i64, oracle_ms: i64) -> String {
+    let r: String = String::from("{\"id\":");
+    r.push_str(i64_to_string(id));
+    r.push_str(String::from(",\"name\":\""));
+    r.push_str(mutant_name(s.file, s.line, s.col, s.label));
+    r.push_str(String::from("\",\"status\":\""));
+    r.push_str(status_str(status));
+    r.push_str(String::from("\",\"tier\":"));
+    r.push_str(i64_to_string(tier));
+    r.push_str(String::from(",\"oracle_ms\":"));
+    r.push_str(i64_to_string(oracle_ms));
+    r.push_str(String::from("}"));
+    r
+}
+
+fn build_summary_json(total: i64, caught: i64, missed: i64, to_count: i64, unviable: i64, unrun: i64, shard_x: i64, shard_y: i64) -> String {
+    let r: String = String::from("{\"total\":");
+    r.push_str(i64_to_string(total));
+    r.push_str(String::from(",\"caught\":"));
+    r.push_str(i64_to_string(caught));
+    r.push_str(String::from(",\"missed\":"));
+    r.push_str(i64_to_string(missed));
+    r.push_str(String::from(",\"timeout\":"));
+    r.push_str(i64_to_string(to_count));
+    r.push_str(String::from(",\"unviable\":"));
+    r.push_str(i64_to_string(unviable));
+    r.push_str(String::from(",\"unrun\":"));
+    r.push_str(i64_to_string(unrun));
+    r.push_str(String::from(",\"shard\":\""));
+    r.push_str(i64_to_string(shard_x));
+    r.push_str(String::from("/"));
+    r.push_str(i64_to_string(shard_y));
+    r.push_str(String::from("\"}"));
+    r
+}
+
+fn write_mutants_json(output_dir: String, sites: Vec<Site>, shard_x: i64, shard_y: i64) -> i64 [io, write] {
+    let path: String = join_path(output_dir, String::from("mutants.json"));
+    let body: String = String::from("{\"version\":1,\"tool\":\"vow-mutants\",\"shard\":\"");
+    body.push_str(i64_to_string(shard_x));
+    body.push_byte(47);
+    body.push_str(i64_to_string(shard_y));
+    body.push_str(String::from("\",\"mutants\":"));
+    body.push_str(sites_array_json(sites));
+    body.push_str(String::from("}\n"));
+    fs_write(path, body)
+}
+
+fn write_outcomes_json(output_dir: String, sites: Vec<Site>, ids: Vec<i64>, statuses: Vec<i64>, tiers: Vec<i64>, oracle_mss: Vec<i64>, summary: String) -> i64 [io, write] {
+    let path: String = join_path(output_dir, String::from("outcomes.json"));
+    let body: String = String::from("{\"version\":1,\"summary\":");
+    body.push_str(summary);
+    body.push_str(String::from(",\"outcomes\":[\n"));
+    let n: i64 = sites.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if i > 0 { body.push_str(String::from(",\n")); }
+        body.push_str(String::from("  "));
+        body.push_str(outcome_record_json(ids[i], sites[i], statuses[i], tiers[i], oracle_mss[i]));
+        i = i + 1;
+    }
+    body.push_str(String::from("\n]}\n"));
+    fs_write(path, body)
+}
+
+// Write one newline-separated mutant name per status into
+// {output_dir}/{status_str}.txt. Status txt files are appended-style in
+// cargo-mutants; we write them all at once at the end since we have the
+// full outcome list in memory.
+fn write_status_lists(output_dir: String, sites: Vec<Site>, statuses: Vec<i64>) -> i64 [io, write] {
+    let buckets: Vec<i64> = Vec::new();
+    buckets.push(ST_CAUGHT());
+    buckets.push(ST_MISSED());
+    buckets.push(ST_TIMEOUT());
+    buckets.push(ST_UNVIABLE());
+    buckets.push(ST_UNRUN());
+    let n: i64 = sites.len();
+    let mut bi: i64 = 0;
+    while bi < buckets.len() {
+        let bs: i64 = buckets[bi];
+        let body: String = String::from("");
+        let mut i: i64 = 0;
+        while i < n {
+            if statuses[i] == bs {
+                let s: Site = sites[i];
+                body.push_str(mutant_name(s.file, s.line, s.col, s.label));
+                body.push_byte(10);
+            }
+            i = i + 1;
+        }
+        let path: String = join_path(output_dir, str2(status_str(bs), String::from(".txt")));
+        fs_write(path, body);
+        bi = bi + 1;
+    }
+    0
+}
+
+
 fn run_run(argv: Vec<String>) -> i32 [io, read, write] {
     let root_in: String = get_flag_arg(argv, String::from("--root"));
     let root: String = if root_in.len() == 0 { String::from("compiler") } else { root_in };
@@ -194,75 +429,130 @@ fn run_run(argv: Vec<String>) -> i32 [io, read, write] {
     let t2_to_ms: i64 = t2_to_secs * 1000;
     let t2_budget_ms: i64 = t2_budget_secs * 1000;
 
-    let sites: Vec<Site> = enumerate_root(root);
-    let n: i64 = sites.len();
+    let output_dir_in: String = get_flag_arg(argv, String::from("--output-dir"));
+    let output_dir: String = if output_dir_in.len() == 0 { String::from("mutants.out") } else { output_dir_in };
+    fs_mkdir(output_dir);
+    // Lock: vow-runtime's fs_mkdir maps to create_dir_all (mkdir -p),
+    // so we can't rely on its return code for atomicity. Best-effort
+    // lock = exists-check + create. Small TOCTOU race window between
+    // the two calls is acceptable here: in practice two concurrent runs
+    // against the same output_dir is rare (CI shards write to different
+    // dirs). --force-unlock removes a stale lock first.
+    let lock_path: String = join_path(output_dir, String::from(".lock"));
+    let force_unlock: bool = has_flag(argv, String::from("--force-unlock"));
+    if force_unlock {
+        fs_remove_dir(lock_path);
+    }
+    if fs_exists(lock_path) == 1 {
+        eprintln_str("vow-mutants run: another invocation appears to be active in this output_dir");
+        eprintln_str("(remove the .lock subdirectory or pass --force-unlock to recover)");
+        return 1;
+    }
+    fs_mkdir(lock_path);
+    fs_mkdir(join_path(output_dir, String::from("diff")));
+    fs_mkdir(join_path(output_dir, String::from("logs")));
+
+    let workdir_in: String = get_flag_arg(argv, String::from("--workdir"));
+    let workdir: String = if workdir_in.len() == 0 { default_workdir() } else { workdir_in };
+    let wt_rc: i64 = worktree_create(workdir);
+    if wt_rc != 0 {
+        eprintln_str("vow-mutants run: failed to create git worktree");
+        return 1;
+    }
+
+    let read_root: String = join_workdir(workdir, root);
+    let all_sites: Vec<Site> = enumerate_root(read_root, root);
+    // Filter to this shard's mutants only.
+    let shard_sites: Vec<Site> = Vec::new();
+    let shard_ids: Vec<i64> = Vec::new();
+    let total_n: i64 = all_sites.len();
+    let mut gid: i64 = 0;
+    while gid < total_n {
+        if (gid % shard_y) == shard_x {
+            shard_sites.push(all_sites[gid]);
+            shard_ids.push(gid);
+        }
+        gid = gid + 1;
+    }
+    write_mutants_json(output_dir, shard_sites, shard_x, shard_y);
+
+    let n: i64 = shard_sites.len();
+    let statuses: Vec<i64> = Vec::new();
+    let tiers: Vec<i64> = Vec::new();
+    let oracle_mss: Vec<i64> = Vec::new();
     let mut caught: i64 = 0;
     let mut missed: i64 = 0;
     let mut to_count: i64 = 0;
     let mut unviable: i64 = 0;
     let mut unrun: i64 = 0;
     let mut t2_used_ms: i64 = 0;
-    let mut id: i64 = 0;
-    while id < n {
-        if (id % shard_y) == shard_x {
-            let s: Site = sites[id];
-            let original: String = fs_read(s.file);
-            let mutated: String = splice(original, s.off, s.len, s.replacement);
-            fs_write(s.file, mutated);
-            let t1_start: i64 = time_unix_ms();
-            let rc1: i64 = run_shell(tier1_cmd, t1_to_ms);
-            let t1_dur: i64 = time_unix_ms() - t1_start;
-            let mut status: i64 = 0;
-            let mut tier: i64 = 1;
-            let mut oracle_ms: i64 = t1_dur;
-            if rc1 == -1 {
-                status = ST_UNVIABLE();
-            } else if rc1 == -2 {
-                status = ST_TIMEOUT();
-            } else if rc1 != 0 {
-                status = ST_CAUGHT();
+    let mut i: i64 = 0;
+    while i < n {
+        let s: Site = shard_sites[i];
+        let mid: i64 = shard_ids[i];
+        let abs_path: String = join_workdir(workdir, s.file);
+        let original: String = fs_read(abs_path);
+        let mutated: String = splice(original, s.off, s.len, s.replacement);
+        fs_write(abs_path, mutated);
+        capture_diff(workdir, s.file, diff_path_for(output_dir, mid));
+        let log_p: String = log_path_for(output_dir, mid);
+        let t1_full: String = cd_with_log(workdir, tier1_cmd, log_p, String::from("tier1"), false);
+        let t1_start: i64 = time_unix_ms();
+        let rc1: i64 = run_shell(t1_full, t1_to_ms);
+        let t1_dur: i64 = time_unix_ms() - t1_start;
+        let mut status: i64 = 0;
+        let mut tier: i64 = 1;
+        let mut oracle_ms: i64 = t1_dur;
+        if rc1 == -1 {
+            status = ST_UNVIABLE();
+        } else if rc1 == -2 {
+            status = ST_TIMEOUT();
+        } else if rc1 != 0 {
+            status = ST_CAUGHT();
+        } else {
+            if t2_used_ms >= t2_budget_ms {
+                status = ST_UNRUN();
+                tier = 1;
             } else {
-                // Tier 2 — only if we have budget left
-                if t2_used_ms >= t2_budget_ms {
-                    status = ST_UNRUN();
-                    tier = 1;
-                } else {
-                    let t2_start: i64 = time_unix_ms();
-                    let rc2: i64 = run_shell(tier2_cmd, t2_to_ms);
-                    let t2_dur: i64 = time_unix_ms() - t2_start;
-                    t2_used_ms = t2_used_ms + t2_dur;
-                    oracle_ms = t1_dur + t2_dur;
-                    tier = 2;
-                    status = classify_oracle_rc(rc2);
-                }
+                let t2_full: String = cd_with_log(workdir, tier2_cmd, log_p, String::from("tier2"), true);
+                let t2_start: i64 = time_unix_ms();
+                let rc2: i64 = run_shell(t2_full, t2_to_ms);
+                let t2_dur: i64 = time_unix_ms() - t2_start;
+                t2_used_ms = t2_used_ms + t2_dur;
+                oracle_ms = t1_dur + t2_dur;
+                tier = 2;
+                status = classify_oracle_rc(rc2);
             }
-            // revert
-            fs_write(s.file, original);
-            // count
-            if      status == ST_CAUGHT()   { caught   = caught   + 1; }
-            else if status == ST_MISSED()   { missed   = missed   + 1; }
-            else if status == ST_TIMEOUT()  { to_count = to_count + 1; }
-            else if status == ST_UNVIABLE() { unviable = unviable + 1; }
-            else if status == ST_UNRUN()    { unrun    = unrun    + 1; }
-            // emit
-            let line: String = run_record_to_json(s, status, tier, oracle_ms);
-            line.push_byte(10);
-            print_str(line);
         }
-        id = id + 1;
+        fs_write(abs_path, original);
+        if      status == ST_CAUGHT()   { caught   = caught   + 1; }
+        else if status == ST_MISSED()   { missed   = missed   + 1; }
+        else if status == ST_TIMEOUT()  { to_count = to_count + 1; }
+        else if status == ST_UNVIABLE() { unviable = unviable + 1; }
+        else if status == ST_UNRUN()    { unrun    = unrun    + 1; }
+        statuses.push(status);
+        tiers.push(tier);
+        oracle_mss.push(oracle_ms);
+        i = i + 1;
     }
-    print_summary(caught + missed + to_count + unviable + unrun, caught, missed, to_count, unviable, unrun, shard_x, shard_y);
+    let summary_json: String = build_summary_json(n, caught, missed, to_count, unviable, unrun, shard_x, shard_y);
+    write_outcomes_json(output_dir, shard_sites, shard_ids, statuses, tiers, oracle_mss, summary_json);
+    write_status_lists(output_dir, shard_sites, statuses);
+    print_summary(n, caught, missed, to_count, unviable, unrun, shard_x, shard_y);
+    worktree_remove(workdir);
+    fs_remove_dir(lock_path);
     0
 }
 
 fn run_list(argv: Vec<String>) -> i32 [io, read] {
     let root: String = get_flag_arg(argv, String::from("--root"));
     let root_used: String = if root.len() == 0 { String::from("compiler") } else { root };
+    // `list` is read-only; no worktree needed.
     let shard_spec: String = get_flag_arg(argv, String::from("--shard"));
     let shard: Vec<i64> = parse_shard(shard_spec);
     let shard_x: i64 = shard[0];
     let shard_y: i64 = shard[1];
-    let sites: Vec<Site> = enumerate_root(root_used);
+    let sites: Vec<Site> = enumerate_root(root_used, root_used);
     let n: i64 = sites.len();
     let mut emitted: i64 = 0;
     let mut id: i64 = 0;
