@@ -4415,18 +4415,26 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
 }
 // GENERATE:SKILL_FULL:END
 
-fn run_skill_install() {
-    let dir = Path::new(".claude/commands");
-    if let Err(e) = std::fs::create_dir_all(dir) {
-        eprintln!("vow skill install: cannot create {}: {}", dir.display(), e);
-        std::process::exit(1);
-    }
+fn install_skill_to(root: &Path) -> std::io::Result<PathBuf> {
+    let dir = root.join(".claude/commands");
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        std::io::Error::new(e.kind(), format!("cannot create {}: {}", dir.display(), e))
+    })?;
     let path = dir.join("vow-toolchain.md");
-    if let Err(e) = std::fs::write(&path, skill_full_markdown()) {
-        eprintln!("vow skill install: cannot write {}: {}", path.display(), e);
-        std::process::exit(1);
+    std::fs::write(&path, skill_full_markdown()).map_err(|e| {
+        std::io::Error::new(e.kind(), format!("cannot write {}: {}", path.display(), e))
+    })?;
+    Ok(path)
+}
+
+fn run_skill_install() {
+    match install_skill_to(Path::new("")) {
+        Ok(path) => eprintln!("installed skill to {}", path.display()),
+        Err(e) => {
+            eprintln!("vow skill install: {}", e);
+            std::process::exit(1);
+        }
     }
-    eprintln!("installed skill to {}", path.display());
 }
 
 // ---------------------------------------------------------------------------
@@ -7100,6 +7108,26 @@ fn main() -> i32 [io] {
             out.contains("vow"),
             "expected vow description in human help"
         );
+    }
+
+    #[test]
+    fn skill_full_markdown_contains_installable_skill_document() {
+        let out = skill_full_markdown();
+        assert!(out.starts_with("---\nname: vow-toolchain\n"));
+        assert!(out.contains("# Vow Language Reference"));
+        assert!(out.contains("## `vow skill`"));
+        assert!(out.contains("schemas/build-result.schema.json"));
+    }
+
+    #[test]
+    fn skill_install_writes_claude_command_file() {
+        let dir = TempDir::new().unwrap();
+        install_skill_to(dir.path()).unwrap();
+
+        let installed = dir.path().join(".claude/commands/vow-toolchain.md");
+        let contents = std::fs::read_to_string(installed).unwrap();
+        assert!(contents.starts_with("---\nname: vow-toolchain\n"));
+        assert!(contents.contains("# Vow Language Reference"));
     }
 
     #[test]
@@ -9805,6 +9833,109 @@ fn main() -> i32 {
         assert_eq!(sce.branch_decisions[0].taken, "else");
         assert_eq!(sce.branch_decisions[0].condition_offset, 20);
         assert_eq!(sce.branch_decisions[0].condition_length, 8);
+    }
+
+    #[test]
+    fn discover_test_files_accepts_file_and_sorted_test_names() {
+        let dir = TempDir::new().unwrap();
+        let single = write_source(&dir, "plain.vow", "module Plain fn main() -> i32 { 0 }");
+        assert_eq!(discover_test_files(&single), vec![single.clone()]);
+
+        write_source(&dir, "notes.vow", "module Notes");
+        let beta = write_source(&dir, "beta_test.vow", "module Beta");
+        let alpha = write_source(&dir, "test_alpha.vow", "module Alpha");
+        let files = discover_test_files(dir.path());
+        assert_eq!(files, vec![beta, alpha]);
+    }
+
+    #[test]
+    fn count_contract_density_ignores_main_and_reports_tenths() {
+        use vow_ir::{BasicBlock, BlockId, FuncId, RegionSummary, Ty, VowEntry, VowId};
+
+        let make_func = |id, name: &str, vows| vow_ir::Function {
+            id: FuncId(id),
+            name: name.to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::Unit,
+            effects: vec![],
+            vows,
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        let vowed = VowEntry {
+            id: VowId(0),
+            description: "ensures: true".to_string(),
+            blame: vow_diag::Blame::Callee,
+            bindings: vec![],
+            file: "test.vow".to_string(),
+            offset: 0,
+        };
+        let module = vow_ir::Module {
+            name: "Density".to_string(),
+            functions: vec![
+                make_func(0, "main", vec![vowed.clone()]),
+                make_func(1, "with_vow", vec![vowed]),
+                make_func(2, "without_vow", vec![]),
+            ],
+            strings: vec![],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+
+        let density = count_contract_density(&module);
+        assert_eq!(density.functions_total, 2);
+        assert_eq!(density.functions_with_vows, 1);
+        assert_eq!(density.density_pct, 50.0);
+    }
+
+    #[test]
+    fn resolve_verify_jobs_preserves_explicit_value() {
+        assert_eq!(resolve_verify_jobs(Some(1)), 1);
+        assert_eq!(resolve_verify_jobs(Some(3)), 3);
+    }
+
+    #[test]
+    fn build_contracts_summary_counts_each_status_bucket() {
+        let source = ContractSourceJson {
+            file: "test.vow".to_string(),
+            offset: 0,
+        };
+        let entry = |status: &str| ContractEntryJson {
+            vow_id: 0,
+            function: "f".to_string(),
+            function_id: 0,
+            kind: "ensures".to_string(),
+            description: "ensures: true".to_string(),
+            blame: "callee".to_string(),
+            source: source.clone(),
+            status: status.to_string(),
+        };
+        let summary = build_contracts_summary(&[
+            entry("proven"),
+            entry("proven-ir"),
+            entry("failed"),
+            entry("unknown"),
+            entry("timeout"),
+            entry("error"),
+            entry("skipped"),
+            entry("not-run"),
+        ]);
+
+        assert_eq!(summary.total, 8);
+        assert_eq!(summary.proven, 2);
+        assert_eq!(summary.failed, 1);
+        assert_eq!(summary.unknown, 1);
+        assert_eq!(summary.timeout, 1);
+        assert_eq!(summary.error, 1);
+        assert_eq!(summary.skipped, 1);
+        assert_eq!(summary.not_verified, 1);
     }
 
     #[test]
