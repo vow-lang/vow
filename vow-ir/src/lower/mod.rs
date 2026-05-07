@@ -3535,6 +3535,7 @@ mod tests {
 
     #[test]
     fn builtins_lower_to_runtime_symbols_and_return_types() {
+        // Keep this table in lockstep with every arm of vow_builtin_to_runtime.
         let cases = [
             ("print_str", "__vow_string_print", Ty::Unit),
             ("print_i64", "__vow_print_i64", Ty::Unit),

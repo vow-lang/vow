@@ -4415,18 +4415,26 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
 }
 // GENERATE:SKILL_FULL:END
 
-fn run_skill_install() {
-    let dir = Path::new(".claude/commands");
-    if let Err(e) = std::fs::create_dir_all(dir) {
-        eprintln!("vow skill install: cannot create {}: {}", dir.display(), e);
-        std::process::exit(1);
-    }
+fn install_skill_to(root: &Path) -> std::io::Result<PathBuf> {
+    let dir = root.join(".claude/commands");
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        std::io::Error::new(e.kind(), format!("cannot create {}: {}", dir.display(), e))
+    })?;
     let path = dir.join("vow-toolchain.md");
-    if let Err(e) = std::fs::write(&path, skill_full_markdown()) {
-        eprintln!("vow skill install: cannot write {}: {}", path.display(), e);
-        std::process::exit(1);
+    std::fs::write(&path, skill_full_markdown()).map_err(|e| {
+        std::io::Error::new(e.kind(), format!("cannot write {}: {}", path.display(), e))
+    })?;
+    Ok(path)
+}
+
+fn run_skill_install() {
+    match install_skill_to(Path::new("")) {
+        Ok(path) => eprintln!("installed skill to {}", path.display()),
+        Err(e) => {
+            eprintln!("vow skill install: {}", e);
+            std::process::exit(1);
+        }
     }
-    eprintln!("installed skill to {}", path.display());
 }
 
 // ---------------------------------------------------------------------------
@@ -7113,15 +7121,8 @@ fn main() -> i32 [io] {
 
     #[test]
     fn skill_install_writes_claude_command_file() {
-        static CWD_LOCK: StdMutex<()> = StdMutex::new(());
-
-        let _guard = CWD_LOCK.lock().unwrap();
-        let old_cwd = std::env::current_dir().unwrap();
         let dir = TempDir::new().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
-        let result = std::panic::catch_unwind(run_skill_install);
-        std::env::set_current_dir(old_cwd).unwrap();
-        result.unwrap();
+        install_skill_to(dir.path()).unwrap();
 
         let installed = dir.path().join(".claude/commands/vow-toolchain.md");
         let contents = std::fs::read_to_string(installed).unwrap();
@@ -9896,6 +9897,7 @@ fn main() -> i32 {
 
     #[test]
     fn resolve_verify_jobs_preserves_explicit_value() {
+        assert_eq!(resolve_verify_jobs(Some(1)), 1);
         assert_eq!(resolve_verify_jobs(Some(3)), 3);
     }
 
