@@ -136,9 +136,14 @@ fn vec_model_receiver_arg(name: &str) -> Option<usize> {
 
 fn string_model_receiver_arg(name: &str) -> Option<usize> {
     match name {
-        "__vow_string_push_str_in_arena" | "__vow_string_push_byte_in_arena" => Some(1),
+        "__vow_string_push_str_in_arena"
+        | "__vow_string_push_byte_in_arena"
+        | "__vow_string_substr_in_arena"
+        | "__vow_string_substring_in_arena" => Some(1),
         "__vow_string_push_str"
         | "__vow_string_push_byte"
+        | "__vow_string_substr"
+        | "__vow_string_substring"
         | "__vow_string_len"
         | "__vow_string_clear"
         | "__vow_string_byte_at"
@@ -162,7 +167,8 @@ fn collect_typed_vars(func: &Function, creator: &str, prefix: &str) -> HashSet<u
                 let is_creator = name == creator || is_alt_creator;
                 if is_creator {
                     vars.insert(inst.id.0);
-                } else if name.starts_with(prefix) {
+                }
+                if name.starts_with(prefix) {
                     let receiver_arg = if prefix == "__vow_vec_" {
                         vec_model_receiver_arg(name)
                     } else if prefix == "__vow_string_" {
@@ -3399,6 +3405,103 @@ mod tests {
         );
         assert!(!c.contains("v0.keys = "), "no keys assignment: {c}");
         assert!(!c.contains("v0.vals = "), "no vals assignment: {c}");
+    }
+
+    #[test]
+    fn emit_string_substring_marks_parameter_receiver_as_string() {
+        use vow_ir::InstId;
+        let func = Function {
+            id: FuncId(0),
+            name: "slice_param".to_string(),
+            params: vec![Ty::Ptr],
+            param_names: vec!["s".to_string()],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                    Inst {
+                        id: InstId(3),
+                        opcode: Opcode::Call,
+                        ty: Ty::Ptr,
+                        args: vec![InstId(0), InstId(1), InstId(2)],
+                        data: InstData::CallExtern("__vow_string_substring".to_string()),
+                        origin: sp(),
+                        region: RegionId::Root,
+                    },
+                    inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            c.contains("__vow_string_t v0;"),
+            "substring source receiver must be emitted as a String model value: {c}"
+        );
+        assert!(
+            !c.contains("int64_t v0;"),
+            "substring source receiver must not be emitted as scalar int64_t: {c}"
+        );
+        assert!(
+            c.contains("v3.len = v2 - v1"),
+            "substring result model should still be emitted: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_string_substr_in_arena_marks_shifted_receiver_as_string() {
+        use vow_ir::InstId;
+        let func = Function {
+            id: FuncId(0),
+            name: "arena_slice_param".to_string(),
+            params: vec![Ty::Ptr],
+            param_names: vec!["s".to_string()],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(3, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                    Inst {
+                        id: InstId(4),
+                        opcode: Opcode::Call,
+                        ty: Ty::Ptr,
+                        args: vec![InstId(0), InstId(1), InstId(2), InstId(3)],
+                        data: InstData::CallExtern("__vow_string_substr_in_arena".to_string()),
+                        origin: sp(),
+                        region: RegionId::Root,
+                    },
+                    inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            c.contains("__vow_string_t v1;"),
+            "arena substr source receiver must be emitted as a String model value: {c}"
+        );
+        assert!(
+            !c.contains("int64_t v1;"),
+            "arena substr source receiver must not be emitted as scalar int64_t: {c}"
+        );
+        assert!(
+            c.contains("v4.len = v3"),
+            "substr result model should still be emitted: {c}"
+        );
     }
 
     #[test]

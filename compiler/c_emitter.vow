@@ -489,8 +489,12 @@ fn vec_model_receiver_arg(name: String) -> i64 {
 fn string_model_receiver_arg(name: String) -> i64 {
     if name == String::from("__vow_string_push_str_in_arena") { return 1; }
     if name == String::from("__vow_string_push_byte_in_arena") { return 1; }
+    if name == String::from("__vow_string_substr_in_arena") { return 1; }
+    if name == String::from("__vow_string_substring_in_arena") { return 1; }
     if name == String::from("__vow_string_push_str") { return 0; }
     if name == String::from("__vow_string_push_byte") { return 0; }
+    if name == String::from("__vow_string_substr") { return 0; }
+    if name == String::from("__vow_string_substring") { return 0; }
     if name == String::from("__vow_string_len") { return 0; }
     if name == String::from("__vow_string_clear") { return 0; }
     if name == String::from("__vow_string_byte_at") { return 0; }
@@ -614,12 +618,7 @@ fn collect_modelled_vars(f: IrFunction, constructor: String, prefix: String) -> 
             let inst: IrInst = insts[ii];
             if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
                 let ds: String = inst.ds;
-                let alt_creator: bool = (prefix == String::from("__vow_vec_")
-                    && is_vec_model_constructor(ds))
-                    || (prefix == String::from("__vow_string_")
-                        && is_string_model_constructor(ds));
-                let is_creator: bool = ds == constructor || alt_creator;
-                if str_starts_with(ds, prefix) && !is_creator {
+                if str_starts_with(ds, prefix) {
                     let iargs: Vec<i64> = inst.args;
                     let receiver_arg: i64 = {
                         if prefix == String::from("__vow_vec_") {

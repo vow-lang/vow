@@ -37,8 +37,20 @@ fn clif_store_effect_advance(flat: Vec<i64>, start: i64) -> i64 {
         i = i + 1;
     } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
         if i < flat.len() {
-            let n: i64 = flat[i];
-            i = i + 1 + n;
+            let raw_n: i64 = flat[i];
+            let n: i64 = {
+                if raw_n < 0 {
+                    0
+                } else {
+                    raw_n
+                }
+            };
+            i = i + 1;
+            let remaining: i64 = flat.len() - i;
+            if n > remaining {
+                return flat.len();
+            }
+            i = i + n;
         }
     }
     if i > flat.len() {

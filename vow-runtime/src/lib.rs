@@ -3790,6 +3790,13 @@ mod tests {
             eprintln!("rodata_trap_worker: null arena string push_byte did NOT trap");
             std::process::exit(42);
         }
+        if op == "String::substr_in_arena_null" {
+            let _ = unsafe {
+                __vow_string_substr_in_arena(std::ptr::null_mut(), std::ptr::null(), 0, 0)
+            };
+            eprintln!("rodata_trap_worker: null arena string substr did NOT trap");
+            std::process::exit(42);
+        }
         if op == "String::substring_in_arena_null" {
             let _ = unsafe {
                 __vow_string_substring_in_arena(std::ptr::null_mut(), std::ptr::null(), 0, 0)
@@ -3940,6 +3947,11 @@ mod tests {
     #[test]
     fn explicit_arena_string_push_byte_null_arena_traps() {
         assert_runtime_invariant_null_arena("String::push_byte_in_arena_null", "String::push_byte");
+    }
+
+    #[test]
+    fn explicit_arena_string_substr_null_arena_traps() {
+        assert_runtime_invariant_null_arena("String::substr_in_arena_null", "String::substr");
     }
 
     #[test]
