@@ -403,7 +403,9 @@ pub fn is_modelable(
                 | Opcode::Return
                 | Opcode::Unreachable
                 | Opcode::Phi
-                | Opcode::Upsilon => true,
+                | Opcode::Upsilon
+                | Opcode::RegionOpen
+                | Opcode::RegionClose => true,
 
                 Opcode::Call => match &inst.data {
                     InstData::CallExtern(name) => is_known_builtin(name),
@@ -430,8 +432,6 @@ pub fn is_modelable(
                 | Opcode::Load
                 | Opcode::Store
                 | Opcode::RegionAlloc
-                | Opcode::RegionOpen
-                | Opcode::RegionClose
                 | Opcode::LinearConsume
                 | Opcode::LinearBorrow
                 | Opcode::FieldSet => false,
@@ -494,8 +494,6 @@ fn first_unsupported_opcode(
                 | Opcode::Load
                 | Opcode::Store
                 | Opcode::RegionAlloc
-                | Opcode::RegionOpen
-                | Opcode::RegionClose
                 | Opcode::LinearConsume
                 | Opcode::LinearBorrow
                 | Opcode::FieldSet => return Some(format!("{:?}", inst.opcode)),
@@ -1228,13 +1226,15 @@ fn emit_inst(
             }
         }
 
+        Opcode::RegionOpen | Opcode::RegionClose => {
+            out.push_str("  /* verifier no-op: region scope marker */\n");
+        }
+
         // Other calls, memory, region/linear/field ops — not yet supported for verification
         Opcode::Call
         | Opcode::Load
         | Opcode::Store
         | Opcode::RegionAlloc
-        | Opcode::RegionOpen
-        | Opcode::RegionClose
         | Opcode::LinearConsume
         | Opcode::LinearBorrow
         | Opcode::FieldSet => {

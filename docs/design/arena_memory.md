@@ -90,7 +90,10 @@ In particular:
 
 The compiler assigns each heap-producing instruction a region via a
 compiler pass (§4). The assignment determines which arena backs the
-allocation.
+allocation. Heap-producing instructions include `RegionAlloc` and
+runtime allocation externs that create fresh heap descriptors, such as
+canonical `__vow_vec_new` / `__vow_vec_new_val` calls emitted for
+`Vec::new`.
 
 ### 2.2. No explicit free
 
@@ -1258,10 +1261,13 @@ function's `return_region == FreshInCaller`; subsequent indices
 enumerate the store-target hidden parameters in the stable order
 defined in §5.2. Lowering uses `HiddenRegionIdx` to select the
 correct `*VowArena` parameter in the emitted
-`__vow_arena_alloc(...)` call; functions with a single hidden
-region always use `Caller(0)`.
+`__vow_arena_alloc(...)` call or to select the explicit-arena
+runtime symbol for a routed container allocation; functions with a
+single hidden region always use `Caller(0)`.
 
-Every heap-producing `Inst` carries a `region: RegionId` field.
+Every heap-producing `Inst` carries a `region: RegionId` field. This
+includes canonical Vec creation extern calls (`__vow_vec_new`,
+`__vow_vec_new_val`) even though they remain `Opcode::Call` in IR.
 
 ### 12.2. No new opcodes for allocation placement
 
@@ -1283,6 +1289,16 @@ Note the naming neighborhood: `RegionAlloc` / `RegionFree` are
 opcodes. Phase 2 may rename `RegionAlloc` to, e.g., `HeapAlloc` if
 this neighborhood becomes confusing — the choice is a phase-2
 implementation detail and not load-bearing on the spec.
+
+Vec creation is intentionally not a new opcode. The lowerer may keep
+emitting canonical root-wrapper extern symbols (`__vow_vec_new`,
+`__vow_vec_new_val`). After `infer_regions`, codegen reads the call's
+`region` field: `Root` keeps the ABI-stable wrapper symbol, while
+`Block(_)` and `Caller(_)` prepend the selected `*VowArena` and call
+`__vow_vec_new_in_arena` / `__vow_vec_new_val_in_arena`. Vec growth
+calls follow the same rule using the receiver Vec's defining region:
+root-owned receivers keep `__vow_vec_push*`, and block/caller-owned
+receivers route to the matching `_in_arena` symbol.
 
 ### 12.3. Block region opcodes
 
