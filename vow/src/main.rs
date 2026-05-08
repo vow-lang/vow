@@ -334,6 +334,9 @@ enum SkillAction {
 struct MutantsArgs {
     /// All remaining arguments forwarded verbatim
     args: Vec<String>,
+    // `help` and `human` are absorbed by clap so flags like `--help` don't
+    // surface as parse errors; the handler below ignores them and prints
+    // a fixed redirect to the self-hosted compiler regardless.
     #[arg(long)]
     help: bool,
     #[arg(long)]

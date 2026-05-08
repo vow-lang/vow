@@ -695,16 +695,16 @@ fn run_mutants(argv: Vec<String>) -> i32 [io, read, write] {
         return 1;
     }
     let sub: String = argv[2];
+    if sub == String::from("version") {
+        print_str("vowc mutants 0.2.0");
+        return 0;
+    }
     let inner: Vec<String> = Vec::new();
     inner.push(String::from("vowc-mutants"));
     let mut i: i64 = 2;
     while i < argv.len() {
         inner.push(argv[i]);
         i = i + 1;
-    }
-    if sub == String::from("version") {
-        print_str("vowc mutants 0.2.0");
-        return 0;
     }
     if sub == String::from("list") {
         return run_mutants_list(inner);
