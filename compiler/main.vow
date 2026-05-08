@@ -7,6 +7,10 @@ use clif
 use c_emitter
 use verifier
 use diag
+use mutants_sites
+use mutants_patch
+use mutants_oracle
+use mutants_main
 
 fn has_flag(argv: Vec<String>, flag: String) -> bool {
     let mut i: i64 = 1;
@@ -135,6 +139,7 @@ fn CMD_VERIFY() -> i64 vow { ensures: result >= 0 } { 2 }
 fn CMD_TEST() -> i64 vow { ensures: result >= 0 } { 3 }
 fn CMD_CONTRACTS() -> i64 vow { ensures: result >= 0 } { 4 }
 fn CMD_SKILL() -> i64 vow { ensures: result >= 0 } { 5 }
+fn CMD_MUTANTS() -> i64 vow { ensures: result >= 0 } { 6 }
 
 fn get_subcommand(argv: Vec<String>) -> i64 {
     if argv.len() < 2 {
@@ -155,6 +160,9 @@ fn get_subcommand(argv: Vec<String>) -> i64 {
     }
     if sub == String::from("skill") {
         return CMD_SKILL();
+    }
+    if sub == String::from("mutants") {
+        return CMD_MUTANTS();
     }
     CMD_NONE()
 }
@@ -3242,6 +3250,35 @@ fn skill_full() -> String {
     r.push_str(String::from("|-------------------|-------------|--------------------------------------------|\n"));
     r.push_str(String::from("| `-o, --output`    | `<source>.vow.d` | Output declaration file path          |\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("### `vow mutants` (self-hosted only)\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Run mutation testing on a Vow source tree. Implemented in the self-hosted compiler only; the Rust bootstrap compiler emits an error pointing the user to `build/vowc`. See `docs/mutants.md` for full details on output schema, mutation kinds, skip-list, and known limitations.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("vowc mutants version\n"));
+    r.push_str(String::from("vowc mutants list  [--root DIR] [--shard X/Y]\n"));
+    r.push_str(String::from("vowc mutants run   [--root DIR] [--shard X/Y]\n"));
+    r.push_str(String::from("                   [--tier1-cmd 'cmd'] [--tier2-cmd 'cmd']\n"));
+    r.push_str(String::from("                   [--tier1-timeout-secs N] [--tier2-timeout-secs N]\n"));
+    r.push_str(String::from("                   [--tier2-budget-secs N]\n"));
+    r.push_str(String::from("                   [--workdir DIR] [--output-dir DIR] [--force-unlock]\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("| Flag | Default | Notes |\n"));
+    r.push_str(String::from("|---|---|---|\n"));
+    r.push_str(String::from("| `--root` | `compiler` | Directory whose `*.vow` files are mutated. `test_*.vow` files are excluded. |\n"));
+    r.push_str(String::from("| `--shard X/Y` | `0/1` | Round-robin split of the deterministic mutant ID space. Mutant `id` is selected iff `id % Y == X`. |\n"));
+    r.push_str(String::from("| `--tier1-cmd` | `scripts/bootstrap.sh --skip-cargo` | Fast oracle. Anything but exit 0 = caught at Tier 1. |\n"));
+    r.push_str(String::from("| `--tier2-cmd` | `scripts/full_test.sh` | Full oracle. Only run on Tier-1 survivors. |\n"));
+    r.push_str(String::from("| `--tier1-timeout-secs` | `180` | Per-mutant Tier-1 wall-clock cap. |\n"));
+    r.push_str(String::from("| `--tier2-timeout-secs` | `3600` | Per-mutant Tier-2 wall-clock cap. |\n"));
+    r.push_str(String::from("| `--tier2-budget-secs` | `7200` | Per-shard total Tier-2 budget. Once exhausted, surviving Tier-1 mutants are emitted with `status:\"unrun\"`. |\n"));
+    r.push_str(String::from("| `--workdir` | `/tmp/vow-mutants-<ms>` | Path of the throwaway `git worktree` used for all mutations. |\n"));
+    r.push_str(String::from("| `--output-dir` | `mutants.out` | Directory for `mutants.json`, `outcomes.json`, status text files, `diff/`, `logs/`. |\n"));
+    r.push_str(String::from("| `--force-unlock` | off | Remove a stale `output_dir/.lock` before starting. |\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("Output schemas: see `docs/spec/schemas/mutants-result.schema.json`.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow --help`\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`vow --help` is agent-first. It emits versioned JSON capability data for the tool, command set,\n"));
@@ -5004,6 +5041,89 @@ fn skill_full() -> String {
     r.push_str(String::from("}\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("## mutants-result\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```json\n"));
+    r.push_str(String::from("{\n"));
+    r.push_str(String::from("  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n"));
+    r.push_str(String::from("  \"$id\": \"https://vow-lang.org/schemas/mutants-result.schema.json\",\n"));
+    r.push_str(String::from("  \"title\": \"MutantsOutput\",\n"));
+    r.push_str(String::from("  \"description\": \"Output of `vow-mutants run` populates a directory (default `mutants.out/`). Each file has its own schema; the union is documented here.\",\n"));
+    r.push_str(String::from("  \"$defs\": {\n"));
+    r.push_str(String::from("    \"Mutant\": {\n"));
+    r.push_str(String::from("      \"description\": \"Per-mutant catalog record (in mutants.json).\",\n"));
+    r.push_str(String::from("      \"type\": \"object\",\n"));
+    r.push_str(String::from("      \"required\": [\"name\", \"file\", \"line\", \"col\", \"off\", \"len\", \"kind\", \"from\", \"to\", \"label\", \"clause_index\"],\n"));
+    r.push_str(String::from("      \"properties\": {\n"));
+    r.push_str(String::from("        \"name\":         { \"type\": \"string\", \"description\": \"Stable cargo-mutants-style name: `file:line:col: <label>`.\" },\n"));
+    r.push_str(String::from("        \"file\":         { \"type\": \"string\", \"description\": \"Repo-relative source path. Independent of --workdir.\" },\n"));
+    r.push_str(String::from("        \"line\":         { \"type\": \"integer\", \"minimum\": 1, \"description\": \"1-based source line of `off`.\" },\n"));
+    r.push_str(String::from("        \"col\":          { \"type\": \"integer\", \"minimum\": 1, \"description\": \"1-based source column of `off`.\" },\n"));
+    r.push_str(String::from("        \"off\":          { \"type\": \"integer\", \"minimum\": 0, \"description\": \"Byte offset of the mutation site.\" },\n"));
+    r.push_str(String::from("        \"len\":          { \"type\": \"integer\", \"minimum\": 0, \"description\": \"Byte length of the mutation span.\" },\n"));
+    r.push_str(String::from("        \"kind\":         { \"enum\": [\"op-flip\", \"const-flip\", \"body-replace\", \"contract-weaken\"] },\n"));
+    r.push_str(String::from("        \"from\":         { \"type\": \"string\", \"description\": \"Original source text at the site (empty for body-replace).\" },\n"));
+    r.push_str(String::from("        \"to\":           { \"type\": \"string\", \"description\": \"Replacement text spliced in for this mutation.\" },\n"));
+    r.push_str(String::from("        \"label\":        { \"type\": \"string\", \"description\": \"Human-readable summary of the mutation.\" },\n"));
+    r.push_str(String::from("        \"clause_index\": { \"type\": \"integer\", \"minimum\": 0, \"description\": \"Disambiguates sibling contract clauses on the same function. 0 for non-contract sites.\" }\n"));
+    r.push_str(String::from("      },\n"));
+    r.push_str(String::from("      \"additionalProperties\": false\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"Outcome\": {\n"));
+    r.push_str(String::from("      \"description\": \"Per-mutant verdict (in outcomes.json).\",\n"));
+    r.push_str(String::from("      \"type\": \"object\",\n"));
+    r.push_str(String::from("      \"required\": [\"id\", \"name\", \"status\", \"tier\", \"oracle_ms\"],\n"));
+    r.push_str(String::from("      \"properties\": {\n"));
+    r.push_str(String::from("        \"id\":         { \"type\": \"integer\", \"minimum\": 0, \"description\": \"Position of this mutant within the shard's `mutants.json` array.\" },\n"));
+    r.push_str(String::from("        \"name\":       { \"type\": \"string\", \"description\": \"Same name as the corresponding Mutant record.\" },\n"));
+    r.push_str(String::from("        \"status\":     { \"enum\": [\"caught\", \"missed\", \"timeout\", \"unviable\", \"unrun\"] },\n"));
+    r.push_str(String::from("        \"tier\":       { \"enum\": [1, 2], \"description\": \"Oracle tier that produced the verdict.\" },\n"));
+    r.push_str(String::from("        \"oracle_ms\":  { \"type\": \"integer\", \"minimum\": 0, \"description\": \"Per-mutant oracle wall-clock in milliseconds. Non-deterministic -- excluded from the determinism guarantee.\" }\n"));
+    r.push_str(String::from("      },\n"));
+    r.push_str(String::from("      \"additionalProperties\": false\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"Summary\": {\n"));
+    r.push_str(String::from("      \"description\": \"Aggregate counts across all of this shard's mutants. Same shape as the stdout summary line.\",\n"));
+    r.push_str(String::from("      \"type\": \"object\",\n"));
+    r.push_str(String::from("      \"required\": [\"total\", \"caught\", \"missed\", \"timeout\", \"unviable\", \"unrun\", \"shard\"],\n"));
+    r.push_str(String::from("      \"properties\": {\n"));
+    r.push_str(String::from("        \"total\":     { \"type\": \"integer\", \"minimum\": 0 },\n"));
+    r.push_str(String::from("        \"caught\":    { \"type\": \"integer\", \"minimum\": 0 },\n"));
+    r.push_str(String::from("        \"missed\":    { \"type\": \"integer\", \"minimum\": 0 },\n"));
+    r.push_str(String::from("        \"timeout\":   { \"type\": \"integer\", \"minimum\": 0 },\n"));
+    r.push_str(String::from("        \"unviable\":  { \"type\": \"integer\", \"minimum\": 0 },\n"));
+    r.push_str(String::from("        \"unrun\":     { \"type\": \"integer\", \"minimum\": 0, \"description\": \"Tier-1 survivors not run because the Tier-2 budget was exhausted.\" },\n"));
+    r.push_str(String::from("        \"shard\":     { \"type\": \"string\", \"pattern\": \"^[0-9]+/[1-9][0-9]*$\" }\n"));
+    r.push_str(String::from("      },\n"));
+    r.push_str(String::from("      \"additionalProperties\": false\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"MutantsJson\": {\n"));
+    r.push_str(String::from("      \"description\": \"Format of `mutants.out/mutants.json`. Written before testing begins.\",\n"));
+    r.push_str(String::from("      \"type\": \"object\",\n"));
+    r.push_str(String::from("      \"required\": [\"version\", \"tool\", \"shard\", \"mutants\"],\n"));
+    r.push_str(String::from("      \"properties\": {\n"));
+    r.push_str(String::from("        \"version\":  { \"const\": 1 },\n"));
+    r.push_str(String::from("        \"tool\":     { \"const\": \"vow-mutants\" },\n"));
+    r.push_str(String::from("        \"shard\":    { \"type\": \"string\", \"pattern\": \"^[0-9]+/[1-9][0-9]*$\" },\n"));
+    r.push_str(String::from("        \"mutants\":  { \"type\": \"array\", \"items\": { \"$ref\": \"#/$defs/Mutant\" } }\n"));
+    r.push_str(String::from("      },\n"));
+    r.push_str(String::from("      \"additionalProperties\": false\n"));
+    r.push_str(String::from("    },\n"));
+    r.push_str(String::from("    \"OutcomesJson\": {\n"));
+    r.push_str(String::from("      \"description\": \"Format of `mutants.out/outcomes.json`. Written after all mutants in this shard have been classified.\",\n"));
+    r.push_str(String::from("      \"type\": \"object\",\n"));
+    r.push_str(String::from("      \"required\": [\"version\", \"summary\", \"outcomes\"],\n"));
+    r.push_str(String::from("      \"properties\": {\n"));
+    r.push_str(String::from("        \"version\":  { \"const\": 1 },\n"));
+    r.push_str(String::from("        \"summary\":  { \"$ref\": \"#/$defs/Summary\" },\n"));
+    r.push_str(String::from("        \"outcomes\": { \"type\": \"array\", \"items\": { \"$ref\": \"#/$defs/Outcome\" } }\n"));
+    r.push_str(String::from("      },\n"));
+    r.push_str(String::from("      \"additionalProperties\": false\n"));
+    r.push_str(String::from("    }\n"));
+    r.push_str(String::from("  }\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("## test-result\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```json\n"));
@@ -5426,6 +5546,9 @@ fn main() -> i32 [io, write] {
     }
     if cmd == CMD_CONTRACTS() {
         return run_contracts(argv);
+    }
+    if cmd == CMD_MUTANTS() {
+        return run_mutants(argv);
     }
     run_legacy(argv)
 }

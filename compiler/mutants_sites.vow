@@ -252,13 +252,10 @@ fn skip_ws(src: String, i: i64) -> i64 {
     k
 }
 
-fn is_ident_start(b: i64) -> bool {
-    (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || b == 95
-}
-
-fn is_ident_cont(b: i64) -> bool {
-    is_ident_start(b) || (b >= 48 && b <= 57)
-}
+// Identifier-byte predicates come from compiler/lexer.vow (already in scope
+// via main.vow's `use lexer`). The mutation scanner uses the same definition
+// so a token-boundary check here matches the one the parser will perform on
+// the mutated source.
 
 // Walk a brace-balanced block starting at `{` at position `start`,
 // emitting contract-weaken sites for top-level `requires`/`ensures`/
@@ -518,20 +515,9 @@ fn parse_contract_clause(src: String, i: i64, file_path: String, sites: Vec<Site
     k
 }
 
-fn str2(a: String, b: String) -> String {
-    let r: String = String::from("");
-    r.push_str(a);
-    r.push_str(b);
-    r
-}
-
-fn str3(a: String, b: String, c: String) -> String {
-    let r: String = String::from("");
-    r.push_str(a);
-    r.push_str(b);
-    r.push_str(c);
-    r
-}
+// str2/str3 string concatenation helpers come from compiler/clif.vow and
+// compiler/c_emitter.vow respectively (already in scope via main.vow's
+// transitive `use` chain).
 
 fn make_const_site(src: String, file: String, off: i64, len: i64, from_text: String, replacement: String, label: String) -> Site {
     let lc: Vec<i64> = line_col_at(src, off);

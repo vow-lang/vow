@@ -150,6 +150,8 @@ enum Command {
     Contracts(ContractsArgs),
     /// Generate or install the Claude Code skill document
     Skill(SkillArgs),
+    /// Run mutation testing on a Vow source tree (self-hosted only)
+    Mutants(MutantsArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -321,6 +323,21 @@ enum SkillAction {
     Print,
     /// Install the skill to .claude/commands/vow-toolchain.md
     Install,
+}
+
+#[derive(clap::Args, Debug)]
+#[command(
+    disable_help_flag = true,
+    trailing_var_arg = true,
+    allow_hyphen_values = true
+)]
+struct MutantsArgs {
+    /// All remaining arguments forwarded verbatim
+    args: Vec<String>,
+    #[arg(long)]
+    help: bool,
+    #[arg(long)]
+    human: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -2512,6 +2529,35 @@ vow decl [OPTIONS] <source.vow>
 |-------------------|-------------|--------------------------------------------|
 | `-o, --output`    | `<source>.vow.d` | Output declaration file path          |
 
+### `vow mutants` (self-hosted only)
+
+Run mutation testing on a Vow source tree. Implemented in the self-hosted compiler only; the Rust bootstrap compiler emits an error pointing the user to `build/vowc`. See `docs/mutants.md` for full details on output schema, mutation kinds, skip-list, and known limitations.
+
+```
+vowc mutants version
+vowc mutants list  [--root DIR] [--shard X/Y]
+vowc mutants run   [--root DIR] [--shard X/Y]
+                   [--tier1-cmd 'cmd'] [--tier2-cmd 'cmd']
+                   [--tier1-timeout-secs N] [--tier2-timeout-secs N]
+                   [--tier2-budget-secs N]
+                   [--workdir DIR] [--output-dir DIR] [--force-unlock]
+```
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--root` | `compiler` | Directory whose `*.vow` files are mutated. `test_*.vow` files are excluded. |
+| `--shard X/Y` | `0/1` | Round-robin split of the deterministic mutant ID space. Mutant `id` is selected iff `id % Y == X`. |
+| `--tier1-cmd` | `scripts/bootstrap.sh --skip-cargo` | Fast oracle. Anything but exit 0 = caught at Tier 1. |
+| `--tier2-cmd` | `scripts/full_test.sh` | Full oracle. Only run on Tier-1 survivors. |
+| `--tier1-timeout-secs` | `180` | Per-mutant Tier-1 wall-clock cap. |
+| `--tier2-timeout-secs` | `3600` | Per-mutant Tier-2 wall-clock cap. |
+| `--tier2-budget-secs` | `7200` | Per-shard total Tier-2 budget. Once exhausted, surviving Tier-1 mutants are emitted with `status:"unrun"`. |
+| `--workdir` | `/tmp/vow-mutants-<ms>` | Path of the throwaway `git worktree` used for all mutations. |
+| `--output-dir` | `mutants.out` | Directory for `mutants.json`, `outcomes.json`, status text files, `diff/`, `logs/`. |
+| `--force-unlock` | off | Remove a stale `output_dir/.lock` before starting. |
+
+Output schemas: see `docs/spec/schemas/mutants-result.schema.json`.
+
 ### `vow --help`
 
 `vow --help` is agent-first. It emits versioned JSON capability data for the tool, command set,
@@ -4271,6 +4317,89 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     }
   },
   "additionalProperties": false
+}
+```
+
+## mutants-result
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vow-lang.org/schemas/mutants-result.schema.json",
+  "title": "MutantsOutput",
+  "description": "Output of `vow-mutants run` populates a directory (default `mutants.out/`). Each file has its own schema; the union is documented here.",
+  "$defs": {
+    "Mutant": {
+      "description": "Per-mutant catalog record (in mutants.json).",
+      "type": "object",
+      "required": ["name", "file", "line", "col", "off", "len", "kind", "from", "to", "label", "clause_index"],
+      "properties": {
+        "name":         { "type": "string", "description": "Stable cargo-mutants-style name: `file:line:col: <label>`." },
+        "file":         { "type": "string", "description": "Repo-relative source path. Independent of --workdir." },
+        "line":         { "type": "integer", "minimum": 1, "description": "1-based source line of `off`." },
+        "col":          { "type": "integer", "minimum": 1, "description": "1-based source column of `off`." },
+        "off":          { "type": "integer", "minimum": 0, "description": "Byte offset of the mutation site." },
+        "len":          { "type": "integer", "minimum": 0, "description": "Byte length of the mutation span." },
+        "kind":         { "enum": ["op-flip", "const-flip", "body-replace", "contract-weaken"] },
+        "from":         { "type": "string", "description": "Original source text at the site (empty for body-replace)." },
+        "to":           { "type": "string", "description": "Replacement text spliced in for this mutation." },
+        "label":        { "type": "string", "description": "Human-readable summary of the mutation." },
+        "clause_index": { "type": "integer", "minimum": 0, "description": "Disambiguates sibling contract clauses on the same function. 0 for non-contract sites." }
+      },
+      "additionalProperties": false
+    },
+    "Outcome": {
+      "description": "Per-mutant verdict (in outcomes.json).",
+      "type": "object",
+      "required": ["id", "name", "status", "tier", "oracle_ms"],
+      "properties": {
+        "id":         { "type": "integer", "minimum": 0, "description": "Position of this mutant within the shard's `mutants.json` array." },
+        "name":       { "type": "string", "description": "Same name as the corresponding Mutant record." },
+        "status":     { "enum": ["caught", "missed", "timeout", "unviable", "unrun"] },
+        "tier":       { "enum": [1, 2], "description": "Oracle tier that produced the verdict." },
+        "oracle_ms":  { "type": "integer", "minimum": 0, "description": "Per-mutant oracle wall-clock in milliseconds. Non-deterministic — excluded from the determinism guarantee." }
+      },
+      "additionalProperties": false
+    },
+    "Summary": {
+      "description": "Aggregate counts across all of this shard's mutants. Same shape as the stdout summary line.",
+      "type": "object",
+      "required": ["total", "caught", "missed", "timeout", "unviable", "unrun", "shard"],
+      "properties": {
+        "total":     { "type": "integer", "minimum": 0 },
+        "caught":    { "type": "integer", "minimum": 0 },
+        "missed":    { "type": "integer", "minimum": 0 },
+        "timeout":   { "type": "integer", "minimum": 0 },
+        "unviable":  { "type": "integer", "minimum": 0 },
+        "unrun":     { "type": "integer", "minimum": 0, "description": "Tier-1 survivors not run because the Tier-2 budget was exhausted." },
+        "shard":     { "type": "string", "pattern": "^[0-9]+/[1-9][0-9]*$" }
+      },
+      "additionalProperties": false
+    },
+    "MutantsJson": {
+      "description": "Format of `mutants.out/mutants.json`. Written before testing begins.",
+      "type": "object",
+      "required": ["version", "tool", "shard", "mutants"],
+      "properties": {
+        "version":  { "const": 1 },
+        "tool":     { "const": "vow-mutants" },
+        "shard":    { "type": "string", "pattern": "^[0-9]+/[1-9][0-9]*$" },
+        "mutants":  { "type": "array", "items": { "$ref": "#/$defs/Mutant" } }
+      },
+      "additionalProperties": false
+    },
+    "OutcomesJson": {
+      "description": "Format of `mutants.out/outcomes.json`. Written after all mutants in this shard have been classified.",
+      "type": "object",
+      "required": ["version", "summary", "outcomes"],
+      "properties": {
+        "version":  { "const": 1 },
+        "summary":  { "$ref": "#/$defs/Summary" },
+        "outcomes": { "type": "array", "items": { "$ref": "#/$defs/Outcome" } }
+      },
+      "additionalProperties": false
+    }
+  }
 }
 ```
 
@@ -6749,6 +6878,13 @@ fn main() {
                     println!("{}", skill_full_markdown());
                 }
             }
+        }
+        Some(Command::Mutants(_)) => {
+            eprintln!(
+                "vow: `mutants` is implemented in the self-hosted compiler only.\n\
+                 Use `build/vowc mutants <subcommand>` after running `scripts/bootstrap.sh`."
+            );
+            std::process::exit(2);
         }
         None => {
             if args.help {
