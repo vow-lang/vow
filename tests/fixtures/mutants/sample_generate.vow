@@ -1,0 +1,18 @@
+module SampleGenerate
+
+// GENERATE:GEN_BLOCK:START
+fn skipped_in_block() -> i64 {
+    let x: i64 = 1;
+    let y: i64 = 0;
+    x + y
+}
+// GENERATE:GEN_BLOCK:END
+
+fn live_after_block() -> i64 {
+    let z: i64 = 1;
+    z + z
+}
+
+fn main() -> i32 [io] {
+    0
+}

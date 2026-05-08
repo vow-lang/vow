@@ -16,3 +16,7 @@ workflow/results/
 __pycache__/
 
 .claude/settings.local.json
+
+# vow-mutants outputs
+mutants.out
+mutants-shard-*/

@@ -138,3 +138,18 @@ else
     printf "  vowc3: %s\n" "$sha_vowc3"
     exit 1
 fi
+
+# ─── Stage 4 (soft): build vow-mutants tool ─────────────────────────
+#
+# Optional auxiliary tool (issue #306). Failure here is non-fatal so a
+# vow-mutants regression cannot block the compiler bootstrap.
+
+if [ -f tools/vow-mutants/main.vow ]; then
+    YELLOW="\033[33m"
+    printf "${BOLD}Stage 4:${RESET} build vow-mutants tool\n"
+    if ! build/vowc build --no-verify tools/vow-mutants/main.vow -o build/vow-mutants 2>/tmp/vow-mutants-build.log; then
+        printf "  ${YELLOW}WARN${RESET}  vow-mutants build failed (non-fatal); see /tmp/vow-mutants-build.log\n"
+    else
+        printf "  ${GREEN}OK${RESET}\n"
+    fi
+fi

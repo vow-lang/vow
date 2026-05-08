@@ -1,0 +1,98 @@
+name: vow-mutants
+
+# Nightly mutation-testing run for the self-hosted compiler at compiler/*.vow.
+# Mirrors .github/workflows/cargo-mutants.yml (which targets the Rust crates),
+# but mutates Vow source and uses the tiered scripts/bootstrap.sh →
+# scripts/full_test.sh oracle defined by tools/vow-mutants/.
+#
+# The schedule is offset from cargo-mutants.yml (17 2 * * *) to avoid
+# overlap on the runner pool.
+
+on:
+  schedule:
+    - cron: "37 3 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  ESBMC_VERSION: "8.1"
+  ESBMC_SHA256: daec35870fdee07e1298676646ae6cf1d631c6272594e7e86479cdb9caa67ec5
+
+jobs:
+  vow-mutants:
+    name: shard ${{ matrix.shard }}/8
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache ESBMC
+        id: cache-esbmc
+        uses: actions/cache@v5
+        with:
+          path: ~/esbmc
+          key: esbmc-${{ env.ESBMC_VERSION }}-${{ env.ESBMC_SHA256 }}-ubuntu-24.04
+
+      - name: Install ESBMC
+        if: steps.cache-esbmc.outputs.cache-hit != 'true'
+        env:
+          ESBMC_ZIP: release-ubuntu-24.04--b.RelWithDebInfo.-e.OFF.zip
+        run: |
+          ESBMC_URL="https://github.com/esbmc/esbmc/releases/download/v$ESBMC_VERSION/$ESBMC_ZIP"
+
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            -o "/tmp/$ESBMC_ZIP" "$ESBMC_URL"
+
+          echo "$ESBMC_SHA256  /tmp/$ESBMC_ZIP" | sha256sum --check --strict -
+
+          unzip -q "/tmp/$ESBMC_ZIP" -d ~/esbmc
+          rm "/tmp/$ESBMC_ZIP"
+
+      - run: echo "$HOME/esbmc/bin" >> "$GITHUB_PATH"
+
+      - name: Bootstrap self-hosted compiler
+        run: |
+          cargo build --all --release
+          scripts/bootstrap.sh --skip-cargo
+
+      - name: Build vow-mutants tool
+        run: |
+          ulimit -v 2000000
+          build/vowc build --no-verify tools/vow-mutants/main.vow -o build/vow-mutants
+
+      - name: Run vow-mutants shard
+        continue-on-error: true
+        run: |
+          ulimit -v 2000000
+          # vow-mutants creates a throwaway git worktree at /tmp/vow-mutants-<ms>
+          # and applies all mutations there. The worktree's target/ starts empty,
+          # so the default `scripts/bootstrap.sh --skip-cargo` Tier-1 won't work
+          # in this context — we override to run the full bootstrap (cargo build
+          # cache lives in the worktree's target/ and is reused across mutants).
+          # The FIRST Tier-1 invocation in the worktree must do a cold
+          # `cargo build --all --release`; on ubuntu-latest that takes 5–15 min.
+          # --tier1-timeout-secs 1800 (30 min) accommodates the cold build with
+          # slack; subsequent mutants reuse the worktree's warm target/ and
+          # finish in ~1–3 min via incremental compilation.
+          # Tier-2 budget = 9000 s (150 min) leaves 30 min within the
+          # 180-min job timeout for setup, teardown, and any unrun-budget cleanup.
+          build/vow-mutants run \
+            --root compiler \
+            --shard ${{ matrix.shard }}/8 \
+            --tier1-cmd 'scripts/bootstrap.sh' \
+            --tier1-timeout-secs 1800 \
+            --tier2-budget-secs 9000 \
+            --output-dir mutants.out
+
+      - name: Upload mutants.out
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mutants-shard-${{ matrix.shard }}
+          path: mutants.out/
+          if-no-files-found: ignore

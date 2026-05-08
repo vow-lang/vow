@@ -1,0 +1,9 @@
+module SampleContract
+
+fn divide(a: i64, b: i64) -> i64 vow { requires: b != 0 } {
+    a / b
+}
+
+fn pos_max(x: i64, y: i64) -> i64 vow { requires: x >= 0, ensures: result >= x, ensures: result >= y } {
+    if x > y { x } else { y }
+}

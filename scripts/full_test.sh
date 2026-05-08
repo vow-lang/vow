@@ -839,6 +839,25 @@ else
 fi
 echo ""
 
+# ─── Section 12: vow-mutants Smoke Test ────────────────────────────
+
+section_begin "Section 12: vow-mutants Smoke Test"
+if [ -f tools/vow-mutants/main.vow ]; then
+    VOWM="$TMPDIR/vow-mutants"
+    if (ulimit -v 2000000; "$SELF" build --no-verify tools/vow-mutants/main.vow -o "$VOWM") >"$TMPDIR/vow-mutants-build.log" 2>&1; then
+        if (ulimit -v 2000000; VOW_MUTANTS_BIN="$VOWM" bash tools/vow-mutants/tests.sh) >"$TMPDIR/vow-mutants-tests.log" 2>&1; then
+            pass "vow-mutants/tests"
+        else
+            fail "vow-mutants/tests" "$(tail -10 "$TMPDIR/vow-mutants-tests.log")"
+        fi
+    else
+        fail "vow-mutants/build" "$(tail -10 "$TMPDIR/vow-mutants-build.log")"
+    fi
+else
+    skip "vow-mutants" "tools/vow-mutants/main.vow not present"
+fi
+echo ""
+
 # ─── Summary ────────────────────────────────────────────────────────
 
 section_finalize

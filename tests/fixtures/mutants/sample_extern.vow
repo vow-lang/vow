@@ -1,0 +1,11 @@
+module SampleExtern
+
+extern "C" {
+    fn external_thing(x: i64) -> i64;
+    fn another(y: i64, z: i64) -> i64;
+}
+
+fn live_outside_extern() -> i64 {
+    let z: i64 = 1;
+    z + z
+}
