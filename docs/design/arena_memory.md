@@ -334,6 +334,67 @@ and explicit-arena Strings uses the same arena grow path as Vec: try to
 extend in place, then allocate in the selected arena and copy on
 fallback.
 
+#### HashMap runtime allocation API
+
+The existing root-region `HashMap` symbols remain ABI-stable:
+
+```c
+void*    __vow_map_new(void);
+void     __vow_map_insert(void* map, int64_t key, int64_t val);
+int64_t  __vow_map_get(const void* map, int64_t key);
+_Bool    __vow_map_contains(const void* map, int64_t key);
+void     __vow_map_remove(void* map, int64_t key);
+uintptr_t __vow_map_len(const void* map);
+```
+
+`__vow_map_contains` predates the `__vow_arena_*` / `__vow_string_eq`
+boolean-ABI convention (§3.3, intro): the live runtime returns Rust
+`bool` and both Cranelift signature tables model it as `I8`, so it is
+declared here as `_Bool` rather than `int64_t`. C/FFI callers must read
+exactly the 1-byte boolean from the return register; the upper bits are
+undefined. This legacy ABI is preserved for compatibility with the
+pre-arena `__vow_map_*` symbols and is unrelated to the arena routing
+introduced by the `_in_arena` forms below.
+
+`__vow_map_new` and `__vow_map_insert` are root wrappers: they acquire
+the root-arena lock, ensure the root arena is open, then delegate to the
+corresponding explicit-arena primitive with `&__vow_root_arena`.
+`__vow_map_remove` is **not** a root wrapper — it performs an in-place
+linear-scan removal that never touches the arena, so the relationship
+inverts: `__vow_map_remove_in_arena` traps on a null arena and then
+delegates to `__vow_map_remove` directly. The non-allocating accessors
+(`__vow_map_get`, `__vow_map_contains`, `__vow_map_len`) read the map
+in place and never touch any arena.
+
+The explicit-arena forms are:
+
+```c
+void* __vow_map_new_in_arena(struct VowArena* arena);
+void  __vow_map_insert_in_arena(struct VowArena* arena, void* map,
+                                int64_t key, int64_t val);
+void  __vow_map_remove_in_arena(struct VowArena* arena, void* map,
+                                int64_t key);
+```
+
+Every explicit-arena HashMap entry traps with
+`RuntimeInvariantViolation` and `reason = "null arena"` before
+dereferencing a null arena pointer. The bucket array and the map
+header are both allocated in the supplied arena: a fresh `HashMap`
+allocates a 24-byte header plus an initial 8-entry × 16-byte backing.
+Growth on `insert` uses the shared arena grow path — first
+`__vow_arena_try_extend` against the current backing, then
+`__vow_arena_alloc` + memcpy on fallback — and the new bucket array
+lives in the same arena as the header. `__vow_map_remove_in_arena` is
+exposed for ABI symmetry with the other in-arena forms; the operation
+itself never allocates and the arena pointer is consumed only for the
+null-arena trap, then ignored.
+
+The current MVP runtime uses i64 keys and i64 values with an O(n)
+linear-scan backing (matching the existing root-region implementation).
+Heap-typed keys or values are not yet supported; the surface grammar
+permits them syntactically (`HashMap<K, V>`), but only `i64` × `i64`
+is wired through the runtime.
+
 ### 3.4. Determinism
 
 The arena **allocation strategy**, the **chunk-size policy**, and

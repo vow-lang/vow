@@ -2727,8 +2727,16 @@ fn string_creation_extern(sym: String) -> bool {
         || sym == String::from("__vow_string_join_in_arena")
 }
 
+fn map_creation_extern(sym: String) -> bool {
+    sym == String::from("__vow_map_new")
+        || sym == String::from("__vow_map_new_in_arena")
+}
+
 fn heap_producing_extern(sym: String) -> bool {
-    extern_fresh_in_caller(sym) || vec_creation_extern(sym) || string_creation_extern(sym)
+    extern_fresh_in_caller(sym)
+        || vec_creation_extern(sym)
+        || string_creation_extern(sym)
+        || map_creation_extern(sym)
 }
 
 fn extern_store_edge_count(sym: String) -> i64 {
@@ -2736,6 +2744,7 @@ fn extern_store_edge_count(sym: String) -> i64 {
     if sym == String::from("__vow_vec_push_val_in_arena") { return 1; }
     if sym == String::from("__vow_vec_set_val") { return 1; }
     if sym == String::from("__vow_map_insert") { return 2; }
+    if sym == String::from("__vow_map_insert_in_arena") { return 2; }
     if sym == String::from("__vow_btreemap_insert") { return 2; }
     0
 }
@@ -2745,6 +2754,7 @@ fn extern_store_target_pos(sym: String, edge_idx: i64) -> i64 {
         return -1;
     }
     if sym == String::from("__vow_vec_push_val_in_arena") && edge_idx == 0 { return 1; }
+    if sym == String::from("__vow_map_insert_in_arena") { return 1; }
     0
 }
 
@@ -2762,6 +2772,8 @@ fn extern_store_source_pos(sym: String, edge_idx: i64) -> i64 {
     {
         return 2;
     }
+    if sym == String::from("__vow_map_insert_in_arena") && edge_idx == 0 { return 2; }
+    if sym == String::from("__vow_map_insert_in_arena") && edge_idx == 1 { return 3; }
     -1
 }
 
@@ -2773,6 +2785,8 @@ fn extern_growth_target_pos(sym: String) -> i64 {
     if sym == String::from("__vow_string_push_str_in_arena") { return 1; }
     if sym == String::from("__vow_string_push_byte") { return 0; }
     if sym == String::from("__vow_string_push_byte_in_arena") { return 1; }
+    if sym == String::from("__vow_map_insert") { return 0; }
+    if sym == String::from("__vow_map_insert_in_arena") { return 1; }
     -1
 }
 

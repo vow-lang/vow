@@ -9245,7 +9245,7 @@ fn main() -> i32 {
         assert_eq!(callee_sites[1].caller_function, "caller_b");
         assert_eq!(callee_sites[1].offset, 200);
         assert_eq!(callee_sites[1].length, 15);
-        assert!(index.get("caller_a").is_none());
+        assert!(!index.contains_key("caller_a"));
     }
 
     #[test]

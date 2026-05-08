@@ -2596,10 +2596,14 @@ const MAP_ENTRY_BYTES: usize = 16;
 const MAP_INITIAL_CAP: usize = 8;
 
 #[unsafe(no_mangle)]
-pub extern "C" fn __vow_map_new() -> *mut u8 {
-    let header_ptr = unsafe { root_arena_alloc_zeroed(24, 8) } as *mut VowMap;
+pub unsafe extern "C" fn __vow_map_new_in_arena(arena: *mut VowArena) -> *mut u8 {
+    if arena.is_null() {
+        null_arena_trap("HashMap::new");
+    }
+    let header_ptr = unsafe { __vow_arena_alloc(arena, 24, 8) } as *mut VowMap;
     let buf_size = MAP_INITIAL_CAP * MAP_ENTRY_BYTES;
-    let buf_ptr = unsafe { root_arena_alloc_zeroed(buf_size, 8) };
+    let buf_ptr = unsafe { __vow_arena_alloc(arena, buf_size, 8) };
+    unsafe { std::ptr::write_bytes(buf_ptr, 0, buf_size) };
     unsafe {
         (*header_ptr).ptr = buf_ptr;
         (*header_ptr).len = 0;
@@ -2609,7 +2613,22 @@ pub extern "C" fn __vow_map_new() -> *mut u8 {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __vow_map_insert(map: *mut u8, key: i64, val: i64) {
+pub extern "C" fn __vow_map_new() -> *mut u8 {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { __vow_map_new_in_arena(&raw mut __vow_root_arena) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_map_insert_in_arena(
+    arena: *mut VowArena,
+    map: *mut u8,
+    key: i64,
+    val: i64,
+) {
+    if arena.is_null() {
+        null_arena_trap("HashMap::insert");
+    }
     let m = unsafe { &mut *(map as *mut VowMap) };
     if m.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("HashMap::insert");
@@ -2625,7 +2644,7 @@ pub unsafe extern "C" fn __vow_map_insert(map: *mut u8, key: i64, val: i64) {
         let old_size = m.cap * MAP_ENTRY_BYTES;
         let new_cap = m.cap * 2;
         let new_size = new_cap * MAP_ENTRY_BYTES;
-        let new_ptr = unsafe { root_arena_grow_backing(m.ptr, old_size, new_size, 8) };
+        let new_ptr = unsafe { arena_grow_backing(arena, m.ptr, old_size, new_size, 8) };
         m.ptr = new_ptr;
         m.cap = new_cap;
     }
@@ -2633,6 +2652,13 @@ pub unsafe extern "C" fn __vow_map_insert(map: *mut u8, key: i64, val: i64) {
     entries[m.len * 2] = key;
     entries[m.len * 2 + 1] = val;
     m.len += 1;
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_map_insert(map: *mut u8, key: i64, val: i64) {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { __vow_map_insert_in_arena(&raw mut __vow_root_arena, map, key, val) };
 }
 
 #[unsafe(no_mangle)]
@@ -2657,6 +2683,16 @@ pub unsafe extern "C" fn __vow_map_contains(map: *const u8, key: i64) -> bool {
         }
     }
     false
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_map_remove_in_arena(arena: *mut VowArena, map: *mut u8, key: i64) {
+    if arena.is_null() {
+        null_arena_trap("HashMap::remove");
+    }
+    // remove never allocates; the arena is accepted only for ABI symmetry
+    // with __vow_map_new_in_arena and __vow_map_insert_in_arena.
+    unsafe { __vow_map_remove(map, key) };
 }
 
 #[unsafe(no_mangle)]
@@ -3145,6 +3181,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::while_immutable_condition,
+        reason = "loop body mutates *v through __vow_vec_pop; clippy can't see through raw pointer"
+    )]
     fn vec_pop_truncate_loop() {
         let v = __vow_vec_new_val();
         for i in 0..10 {
@@ -3710,7 +3750,7 @@ mod tests {
         let mut a = empty_arena_header();
         unsafe { __vow_arena_open(&mut a) };
         let source = VowVec {
-            ptr: 1 as *mut u8,
+            ptr: std::ptr::dangling_mut::<u8>(),
             len: 0,
             cap: VOW_CAP_RODATA,
         };
@@ -3761,6 +3801,93 @@ mod tests {
         unsafe { __vow_arena_close(&mut a) };
     }
 
+    #[test]
+    fn explicit_arena_map_new_allocates_in_supplied_arena() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+
+        let cursor_before = a.cursor;
+        let m = unsafe { __vow_map_new_in_arena(&mut a) };
+        let cursor_after = a.cursor;
+
+        assert!(!m.is_null(), "__vow_map_new_in_arena returned null");
+        assert!(
+            cursor_after > cursor_before,
+            "arena cursor must advance for header + initial backing"
+        );
+
+        let header = unsafe { &*(m as *const VowMap) };
+        assert_eq!(header.len, 0);
+        assert_eq!(header.cap, MAP_INITIAL_CAP);
+        assert!(!header.ptr.is_null(), "initial backing must be allocated");
+
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn explicit_arena_map_remove_decrements_len() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+
+        let m = unsafe { __vow_map_new_in_arena(&mut a) };
+        unsafe { __vow_map_insert_in_arena(&mut a, m, 1, 10) };
+        unsafe { __vow_map_insert_in_arena(&mut a, m, 2, 20) };
+        assert_eq!(unsafe { __vow_map_len(m) }, 2);
+
+        unsafe { __vow_map_remove_in_arena(&mut a, m, 1) };
+        assert_eq!(unsafe { __vow_map_len(m) }, 1);
+        assert!(!unsafe { __vow_map_contains(m, 1) });
+        assert_eq!(unsafe { __vow_map_get(m, 2) }, 20);
+
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn explicit_arena_map_insert_grows_past_initial_cap() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+
+        let m = unsafe { __vow_map_new_in_arena(&mut a) };
+        // Force a copy-fallback growth: insert MAP_INITIAL_CAP entries, then
+        // an intervening alloc, then push the (cap+1)th entry. The intervening
+        // alloc invalidates try_extend, so growth must allocate and copy.
+        let n = (MAP_INITIAL_CAP + 4) as i64;
+        for i in 0..(MAP_INITIAL_CAP as i64) {
+            unsafe { __vow_map_insert_in_arena(&mut a, m, i, i * 100) };
+        }
+        let _intervening = unsafe { __vow_arena_alloc(&mut a, 16, 8) };
+        for i in (MAP_INITIAL_CAP as i64)..n {
+            unsafe { __vow_map_insert_in_arena(&mut a, m, i, i * 100) };
+        }
+
+        let header = unsafe { &*(m as *const VowMap) };
+        assert_eq!(header.len, n as usize);
+        assert!(header.cap > MAP_INITIAL_CAP, "cap must have doubled");
+        for i in 0..n {
+            assert_eq!(unsafe { __vow_map_get(m, i) }, i * 100);
+        }
+
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn explicit_arena_map_insert_round_trips_through_get() {
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+
+        let m = unsafe { __vow_map_new_in_arena(&mut a) };
+        unsafe { __vow_map_insert_in_arena(&mut a, m, 7, 70) };
+        unsafe { __vow_map_insert_in_arena(&mut a, m, 3, 30) };
+
+        assert_eq!(unsafe { __vow_map_len(m) }, 2);
+        assert_eq!(unsafe { __vow_map_get(m, 7) }, 70);
+        assert_eq!(unsafe { __vow_map_get(m, 3) }, 30);
+        assert!(unsafe { __vow_map_contains(m, 7) });
+        assert!(!unsafe { __vow_map_contains(m, 99) });
+
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
     // -----------------------------------------------------------------------
     // Runtime trap tests. These use the subprocess pattern:
     // rodata_trap_worker reruns itself with an env var and invokes the
@@ -3770,7 +3897,8 @@ mod tests {
 
     fn make_rodata_vec_val() -> VowVec {
         VowVec {
-            ptr: 1 as *mut u8, // never dereferenced; trap fires first
+            // never dereferenced; trap fires first
+            ptr: std::ptr::dangling_mut::<u8>(),
             len: 0,
             cap: VOW_CAP_RODATA,
         }
@@ -3778,7 +3906,7 @@ mod tests {
 
     fn make_rodata_map() -> VowMap {
         VowMap {
-            ptr: 1 as *mut u8,
+            ptr: std::ptr::dangling_mut::<u8>(),
             len: 0,
             cap: VOW_CAP_RODATA,
         }
@@ -3938,6 +4066,35 @@ mod tests {
             eprintln!("rodata_trap_worker: null arena string join did NOT trap");
             std::process::exit(42);
         }
+        if op == "HashMap::new_in_arena_null" {
+            let _ = unsafe { __vow_map_new_in_arena(std::ptr::null_mut()) };
+            eprintln!("rodata_trap_worker: null arena map new did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "HashMap::insert_in_arena_null" {
+            let mut m = VowMap {
+                ptr: 8 as *mut u8,
+                len: 0,
+                cap: 0,
+            };
+            unsafe {
+                __vow_map_insert_in_arena(std::ptr::null_mut(), &mut m as *mut _ as *mut u8, 1, 1)
+            };
+            eprintln!("rodata_trap_worker: null arena map insert did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "HashMap::remove_in_arena_null" {
+            let mut m = VowMap {
+                ptr: 8 as *mut u8,
+                len: 0,
+                cap: 0,
+            };
+            unsafe {
+                __vow_map_remove_in_arena(std::ptr::null_mut(), &mut m as *mut _ as *mut u8, 1)
+            };
+            eprintln!("rodata_trap_worker: null arena map remove did NOT trap");
+            std::process::exit(42);
+        }
         let mut v = make_rodata_vec_val();
         let vp = &mut v as *mut _ as *mut u8;
         let mut m = make_rodata_map();
@@ -3962,6 +4119,16 @@ mod tests {
             "String::push_byte" => unsafe { __vow_string_push_byte(vp, 0x61) },
             "HashMap::insert" => unsafe { __vow_map_insert(mp, 1, 2) },
             "HashMap::remove" => unsafe { __vow_map_remove(mp, 1) },
+            "HashMap::insert_in_arena" => {
+                let mut a = empty_arena_header();
+                unsafe { __vow_arena_open(&mut a) };
+                unsafe { __vow_map_insert_in_arena(&mut a, mp, 1, 2) };
+            }
+            "HashMap::remove_in_arena" => {
+                let mut a = empty_arena_header();
+                unsafe { __vow_arena_open(&mut a) };
+                unsafe { __vow_map_remove_in_arena(&mut a, mp, 1) };
+            }
             other => panic!("unknown trap op: {other}"),
         }
         // Should be unreachable — each branch must trap.
@@ -4094,6 +4261,21 @@ mod tests {
     }
 
     #[test]
+    fn explicit_arena_map_new_null_arena_traps() {
+        assert_runtime_invariant_null_arena("HashMap::new_in_arena_null", "HashMap::new");
+    }
+
+    #[test]
+    fn explicit_arena_map_insert_null_arena_traps() {
+        assert_runtime_invariant_null_arena("HashMap::insert_in_arena_null", "HashMap::insert");
+    }
+
+    #[test]
+    fn explicit_arena_map_remove_null_arena_traps() {
+        assert_runtime_invariant_null_arena("HashMap::remove_in_arena_null", "HashMap::remove");
+    }
+
+    #[test]
     fn explicit_arena_string_fresh_helper_null_arena_traps() {
         let cases = [
             ("String::split_in_arena_null", "String::split"),
@@ -4157,8 +4339,16 @@ mod tests {
         assert_rodata_trap("HashMap::insert", "HashMap::insert");
     }
     #[test]
+    fn rodata_map_insert_in_arena_traps() {
+        assert_rodata_trap("HashMap::insert_in_arena", "HashMap::insert");
+    }
+    #[test]
     fn rodata_map_remove_traps() {
         assert_rodata_trap("HashMap::remove", "HashMap::remove");
+    }
+    #[test]
+    fn rodata_map_remove_in_arena_traps() {
+        assert_rodata_trap("HashMap::remove_in_arena", "HashMap::remove");
     }
 
     #[test]

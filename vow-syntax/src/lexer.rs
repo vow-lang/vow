@@ -475,6 +475,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::approx_constant,
+        reason = "3.14 is the lexer input, not an approximation of PI"
+    )]
     fn lex_float_literal() {
         let kinds = lex("3.14 0.0");
         assert!(matches!(kinds[0], TokenKind::LitFloat(f) if (f - 3.14).abs() < 1e-10));

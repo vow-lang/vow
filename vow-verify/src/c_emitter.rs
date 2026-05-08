@@ -173,6 +173,19 @@ fn string_model_receiver_arg(name: &str) -> Option<usize> {
     }
 }
 
+fn is_map_model_creator(name: &str) -> bool {
+    matches!(name, "__vow_map_new" | "__vow_map_new_in_arena")
+}
+
+fn map_model_receiver_arg(name: &str) -> Option<usize> {
+    match name {
+        "__vow_map_insert_in_arena" | "__vow_map_remove_in_arena" => Some(1),
+        "__vow_map_insert" | "__vow_map_remove" | "__vow_map_get" | "__vow_map_contains"
+        | "__vow_map_len" => Some(0),
+        _ => None,
+    }
+}
+
 fn collect_typed_vars(func: &Function, creator: &str, prefix: &str) -> HashSet<u32> {
     let mut vars = HashSet::new();
 
@@ -182,7 +195,8 @@ fn collect_typed_vars(func: &Function, creator: &str, prefix: &str) -> HashSet<u
                 && let InstData::CallExtern(ref name) = inst.data
             {
                 let is_alt_creator = (prefix == "__vow_vec_" && is_vec_model_creator(name))
-                    || (prefix == "__vow_string_" && is_string_model_creator(name));
+                    || (prefix == "__vow_string_" && is_string_model_creator(name))
+                    || (prefix == "__vow_map_" && is_map_model_creator(name));
                 let is_creator = name == creator || is_alt_creator;
                 if is_creator {
                     vars.insert(inst.id.0);
@@ -192,6 +206,8 @@ fn collect_typed_vars(func: &Function, creator: &str, prefix: &str) -> HashSet<u
                         vec_model_receiver_arg(name)
                     } else if prefix == "__vow_string_" {
                         string_model_receiver_arg(name)
+                    } else if prefix == "__vow_map_" {
+                        map_model_receiver_arg(name)
                     } else {
                         Some(0)
                     };
@@ -324,11 +340,14 @@ fn is_known_builtin(name: &str) -> bool {
             | "__vow_string_parse_u64_opt"
             | "__vow_string_print"
             | "__vow_map_new"
+            | "__vow_map_new_in_arena"
             | "__vow_map_len"
             | "__vow_map_insert"
+            | "__vow_map_insert_in_arena"
             | "__vow_map_get"
             | "__vow_map_contains"
             | "__vow_map_remove"
+            | "__vow_map_remove_in_arena"
             | "__vow_btreemap_new"
             | "__vow_btreemap_len"
             | "__vow_btreemap_insert"
@@ -1176,20 +1195,35 @@ fn emit_inst(
         }
 
         // HashMap operations — modeled as abstract struct with len + keys/vals arrays
-        Opcode::Call if matches!(&inst.data, InstData::CallExtern(n) if n.starts_with("__vow_map_")) => {
+        Opcode::Call if matches!(&inst.data, InstData::CallExtern(n) if n.starts_with("__vow_map_")) =>
+        {
             if let InstData::CallExtern(ref name) = inst.data {
+                // _in_arena variants share their bodies with the root forms;
+                // they accept an extra leading arena pointer that the verifier
+                // C model ignores (arenas are opaque).
+                let arena_offset = if matches!(
+                    name.as_str(),
+                    "__vow_map_new_in_arena"
+                        | "__vow_map_insert_in_arena"
+                        | "__vow_map_remove_in_arena"
+                ) {
+                    1
+                } else {
+                    0
+                };
+                let arg = |i: usize| inst.args[arena_offset + i].0;
                 match name.as_str() {
-                    "__vow_map_new" => {
+                    "__vow_map_new" | "__vow_map_new_in_arena" => {
                         out.push_str(&format!("  v{id}.len = 0;\n"));
                     }
                     "__vow_map_len" => {
-                        let m = inst.args[0].0;
+                        let m = arg(0);
                         out.push_str(&format!("  v{id} = v{m}.len;\n"));
                     }
-                    "__vow_map_insert" => {
-                        let m = inst.args[0].0;
-                        let k = inst.args[1].0;
-                        let v = inst.args[2].0;
+                    "__vow_map_insert" | "__vow_map_insert_in_arena" => {
+                        let m = arg(0);
+                        let k = arg(1);
+                        let v = arg(2);
                         let hashmap_max = limits.hashmap_max;
                         out.push_str(&format!(
                             "  {{\n\
@@ -1205,8 +1239,8 @@ fn emit_inst(
                         ));
                     }
                     "__vow_map_get" => {
-                        let m = inst.args[0].0;
-                        let k = inst.args[1].0;
+                        let m = arg(0);
+                        let k = arg(1);
                         out.push_str(&format!(
                             "  v{id} = 0;\n\
                              \x20 for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
@@ -1215,8 +1249,8 @@ fn emit_inst(
                         ));
                     }
                     "__vow_map_contains" => {
-                        let m = inst.args[0].0;
-                        let k = inst.args[1].0;
+                        let m = arg(0);
+                        let k = arg(1);
                         out.push_str(&format!(
                             "  v{id} = 0;\n\
                              \x20 for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
@@ -1224,9 +1258,9 @@ fn emit_inst(
                              \x20 }}\n"
                         ));
                     }
-                    "__vow_map_remove" => {
-                        let m = inst.args[0].0;
-                        let k = inst.args[1].0;
+                    "__vow_map_remove" | "__vow_map_remove_in_arena" => {
+                        let m = arg(0);
+                        let k = arg(1);
                         out.push_str(&format!(
                             "  for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
                              \x20   if (v{m}.keys[__i] == v{k}) {{\n\
@@ -4435,7 +4469,7 @@ mod tests {
         let resample_pos = c[len_inc_pos..]
             .find(resample)
             .map(|p| p + len_inc_pos)
-            .expect(&format!("re-sample must follow v1.len++: {c}"));
+            .unwrap_or_else(|| panic!("re-sample must follow v1.len++: {c}"));
         let second_read_pos = c
             .find("v7 = (v1.len == v3.len)")
             .expect("second read must exist");
@@ -4521,7 +4555,7 @@ mod tests {
         let resample_pos = c[push_pos..]
             .find(resample)
             .map(|p| p + push_pos)
-            .expect(&format!("re-sample must follow push_str body: {c}"));
+            .unwrap_or_else(|| panic!("re-sample must follow push_str body: {c}"));
         let second_read_pos = c
             .find("v6 = (v1.len == v3.len)")
             .expect("second read must exist");
@@ -4601,14 +4635,14 @@ mod tests {
         // The new model emits `len = 0`.
         let zero_pos = c
             .find("v1.len = 0;")
-            .expect(&format!("clear must emit `v1.len = 0;`: {c}"));
+            .unwrap_or_else(|| panic!("clear must emit `v1.len = 0;`: {c}"));
         // Re-sample for the (1, 3) pair follows the clear and precedes the
         // second read.
         let resample = "__str_eq_1_3 = __VERIFIER_nondet_bool();";
         let resample_pos = c[zero_pos..]
             .find(resample)
             .map(|p| p + zero_pos)
-            .expect(&format!("re-sample must follow clear: {c}"));
+            .unwrap_or_else(|| panic!("re-sample must follow clear: {c}"));
         let second_read_pos = c
             .find("v6 = (v1.len == v3.len)")
             .expect("second read must exist");

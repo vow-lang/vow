@@ -562,6 +562,19 @@ fn routed_vec_extern<'a>(
                 _ => (sym, None),
             }
         }
+        "__vow_map_new" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_map_new_in_arena", Some(region)),
+        },
+        "__vow_map_insert" => {
+            let region = first_arg_region(inst, inst_index, current_summary, phi_data);
+            match region {
+                RegionId::Block(_) | RegionId::Caller(_) => {
+                    ("__vow_map_insert_in_arena", Some(region))
+                }
+                _ => (sym, None),
+            }
+        }
         _ => {
             if extern_uses_target_region(sym) {
                 (sym, Some(inst.region))
@@ -2487,7 +2500,17 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_map_new" => {
             sig.returns.push(AbiParam::new(types::I64)); // *VowMap
         }
+        "__vow_map_new_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.returns.push(AbiParam::new(types::I64)); // *VowMap
+        }
         "__vow_map_insert" => {
+            sig.params.push(AbiParam::new(types::I64)); // map ptr
+            sig.params.push(AbiParam::new(types::I64)); // key
+            sig.params.push(AbiParam::new(types::I64)); // value
+        }
+        "__vow_map_insert_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // map ptr
             sig.params.push(AbiParam::new(types::I64)); // key
             sig.params.push(AbiParam::new(types::I64)); // value
@@ -2503,6 +2526,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.returns.push(AbiParam::new(types::I8)); // bool
         }
         "__vow_map_remove" => {
+            sig.params.push(AbiParam::new(types::I64)); // map ptr
+            sig.params.push(AbiParam::new(types::I64)); // key
+        }
+        "__vow_map_remove_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // map ptr
             sig.params.push(AbiParam::new(types::I64)); // key
         }
@@ -3306,7 +3334,7 @@ mod tests {
 
     #[test]
     fn cranelift_backend_default_impl() {
-        let _ = CraneliftBackend::default();
+        let _ = CraneliftBackend {};
     }
 
     /// Regression for the Codex review on PR #230: `build_signature`
@@ -3455,7 +3483,7 @@ mod tests {
                         Opcode::ConstF64,
                         Ty::F64,
                         vec![],
-                        InstData::ConstF64(2.718f64),
+                        InstData::ConstF64(std::f64::consts::E),
                     ),
                     inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
                 ],
@@ -5167,7 +5195,7 @@ mod tests {
                         Opcode::ConstF64,
                         Ty::F64,
                         vec![],
-                        InstData::ConstF64(2.718f64),
+                        InstData::ConstF64(std::f64::consts::E),
                     ),
                     inst(
                         2,

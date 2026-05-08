@@ -307,6 +307,20 @@ fn clif_routed_extern_symbol(f: IrFunction, inst: IrInst) -> String {
         }
         return sym;
     }
+    if sym == String::from("__vow_map_new") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_map_new_in_arena");
+    }
+    if sym == String::from("__vow_map_insert") {
+        let mr: i64 = clif_receiver_region(f, inst);
+        let mk: i64 = region_kind(mr);
+        if mk == REGION_KIND_BLOCK() || mk == REGION_KIND_CALLER() {
+            return String::from("__vow_map_insert_in_arena");
+        }
+        return sym;
+    }
     sym
 }
 
