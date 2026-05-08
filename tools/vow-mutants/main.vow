@@ -253,8 +253,27 @@ fn enumerate_root(read_dir: String, repo_relative_root: String) -> Vec<Site> [re
     all
 }
 
+// True iff `s` is a (possibly signed) decimal integer literal.
+// Used to harden `parse_i64_default` against non-numeric flag values:
+// vow-runtime's `parse_i64("abc")` returns 0, not the supplied default.
+fn is_decimal_int_literal(s: String) -> bool {
+    let n: i64 = s.len();
+    if n == 0 { return false; }
+    let mut start: i64 = 0;
+    if s.byte_at(0) == 45 || s.byte_at(0) == 43 { start = 1; }
+    if start == n { return false; }
+    let mut i: i64 = start;
+    while i < n {
+        let b: i64 = s.byte_at(i);
+        if b < 48 || b > 57 { return false; }
+        i = i + 1;
+    }
+    true
+}
+
 fn parse_i64_default(s: String, default: i64) -> i64 {
     if s.len() == 0 { return default; }
+    if !is_decimal_int_literal(s) { return default; }
     parse_i64(s)
 }
 
@@ -301,9 +320,12 @@ fn shell_quote(s: String) -> String {
 fn cd_with_log(workdir: String, cmd: String, log_path: String, tier_label: String, append: bool) -> String {
     let r: String = String::from("cd ");
     r.push_str(shell_quote(workdir));
-    r.push_str(String::from(" && (echo \"--- "));
-    r.push_str(tier_label);
-    r.push_str(String::from(" ---\" && "));
+    // tier_label is currently always "tier1" or "tier2" (hardcoded
+    // constants), but quote it defensively so future callers passing
+    // arbitrary strings can't inject shell metacharacters via `echo`.
+    r.push_str(String::from(" && (echo --- "));
+    r.push_str(shell_quote(tier_label));
+    r.push_str(String::from(" --- && "));
     r.push_str(cmd);
     if append {
         r.push_str(String::from(") >> "));
