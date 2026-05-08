@@ -1,36 +1,16 @@
-module Mutants
+module MutantsMain
 
-use sites
-use patch
-use oracle
+use mutants_sites
+use mutants_patch
+use mutants_oracle
 
-fn print_usage() [io] {
-    eprintln_str("usage: vow-mutants <subcommand> [flags]");
+fn mutants_print_usage() [io] {
+    eprintln_str("usage: vowc mutants <subcommand> [flags]");
     eprintln_str("");
     eprintln_str("subcommands:");
-    eprintln_str("  version    print the tool version");
+    eprintln_str("  version    print the mutation tester version");
     eprintln_str("  list       enumerate mutation sites without running an oracle");
     eprintln_str("  run        enumerate, mutate, run oracle, report results");
-}
-
-fn get_flag_arg(argv: Vec<String>, flag: String) -> String {
-    let mut i: i64 = 1;
-    while i < argv.len() - 1 {
-        if argv[i] == flag {
-            return argv[i + 1];
-        }
-        i = i + 1;
-    }
-    String::from("")
-}
-
-fn has_flag(argv: Vec<String>, flag: String) -> bool {
-    let mut i: i64 = 1;
-    while i < argv.len() {
-        if argv[i] == flag { return true; }
-        i = i + 1;
-    }
-    false
 }
 
 fn parse_shard(spec: String) -> Vec<i64> [io] {
@@ -504,7 +484,7 @@ fn write_status_lists(output_dir: String, sites: Vec<Site>, statuses: Vec<i64>) 
 }
 
 
-fn run_run(argv: Vec<String>) -> i32 [io, read, write] {
+fn run_mutants_run(argv: Vec<String>) -> i32 [io, read, write] {
     let root_in: String = get_flag_arg(argv, String::from("--root"));
     let root: String = if root_in.len() == 0 { String::from("compiler") } else { root_in };
     let shard_spec: String = get_flag_arg(argv, String::from("--shard"));
@@ -678,7 +658,7 @@ fn run_run(argv: Vec<String>) -> i32 [io, read, write] {
     0
 }
 
-fn run_list(argv: Vec<String>) -> i32 [io, read] {
+fn run_mutants_list(argv: Vec<String>) -> i32 [io, read] {
     let root: String = get_flag_arg(argv, String::from("--root"));
     let root_used: String = if root.len() == 0 { String::from("compiler") } else { root };
     // `list` is read-only; no worktree needed.
@@ -703,24 +683,36 @@ fn run_list(argv: Vec<String>) -> i32 [io, read] {
     0
 }
 
-fn main() -> i32 [io, read, write] {
-    let argv: Vec<String> = args();
-    if argv.len() < 2 {
-        print_usage();
+// Entry point invoked from compiler/main.vow when the user runs
+// `vowc mutants <sub> [...]`. argv[0] is the vowc binary, argv[1] is
+// "mutants", argv[2] is the sub-subcommand. We strip argv[0] and
+// argv[1] before dispatching so the inner functions see argv as if
+// "mutants" were the program name (matching the prior standalone
+// `vow-mutants` binary's CLI shape).
+fn run_mutants(argv: Vec<String>) -> i32 [io, read, write] {
+    if argv.len() < 3 {
+        mutants_print_usage();
         return 1;
     }
-    let sub: String = argv[1];
+    let sub: String = argv[2];
     if sub == String::from("version") {
-        print_str("vow-mutants 0.1.0");
+        print_str("vowc mutants 0.2.0");
         return 0;
     }
+    let inner: Vec<String> = Vec::new();
+    inner.push(String::from("vowc-mutants"));
+    let mut i: i64 = 2;
+    while i < argv.len() {
+        inner.push(argv[i]);
+        i = i + 1;
+    }
     if sub == String::from("list") {
-        return run_list(argv);
+        return run_mutants_list(inner);
     }
     if sub == String::from("run") {
-        return run_run(argv);
+        return run_mutants_run(inner);
     }
-    eprintln_str("vow-mutants: unknown subcommand");
-    print_usage();
+    eprintln_str("vowc mutants: unknown subcommand");
+    mutants_print_usage();
     1
 }

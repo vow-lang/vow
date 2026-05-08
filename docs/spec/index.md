@@ -65,5 +65,5 @@ Vow is written by agents under a finite context window. These principles apply t
 | [schemas/diagnostic.schema.json](schemas/diagnostic.schema.json)         | Diagnostic JSON schema              |
 | [schemas/counterexample.schema.json](schemas/counterexample.schema.json) | Counterexample JSON schema          |
 | [schemas/vow-violation.schema.json](schemas/vow-violation.schema.json)   | Runtime violation JSON schema       |
-| [schemas/mutants-result.schema.json](schemas/mutants-result.schema.json) | `vow-mutants` run/list output schema |
+| [schemas/mutants-result.schema.json](schemas/mutants-result.schema.json) | `vowc mutants` run/list output schema |
 <!-- OMIT-FROM-SKILL-END -->

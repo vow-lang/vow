@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Smoke tests for vow-mutants. Built and invoked by scripts/full_test.sh Section 12.
-# Standalone usage: bash tools/vow-mutants/tests.sh
+# Smoke tests for `vowc mutants`. Built and invoked by scripts/full_test.sh Section 12.
+# Standalone usage: bash tests/mutants/tests.sh
+# Override the vowc binary with VOWC_BIN=/path/to/vowc (defaults to ./build/vowc).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-VOWC="$ROOT/build/vowc"
-VOWM=""
+VOWC="${VOWC_BIN:-$ROOT/build/vowc}"
 TMP=""
 
 GREEN="\033[32m"
@@ -20,16 +20,15 @@ FAILURES=()
 setup() {
     TMP="$(mktemp -d)"
     trap 'rm -rf "$TMP"' EXIT
-    if [ -n "${VOW_MUTANTS_BIN:-}" ]; then
-        VOWM="$VOW_MUTANTS_BIN"
-    else
-        VOWM="$TMP/vow-mutants"
-        (ulimit -v 2000000; "$VOWC" build --no-verify tools/vow-mutants/main.vow -o "$VOWM") >/dev/null
+    if [ ! -x "$VOWC" ]; then
+        echo "vowc binary not found or not executable: $VOWC" >&2
+        echo "Set VOWC_BIN or run scripts/bootstrap.sh first." >&2
+        exit 1
     fi
 }
 
 run_vowm() {
-    (ulimit -v 2000000; "$VOWM" "$@")
+    (ulimit -v 2000000; "$VOWC" mutants "$@")
 }
 
 assert_eq() {
@@ -63,7 +62,7 @@ t1_version() {
     out=$(run_vowm version)
     rc=$?
     assert_eq "T1: version exit code" "0" "$rc"
-    assert_grep "T1: version output contains 'vow-mutants 0.1.0'" "vow-mutants 0\\.1\\.0" "$out"
+    assert_grep "T1: version output contains 'vowc mutants'" "vowc mutants " "$out"
 }
 
 t1_no_args_exits_1() {

@@ -171,6 +171,35 @@ vow decl [OPTIONS] <source.vow>
 |-------------------|-------------|--------------------------------------------|
 | `-o, --output`    | `<source>.vow.d` | Output declaration file path          |
 
+### `vow mutants` (self-hosted only)
+
+Run mutation testing on a Vow source tree. Implemented in the self-hosted compiler only; the Rust bootstrap compiler emits an error pointing the user to `build/vowc`. See `docs/mutants.md` for full details on output schema, mutation kinds, skip-list, and known limitations.
+
+```
+vowc mutants version
+vowc mutants list  [--root DIR] [--shard X/Y]
+vowc mutants run   [--root DIR] [--shard X/Y]
+                   [--tier1-cmd 'cmd'] [--tier2-cmd 'cmd']
+                   [--tier1-timeout-secs N] [--tier2-timeout-secs N]
+                   [--tier2-budget-secs N]
+                   [--workdir DIR] [--output-dir DIR] [--force-unlock]
+```
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--root` | `compiler` | Directory whose `*.vow` files are mutated. `test_*.vow` files are excluded. |
+| `--shard X/Y` | `0/1` | Round-robin split of the deterministic mutant ID space. Mutant `id` is selected iff `id % Y == X`. |
+| `--tier1-cmd` | `scripts/bootstrap.sh --skip-cargo` | Fast oracle. Anything but exit 0 = caught at Tier 1. |
+| `--tier2-cmd` | `scripts/full_test.sh` | Full oracle. Only run on Tier-1 survivors. |
+| `--tier1-timeout-secs` | `180` | Per-mutant Tier-1 wall-clock cap. |
+| `--tier2-timeout-secs` | `3600` | Per-mutant Tier-2 wall-clock cap. |
+| `--tier2-budget-secs` | `7200` | Per-shard total Tier-2 budget. Once exhausted, surviving Tier-1 mutants are emitted with `status:"unrun"`. |
+| `--workdir` | `/tmp/vow-mutants-<ms>` | Path of the throwaway `git worktree` used for all mutations. |
+| `--output-dir` | `mutants.out` | Directory for `mutants.json`, `outcomes.json`, status text files, `diff/`, `logs/`. |
+| `--force-unlock` | off | Remove a stale `output_dir/.lock` before starting. |
+
+Output schemas: see `docs/spec/schemas/mutants-result.schema.json`.
+
 ### `vow --help`
 
 `vow --help` is agent-first. It emits versioned JSON capability data for the tool, command set,

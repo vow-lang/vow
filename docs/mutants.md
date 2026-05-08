@@ -1,25 +1,19 @@
-# vow-mutants
+# Mutation testing (`vowc mutants`)
 
-A `cargo-mutants`-style mutation-testing tool for Vow programs. Self-hosted: `vow-mutants` is itself a Vow program in `tools/vow-mutants/`. The default target is the self-hosted compiler at `compiler/*.vow`, with `scripts/full_test.sh` as the catch-it-or-miss-it oracle.
+A `cargo-mutants`-style mutation-testing tool integrated as a `vowc` subcommand. The default target is the self-hosted compiler at `compiler/*.vow`, with `scripts/full_test.sh` as the catch-it-or-miss-it oracle.
 
-Closes #306.
-
-## Build
-
-```bash
-build/vowc build --no-verify tools/vow-mutants/main.vow -o build/vow-mutants
-```
+Mutation testing is **local-only** — it is not wired into CI. A full sweep across `compiler/*.vow` is multi-hour wall-clock, and a nightly across 8 shards would burn through the GitHub Actions budget for findings only the developer ever consumes. Run it on the cadence the project warrants — before tagging a release, after a substantial compiler change, or whenever you want to audit test coverage.
 
 ## Subcommands
 
 ```text
-vow-mutants version
-vow-mutants list  [--root DIR] [--shard X/Y]
-vow-mutants run   [--root DIR] [--shard X/Y]
-                  [--tier1-cmd 'cmd'] [--tier2-cmd 'cmd']
-                  [--tier1-timeout-secs N] [--tier2-timeout-secs N]
-                  [--tier2-budget-secs N]
-                  [--workdir DIR] [--output-dir DIR] [--force-unlock]
+vowc mutants version
+vowc mutants list  [--root DIR] [--shard X/Y]
+vowc mutants run   [--root DIR] [--shard X/Y]
+                   [--tier1-cmd 'cmd'] [--tier2-cmd 'cmd']
+                   [--tier1-timeout-secs N] [--tier2-timeout-secs N]
+                   [--tier2-budget-secs N]
+                   [--workdir DIR] [--output-dir DIR] [--force-unlock]
 ```
 
 | Flag | Default | Notes |
@@ -37,7 +31,7 @@ vow-mutants run   [--root DIR] [--shard X/Y]
 
 ## Worktree mode
 
-`vow-mutants run` operates on a fresh `git worktree` (created via `git worktree add --detach`) instead of mutating the live source tree. This guarantees the original `compiler/` (or any `--root`) is byte-identical before and after the run, even on Ctrl-C or oracle crashes. The worktree is removed via `git worktree remove --force` at exit.
+`vowc mutants run` operates on a fresh `git worktree` (created via `git worktree add --detach`) instead of mutating the live source tree. This guarantees the original `compiler/` (or any `--root`) is byte-identical before and after the run, even on Ctrl-C or oracle crashes. The worktree is removed via `git worktree remove --force` at exit.
 
 **Caveats**:
 - The worktree's `target/` starts empty. The default Tier-1 oracle `scripts/bootstrap.sh --skip-cargo` requires `target/release/vow` to already exist, so it will fail in the worktree unless you (a) pass `--tier1-cmd 'scripts/bootstrap.sh'` to run the full bootstrap inside the worktree, or (b) symlink `target/` from the original tree before invoking. Local development typically uses (b) for speed; (a) is what you'd want when running from a fresh checkout.
@@ -116,11 +110,13 @@ See `docs/spec/schemas/mutants-result.schema.json` for the formal schema.
 
 ## Determinism guarantee
 
-For a fixed source tree and shard configuration, `vow-mutants list` produces byte-identical output across runs. `vow-mutants run` produces `mutants.json` byte-identically; `outcomes.json` differs only in the `oracle_ms` field per record. Mutant IDs are stable, so re-running a single shard's failing mutants is straightforward.
+For a fixed source tree and shard configuration, `vowc mutants list` produces byte-identical output across runs. `vowc mutants run` produces `mutants.json` byte-identically; `outcomes.json` differs only in the `oracle_ms` field per record. Mutant IDs are stable, so re-running a single shard's failing mutants is straightforward.
 
 ## How to run it
 
-Mutation testing is **local-only** — there is no scheduled nightly. A full sweep across `compiler/*.vow` is multi-hour wall-clock, and a nightly across 8 shards would burn through GitHub Actions budget on every run for findings that only the developer ever consumes. Run it on the cadence the project warrants — before tagging a release, after a substantial compiler change, or whenever you want to audit test coverage. To split the work, shard explicitly with `--shard 0/8` and run shards sequentially across multiple sessions; the determinism guarantee above means the union of `mutants.out/` across shards is well-defined.
+To split the work across multiple sessions, shard explicitly with `--shard 0/8` and run shards sequentially. The determinism guarantee above means the union of `mutants.out/` across shards is well-defined, so partial nightly progress accumulates over runs.
+
+When a `missed.txt` entry appears, the actionable response is to either (a) write a test that catches the mutation, or (b) file an issue documenting why the mutation is equivalent and out of scope.
 
 ## Limitations (v1)
 
@@ -131,7 +127,7 @@ Mutation testing is **local-only** — there is no scheduled nightly. A full swe
 - **Generic-type angle brackets are mutated.** The token-level scanner emits `< → >=` and `> → <=` op-flip sites for `<` and `>` everywhere they appear, including generic type positions (`Vec<i64>`, `Vec<String>`, etc.). Mutating these produces unparseable source, which the oracle classifies as `unviable`. The unviable count therefore inflates with the number of generic type uses in the target tree; this is correct but noisy.
 - **Unary minus produces unviable records.** The scanner emits `- → +` for every `-` not immediately followed by `>` (the return-type arrow), including unary positions (e.g., `let x: i64 = -5;`). Vow has no unary `+` operator, so these mutations produce unparseable source and the oracle classifies them as `unviable` — same shape as the angle-bracket case above.
 - **Op-flip coverage gap inside `vow { … }` blocks** when the function's return type is supported by `default_for_ty` (i64/bool/String/Vec/etc.). In that case `try_emit_body_replace` consumes the vow block via `scan_vow_block_contracts` (contract sites only) and the outer scanner skips ahead to the body, so operator mutations *inside* contract clauses (e.g. `b == 0` inside `requires: b != 0`) aren't enumerated. Functions with unsupported return types don't have this gap because the outer scan walks through the vow block naturally.
-- **Build-vs-test failures both classify as `caught`.** When a Tier-1 oracle's exit code is nonzero, vow-mutants records the mutant as `caught` regardless of whether the failure was a real test detecting the mutation or a build failure (e.g., the mutated source is unparseable). cargo-mutants distinguishes these via parse-time checks; we don't currently. Practically, angle-bracket and unary-minus noise inflates the `caught` bucket; equivalent-mutant analysis would require deeper integration with the Vow parser.
+- **Build-vs-test failures both classify as `caught`.** When a Tier-1 oracle's exit code is nonzero, `vowc mutants` records the mutant as `caught` regardless of whether the failure was a real test detecting the mutation or a build failure (e.g., the mutated source is unparseable). cargo-mutants distinguishes these via parse-time checks; we don't currently. Practically, angle-bracket and unary-minus noise inflates the `caught` bucket; equivalent-mutant analysis would require deeper integration with the Vow parser.
 - **Unsupported return types**: function bodies whose return type doesn't match the supported set produce no `body-replace` site (silent skip).
 - **Sequential within a shard**: one mutant at a time. Parallel workers per shard would require multiple worktrees; deferred to a follow-up.
 - **Quadratic line/column lookup**: each `Site` constructor calls `line_col_at(src, off)` independently, walking from byte 0 every time. For ~24 K LOC of `compiler/*.vow` this is observable in `list` wall-clock but small in absolute terms; a single-pass running accumulator threaded through the scanner would make site enumeration O(file_size) instead of O(file_size × site_count). Deferred.
