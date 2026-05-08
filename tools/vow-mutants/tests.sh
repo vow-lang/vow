@@ -210,6 +210,131 @@ t15_lock_prevents_concurrent_runs() {
     fi
 }
 
+t16_parse_shard_rejects_x_gte_y() {
+    # Regression for "parse_shard accepts x >= y silently". With the bug,
+    # `--shard 5/3` selected zero records; with the fix it falls back to
+    # `0/1` and produces the full set.
+    local result outdir total_full total_bad
+    result=$(do_run shard_full --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true')
+    outdir="${result#*:}"
+    total_full=$(grep -c '"id":[0-9]' "$outdir/outcomes.json" 2>/dev/null || true)
+    result=$(do_run shard_bad --shard 5/3 --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true')
+    outdir="${result#*:}"
+    total_bad=$(grep -c '"id":[0-9]' "$outdir/outcomes.json" 2>/dev/null || true)
+    if [ "$total_bad" -eq "$total_full" ] && [ "$total_full" -gt 0 ]; then
+        printf "  ${GREEN}PASS${RESET} T16: --shard 5/3 falls back to 0/1 (got %d == %d)\n" "$total_bad" "$total_full"
+        PASS=$((PASS + 1))
+    else
+        printf "  ${RED}FAIL${RESET} T16: --shard 5/3 should fall back, got %d (full %d)\n" "$total_bad" "$total_full"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("T16")
+    fi
+}
+
+t17_generate_name_matching_disjoint_blocks() {
+    # Regression for "find_generate_end matches first :END regardless of NAME".
+    # Build a fixture with two interleaved blocks FOO and BAR; under the bug
+    # the FOO range would extend through BAR's END, suppressing live code in
+    # between. With the fix, only the explicitly-paired range is suppressed.
+    local fix="$TMP/gen_name"
+    mkdir -p "$fix"
+    cat > "$fix/disjoint.vow" <<'V'
+module Disjoint
+
+// GENERATE:FOO:START
+fn foo() -> i64 { 1 + 2 }
+// GENERATE:FOO:END
+
+fn live_between() -> i64 { 3 + 4 }
+
+// GENERATE:BAR:START
+fn bar() -> i64 { 5 + 6 }
+// GENERATE:BAR:END
+
+fn live_after() -> i64 { 7 + 8 }
+V
+    local out
+    set +e
+    out=$(run_vowm list --root "$fix" 2>&1)
+    set -e
+    # live_between and live_after must yield sites; foo/bar must not.
+    local live_count
+    live_count=$(echo "$out" | grep '"file":"' | grep -c "$fix/disjoint.vow" || true)
+    # Both live functions have `+` op-flips and `1`/etc const-flips.
+    if [ "$live_count" -ge 4 ]; then
+        printf "  ${GREEN}PASS${RESET} T17: disjoint GENERATE blocks preserve live code between them (got %d sites)\n" "$live_count"
+        PASS=$((PASS + 1))
+    else
+        printf "  ${RED}FAIL${RESET} T17: expected >=4 sites in disjoint fixture, got %d\n    output:\n%s\n" "$live_count" "$out"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("T17")
+    fi
+}
+
+t18_outcome_ids_are_shard_local() {
+    # Regression for "Outcome.id used global gid instead of shard-local index".
+    # For shard 1/3, the first outcome.id must be 0 (local) not 1 (global).
+    local result outdir first_id
+    result=$(do_run shard_local --shard 1/3 --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true')
+    outdir="${result#*:}"
+    first_id=$(grep -oE '"id":[0-9]+' "$outdir/outcomes.json" | head -1 | grep -oE '[0-9]+')
+    assert_eq "T18: first outcome.id in shard 1/3 is 0 (shard-local)" "0" "$first_id"
+}
+
+t19_json_escapes_quotes_in_body_replace() {
+    # Regression for "String::from(\"\") body-replace replacements emit
+    # unescaped \" into JSON". With escaping, every JSON string is valid
+    # so `python3 -m json.tool` parses mutants.json/outcomes.json cleanly.
+    local fix="$TMP/json_escape"
+    mkdir -p "$fix"
+    cat > "$fix/strret.vow" <<'V'
+module StrRet
+
+fn build() -> String {
+    String::from("hello")
+}
+V
+    local result outdir
+    result=$(do_run jsonesc --root "$fix" --tier1-cmd 'true' --tier2-cmd 'true')
+    outdir="${result#*:}"
+    if uv run --with-requirements /dev/null python3 -c "import json; json.load(open('$outdir/mutants.json')); json.load(open('$outdir/outcomes.json'))" 2>/dev/null; then
+        printf "  ${GREEN}PASS${RESET} T19: mutants.json and outcomes.json parse as valid JSON after String::from() body-replace\n"
+        PASS=$((PASS + 1))
+    elif python3 -c "import json; json.load(open('$outdir/mutants.json')); json.load(open('$outdir/outcomes.json'))" 2>/dev/null; then
+        printf "  ${GREEN}PASS${RESET} T19: mutants.json and outcomes.json parse as valid JSON after String::from() body-replace\n"
+        PASS=$((PASS + 1))
+    else
+        printf "  ${RED}FAIL${RESET} T19: JSON parse failed; first 400 chars:\n%s\n" "$(head -c 400 "$outdir/mutants.json")"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("T19")
+    fi
+}
+
+t20_relative_output_dir_works() {
+    # Regression for "log redirect resolves inside worktree, breaking CI".
+    # Use a relative --output-dir; if the bug were back, every Tier-1 oracle
+    # would fail trying to write into <worktree>/<output-dir>/logs/0.log
+    # (a path that does not exist inside a fresh worktree).
+    local reldir="autofix_t20_out_$$"
+    rm -rf "$reldir"
+    set +e
+    run_vowm run --output-dir "$reldir" --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
+    local rc=$?
+    set -e
+    assert_eq "T20: relative --output-dir run exits 0" "0" "$rc"
+    local missed
+    missed=$(grep -c '"status":"missed"' "$reldir/outcomes.json" 2>/dev/null || true)
+    if [ "$missed" -ge 1 ]; then
+        printf "  ${GREEN}PASS${RESET} T20: relative output_dir produces missed records (got %d), proving log redirect works\n" "$missed"
+        PASS=$((PASS + 1))
+    else
+        printf "  ${RED}FAIL${RESET} T20: relative output_dir produced no missed records (would indicate log redirect broken)\n"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("T20")
+    fi
+    rm -rf "$reldir"
+}
+
 t14_per_mutant_diff_and_log_captured() {
     local result outdir
     result=$(do_run difflog --root tests/fixtures/mutants --tier1-cmd 'echo TIER1 PROBE' --tier2-cmd 'echo TIER2 PROBE')
@@ -381,6 +506,14 @@ t7_finds_contract_weaken_sites() {
     fi
 }
 
+# Compute, dynamically, the byte offset of the first byte of `marker_line`
+# inside `file`. Returns -1 if the marker isn't found. Used by T5/T6 to
+# avoid hardcoded byte boundaries that silently shift if the fixture is edited.
+fixture_marker_offset() {
+    local file="$1" marker_line="$2"
+    awk -v needle="$marker_line" 'BEGIN { off = 0 } { if (index($0, needle) > 0) { print off; exit } off += length($0) + 1 }' "$file"
+}
+
 t6_skips_extern_c_block() {
     local out rc
     set +e
@@ -388,12 +521,21 @@ t6_skips_extern_c_block() {
     rc=$?
     set -e
     assert_eq "T6: list exit code" "0" "$rc"
-    # extern "C" block in sample_extern.vow ends roughly at byte 130;
-    # live_outside_extern starts after that, contains a `+` and `1`.
+    # The extern "C" block ends at the closing `}`; live code starts at the
+    # following `fn live_outside_extern` line. Compute the boundary from the
+    # fixture so an edit doesn't silently shift it.
+    local boundary
+    boundary=$(fixture_marker_offset tests/fixtures/mutants/sample_extern.vow "fn live_outside_extern")
+    if [ -z "$boundary" ] || [ "$boundary" -le 0 ]; then
+        printf "  ${RED}FAIL${RESET} T6: could not locate live_outside_extern marker in fixture\n"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("T6-marker")
+        return
+    fi
     local in_block_count outside_count
-    in_block_count=$(echo "$out" | grep '"file":"tests/fixtures/mutants/sample_extern.vow"' | awk -F'"off":' '{print $2}' | awk -F',' '{print $1}' | awk '$1 < 130' | wc -l)
-    outside_count=$(echo "$out" | grep '"file":"tests/fixtures/mutants/sample_extern.vow"' | awk -F'"off":' '{print $2}' | awk -F',' '{print $1}' | awk '$1 >= 130' | wc -l)
-    assert_eq "T6: zero sites inside extern \"C\" block" "0" "$in_block_count"
+    in_block_count=$(echo "$out" | grep '"file":"tests/fixtures/mutants/sample_extern.vow"' | awk -F'"off":' '{print $2}' | awk -F',' '{print $1}' | awk -v B="$boundary" '$1 < B' | wc -l)
+    outside_count=$(echo "$out" | grep '"file":"tests/fixtures/mutants/sample_extern.vow"' | awk -F'"off":' '{print $2}' | awk -F',' '{print $1}' | awk -v B="$boundary" '$1 >= B' | wc -l)
+    assert_eq "T6: zero sites inside extern \"C\" block (boundary=$boundary)" "0" "$in_block_count"
     if [ "$outside_count" -ge 1 ]; then
         printf "  ${GREEN}PASS${RESET} T6: live_outside_extern yields >=1 site (got %d)\n" "$outside_count"
         PASS=$((PASS + 1))
@@ -411,15 +553,20 @@ t5_skips_generate_block() {
     rc=$?
     set -e
     assert_eq "T5: list exit code" "0" "$rc"
-    # No site whose `file` is sample_generate.vow may have an `off` < the
-    # END marker offset. Easy proxy: count sites in sample_generate.vow that
-    # appear before live_after_block. live_after_block starts well past byte 200,
-    # while skipped_in_block sites would be before byte 200.
+    # Compute the byte offset of the first live function after the GENERATE
+    # END marker so the test withstands edits to skipped_in_block.
+    local boundary
+    boundary=$(fixture_marker_offset tests/fixtures/mutants/sample_generate.vow "fn live_after_block")
+    if [ -z "$boundary" ] || [ "$boundary" -le 0 ]; then
+        printf "  ${RED}FAIL${RESET} T5: could not locate live_after_block marker in fixture\n"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("T5-marker")
+        return
+    fi
     local in_block_count outside_count
-    # GENERATE END marker terminates at byte 160; live_after_block opens at 161+.
-    in_block_count=$(echo "$out" | grep '"file":"tests/fixtures/mutants/sample_generate.vow"' | awk -F'"off":' '{print $2}' | awk -F',' '{print $1}' | awk '$1 < 161' | wc -l)
-    outside_count=$(echo "$out" | grep '"file":"tests/fixtures/mutants/sample_generate.vow"' | awk -F'"off":' '{print $2}' | awk -F',' '{print $1}' | awk '$1 >= 161' | wc -l)
-    assert_eq "T5: zero sites inside GENERATE block" "0" "$in_block_count"
+    in_block_count=$(echo "$out" | grep '"file":"tests/fixtures/mutants/sample_generate.vow"' | awk -F'"off":' '{print $2}' | awk -F',' '{print $1}' | awk -v B="$boundary" '$1 < B' | wc -l)
+    outside_count=$(echo "$out" | grep '"file":"tests/fixtures/mutants/sample_generate.vow"' | awk -F'"off":' '{print $2}' | awk -F',' '{print $1}' | awk -v B="$boundary" '$1 >= B' | wc -l)
+    assert_eq "T5: zero sites inside GENERATE block (boundary=$boundary)" "0" "$in_block_count"
     if [ "$outside_count" -ge 1 ]; then
         printf "  ${GREEN}PASS${RESET} T5: live_after_block yields >=1 site (got %d)\n" "$outside_count"
         PASS=$((PASS + 1))
@@ -523,6 +670,11 @@ t12_tier2_budget_zero_marks_remaining_unrun
 t13_records_carry_line_col_and_name
 t14_per_mutant_diff_and_log_captured
 t15_lock_prevents_concurrent_runs
+t16_parse_shard_rejects_x_gte_y
+t17_generate_name_matching_disjoint_blocks
+t18_outcome_ids_are_shard_local
+t19_json_escapes_quotes_in_body_replace
+t20_relative_output_dir_works
 
 echo ""
 if [ "$FAIL" -eq 0 ]; then

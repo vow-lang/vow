@@ -19,15 +19,37 @@ fn status_str(s: i64) -> String {
 // Run a shell command via `sh -c`, return exit code (or -2 on timeout, -1 on
 // spawn error). Cmd is interpreted by the shell, so it can include flags,
 // pipes, redirections, etc.
+//
+// To kill the entire process tree on timeout (otherwise the `sh -c`
+// process dies but its grandchildren — cargo, ESBMC, gcc — survive and
+// leak into subsequent mutant runs within the same shard), the command
+// is wrapped in coreutils `timeout(1)`. `timeout` sends SIGTERM to the
+// process group on expiry, then SIGKILL after a 5s grace period.
+//
+// `process_wait_timeout` is still set with a 30s slack window past
+// timeout_ms as a backstop; in practice `timeout(1)` should fire first
+// and the shell exits with code 124 (mapped to -2 here for parity with
+// `process_wait_timeout`'s native timeout sentinel).
 fn run_shell(cmd: String, timeout_ms: i64) -> i64 [io] {
+    let mut to_secs: i64 = timeout_ms / 1000;
+    if to_secs <= 0 { to_secs = 1; }
+    let mut to_arg: String = i64_to_string(to_secs);
+    to_arg.push_byte(115);
     let args: Vec<String> = Vec::new();
+    args.push(String::from("--kill-after=5s"));
+    args.push(to_arg);
+    args.push(String::from("sh"));
     args.push(String::from("-c"));
     args.push(cmd);
-    let pid: i64 = process_start(String::from("sh"), args);
+    let pid: i64 = process_start(String::from("timeout"), args);
     if pid < 0 { return -1; }
-    let rc: i64 = process_wait_timeout(pid, timeout_ms);
+    let rc: i64 = process_wait_timeout(pid, timeout_ms + 30000);
     if rc == -2 {
         process_kill(pid);
+        return -2;
+    }
+    if rc == 124 {
+        return -2;
     }
     rc
 }

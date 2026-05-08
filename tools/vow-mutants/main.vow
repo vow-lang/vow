@@ -49,7 +49,10 @@ fn parse_shard(spec: String) -> Vec<i64> {
     }
     let x: i64 = parse_i64(parts[0]);
     let y: i64 = parse_i64(parts[1]);
-    if y <= 0 {
+    // Reject y <= 0 AND x >= y AND x < 0. Otherwise `--shard 5/3` would
+    // pass through and the runner's `id % y == x` check would never match,
+    // silently producing zero records.
+    if y <= 0 || x < 0 || x >= y {
         result.push(0);
         result.push(1);
         return result;
@@ -94,6 +97,31 @@ fn default_workdir() -> String [io] {
     r
 }
 
+// Resolve `path` to an absolute filesystem path. Already-absolute paths
+// are returned unchanged. Relative paths are resolved against the
+// process's current working directory using `realpath -m`, which
+// canonicalizes without requiring the path's existence.
+fn absolutize_path(path: String) -> String [io] {
+    if path.len() > 0 && path.byte_at(0) == 47 {
+        return path;
+    }
+    let args: Vec<String> = Vec::new();
+    args.push(String::from("-m"));
+    args.push(path);
+    let rc: i64 = process_run(String::from("realpath"), args);
+    if rc != 0 {
+        return path;
+    }
+    let mut out: String = process_get_stdout();
+    while out.len() > 0 && (out.byte_at(out.len() - 1) == 10 || out.byte_at(out.len() - 1) == 13) {
+        out = string_substr(out, 0, out.len() - 1);
+    }
+    if out.len() == 0 || out.byte_at(0) != 47 {
+        return path;
+    }
+    out
+}
+
 fn worktree_create(workdir: String) -> i64 [io] {
     let args: Vec<String> = Vec::new();
     args.push(String::from("worktree"));
@@ -133,11 +161,37 @@ fn join_path(dir: String, name: String) -> String {
     r
 }
 
+// Escape a string for inclusion inside a JSON `"..."` literal.
+// Handles the cases that occur in vow-mutants output: `"`, `\`, newlines,
+// carriage returns, tabs, and other control bytes (rendered as `?`).
+// Raw `"` is the practical concern — `String::from("")` and `Vec::new()`
+// body-replacement defaults plus contract clauses that reference string
+// literals would otherwise produce malformed JSON.
+fn json_escape_str(s: String) -> String {
+    let r: String = String::from("");
+    let n: i64 = s.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let b: i64 = s.byte_at(i);
+        if b == 34 { r.push_byte(92); r.push_byte(34); }
+        else if b == 92 { r.push_byte(92); r.push_byte(92); }
+        else if b == 10 { r.push_byte(92); r.push_byte(110); }
+        else if b == 13 { r.push_byte(92); r.push_byte(114); }
+        else if b == 9  { r.push_byte(92); r.push_byte(116); }
+        else if b == 8  { r.push_byte(92); r.push_byte(98);  }
+        else if b == 12 { r.push_byte(92); r.push_byte(102); }
+        else if b < 32  { r.push_byte(63); }
+        else { r.push_byte(b); }
+        i = i + 1;
+    }
+    r
+}
+
 fn site_to_json(s: Site) -> String {
     let r: String = String::from("{\"name\":\"");
-    r.push_str(mutant_name(s.file, s.line, s.col, s.label));
+    r.push_str(json_escape_str(mutant_name(s.file, s.line, s.col, s.label)));
     r.push_str(String::from("\",\"file\":\""));
-    r.push_str(s.file);
+    r.push_str(json_escape_str(s.file));
     r.push_str(String::from("\",\"line\":"));
     r.push_str(i64_to_string(s.line));
     r.push_str(String::from(",\"col\":"));
@@ -147,13 +201,13 @@ fn site_to_json(s: Site) -> String {
     r.push_str(String::from(",\"len\":"));
     r.push_str(i64_to_string(s.len));
     r.push_str(String::from(",\"kind\":\""));
-    r.push_str(s.kind);
+    r.push_str(json_escape_str(s.kind));
     r.push_str(String::from("\",\"from\":\""));
-    r.push_str(s.from_text);
+    r.push_str(json_escape_str(s.from_text));
     r.push_str(String::from("\",\"to\":\""));
-    r.push_str(s.replacement);
+    r.push_str(json_escape_str(s.replacement));
     r.push_str(String::from("\",\"label\":\""));
-    r.push_str(s.label);
+    r.push_str(json_escape_str(s.label));
     r.push_str(String::from("\",\"clause_index\":"));
     r.push_str(i64_to_string(s.clause_index));
     r.push_str(String::from("}"));
@@ -194,39 +248,6 @@ fn enumerate_root(read_dir: String, repo_relative_root: String) -> Vec<Site> [re
 fn parse_i64_default(s: String, default: i64) -> i64 {
     if s.len() == 0 { return default; }
     parse_i64(s)
-}
-
-fn run_record_to_json(s: Site, status: i64, tier: i64, oracle_ms: i64) -> String {
-    let r: String = String::from("{\"name\":\"");
-    r.push_str(mutant_name(s.file, s.line, s.col, s.label));
-    r.push_str(String::from("\",\"file\":\""));
-    r.push_str(s.file);
-    r.push_str(String::from("\",\"line\":"));
-    r.push_str(i64_to_string(s.line));
-    r.push_str(String::from(",\"col\":"));
-    r.push_str(i64_to_string(s.col));
-    r.push_str(String::from(",\"off\":"));
-    r.push_str(i64_to_string(s.off));
-    r.push_str(String::from(",\"len\":"));
-    r.push_str(i64_to_string(s.len));
-    r.push_str(String::from(",\"kind\":\""));
-    r.push_str(s.kind);
-    r.push_str(String::from("\",\"from\":\""));
-    r.push_str(s.from_text);
-    r.push_str(String::from("\",\"to\":\""));
-    r.push_str(s.replacement);
-    r.push_str(String::from("\",\"label\":\""));
-    r.push_str(s.label);
-    r.push_str(String::from("\",\"clause_index\":"));
-    r.push_str(i64_to_string(s.clause_index));
-    r.push_str(String::from(",\"status\":\""));
-    r.push_str(status_str(status));
-    r.push_str(String::from("\",\"tier\":"));
-    r.push_str(i64_to_string(tier));
-    r.push_str(String::from(",\"oracle_ms\":"));
-    r.push_str(i64_to_string(oracle_ms));
-    r.push_str(String::from("}"));
-    r
 }
 
 fn classify_oracle_rc(rc: i64) -> i64 {
@@ -315,9 +336,9 @@ fn outcome_record_json(id: i64, s: Site, status: i64, tier: i64, oracle_ms: i64)
     let r: String = String::from("{\"id\":");
     r.push_str(i64_to_string(id));
     r.push_str(String::from(",\"name\":\""));
-    r.push_str(mutant_name(s.file, s.line, s.col, s.label));
+    r.push_str(json_escape_str(mutant_name(s.file, s.line, s.col, s.label)));
     r.push_str(String::from("\",\"status\":\""));
-    r.push_str(status_str(status));
+    r.push_str(json_escape_str(status_str(status)));
     r.push_str(String::from("\",\"tier\":"));
     r.push_str(i64_to_string(tier));
     r.push_str(String::from(",\"oracle_ms\":"));
@@ -359,7 +380,7 @@ fn write_mutants_json(output_dir: String, sites: Vec<Site>, shard_x: i64, shard_
     fs_write(path, body)
 }
 
-fn write_outcomes_json(output_dir: String, sites: Vec<Site>, ids: Vec<i64>, statuses: Vec<i64>, tiers: Vec<i64>, oracle_mss: Vec<i64>, summary: String) -> i64 [io, write] {
+fn write_outcomes_json(output_dir: String, sites: Vec<Site>, statuses: Vec<i64>, tiers: Vec<i64>, oracle_mss: Vec<i64>, summary: String) -> i64 [io, write] {
     let path: String = join_path(output_dir, String::from("outcomes.json"));
     let body: String = String::from("{\"version\":1,\"summary\":");
     body.push_str(summary);
@@ -369,7 +390,10 @@ fn write_outcomes_json(output_dir: String, sites: Vec<Site>, ids: Vec<i64>, stat
     while i < n {
         if i > 0 { body.push_str(String::from(",\n")); }
         body.push_str(String::from("  "));
-        body.push_str(outcome_record_json(ids[i], sites[i], statuses[i], tiers[i], oracle_mss[i]));
+        // Outcome.id is the position within THIS shard's mutants.json array,
+        // per the schema. Use the local index `i` rather than the global
+        // mutant id (which would only be valid for shard 0/1).
+        body.push_str(outcome_record_json(i, sites[i], statuses[i], tiers[i], oracle_mss[i]));
         i = i + 1;
     }
     body.push_str(String::from("\n]}\n"));
@@ -430,8 +454,14 @@ fn run_run(argv: Vec<String>) -> i32 [io, read, write] {
     let t2_budget_ms: i64 = t2_budget_secs * 1000;
 
     let output_dir_in: String = get_flag_arg(argv, String::from("--output-dir"));
-    let output_dir: String = if output_dir_in.len() == 0 { String::from("mutants.out") } else { output_dir_in };
-    fs_mkdir(output_dir);
+    let output_dir_raw: String = if output_dir_in.len() == 0 { String::from("mutants.out") } else { output_dir_in };
+    fs_mkdir(output_dir_raw);
+    // Resolve to an absolute path BEFORE the per-mutant oracle commands
+    // are built. Those commands `cd <workdir>` first; a relative
+    // output_dir would then resolve inside the worktree (where the
+    // mutants.out directory does not exist), every redirect would fail,
+    // and every Tier-1 oracle would be misclassified as `caught`.
+    let output_dir: String = absolutize_path(output_dir_raw);
     // Lock: vow-runtime's fs_mkdir maps to create_dir_all (mkdir -p),
     // so we can't rely on its return code for atomicity. Best-effort
     // lock = exists-check + create. Small TOCTOU race window between
@@ -464,13 +494,11 @@ fn run_run(argv: Vec<String>) -> i32 [io, read, write] {
     let all_sites: Vec<Site> = enumerate_root(read_root, root);
     // Filter to this shard's mutants only.
     let shard_sites: Vec<Site> = Vec::new();
-    let shard_ids: Vec<i64> = Vec::new();
     let total_n: i64 = all_sites.len();
     let mut gid: i64 = 0;
     while gid < total_n {
         if (gid % shard_y) == shard_x {
             shard_sites.push(all_sites[gid]);
-            shard_ids.push(gid);
         }
         gid = gid + 1;
     }
@@ -489,13 +517,14 @@ fn run_run(argv: Vec<String>) -> i32 [io, read, write] {
     let mut i: i64 = 0;
     while i < n {
         let s: Site = shard_sites[i];
-        let mid: i64 = shard_ids[i];
+        // diff/<id>.diff and logs/<id>.log filenames use the shard-local
+        // index so they line up with `Outcome.id` in outcomes.json.
         let abs_path: String = join_workdir(workdir, s.file);
         let original: String = fs_read(abs_path);
         let mutated: String = splice(original, s.off, s.len, s.replacement);
         fs_write(abs_path, mutated);
-        capture_diff(workdir, s.file, diff_path_for(output_dir, mid));
-        let log_p: String = log_path_for(output_dir, mid);
+        capture_diff(workdir, s.file, diff_path_for(output_dir, i));
+        let log_p: String = log_path_for(output_dir, i);
         let t1_full: String = cd_with_log(workdir, tier1_cmd, log_p, String::from("tier1"), false);
         let t1_start: i64 = time_unix_ms();
         let rc1: i64 = run_shell(t1_full, t1_to_ms);
@@ -536,7 +565,7 @@ fn run_run(argv: Vec<String>) -> i32 [io, read, write] {
         i = i + 1;
     }
     let summary_json: String = build_summary_json(n, caught, missed, to_count, unviable, unrun, shard_x, shard_y);
-    write_outcomes_json(output_dir, shard_sites, shard_ids, statuses, tiers, oracle_mss, summary_json);
+    write_outcomes_json(output_dir, shard_sites, statuses, tiers, oracle_mss, summary_json);
     write_status_lists(output_dir, shard_sites, statuses);
     print_summary(n, caught, missed, to_count, unviable, unrun, shard_x, shard_y);
     worktree_remove(workdir);

@@ -58,8 +58,12 @@ struct SkipRange {
     end: i64,
 }
 
-// Scan a single .vow source for mutation sites.
-fn scan_op_sites(src: String, file_path: String) -> Vec<Site> {
+// Scan a single .vow source for mutation sites of all four kinds:
+// op-flip, const-flip, body-replace, and contract-weaken. Comments,
+// string literals, and identifier runs are skipped at the byte level so
+// keywords inside strings and operators inside comments do not produce
+// sites.
+fn scan_all_sites(src: String, file_path: String) -> Vec<Site> {
     let sites: Vec<Site> = Vec::new();
     let n: i64 = src.len();
     let mut i: i64 = 0;
@@ -554,9 +558,15 @@ fn compute_skip_ranges(src: String) -> Vec<i64> {
             let line: String = string_substr(src, line_start, line_len);
             if string_starts_with(line, String::from("// GENERATE:")) == 1
                 && string_ends_with(line, String::from(":START")) == 1 {
-                // scan forward for matching :END line
+                // Extract the NAME between `// GENERATE:` (12 chars) and
+                // `:START` (6 chars). The matching :END line must use the
+                // same NAME. Without this match, two interleaved blocks
+                // (FOO opens, BAR:END appears first) silently merge into
+                // one skip range and drop sites between them.
+                let name_len: i64 = line_len - 12 - 6;
+                let name: String = string_substr(line, 12, name_len);
                 let mut j: i64 = i + 1;
-                let end_close: i64 = find_generate_end(src, j);
+                let end_close: i64 = find_generate_end(src, j, name);
                 if end_close > line_end {
                     ranges.push(line_start);
                     ranges.push(end_close);
@@ -651,11 +661,15 @@ fn add_extern_ranges(src: String, ranges: Vec<i64>) {
     }
 }
 
-// Starting at byte j, locate the next "// GENERATE:<NAME>:END" line.
-// Returns the byte offset PAST the trailing newline of that line, or -1
-// if no matching marker is found.
-fn find_generate_end(src: String, start: i64) -> i64 {
+// Starting at byte `start`, locate the next `// GENERATE:<name>:END`
+// line whose NAME matches the supplied `name`. Returns the byte offset
+// PAST the trailing newline of that line, or -1 if no matching marker
+// is found.
+fn find_generate_end(src: String, start: i64, name: String) -> i64 {
     let n: i64 = src.len();
+    let expected: String = String::from("// GENERATE:");
+    expected.push_str(name);
+    expected.push_str(String::from(":END"));
     let mut k: i64 = start;
     while k < n {
         let line_start: i64 = k;
@@ -663,11 +677,9 @@ fn find_generate_end(src: String, start: i64) -> i64 {
             k = k + 1;
         }
         let line_end: i64 = k;
-        let line_len: i64 = line_end - line_start;
-        if line_len > 12 {
-            let line: String = string_substr(src, line_start, line_len);
-            if string_starts_with(line, String::from("// GENERATE:")) == 1
-                && string_ends_with(line, String::from(":END")) == 1 {
+        if line_end - line_start == expected.len() {
+            let line: String = string_substr(src, line_start, line_end - line_start);
+            if line == expected {
                 if k < n {
                     return k + 1;
                 } else {
@@ -698,7 +710,7 @@ fn is_skipped(off: i64, len: i64, ranges: Vec<i64>) -> bool {
 
 // Top-level entry: enumerate all sites for one file with skip-list applied.
 fn enumerate_sites(src: String, file_path: String) -> Vec<Site> {
-    let raw: Vec<Site> = scan_op_sites(src, file_path);
+    let raw: Vec<Site> = scan_all_sites(src, file_path);
     let ranges: Vec<i64> = compute_skip_ranges(src);
     if ranges.len() == 0 {
         return raw;
