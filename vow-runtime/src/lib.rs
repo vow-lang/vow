@@ -4078,12 +4078,7 @@ mod tests {
                 cap: 0,
             };
             unsafe {
-                __vow_map_insert_in_arena(
-                    std::ptr::null_mut(),
-                    &mut m as *mut _ as *mut u8,
-                    1,
-                    1,
-                )
+                __vow_map_insert_in_arena(std::ptr::null_mut(), &mut m as *mut _ as *mut u8, 1, 1)
             };
             eprintln!("rodata_trap_worker: null arena map insert did NOT trap");
             std::process::exit(42);
@@ -4128,6 +4123,11 @@ mod tests {
                 let mut a = empty_arena_header();
                 unsafe { __vow_arena_open(&mut a) };
                 unsafe { __vow_map_insert_in_arena(&mut a, mp, 1, 2) };
+            }
+            "HashMap::remove_in_arena" => {
+                let mut a = empty_arena_header();
+                unsafe { __vow_arena_open(&mut a) };
+                unsafe { __vow_map_remove_in_arena(&mut a, mp, 1) };
             }
             other => panic!("unknown trap op: {other}"),
         }
@@ -4345,6 +4345,10 @@ mod tests {
     #[test]
     fn rodata_map_remove_traps() {
         assert_rodata_trap("HashMap::remove", "HashMap::remove");
+    }
+    #[test]
+    fn rodata_map_remove_in_arena_traps() {
+        assert_rodata_trap("HashMap::remove_in_arena", "HashMap::remove");
     }
 
     #[test]

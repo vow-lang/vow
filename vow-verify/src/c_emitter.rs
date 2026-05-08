@@ -180,10 +180,7 @@ fn is_map_model_creator(name: &str) -> bool {
 fn map_model_receiver_arg(name: &str) -> Option<usize> {
     match name {
         "__vow_map_insert_in_arena" | "__vow_map_remove_in_arena" => Some(1),
-        "__vow_map_insert"
-        | "__vow_map_remove"
-        | "__vow_map_get"
-        | "__vow_map_contains"
+        "__vow_map_insert" | "__vow_map_remove" | "__vow_map_get" | "__vow_map_contains"
         | "__vow_map_len" => Some(0),
         _ => None,
     }
@@ -1198,7 +1195,8 @@ fn emit_inst(
         }
 
         // HashMap operations — modeled as abstract struct with len + keys/vals arrays
-        Opcode::Call if matches!(&inst.data, InstData::CallExtern(n) if n.starts_with("__vow_map_")) => {
+        Opcode::Call if matches!(&inst.data, InstData::CallExtern(n) if n.starts_with("__vow_map_")) =>
+        {
             if let InstData::CallExtern(ref name) = inst.data {
                 // _in_arena variants share their bodies with the root forms;
                 // they accept an extra leading arena pointer that the verifier

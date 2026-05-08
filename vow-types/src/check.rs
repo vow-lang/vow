@@ -2090,7 +2090,10 @@ mod tests {
         }
     }
 
-    #[allow(dead_code, reason = "kept alongside dummy_span helpers for future test fixtures")]
+    #[allow(
+        dead_code,
+        reason = "kept alongside dummy_span helpers for future test fixtures"
+    )]
     fn make_param(name: &str, ty_name: &str) -> Param {
         Param {
             name: name.to_string(),

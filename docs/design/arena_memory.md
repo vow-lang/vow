@@ -342,15 +342,27 @@ The existing root-region `HashMap` symbols remain ABI-stable:
 void*    __vow_map_new(void);
 void     __vow_map_insert(void* map, int64_t key, int64_t val);
 int64_t  __vow_map_get(const void* map, int64_t key);
-int64_t  __vow_map_contains(const void* map, int64_t key);
+_Bool    __vow_map_contains(const void* map, int64_t key);
 void     __vow_map_remove(void* map, int64_t key);
 uintptr_t __vow_map_len(const void* map);
 ```
 
-`__vow_map_new`, `__vow_map_insert`, and `__vow_map_remove` are root
-wrappers: they acquire the root-arena lock, ensure the root arena is
-open, then delegate to the corresponding explicit-arena primitive with
-`&__vow_root_arena`. The non-allocating accessors
+`__vow_map_contains` predates the `__vow_arena_*` / `__vow_string_eq`
+boolean-ABI convention (§3.3, intro): the live runtime returns Rust
+`bool` and both Cranelift signature tables model it as `I8`, so it is
+declared here as `_Bool` rather than `int64_t`. C/FFI callers must read
+exactly the 1-byte boolean from the return register; the upper bits are
+undefined. This legacy ABI is preserved for compatibility with the
+pre-arena `__vow_map_*` symbols and is unrelated to the arena routing
+introduced by the `_in_arena` forms below.
+
+`__vow_map_new` and `__vow_map_insert` are root wrappers: they acquire
+the root-arena lock, ensure the root arena is open, then delegate to the
+corresponding explicit-arena primitive with `&__vow_root_arena`.
+`__vow_map_remove` is **not** a root wrapper — it performs an in-place
+linear-scan removal that never touches the arena, so the relationship
+inverts: `__vow_map_remove_in_arena` traps on a null arena and then
+delegates to `__vow_map_remove` directly. The non-allocating accessors
 (`__vow_map_get`, `__vow_map_contains`, `__vow_map_len`) read the map
 in place and never touch any arena.
 
