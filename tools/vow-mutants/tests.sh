@@ -103,15 +103,23 @@ count_status_in_outcomes() {
 t10_run_round_trip_leaves_files_unchanged() {
     local before_sum after_sum result outdir rc
     before_sum=$(sha256sum tests/fixtures/mutants/sample_op.vow | awk '{print $1}')
+    # Capture worktree count BEFORE the test, not just AFTER. When this
+    # harness runs nested inside another vow-mutants invocation (e.g.,
+    # full_test.sh's Section 12 firing as someone's Tier-2 oracle), the
+    # outer worktree is still registered and would falsely fail an
+    # absolute "== 0" assertion. Asserting delta-from-baseline tolerates
+    # the recursive case.
+    local before_worktrees
+    before_worktrees=$(git worktree list | grep -c '/tmp/vow-mutants-' || true)
     result=$(do_run rt --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true')
     rc="${result%%:*}"
     outdir="${result#*:}"
     after_sum=$(sha256sum tests/fixtures/mutants/sample_op.vow | awk '{print $1}')
     assert_eq "T10: run exit code" "0" "$rc"
     assert_eq "T10: source tree byte-identical after worktree-isolated run" "$before_sum" "$after_sum"
-    local stale_worktrees
-    stale_worktrees=$(git worktree list | grep -c '/tmp/vow-mutants-' || true)
-    assert_eq "T10: no /tmp/vow-mutants-* worktrees left registered" "0" "$stale_worktrees"
+    local after_worktrees
+    after_worktrees=$(git worktree list | grep -c '/tmp/vow-mutants-' || true)
+    assert_eq "T10: vow-mutants worktree count unchanged after run" "$before_worktrees" "$after_worktrees"
     if [ -f "$outdir/mutants.json" ] && [ -f "$outdir/outcomes.json" ]; then
         printf "  ${GREEN}PASS${RESET} T10: mutants.json and outcomes.json written to output dir\n"
         PASS=$((PASS + 1))

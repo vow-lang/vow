@@ -54,6 +54,18 @@ fn parse_shard(spec: String) -> Vec<i64> [io] {
         result.push(1);
         return result;
     }
+    // `parse_i64` returns 0 on non-numeric input, so `--shard abc/8`
+    // would silently become `0/8` and pass the range check below.
+    // Reject non-numeric components explicitly.
+    if !is_decimal_int_literal(parts[0]) || !is_decimal_int_literal(parts[1]) {
+        let msg: String = String::from("vow-mutants: invalid --shard '");
+        msg.push_str(spec);
+        msg.push_str(String::from("' (X and Y must be decimal integers); falling back to 0/1"));
+        eprintln_str(msg);
+        result.push(0);
+        result.push(1);
+        return result;
+    }
     let x: i64 = parse_i64(parts[0]);
     let y: i64 = parse_i64(parts[1]);
     if y <= 0 || x < 0 || x >= y {
