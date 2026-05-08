@@ -1,0 +1,34 @@
+// TEST: stdout ""
+// Issue #314 reproducer — helper-mediated arena push pattern.
+// Pushing a struct-typed parameter into a Vec field of another struct-typed
+// parameter is a routine arena-style operation. Region inference correctly
+// widens the inline allocation's region to caller_0 via store-effect
+// propagation; the conflict check must consult that inferred region rather
+// than rejecting on raw IR opcode shape.
+module Repro
+
+pub struct Item {
+    name: String,
+}
+
+pub struct Arena {
+    entries: Vec<Item>,
+}
+
+fn arena_new() -> Arena {
+    return Arena { entries: Vec::new() };
+}
+
+fn push_item(a: Arena, e: Item) {
+    a.entries.push(e);
+}
+
+pub fn add_named(a: Arena) {
+    push_item(a, Item { name: String::from("hi") });
+}
+
+fn main() -> i32 {
+    let a: Arena = arena_new();
+    add_named(a);
+    return 0i32;
+}

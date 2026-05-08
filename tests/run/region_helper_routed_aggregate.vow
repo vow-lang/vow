@@ -1,0 +1,33 @@
+// TEST: stdout ""
+// Codex Option 1.5 (issue #314): a fresh aggregate constructed inline at a
+// call site that's routed through a callee's store-effect compiles cleanly.
+// Region inference's must_outlive marker propagation widens the alloc to
+// the caller's region; the post-inference conflict check consults the
+// inferred region rather than rejecting on raw IR opcode shape.
+//
+// Inverted from the historical `tests/error/region_conflict_store_effect.vow`
+// fixture (added April 30 in commit 83f7ffb), which asserted the same
+// pattern MUST be rejected. That assertion reflected the now-obsolete
+// shape-based check; under the semantic check, the routing is sound.
+module RegionHelperRoutedAggregate
+
+struct Box {
+    value: Payload,
+}
+
+struct Payload {
+    n: i64,
+}
+
+fn put(target: Box, value: Payload) {
+    target.value = value;
+}
+
+fn use_caller(target: Box) {
+    let value: Payload = Payload { n: 1 };
+    put(target, value);
+}
+
+fn main() -> i32 {
+    0
+}

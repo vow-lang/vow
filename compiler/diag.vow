@@ -33,6 +33,9 @@ fn EC_REGION_LINEAR() -> i64 vow { ensures: result >= 0 } { 19 }
 fn EC_VERIFICATION_SKIPPED() -> i64 vow { ensures: result >= 0 } { 20 }
 fn EC_BTREEMAP_KEY_TYPE_MUST_BE_I64() -> i64 vow { ensures: result >= 0 } { 21 }
 fn EC_BTREEMAP_VALUE_TYPE_MUST_BE_I64() -> i64 vow { ensures: result >= 0 } { 22 }
+// Codex Option 1.5 (issue #314): emitted as a Note when an allocation routes
+// to the root region via store-effect chains.
+fn EC_REGION_ROOT_ESCAPE() -> i64 vow { ensures: result >= 0 } { 23 }
 
 struct Diagnostic {
     severity: i64,
@@ -221,6 +224,9 @@ fn ec_name(code: i64) -> String {
     if code == EC_REGION_LINEAR() {
         String::from("RegionLinear")
     } else {
+    if code == EC_REGION_ROOT_ESCAPE() {
+        String::from("RegionRootEscape")
+    } else {
     if code == EC_VERIFICATION_SKIPPED() {
         String::from("VerificationSkipped")
     } else {
@@ -231,7 +237,7 @@ fn ec_name(code: i64) -> String {
         String::from("BTreeMapValueTypeMustBeI64")
     } else {
         String::from("IoError")
-    }}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}
 }
 
 fn sev_name_lower(s: i64) -> String {

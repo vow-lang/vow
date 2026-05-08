@@ -249,7 +249,23 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
         fi = fi + 1;
     }
 
-    check_region_store_conflicts_module(m, id_to_inst_per_fn, dctx);
+    check_region_store_conflicts_module(
+        m,
+        id_to_inst_per_fn,
+        id_to_block_per_fn,
+        block_parent_per_fn,
+        block_depth_per_fn,
+        region_keys,
+        region_vals,
+        int_kinds,
+        dctx,
+    );
+
+    // Codex Option 1.5 (issue #314): emit RegionRootEscape notes for
+    // allocations that route to the root region. Uses `int_kinds` (the
+    // per-function published return-region kind) to gate per spec §4.4.
+    emit_root_escape_notes_module(m, region_keys, region_vals, int_kinds,
+                                   int_se_targets, dctx);
 
     // Commit per-inst regions.
     let mut fi2: i64 = 0;
@@ -735,12 +751,22 @@ fn add_store_effect(
 }
 
 fn check_region_store_conflicts_module(
-    m: IrModule, id_to_inst_per_fn: Vec<Vec<IrInst>>, dctx: DiagCtx
+    m: IrModule, id_to_inst_per_fn: Vec<Vec<IrInst>>,
+    id_to_block_per_fn: Vec<Vec<i64>>,
+    block_parent_per_fn: Vec<Vec<i64>>, block_depth_per_fn: Vec<Vec<i64>>,
+    region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
+    int_kinds: Vec<i64>,
+    dctx: DiagCtx
 ) {
     let mut fi: i64 = 0;
     while fi < m.functions.len() {
         let f: IrFunction = m.functions[fi];
         let id_to_inst: Vec<IrInst> = id_to_inst_per_fn[fi];
+        let id_to_block: Vec<i64> = id_to_block_per_fn[fi];
+        let parents: Vec<i64> = block_parent_per_fn[fi];
+        let depths: Vec<i64> = block_depth_per_fn[fi];
+        let rkeys: Vec<i64> = region_keys[fi];
+        let rvals: Vec<i64> = region_vals[fi];
         let mut bi: i64 = 0;
         while bi < f.blocks.len() {
             let blk: IrBlock = f.blocks[bi];
@@ -754,6 +780,12 @@ fn check_region_store_conflicts_module(
                             m.functions[callee_idx].rsum_store_effects,
                             inst,
                             id_to_inst,
+                            id_to_block,
+                            parents,
+                            depths,
+                            rkeys,
+                            rvals,
+                            int_kinds,
                             dctx,
                             f.source_file,
                         );
@@ -768,7 +800,10 @@ fn check_region_store_conflicts_module(
 }
 
 fn check_store_effects_at_call(
-    flat: Vec<i64>, call_inst: IrInst, id_to_inst: Vec<IrInst>, dctx: DiagCtx, source_file: String
+    flat: Vec<i64>, call_inst: IrInst, id_to_inst: Vec<IrInst>,
+    id_to_block: Vec<i64>, parents: Vec<i64>, depths: Vec<i64>,
+    region_keys: Vec<i64>, region_vals: Vec<i64>, int_kinds: Vec<i64>,
+    dctx: DiagCtx, source_file: String
 ) {
     let mut i: i64 = 0;
     while i < flat.len() {
@@ -790,6 +825,12 @@ fn check_store_effects_at_call(
                     call_inst.args[source_param],
                     call_inst,
                     id_to_inst,
+                    id_to_block,
+                    parents,
+                    depths,
+                    region_keys,
+                    region_vals,
+                    int_kinds,
                     dctx,
                 );
             }
@@ -817,23 +858,174 @@ fn check_store_effects_at_call(
     }
 }
 
+// Codex Option 1.5 (issue #314): emit RegionRootEscape Note for each
+// heap-producing instruction whose inferred region is REGION_KIND_CALLER
+// in a function that publishes FreshInCaller (return) or any store effect.
+// Conservative over-approximation: false positives acceptable for Note
+// severity; the alternative (full call-graph reachability from main) is
+// unnecessary infrastructure for an informational diagnostic.
+fn emit_root_escape_notes_module(
+    m: IrModule,
+    region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
+    int_kinds: Vec<i64>,
+    int_se_targets: Vec<Vec<i64>>,
+    dctx: DiagCtx
+) {
+    let mut fi: i64 = 0;
+    while fi < m.functions.len() {
+        let f: IrFunction = m.functions[fi];
+        let return_kind: i64 = int_kinds[fi];
+        let has_publishable: bool = return_kind == RSUM_KIND_FRESH_IN_CALLER()
+            || int_se_targets[fi].len() > 0;
+        if !has_publishable {
+            fi = fi + 1;
+            continue;
+        }
+        let rkeys: Vec<i64> = region_keys[fi];
+        let rvals: Vec<i64> = region_vals[fi];
+        let bks: Vec<IrBlock> = f.blocks;
+        let mut bi: i64 = 0;
+        while bi < bks.len() {
+            let blk: IrBlock = bks[bi];
+            let mut ii: i64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                let rgn: i64 = lookup_inst_region(rkeys, rvals, inst.id);
+                if rgn >= 0 && region_kind(rgn) == REGION_KIND_CALLER() {
+                    // Skip the value being returned — that's the canonical
+                    // FreshInCaller return path, not a side-effect escape.
+                    if !is_returned_value(f, inst.id) {
+                        let span_start: i64 = inst.ostart;
+                        let span_len: i64 = inst.olen;
+                        let d: Diagnostic = diag_new(
+                            SEV_NOTE(),
+                            EC_REGION_ROOT_ESCAPE(),
+                            String::from("allocation may live in the root region: routed via store-effect chain to a caller whose target_region ultimately resolves to root"),
+                            f.source_file,
+                            span_start,
+                            span_len,
+                            DIAG_BLAME_CALLEE()
+                        );
+                        diag_add_hint(
+                            d,
+                            String::from("if intentional (e.g. program-lifetime data), no action needed; if you want this allocation freed earlier, restructure so the value is returned rather than stored into a parameter container")
+                        );
+                        diag_ctx_emit(dctx, d);
+                    }
+                }
+                ii = ii + 1;
+            }
+            bi = bi + 1;
+        }
+        fi = fi + 1;
+    }
+}
+
+// Heuristic: does any Return inst in `f` reference `id` as its arg?
+fn is_returned_value(f: IrFunction, id: i64) -> bool {
+    let bks: Vec<IrBlock> = f.blocks;
+    let mut bi: i64 = 0;
+    while bi < bks.len() {
+        let blk: IrBlock = bks[bi];
+        let mut ii: i64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_RETURN() && inst.args.len() > 0 && inst.args[0] == id {
+                return true;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    false
+}
+
+// Walk `child` up `parents` to see whether `candidate_ancestor` is reachable
+// (an ancestor in the block tree). Returns true if child == candidate_ancestor
+// or if any parent of child is candidate_ancestor. Bounded by `depths` to
+// terminate cleanly on malformed parent chains.
+fn block_is_ancestor(parents: Vec<i64>, depths: Vec<i64>, child: i64, candidate_ancestor: i64) -> bool {
+    if child == candidate_ancestor {
+        return true;
+    }
+    let mut cur: i64 = child;
+    let mut steps: i64 = block_depth_at(depths, child);
+    if steps < 0 {
+        steps = 0;
+    }
+    while steps > 0 {
+        cur = block_parent_at(parents, cur);
+        if cur < 0 {
+            return false;
+        }
+        if cur == candidate_ancestor {
+            return true;
+        }
+        steps = steps - 1;
+    }
+    false
+}
+
 fn check_store_conflict(
     source_file: String, target_arg_id: i64, source_arg_id: i64, call_inst: IrInst,
-    id_to_inst: Vec<IrInst>, dctx: DiagCtx
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>,
+    parents: Vec<i64>, depths: Vec<i64>,
+    region_keys: Vec<i64>, region_vals: Vec<i64>,
+    int_kinds: Vec<i64>,
+    dctx: DiagCtx
 ) {
-    let source: DeepRet = trace_origin_shallow(id_to_inst, source_arg_id);
-    if source.kind != RSUM_KIND_FRESH_IN_CALLER() {
-        return;
-    }
-    let source_inst: IrInst = lookup_inst_or_default(id_to_inst, source_arg_id);
-    if source_inst.op != IOP_REGION_ALLOC() {
-        return;
-    }
+    // Semantic check (Codex Option 1.5): consult the inferred region for the
+    // source value, not its raw IR opcode. Region inference's value_lub_region
+    // already widens fresh allocations through must-outlive markers added by
+    // call_store_effects_collect_regions; a conflict is only real when the
+    // inferred region is strictly narrower than the target's region.
     let target_param: i64 = trace_param(id_to_inst, target_arg_id);
     if target_param < 0 {
+        // Inline case: target is not a parameter; the inline code path handles
+        // its own region-LCA check via direct markers, no cross-call conflict.
         return;
     }
+    let src_rgn: i64 = lookup_inst_region(region_keys, region_vals, source_arg_id);
+    if src_rgn < 0 {
+        // Source is not a heap producer (only `is_heap_producing_for_region`
+        // values are inserted into the region map at the SCC fixed-point).
+        return;
+    }
+    let src_kind: i64 = region_kind(src_rgn);
+    // Arm A: source already widened to caller/root/rodata — satisfies any
+    // parameter-region target. Region inference has done the right thing.
+    if src_kind == REGION_KIND_CALLER()
+        || src_kind == REGION_KIND_ROOT()
+        || src_kind == REGION_KIND_RODATA() {
+        return;
+    }
+    // Arm B: source is a concrete block — compare against target's region.
+    if src_kind == REGION_KIND_BLOCK() {
+        let src_block: i64 = region_val(src_rgn);
+        let tgt_rgn: i64 = target_marker_region(id_to_inst, id_to_block, target_arg_id, int_kinds);
+        let tgt_kind: i64 = region_kind(tgt_rgn);
+        if tgt_kind == REGION_KIND_CALLER() || tgt_kind == REGION_KIND_ROOT() {
+            // Concrete block source cannot outlive caller/root target.
+        } else if tgt_kind == REGION_KIND_BLOCK() {
+            let tgt_block: i64 = region_val(tgt_rgn);
+            if src_block == tgt_block {
+                return; // Same region — fine.
+            }
+            // src outlives tgt iff tgt_block is a descendant of src_block
+            // (walking from tgt up via parents eventually hits src).
+            if block_is_ancestor(parents, depths, tgt_block, src_block) {
+                return;
+            }
+            // Otherwise src_block is strictly inside tgt_block (or unrelated)
+            // — falls through to emit the conflict diagnostic.
+        } else {
+            // Unknown target kind — be conservative and emit.
+        }
+    } else {
+        // Unknown source kind — be conservative and emit.
+    }
 
+    let source_inst: IrInst = lookup_inst_or_default(id_to_inst, source_arg_id);
     let span_start: i64 = if source_inst.id >= 0 && source_inst.olen > 0 { source_inst.ostart } else { call_inst.ostart };
     let span_len: i64 = if source_inst.id >= 0 && source_inst.olen > 0 { source_inst.olen } else { call_inst.olen };
     // Diagnostic shape divergence from the Rust pass: the Rust

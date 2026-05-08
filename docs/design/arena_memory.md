@@ -784,22 +784,64 @@ the wrong end: it only grows and never shrinks, so it must be
 seeded at the empty set. A non-empty seed would require a shrink
 step to reach the true minimum, which is not monotone.
 
-### 4.4. Rejection, not over-approximation
+### 4.4. Rejection vs. visibility
 
-When region inference encounters a placement conflict — an
-interprocedural store-effect constraint (§4.1, step 4) that cannot
-be satisfied by the caller's concrete region assignments — the
-program MUST be rejected with `RegionConflict`. The compiler MUST
-NOT silently promote the value to the root region or to any wider
-region than `must_outlive(I)` demands.
+Region inference distinguishes two concerns:
 
-Rationale: silent root-region placement causes memory growth for the
-program lifetime with no visible signal to the agent. Structured
-rejection is the feedback signal the CEGIS workflow depends on.
+**Rejection** (`RegionConflict`, severity Error). When the
+interprocedural store-effect constraint (§4.1, step 4) cannot be
+satisfied by the caller's **inferred** region assignments — that is,
+when a value's `region(I) = LUB(must_outlive(I))` resolves to a
+concrete block strictly narrower than the target container's region
+— the program MUST be rejected with `RegionConflict`. The compiler
+MUST NOT silently promote the value to a wider region than the
+inference's must-outlive markers already demand.
+
+Operationally, the conflict check consults the inferred `region(I)`
+populated by step 3's LUB pass, NOT the IR opcode shape of the
+producing instruction. A fresh `RegionAlloc` whose must-outlive set
+includes a `VirtualCaller` marker (added by §4.1 step 2's call-site
+propagation when the value is passed to a callee whose store-effect
+target is a parameter) has `region(I) = Caller` after LUB, satisfies
+any parameter-region target, and MUST NOT be rejected. Rejecting
+such a value would force programmers to refactor sound arena
+patterns into less-direct forms, with no soundness benefit.
+
+**Visibility** (`RegionRootEscape`, severity Note, non-blocking).
+When `region(I)` resolves through caller-region routing to a chain
+that bottoms out at the root region (§5.4: `main`'s `target_region
+= &__vow_root_arena`), the compiler MUST emit a `RegionRootEscape`
+note. Root never shrinks (§6.2); program-lifetime placement is a
+memory-cost decision the agent should be aware of. The note is
+informational — it does not fail the build.
+
+Conservative approximation is acceptable for the note: rather than
+performing full call-graph reachability from `main`, an
+implementation MAY emit the note for any heap-producing instruction
+whose inferred region is `Caller` in a function that publishes
+`FreshInCaller` or any store effect (i.e., the alloc CAN escape via
+the caller chain to root). False positives are tolerated because
+the diagnostic is non-blocking and informational.
+
+The note SHOULD NOT fire for the canonical `FreshInCaller`
+return-value pattern (`fn make_X() -> X`), where the alloc is the
+return value — that's the documented mechanism for producing values
+in a caller's arena and carries no hidden surprise.
+
+Rationale: structured rejection on genuine constraint failures is
+the CEGIS feedback signal; structured visibility on root routing
+prevents silent program-lifetime growth without conflating it with
+unsoundness. Issue #314 motivated splitting these concerns: a
+shape-based rejection check (rejecting any `RegionAlloc` source
+flowing to a parameter container) was too coarse, blocking
+legitimate arena patterns. The semantic check restores the
+spec-mandated rejection rule while the note preserves the spirit
+of the original silent-root concern.
 
 Note that the block-tree LUB in step 3 always succeeds (the virtual
 caller node is the universal root); the rejection condition is
-solely the interprocedural constraint check in step 4.
+solely the interprocedural constraint check in step 4 against the
+LUB-computed region.
 
 ### 4.5. Interaction with other passes
 
