@@ -257,14 +257,42 @@ fn classify_oracle_rc(rc: i64) -> i64 {
     ST_CAUGHT()
 }
 
+// POSIX-safe single-quote shell escape. Wraps the value in `'...'` and
+// turns each interior `'` into `'\''` (close, escape, open). Used when
+// interpolating user-supplied paths into shell command strings so a
+// `--workdir` or `--output-dir` containing spaces or other shell-active
+// bytes doesn't break tokenization. The default paths
+// (`/tmp/vow-mutants-<ms>/...`) are safe even without this; user-supplied
+// paths require it.
+fn shell_quote(s: String) -> String {
+    let r: String = String::from("'");
+    let n: i64 = s.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let b: i64 = s.byte_at(i);
+        if b == 39 {
+            r.push_byte(39);
+            r.push_byte(92);
+            r.push_byte(39);
+            r.push_byte(39);
+        } else {
+            r.push_byte(b);
+        }
+        i = i + 1;
+    }
+    r.push_byte(39);
+    r
+}
+
 // Build a shell command that runs `cmd` with cwd = workdir and tees its
 // combined stdout+stderr into log_path. `tier_label` is a short string
 // printed before the command starts (e.g., "tier1") so the operator can
 // tell which tier produced which chunk of the log when both tiers ran.
 // `append` controls whether the redirection appends (>>) or truncates (>).
+// Workdir and log_path are shell-quoted so paths with spaces work.
 fn cd_with_log(workdir: String, cmd: String, log_path: String, tier_label: String, append: bool) -> String {
     let r: String = String::from("cd ");
-    r.push_str(workdir);
+    r.push_str(shell_quote(workdir));
     r.push_str(String::from(" && (echo \"--- "));
     r.push_str(tier_label);
     r.push_str(String::from(" ---\" && "));
@@ -274,7 +302,7 @@ fn cd_with_log(workdir: String, cmd: String, log_path: String, tier_label: Strin
     } else {
         r.push_str(String::from(") > "));
     }
-    r.push_str(log_path);
+    r.push_str(shell_quote(log_path));
     r.push_str(String::from(" 2>&1"));
     r
 }
@@ -282,11 +310,12 @@ fn cd_with_log(workdir: String, cmd: String, log_path: String, tier_label: Strin
 // Capture `git diff --no-color -- <file>` from inside `workdir` and write
 // the patch text to `diff_path`. Best-effort: returns 0 on success, or
 // process_run's exit code on failure (we don't propagate to the verdict).
+// Workdir and the file path are shell-quoted to handle spaces.
 fn capture_diff(workdir: String, repo_relative_file: String, diff_path: String) -> i64 [io, write] {
     let cmd: String = String::from("cd ");
-    cmd.push_str(workdir);
+    cmd.push_str(shell_quote(workdir));
     cmd.push_str(String::from(" && git diff --no-color -- "));
-    cmd.push_str(repo_relative_file);
+    cmd.push_str(shell_quote(repo_relative_file));
     let args: Vec<String> = Vec::new();
     args.push(String::from("-c"));
     args.push(cmd);

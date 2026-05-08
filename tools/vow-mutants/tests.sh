@@ -417,6 +417,36 @@ t22_lock_released_when_worktree_creation_fails() {
     rm -rf "$bad_workdir"
 }
 
+t23_workdir_with_spaces_is_shell_quoted() {
+    # Regression for "shell command construction unquoted". Previously a
+    # workdir containing a space would break `cd <workdir>` and every
+    # oracle redirect; with shell_quote the path is wrapped in '...'.
+    local outdir="$TMP/out_spaces"
+    local spaced_workdir="$TMP/wt with spaces $$"
+    rm -rf "$outdir" "$spaced_workdir"
+    set +e
+    run_vowm run --output-dir "$outdir" --workdir "$spaced_workdir" --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
+    local rc=$?
+    set -e
+    assert_eq "T23: run with --workdir containing spaces exits 0" "0" "$rc"
+    if [ -f "$outdir/outcomes.json" ]; then
+        local missed
+        missed=$(grep -c '"status":"missed"' "$outdir/outcomes.json" 2>/dev/null || true)
+        if [ "$missed" -ge 1 ]; then
+            printf "  ${GREEN}PASS${RESET} T23: spaced workdir produces missed records (got %d) — shell quoting works\n" "$missed"
+            PASS=$((PASS + 1))
+        else
+            printf "  ${RED}FAIL${RESET} T23: outcomes.json present but no missed records (oracle may have failed silently due to bad quoting)\n"
+            FAIL=$((FAIL + 1))
+            FAILURES+=("T23-no-missed")
+        fi
+    else
+        printf "  ${RED}FAIL${RESET} T23: outcomes.json not produced — run probably failed before reaching the oracle\n"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("T23-no-outcomes")
+    fi
+}
+
 t13_records_carry_line_col_and_name() {
     local out
     set +e
@@ -731,6 +761,7 @@ t19_json_escapes_quotes_in_body_replace
 t20_relative_output_dir_works
 t21_contracts_not_duplicated_for_unsupported_return_types
 t22_lock_released_when_worktree_creation_fails
+t23_workdir_with_spaces_is_shell_quoted
 
 echo ""
 if [ "$FAIL" -eq 0 ]; then
