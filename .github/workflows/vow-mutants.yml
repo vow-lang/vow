@@ -74,13 +74,18 @@ jobs:
           # so the default `scripts/bootstrap.sh --skip-cargo` Tier-1 won't work
           # in this context — we override to run the full bootstrap (cargo build
           # cache lives in the worktree's target/ and is reused across mutants).
+          # The FIRST Tier-1 invocation in the worktree must do a cold
+          # `cargo build --all --release`; on ubuntu-latest that takes 5–15 min.
+          # --tier1-timeout-secs 1800 (30 min) accommodates the cold build with
+          # slack; subsequent mutants reuse the worktree's warm target/ and
+          # finish in ~1–3 min via incremental compilation.
           # Tier-2 budget = 9000 s (150 min) leaves 30 min within the
           # 180-min job timeout for setup, teardown, and any unrun-budget cleanup.
           build/vow-mutants run \
             --root compiler \
             --shard ${{ matrix.shard }}/8 \
             --tier1-cmd 'scripts/bootstrap.sh' \
-            --tier1-timeout-secs 300 \
+            --tier1-timeout-secs 1800 \
             --tier2-budget-secs 9000 \
             --output-dir mutants.out
 

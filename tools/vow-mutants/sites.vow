@@ -384,6 +384,15 @@ fn try_emit_body_replace(src: String, i_after_kw: i64, file_path: String, sites:
         // e.g., `i64 vow {` → ty becomes `i64` here because we break on space
         // but if it was `i64vow` it would mash. Should be fine since vow source uses spaces.
     }
+    // Hoist the return-type check BEFORE walking the vow block. If the
+    // return type is unsupported, return -1 immediately so the caller's
+    // natural scan can emit contract-weaken sites once via
+    // parse_contract_clause. Without this early exit, scan_vow_block_contracts
+    // (called in the loop below) emits contract sites, then we fail on
+    // default_for_ty, return -1, and the caller's natural scan re-emits the
+    // same sites — producing duplicate contract mutants.
+    let replacement: String = default_for_ty(ret_ty);
+    if replacement.len() == 0 { return -1; }
     // skip optional `vow { ... }` and effect `[ ... ]` annotations in any order
     let mut guard: i64 = 0;
     while k < n && guard < 6 {
@@ -419,8 +428,6 @@ fn try_emit_body_replace(src: String, i_after_kw: i64, file_path: String, sites:
     let body_close: i64 = body_end - 1;
     let body_len: i64 = body_close - body_inside;
     if body_len <= 0 { return -1; }
-    let replacement: String = default_for_ty(ret_ty);
-    if replacement.len() == 0 { return -1; }
     let label: String = str3(String::from("body → "), replacement, String::from(""));
     let lc: Vec<i64> = line_col_at(src, body_inside);
     sites.push(Site {

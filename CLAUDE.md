@@ -243,12 +243,13 @@ The `examples/` directory contains runnable `.vow` programs:
 
 ## Mutation Testing (`tools/vow-mutants/`)
 
-`tools/vow-mutants/` is a `cargo-mutants`-style mutation testing tool, dogfooded as a self-hosted Vow program. It mutates `compiler/*.vow` (or any `--root` directory), runs a tiered oracle (`scripts/bootstrap.sh --skip-cargo` then `scripts/full_test.sh`), and emits JSONL records classifying each mutant as `caught`/`missed`/`timeout`/`unviable`/`unrun`.
+`tools/vow-mutants/` is a `cargo-mutants`-style mutation testing tool, dogfooded as a self-hosted Vow program. It mutates `compiler/*.vow` (or any `--root` directory), runs a tiered oracle (`scripts/bootstrap.sh --skip-cargo` then `scripts/full_test.sh`), and writes structured JSON output to `mutants.out/` (`mutants.json`, `outcomes.json`, per-status `.txt` lists, plus `diff/<id>.diff` and `logs/<id>.log` per mutant). Stdout carries only a one-line summary.
 
 ```bash
 build/vowc build --no-verify tools/vow-mutants/main.vow -o build/vow-mutants
-build/vow-mutants list                                  # enumerate sites only
-build/vow-mutants run --shard 0/8 --tier2-budget-secs 9000 > mutants.out
+build/vow-mutants list                                                # enumerate sites only
+build/vow-mutants run --shard 0/8 --tier2-budget-secs 9000            # writes ./mutants.out/
+build/vow-mutants run --shard 0/8 --output-dir my-results             # custom output directory
 ```
 
 Mutation kinds: `op-flip` (binary operators), `const-flip` (`0`/`1`, `true`/`false`), `body-replace` (function bodies → default value for return type), `contract-weaken` (`requires`/`ensures`/`invariant` clauses → `true`).

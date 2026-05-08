@@ -48,7 +48,12 @@ fn run_shell(cmd: String, timeout_ms: i64) -> i64 [io] {
         process_kill(pid);
         return -2;
     }
-    if rc == 124 {
+    // Both timeout exit codes from coreutils `timeout(1)` map to the
+    // -2 sentinel: 124 = SIGTERM fired on timeout; 137 = SIGKILL fired
+    // after `--kill-after` because the oracle ignored SIGTERM during
+    // the grace period. Without the 137 case, hung oracles fall through
+    // as "exit > 0" and are misclassified as `caught`.
+    if rc == 124 || rc == 137 {
         return -2;
     }
     rc

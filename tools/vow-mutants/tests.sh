@@ -363,6 +363,60 @@ t14_per_mutant_diff_and_log_captured() {
     fi
 }
 
+t21_contracts_not_duplicated_for_unsupported_return_types() {
+    # Regression for the duplicate-contract bug: when a function has a vow
+    # block AND a return type outside default_for_ty's supported set,
+    # try_emit_body_replace used to push contract sites via
+    # scan_vow_block_contracts before noticing the unsupported return type
+    # and returning -1 — leaving the caller's natural scan to re-emit the
+    # same clauses via parse_contract_clause. Result: duplicate sites.
+    local fix="$TMP/contract_dedup"
+    mkdir -p "$fix"
+    cat > "$fix/unsupported_ret.vow" <<'V'
+module UnsupportedRet
+
+struct CustomType { x: i64 }
+
+fn build(a: i64) -> CustomType vow { requires: a >= 0, ensures: result.x == a } {
+    CustomType { x: a }
+}
+V
+    local out
+    set +e
+    out=$(run_vowm list --root "$fix" 2>&1)
+    set -e
+    local cw_count
+    cw_count=$(echo "$out" | grep '"file":"' | grep -c '"kind":"contract-weaken"' || true)
+    # Two clauses (requires + ensures), one each — never doubled.
+    assert_eq "T21: unsupported-ret fn yields exactly 2 contract-weaken sites" "2" "$cw_count"
+}
+
+t22_lock_released_when_worktree_creation_fails() {
+    # Regression for "lock not released on worktree creation failure".
+    # Force `git worktree add` to fail by pointing --workdir at a path
+    # that already exists as a directory git considers invalid.
+    local outdir="$TMP/out_lock_release"
+    rm -rf "$outdir"
+    local bad_workdir="$TMP/wt_bad_$$"
+    mkdir -p "$bad_workdir"
+    # Pre-populate with a file so git worktree add refuses
+    echo "occupier" > "$bad_workdir/file"
+    set +e
+    run_vowm run --output-dir "$outdir" --workdir "$bad_workdir" --root tests/fixtures/mutants --tier1-cmd 'true' --tier2-cmd 'true' >/dev/null 2>&1
+    local rc=$?
+    set -e
+    assert_eq "T22: run exits nonzero when worktree creation fails" "1" "$rc"
+    if [ ! -d "$outdir/.lock" ]; then
+        printf "  ${GREEN}PASS${RESET} T22: .lock removed even though worktree_create failed\n"
+        PASS=$((PASS + 1))
+    else
+        printf "  ${RED}FAIL${RESET} T22: .lock still present after worktree creation failure (would block future runs)\n"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("T22-lock-leak")
+    fi
+    rm -rf "$bad_workdir"
+}
+
 t13_records_carry_line_col_and_name() {
     local out
     set +e
@@ -675,6 +729,8 @@ t17_generate_name_matching_disjoint_blocks
 t18_outcome_ids_are_shard_local
 t19_json_escapes_quotes_in_body_replace
 t20_relative_output_dir_works
+t21_contracts_not_duplicated_for_unsupported_return_types
+t22_lock_released_when_worktree_creation_fails
 
 echo ""
 if [ "$FAIL" -eq 0 ]; then
