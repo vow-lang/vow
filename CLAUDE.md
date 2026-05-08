@@ -256,7 +256,9 @@ Mutation kinds: `op-flip` (binary operators), `const-flip` (`0`/`1`, `true`/`fal
 
 Skip-list: `// GENERATE:<NAME>:START`/`:END` blocks and `extern "C" { ... }` blocks are excluded. `test_*.vow` files are filtered before scanning.
 
-`.github/workflows/vow-mutants.yml` runs the suite nightly, sharded across 8 GitHub Actions runners, with each shard uploading its `mutants.out` artifact. Wall-clock note: full Tier-2 coverage does not fit in a single nightly run; shards exit with `unrun` records when the per-shard budget is exhausted. See `tools/vow-mutants/README.md` for the full output schema and known limitations.
+**Local-only.** Mutation testing is not wired into CI — a full Tier-2 sweep across `compiler/*.vow` is multi-hour wall-clock and would burn through GitHub Actions budget on every nightly. Run it on the developer machine on whatever cadence suits the project (e.g., before tagging a release, or after a substantial compiler change). To split the work, shard explicitly with `--shard 0/8` etc. and run shards sequentially over multiple sessions; the determinism guarantee means the union of `mutants.out/` across shards is well-defined.
+
+When a `missed.txt` entry appears, the actionable response is to either (a) write a test that catches the mutation, or (b) file an issue documenting why the mutation is equivalent and out of scope. See `tools/vow-mutants/README.md` for the full output schema and known limitations.
 
 ## Vericoding Benchmark Suite
 

@@ -40,7 +40,7 @@ vow-mutants run   [--root DIR] [--shard X/Y]
 `vow-mutants run` operates on a fresh `git worktree` (created via `git worktree add --detach`) instead of mutating the live source tree. This guarantees the original `compiler/` (or any `--root`) is byte-identical before and after the run, even on Ctrl-C or oracle crashes. The worktree is removed via `git worktree remove --force` at exit.
 
 **Caveats**:
-- The worktree's `target/` starts empty. The default Tier-1 oracle `scripts/bootstrap.sh --skip-cargo` requires `target/release/vow` to already exist, so it will fail in the worktree unless you (a) pass `--tier1-cmd 'scripts/bootstrap.sh'` to run the full bootstrap inside the worktree, or (b) symlink `target/` from the original tree before invoking. The bundled `.github/workflows/vow-mutants.yml` uses option (a).
+- The worktree's `target/` starts empty. The default Tier-1 oracle `scripts/bootstrap.sh --skip-cargo` requires `target/release/vow` to already exist, so it will fail in the worktree unless you (a) pass `--tier1-cmd 'scripts/bootstrap.sh'` to run the full bootstrap inside the worktree, or (b) symlink `target/` from the original tree before invoking. Local development typically uses (b) for speed; (a) is what you'd want when running from a fresh checkout.
 - The repo must be a git working tree. A non-git checkout is not supported in v1.
 
 ## Mutation kinds
@@ -112,21 +112,21 @@ mutants.out/
 
 See `docs/spec/schemas/mutants-result.schema.json` for the formal schema.
 
-`stdout` carries only the one-line summary record (so CI logs surface the verdict at a glance).
+`stdout` carries only the one-line summary record (so the per-shard verdict surfaces at a glance even when the full output is in `mutants.out/`).
 
 ## Determinism guarantee
 
 For a fixed source tree and shard configuration, `vow-mutants list` produces byte-identical output across runs. `vow-mutants run` produces `mutants.json` byte-identically; `outcomes.json` differs only in the `oracle_ms` field per record. Mutant IDs are stable, so re-running a single shard's failing mutants is straightforward.
 
-## CI
+## How to run it
 
-`.github/workflows/vow-mutants.yml` runs the full mutation pass nightly, sharded across 8 GitHub Actions runners with a 150-minute per-shard Tier-2 budget. Each shard uploads its `mutants.out/` directory as an artifact for offline review.
+Mutation testing is **local-only** — there is no scheduled nightly. A full sweep across `compiler/*.vow` is multi-hour wall-clock, and a nightly across 8 shards would burn through GitHub Actions budget on every run for findings that only the developer ever consumes. Run it on the cadence the project warrants — before tagging a release, after a substantial compiler change, or whenever you want to audit test coverage. To split the work, shard explicitly with `--shard 0/8` and run shards sequentially across multiple sessions; the determinism guarantee above means the union of `mutants.out/` across shards is well-defined.
 
 ## Limitations (v1)
 
-- **Wall-clock at this scale, not specific to vow-mutants**: any mutation-testing pass on a codebase this size exceeds a single CI run, regardless of oracle. cargo-mutants on this repo is in the same position — its 90-min nightly with 8 shards and `cargo test` per mutant only reaches a fraction of the total mutant count, and the rest are silently absent from `mutants.out`. vow-mutants makes the unrun set explicit (`status:"unrun"` records when `--tier2-budget-secs` is exhausted) so coverage gaps are visible per shard. Full Tier-2 coverage takes multiple nightlies; the determinism guarantee above means the union across runs is well-defined.
+- **Wall-clock at scale**: a full Tier-2 sweep across `compiler/*.vow` takes hours. The `--tier2-budget-secs` cap (default 7200 = 2 h) ensures graceful degradation: surviving Tier-1 mutants beyond the budget are emitted with `status:"unrun"` so coverage gaps are explicit rather than silent. Multiple sessions across different shards reach full coverage; the determinism guarantee makes the union well-defined.
 - **Equivalent mutants**: weakening a non-load-bearing `ensures` clause (e.g., a `result >= 0` clause on a constant function) yields a `missed` record even though the contract is functionally redundant. There is no equivalent-mutant detector in v1.
-- **Lock TOCTOU race**: the `.lock` directory is created with `fs_mkdir` after an `fs_exists` probe; vow-runtime's `fs_mkdir` is `mkdir -p` semantics, not atomic. Two nearly-simultaneous invocations against the same `--output-dir` could both pass the existence check. In practice CI shards write to different output dirs, so the race window is acceptable.
+- **Lock TOCTOU race**: the `.lock` directory is created with `fs_mkdir` after an `fs_exists` probe; vow-runtime's `fs_mkdir` is `mkdir -p` semantics, not atomic. Two nearly-simultaneous invocations against the same `--output-dir` could both pass the existence check. In practice you only run one mutation pass at a time per output dir; if you parallelise, point each invocation at its own `--output-dir`.
 - **JSON output is escaped** for `"`, `\`, and ASCII control bytes (newline / carriage-return / tab / backspace / form-feed → `\n` / `\r` / `\t` / `\b` / `\f`; other bytes < 0x20 → `?`). Non-ASCII bytes (UTF-8 continuation bytes for multi-byte codepoints) pass through unescaped, which is valid in modern JSON parsers but technically not pure-ASCII JSON.
 - **Generic-type angle brackets are mutated.** The token-level scanner emits `< → >=` and `> → <=` op-flip sites for `<` and `>` everywhere they appear, including generic type positions (`Vec<i64>`, `Vec<String>`, etc.). Mutating these produces unparseable source, which the oracle classifies as `unviable`. The unviable count therefore inflates with the number of generic type uses in the target tree; this is correct but noisy.
 - **Unary minus produces unviable records.** The scanner emits `- → +` for every `-` not immediately followed by `>` (the return-type arrow), including unary positions (e.g., `let x: i64 = -5;`). Vow has no unary `+` operator, so these mutations produce unparseable source and the oracle classifies them as `unviable` — same shape as the angle-bracket case above.
