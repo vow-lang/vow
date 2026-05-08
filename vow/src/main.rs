@@ -5660,24 +5660,21 @@ fn run_verify_only_inner(
 // Full build pipeline (vow build / legacy)
 // ---------------------------------------------------------------------------
 
-fn link_obj(obj_path: &Path, output_path: &Path) -> Option<PathBuf> {
-    match find_runtime_lib() {
-        Some(runtime) => {
-            match link(
-                &[obj_path],
-                &runtime,
-                find_shim_lib().as_deref(),
-                output_path,
-            ) {
-                Ok(()) => {
-                    let _ = std::fs::remove_file(obj_path);
-                    Some(output_path.to_path_buf())
-                }
-                Err(_) => None,
-            }
-        }
-        None => None,
-    }
+fn link_obj(obj_path: &Path, output_path: &Path) -> Result<PathBuf, String> {
+    let runtime = find_runtime_lib().ok_or_else(|| {
+        "could not find libvow_runtime.a; build it with `cargo build --release --all` \
+         or set VOW_RUNTIME_PATH"
+            .to_string()
+    })?;
+    link(
+        &[obj_path],
+        &runtime,
+        find_shim_lib().as_deref(),
+        output_path,
+    )
+    .map_err(|e| format!("link failed: {e:?}"))?;
+    let _ = std::fs::remove_file(obj_path);
+    Ok(output_path.to_path_buf())
 }
 
 // Compile-object cache is only enabled when `--no-cache` is off and verification is off, so verified builds always link a fresh codegen output.
@@ -5822,7 +5819,20 @@ fn run_pipeline_from_frontend(
         && let Some(cached_obj) = cc.lookup(key)
         && std::fs::copy(&cached_obj, &obj_path).is_ok()
     {
-        let exe_path = link_obj(&obj_path, &output_path);
+        let exe_path = match link_obj(&obj_path, &output_path) {
+            Ok(p) => Some(p),
+            Err(message) => {
+                let _ = verify_handle.join();
+                return BuildOutput {
+                    status: BuildStatus::CompileFailed { message },
+                    executable: None,
+                    diagnostics: all_diagnostics,
+                    counterexamples: vec![],
+                    verify_status: None,
+                    verify_message: None,
+                };
+            }
+        };
         let (verify_outcome, skipped) = verify_handle
             .join()
             .unwrap_or((VerifyOutcome::Skipped, Vec::new()));
@@ -5878,7 +5888,20 @@ fn run_pipeline_from_frontend(
         cc.store(key, &obj_path);
     }
 
-    let exe_path = link_obj(&obj_path, &output_path);
+    let exe_path = match link_obj(&obj_path, &output_path) {
+        Ok(p) => Some(p),
+        Err(message) => {
+            let _ = verify_handle.join();
+            return BuildOutput {
+                status: BuildStatus::CompileFailed { message },
+                executable: None,
+                diagnostics: all_diagnostics,
+                counterexamples: vec![],
+                verify_status: None,
+                verify_message: None,
+            };
+        }
+    };
 
     let (verify_outcome, skipped) = verify_handle
         .join()
