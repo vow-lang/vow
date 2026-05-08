@@ -630,9 +630,16 @@ fn run_run(argv: Vec<String>) -> i32 [io, read, write] {
                 status = ST_UNRUN();
                 tier = 1;
             } else {
+                // Cap the per-mutant Tier-2 timeout at the remaining
+                // budget so a single late-shard mutant cannot overshoot
+                // the per-shard budget by up to `--tier2-timeout-secs`.
+                // Keeps the GitHub job timeout from killing the run
+                // before outcomes.json gets persisted.
+                let remaining_ms: i64 = t2_budget_ms - t2_used_ms;
+                let this_t2_to_ms: i64 = if t2_to_ms < remaining_ms { t2_to_ms } else { remaining_ms };
                 let t2_full: String = cd_with_log(workdir, tier2_cmd, log_p, String::from("tier2"), true);
                 let t2_start: i64 = time_unix_ms();
-                let rc2: i64 = run_shell(t2_full, t2_to_ms);
+                let rc2: i64 = run_shell(t2_full, this_t2_to_ms);
                 let t2_dur: i64 = time_unix_ms() - t2_start;
                 t2_used_ms = t2_used_ms + t2_dur;
                 oracle_ms = t1_dur + t2_dur;
