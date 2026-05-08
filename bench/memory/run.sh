@@ -286,6 +286,14 @@ for source in "${PROGRAMS[@]}"; do
 
   if [[ "$build_exit" -ne 0 || ! -x "$binary" ]]; then
     emit_result "build_failed" "$name" "$source" "$binary" "$build_exit" "" "" "$bound" ""
+    if [[ -s "$build_stdout" ]]; then
+      printf '  build stdout (%s):\n' "$name" >&2
+      sed 's/^/    /' "$build_stdout" >&2
+    fi
+    if [[ -s "$build_stderr" ]]; then
+      printf '  build stderr (%s):\n' "$name" >&2
+      sed 's/^/    /' "$build_stderr" >&2
+    fi
     OVERALL=1
     continue
   fi

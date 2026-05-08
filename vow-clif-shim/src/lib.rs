@@ -2609,16 +2609,20 @@ pub unsafe extern "C" fn __vow_clif_link(obj_path_ptr: i64, output_path_ptr: i64
     let obj_path = unsafe { read_vow_string(obj_path_ptr) };
     let output_path = unsafe { read_vow_string(output_path_ptr) };
 
-    let runtime_lib = find_lib("libvow_runtime.a");
+    let runtime_lib = match find_lib("libvow_runtime.a") {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "clif_shim: could not find libvow_runtime.a; build it with `cargo build --release --all` or set VOW_RUNTIME_PATH"
+            );
+            return -1;
+        }
+    };
     let shim_lib = find_lib("libvow_clif_shim.a");
 
     let mut cmd = std::process::Command::new("cc");
     cmd.arg(obj_path);
-    if let Some(ref rt) = runtime_lib {
-        cmd.arg(rt);
-    } else {
-        eprintln!("clif_shim: warning: could not find libvow_runtime.a");
-    }
+    cmd.arg(&runtime_lib);
     if let Some(ref sl) = shim_lib {
         cmd.arg(sl);
     }
