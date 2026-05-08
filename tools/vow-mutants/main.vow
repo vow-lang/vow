@@ -33,8 +33,11 @@ fn has_flag(argv: Vec<String>, flag: String) -> bool {
     false
 }
 
-fn parse_shard(spec: String) -> Vec<i64> {
+fn parse_shard(spec: String) -> Vec<i64> [io] {
     // spec format: "X/Y"; defaults to 0/1 if empty or malformed.
+    // Falls-back paths print a stderr warning so a CI matrix typo
+    // (e.g. `--shard 5/3` or `--shard abc`) doesn't silently misconfigure
+    // the run.
     let result: Vec<i64> = Vec::new();
     if spec.len() == 0 {
         result.push(0);
@@ -43,16 +46,21 @@ fn parse_shard(spec: String) -> Vec<i64> {
     }
     let parts: Vec<String> = string_split(spec, String::from("/"));
     if parts.len() != 2 {
+        let msg: String = String::from("vow-mutants: invalid --shard '");
+        msg.push_str(spec);
+        msg.push_str(String::from("' (expected 'X/Y'); falling back to 0/1"));
+        eprintln_str(msg);
         result.push(0);
         result.push(1);
         return result;
     }
     let x: i64 = parse_i64(parts[0]);
     let y: i64 = parse_i64(parts[1]);
-    // Reject y <= 0 AND x >= y AND x < 0. Otherwise `--shard 5/3` would
-    // pass through and the runner's `id % y == x` check would never match,
-    // silently producing zero records.
     if y <= 0 || x < 0 || x >= y {
+        let msg: String = String::from("vow-mutants: invalid --shard '");
+        msg.push_str(spec);
+        msg.push_str(String::from("' (need 0 <= X < Y); falling back to 0/1"));
+        eprintln_str(msg);
         result.push(0);
         result.push(1);
         return result;

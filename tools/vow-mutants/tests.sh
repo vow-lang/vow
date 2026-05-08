@@ -447,6 +447,66 @@ t23_workdir_with_spaces_is_shell_quoted() {
     fi
 }
 
+t24_invalid_shard_warns_to_stderr() {
+    # Regression for "parse_shard silent fallback".
+    local stderr
+    stderr=$(run_vowm list --root tests/fixtures/mutants --shard 5/3 2>&1 >/dev/null)
+    if echo "$stderr" | grep -q "invalid --shard '5/3'"; then
+        printf "  ${GREEN}PASS${RESET} T24: invalid --shard prints warning to stderr\n"
+        PASS=$((PASS + 1))
+    else
+        printf "  ${RED}FAIL${RESET} T24: expected stderr warning for --shard 5/3, got: %s\n" "$stderr"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("T24")
+    fi
+}
+
+t25_body_replace_label_has_no_double_space() {
+    # Regression for "body-replace label whitespace": labels were built from
+    # the space-padded splice replacement, producing "body →  0 " (double
+    # space + trailing space). Trim restores the cleaner display form.
+    local out
+    set +e
+    out=$(run_vowm list --root tests/fixtures/mutants 2>&1)
+    set -e
+    local body_labels_with_double_space
+    body_labels_with_double_space=$(echo "$out" | grep '"kind":"body-replace"' | grep -c '"label":"body → [ ]' || true)
+    assert_eq "T25: zero body-replace labels with double-space after arrow" "0" "$body_labels_with_double_space"
+    # Also assert at least one body-replace site exists so the test isn't vacuous.
+    local body_count
+    body_count=$(echo "$out" | grep -c '"kind":"body-replace"' || true)
+    if [ "$body_count" -ge 1 ]; then
+        printf "  ${GREEN}PASS${RESET} T25: body-replace sites exist (got %d) and labels are well-formed\n" "$body_count"
+        PASS=$((PASS + 1))
+    else
+        printf "  ${RED}FAIL${RESET} T25: vacuous \\u2014 no body-replace sites in fixtures\n"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("T25-vacuous")
+    fi
+}
+
+t26_modulo_paired_with_division() {
+    # Regression for `% → /` mutation pairing (was `% → *`).
+    local fix="$TMP/mod_pair"
+    mkdir -p "$fix"
+    cat > "$fix/m.vow" <<'V'
+module ModPair
+fn r(a: i64, b: i64) -> i64 { a % b }
+V
+    local out
+    set +e
+    out=$(run_vowm list --root "$fix" 2>&1)
+    set -e
+    if echo "$out" | grep -q '"kind":"op-flip","from":"%","to":"/"'; then
+        printf "  ${GREEN}PASS${RESET} T26: %% paired with /\n"
+        PASS=$((PASS + 1))
+    else
+        printf "  ${RED}FAIL${RESET} T26: expected %% → / op-flip site, got: %s\n" "$out"
+        FAIL=$((FAIL + 1))
+        FAILURES+=("T26")
+    fi
+}
+
 t13_records_carry_line_col_and_name() {
     local out
     set +e
@@ -762,6 +822,9 @@ t20_relative_output_dir_works
 t21_contracts_not_duplicated_for_unsupported_return_types
 t22_lock_released_when_worktree_creation_fails
 t23_workdir_with_spaces_is_shell_quoted
+t24_invalid_shard_warns_to_stderr
+t25_body_replace_label_has_no_double_space
+t26_modulo_paired_with_division
 
 echo ""
 if [ "$FAIL" -eq 0 ]; then

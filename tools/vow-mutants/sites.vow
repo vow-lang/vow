@@ -206,7 +206,10 @@ fn scan_all_sites(src: String, file_path: String) -> Vec<Site> {
             i = i + 1; continue;
         }
         if b == 37 {
-            sites.push(make_op_site(src, file_path, i, 1, String::from("%"), String::from("*"), String::from("% → *")));
+            // % → / is a stronger semantic mutation than % → *: integer
+            // remainder vs. quotient is a much more common bug class than
+            // remainder vs. product. Same byte cost.
+            sites.push(make_op_site(src, file_path, i, 1, String::from("%"), String::from("/"), String::from("% → /")));
             i = i + 1; continue;
         }
         if b == 60 {
@@ -428,7 +431,10 @@ fn try_emit_body_replace(src: String, i_after_kw: i64, file_path: String, sites:
     let body_close: i64 = body_end - 1;
     let body_len: i64 = body_close - body_inside;
     if body_len <= 0 { return -1; }
-    let label: String = str3(String::from("body → "), replacement, String::from(""));
+    // `replacement` is space-padded for splicing (e.g. ` 0 ` to keep the
+    // surrounding bytes legible); trim for the human-facing label.
+    let label: String = String::from("body → ");
+    label.push_str(string_trim(replacement));
     let lc: Vec<i64> = line_col_at(src, body_inside);
     sites.push(Site {
         file: file_path,
