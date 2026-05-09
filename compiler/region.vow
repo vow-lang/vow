@@ -1012,6 +1012,16 @@ fn emit_root_escape_notes_module(
     while fi < m.functions.len() {
         let f: IrFunction = m.functions[fi];
         let return_kind: i64 = int_kinds[fi];
+        // Divergence from Rust's mirror: Rust filters
+        // `summary.store_effects` to `Published(_)` constraints (excludes
+        // Unresolved/NotPublished); self-hosted's flat `int_se_targets`
+        // doesn't carry that distinction, so any non-empty entry triggers
+        // the gate. Conservative over-approximation — fires the note for
+        // a few functions Rust would skip — and spec-allowed for non-
+        // blocking notes. Same family as the
+        // `unique_store_target_count` adjacency-dedup asymmetry; tracked
+        // for follow-up if the .vmod schema ever gains the publication
+        // discriminator at this layer.
         let has_publishable: bool = return_kind == RSUM_KIND_FRESH_IN_CALLER()
             || int_se_targets[fi].len() > 0;
         if !has_publishable {

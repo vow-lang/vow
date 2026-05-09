@@ -5749,12 +5749,14 @@ mod tests {
             .iter()
             .filter(|d| d.code == ErrorCode::RegionRootEscape)
             .collect();
-        // The routed alloc fires; the returned one is on the skip-set.
-        // Multi-slot ambiguous_caller_slot is not triggered here (one
-        // store target + one FreshInCaller = two slots, but the routed
-        // alloc would also trip RegionConflict — which is the expected
-        // ambiguous-slot behaviour). Filter by severity to scope this
-        // test to the note path.
+        // The routed alloc fires the note; the returned one is on the
+        // skip-set. The fixture has 1 store target + 1 FreshInCaller
+        // return = 2 slots, so `ambiguous_caller_slot` is also true
+        // and the routed alloc additionally trips `RegionConflict`
+        // (expected). The filter below scopes the assertion to the
+        // note path; the conflict path is covered by the dedicated
+        // `region_conflict_when_multiple_caller_slots_make_caller0_ambiguous`
+        // test.
         assert!(
             notes.iter().any(|d| d.severity == Severity::Note),
             "expected at least one RegionRootEscape note for the routed alloc; \
