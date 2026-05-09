@@ -1030,9 +1030,11 @@ fn emit_root_escape_notes_module(
         // the gate. Conservative over-approximation — fires the note for
         // a few functions Rust would skip — and spec-allowed for non-
         // blocking notes. Same family as the
-        // `unique_store_target_count` adjacency-dedup asymmetry; tracked
-        // for follow-up if the .vmod schema ever gains the publication
-        // discriminator at this layer.
+        // `unique_store_target_count` adjacency-dedup asymmetry.
+        // TODO(#318): when the .vmod schema gains a publication
+        // discriminator at this layer, re-align with Rust's
+        // `Published(_)` filter so both compilers emit the same set
+        // of `RegionRootEscape` notes.
         let has_publishable: bool = return_kind == RSUM_KIND_FRESH_IN_CALLER()
             || int_se_targets[fi].len() > 0;
         if !has_publishable {

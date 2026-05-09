@@ -323,7 +323,11 @@ fn rust_routed_aggregate_via_callee_store_effect_compiles() {
     // without a prior `cargo build --release --all`. The region pass
     // itself runs in either case; we tolerate the link-only failure
     // because the fixture's purpose is to exercise inference, not
-    // linking.
+    // linking. CI runs a full build first, so this branch is dead in
+    // CI — and the unconditional `RegionConflict`-absence assertion
+    // below still runs against the parsed diagnostics regardless of
+    // link status, so a regression in the region pass cannot be
+    // masked by a missing runtime archive.
     let runtime_link_failure = status == Some("CompileFailed")
         && parsed["message"]
             .as_str()
