@@ -1479,6 +1479,31 @@ fn analyze_function(
     summary
 }
 
+/// Walk back from a Return-argument id, recording the id itself plus every
+/// Upsilon arm source for any Phi reached. Used to expand
+/// `emit_root_escape_notes`'s skip-set so the underlying `RegionAlloc`s
+/// merged through a Phi for conditional-construction patterns
+/// (`if cond { X{..} } else { X{..} }`) are recognised as canonical
+/// FreshInCaller return values rather than side-effect escapes.
+fn collect_return_value_sources(start: InstId, func: &Function, out: &mut BTreeSet<InstId>) {
+    let mut stack = vec![start];
+    while let Some(id) = stack.pop() {
+        if !out.insert(id) {
+            continue;
+        }
+        for blk in &func.blocks {
+            for inst in &blk.insts {
+                if inst.opcode == Opcode::Upsilon
+                    && matches!(inst.data, InstData::PhiTarget(t) if t == id)
+                    && let Some(&arm) = inst.args.first()
+                {
+                    stack.push(arm);
+                }
+            }
+        }
+    }
+}
+
 /// Emit a `RegionRootEscape` Note for each heap-producing instruction whose
 /// inferred region is `Caller(_)`. Only invoked from `analyze_function` for
 /// functions that may propagate the allocation to a caller (FreshInCaller
@@ -1492,16 +1517,21 @@ fn emit_root_escape_notes(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let source_file: &str = &func.source_file;
-    // Pre-collect returned IDs so the inner skip is O(log n) instead of O(n).
-    // Skip notes for the canonical FreshInCaller return path; only flag
-    // side-effect escapes (allocs stored into parameter containers).
-    let returned_ids: BTreeSet<InstId> = func
-        .blocks
-        .iter()
-        .flat_map(|b| &b.insts)
-        .filter(|i| i.opcode == Opcode::Return)
-        .filter_map(|i| i.args.first().copied())
-        .collect();
+    // Pre-collect IDs of every value reachable from a `Return` — directly,
+    // and through Phi nodes via their Upsilon arms. Allocations on the
+    // canonical FreshInCaller return path (including Phi-merged arms in
+    // `if cond { Foo{..} } else { Foo{..} }`) shouldn't fire the note;
+    // only side-effect escapes through store-effect chains should.
+    let mut returned_ids: BTreeSet<InstId> = BTreeSet::new();
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.opcode == Opcode::Return
+                && let Some(&rv) = inst.args.first()
+            {
+                collect_return_value_sources(rv, func, &mut returned_ids);
+            }
+        }
+    }
     for block in &func.blocks {
         for inst in &block.insts {
             let Some(rgn) = region_map.get(&inst.id) else {
@@ -2445,19 +2475,10 @@ fn origin_to_constraint(origin: &ValueOrigin) -> RegionConstraint {
 // Conflict detection
 // ---------------------------------------------------------------------------
 
-/// Walk through aliasing wrappers (FieldGet, Load, vec-get extern, Phi) to
-/// find the underlying region of a value. Mirrors the chain codegen's
-/// `source_value_region` (vow-codegen) and `clif_value_receiver_region`
-/// (compiler/clif.vow) walk. Used only in `ambiguous_caller_slot` mode to
-/// detect underlying `Caller(_)` allocations that would silently misroute
-/// through slot 0.
-///
-/// Returns `Some(RegionId::Caller(_))` when ANY reachable terminus
-/// resolves to a caller region — caller treats that as a conflict. For
-/// Phi insts, every Upsilon writing to the Phi is recursed into, and the
-/// first Caller result short-circuits. Returns `None` when no caller
-/// terminus is found (parameters, scalars, unrecognised opcodes, or
-/// purely Block/Root/Rodata Phi merges) — those are safe in ambiguous mode.
+/// Trace alias chain (FieldGet/Load/vec-get/Phi) for ambiguous-slot check;
+/// mirrors codegen's `source_value_region`. Returns `Some(Caller(_))` when
+/// any terminus resolves to a caller arena (caller treats as conflict);
+/// `None` for safe termini (parameters, scalars, Block/Root/Rodata).
 fn underlying_caller_via_aliases(
     source_arg_id: InstId,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,

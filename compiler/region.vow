@@ -747,21 +747,10 @@ fn add_store_effect(
     aliases_list.push(clone_i64_vec(aliases));
 }
 
-// Walk through aliasing wrappers (FieldGet, Load, vec-get extern, Phi) to
-// find the underlying region of a value. Mirrors the chain that
-// `clif_value_receiver_region` (compiler/clif.vow) follows during codegen.
-// Used only in `ambiguous_caller_slot` mode to detect underlying
-// `Caller(_)` allocations that would silently misroute through slot 0.
-//
-// Returns:
-//   >=0   — packed region of a heap producer reached by the trace, or
-//           a Caller(_) sentinel when a Phi merges divergent arms one of
-//           which reaches Caller (conservative reject path).
-//   -1    — chain terminates at a parameter, scalar, or unrecognised
-//           opcode that cannot misroute via slot 0.
-//
-// Cycle detection via `seen` only — no fixed depth cap, since codegen's
-// equivalent walk is depth-unbounded and must agree.
+// Trace alias chain (FieldGet/Load/vec-get/Phi) for ambiguous-slot check;
+// mirrors clif_value_receiver_region. Returns packed region (>=0) on a
+// heap-producer terminus (Caller sentinel triggers conservative reject)
+// or -1 on a safe terminus.
 fn underlying_caller_via_aliases(
     id_to_inst: Vec<IrInst>,
     region_keys: Vec<i64>, region_vals: Vec<i64>,
@@ -1056,12 +1045,16 @@ fn emit_root_escape_notes_module(
     }
 }
 
-// Pre-collect the inst ids referenced by every `Return` in the function.
-// Used by `emit_root_escape_notes_module` to skip notes for the canonical
-// FreshInCaller return path — pre-collecting once turns the per-inst skip
-// into an O(returned_ids) lookup rather than a per-inst full-function rescan.
+// Collect the IDs of every value reachable from a Return — directly, and
+// through Phi nodes via their Upsilon arms. Used by
+// `emit_root_escape_notes_module` to skip notes on the canonical
+// FreshInCaller return path, including conditional-construction patterns
+// (`if cond { X{..} } else { X{..} }`) where the Phi is returned but the
+// underlying RegionAllocs in each arm are the actual heap producers.
 fn collect_returned_ids(bks: Vec<IrBlock>) -> Vec<i64> {
     let out: Vec<i64> = Vec::new();
+    // First gather direct Return arguments.
+    let stack: Vec<i64> = Vec::new();
     let mut bi: i64 = 0;
     while bi < bks.len() {
         let blk: IrBlock = bks[bi];
@@ -1069,11 +1062,35 @@ fn collect_returned_ids(bks: Vec<IrBlock>) -> Vec<i64> {
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
             if inst.op == IOP_RETURN() && inst.args.len() > 0 {
-                out.push(inst.args[0]);
+                stack.push(inst.args[0]);
             }
             ii = ii + 1;
         }
         bi = bi + 1;
+    }
+    // BFS expansion through Phi arms via Upsilon insts.
+    while stack.len() > 0 {
+        let id: i64 = stack[stack.len() - 1];
+        stack.pop();
+        if region_vec_contains_i64(out, id) {
+            continue;
+        }
+        out.push(id);
+        let mut sbi: i64 = 0;
+        while sbi < bks.len() {
+            let sblk: IrBlock = bks[sbi];
+            let mut sii: i64 = 0;
+            while sii < sblk.insts.len() {
+                let up: IrInst = sblk.insts[sii];
+                if up.op == IOP_UPSILON() && up.dk == IDATA_PHI_TARGET()
+                    && up.dv == id && up.args.len() > 0
+                {
+                    stack.push(up.args[0]);
+                }
+                sii = sii + 1;
+            }
+            sbi = sbi + 1;
+        }
     }
     out
 }

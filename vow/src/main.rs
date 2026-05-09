@@ -3449,15 +3449,18 @@ fn add(a: i64, b: i64) -> i64 vow {
 ### RegionConflict
 
 **Phase:** Region Inference (arena-per-scope, Phase 3)
-**Meaning:** A heap-typed value's required lifetime cannot be satisfied by the regions the surrounding code provides. This fires when an interprocedural store-effect constraint is unsatisfiable — for example, a value allocated in an inner block is stored into a container that outlives that block.
+**Meaning:** A heap-typed value's required lifetime cannot be satisfied by the regions the surrounding code provides. This fires when an interprocedural store-effect constraint is unsatisfiable against the **inferred** region — that is, the value's `region(I) = LUB(must_outlive(I))` resolves to a concrete block strictly narrower than the target container's region.
 
-> **Coverage note (as of issue #289):** the alloc→param-via-callee shape is
-> detected and emits this code with `Blame: Callee` and a hint pointing
-> at the three resolution strategies (copy into outer arena, hoist the
-> allocation, or restructure the data flow). Cross-parameter cases that
-> require a published store-effect and Phi-of-mixed-origins remain partial.
-> Concrete block-marker sets now use the block-tree LUB from spec §4.1
-> step 3; they no longer silently promote to `Root`.
+> **Coverage note (as of issue #314):** the check is now semantic, consulting
+> the inferred region populated by §4.1 step 3's LUB pass rather than the
+> raw IR opcode. A fresh allocation routed through a callee's store-effect
+> chain into a parameter container has its inferred region widened to
+> `Caller` by §4.1 step 2's must-outlive marker propagation; such routings
+> satisfy the constraint and are NOT rejected. Only allocations whose
+> inferred region is a strictly narrower block fire `RegionConflict`. Per
+> §4.4, the conflict path is reached only when must-outlive widening
+> cannot satisfy the constraint — which, in single-block functions, is
+> structurally unreachable; the diagnostic is exercised by IR-level tests.
 
 ```vow
 fn store_into(out: Vec<String>, prefix: String) [io] {
@@ -3467,7 +3470,28 @@ fn store_into(out: Vec<String>, prefix: String) [io] {
 }
 ```
 
-**Fix:** Move the allocation to a wider scope, or copy the value into the target region (e.g., `String::from(s)` into the outer arena). The compiler does NOT silently promote values to the root region — see `docs/design/arena_memory.md` §4.4.
+**Fix:** Move the allocation to a wider scope, or copy the value into the target region (e.g., `String::from(s)` into the outer arena). For routings that compile cleanly but you'd like to know about (root-region placement), see `RegionRootEscape` below. See `docs/design/arena_memory.md` §4.4 for the full rejection vs. visibility distinction.
+
+### RegionRootEscape
+
+**Phase:** Region Inference (arena-per-scope, Phase 3)
+**Severity:** Note (informational — does not fail the build)
+**Meaning:** A heap allocation's inferred region is `Caller`, and the surrounding function publishes a `FreshInCaller` return summary or store effect — so the allocation may flow up the caller chain to `main` and ultimately land in the root region (`__vow_root_arena`, never freed). This is a memory-cost decision the compiler surfaces visibly per `docs/design/arena_memory.md` §4.4: silent root-region placement caused growth-with-no-signal in earlier compiler versions, and the note restores that signal without conflating it with unsoundness (`RegionConflict`).
+
+The note is conservative — it fires for any `Caller`-region allocation in a function that could route to a caller, even if the actual concrete chain in this program doesn't reach `main`. False positives are tolerated because the diagnostic is non-blocking.
+
+```json
+{
+  "error_code": "RegionRootEscape",
+  "severity": "note",
+  "message": "allocation may live in the root region: routed via store-effect chain to a caller whose target_region ultimately resolves to root",
+  "hints": [
+    "if intentional (e.g. program-lifetime data), no action needed; if you want this allocation freed earlier, restructure so the value is returned rather than stored into a parameter container"
+  ]
+}
+```
+
+**Fix:** Often none — if the program is short-lived (a checker, a CLI tool) or the values are genuinely program-lifetime, the note is informational. To free the allocation earlier, restructure so the value is **returned** from the constructing function rather than stored into a parameter container; the canonical `FreshInCaller` return path (`fn make_X() -> X`) does not trigger the note for the returned value itself.
 
 ### VerificationSkipped
 

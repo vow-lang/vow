@@ -16,7 +16,7 @@ pub struct Arena {
 }
 
 fn arena_new() -> Arena {
-    return Arena { entries: Vec::new() };
+    Arena { entries: Vec::new() }
 }
 
 fn push_item(a: Arena, e: Item) {
@@ -30,5 +30,5 @@ pub fn add_named(a: Arena) {
 fn main() -> i32 {
     let a: Arena = arena_new();
     add_named(a);
-    return 0i32;
+    0
 }
