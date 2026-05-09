@@ -74,10 +74,20 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
     // since we'll consume them once at the end.
     let region_keys: Vec<Vec<i64>> = Vec::new();
     let region_vals: Vec<Vec<i64>> = Vec::new();
+    // Pre-rewrite Caller(_) snapshots for the `RegionRootEscape` note pass.
+    // `analyze_function` collapses internal-call results from Caller(_) to
+    // Root in `region_keys/vals` for codegen conservatism; capturing the
+    // original Caller(_) here keeps the note pass visible to issue #320's
+    // case where the rewrite would otherwise silence a real root-region
+    // placement. Mirrors the Rust pass's local `note_region_map`.
+    let note_region_keys: Vec<Vec<i64>> = Vec::new();
+    let note_region_vals: Vec<Vec<i64>> = Vec::new();
     let mut ri: i64 = 0;
     while ri < n_funcs {
         region_keys.push(Vec::new());
         region_vals.push(Vec::new());
+        note_region_keys.push(Vec::new());
+        note_region_vals.push(Vec::new());
         ri = ri + 1;
     }
 
@@ -145,6 +155,7 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
                     int_kinds, int_auxs, int_aliases_list,
                     int_se_targets, int_se_src_kinds, int_se_src_aux, int_se_src_aliases,
                     region_keys, region_vals,
+                    note_region_keys, note_region_vals,
                 );
                 if did_change {
                     changed = true;
@@ -261,8 +272,9 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
     // (program-lifetime placement) as `RegionRootEscape` notes — gated by
     // `int_kinds` so we only fire on functions that may propagate the alloc
     // to a caller. See arena_memory.md §4.4.
-    emit_root_escape_notes_module(m, region_keys, region_vals, int_kinds,
-                                   int_se_targets, dctx);
+    emit_root_escape_notes_module(m, region_keys, region_vals,
+                                   note_region_keys, note_region_vals,
+                                   int_kinds, int_se_targets, dctx);
 
     // Commit per-inst regions.
     let mut fi2: i64 = 0;
@@ -1092,6 +1104,7 @@ fn check_store_effects_at_call(
 fn emit_root_escape_notes_module(
     m: IrModule,
     region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
+    note_region_keys: Vec<Vec<i64>>, note_region_vals: Vec<Vec<i64>>,
     int_kinds: Vec<i64>,
     int_se_targets: Vec<Vec<i64>>,
     dctx: DiagCtx
@@ -1137,6 +1150,8 @@ fn emit_root_escape_notes_module(
         }
         let rkeys: Vec<i64> = region_keys[fi];
         let rvals: Vec<i64> = region_vals[fi];
+        let note_rkeys: Vec<i64> = note_region_keys[fi];
+        let note_rvals: Vec<i64> = note_region_vals[fi];
         let bks: Vec<IrBlock> = f.blocks;
         // Pre-collect returned IDs once per function so the inner skip is O(N)
         // total instead of O(N*Returns) — was O(N²) for functions with many
@@ -1153,7 +1168,15 @@ fn emit_root_escape_notes_module(
             let mut ii: i64 = 0;
             while ii < blk.insts.len() {
                 let inst: IrInst = blk.insts[ii];
-                let rgn: i64 = lookup_inst_region(rkeys, rvals, inst.id);
+                // Issue #320: prefer the pre-rewrite Caller(_) snapshot when
+                // present (set by `analyze_function` for internal-call heap
+                // producers whose region was conservatively rewritten to
+                // Root). Fall back to the committed `region_keys/vals` for
+                // the canonical direct-`RegionAlloc{Caller(_)}` path.
+                let mut rgn: i64 = lookup_inst_region(note_rkeys, note_rvals, inst.id);
+                if rgn < 0 {
+                    rgn = lookup_inst_region(rkeys, rvals, inst.id);
+                }
                 if rgn >= 0 && region_kind(rgn) == REGION_KIND_CALLER() {
                     // Skip the value being returned — that's the canonical
                     // FreshInCaller return path, not a side-effect escape.
@@ -1331,6 +1354,7 @@ fn analyze_function(
     int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>,
     int_se_src_aux: Vec<Vec<i64>>, int_se_src_aliases: Vec<Vec<Vec<i64>>>,
     region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
+    note_region_keys: Vec<Vec<i64>>, note_region_vals: Vec<Vec<i64>>,
 ) -> bool {
     let f: IrFunction = m.functions[fidx];
     let bks: Vec<IrBlock> = f.blocks;
@@ -1472,6 +1496,20 @@ fn analyze_function(
                     int_kinds, int_auxs, int_aliases_list,
                     int_se_targets, int_se_src_kinds, int_se_src_aux,
                 );
+                // Issue #320: capture the pre-rewrite Caller(_) so the note
+                // pass can still surface internal-call heap producers routed
+                // through a hidden caller slot. The rewrite below collapses
+                // them to Root for codegen conservatism, which would
+                // otherwise silence the diagnostic. The SCC fixed-point
+                // accumulates across iterations here (vs. per-call in the
+                // Rust mirror), but the LUB lattice ascends monotonically
+                // (Block ⊑ Caller ⊑ Root), so a stale Caller(_) entry still
+                // corresponds to a real pre-rewrite state and firing the
+                // note on it remains correct.
+                if rinst.op == IOP_CALL() && rinst.dk != IDATA_CALL_EXTERN()
+                    && region_kind(rgn) == REGION_KIND_CALLER() {
+                    put_inst_region(note_region_keys[fidx], note_region_vals[fidx], rinst.id, rgn);
+                }
                 if rinst.op == IOP_CALL() && rinst.dk != IDATA_CALL_EXTERN() {
                     let rk: i64 = region_kind(rgn);
                     if rk == REGION_KIND_BLOCK() || rk == REGION_KIND_CALLER() {

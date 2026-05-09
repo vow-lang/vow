@@ -1419,6 +1419,13 @@ fn analyze_function(
     // escape on the must_outlive set.
     summary.return_region = compute_return_region(func, &inst_lookup, &phi_arms, summaries);
 
+    // Pre-rewrite `Caller(_)` regions for the `RegionRootEscape` note pass.
+    // The rewrite below collapses internal-call results from `Caller(_)` to
+    // `Root` for codegen conservatism, but the note pass needs to surface the
+    // pre-rewrite state so that internal `Call` heap producers routed through
+    // a hidden caller slot still emit a note (issue #320).
+    let mut note_region_map: BTreeMap<InstId, RegionId> = BTreeMap::new();
+
     // Compute LUB-derived RegionId for every heap-producing inst.
     for block in &func.blocks {
         for inst in &block.insts {
@@ -1437,6 +1444,12 @@ fn analyze_function(
                 // runtime heap producers to route through their explicit
                 // arena-aware ABI.
                 if matches!(region_id, RegionId::Block(_) | RegionId::Caller(_)) {
+                    if matches!(region_id, RegionId::Caller(_)) {
+                        // Stash the pre-rewrite Caller(_) so the note pass can
+                        // see it; only Caller(_) ever fires `RegionRootEscape`,
+                        // so capturing Block(_) would just inflate the map.
+                        note_region_map.insert(inst.id, region_id);
+                    }
                     region_id = RegionId::Root;
                 }
             }
@@ -1483,7 +1496,7 @@ fn analyze_function(
         .iter()
         .any(|(_, c)| matches!(c, InternalReturnRegion::Published(_)));
     if (returns_fresh || any_published_store) && total_hidden_slots <= 1 {
-        emit_root_escape_notes(func, region_map, diagnostics);
+        emit_root_escape_notes(func, region_map, &note_region_map, diagnostics);
     }
 
     summary
@@ -1537,6 +1550,7 @@ fn collect_return_value_sources(start: InstId, func: &Function, out: &mut BTreeS
 fn emit_root_escape_notes(
     func: &Function,
     region_map: &BTreeMap<InstId, RegionId>,
+    note_region_map: &BTreeMap<InstId, RegionId>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let source_file: &str = &func.source_file;
@@ -1557,8 +1571,17 @@ fn emit_root_escape_notes(
     }
     for block in &func.blocks {
         for inst in &block.insts {
-            let Some(rgn) = region_map.get(&inst.id) else {
-                continue;
+            // `note_region_map` carries the pre-rewrite `Caller(_)` for
+            // internal-call heap producers that `analyze_function` collapsed
+            // to `Root` (issue #320). Consult it first; fall back to the
+            // post-rewrite `region_map` for everything else (the canonical
+            // direct-`RegionAlloc{Caller(_)}` path).
+            let rgn = match note_region_map.get(&inst.id) {
+                Some(r) => r,
+                None => match region_map.get(&inst.id) {
+                    Some(r) => r,
+                    None => continue,
+                },
             };
             if !matches!(rgn, RegionId::Caller(_)) {
                 continue;
@@ -5865,6 +5888,116 @@ mod tests {
         // `func.source_file` directly; this assertion exercises that
         // plumbing for `RegionRootEscape` (the conflict path is covered
         // by `region_conflict_when_multiple_caller_slots_make_caller0_ambiguous`).
+        assert_eq!(
+            notes[0].primary.file, "caller.vow",
+            "RegionRootEscape primary span must point at the analyzing function's source file"
+        );
+    }
+
+    /// `RegionRootEscape` issue #320 coverage: an internal `Call` whose
+    /// callee publishes `FreshInCaller` is heap-producing; when its result
+    /// is routed into a parameter container via a sibling callee's store
+    /// effect, the LUB resolves to `Caller(_)` — but `analyze_function`'s
+    /// conservative codegen pass rewrites that to `RegionId::Root` before
+    /// the note pass would see it. The pre-rewrite `note_region_map`
+    /// preserves the original `Caller(_)` so the note still fires.
+    /// Mirrors the canonical single-slot test above, but the heap producer
+    /// is an internal Call rather than a direct `RegionAlloc`.
+    #[test]
+    fn region_root_escape_note_emitted_for_internal_call_rewritten_to_root() {
+        // Producer: returns a `RegionAlloc` directly → FreshInCaller summary,
+        // making `Call(producer)` heap-producing in the caller.
+        let producer_insts = vec![
+            inst(
+                0,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(1, Opcode::Return, Ty::Ptr, vec![0], InstData::None),
+        ];
+        let mut producer = function(
+            0,
+            "make_payload",
+            vec![],
+            Ty::Ptr,
+            vec![block(0, producer_insts)],
+        );
+        producer.source_file = "producer.vow".to_string();
+
+        // Consumer: stores arg[1] into arg[0]. One target → one hidden slot.
+        let consumer_insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(2, Opcode::Store, Ty::Unit, vec![0, 1], InstData::None),
+            inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let mut consumer = function(
+            1,
+            "put",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, consumer_insts)],
+        );
+        consumer.source_file = "consumer.vow".to_string();
+
+        // Caller: takes a parameter container `target`, calls the producer,
+        // routes the producer's result into `target` via the consumer.
+        // Inherits a single store effect with `FreshInCaller` source — total
+        // slots = 1, ambiguous_caller_slot = false. The Call(producer) result
+        // gets `target_region_marker(GetArg(0)) = VirtualCaller` propagated
+        // via consumer's store effect, so its LUB is `Caller(0)`. The Call
+        // opcode's conservative-rewrite gate then fires the Caller→Root
+        // rewrite: pre-fix the note pass sees `Root` and stays silent.
+        let caller_insts = vec![
+            inst(10, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(
+                11,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![],
+                InstData::CallTarget(FuncId(0)),
+            ),
+            inst(
+                12,
+                Opcode::Call,
+                Ty::Unit,
+                vec![10, 11],
+                InstData::CallTarget(FuncId(1)),
+            ),
+            inst(13, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let mut caller = function(
+            2,
+            "use_caller",
+            vec![Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, caller_insts)],
+        );
+        caller.source_file = "caller.vow".to_string();
+        let mut m = module(vec![producer, consumer, caller]);
+        infer_regions(&mut m);
+
+        assert!(
+            m.warnings
+                .iter()
+                .all(|d| d.code != ErrorCode::RegionConflict),
+            "single-slot routing should not trip RegionConflict; warnings: {:?}",
+            m.warnings
+        );
+        let notes: Vec<_> = m
+            .warnings
+            .iter()
+            .filter(|d| d.code == ErrorCode::RegionRootEscape)
+            .collect();
+        assert_eq!(
+            notes.len(),
+            1,
+            "expected exactly one RegionRootEscape note for the rewritten internal call result; \
+             warnings: {:?}",
+            m.warnings
+        );
         assert_eq!(
             notes[0].primary.file, "caller.vow",
             "RegionRootEscape primary span must point at the analyzing function's source file"
