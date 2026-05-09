@@ -833,8 +833,13 @@ fn underlying_caller_via_aliases_inner(
 // `canonicalize_store_effects`) and counts unique target indices. The
 // layout is `target, kind, (aux)?, (alias_count, alias...)?` per effect;
 // ALIAS_OF carries one aux, ALIAS_OF_ANY carries an alias-count plus that
-// many indices, the others carry no payload. Effects are pre-sorted by
-// target, so adjacent duplicates compare cheaply.
+// many indices, the others carry no payload.
+//
+// Precondition: `flat` is sorted by target ascending — guaranteed by
+// `canonicalize_store_effects` (insertion sort at line ~637). The
+// adjacency dedup via `last` would silently undercount if the precondition
+// were ever broken; the canonical-form invariant is enforced everywhere
+// summaries are constructed.
 fn unique_store_target_count(flat: Vec<i64>) -> i64 {
     let mut count: i64 = 0;
     let mut last: i64 = -1;
@@ -1006,7 +1011,12 @@ fn emit_root_escape_notes_module(
         let bks: Vec<IrBlock> = f.blocks;
         // Pre-collect returned IDs once per function so the inner skip is O(N)
         // total instead of O(N*Returns) — was O(N²) for functions with many
-        // heap producers and at least one Return.
+        // heap producers and at least one Return. Inner skip is
+        // `region_vec_contains_i64` (linear in `returned_ids.len()`); the
+        // Rust mirror uses `BTreeSet::contains` (logarithmic). Vow's
+        // current stdlib has no equivalent ordered-set type; the linear
+        // scan is fine for typical functions but would diverge on very
+        // large `returned_ids` — track if it ever bites.
         let returned_ids: Vec<i64> = collect_returned_ids(bks);
         let mut bi: i64 = 0;
         while bi < bks.len() {

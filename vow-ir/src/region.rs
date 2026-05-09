@@ -5615,17 +5615,23 @@ mod tests {
         // get caller-region must-outlive markers — but `caller` has two
         // hidden arena slots (one per unique store-effect target inherited
         // from the callee), making the uniform Caller(0) tagging
-        // ambiguous. The conservative reject must fire for at least one
-        // of the two routings.
+        // ambiguous. Two routings → exactly two RegionConflict diagnostics
+        // (one per ambiguous arg). The exact `== 2` count also doubles as
+        // the SCC-deduplication regression guard the previously-deleted
+        // `region_conflict_alloc_into_param_via_callee_store_effect` test
+        // provided: `infer_regions` keeps only the convergence iteration's
+        // diagnostics (lines ~123-126), so without dedup we'd see one
+        // copy per fixed-point round.
         let conflicts: Vec<_> = m
             .warnings
             .iter()
             .filter(|d| d.code == ErrorCode::RegionConflict)
             .collect();
-        assert!(
-            !conflicts.is_empty(),
-            "ambiguous_caller_slot guard should reject routings into 2+ slot functions; \
-             warnings: {:?}",
+        assert_eq!(
+            conflicts.len(),
+            2,
+            "expected exactly 2 RegionConflict diagnostics (one per ambiguous \
+             routed arg, no SCC-iteration dupes); warnings: {:?}",
             m.warnings
         );
         // Issue #254 regression guard: the diagnostic must label the
