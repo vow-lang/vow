@@ -760,15 +760,18 @@ fn add_store_effect(
 fn underlying_caller_via_aliases(
     id_to_inst: Vec<IrInst>,
     region_keys: Vec<i64>, region_vals: Vec<i64>,
+    m_functions: Vec<IrFunction>,
     source_arg_id: i64
 ) -> i64 {
     let seen: Vec<i64> = Vec::new();
-    underlying_caller_via_aliases_inner(id_to_inst, region_keys, region_vals, source_arg_id, seen)
+    underlying_caller_via_aliases_inner(
+        id_to_inst, region_keys, region_vals, m_functions, source_arg_id, seen)
 }
 
 fn underlying_caller_via_aliases_inner(
     id_to_inst: Vec<IrInst>,
     region_keys: Vec<i64>, region_vals: Vec<i64>,
+    m_functions: Vec<IrFunction>,
     source_arg_id: i64,
     seen: Vec<i64>
 ) -> i64 {
@@ -834,7 +837,7 @@ fn underlying_caller_via_aliases_inner(
                             // B does not inherit arm A's exploration.
                             // Mirrors `arm_seen = seen.clone()` in Rust.
                             let arm_rgn: i64 = underlying_caller_via_aliases_inner(
-                                id_to_inst, region_keys, region_vals, up.args[0], local_seen);
+                                id_to_inst, region_keys, region_vals, m_functions, up.args[0], local_seen);
                             if arm_rgn >= 0 && region_kind(arm_rgn) == REGION_KIND_CALLER()
                                 && any_caller_arm < 0
                             {
@@ -855,6 +858,56 @@ fn underlying_caller_via_aliases_inner(
                         result = first_rgn;
                     }
                     keep_going = false;
+                } else if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
+                    // The callee returns a value derived from its parameters
+                    // (AliasOf / AliasOfAny). The marker propagation pushes
+                    // VirtualCaller markers from the call result back to the
+                    // underlying allocs via the alias edge; the call result
+                    // itself isn't heap-producing for AliasOf returns, so
+                    // `region_map` has no entry and we fall through to here.
+                    // Trace through to those arg(s) — same as FieldGet/Load
+                    // semantically. AliasOfAny: any-caller-arm wins (mirror
+                    // Phi pattern). Mirrors the CallTarget arm in
+                    // vow-ir/src/region.rs:underlying_caller_via_aliases_inner;
+                    // both compilers must keep this in sync.
+                    let callee_idx: i64 = inst.dv;
+                    if callee_idx >= 0 && callee_idx < m_functions.len() {
+                        let callee: IrFunction = m_functions[callee_idx];
+                        let rkind: i64 = callee.rsum_return_kind;
+                        if rkind == RSUM_KIND_ALIAS_OF() {
+                            let j_idx: i64 = callee.rsum_return_aux;
+                            if j_idx >= 0 && j_idx < inst.args.len() {
+                                current = inst.args[j_idx];
+                            } else {
+                                keep_going = false;
+                            }
+                        } else if rkind == RSUM_KIND_ALIAS_OF_ANY() {
+                            let aliases: Vec<i64> = callee.rsum_return_aliases;
+                            let mut any_caller: i64 = -1;
+                            let mut ai: i64 = 0;
+                            while ai < aliases.len() && any_caller < 0 {
+                                let j_idx: i64 = aliases[ai];
+                                if j_idx >= 0 && j_idx < inst.args.len() {
+                                    let arm_rgn: i64 = underlying_caller_via_aliases_inner(
+                                        id_to_inst, region_keys, region_vals, m_functions,
+                                        inst.args[j_idx], local_seen);
+                                    if arm_rgn >= 0 && region_kind(arm_rgn) == REGION_KIND_CALLER() {
+                                        any_caller = arm_rgn;
+                                    }
+                                }
+                                ai = ai + 1;
+                            }
+                            result = any_caller;
+                            keep_going = false;
+                        } else {
+                            // FreshInCaller is heap-producing → has a
+                            // region_map entry handled above. Other kinds
+                            // (ConstantGlobal / Uninit) can't carry Caller.
+                            keep_going = false;
+                        }
+                    } else {
+                        keep_going = false;
+                    }
                 } else {
                     keep_going = false;
                 }
@@ -957,6 +1010,7 @@ fn check_region_store_conflicts_module(
                             id_to_inst,
                             rkeys,
                             rvals,
+                            m.functions,
                             ambiguous_caller_slot,
                             dctx,
                             f.source_file,
@@ -974,6 +1028,7 @@ fn check_region_store_conflicts_module(
 fn check_store_effects_at_call(
     flat: Vec<i64>, call_inst: IrInst, id_to_inst: Vec<IrInst>,
     region_keys: Vec<i64>, region_vals: Vec<i64>,
+    m_functions: Vec<IrFunction>,
     ambiguous_caller_slot: bool,
     dctx: DiagCtx, source_file: String
 ) {
@@ -999,6 +1054,7 @@ fn check_store_effects_at_call(
                     id_to_inst,
                     region_keys,
                     region_vals,
+                    m_functions,
                     ambiguous_caller_slot,
                     dctx,
                 );
@@ -1182,6 +1238,7 @@ fn check_store_conflict(
     source_file: String, target_arg_id: i64, source_arg_id: i64, call_inst: IrInst,
     id_to_inst: Vec<IrInst>,
     region_keys: Vec<i64>, region_vals: Vec<i64>,
+    m_functions: Vec<IrFunction>,
     ambiguous_caller_slot: bool,
     dctx: DiagCtx
 ) {
@@ -1207,7 +1264,7 @@ fn check_store_conflict(
             // other terminus (Block/Root/Rodata/parameter/non-heap)
             // can't trigger the slot-misroute hazard.
             let traced: i64 = underlying_caller_via_aliases(
-                id_to_inst, region_keys, region_vals, source_arg_id);
+                id_to_inst, region_keys, region_vals, m_functions, source_arg_id);
             if traced >= 0 && region_kind(traced) == REGION_KIND_CALLER() {
                 // Drop through to emit conflict.
             } else {

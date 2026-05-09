@@ -2498,23 +2498,32 @@ fn origin_to_constraint(origin: &ValueOrigin) -> RegionConstraint {
 // Conflict detection
 // ---------------------------------------------------------------------------
 
-/// Trace alias chain (FieldGet/Load/vec-get/Phi) for ambiguous-slot check;
-/// mirrors codegen's `source_value_region`. Returns `Some(Caller(_))` when
-/// any terminus resolves to a caller arena (caller treats as conflict);
-/// `None` for safe termini (parameters, scalars, Block/Root/Rodata).
+/// Trace alias chain (FieldGet/Load/vec-get/Phi/CallTarget-AliasOf) for
+/// ambiguous-slot check; mirrors codegen's `source_value_region`.
+/// Returns `Some(Caller(_))` when any terminus resolves to a caller arena
+/// (caller treats as conflict); `None` for safe termini (parameters,
+/// scalars, Block/Root/Rodata).
 fn underlying_caller_via_aliases(
     source_arg_id: InstId,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
     region_map: &BTreeMap<InstId, RegionId>,
+    summaries: &[InternalSummary],
 ) -> Option<RegionId> {
     let mut seen: BTreeSet<InstId> = BTreeSet::new();
-    underlying_caller_via_aliases_inner(source_arg_id, inst_lookup, region_map, &mut seen)
+    underlying_caller_via_aliases_inner(
+        source_arg_id,
+        inst_lookup,
+        region_map,
+        summaries,
+        &mut seen,
+    )
 }
 
 fn underlying_caller_via_aliases_inner(
     source_arg_id: InstId,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
     region_map: &BTreeMap<InstId, RegionId>,
+    summaries: &[InternalSummary],
     seen: &mut BTreeSet<InstId>,
 ) -> Option<RegionId> {
     let mut current = source_arg_id;
@@ -2568,6 +2577,7 @@ fn underlying_caller_via_aliases_inner(
                             arm_id,
                             inst_lookup,
                             region_map,
+                            summaries,
                             &mut arm_seen,
                         );
                         if let Some(rgn @ RegionId::Caller(_)) = arm_rgn
@@ -2586,6 +2596,56 @@ fn underlying_caller_via_aliases_inner(
                     return any_caller_arm;
                 }
                 return merged.flatten();
+            }
+            (Opcode::Call, InstData::CallTarget(callee_id)) => {
+                // The callee returns a value derived from its parameters
+                // (AliasOf / AliasOfAny). `propagate_alias_markers` adds an
+                // alias edge from the call result to those args, which back-
+                // propagates VirtualCaller markers to the underlying allocs
+                // (vow-ir/src/region.rs propagate_alias_markers, AliasOf/
+                // AliasOfAny return arms). The call result itself is NOT
+                // heap-producing for AliasOf-returning callees (see
+                // `is_heap_producing`), so `region_map` has no entry for it
+                // and we get here. Trace through to those arg(s) — same as
+                // FieldGet/Load semantically. AliasOfAny: any-caller-arm
+                // wins (mirror Phi pattern); divergence-without-Caller
+                // doesn't matter for the ambiguous-slot reject.
+                let summary = summaries.get(callee_id.0 as usize)?;
+                match &summary.return_region {
+                    InternalReturnRegion::Published(RegionConstraint::AliasOf(j)) => {
+                        let j_idx = *j as usize;
+                        let &arg_id = inst.args.get(j_idx)?;
+                        current = arg_id;
+                    }
+                    InternalReturnRegion::Published(RegionConstraint::AliasOfAny(js)) => {
+                        let mut any_caller: Option<RegionId> = None;
+                        for j in js {
+                            let j_idx = *j as usize;
+                            let Some(&arg_id) = inst.args.get(j_idx) else {
+                                continue;
+                            };
+                            let mut arm_seen = seen.clone();
+                            if let Some(rgn @ RegionId::Caller(_)) =
+                                underlying_caller_via_aliases_inner(
+                                    arg_id,
+                                    inst_lookup,
+                                    region_map,
+                                    summaries,
+                                    &mut arm_seen,
+                                )
+                            {
+                                any_caller = Some(rgn);
+                                break;
+                            }
+                        }
+                        return any_caller;
+                    }
+                    // FreshInCaller is heap-producing → has a region_map entry
+                    // and would have been resolved above. ConstantGlobal /
+                    // Uninit / unpublished returns can't carry a Caller(_)
+                    // hazard.
+                    _ => return None,
+                }
             }
             _ => return None,
         }
@@ -2674,6 +2734,7 @@ fn check_store_conflicts_post_inference(
                         inst,
                         inst_lookup,
                         region_map,
+                        summaries,
                         ambiguous_caller_slot,
                         diagnostics,
                     );
@@ -2691,6 +2752,7 @@ fn check_store_conflict_semantic(
     call_inst: &Inst,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
     region_map: &BTreeMap<InstId, RegionId>,
+    summaries: &[InternalSummary],
     ambiguous_caller_slot: bool,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -2720,7 +2782,7 @@ fn check_store_conflict_semantic(
             // ONLY reject when the trace resolves to `Caller(_)`; any
             // Block/Root/Rodata/safe terminus stays allowed (the slot
             // misroute can't happen for non-Caller sources).
-            match underlying_caller_via_aliases(source_arg_id, inst_lookup, region_map) {
+            match underlying_caller_via_aliases(source_arg_id, inst_lookup, region_map, summaries) {
                 Some(RegionId::Caller(_)) => {
                     // Drop through to emit conflict.
                 }
@@ -5939,6 +6001,102 @@ mod tests {
         assert!(
             !conflicts.is_empty(),
             "divergent Phi with one Caller arm must trip RegionConflict in ambiguous mode; \
+             warnings: {:?}",
+            m.warnings
+        );
+    }
+
+    /// `CallTarget`-AliasOf alias-walk soundness: when the store source is
+    /// a `CallTarget` whose callee returns `AliasOf(j)`, the alias walk
+    /// must trace through the call to the underlying argument and report
+    /// `Some(Caller(_))` if it terminates at a fresh alloc. Without this,
+    /// the marker propagation pushes VirtualCaller back to the underlying
+    /// fresh alloc (tagging it Caller(0)), the walk falls into the safe
+    /// terminus branch, and the conservative reject doesn't fire — letting
+    /// codegen publish slot-0 into a slot-1 target.
+    #[test]
+    fn region_conflict_when_call_target_alias_of_source_in_ambiguous_mode() {
+        // identity callee: returns its first arg unchanged.
+        let id_insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::Return, Ty::Ptr, vec![0], InstData::None),
+        ];
+        let mut id_fn = function(0, "id", vec![Ty::Ptr], Ty::Ptr, vec![block(0, id_insts)]);
+        id_fn.source_file = "id.vow".to_string();
+        // infer_regions will compute the summary as Return = AliasOf(0).
+        // Multi-store callee: stores arg[1] into arg[0], stores arg[3] into arg[2].
+        let helper_insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(2, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(2)),
+            inst(3, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(3)),
+            inst(4, Opcode::Store, Ty::Unit, vec![0, 1], InstData::None),
+            inst(5, Opcode::Store, Ty::Unit, vec![2, 3], InstData::None),
+            inst(6, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let mut helper = function(
+            1,
+            "store_two",
+            vec![Ty::Ptr, Ty::Ptr, Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, helper_insts)],
+        );
+        helper.source_file = "helper.vow".to_string();
+        // Caller: passes (p, id(fresh1), q, fresh2) — `fresh1` is laundered
+        // through `id` so its source at the helper call is the AliasOf-
+        // returning CallTarget call.
+        let caller_insts = vec![
+            inst(10, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(11, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(
+                12,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                13,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![12],
+                InstData::CallTarget(FuncId(0)),
+            ),
+            inst(
+                14,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                15,
+                Opcode::Call,
+                Ty::Unit,
+                vec![10, 13, 11, 14],
+                InstData::CallTarget(FuncId(1)),
+            ),
+            inst(16, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let mut caller = function(
+            2,
+            "caller_via_id",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, caller_insts)],
+        );
+        caller.source_file = "caller.vow".to_string();
+        let mut m = module(vec![id_fn, helper, caller]);
+        infer_regions(&mut m);
+
+        let conflicts: Vec<_> = m
+            .warnings
+            .iter()
+            .filter(|d| d.code == ErrorCode::RegionConflict)
+            .collect();
+        assert!(
+            !conflicts.is_empty(),
+            "CallTarget-AliasOf source over a fresh alloc must trip RegionConflict in ambiguous mode; \
              warnings: {:?}",
             m.warnings
         );
