@@ -261,9 +261,10 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
         dctx,
     );
 
-    // Codex Option 1.5 (issue #314): emit RegionRootEscape notes for
-    // allocations that route to the root region. Uses `int_kinds` (the
-    // per-function published return-region kind) to gate per spec §4.4.
+    // Surface allocations whose inferred region routes to the root region
+    // (program-lifetime placement) as `RegionRootEscape` notes — gated by
+    // `int_kinds` so we only fire on functions that may propagate the alloc
+    // to a caller. See arena_memory.md §4.4.
     emit_root_escape_notes_module(m, region_keys, region_vals, int_kinds,
                                    int_se_targets, dctx);
 
@@ -767,6 +768,17 @@ fn check_region_store_conflicts_module(
         let depths: Vec<i64> = block_depth_per_fn[fi];
         let rkeys: Vec<i64> = region_keys[fi];
         let rvals: Vec<i64> = region_vals[fi];
+        // Ambiguous-slot guard: when this function both returns FreshInCaller
+        // and publishes store effects, codegen lays out hidden arena slots
+        // as [return, store-target...]. Region inference uniformly tags
+        // caller-escaping allocs as Caller(0), so it cannot distinguish the
+        // return-arena alloc from a store-target alloc; accepting Caller(_)
+        // would silently route to the wrong slot. Reject the routing path
+        // for this combo until inference can produce the correct
+        // HiddenRegionIdx(N).
+        let returns_fresh: bool = f.rsum_return_kind == RSUM_KIND_FRESH_IN_CALLER();
+        let has_store_effects: bool = f.rsum_store_effects.len() > 0;
+        let ambiguous_caller_slot: bool = returns_fresh && has_store_effects;
         let mut bi: i64 = 0;
         while bi < f.blocks.len() {
             let blk: IrBlock = f.blocks[bi];
@@ -786,6 +798,7 @@ fn check_region_store_conflicts_module(
                             rkeys,
                             rvals,
                             int_kinds,
+                            ambiguous_caller_slot,
                             dctx,
                             f.source_file,
                         );
@@ -803,6 +816,7 @@ fn check_store_effects_at_call(
     flat: Vec<i64>, call_inst: IrInst, id_to_inst: Vec<IrInst>,
     id_to_block: Vec<i64>, parents: Vec<i64>, depths: Vec<i64>,
     region_keys: Vec<i64>, region_vals: Vec<i64>, int_kinds: Vec<i64>,
+    ambiguous_caller_slot: bool,
     dctx: DiagCtx, source_file: String
 ) {
     let mut i: i64 = 0;
@@ -831,6 +845,7 @@ fn check_store_effects_at_call(
                     region_keys,
                     region_vals,
                     int_kinds,
+                    ambiguous_caller_slot,
                     dctx,
                 );
             }
@@ -858,12 +873,12 @@ fn check_store_effects_at_call(
     }
 }
 
-// Codex Option 1.5 (issue #314): emit RegionRootEscape Note for each
-// heap-producing instruction whose inferred region is REGION_KIND_CALLER
-// in a function that publishes FreshInCaller (return) or any store effect.
-// Conservative over-approximation: false positives acceptable for Note
-// severity; the alternative (full call-graph reachability from main) is
-// unnecessary infrastructure for an informational diagnostic.
+// Emit a `RegionRootEscape` Note for each heap-producing instruction whose
+// inferred region is `REGION_KIND_CALLER` in a function that publishes
+// `FreshInCaller` (return) or any store effect. Conservative
+// over-approximation — false positives are acceptable for Note severity;
+// full call-graph reachability from main is unnecessary infrastructure for
+// an informational diagnostic.
 fn emit_root_escape_notes_module(
     m: IrModule,
     region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
@@ -972,13 +987,14 @@ fn check_store_conflict(
     parents: Vec<i64>, depths: Vec<i64>,
     region_keys: Vec<i64>, region_vals: Vec<i64>,
     int_kinds: Vec<i64>,
+    ambiguous_caller_slot: bool,
     dctx: DiagCtx
 ) {
-    // Semantic check (Codex Option 1.5): consult the inferred region for the
-    // source value, not its raw IR opcode. Region inference's value_lub_region
-    // already widens fresh allocations through must-outlive markers added by
-    // call_store_effects_collect_regions; a conflict is only real when the
-    // inferred region is strictly narrower than the target's region.
+    // Consult the inferred region for the source value, not its raw IR
+    // opcode. `value_lub_region` already widens fresh allocations through
+    // must-outlive markers added by `call_store_effects_collect_regions`;
+    // a conflict is only real when the inferred region is strictly narrower
+    // than the target's region.
     let target_param: i64 = trace_param(id_to_inst, target_arg_id);
     if target_param < 0 {
         // Inline case: target is not a parameter; the inline code path handles
@@ -993,14 +1009,20 @@ fn check_store_conflict(
     }
     let src_kind: i64 = region_kind(src_rgn);
     // Arm A: source already widened to caller/root/rodata — satisfies any
-    // parameter-region target. Region inference has done the right thing.
-    if src_kind == REGION_KIND_CALLER()
-        || src_kind == REGION_KIND_ROOT()
-        || src_kind == REGION_KIND_RODATA() {
+    // parameter-region target. EXCEPT when the analyzing function has the
+    // ambiguous-caller-slot combo (FreshInCaller return + store effects),
+    // in which case a `Caller(_)` source could mean either the return arena
+    // (slot 0) or a store-target arena (slot 1+). Region inference cannot
+    // distinguish them today; accepting would silently misroute at codegen.
+    if src_kind == REGION_KIND_CALLER() {
+        if !ambiguous_caller_slot {
+            return;
+        }
+        // Fall through to emit the conflict.
+    } else if src_kind == REGION_KIND_ROOT() || src_kind == REGION_KIND_RODATA() {
         return;
-    }
-    // Arm B: source is a concrete block — compare against target's region.
-    if src_kind == REGION_KIND_BLOCK() {
+    } else if src_kind == REGION_KIND_BLOCK() {
+        // Arm B: source is a concrete block — compare against target's region.
         let src_block: i64 = region_val(src_rgn);
         let tgt_rgn: i64 = target_marker_region(id_to_inst, id_to_block, target_arg_id, int_kinds);
         let tgt_kind: i64 = region_kind(tgt_rgn);

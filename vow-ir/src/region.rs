@@ -1376,7 +1376,6 @@ fn analyze_function(
     region_map: &mut BTreeMap<InstId, RegionId>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> InternalSummary {
-    let source_file: &str = &func.source_file;
     let mut summary = InternalSummary::seed(func.params.len());
 
     // Build inst lookup + a flat "all instructions" iterator that records
@@ -1400,7 +1399,6 @@ fn analyze_function(
     for block in &func.blocks {
         for inst in &block.insts {
             handle_inst(
-                source_file,
                 inst,
                 block.id,
                 &inst_lookup,
@@ -1408,7 +1406,6 @@ fn analyze_function(
                 is_scalar_ty(func.return_ty),
                 &mut must_outlive,
                 &mut summary,
-                diagnostics,
             );
         }
     }
@@ -1447,24 +1444,27 @@ fn analyze_function(
         }
     }
 
-    // Codex Option 1.5 (issue #314): semantic store-conflict check that
-    // consults the populated region_map. Replaces the old shape-based check
-    // that fired in handle_inst purely on IR-opcode shape.
+    // The semantic store-conflict check runs here, after the must-outlive
+    // marker propagation has populated `region_map`. Earlier shape-based
+    // gating (rejecting on raw IR-opcode shape) misclassified routed
+    // aggregates as conflicts; consulting the inferred region instead fires
+    // only when the source's resolved region is strictly narrower than the
+    // target's.
     check_store_conflicts_post_inference(
         func,
+        &summary,
         summaries,
         region_map,
-        &block_tree,
         &inst_lookup,
         diagnostics,
     );
 
-    // Codex Option 1.5 (issue #314): emit RegionRootEscape notes for
-    // allocations that route to the root region. Conservative
-    // over-approximation: any Caller(_) inferred region in a function whose
-    // summary will publish FreshInCaller (so the alloc CAN escape via the
-    // caller chain to root). Severity Note — non-blocking; surfaces silent
-    // program-lifetime placement that the spec §4.4 rationale warns about.
+    // Surface `Caller(_)` allocations in functions that may propagate them
+    // to a caller (FreshInCaller return or any store effect) as
+    // `RegionRootEscape` notes — the chain ultimately resolves to
+    // `__vow_root_arena` per spec §5.4 and §4.4's rationale. Conservative
+    // over-approximation: emit per-instruction without full call-graph
+    // reachability; severity `Note` keeps it informational.
     if matches!(
         summary.return_region,
         InternalReturnRegion::Published(RegionConstraint::FreshInCaller)
@@ -1479,13 +1479,13 @@ fn analyze_function(
     summary
 }
 
-/// Codex Option 1.5 (issue #314): emit a `RegionRootEscape` Note for each
-/// heap-producing instruction whose inferred region is `Caller(_)`. Only
-/// invoked from `analyze_function` for functions that may propagate the
-/// allocation to a caller (FreshInCaller return or any published store
-/// effect). Conservative over-approximation — false positives are
-/// acceptable for a Note severity, false negatives would silently miss
-/// program-lifetime placements that §4.4's rationale targets.
+/// Emit a `RegionRootEscape` Note for each heap-producing instruction whose
+/// inferred region is `Caller(_)`. Only invoked from `analyze_function` for
+/// functions that may propagate the allocation to a caller (FreshInCaller
+/// return or any published store effect). Conservative over-approximation —
+/// false positives are acceptable for a Note severity, false negatives
+/// would silently miss program-lifetime placements that §4.4's rationale
+/// targets.
 fn emit_root_escape_notes(
     func: &Function,
     region_map: &BTreeMap<InstId, RegionId>,
@@ -1645,16 +1645,11 @@ fn is_heap_producing(inst: &Inst, summaries: &[InternalSummary]) -> bool {
 }
 
 /// Handle one instruction: contribute to `must_outlive` and to the
-/// function's tightening `summary`.
-///
-/// `_source_file` and `_diagnostics` were used by the eager-emission shape
-/// of the old `check_store_conflict` (Issue #314). After Codex Option 1.5,
-/// the conflict check moved to a post-inference pass; the parameters are
-/// retained on this signature to preserve the call shape and keep diffs
-/// localised, but are unused here.
+/// function's tightening `summary`. Conflict diagnostics are emitted by
+/// `check_store_conflicts_post_inference` after `region_map` is populated,
+/// so the source-file / diagnostics-buffer plumbing lives on that pass.
 #[allow(clippy::too_many_arguments)]
 fn handle_inst(
-    _source_file: &str,
     inst: &Inst,
     _block_id: BlockId,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
@@ -1662,7 +1657,6 @@ fn handle_inst(
     return_is_scalar: bool,
     must_outlive: &mut BTreeMap<InstId, BTreeSet<MustOutliveMarker>>,
     summary: &mut InternalSummary,
-    _diagnostics: &mut Vec<Diagnostic>,
 ) {
     match inst.opcode {
         Opcode::Return => {
@@ -1785,10 +1779,9 @@ fn handle_inst(
                         InternalReturnRegion::Published(RegionConstraint::AliasOf(p)) => {
                             // The callee writes argument-at-position-p into argument-at-position-target.
                             // Add the must-outlive marker so region inference can widen the
-                            // source's region. The conflict diagnostic itself is now emitted
-                            // by `check_store_conflicts_post_inference` after the region_map
-                            // is populated, so the check can consult the inferred region
-                            // (Codex Option 1.5 — issue #314).
+                            // source's region. The conflict diagnostic is emitted later by
+                            // `check_store_conflicts_post_inference` once `region_map` is
+                            // populated, so the check can consult the inferred region.
                             let p_idx = *p as usize;
                             if p_idx < inst.args.len() {
                                 let source_arg_id = inst.args[p_idx];
@@ -2495,7 +2488,7 @@ fn origin_to_constraint(origin: &ValueOrigin) -> RegionConstraint {
 ///   * Phi-of-mixed-origins: descend into upsilon arms and reject when
 ///     the joined origin set spans incompatible regions.
 ///
-/// Codex Option 1.5 (issue #314): semantic post-inference store-conflict check.
+/// Semantic post-inference store-conflict check.
 ///
 /// After `analyze_function` populates `region_map`, walk every CallTarget
 /// instruction; for each callee store-effect of kind `AliasOf(p)`, look up
@@ -2506,14 +2499,32 @@ fn origin_to_constraint(origin: &ValueOrigin) -> RegionConstraint {
 /// inference's must_outlive widening (added by the same call site in
 /// `handle_inst`) has already done the right thing; the check must consult
 /// it instead of inspecting opcode shape.
+#[allow(clippy::too_many_arguments)]
 fn check_store_conflicts_post_inference(
     func: &Function,
+    own_summary: &InternalSummary,
     summaries: &[InternalSummary],
     region_map: &BTreeMap<InstId, RegionId>,
-    block_tree: &BlockTree,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    // When the analyzing function both returns a fresh value (`FreshInCaller`)
+    // AND publishes store effects, codegen lays out hidden arena slots as
+    // `[return_arena, store_target_arenas...]` (see
+    // `hidden_region_idx_for_store_target` in vow-codegen). Region inference
+    // collapses every must-outlive=VirtualCaller alloc to
+    // `Caller(HiddenRegionIdx(0))`, which is the return arena slot — but a
+    // helper-mediated routing actually wants the alloc to land in a
+    // store-target slot (1+). Until inference produces the correct
+    // `HiddenRegionIdx(N)`, accepting `Caller(_)` sources for this combo
+    // would silently route allocations to the wrong arena.
+    let returns_fresh = matches!(
+        own_summary.return_region,
+        InternalReturnRegion::Published(RegionConstraint::FreshInCaller)
+    );
+    let has_store_effects = !own_summary.store_effects.is_empty();
+    let ambiguous_caller_slot = returns_fresh && has_store_effects;
+
     let source_file: &str = &func.source_file;
     for block in &func.blocks {
         for inst in &block.insts {
@@ -2548,9 +2559,8 @@ fn check_store_conflicts_post_inference(
                         source_arg_id,
                         inst,
                         inst_lookup,
-                        summaries,
                         region_map,
-                        block_tree,
+                        ambiguous_caller_slot,
                         diagnostics,
                     );
                 }
@@ -2566,9 +2576,8 @@ fn check_store_conflict_semantic(
     source_arg_id: InstId,
     call_inst: &Inst,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
-    summaries: &[InternalSummary],
     region_map: &BTreeMap<InstId, RegionId>,
-    block_tree: &BlockTree,
+    ambiguous_caller_slot: bool,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     // Inline case: target is not a parameter; the inline path handles its own
@@ -2578,33 +2587,24 @@ fn check_store_conflict_semantic(
         return;
     };
 
-    // Arm A/A.5: source is not in the region map (not a heap producer) OR is
-    // already widened to caller/root/rodata. Either way, no conflict.
+    // Source is not in the region map (not a heap producer) OR is already
+    // widened to caller/root/rodata. Either way, no conflict — UNLESS the
+    // analyzing function has the ambiguous combo (FreshInCaller return +
+    // store effects), in which case Caller(0) might mean either the return
+    // arena or a store-target arena and we can't statically resolve which.
     let Some(src_rgn) = region_map.get(&source_arg_id).copied() else {
         return;
     };
-    let src_block = match src_rgn {
-        RegionId::Caller(_) | RegionId::Root | RegionId::Rodata => return,
-        RegionId::Block(b) => b,
-    };
-
-    // Arm B: source is a concrete block. Compute target's region; conflict iff
-    // src_block does not enclose tgt_block. We've already established target is
-    // a parameter (above), so target_region_marker returns VirtualCaller —
-    // hence any concrete block source is strictly narrower. We still go
-    // through the full match for clarity / future-proofing.
-    let target_marker = target_region_marker(target_arg_id, inst_lookup, summaries);
-    let conflict = match target_marker {
-        MustOutliveMarker::VirtualCaller | MustOutliveMarker::Root => true,
-        MustOutliveMarker::Rodata => true,
-        MustOutliveMarker::Block(tgt_block) => {
-            // src outlives tgt iff src_block is an ancestor of tgt_block in the
-            // block tree (a node is its own ancestor for this purpose).
-            !block_tree.is_ancestor(src_block, tgt_block)
+    match src_rgn {
+        RegionId::Caller(_) if ambiguous_caller_slot => {
+            // Fall through to emit a conflict — accepting would silently
+            // route to the wrong arena slot at codegen time.
         }
-    };
-    if !conflict {
-        return;
+        RegionId::Caller(_) | RegionId::Root | RegionId::Rodata => return,
+        RegionId::Block(_) => {
+            // Concrete block source, parameter target — strictly narrower,
+            // always a conflict; drop through to emission.
+        }
     }
 
     let source_span = inst_lookup
@@ -5402,22 +5402,14 @@ mod tests {
         assert!(sccs.is_empty());
     }
 
-    /// A callee that stores its second arg into its first arg publishes
-    /// `(0, AliasOf(1))` store-effect. A caller passing `(some_param,
-    /// fresh_alloc)` exhibits the alloc→param-via-callee shape that
-    /// `check_store_conflict` rejects (Phase 5 partial detection).
+    /// A fresh `RegionAlloc` passed through a callee whose store-effect
+    /// routes it into a parameter container must NOT trip `RegionConflict`.
+    /// Must-outlive marker propagation places the alloc at the caller's
+    /// region; the post-inference check consults that inferred region
+    /// rather than the IR opcode. Companion to
+    /// `vec_new_through_callee_store_effect_lifts_without_conflict` —
+    /// both cases share routing semantics; only opcode shape differs.
     #[test]
-    /// Codex Option 1.5 (issue #314): a fresh `RegionAlloc` passed through a
-    /// callee whose store-effect routes it into a parameter container MUST
-    /// NOT trip `RegionConflict`. Region inference's must_outlive widening
-    /// (`call_store_effects_collect_regions` equivalent) places the alloc at
-    /// the caller's region; `check_store_conflicts_post_inference` consults
-    /// that inferred region rather than the IR opcode.
-    ///
-    /// Mirrors the existing `vec_new_through_callee_store_effect_lifts_without_conflict`
-    /// test for the `Vec::new()` case; before Codex 1.5, the two cases gave
-    /// different verdicts because the old check filtered on `RegionAlloc`
-    /// opcode while the routing semantics were identical.
     fn region_alloc_through_callee_store_effect_lifts_without_conflict() {
         let f0_insts = vec![
             inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
@@ -5478,18 +5470,6 @@ mod tests {
             "RegionAlloc passed through a store-effecting callee should lift to caller"
         );
     }
-
-    // Removed by Codex Option 1.5 (issue #314): the test
-    // `region_conflict_uses_callee_function_source_file` asserted that the
-    // `source_file` field of a RegionConflict diagnostic points at the
-    // analyzing caller's file. After Option 1.5, the conflict path is
-    // reached only when region inference's must_outlive marker propagation
-    // does NOT widen the source — but that propagation runs unconditionally
-    // for every AliasOf store-effect at every call site (see handle_inst
-    // around line 1696 and check_store_conflicts_post_inference). The path
-    // is therefore unreachable from synthetic per-function IR and the test
-    // could not be re-fixtured. The source_file plumbing remains exercised
-    // by other diagnostics (Linear*, Mismatch*) and by integration tests.
 
     /// Same callee shape as the conflict test, but caller passes two
     /// parameters (no fresh alloc). Cross-param store stays Phase-5-deferred,

@@ -33,8 +33,8 @@ fn EC_REGION_LINEAR() -> i64 vow { ensures: result >= 0 } { 19 }
 fn EC_VERIFICATION_SKIPPED() -> i64 vow { ensures: result >= 0 } { 20 }
 fn EC_BTREEMAP_KEY_TYPE_MUST_BE_I64() -> i64 vow { ensures: result >= 0 } { 21 }
 fn EC_BTREEMAP_VALUE_TYPE_MUST_BE_I64() -> i64 vow { ensures: result >= 0 } { 22 }
-// Codex Option 1.5 (issue #314): emitted as a Note when an allocation routes
-// to the root region via store-effect chains.
+// Note severity: an allocation that routes via store-effect chains to the
+// root region (program-lifetime placement). See arena_memory.md §4.4.
 fn EC_REGION_ROOT_ESCAPE() -> i64 vow { ensures: result >= 0 } { 23 }
 
 struct Diagnostic {

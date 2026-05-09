@@ -68,10 +68,10 @@ pub enum ErrorCode {
     // Region inference (arena-per-scope, Phase 3)
     RegionConflict,
     RegionLinear,
-    // Codex Option 1.5 (issue #314): emitted as a Note when an allocation
-    // routed via store-effect chains will live in the root region
-    // (`__vow_root_arena`). Non-blocking; surfaces silent program-lifetime
-    // placement so the agent can decide whether it's intentional.
+    // Note severity: an allocation whose region routes via store-effect
+    // chains to `__vow_root_arena` (program-lifetime placement). The build
+    // still succeeds; the diagnostic exists so the agent sees that the
+    // value will live for the entire process — see `arena_memory.md` §4.4.
     RegionRootEscape,
     // Emitted as a Warning when a vowed function's body cannot be modeled
     // by the verifier (e.g. uses RegionAlloc/FieldSet/Linear*/Load/Store).
@@ -282,8 +282,8 @@ mod tests {
 
     #[test]
     fn region_root_escape_debug_format_is_pascalcase() {
-        // Codex Option 1.5 (issue #314): the JSON `error_code` for the
-        // root-routing note is "RegionRootEscape".
+        // Same wire-format contract as RegionConflict / RegionLinear: the
+        // JSON `error_code` is the Debug format, so it must stay PascalCase.
         assert_eq!(
             format!("{:?}", ErrorCode::RegionRootEscape),
             "RegionRootEscape"
