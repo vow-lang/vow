@@ -982,12 +982,14 @@ fn unique_store_target_count(flat: Vec<i64>) -> i64 {
 
 // Mirrors Rust's `any_published_store` filter at vow-ir/src/region.rs:1481-1484.
 // Returns true if the parallel `int_se_src_kinds[fi]` array contains any
-// kind other than RSUM_INTERNAL_UNINIT(). Today every entry is in {0..3}
-// (no Uninit ever leaks into the published parallel arrays via
-// `add_store_effect`), so this is structurally equivalent to
-// `kinds.len() > 0` — but locks in the Published(_) discriminator the
-// way Rust does, so a future code path that publishes a non-Published
-// kind cannot silently widen the gate.
+// kind other than RSUM_INTERNAL_UNINIT(). This is exact (not merely
+// conservative) because the integer encoding is closed: Published kinds
+// map to {0..3} and RSUM_INTERNAL_UNINIT = -1 is the only non-Published
+// value. As long as that invariant holds, `!= UNINIT` ≡ `is Published`,
+// and `add_store_effect` is the single chokepoint that writes
+// `int_se_src_kinds`, so adding a future non-Published kind requires
+// either extending the encoding past {0..3} or adding a new sentinel —
+// both of which would force this gate's review.
 fn any_published_se_kind(kinds: Vec<i64>) -> bool {
     let mut i: i64 = 0;
     while i < kinds.len() {
