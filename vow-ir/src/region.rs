@@ -2756,12 +2756,22 @@ fn check_store_conflict_semantic(
     ambiguous_caller_slot: bool,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    // Inline case: target is not a parameter; the inline path handles its own
-    // region-LCA check via direct markers, no cross-call conflict.
-    let target_origin = trace_origin(target_arg_id, inst_lookup);
-    let ValueOrigin::Param(_) = target_origin else {
+    // Inline case: target is not parameter-rooted; the inline path handles
+    // its own region-LCA check via direct markers, no cross-call conflict.
+    //
+    // Use `trace_param` (deep walk through FieldGet/Load/vec-get back to
+    // GetArg) rather than `trace_origin` (shallow). Codegen's `arg_region`
+    // / `source_value_region` follows the same alias chain back to the
+    // underlying GetArg and then mints a `Caller(HiddenRegionIdx(N))` via
+    // `hidden_region_idx_for_store_target`, so a target like `a.entries`
+    // (FieldGet on parameter) IS a parameter target as far as hidden-slot
+    // routing is concerned. Using the shallow walk would early-return on
+    // FieldGet/Load targets and skip the `ambiguous_caller_slot` guard,
+    // matching neither codegen nor the self-hosted `compiler/region.vow`
+    // mirror (which has always used the deep walk).
+    if trace_param(target_arg_id, inst_lookup).is_none() {
         return;
-    };
+    }
 
     // Direct lookup first.
     let direct = region_map.get(&source_arg_id).copied();
