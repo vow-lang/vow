@@ -839,12 +839,10 @@ fn region_root_escape_note_count_parity_rust_vs_self_hosted() {
         });
         parsed["diagnostics"]
             .as_array()
-            .map(|d| {
-                d.iter()
-                    .filter(|x| x["error_code"].as_str() == Some("RegionRootEscape"))
-                    .count()
-            })
-            .unwrap_or(0)
+            .expect("diagnostics should be an array in compiler JSON output")
+            .iter()
+            .filter(|x| x["error_code"].as_str() == Some("RegionRootEscape"))
+            .count()
     };
 
     let rust_count = count_notes(std::path::Path::new(env!("CARGO_BIN_EXE_vow")), "rust vow");
