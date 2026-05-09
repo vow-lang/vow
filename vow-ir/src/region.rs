@@ -2445,74 +2445,35 @@ fn origin_to_constraint(origin: &ValueOrigin) -> RegionConstraint {
 // Conflict detection
 // ---------------------------------------------------------------------------
 
-/// Phase 5 partial conflict detection (spec §4.4).
+/// Walk through aliasing wrappers (FieldGet, Load, vec-get extern, Phi) to
+/// find the underlying region of a value. Mirrors the chain codegen's
+/// `source_value_region` (vow-codegen) and `clif_value_receiver_region`
+/// (compiler/clif.vow) walk. Used only in `ambiguous_caller_slot` mode to
+/// detect underlying `Caller(_)` allocations that would silently misroute
+/// through slot 0.
 ///
-/// The self-hosted `compiler/region.vow` mirrors this in two phases: it
-/// publishes direct `Store`/`FieldSet` effects during fixed-point iteration,
-/// then checks call sites once after summaries converge. Keeping diagnostic
-/// emission outside the SCC loop avoids duplicate reports while preserving the
-/// same source-visible rejection as this Rust path.
-///
-/// Called during the forward sweep when an `Opcode::Call` site processes
-/// a callee store-effect of shape `(target_param, AliasOf(p))`: the callee
-/// writes its arg[p] into its arg[target_param]. In the caller's frame,
-/// `target_arg_id = inst.args[target_param]` and `source_arg_id =
-/// inst.args[p]`.
-///
-/// The constraint per spec §4.4 is `region(target) ⊇ region(source)`. The
-/// clearest unsatisfiable shape we can detect with current data:
-///
-/// * `source_origin = RegionAlloc` (block-local fresh allocation in the
-///   caller) and `target_origin = Param(_)` (caller's parameter region,
-///   which strictly outlives any caller block). Storing a block-local
-///   value into a parameter container is a use-after-free in the
-///   caller's caller after the caller returns, unless the caller's own
-///   summary lifts the allocation via a `(target, FreshInCaller)` entry.
-///   The lift only materialises if the caller separately publishes that
-///   effect (via a direct `Store`/`FieldSet` of a fresh value into the
-///   same param), which is its own visible source-level pattern; we
-///   reject this call shape unconditionally — the user fix is either to
-///   hoist the alloc, copy via `pin_to_root`, or restructure the return
-///   flow per §4.4 + issue #200.
-///
-/// Still outside this partial checker:
-///   * Cross-param without published spanning effect (`source = Param(p)`,
-///     `target = Param(q)`, `p != q`): needs the caller's full summary,
-///     which is built up forward through this same pass.
-///   * Phi-of-mixed-origins: descend into upsilon arms and reject when
-///     the joined origin set spans incompatible regions.
-///
-/// Semantic post-inference store-conflict check.
-///
-/// After `analyze_function` populates `region_map`, walk every CallTarget
-/// instruction; for each callee store-effect of kind `AliasOf(p)`, look up
-/// the inferred region of the corresponding caller-side argument. Reject
-/// only when that inferred region is a concrete block strictly narrower
-/// than the target's region. Sources whose inferred region is already
-/// `Caller`/`Root`/`Rodata` satisfy any parameter-region target — region
-/// inference's must_outlive widening (added by the same call site in
-/// `handle_inst`) has already done the right thing; the check must consult
-/// it instead of inspecting opcode shape.
-/// Walk through aliasing wrappers (FieldGet, Load, vec-get extern) to find
-/// the underlying region of a value. Mirrors the chain codegen's
-/// `source_value_region` follows. Used only in `ambiguous_caller_slot`
-/// mode to detect underlying `Caller(_)` allocations that would silently
-/// misroute through slot 0.
-///
-/// Returns the resolved `RegionId` only when the trace terminates at a
-/// heap-producing instruction in `region_map`. Returns `None` for chains
-/// that terminate at parameters, scalar values, Phi, or unrecognised
-/// opcodes — those cases are SAFE in ambiguous mode (parameters route via
-/// their own hidden slot; scalars/non-heap don't allocate; Phi-of-allocs
-/// would have its own region_map entry directly). Caller treats the
-/// `Some(Caller(_))` case as a conflict and any other result as safe.
+/// Returns `Some(RegionId::Caller(_))` when ANY reachable terminus
+/// resolves to a caller region — caller treats that as a conflict. For
+/// Phi insts, every Upsilon writing to the Phi is recursed into, and the
+/// first Caller result short-circuits. Returns `None` when no caller
+/// terminus is found (parameters, scalars, unrecognised opcodes, or
+/// purely Block/Root/Rodata Phi merges) — those are safe in ambiguous mode.
 fn underlying_caller_via_aliases(
     source_arg_id: InstId,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
     region_map: &BTreeMap<InstId, RegionId>,
 ) -> Option<RegionId> {
-    let mut current = source_arg_id;
     let mut seen: BTreeSet<InstId> = BTreeSet::new();
+    underlying_caller_via_aliases_inner(source_arg_id, inst_lookup, region_map, &mut seen)
+}
+
+fn underlying_caller_via_aliases_inner(
+    source_arg_id: InstId,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+    region_map: &BTreeMap<InstId, RegionId>,
+    seen: &mut BTreeSet<InstId>,
+) -> Option<RegionId> {
+    let mut current = source_arg_id;
     loop {
         if !seen.insert(current) {
             return None;
@@ -2523,26 +2484,53 @@ fn underlying_caller_via_aliases(
         let (_, inst) = inst_lookup.get(&current)?;
         match (&inst.opcode, &inst.data) {
             (Opcode::FieldGet | Opcode::Load, _) => {
-                if let Some(&first) = inst.args.first() {
-                    current = first;
-                } else {
-                    return None;
-                }
+                current = *inst.args.first()?;
             }
             (Opcode::Call, InstData::CallExtern(sym))
                 if matches!(sym.as_str(), "__vow_vec_get_val" | "__vow_vec_get") =>
             {
-                if let Some(&first) = inst.args.first() {
-                    current = first;
-                } else {
-                    return None;
+                current = *inst.args.first()?;
+            }
+            (Opcode::Phi, _) => {
+                // Walk every Upsilon targeting this Phi. If ANY arm
+                // resolves to Caller(_), short-circuit with a reject.
+                let phi_id = inst.id;
+                for (_, (_, candidate)) in inst_lookup.iter() {
+                    if candidate.opcode == Opcode::Upsilon
+                        && matches!(candidate.data, InstData::PhiTarget(t) if t == phi_id)
+                        && let Some(&arm_id) = candidate.args.first()
+                    {
+                        let mut arm_seen = seen.clone();
+                        if let Some(arm_rgn) = underlying_caller_via_aliases_inner(
+                            arm_id, inst_lookup, region_map, &mut arm_seen,
+                        ) && matches!(arm_rgn, RegionId::Caller(_))
+                        {
+                            return Some(arm_rgn);
+                        }
+                    }
                 }
+                return None;
             }
             _ => return None,
         }
     }
 }
 
+/// Semantic post-inference store-conflict check (spec §4.4).
+///
+/// After `analyze_function` populates `region_map`, walks every
+/// `CallTarget` instruction; for each callee store-effect of kind
+/// `AliasOf(p)`, looks up the inferred region of the corresponding
+/// caller-side argument. Rejects only when that inferred region is a
+/// concrete block strictly narrower than the target's region (always a
+/// conflict for parameter targets), or — in `ambiguous_caller_slot`
+/// mode — when the resolved alias chain reaches a `Caller(_)` terminus
+/// that codegen would silently route to slot 0 instead of the intended
+/// per-target slot.
+///
+/// The self-hosted `compiler/region.vow` mirrors this check; both
+/// compilers must keep the same accept/reject decisions to preserve the
+/// binary fixed-point bootstrap.
 #[allow(clippy::too_many_arguments)]
 fn check_store_conflicts_post_inference(
     func: &Function,
@@ -5551,13 +5539,14 @@ mod tests {
             inst(5, Opcode::Store, Ty::Unit, vec![2, 3], InstData::None),
             inst(6, Opcode::Return, Ty::Unit, vec![], InstData::None),
         ];
-        let callee = function(
+        let mut callee = function(
             0,
             "store_into_two",
             vec![Ty::Ptr, Ty::Ptr, Ty::Ptr, Ty::Ptr],
             Ty::Unit,
             vec![block(0, callee_insts)],
         );
+        callee.source_file = "callee.vow".to_string();
         // Caller: passes (a, fresh1, b, fresh2) — both fresh allocations
         // route through the callee's store effects and therefore would
         // both be tagged Caller(HiddenRegionIdx(0)) by inference.
@@ -5587,13 +5576,14 @@ mod tests {
             ),
             inst(15, Opcode::Return, Ty::Unit, vec![], InstData::None),
         ];
-        let caller = function(
+        let mut caller = function(
             1,
             "ambiguous_caller",
             vec![Ty::Ptr, Ty::Ptr],
             Ty::Unit,
             vec![block(0, caller_insts)],
         );
+        caller.source_file = "caller.vow".to_string();
         let mut m = module(vec![callee, caller]);
         infer_regions(&mut m);
 
@@ -5614,11 +5604,25 @@ mod tests {
              warnings: {:?}",
             m.warnings
         );
-        // Source-file plumbing: the diagnostic must label the analyzing
-        // function's source file.
+        // Issue #254 regression guard: the diagnostic must label the
+        // analyzing caller's source file ("caller.vow"), never the
+        // callee's ("callee.vow"). This is the same property the
+        // pre-existing `region_conflict_uses_callee_function_source_file`
+        // test (deleted in this PR's first commit) used to assert; rolling
+        // it forward here keeps the source_file plumbing covered.
         for c in &conflicts {
             assert_eq!(c.severity, Severity::Error);
             assert_eq!(c.blame, Blame::Callee);
+            assert_eq!(
+                c.primary.file, "caller.vow",
+                "primary span must point at the analyzing function's source file"
+            );
+            for s in &c.secondary {
+                assert_eq!(
+                    s.file, "caller.vow",
+                    "secondary spans must also point at the analyzing function's source file"
+                );
+            }
         }
     }
 

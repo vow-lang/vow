@@ -751,56 +751,97 @@ fn add_store_effect(
     aliases_list.push(clone_i64_vec(aliases));
 }
 
-// Walk through aliasing wrappers (FieldGet, Load, vec-get extern) to find
-// the underlying region of a value. Mirrors the chain that codegen's
-// `source_value_region` follows. Used only in `ambiguous_caller_slot` mode
-// to detect underlying `Caller(_)` allocations that would silently
-// misroute through slot 0.
+// Walk through aliasing wrappers (FieldGet, Load, vec-get extern, Phi) to
+// find the underlying region of a value. Mirrors the chain that
+// `clif_value_receiver_region` (compiler/clif.vow) follows during codegen.
+// Used only in `ambiguous_caller_slot` mode to detect underlying
+// `Caller(_)` allocations that would silently misroute through slot 0.
 //
-// Returns the resolved packed region (>=0) only when the trace terminates
-// at a heap-producing instruction in the region map. Returns -1 for
-// chains that terminate at parameters, scalars, Phi, or unrecognised
-// opcodes — those cases are SAFE in ambiguous mode (parameters route via
-// their own hidden slot; scalars don't allocate; Phi-of-allocs has its
-// own region map entry directly). Caller treats Caller(_) results as
-// conflict and any other result as safe.
+// Returns:
+//   >=0   — packed region of a heap producer reached by the trace, or
+//           a Caller(_) sentinel when a Phi merges divergent arms one of
+//           which reaches Caller (conservative reject path).
+//   -1    — chain terminates at a parameter, scalar, or unrecognised
+//           opcode that cannot misroute via slot 0.
+//
+// Cycle detection via `seen` only — no fixed depth cap, since codegen's
+// equivalent walk is depth-unbounded and must agree.
 fn underlying_caller_via_aliases(
     id_to_inst: Vec<IrInst>,
     region_keys: Vec<i64>, region_vals: Vec<i64>,
     source_arg_id: i64
 ) -> i64 {
+    let seen: Vec<i64> = Vec::new();
+    underlying_caller_via_aliases_inner(id_to_inst, region_keys, region_vals, source_arg_id, seen)
+}
+
+fn underlying_caller_via_aliases_inner(
+    id_to_inst: Vec<IrInst>,
+    region_keys: Vec<i64>, region_vals: Vec<i64>,
+    source_arg_id: i64,
+    seen: Vec<i64>
+) -> i64 {
     let mut current: i64 = source_arg_id;
-    let mut seen: Vec<i64> = Vec::new();
-    let mut steps: i64 = 0;
-    while steps < 32 {
+    let mut local_seen: Vec<i64> = clone_i64_vec(seen);
+    let mut keep_going: bool = true;
+    let mut result: i64 = -1;
+    while keep_going {
         let mut already: bool = false;
         let mut si: i64 = 0;
-        while si < seen.len() {
-            if seen[si] == current { already = true; }
+        while si < local_seen.len() {
+            if local_seen[si] == current { already = true; }
             si = si + 1;
         }
-        if already { return -1; }
-        seen.push(current);
-        let direct: i64 = lookup_inst_region(region_keys, region_vals, current);
-        if direct >= 0 { return direct; }
-        let inst: IrInst = lookup_inst_or_default(id_to_inst, current);
-        if inst.id < 0 { return -1; }
-        if (inst.op == IOP_FIELD_GET() || inst.op == IOP_LOAD()) && inst.args.len() > 0 {
-            current = inst.args[0];
-            steps = steps + 1;
-            continue;
+        if already {
+            keep_going = false;
+        } else {
+            local_seen.push(current);
+            let direct: i64 = lookup_inst_region(region_keys, region_vals, current);
+            if direct >= 0 {
+                result = direct;
+                keep_going = false;
+            } else {
+                let inst: IrInst = lookup_inst_or_default(id_to_inst, current);
+                if inst.id < 0 {
+                    keep_going = false;
+                } else if (inst.op == IOP_FIELD_GET() || inst.op == IOP_LOAD()) && inst.args.len() > 0 {
+                    current = inst.args[0];
+                } else if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
+                    && (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
+                    && inst.args.len() > 0
+                {
+                    current = inst.args[0];
+                } else if inst.op == IOP_PHI() {
+                    // Walk every Upsilon writing to this Phi. If ANY arm
+                    // resolves to Caller(_), short-circuit with that —
+                    // the call site only cares about the
+                    // Caller-vs-not-Caller distinction.
+                    let mut ki: i64 = 0;
+                    while ki < id_to_inst.len() {
+                        let up: IrInst = id_to_inst[ki];
+                        if up.id >= 0 && up.op == IOP_UPSILON() && up.dk == IDATA_PHI_TARGET()
+                            && up.dv == inst.id && up.args.len() > 0
+                        {
+                            let arm_rgn: i64 = underlying_caller_via_aliases_inner(
+                                id_to_inst, region_keys, region_vals, up.args[0], local_seen);
+                            if arm_rgn >= 0 && region_kind(arm_rgn) == REGION_KIND_CALLER() {
+                                result = arm_rgn;
+                                ki = id_to_inst.len();
+                            } else {
+                                ki = ki + 1;
+                            }
+                        } else {
+                            ki = ki + 1;
+                        }
+                    }
+                    keep_going = false;
+                } else {
+                    keep_going = false;
+                }
+            }
         }
-        if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
-            && (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
-            && inst.args.len() > 0
-        {
-            current = inst.args[0];
-            steps = steps + 1;
-            continue;
-        }
-        return -1;
     }
-    -1
+    result
 }
 
 // Walks the flat store-effect array (canonical wire layout from
