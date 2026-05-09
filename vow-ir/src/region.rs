@@ -2508,22 +2508,28 @@ fn check_store_conflicts_post_inference(
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    // When the analyzing function both returns a fresh value (`FreshInCaller`)
-    // AND publishes store effects, codegen lays out hidden arena slots as
-    // `[return_arena, store_target_arenas...]` (see
-    // `hidden_region_idx_for_store_target` in vow-codegen). Region inference
-    // collapses every must-outlive=VirtualCaller alloc to
-    // `Caller(HiddenRegionIdx(0))`, which is the return arena slot — but a
-    // helper-mediated routing actually wants the alloc to land in a
-    // store-target slot (1+). Until inference produces the correct
-    // `HiddenRegionIdx(N)`, accepting `Caller(_)` sources for this combo
-    // would silently route allocations to the wrong arena.
+    // Codegen lays out hidden arena slots as
+    // `[return_arena?, sorted_unique_store_targets...]` (see
+    // `hidden_region_idx_for_store_target` in vow-codegen) — one slot per
+    // FreshInCaller return plus one per distinct store-effect target.
+    // Region inference collapses every must-outlive=VirtualCaller alloc to
+    // `Caller(HiddenRegionIdx(0))`, which is unambiguous only when there's
+    // exactly one slot. With two or more, slot 0 might mean the return
+    // arena, the first store-target arena, or any other slot the caller
+    // chain expects — and codegen can't tell from the IR alone.
+    // Until inference produces the correct `HiddenRegionIdx(N)`, accepting
+    // `Caller(_)` sources whenever multiple slots exist would silently
+    // route allocations to the wrong arena.
     let returns_fresh = matches!(
         own_summary.return_region,
         InternalReturnRegion::Published(RegionConstraint::FreshInCaller)
     );
-    let has_store_effects = !own_summary.store_effects.is_empty();
-    let ambiguous_caller_slot = returns_fresh && has_store_effects;
+    let mut store_target_set: BTreeSet<u32> = BTreeSet::new();
+    for (target, _) in &own_summary.store_effects {
+        store_target_set.insert(*target);
+    }
+    let total_hidden_slots = (returns_fresh as usize) + store_target_set.len();
+    let ambiguous_caller_slot = total_hidden_slots > 1;
 
     let source_file: &str = &func.source_file;
     for block in &func.blocks {

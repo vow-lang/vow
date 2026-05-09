@@ -751,6 +751,45 @@ fn add_store_effect(
     aliases_list.push(clone_i64_vec(aliases));
 }
 
+// Walks the flat store-effect array (canonical wire layout from
+// `canonicalize_store_effects`) and counts unique target indices. The
+// layout is `target, kind, (aux)?, (alias_count, alias...)?` per effect;
+// ALIAS_OF carries one aux, ALIAS_OF_ANY carries an alias-count plus that
+// many indices, the others carry no payload. Effects are pre-sorted by
+// target, so adjacent duplicates compare cheaply.
+fn unique_store_target_count(flat: Vec<i64>) -> i64 {
+    let mut count: i64 = 0;
+    let mut last: i64 = -1;
+    let mut have_last: bool = false;
+    let mut i: i64 = 0;
+    while i < flat.len() {
+        let target: i64 = flat[i];
+        i = i + 1;
+        if i >= flat.len() { break; }
+        let kind: i64 = flat[i];
+        i = i + 1;
+        if !have_last || target != last {
+            count = count + 1;
+            last = target;
+            have_last = true;
+        }
+        if kind == RSUM_KIND_ALIAS_OF() {
+            if i >= flat.len() { break; }
+            i = i + 1;
+        } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
+            if i >= flat.len() { break; }
+            let n: i64 = flat[i];
+            i = i + 1;
+            let mut a: i64 = 0;
+            while a < n && i < flat.len() {
+                i = i + 1;
+                a = a + 1;
+            }
+        }
+    }
+    count
+}
+
 fn check_region_store_conflicts_module(
     m: IrModule, id_to_inst_per_fn: Vec<Vec<IrInst>>,
     id_to_block_per_fn: Vec<Vec<i64>>,
@@ -768,17 +807,20 @@ fn check_region_store_conflicts_module(
         let depths: Vec<i64> = block_depth_per_fn[fi];
         let rkeys: Vec<i64> = region_keys[fi];
         let rvals: Vec<i64> = region_vals[fi];
-        // Ambiguous-slot guard: when this function both returns FreshInCaller
-        // and publishes store effects, codegen lays out hidden arena slots
-        // as [return, store-target...]. Region inference uniformly tags
-        // caller-escaping allocs as Caller(0), so it cannot distinguish the
-        // return-arena alloc from a store-target alloc; accepting Caller(_)
-        // would silently route to the wrong slot. Reject the routing path
-        // for this combo until inference can produce the correct
+        // Ambiguous-slot guard: codegen lays out hidden arena slots as
+        // [return?, sorted-unique-store-targets...] — one slot per
+        // FreshInCaller return plus one per distinct store-effect target.
+        // Region inference uniformly tags caller-escaping allocs as
+        // Caller(0), which is unambiguous only when there's exactly one
+        // hidden slot. With two or more, slot 0 could mean any of them,
+        // and accepting Caller(_) would silently misroute. Reject the
+        // routing path until inference produces the correct
         // HiddenRegionIdx(N).
         let returns_fresh: bool = f.rsum_return_kind == RSUM_KIND_FRESH_IN_CALLER();
-        let has_store_effects: bool = f.rsum_store_effects.len() > 0;
-        let ambiguous_caller_slot: bool = returns_fresh && has_store_effects;
+        let unique_store_targets: i64 = unique_store_target_count(f.rsum_store_effects);
+        let return_slots: i64 = if returns_fresh { 1 } else { 0 };
+        let total_hidden_slots: i64 = return_slots + unique_store_targets;
+        let ambiguous_caller_slot: bool = total_hidden_slots > 1;
         let mut bi: i64 = 0;
         while bi < f.blocks.len() {
             let blk: IrBlock = f.blocks[bi];
