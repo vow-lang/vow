@@ -28,7 +28,8 @@
         "EsbmcNotFound",
         "IoError",
         "RegionConflict",
-        "RegionLinear"
+        "RegionLinear",
+        "RegionRootEscape"
       ],
       "description": "Machine-readable error code"
     },

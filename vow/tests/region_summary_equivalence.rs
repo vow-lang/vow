@@ -288,23 +288,25 @@ fn small_module_uninit_never_leaks_after_round_trip() {
     }
 }
 
-/// Source-level regression for the same logical shape as the inline
-/// `region_conflict_alloc_into_param_via_callee_store_effect` IR test:
-/// a callee stores arg1 into arg0, and a caller passes a parameter container
-/// plus a fresh block-local allocation. Exercises only the Rust frontend
-/// here; the same fixture is picked up by the self-hosted shell suite via
-/// its `// TEST: error-code RegionConflict` annotation, which runs
-/// `build/vowc` on it after bootstrap.
+/// Codex Option 1.5 regression (issue #314): a fresh aggregate constructed
+/// inline at a call site and routed through a callee's store-effect must
+/// compile cleanly. Region inference's must_outlive marker propagation
+/// widens the alloc to the caller's region; the post-inference conflict
+/// check consults that inferred region rather than the IR opcode.
+///
+/// Same fixture is picked up by the self-hosted shell suite via its
+/// `// TEST: stdout ""` annotation, which runs `build/vowc` on it after
+/// bootstrap.
 #[test]
-fn rust_alloc_into_param_via_callee_emits_region_conflict() {
+fn rust_routed_aggregate_via_callee_store_effect_compiles() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .to_path_buf();
     let fixture = root
         .join("tests")
-        .join("error")
-        .join("region_conflict_store_effect.vow");
+        .join("run")
+        .join("region_helper_routed_aggregate.vow");
     let out = Command::new(env!("CARGO_BIN_EXE_vow"))
         .args(["build", "--no-verify"])
         .arg(&fixture)
@@ -312,14 +314,29 @@ fn rust_alloc_into_param_via_callee_emits_region_conflict() {
         .expect("failed to run vow");
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        !out.status.success(),
-        "fixture should fail with RegionConflict\nstdout: {stdout}\nstderr: {stderr}"
-    );
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
         panic!("failed to parse vow stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
     });
-    assert_eq!(parsed["status"].as_str(), Some("CompileFailed"));
+    let status = parsed["status"].as_str();
+    // Test environment may lack `libvow_runtime.a` when this test is run
+    // standalone (`cargo test -p vow --test region_summary_equivalence`)
+    // without a prior `cargo build --release --all`. The region pass
+    // itself runs in either case; we tolerate the link-only failure
+    // because the fixture's purpose is to exercise inference, not
+    // linking. CI runs a full build first, so this branch is dead in
+    // CI — and the unconditional `RegionConflict`-absence assertion
+    // below still runs against the parsed diagnostics regardless of
+    // link status, so a regression in the region pass cannot be
+    // masked by a missing runtime archive.
+    let runtime_link_failure = status == Some("CompileFailed")
+        && parsed["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("libvow_runtime.a"));
+    assert!(
+        matches!(status, Some("Verified") | Some("Unverified")) || runtime_link_failure,
+        "expected Verified/Unverified status (or link-only failure on \
+         missing libvow_runtime.a), got {status:?}\nstdout: {stdout}\nstderr: {stderr}"
+    );
     let diagnostics = parsed["diagnostics"]
         .as_array()
         .expect("diagnostics should be an array");
@@ -327,10 +344,21 @@ fn rust_alloc_into_param_via_callee_emits_region_conflict() {
         .iter()
         .filter(|d| d["error_code"].as_str() == Some("RegionConflict"))
         .collect();
-    assert_eq!(
-        conflicts.len(),
-        1,
-        "expected exactly one RegionConflict diagnostic\nstdout: {stdout}\nstderr: {stderr}"
+    assert!(
+        conflicts.is_empty(),
+        "routed aggregate must not trip RegionConflict; diagnostics: {diagnostics:?}"
     );
-    assert_eq!(conflicts[0]["blame"].as_str(), Some("callee"));
+    // The fixture's `use_caller` function has a Caller-region `Payload{n:1}`
+    // alloc that is routed through `put` — it must surface as a
+    // `RegionRootEscape` note. Closes the gap a regression that silently
+    // dropped all notes would otherwise slip through.
+    let notes: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .collect();
+    assert!(
+        !notes.is_empty(),
+        "routed aggregate must emit at least one RegionRootEscape note; \
+         diagnostics: {diagnostics:?}"
+    );
 }

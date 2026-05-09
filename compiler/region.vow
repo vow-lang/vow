@@ -249,7 +249,20 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
         fi = fi + 1;
     }
 
-    check_region_store_conflicts_module(m, id_to_inst_per_fn, dctx);
+    check_region_store_conflicts_module(
+        m,
+        id_to_inst_per_fn,
+        region_keys,
+        region_vals,
+        dctx,
+    );
+
+    // Surface allocations whose inferred region routes to the root region
+    // (program-lifetime placement) as `RegionRootEscape` notes — gated by
+    // `int_kinds` so we only fire on functions that may propagate the alloc
+    // to a caller. See arena_memory.md §4.4.
+    emit_root_escape_notes_module(m, region_keys, region_vals, int_kinds,
+                                   int_se_targets, dctx);
 
     // Commit per-inst regions.
     let mut fi2: i64 = 0;
@@ -629,6 +642,12 @@ fn put_inst_region(keys: Vec<i64>, vals: Vec<i64>, id: i64, rgn: i64) {
 // canon_flat encodes the canonical wire shape used by `IrFunction.rsum_store_effects`,
 // matching `vow-ir/src/serialize.rs::write_region_constraint` discriminants:
 //   per effect: target_u32, constraint_kind, (aux_u32)?, (alias_count, alias_u32...)?
+//
+// Sort invariant: the produced flat array is sorted by ascending target.
+// Adjacency-dedup consumers depend on this — see
+// `unique_store_target_count` (called from `check_region_store_conflicts_module`
+// and `emit_root_escape_notes_module`). If the sort order ever changes,
+// switch those consumers to an explicit set or update them in lockstep.
 fn canonicalize_store_effects(
     targets: Vec<i64>, kinds: Vec<i64>, aux: Vec<i64>, aliases: Vec<Vec<i64>>
 ) -> Vec<i64> {
@@ -734,13 +753,248 @@ fn add_store_effect(
     aliases_list.push(clone_i64_vec(aliases));
 }
 
+// Trace alias chain (FieldGet/Load/vec-get/Phi) for ambiguous-slot check;
+// mirrors clif_value_receiver_region. Returns packed region (>=0) on a
+// heap-producer terminus (Caller sentinel triggers conservative reject)
+// or -1 on a safe terminus.
+fn underlying_caller_via_aliases(
+    id_to_inst: Vec<IrInst>,
+    region_keys: Vec<i64>, region_vals: Vec<i64>,
+    m_functions: Vec<IrFunction>,
+    source_arg_id: i64
+) -> i64 {
+    let seen: Vec<i64> = Vec::new();
+    underlying_caller_via_aliases_inner(
+        id_to_inst, region_keys, region_vals, m_functions, source_arg_id, seen)
+}
+
+fn underlying_caller_via_aliases_inner(
+    id_to_inst: Vec<IrInst>,
+    region_keys: Vec<i64>, region_vals: Vec<i64>,
+    m_functions: Vec<IrFunction>,
+    source_arg_id: i64,
+    seen: Vec<i64>
+) -> i64 {
+    let mut current: i64 = source_arg_id;
+    let mut local_seen: Vec<i64> = clone_i64_vec(seen);
+    let mut keep_going: bool = true;
+    let mut result: i64 = -1;
+    while keep_going {
+        let mut already: bool = false;
+        let mut si: i64 = 0;
+        while si < local_seen.len() {
+            if local_seen[si] == current { already = true; }
+            si = si + 1;
+        }
+        if already {
+            keep_going = false;
+        } else {
+            local_seen.push(current);
+            let direct: i64 = lookup_inst_region(region_keys, region_vals, current);
+            if direct >= 0 {
+                result = direct;
+                keep_going = false;
+            } else {
+                let inst: IrInst = lookup_inst_or_default(id_to_inst, current);
+                if inst.id < 0 {
+                    keep_going = false;
+                } else if (inst.op == IOP_FIELD_GET() || inst.op == IOP_LOAD()) && inst.args.len() > 0 {
+                    current = inst.args[0];
+                } else if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
+                    && (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
+                    && inst.args.len() > 0
+                {
+                    current = inst.args[0];
+                } else if inst.op == IOP_PHI() {
+                    // Mirror codegen's `clif_value_receiver_region` Phi
+                    // semantics for the all-arms-agree case. For divergent
+                    // arms, codegen's source_value_region falls back to
+                    // the Phi's own (default) region — but that fallback
+                    // only governs how *future re-allocations* would
+                    // route. It does NOT undo a `RegionAlloc{Caller(_)}`
+                    // that already executed in some arm at runtime.
+                    // Hidden caller slots have asymmetric lifetimes, so a
+                    // fresh Caller(0) arm can be stored into slot 1's
+                    // target whose arena outlives slot 0's. To stay sound
+                    // under `ambiguous_caller_slot`, *any* Caller(_)-
+                    // carrying arm — even mixed with safe arms — must
+                    // trigger the conservative reject. The Rust mirror in
+                    // `vow-ir/src/region.rs` carries the same widened
+                    // logic; both compilers must keep this in sync.
+                    let mut have_first: bool = false;
+                    let mut first_rgn: i64 = -1;
+                    let mut diverged: bool = false;
+                    let mut any_caller_arm: i64 = -1;
+                    let mut ki: i64 = 0;
+                    while ki < id_to_inst.len() {
+                        let up: IrInst = id_to_inst[ki];
+                        if up.id >= 0 && up.op == IOP_UPSILON() && up.dk == IDATA_PHI_TARGET()
+                            && up.dv == inst.id && up.args.len() > 0
+                        {
+                            // Each arm gets the path-to-Phi seen set as a
+                            // starting `seen`; the inner call clones it on
+                            // entry, so arms explore independently and arm
+                            // B does not inherit arm A's exploration.
+                            // Mirrors `arm_seen = seen.clone()` in Rust.
+                            let arm_rgn: i64 = underlying_caller_via_aliases_inner(
+                                id_to_inst, region_keys, region_vals, m_functions, up.args[0], local_seen);
+                            if arm_rgn >= 0 && region_kind(arm_rgn) == REGION_KIND_CALLER()
+                                && any_caller_arm < 0
+                            {
+                                any_caller_arm = arm_rgn;
+                            }
+                            if !have_first {
+                                have_first = true;
+                                first_rgn = arm_rgn;
+                            } else if first_rgn != arm_rgn {
+                                diverged = true;
+                            }
+                        }
+                        ki = ki + 1;
+                    }
+                    if diverged {
+                        result = any_caller_arm;
+                    } else if have_first {
+                        result = first_rgn;
+                    }
+                    keep_going = false;
+                } else if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
+                    // The callee returns a value derived from its parameters
+                    // (AliasOf / AliasOfAny). The marker propagation pushes
+                    // VirtualCaller markers from the call result back to the
+                    // underlying allocs via the alias edge; the call result
+                    // itself isn't heap-producing for AliasOf returns, so
+                    // `region_map` has no entry and we fall through to here.
+                    // Trace through to those arg(s) — same as FieldGet/Load
+                    // semantically. AliasOfAny: any-caller-arm wins (mirror
+                    // Phi pattern). Mirrors the CallTarget arm in
+                    // vow-ir/src/region.rs:underlying_caller_via_aliases_inner;
+                    // both compilers must keep this in sync.
+                    let callee_idx: i64 = inst.dv;
+                    if callee_idx >= 0 && callee_idx < m_functions.len() {
+                        let callee: IrFunction = m_functions[callee_idx];
+                        let rkind: i64 = callee.rsum_return_kind;
+                        if rkind == RSUM_KIND_ALIAS_OF() {
+                            let j_idx: i64 = callee.rsum_return_aux;
+                            if j_idx >= 0 && j_idx < inst.args.len() {
+                                current = inst.args[j_idx];
+                            } else {
+                                keep_going = false;
+                            }
+                        } else if rkind == RSUM_KIND_ALIAS_OF_ANY() {
+                            let aliases: Vec<i64> = callee.rsum_return_aliases;
+                            let mut any_caller: i64 = -1;
+                            let mut ai: i64 = 0;
+                            while ai < aliases.len() && any_caller < 0 {
+                                let j_idx: i64 = aliases[ai];
+                                if j_idx >= 0 && j_idx < inst.args.len() {
+                                    let arm_rgn: i64 = underlying_caller_via_aliases_inner(
+                                        id_to_inst, region_keys, region_vals, m_functions,
+                                        inst.args[j_idx], local_seen);
+                                    if arm_rgn >= 0 && region_kind(arm_rgn) == REGION_KIND_CALLER() {
+                                        any_caller = arm_rgn;
+                                    }
+                                }
+                                ai = ai + 1;
+                            }
+                            result = any_caller;
+                            keep_going = false;
+                        } else {
+                            // FreshInCaller is heap-producing → has a
+                            // region_map entry handled above. Other kinds
+                            // (ConstantGlobal / Uninit) can't carry Caller.
+                            keep_going = false;
+                        }
+                    } else {
+                        keep_going = false;
+                    }
+                } else {
+                    keep_going = false;
+                }
+            }
+        }
+    }
+    result
+}
+
+// Counts unique store-effect target indices in the pre-sorted canonical
+// flat array produced by `canonicalize_store_effects` (sort key: target,
+// then kind, then payload). Layout is `target, kind, (aux)?,
+// (alias_count, alias...)?` per effect; ALIAS_OF carries one aux,
+// ALIAS_OF_ANY carries an alias-count plus that many indices, the others
+// carry no payload.
+//
+// Adjacency dedup via `have_last`/`last` is ONLY correct because the
+// flat array is target-sorted; if the canonical layout ever changes,
+// switch to an explicit set. Rust's mirror uses BTreeSet which is
+// ordering-independent. The sort invariant is enforced by
+// `canonicalize_store_effects` (insertion sort at line ~637); both
+// `add_store_effect` (insertion-with-dedup) and `canonicalize_store_effects`
+// are the only writers to `rsum_store_effects`.
+fn unique_store_target_count(flat: Vec<i64>) -> i64 {
+    let mut count: i64 = 0;
+    let mut last: i64 = -1;
+    let mut have_last: bool = false;
+    let mut i: i64 = 0;
+    while i < flat.len() {
+        let target: i64 = flat[i];
+        i = i + 1;
+        if i >= flat.len() { break; }
+        let kind: i64 = flat[i];
+        i = i + 1;
+        if !have_last || target != last {
+            count = count + 1;
+            last = target;
+            have_last = true;
+        }
+        if kind == RSUM_KIND_ALIAS_OF() {
+            if i >= flat.len() { break; }
+            i = i + 1;
+        } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
+            if i >= flat.len() { break; }
+            let n: i64 = flat[i];
+            i = i + 1;
+            let mut a: i64 = 0;
+            while a < n && i < flat.len() {
+                i = i + 1;
+                a = a + 1;
+            }
+        }
+    }
+    count
+}
+
 fn check_region_store_conflicts_module(
-    m: IrModule, id_to_inst_per_fn: Vec<Vec<IrInst>>, dctx: DiagCtx
+    m: IrModule, id_to_inst_per_fn: Vec<Vec<IrInst>>,
+    region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
+    dctx: DiagCtx
 ) {
     let mut fi: i64 = 0;
     while fi < m.functions.len() {
         let f: IrFunction = m.functions[fi];
         let id_to_inst: Vec<IrInst> = id_to_inst_per_fn[fi];
+        let rkeys: Vec<i64> = region_keys[fi];
+        let rvals: Vec<i64> = region_vals[fi];
+        // Ambiguous-slot guard: codegen lays out hidden arena slots as
+        // [return?, sorted-unique-store-targets...] — one slot per
+        // FreshInCaller return plus one per distinct store-effect target.
+        // Region inference uniformly tags caller-escaping allocs as
+        // Caller(0), which is unambiguous only when there's exactly one
+        // hidden slot. With two or more, slot 0 could mean any of them,
+        // and accepting Caller(_) would silently misroute. Reject the
+        // routing path until inference produces the correct
+        // HiddenRegionIdx(N).
+        let returns_fresh: bool = f.rsum_return_kind == RSUM_KIND_FRESH_IN_CALLER();
+        // Precondition: `f.rsum_store_effects` must be target-sorted (see
+        // `canonicalize_store_effects` in vmod write/read paths).
+        // `unique_store_target_count` performs adjacency dedup and would
+        // silently under-count an unsorted array, making
+        // `ambiguous_caller_slot` false when it should be true and
+        // permitting a slot misroute without diagnostic.
+        let unique_store_targets: i64 = unique_store_target_count(f.rsum_store_effects);
+        let return_slots: i64 = if returns_fresh { 1 } else { 0 };
+        let total_hidden_slots: i64 = return_slots + unique_store_targets;
+        let ambiguous_caller_slot: bool = total_hidden_slots > 1;
         let mut bi: i64 = 0;
         while bi < f.blocks.len() {
             let blk: IrBlock = f.blocks[bi];
@@ -754,6 +1008,10 @@ fn check_region_store_conflicts_module(
                             m.functions[callee_idx].rsum_store_effects,
                             inst,
                             id_to_inst,
+                            rkeys,
+                            rvals,
+                            m.functions,
+                            ambiguous_caller_slot,
                             dctx,
                             f.source_file,
                         );
@@ -768,7 +1026,11 @@ fn check_region_store_conflicts_module(
 }
 
 fn check_store_effects_at_call(
-    flat: Vec<i64>, call_inst: IrInst, id_to_inst: Vec<IrInst>, dctx: DiagCtx, source_file: String
+    flat: Vec<i64>, call_inst: IrInst, id_to_inst: Vec<IrInst>,
+    region_keys: Vec<i64>, region_vals: Vec<i64>,
+    m_functions: Vec<IrFunction>,
+    ambiguous_caller_slot: bool,
+    dctx: DiagCtx, source_file: String
 ) {
     let mut i: i64 = 0;
     while i < flat.len() {
@@ -790,6 +1052,10 @@ fn check_store_effects_at_call(
                     call_inst.args[source_param],
                     call_inst,
                     id_to_inst,
+                    region_keys,
+                    region_vals,
+                    m_functions,
+                    ambiguous_caller_slot,
                     dctx,
                 );
             }
@@ -817,23 +1083,217 @@ fn check_store_effects_at_call(
     }
 }
 
+// Emit a `RegionRootEscape` Note for each heap-producing instruction whose
+// inferred region is `REGION_KIND_CALLER` in a function that publishes
+// `FreshInCaller` (return) or any store effect. Conservative
+// over-approximation — false positives are acceptable for Note severity;
+// full call-graph reachability from main is unnecessary infrastructure for
+// an informational diagnostic.
+fn emit_root_escape_notes_module(
+    m: IrModule,
+    region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
+    int_kinds: Vec<i64>,
+    int_se_targets: Vec<Vec<i64>>,
+    dctx: DiagCtx
+) {
+    let mut fi: i64 = 0;
+    while fi < m.functions.len() {
+        let f: IrFunction = m.functions[fi];
+        let return_kind: i64 = int_kinds[fi];
+        // Divergence from Rust's mirror: Rust filters
+        // `summary.store_effects` to `Published(_)` constraints (excludes
+        // Unresolved/NotPublished); self-hosted's flat `int_se_targets`
+        // doesn't carry that distinction, so any non-empty entry triggers
+        // the gate. Conservative over-approximation — fires the note for
+        // a few functions Rust would skip — and spec-allowed for non-
+        // blocking notes. Same family as the
+        // `unique_store_target_count` adjacency-dedup asymmetry.
+        // TODO(#318): when the .vmod schema gains a publication
+        // discriminator at this layer, re-align with Rust's
+        // `Published(_)` filter so both compilers emit the same set
+        // of `RegionRootEscape` notes.
+        let has_publishable: bool = return_kind == RSUM_KIND_FRESH_IN_CALLER()
+            || int_se_targets[fi].len() > 0;
+        if !has_publishable {
+            fi = fi + 1;
+            continue;
+        }
+        // Skip the note pass when this function would also trigger
+        // `ambiguous_caller_slot` rejection — the routed allocs already
+        // carry a hard `RegionConflict`, and the note's "no action
+        // needed if intentional" hint is misleading at a location with
+        // an actual error. Same predicate as in
+        // `check_region_store_conflicts_module`.
+        let returns_fresh: bool = return_kind == RSUM_KIND_FRESH_IN_CALLER();
+        // Precondition: `f.rsum_store_effects` must be target-sorted
+        // (see `canonicalize_store_effects`). Same dedup-correctness
+        // contract as in `check_region_store_conflicts_module`.
+        let unique_st: i64 = unique_store_target_count(f.rsum_store_effects);
+        let return_slot_n: i64 = if returns_fresh { 1 } else { 0 };
+        let total_slots: i64 = return_slot_n + unique_st;
+        if total_slots > 1 {
+            fi = fi + 1;
+            continue;
+        }
+        let rkeys: Vec<i64> = region_keys[fi];
+        let rvals: Vec<i64> = region_vals[fi];
+        let bks: Vec<IrBlock> = f.blocks;
+        // Pre-collect returned IDs once per function so the inner skip is O(N)
+        // total instead of O(N*Returns) — was O(N²) for functions with many
+        // heap producers and at least one Return. Inner skip is
+        // `region_vec_contains_i64` (linear in `returned_ids.len()`); the
+        // Rust mirror uses `BTreeSet::contains` (logarithmic). Vow's
+        // current stdlib has no equivalent ordered-set type; the linear
+        // scan is fine for typical functions but would diverge on very
+        // large `returned_ids` — track if it ever bites.
+        let returned_ids: Vec<i64> = collect_returned_ids(bks);
+        let mut bi: i64 = 0;
+        while bi < bks.len() {
+            let blk: IrBlock = bks[bi];
+            let mut ii: i64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                let rgn: i64 = lookup_inst_region(rkeys, rvals, inst.id);
+                if rgn >= 0 && region_kind(rgn) == REGION_KIND_CALLER() {
+                    // Skip the value being returned — that's the canonical
+                    // FreshInCaller return path, not a side-effect escape.
+                    if !region_vec_contains_i64(returned_ids, inst.id) {
+                        let span_start: i64 = inst.ostart;
+                        let span_len: i64 = inst.olen;
+                        let d: Diagnostic = diag_new(
+                            SEV_NOTE(),
+                            EC_REGION_ROOT_ESCAPE(),
+                            String::from("allocation may live in the root region: routed via store-effect chain to a caller whose target_region ultimately resolves to root"),
+                            f.source_file,
+                            span_start,
+                            span_len,
+                            DIAG_BLAME_CALLEE()
+                        );
+                        diag_add_hint(
+                            d,
+                            String::from("if intentional (e.g. program-lifetime data), no action needed; if you want this allocation freed earlier, restructure so the value is returned rather than stored into a parameter container")
+                        );
+                        diag_ctx_emit(dctx, d);
+                    }
+                }
+                ii = ii + 1;
+            }
+            bi = bi + 1;
+        }
+        fi = fi + 1;
+    }
+}
+
+// Collect the IDs of every value reachable from a Return — directly, and
+// through Phi nodes via their Upsilon arms. Used by
+// `emit_root_escape_notes_module` to skip notes on the canonical
+// FreshInCaller return path, including conditional-construction patterns
+// (`if cond { X{..} } else { X{..} }`) where the Phi is returned but the
+// underlying RegionAllocs in each arm are the actual heap producers.
+fn collect_returned_ids(bks: Vec<IrBlock>) -> Vec<i64> {
+    let mut out: Vec<i64> = Vec::new();
+    // First gather direct Return arguments.
+    let mut stack: Vec<i64> = Vec::new();
+    let mut bi: i64 = 0;
+    while bi < bks.len() {
+        let blk: IrBlock = bks[bi];
+        let mut ii: i64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_RETURN() && inst.args.len() > 0 {
+                stack.push(inst.args[0]);
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    // DFS expansion through Phi arms via Upsilon insts.
+    while stack.len() > 0 {
+        let id: i64 = stack[stack.len() - 1];
+        stack.pop();
+        if region_vec_contains_i64(out, id) {
+            continue;
+        }
+        out.push(id);
+        let mut sbi: i64 = 0;
+        while sbi < bks.len() {
+            let sblk: IrBlock = bks[sbi];
+            let mut sii: i64 = 0;
+            while sii < sblk.insts.len() {
+                let up: IrInst = sblk.insts[sii];
+                if up.op == IOP_UPSILON() && up.dk == IDATA_PHI_TARGET()
+                    && up.dv == id && up.args.len() > 0
+                {
+                    stack.push(up.args[0]);
+                }
+                sii = sii + 1;
+            }
+            sbi = sbi + 1;
+        }
+    }
+    out
+}
+
 fn check_store_conflict(
     source_file: String, target_arg_id: i64, source_arg_id: i64, call_inst: IrInst,
-    id_to_inst: Vec<IrInst>, dctx: DiagCtx
+    id_to_inst: Vec<IrInst>,
+    region_keys: Vec<i64>, region_vals: Vec<i64>,
+    m_functions: Vec<IrFunction>,
+    ambiguous_caller_slot: bool,
+    dctx: DiagCtx
 ) {
-    let source: DeepRet = trace_origin_shallow(id_to_inst, source_arg_id);
-    if source.kind != RSUM_KIND_FRESH_IN_CALLER() {
-        return;
-    }
-    let source_inst: IrInst = lookup_inst_or_default(id_to_inst, source_arg_id);
-    if source_inst.op != IOP_REGION_ALLOC() {
-        return;
-    }
+    // Consult the inferred region for the source value, not its raw IR
+    // opcode. `value_lub_region` already widens fresh allocations through
+    // must-outlive markers added by `call_store_effects_collect_regions`;
+    // a conflict is only real when the inferred region is strictly narrower
+    // than the target's region.
     let target_param: i64 = trace_param(id_to_inst, target_arg_id);
     if target_param < 0 {
+        // Inline case: target is not a parameter; the inline code path handles
+        // its own region-LCA check via direct markers, no cross-call conflict.
         return;
     }
+    let src_rgn: i64 = lookup_inst_region(region_keys, region_vals, source_arg_id);
+    if src_rgn < 0 {
+        if ambiguous_caller_slot {
+            // Source is an aliasing wrapper (FieldGet, Load, vec-get,
+            // GetArg, Phi). Trace through aliases — codegen's
+            // source_value_region does the same, so an underlying alloc
+            // tagged Caller(0) would still be silently misrouted. Only
+            // reject when the trace finds a Caller(_) terminus; any
+            // other terminus (Block/Root/Rodata/parameter/non-heap)
+            // can't trigger the slot-misroute hazard.
+            let traced: i64 = underlying_caller_via_aliases(
+                id_to_inst, region_keys, region_vals, m_functions, source_arg_id);
+            if traced >= 0 && region_kind(traced) == REGION_KIND_CALLER() {
+                // Drop through to emit conflict.
+            } else {
+                return;
+            }
+        } else {
+            // Source is not a heap producer; can't conflict.
+            return;
+        }
+    } else {
+    let src_kind: i64 = region_kind(src_rgn);
+    if src_kind == REGION_KIND_CALLER() {
+        if !ambiguous_caller_slot {
+            return;
+        }
+        // Fall through to emit the conflict.
+    } else if src_kind == REGION_KIND_ROOT() || src_kind == REGION_KIND_RODATA() {
+        return;
+    } else if src_kind == REGION_KIND_BLOCK() {
+        // Source is a concrete block; target is a parameter (established
+        // above), so target_marker_region returns VirtualCaller — any
+        // concrete block source is strictly narrower, always a conflict.
+        // Fall through to emission.
+    } else {
+        // Unknown source kind — be conservative and emit.
+    }
+    }
 
+    let source_inst: IrInst = lookup_inst_or_default(id_to_inst, source_arg_id);
     let span_start: i64 = if source_inst.id >= 0 && source_inst.olen > 0 { source_inst.ostart } else { call_inst.ostart };
     let span_len: i64 = if source_inst.id >= 0 && source_inst.olen > 0 { source_inst.olen } else { call_inst.olen };
     // Diagnostic shape divergence from the Rust pass: the Rust
