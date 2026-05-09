@@ -814,6 +814,11 @@ fn underlying_caller_via_aliases_inner(
                         if up.id >= 0 && up.op == IOP_UPSILON() && up.dk == IDATA_PHI_TARGET()
                             && up.dv == inst.id && up.args.len() > 0
                         {
+                            // Each arm gets the path-to-Phi seen set as a
+                            // starting `seen`; the inner call clones it on
+                            // entry, so arms explore independently and arm
+                            // B does not inherit arm A's exploration.
+                            // Mirrors `arm_seen = seen.clone()` in Rust.
                             let arm_rgn: i64 = underlying_caller_via_aliases_inner(
                                 id_to_inst, region_keys, region_vals, up.args[0], local_seen);
                             if !have_first {
