@@ -108,10 +108,6 @@ fn span_pack(start: i64, len: i64) -> i64 vow {
     start * 65536 + len
 }
 
-// Span end of the last consumed token (or 0 before any token has been
-// advanced past). Pairs with `span_pack_to_here` to give AST nodes a
-// real span length instead of the zero-length placeholder that older
-// callsites packed.
 fn span_end_here(p: Parser) -> i64 {
     if p.pos > 0 {
         let prev: Token = p.tokens[p.pos - 1];
@@ -121,11 +117,7 @@ fn span_end_here(p: Parser) -> i64 {
     }
 }
 
-// Pack a span from `span_start` to the end of the last consumed token.
-// Length is clamped to [0, 65535] to fit the 16-bit `len` slot used by
-// `span_pack`. Without this, AST nodes whose construction site originally
-// passed `len=0` produced diagnostics with `length: 0`, hiding the
-// extent of the offending construct.
+// Length clamped to [0, 65535] to fit span_pack's 16-bit len slot.
 fn span_pack_to_here(p: Parser, span_start: i64) -> i64 {
     let end: i64 = span_end_here(p);
     let mut len: i64 = end - span_start;

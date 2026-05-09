@@ -492,11 +492,7 @@ print('|'.join(codes))
     fi
   fi
 
-  # JSON-shape assertion. The annotation supplies a Python boolean expression
-  # evaluated with `d` bound to the full parsed build_json, `xs` to its
-  # `diagnostics` array, and `x` to `xs[0]` if present. Keeps existing
-  # `error_code` and substring checks composable with structural assertions
-  # (e.g. span/length, hint contents).
+  # build-json: Python expr; d=full JSON, xs=diagnostics array, x=xs[0] or {}.
   if [[ -n "$TEST_BUILD_JSON" ]]; then
     json_check="$(EXPR="$TEST_BUILD_JSON" python3 -c "
 import json, sys, os
