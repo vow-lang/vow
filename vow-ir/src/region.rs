@@ -2536,16 +2536,28 @@ fn underlying_caller_via_aliases_inner(
                 current = *inst.args.first()?;
             }
             (Opcode::Phi, _) => {
-                // Mirror codegen's `source_value_region` Phi semantics:
-                // collect arm resolutions; if every arm agrees on the same
-                // region, return that; if any two arms diverge or arms are
-                // missing, codegen falls back to the Phi's own (default)
-                // region — typically `Root` for non-heap Phi insts, which
-                // is safe in ambiguous mode. Only the all-arms-Caller case
-                // is a real misroute hazard.
+                // Mirror codegen's `source_value_region` Phi semantics for
+                // the all-arms-agree case: if every arm resolves to the
+                // same region, return that. For divergent arms, codegen's
+                // `source_value_region` falls back to the Phi's own
+                // (default) region — but that fallback only governs how
+                // *future re-allocations* would route. It does NOT undo a
+                // `RegionAlloc{Caller(_)}` that already executed in some
+                // arm at runtime. Hidden caller slots have asymmetric
+                // lifetimes (each slot's arena is chosen independently by
+                // the parent's `arg_region` per store-effect target —
+                // possibly a block stack-slot arena, an inherited
+                // `Caller(idx)`, or root), so a fresh `Caller(0)` arm can
+                // be stored into slot 1's target whose arena outlives slot
+                // 0's. To stay sound under `ambiguous_caller_slot`,
+                // *any* Caller(_)-carrying arm — even mixed with safe
+                // arms — must trigger the conservative reject. The
+                // self-hosted mirror in `compiler/region.vow` carries the
+                // same widened logic.
                 let phi_id = inst.id;
                 let mut merged: Option<Option<RegionId>> = None;
                 let mut diverged = false;
+                let mut any_caller_arm: Option<RegionId> = None;
                 for (_, (_, candidate)) in inst_lookup.iter() {
                     if candidate.opcode == Opcode::Upsilon
                         && matches!(candidate.data, InstData::PhiTarget(t) if t == phi_id)
@@ -2558,18 +2570,20 @@ fn underlying_caller_via_aliases_inner(
                             region_map,
                             &mut arm_seen,
                         );
+                        if let Some(rgn @ RegionId::Caller(_)) = arm_rgn
+                            && any_caller_arm.is_none()
+                        {
+                            any_caller_arm = Some(rgn);
+                        }
                         match merged {
-                            Some(prev) if prev != arm_rgn => {
-                                diverged = true;
-                                break;
-                            }
+                            Some(prev) if prev != arm_rgn => diverged = true,
                             Some(_) => {}
                             None => merged = Some(arm_rgn),
                         }
                     }
                 }
                 if diverged {
-                    return None;
+                    return any_caller_arm;
                 }
                 return merged.flatten();
             }
@@ -5782,6 +5796,151 @@ mod tests {
         assert_eq!(
             notes[0].primary.file, "caller.vow",
             "RegionRootEscape primary span must point at the analyzing function's source file"
+        );
+    }
+
+    /// Divergent-Phi soundness: in `ambiguous_caller_slot` mode, a Phi
+    /// whose arms mix a `Caller(_)` terminus with a non-Caller terminus
+    /// must trigger the conservative reject. The fresh arm's
+    /// `RegionAlloc{Caller(0)}` already executed at runtime; codegen's
+    /// fallback to the Phi's own region only governs *future*
+    /// re-allocations and does not relocate the existing slot-0
+    /// allocation. Without this widened reject, the slot-0 pointer can be
+    /// stored into a longer-lived slot-N container and dangle when slot 0
+    /// is freed first (hidden caller arenas have asymmetric lifetimes).
+    #[test]
+    fn region_conflict_when_divergent_phi_mixes_caller_arm_in_ambiguous_mode() {
+        // Callee: stores arg[1] into arg[0], stores arg[3] into arg[2].
+        // Two unique store-effect targets → two hidden caller slots.
+        let callee_insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(2, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(2)),
+            inst(3, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(3)),
+            inst(4, Opcode::Store, Ty::Unit, vec![0, 1], InstData::None),
+            inst(5, Opcode::Store, Ty::Unit, vec![2, 3], InstData::None),
+            inst(6, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let mut callee = function(
+            0,
+            "store_into_two",
+            vec![Ty::Ptr, Ty::Ptr, Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, callee_insts)],
+        );
+        callee.source_file = "callee.vow".to_string();
+        // Caller: divergent Phi with one fresh `RegionAlloc` arm and one
+        // parameter-derived arm, then passes the Phi value into the
+        // multi-slot helper.
+        //
+        // - block 0: GetArg p (id 10), GetArg q (id 11), GetArg cond (id 12), CondBr cond
+        // - block 1 (then): RegionAlloc (id 13) → Upsilon(phi 14, 13)
+        // - block 2 (else): GetArg q is reused → Upsilon(phi 14, 11)
+        // - block 3 (merge): Phi (id 14), Call(callee, p, phi, q, fresh) (id 15), Return
+        let caller_b0 = vec![
+            inst(10, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(11, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(12, Opcode::GetArg, Ty::Bool, vec![], InstData::ArgIndex(2)),
+            inst(
+                100,
+                Opcode::Branch,
+                Ty::Unit,
+                vec![12],
+                InstData::BranchTargets {
+                    then_block: BlockId(1),
+                    else_block: BlockId(2),
+                },
+            ),
+        ];
+        let caller_b1 = vec![
+            inst(
+                13,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                101,
+                Opcode::Upsilon,
+                Ty::Unit,
+                vec![13],
+                InstData::PhiTarget(InstId(14)),
+            ),
+            inst(
+                102,
+                Opcode::Jump,
+                Ty::Unit,
+                vec![],
+                InstData::JumpTarget(BlockId(3)),
+            ),
+        ];
+        let caller_b2 = vec![
+            inst(
+                103,
+                Opcode::Upsilon,
+                Ty::Unit,
+                vec![11],
+                InstData::PhiTarget(InstId(14)),
+            ),
+            inst(
+                104,
+                Opcode::Jump,
+                Ty::Unit,
+                vec![],
+                InstData::JumpTarget(BlockId(3)),
+            ),
+        ];
+        let caller_b3 = vec![
+            inst(14, Opcode::Phi, Ty::Ptr, vec![], InstData::None),
+            inst(
+                15,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                16,
+                Opcode::Call,
+                Ty::Unit,
+                vec![10, 14, 11, 15],
+                InstData::CallTarget(FuncId(0)),
+            ),
+            inst(17, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let mut caller = function(
+            1,
+            "divergent_phi_caller",
+            vec![Ty::Ptr, Ty::Ptr, Ty::Bool],
+            Ty::Unit,
+            vec![
+                block(0, caller_b0),
+                block(1, caller_b1),
+                block(2, caller_b2),
+                block(3, caller_b3),
+            ],
+        );
+        caller.source_file = "caller.vow".to_string();
+        let mut m = module(vec![callee, caller]);
+        infer_regions(&mut m);
+
+        // The divergent Phi (one Caller-arm, one param-arm) at arg 1
+        // must trip the conservative reject. The unconditional fresh
+        // alloc at arg 3 also trips the reject (same all-Caller terminus
+        // as the existing multi-slot test), so we expect at least one
+        // RegionConflict total — but specifically one that targets the
+        // divergent-Phi argument.
+        let conflicts: Vec<_> = m
+            .warnings
+            .iter()
+            .filter(|d| d.code == ErrorCode::RegionConflict)
+            .collect();
+        assert!(
+            !conflicts.is_empty(),
+            "divergent Phi with one Caller arm must trip RegionConflict in ambiguous mode; \
+             warnings: {:?}",
+            m.warnings
         );
     }
 

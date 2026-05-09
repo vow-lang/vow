@@ -798,18 +798,26 @@ fn underlying_caller_via_aliases_inner(
                     current = inst.args[0];
                 } else if inst.op == IOP_PHI() {
                     // Mirror codegen's `clif_value_receiver_region` Phi
-                    // semantics: collect arm resolutions; only return a
-                    // Caller region if EVERY arm agrees on the same
-                    // resolved region. If any two arms diverge, codegen
-                    // falls back to the Phi's own (default) region —
-                    // typically Root for non-heap Phi insts, which is
-                    // safe in ambiguous mode. Only the all-arms-Caller
-                    // case is a real misroute hazard.
+                    // semantics for the all-arms-agree case. For divergent
+                    // arms, codegen's source_value_region falls back to
+                    // the Phi's own (default) region — but that fallback
+                    // only governs how *future re-allocations* would
+                    // route. It does NOT undo a `RegionAlloc{Caller(_)}`
+                    // that already executed in some arm at runtime.
+                    // Hidden caller slots have asymmetric lifetimes, so a
+                    // fresh Caller(0) arm can be stored into slot 1's
+                    // target whose arena outlives slot 0's. To stay sound
+                    // under `ambiguous_caller_slot`, *any* Caller(_)-
+                    // carrying arm — even mixed with safe arms — must
+                    // trigger the conservative reject. The Rust mirror in
+                    // `vow-ir/src/region.rs` carries the same widened
+                    // logic; both compilers must keep this in sync.
                     let mut have_first: bool = false;
                     let mut first_rgn: i64 = -1;
                     let mut diverged: bool = false;
+                    let mut any_caller_arm: i64 = -1;
                     let mut ki: i64 = 0;
-                    while ki < id_to_inst.len() && !diverged {
+                    while ki < id_to_inst.len() {
                         let up: IrInst = id_to_inst[ki];
                         if up.id >= 0 && up.op == IOP_UPSILON() && up.dk == IDATA_PHI_TARGET()
                             && up.dv == inst.id && up.args.len() > 0
@@ -821,6 +829,11 @@ fn underlying_caller_via_aliases_inner(
                             // Mirrors `arm_seen = seen.clone()` in Rust.
                             let arm_rgn: i64 = underlying_caller_via_aliases_inner(
                                 id_to_inst, region_keys, region_vals, up.args[0], local_seen);
+                            if arm_rgn >= 0 && region_kind(arm_rgn) == REGION_KIND_CALLER()
+                                && any_caller_arm < 0
+                            {
+                                any_caller_arm = arm_rgn;
+                            }
                             if !have_first {
                                 have_first = true;
                                 first_rgn = arm_rgn;
@@ -830,7 +843,9 @@ fn underlying_caller_via_aliases_inner(
                         }
                         ki = ki + 1;
                     }
-                    if !diverged && have_first {
+                    if diverged {
+                        result = any_caller_arm;
+                    } else if have_first {
                         result = first_rgn;
                     }
                     keep_going = false;
