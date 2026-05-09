@@ -68,10 +68,7 @@ pub enum ErrorCode {
     // Region inference (arena-per-scope, Phase 3)
     RegionConflict,
     RegionLinear,
-    // Note severity: an allocation whose region routes via store-effect
-    // chains to `__vow_root_arena` (program-lifetime placement). The build
-    // still succeeds; the diagnostic exists so the agent sees that the
-    // value will live for the entire process — see `arena_memory.md` §4.4.
+    // Note: program-lifetime root-arena placement. See arena_memory.md §4.4.
     RegionRootEscape,
     // Emitted as a Warning when a vowed function's body cannot be modeled
     // by the verifier (e.g. uses RegionAlloc/FieldSet/Linear*/Load/Store).

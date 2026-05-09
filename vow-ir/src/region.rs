@@ -1492,6 +1492,16 @@ fn emit_root_escape_notes(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let source_file: &str = &func.source_file;
+    // Pre-collect returned IDs so the inner skip is O(log n) instead of O(n).
+    // Skip notes for the canonical FreshInCaller return path; only flag
+    // side-effect escapes (allocs stored into parameter containers).
+    let returned_ids: BTreeSet<InstId> = func
+        .blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .filter(|i| i.opcode == Opcode::Return)
+        .filter_map(|i| i.args.first().copied())
+        .collect();
     for block in &func.blocks {
         for inst in &block.insts {
             let Some(rgn) = region_map.get(&inst.id) else {
@@ -1500,23 +1510,7 @@ fn emit_root_escape_notes(
             if !matches!(rgn, RegionId::Caller(_)) {
                 continue;
             }
-            // Skip the value being returned — that's the canonical
-            // FreshInCaller return path, not a side-effect escape.
-            // Heuristic: if any Return inst in this function references
-            // this id, treat it as the return-value path.
-            let mut is_return_value = false;
-            for blk in &func.blocks {
-                for i in &blk.insts {
-                    if i.opcode == Opcode::Return && i.args.first() == Some(&inst.id) {
-                        is_return_value = true;
-                        break;
-                    }
-                }
-                if is_return_value {
-                    break;
-                }
-            }
-            if is_return_value {
+            if returned_ids.contains(&inst.id) {
                 continue;
             }
             diagnostics.push(Diagnostic {
@@ -2499,6 +2493,56 @@ fn origin_to_constraint(origin: &ValueOrigin) -> RegionConstraint {
 /// inference's must_outlive widening (added by the same call site in
 /// `handle_inst`) has already done the right thing; the check must consult
 /// it instead of inspecting opcode shape.
+/// Walk through aliasing wrappers (FieldGet, Load, vec-get extern) to find
+/// the underlying region of a value. Mirrors the chain codegen's
+/// `source_value_region` follows. Used only in `ambiguous_caller_slot`
+/// mode to detect underlying `Caller(_)` allocations that would silently
+/// misroute through slot 0.
+///
+/// Returns the resolved `RegionId` only when the trace terminates at a
+/// heap-producing instruction in `region_map`. Returns `None` for chains
+/// that terminate at parameters, scalar values, Phi, or unrecognised
+/// opcodes — those cases are SAFE in ambiguous mode (parameters route via
+/// their own hidden slot; scalars/non-heap don't allocate; Phi-of-allocs
+/// would have its own region_map entry directly). Caller treats the
+/// `Some(Caller(_))` case as a conflict and any other result as safe.
+fn underlying_caller_via_aliases(
+    source_arg_id: InstId,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+    region_map: &BTreeMap<InstId, RegionId>,
+) -> Option<RegionId> {
+    let mut current = source_arg_id;
+    let mut seen: BTreeSet<InstId> = BTreeSet::new();
+    loop {
+        if !seen.insert(current) {
+            return None;
+        }
+        if let Some(rgn) = region_map.get(&current).copied() {
+            return Some(rgn);
+        }
+        let (_, inst) = inst_lookup.get(&current)?;
+        match (&inst.opcode, &inst.data) {
+            (Opcode::FieldGet | Opcode::Load, _) => {
+                if let Some(&first) = inst.args.first() {
+                    current = first;
+                } else {
+                    return None;
+                }
+            }
+            (Opcode::Call, InstData::CallExtern(sym))
+                if matches!(sym.as_str(), "__vow_vec_get_val" | "__vow_vec_get") =>
+            {
+                if let Some(&first) = inst.args.first() {
+                    current = first;
+                } else {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn check_store_conflicts_post_inference(
     func: &Function,
@@ -2593,24 +2637,33 @@ fn check_store_conflict_semantic(
         return;
     };
 
-    // Source is not in the region map (not a heap producer) OR is already
-    // widened to caller/root/rodata. Either way, no conflict — UNLESS the
-    // analyzing function has the ambiguous combo (FreshInCaller return +
-    // store effects), in which case Caller(0) might mean either the return
-    // arena or a store-target arena and we can't statically resolve which.
-    let Some(src_rgn) = region_map.get(&source_arg_id).copied() else {
-        return;
-    };
-    match src_rgn {
-        RegionId::Caller(_) if ambiguous_caller_slot => {
-            // Fall through to emit a conflict — accepting would silently
-            // route to the wrong arena slot at codegen time.
+    // Direct lookup first.
+    let direct = region_map.get(&source_arg_id).copied();
+    match direct {
+        Some(RegionId::Caller(_)) if ambiguous_caller_slot => {
+            // Slot-misroute risk — fall through to emit conflict.
         }
-        RegionId::Caller(_) | RegionId::Root | RegionId::Rodata => return,
-        RegionId::Block(_) => {
+        Some(RegionId::Caller(_) | RegionId::Root | RegionId::Rodata) => return,
+        Some(RegionId::Block(_)) => {
             // Concrete block source, parameter target — strictly narrower,
             // always a conflict; drop through to emission.
         }
+        None if ambiguous_caller_slot => {
+            // Source is an aliasing wrapper (FieldGet, Load, vec-get,
+            // GetArg, Phi). Trace through aliases — codegen's
+            // `source_value_region` does the same trace, so an underlying
+            // alloc tagged `Caller(0)` would still be silently misrouted.
+            // ONLY reject when the trace resolves to `Caller(_)`; any
+            // Block/Root/Rodata/safe terminus stays allowed (the slot
+            // misroute can't happen for non-Caller sources).
+            match underlying_caller_via_aliases(source_arg_id, inst_lookup, region_map) {
+                Some(RegionId::Caller(_)) => {
+                    // Drop through to emit conflict.
+                }
+                _ => return,
+            }
+        }
+        None => return,
     }
 
     let source_span = inst_lookup
@@ -5475,6 +5528,98 @@ mod tests {
             RegionId::Caller(HiddenRegionIdx(0)),
             "RegionAlloc passed through a store-effecting callee should lift to caller"
         );
+    }
+
+    /// `ambiguous_caller_slot` reject path: a function with multiple
+    /// hidden caller-arena slots (here: two unique store-effect targets,
+    /// no FreshInCaller return) cannot soundly accept a `Caller(_)` source
+    /// because inference uniformly tags those allocations as
+    /// `Caller(HiddenRegionIdx(0))`. Codegen would silently route the
+    /// alloc to slot 0 even when the store-effect demands slot 1+.
+    /// Reject with `RegionConflict` until the deeper fix (#317) lets
+    /// inference produce the right `HiddenRegionIdx(N)`.
+    #[test]
+    fn region_conflict_when_multiple_caller_slots_make_caller0_ambiguous() {
+        // Callee: stores arg[1] into arg[0], stores arg[3] into arg[2].
+        // Two unique store-effect targets → two hidden caller slots.
+        let callee_insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(2, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(2)),
+            inst(3, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(3)),
+            inst(4, Opcode::Store, Ty::Unit, vec![0, 1], InstData::None),
+            inst(5, Opcode::Store, Ty::Unit, vec![2, 3], InstData::None),
+            inst(6, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let callee = function(
+            0,
+            "store_into_two",
+            vec![Ty::Ptr, Ty::Ptr, Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, callee_insts)],
+        );
+        // Caller: passes (a, fresh1, b, fresh2) — both fresh allocations
+        // route through the callee's store effects and therefore would
+        // both be tagged Caller(HiddenRegionIdx(0)) by inference.
+        let caller_insts = vec![
+            inst(10, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(11, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(
+                12,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                13,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                14,
+                Opcode::Call,
+                Ty::Unit,
+                vec![10, 12, 11, 13],
+                InstData::CallTarget(FuncId(0)),
+            ),
+            inst(15, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let caller = function(
+            1,
+            "ambiguous_caller",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, caller_insts)],
+        );
+        let mut m = module(vec![callee, caller]);
+        infer_regions(&mut m);
+
+        // Both fresh allocs are routed via store-effect chains, so both
+        // get caller-region must-outlive markers — but `caller` has two
+        // hidden arena slots (one per unique store-effect target inherited
+        // from the callee), making the uniform Caller(0) tagging
+        // ambiguous. The conservative reject must fire for at least one
+        // of the two routings.
+        let conflicts: Vec<_> = m
+            .warnings
+            .iter()
+            .filter(|d| d.code == ErrorCode::RegionConflict)
+            .collect();
+        assert!(
+            !conflicts.is_empty(),
+            "ambiguous_caller_slot guard should reject routings into 2+ slot functions; \
+             warnings: {:?}",
+            m.warnings
+        );
+        // Source-file plumbing: the diagnostic must label the analyzing
+        // function's source file.
+        for c in &conflicts {
+            assert_eq!(c.severity, Severity::Error);
+            assert_eq!(c.blame, Blame::Callee);
+        }
     }
 
     /// Same callee shape as the conflict test, but caller passes two

@@ -33,8 +33,7 @@ fn EC_REGION_LINEAR() -> i64 vow { ensures: result >= 0 } { 19 }
 fn EC_VERIFICATION_SKIPPED() -> i64 vow { ensures: result >= 0 } { 20 }
 fn EC_BTREEMAP_KEY_TYPE_MUST_BE_I64() -> i64 vow { ensures: result >= 0 } { 21 }
 fn EC_BTREEMAP_VALUE_TYPE_MUST_BE_I64() -> i64 vow { ensures: result >= 0 } { 22 }
-// Note severity: an allocation that routes via store-effect chains to the
-// root region (program-lifetime placement). See arena_memory.md §4.4.
+// Note: program-lifetime root-arena placement. See arena_memory.md §4.4.
 fn EC_REGION_ROOT_ESCAPE() -> i64 vow { ensures: result >= 0 } { 23 }
 
 struct Diagnostic {
@@ -224,9 +223,6 @@ fn ec_name(code: i64) -> String {
     if code == EC_REGION_LINEAR() {
         String::from("RegionLinear")
     } else {
-    if code == EC_REGION_ROOT_ESCAPE() {
-        String::from("RegionRootEscape")
-    } else {
     if code == EC_VERIFICATION_SKIPPED() {
         String::from("VerificationSkipped")
     } else {
@@ -235,6 +231,9 @@ fn ec_name(code: i64) -> String {
     } else {
     if code == EC_BTREEMAP_VALUE_TYPE_MUST_BE_I64() {
         String::from("BTreeMapValueTypeMustBeI64")
+    } else {
+    if code == EC_REGION_ROOT_ESCAPE() {
+        String::from("RegionRootEscape")
     } else {
         String::from("IoError")
     }}}}}}}}}}}}}}}}}}}}}}}

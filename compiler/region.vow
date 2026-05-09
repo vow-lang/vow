@@ -751,6 +751,58 @@ fn add_store_effect(
     aliases_list.push(clone_i64_vec(aliases));
 }
 
+// Walk through aliasing wrappers (FieldGet, Load, vec-get extern) to find
+// the underlying region of a value. Mirrors the chain that codegen's
+// `source_value_region` follows. Used only in `ambiguous_caller_slot` mode
+// to detect underlying `Caller(_)` allocations that would silently
+// misroute through slot 0.
+//
+// Returns the resolved packed region (>=0) only when the trace terminates
+// at a heap-producing instruction in the region map. Returns -1 for
+// chains that terminate at parameters, scalars, Phi, or unrecognised
+// opcodes — those cases are SAFE in ambiguous mode (parameters route via
+// their own hidden slot; scalars don't allocate; Phi-of-allocs has its
+// own region map entry directly). Caller treats Caller(_) results as
+// conflict and any other result as safe.
+fn underlying_caller_via_aliases(
+    id_to_inst: Vec<IrInst>,
+    region_keys: Vec<i64>, region_vals: Vec<i64>,
+    source_arg_id: i64
+) -> i64 {
+    let mut current: i64 = source_arg_id;
+    let mut seen: Vec<i64> = Vec::new();
+    let mut steps: i64 = 0;
+    while steps < 32 {
+        let mut already: bool = false;
+        let mut si: i64 = 0;
+        while si < seen.len() {
+            if seen[si] == current { already = true; }
+            si = si + 1;
+        }
+        if already { return -1; }
+        seen.push(current);
+        let direct: i64 = lookup_inst_region(region_keys, region_vals, current);
+        if direct >= 0 { return direct; }
+        let inst: IrInst = lookup_inst_or_default(id_to_inst, current);
+        if inst.id < 0 { return -1; }
+        if (inst.op == IOP_FIELD_GET() || inst.op == IOP_LOAD()) && inst.args.len() > 0 {
+            current = inst.args[0];
+            steps = steps + 1;
+            continue;
+        }
+        if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
+            && (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
+            && inst.args.len() > 0
+        {
+            current = inst.args[0];
+            steps = steps + 1;
+            continue;
+        }
+        return -1;
+    }
+    -1
+}
+
 // Walks the flat store-effect array (canonical wire layout from
 // `canonicalize_store_effects`) and counts unique target indices. The
 // layout is `target, kind, (aux)?, (alias_count, alias...)?` per effect;
@@ -941,6 +993,10 @@ fn emit_root_escape_notes_module(
         let rkeys: Vec<i64> = region_keys[fi];
         let rvals: Vec<i64> = region_vals[fi];
         let bks: Vec<IrBlock> = f.blocks;
+        // Pre-collect returned IDs once per function so the inner skip is O(N)
+        // total instead of O(N*Returns) — was O(N²) for functions with many
+        // heap producers and at least one Return.
+        let returned_ids: Vec<i64> = collect_returned_ids(bks);
         let mut bi: i64 = 0;
         while bi < bks.len() {
             let blk: IrBlock = bks[bi];
@@ -951,7 +1007,7 @@ fn emit_root_escape_notes_module(
                 if rgn >= 0 && region_kind(rgn) == REGION_KIND_CALLER() {
                     // Skip the value being returned — that's the canonical
                     // FreshInCaller return path, not a side-effect escape.
-                    if !is_returned_value(f, inst.id) {
+                    if !region_vec_contains_i64(returned_ids, inst.id) {
                         let span_start: i64 = inst.ostart;
                         let span_len: i64 = inst.olen;
                         let d: Diagnostic = diag_new(
@@ -978,23 +1034,26 @@ fn emit_root_escape_notes_module(
     }
 }
 
-// Heuristic: does any Return inst in `f` reference `id` as its arg?
-fn is_returned_value(f: IrFunction, id: i64) -> bool {
-    let bks: Vec<IrBlock> = f.blocks;
+// Pre-collect the inst ids referenced by every `Return` in the function.
+// Used by `emit_root_escape_notes_module` to skip notes for the canonical
+// FreshInCaller return path — pre-collecting once turns the per-inst skip
+// into an O(returned_ids) lookup rather than a per-inst full-function rescan.
+fn collect_returned_ids(bks: Vec<IrBlock>) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
     let mut bi: i64 = 0;
     while bi < bks.len() {
         let blk: IrBlock = bks[bi];
         let mut ii: i64 = 0;
         while ii < blk.insts.len() {
             let inst: IrInst = blk.insts[ii];
-            if inst.op == IOP_RETURN() && inst.args.len() > 0 && inst.args[0] == id {
-                return true;
+            if inst.op == IOP_RETURN() && inst.args.len() > 0 {
+                out.push(inst.args[0]);
             }
             ii = ii + 1;
         }
         bi = bi + 1;
     }
-    false
+    out
 }
 
 // Walk `child` up `parents` to see whether `candidate_ancestor` is reachable
@@ -1045,17 +1104,27 @@ fn check_store_conflict(
     }
     let src_rgn: i64 = lookup_inst_region(region_keys, region_vals, source_arg_id);
     if src_rgn < 0 {
-        // Source is not a heap producer (only `is_heap_producing_for_region`
-        // values are inserted into the region map at the SCC fixed-point).
-        return;
-    }
+        if ambiguous_caller_slot {
+            // Source is an aliasing wrapper (FieldGet, Load, vec-get,
+            // GetArg, Phi). Trace through aliases — codegen's
+            // source_value_region does the same, so an underlying alloc
+            // tagged Caller(0) would still be silently misrouted. Only
+            // reject when the trace finds a Caller(_) terminus; any
+            // other terminus (Block/Root/Rodata/parameter/non-heap)
+            // can't trigger the slot-misroute hazard.
+            let traced: i64 = underlying_caller_via_aliases(
+                id_to_inst, region_keys, region_vals, source_arg_id);
+            if traced >= 0 && region_kind(traced) == REGION_KIND_CALLER() {
+                // Drop through to emit conflict.
+            } else {
+                return;
+            }
+        } else {
+            // Source is not a heap producer; can't conflict.
+            return;
+        }
+    } else {
     let src_kind: i64 = region_kind(src_rgn);
-    // Arm A: source already widened to caller/root/rodata — satisfies any
-    // parameter-region target. EXCEPT when the analyzing function has the
-    // ambiguous-caller-slot combo (FreshInCaller return + store effects),
-    // in which case a `Caller(_)` source could mean either the return arena
-    // (slot 0) or a store-target arena (slot 1+). Region inference cannot
-    // distinguish them today; accepting would silently misroute at codegen.
     if src_kind == REGION_KIND_CALLER() {
         if !ambiguous_caller_slot {
             return;
@@ -1087,6 +1156,7 @@ fn check_store_conflict(
         }
     } else {
         // Unknown source kind — be conservative and emit.
+    }
     }
 
     let source_inst: IrInst = lookup_inst_or_default(id_to_inst, source_arg_id);
