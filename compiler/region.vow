@@ -797,27 +797,36 @@ fn underlying_caller_via_aliases_inner(
                 {
                     current = inst.args[0];
                 } else if inst.op == IOP_PHI() {
-                    // Walk every Upsilon writing to this Phi. If ANY arm
-                    // resolves to Caller(_), short-circuit with that —
-                    // the call site only cares about the
-                    // Caller-vs-not-Caller distinction.
+                    // Mirror codegen's `clif_value_receiver_region` Phi
+                    // semantics: collect arm resolutions; only return a
+                    // Caller region if EVERY arm agrees on the same
+                    // resolved region. If any two arms diverge, codegen
+                    // falls back to the Phi's own (default) region —
+                    // typically Root for non-heap Phi insts, which is
+                    // safe in ambiguous mode. Only the all-arms-Caller
+                    // case is a real misroute hazard.
+                    let mut have_first: bool = false;
+                    let mut first_rgn: i64 = -1;
+                    let mut diverged: bool = false;
                     let mut ki: i64 = 0;
-                    while ki < id_to_inst.len() {
+                    while ki < id_to_inst.len() && !diverged {
                         let up: IrInst = id_to_inst[ki];
                         if up.id >= 0 && up.op == IOP_UPSILON() && up.dk == IDATA_PHI_TARGET()
                             && up.dv == inst.id && up.args.len() > 0
                         {
                             let arm_rgn: i64 = underlying_caller_via_aliases_inner(
                                 id_to_inst, region_keys, region_vals, up.args[0], local_seen);
-                            if arm_rgn >= 0 && region_kind(arm_rgn) == REGION_KIND_CALLER() {
-                                result = arm_rgn;
-                                ki = id_to_inst.len();
-                            } else {
-                                ki = ki + 1;
+                            if !have_first {
+                                have_first = true;
+                                first_rgn = arm_rgn;
+                            } else if first_rgn != arm_rgn {
+                                diverged = true;
                             }
-                        } else {
-                            ki = ki + 1;
                         }
+                        ki = ki + 1;
+                    }
+                    if !diverged && have_first {
+                        result = first_rgn;
                     }
                     keep_going = false;
                 } else {
@@ -829,17 +838,20 @@ fn underlying_caller_via_aliases_inner(
     result
 }
 
-// Walks the flat store-effect array (canonical wire layout from
-// `canonicalize_store_effects`) and counts unique target indices. The
-// layout is `target, kind, (aux)?, (alias_count, alias...)?` per effect;
-// ALIAS_OF carries one aux, ALIAS_OF_ANY carries an alias-count plus that
-// many indices, the others carry no payload.
+// Counts unique store-effect target indices in the pre-sorted canonical
+// flat array produced by `canonicalize_store_effects` (sort key: target,
+// then kind, then payload). Layout is `target, kind, (aux)?,
+// (alias_count, alias...)?` per effect; ALIAS_OF carries one aux,
+// ALIAS_OF_ANY carries an alias-count plus that many indices, the others
+// carry no payload.
 //
-// Precondition: `flat` is sorted by target ascending — guaranteed by
-// `canonicalize_store_effects` (insertion sort at line ~637). The
-// adjacency dedup via `last` would silently undercount if the precondition
-// were ever broken; the canonical-form invariant is enforced everywhere
-// summaries are constructed.
+// Adjacency dedup via `have_last`/`last` is ONLY correct because the
+// flat array is target-sorted; if the canonical layout ever changes,
+// switch to an explicit set. Rust's mirror uses BTreeSet which is
+// ordering-independent. The sort invariant is enforced by
+// `canonicalize_store_effects` (insertion sort at line ~637); both
+// `add_store_effect` (insertion-with-dedup) and `canonicalize_store_effects`
+// are the only writers to `rsum_store_effects`.
 fn unique_store_target_count(flat: Vec<i64>) -> i64 {
     let mut count: i64 = 0;
     let mut last: i64 = -1;

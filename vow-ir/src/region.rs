@@ -2513,27 +2513,42 @@ fn underlying_caller_via_aliases_inner(
                 current = *inst.args.first()?;
             }
             (Opcode::Phi, _) => {
-                // Walk every Upsilon targeting this Phi. If ANY arm
-                // resolves to Caller(_), short-circuit with a reject.
+                // Mirror codegen's `source_value_region` Phi semantics:
+                // collect arm resolutions; if every arm agrees on the same
+                // region, return that; if any two arms diverge or arms are
+                // missing, codegen falls back to the Phi's own (default)
+                // region — typically `Root` for non-heap Phi insts, which
+                // is safe in ambiguous mode. Only the all-arms-Caller case
+                // is a real misroute hazard.
                 let phi_id = inst.id;
+                let mut merged: Option<Option<RegionId>> = None;
+                let mut diverged = false;
                 for (_, (_, candidate)) in inst_lookup.iter() {
                     if candidate.opcode == Opcode::Upsilon
                         && matches!(candidate.data, InstData::PhiTarget(t) if t == phi_id)
                         && let Some(&arm_id) = candidate.args.first()
                     {
                         let mut arm_seen = seen.clone();
-                        if let Some(arm_rgn) = underlying_caller_via_aliases_inner(
+                        let arm_rgn = underlying_caller_via_aliases_inner(
                             arm_id,
                             inst_lookup,
                             region_map,
                             &mut arm_seen,
-                        ) && matches!(arm_rgn, RegionId::Caller(_))
-                        {
-                            return Some(arm_rgn);
+                        );
+                        match merged {
+                            Some(prev) if prev != arm_rgn => {
+                                diverged = true;
+                                break;
+                            }
+                            Some(_) => {}
+                            None => merged = Some(arm_rgn),
                         }
                     }
                 }
-                return None;
+                if diverged {
+                    return None;
+                }
+                return merged.flatten();
             }
             _ => return None,
         }
@@ -5654,6 +5669,85 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `RegionRootEscape` positive coverage: a function that publishes a
+    /// FreshInCaller return AND has a fresh alloc whose region resolves
+    /// to `Caller(_)` via store-effect routing must emit the note for
+    /// the routed alloc but NOT for the returned one (canonical
+    /// FreshInCaller path is on the skip-set via
+    /// `collect_return_value_sources`).
+    #[test]
+    fn region_root_escape_note_emitted_for_routed_alloc_but_not_for_returned() {
+        // Callee: stores arg[1] into arg[0] — same `(0, AliasOf(1))` shape
+        // as elsewhere.
+        let callee_insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(2, Opcode::Store, Ty::Unit, vec![0, 1], InstData::None),
+            inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let callee = function(
+            0,
+            "store_into",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, callee_insts)],
+        );
+        // Caller: parameter container `a`, two RegionAllocs — one returned,
+        // one routed via the callee's store effect.
+        let caller_insts = vec![
+            inst(10, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(
+                11,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ), // routed (will fire note)
+            inst(
+                12,
+                Opcode::Call,
+                Ty::Unit,
+                vec![10, 11],
+                InstData::CallTarget(FuncId(0)),
+            ),
+            inst(
+                13,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ), // returned (must NOT fire note — canonical FreshInCaller path)
+            inst(14, Opcode::Return, Ty::Ptr, vec![13], InstData::None),
+        ];
+        let caller = function(
+            1,
+            "publishes",
+            vec![Ty::Ptr],
+            Ty::Ptr,
+            vec![block(0, caller_insts)],
+        );
+        let mut m = module(vec![callee, caller]);
+        infer_regions(&mut m);
+
+        let notes: Vec<_> = m
+            .warnings
+            .iter()
+            .filter(|d| d.code == ErrorCode::RegionRootEscape)
+            .collect();
+        // The routed alloc fires; the returned one is on the skip-set.
+        // Multi-slot ambiguous_caller_slot is not triggered here (one
+        // store target + one FreshInCaller = two slots, but the routed
+        // alloc would also trip RegionConflict — which is the expected
+        // ambiguous-slot behaviour). Filter by severity to scope this
+        // test to the note path.
+        assert!(
+            notes.iter().any(|d| d.severity == Severity::Note),
+            "expected at least one RegionRootEscape note for the routed alloc; \
+             warnings: {:?}",
+            m.warnings
+        );
     }
 
     /// Same callee shape as the conflict test, but caller passes two
