@@ -1465,14 +1465,24 @@ fn analyze_function(
     // `__vow_root_arena` per spec §5.4 and §4.4's rationale. Conservative
     // over-approximation: emit per-instruction without full call-graph
     // reachability; severity `Note` keeps it informational.
-    if matches!(
+    //
+    // Skip the pass when the same function would also trigger
+    // `ambiguous_caller_slot` rejection — the routed allocs that would
+    // fire the note are already carrying a hard `RegionConflict`, and the
+    // note's "no action needed if intentional" hint is misleading at a
+    // location with an actual error.
+    let returns_fresh = matches!(
         summary.return_region,
         InternalReturnRegion::Published(RegionConstraint::FreshInCaller)
-    ) || summary
+    );
+    let unique_store_targets: BTreeSet<u32> =
+        summary.store_effects.iter().map(|(t, _)| *t).collect();
+    let total_hidden_slots = (returns_fresh as usize) + unique_store_targets.len();
+    let any_published_store = summary
         .store_effects
         .iter()
-        .any(|(_, c)| matches!(c, InternalReturnRegion::Published(_)))
-    {
+        .any(|(_, c)| matches!(c, InternalReturnRegion::Published(_)));
+    if (returns_fresh || any_published_store) && total_hidden_slots <= 1 {
         emit_root_escape_notes(func, region_map, diagnostics);
     }
 
@@ -5684,16 +5694,16 @@ mod tests {
         }
     }
 
-    /// `RegionRootEscape` positive coverage: a function that publishes a
-    /// FreshInCaller return AND has a fresh alloc whose region resolves
-    /// to `Caller(_)` via store-effect routing must emit the note for
-    /// the routed alloc but NOT for the returned one (canonical
-    /// FreshInCaller path is on the skip-set via
-    /// `collect_return_value_sources`).
+    /// `RegionRootEscape` positive coverage: a function with exactly one
+    /// hidden caller slot (one store target, no FreshInCaller return)
+    /// has `ambiguous_caller_slot = false`, so a `Caller(_)` alloc
+    /// routed into the parameter container is accepted by the conflict
+    /// check AND fires the note. Avoids the multi-slot case where
+    /// `RegionConflict` would also fire and the note is suppressed.
     #[test]
-    fn region_root_escape_note_emitted_for_routed_alloc_but_not_for_returned() {
-        // Callee: stores arg[1] into arg[0] — same `(0, AliasOf(1))` shape
-        // as elsewhere.
+    fn region_root_escape_note_emitted_for_single_slot_routed_alloc() {
+        // Callee: stores arg[1] into arg[0]. One target → one hidden slot
+        // when called from a non-FreshInCaller function.
         let callee_insts = vec![
             inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
             inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
@@ -5707,8 +5717,10 @@ mod tests {
             Ty::Unit,
             vec![block(0, callee_insts)],
         );
-        // Caller: parameter container `a`, two RegionAllocs — one returned,
-        // one routed via the callee's store effect.
+        // Caller: takes a parameter container `a`, allocates `routed`,
+        // routes it through the callee, returns Void. Inherits the
+        // callee's store-effect → 1 store target, no FreshInCaller
+        // return, total slots = 1, ambiguous_caller_slot = false.
         let caller_insts = vec![
             inst(10, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
             inst(
@@ -5717,7 +5729,7 @@ mod tests {
                 Ty::Ptr,
                 vec![],
                 InstData::AllocSize { size: 16, align: 8 },
-            ), // routed (will fire note)
+            ),
             inst(
                 12,
                 Opcode::Call,
@@ -5725,41 +5737,37 @@ mod tests {
                 vec![10, 11],
                 InstData::CallTarget(FuncId(0)),
             ),
-            inst(
-                13,
-                Opcode::RegionAlloc,
-                Ty::Ptr,
-                vec![],
-                InstData::AllocSize { size: 16, align: 8 },
-            ), // returned (must NOT fire note — canonical FreshInCaller path)
-            inst(14, Opcode::Return, Ty::Ptr, vec![13], InstData::None),
+            inst(13, Opcode::Return, Ty::Unit, vec![], InstData::None),
         ];
         let caller = function(
             1,
-            "publishes",
+            "publishes_one_store",
             vec![Ty::Ptr],
-            Ty::Ptr,
+            Ty::Unit,
             vec![block(0, caller_insts)],
         );
         let mut m = module(vec![callee, caller]);
         infer_regions(&mut m);
 
+        // `ambiguous_caller_slot` is false (one slot), so no
+        // RegionConflict — the routing is accepted. The note fires for
+        // the routed alloc (Caller(0) region, not on returned-id skip-set).
+        assert!(
+            m.warnings
+                .iter()
+                .all(|d| d.code != ErrorCode::RegionConflict),
+            "single-slot routing should not trip RegionConflict; warnings: {:?}",
+            m.warnings
+        );
         let notes: Vec<_> = m
             .warnings
             .iter()
             .filter(|d| d.code == ErrorCode::RegionRootEscape)
             .collect();
-        // The routed alloc fires the note; the returned one is on the
-        // skip-set. The fixture has 1 store target + 1 FreshInCaller
-        // return = 2 slots, so `ambiguous_caller_slot` is also true
-        // and the routed alloc additionally trips `RegionConflict`
-        // (expected). The filter below scopes the assertion to the
-        // note path; the conflict path is covered by the dedicated
-        // `region_conflict_when_multiple_caller_slots_make_caller0_ambiguous`
-        // test.
-        assert!(
-            notes.iter().any(|d| d.severity == Severity::Note),
-            "expected at least one RegionRootEscape note for the routed alloc; \
+        assert_eq!(
+            notes.len(),
+            1,
+            "expected exactly one RegionRootEscape note for the routed alloc; \
              warnings: {:?}",
             m.warnings
         );

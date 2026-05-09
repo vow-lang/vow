@@ -1028,6 +1028,20 @@ fn emit_root_escape_notes_module(
             fi = fi + 1;
             continue;
         }
+        // Skip the note pass when this function would also trigger
+        // `ambiguous_caller_slot` rejection — the routed allocs already
+        // carry a hard `RegionConflict`, and the note's "no action
+        // needed if intentional" hint is misleading at a location with
+        // an actual error. Same predicate as in
+        // `check_region_store_conflicts_module`.
+        let returns_fresh: bool = return_kind == RSUM_KIND_FRESH_IN_CALLER();
+        let unique_st: i64 = unique_store_target_count(f.rsum_store_effects);
+        let return_slot_n: i64 = if returns_fresh { 1 } else { 0 };
+        let total_slots: i64 = return_slot_n + unique_st;
+        if total_slots > 1 {
+            fi = fi + 1;
+            continue;
+        }
         let rkeys: Vec<i64> = region_keys[fi];
         let rvals: Vec<i64> = region_vals[fi];
         let bks: Vec<IrBlock> = f.blocks;
