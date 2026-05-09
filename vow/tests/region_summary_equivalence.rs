@@ -38,7 +38,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use vow_diag::Severity;
-use vow_ir::{decode_module, encode_module, RegionConstraint};
+use vow_ir::{RegionConstraint, decode_module, encode_module};
 
 /// Assert canonical-form invariants on every function's summary.
 fn assert_canonical_summaries(module: &vow_ir::Module) {
@@ -150,8 +150,8 @@ fn small_module_uninit_never_leaks_after_round_trip() {
     // run the pass, encode + decode via the public .vmod path, and
     // assert canonical-form invariants survive the round trip.
     use vow_ir::{
-        infer_regions, BasicBlock, BlockId, FuncId, Function, HiddenRegionIdx, Inst, InstData,
-        InstId, Module, Opcode, RegionId, RegionSummary, Ty, VowEntry, VowId,
+        BasicBlock, BlockId, FuncId, Function, HiddenRegionIdx, Inst, InstData, InstId, Module,
+        Opcode, RegionId, RegionSummary, Ty, VowEntry, VowId, infer_regions,
     };
     use vow_syntax::ast::Effect;
     use vow_syntax::span::Span;
@@ -595,5 +595,58 @@ fn rust_struct_field_initializer_alloc_skipped() {
         "field-initializer allocations of a returned struct must not \
          fire RegionRootEscape; got {} note(s): {notes:?}",
         notes.len(),
+    );
+}
+
+/// Issue #319 regression: the FieldSet skip-set extension must distinguish
+/// a fresh struct's field initializer from a mutation into a caller-owned
+/// container. `fn fill(target: Box) -> Box { target.name = ...; target }`
+/// returns the parameter `target` after mutating its field — the stored
+/// String is a genuine store-effect escape (caller-owned container), not
+/// a field initializer of a freshly-allocated struct, and the
+/// `RegionRootEscape` note must keep firing. The BFS gates the FieldSet
+/// edge on `args[0]` being produced by `Opcode::RegionAlloc`, which
+/// excludes parameter (`GetArg`) targets.
+#[test]
+fn rust_param_field_mutation_emits_root_escape_note() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let fixture = root
+        .join("tests")
+        .join("run")
+        .join("region_param_field_mutation.vow");
+    let out = Command::new(env!("CARGO_BIN_EXE_vow"))
+        .args(["build", "--no-verify"])
+        .arg(&fixture)
+        .output()
+        .expect("failed to run vow");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("failed to parse vow stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let status = parsed["status"].as_str();
+    let runtime_link_failure = status == Some("CompileFailed")
+        && parsed["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("libvow_runtime.a"));
+    assert!(
+        matches!(status, Some("Verified") | Some("Unverified")) || runtime_link_failure,
+        "expected Verified/Unverified status (or link-only failure on \
+         missing libvow_runtime.a), got {status:?}\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    let diagnostics = parsed["diagnostics"]
+        .as_array()
+        .expect("diagnostics should be an array");
+    let notes: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .collect();
+    assert!(
+        !notes.is_empty(),
+        "FieldSet into a parameter container must keep firing \
+         RegionRootEscape; got 0 notes: {diagnostics:?}",
     );
 }

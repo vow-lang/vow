@@ -1538,25 +1538,36 @@ fn analyze_function(
 
 /// Walk back from a Return-argument id, recording the id itself plus every
 /// source that flows into it through Phi arms (via Upsilon insts) or struct
-/// field initializers (via FieldSet insts whose target pointer is already in
-/// the skip-set). Used to expand `emit_root_escape_notes`'s skip-set so the
-/// underlying `RegionAlloc`s merged through a Phi (`if cond { X{..} } else
-/// { X{..} }`) or installed as a field of a returned struct
-/// (`Item { name: String::from("hi") }` from `make_item`) are recognised as
-/// canonical FreshInCaller return values rather than side-effect escapes.
+/// field initializers (via FieldSet insts whose target pointer is itself a
+/// fresh `RegionAlloc` already in the skip-set). Used to expand
+/// `emit_root_escape_notes`'s skip-set so the underlying `RegionAlloc`s
+/// merged through a Phi (`if cond { X{..} } else { X{..} }`) or installed
+/// as a field of a freshly-allocated returned struct
+/// (`Item { name: String::from("hi") }` from `make_item`) are recognised
+/// as canonical FreshInCaller return values rather than side-effect
+/// escapes.
 ///
 /// Per spec §4.4, the "alloc is the return value" exemption covers the
 /// top-level return argument and any allocation it transitively owns via
-/// `FieldSet` initializers — those field allocations share the parent
-/// struct's caller-arena lifetime, so the parent's escape note (when
-/// applicable) already conveys the full lifetime story; surfacing the
-/// children adds noise without information.
-///
-/// Safety: expansion is rooted at confirmed skip-set members. The FieldSet
-/// edge fires only when `args[0]` (the struct pointer) is already in
-/// `out`, and the BFS pushes `args[1]` (the field value); the existing
-/// `out.insert(id)` cycle guard handles any reconvergence.
+/// FieldSet initializers of a freshly-allocated struct. Critically, the
+/// exemption does NOT extend to FieldSets whose target is a parameter or
+/// other non-fresh pointer (e.g. `target.name = String::from("hi")`
+/// followed by `return target`): mutations into a caller-owned container
+/// are genuine store-effect escapes, not field initializers, and must keep
+/// firing the note. We distinguish the two cases by checking that the
+/// target id was produced by `Opcode::RegionAlloc` — only then is it a
+/// fresh aggregate and its FieldSet a constructor-style initialization.
 fn collect_return_value_sources(start: InstId, func: &Function, out: &mut BTreeSet<InstId>) {
+    // Pre-compute the set of ids produced by RegionAlloc so the FieldSet
+    // edge below can gate on "target is a fresh aggregate" in O(1) rather
+    // than re-scanning every iteration of the worklist.
+    let region_alloc_ids: BTreeSet<InstId> = func
+        .blocks
+        .iter()
+        .flat_map(|b| b.insts.iter())
+        .filter(|i| i.opcode == Opcode::RegionAlloc)
+        .map(|i| i.id)
+        .collect();
     let mut stack = vec![start];
     while let Some(id) = stack.pop() {
         if !out.insert(id) {
@@ -1573,6 +1584,7 @@ fn collect_return_value_sources(start: InstId, func: &Function, out: &mut BTreeS
                 if inst.opcode == Opcode::FieldSet
                     && inst.args.len() >= 2
                     && inst.args[0] == id
+                    && region_alloc_ids.contains(&id)
                 {
                     stack.push(inst.args[1]);
                 }
@@ -1596,10 +1608,15 @@ fn emit_root_escape_notes(
 ) {
     let source_file: &str = &func.source_file;
     // Pre-collect IDs of every value reachable from a `Return` — directly,
-    // and through Phi nodes via their Upsilon arms. Allocations on the
-    // canonical FreshInCaller return path (including Phi-merged arms in
-    // `if cond { Foo{..} } else { Foo{..} }`) shouldn't fire the note;
-    // only side-effect escapes through store-effect chains should.
+    // through Phi nodes via their Upsilon arms, and through field
+    // initializers (via FieldSet insts whose target pointer is itself a
+    // fresh RegionAlloc already in the skip-set). Allocations on the
+    // canonical FreshInCaller return path — Phi-merged arms in
+    // `if cond { Foo{..} } else { Foo{..} }` and field initializers in
+    // `Foo { name: String::from("hi") }` from a returning function —
+    // shouldn't fire the note; only side-effect escapes through
+    // store-effect chains (FieldSets into parameter-rooted containers,
+    // calls into caller-owned aggregates) should.
     let mut returned_ids: BTreeSet<InstId> = BTreeSet::new();
     for block in &func.blocks {
         for inst in &block.insts {

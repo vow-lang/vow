@@ -1,0 +1,23 @@
+// TEST: stdout ""
+// Issue #319 regression — the FieldSet skip-set extension must NOT
+// suppress notes for FieldSets into a parameter (caller-owned) container.
+// `fill` mutates `target.name` with a fresh String allocation and then
+// returns `target`. The `String::from("hi")` is a genuine store-effect
+// escape into a caller-owned container — exactly what RegionRootEscape
+// exists to flag — and must keep firing the note.
+module Repro
+
+pub struct Box {
+    name: String,
+}
+
+fn fill(target: Box) -> Box {
+    target.name = String::from("hi");
+    target
+}
+
+fn main() -> i32 {
+    let b: Box = Box { name: String::from("init") };
+    let b2: Box = fill(b);
+    0
+}
