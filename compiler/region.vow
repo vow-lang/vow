@@ -1133,27 +1133,10 @@ fn check_store_conflict(
     } else if src_kind == REGION_KIND_ROOT() || src_kind == REGION_KIND_RODATA() {
         return;
     } else if src_kind == REGION_KIND_BLOCK() {
-        // Arm B: source is a concrete block — compare against target's region.
-        let src_block: i64 = region_val(src_rgn);
-        let tgt_rgn: i64 = target_marker_region(id_to_inst, id_to_block, target_arg_id, int_kinds);
-        let tgt_kind: i64 = region_kind(tgt_rgn);
-        if tgt_kind == REGION_KIND_CALLER() || tgt_kind == REGION_KIND_ROOT() {
-            // Concrete block source cannot outlive caller/root target.
-        } else if tgt_kind == REGION_KIND_BLOCK() {
-            let tgt_block: i64 = region_val(tgt_rgn);
-            if src_block == tgt_block {
-                return; // Same region — fine.
-            }
-            // src outlives tgt iff tgt_block is a descendant of src_block
-            // (walking from tgt up via parents eventually hits src).
-            if block_is_ancestor(parents, depths, tgt_block, src_block) {
-                return;
-            }
-            // Otherwise src_block is strictly inside tgt_block (or unrelated)
-            // — falls through to emit the conflict diagnostic.
-        } else {
-            // Unknown target kind — be conservative and emit.
-        }
+        // Source is a concrete block; target is a parameter (established
+        // above), so target_marker_region returns VirtualCaller — any
+        // concrete block source is strictly narrower, always a conflict.
+        // Fall through to emission.
     } else {
         // Unknown source kind — be conservative and emit.
     }
