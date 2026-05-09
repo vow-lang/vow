@@ -1114,7 +1114,7 @@ fn collect_returned_ids(bks: Vec<IrBlock>) -> Vec<i64> {
         }
         bi = bi + 1;
     }
-    // BFS expansion through Phi arms via Upsilon insts.
+    // DFS expansion through Phi arms via Upsilon insts.
     while stack.len() > 0 {
         let id: i64 = stack[stack.len() - 1];
         stack.pop();
