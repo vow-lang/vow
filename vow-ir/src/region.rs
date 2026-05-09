@@ -1485,6 +1485,19 @@ fn analyze_function(
 /// merged through a Phi for conditional-construction patterns
 /// (`if cond { X{..} } else { X{..} }`) are recognised as canonical
 /// FreshInCaller return values rather than side-effect escapes.
+///
+/// Conservative scope: this walk follows Phi → Upsilon chains only.
+/// Sub-allocations that form fields of a returned struct
+/// (e.g. the `String::from("hi")` heap allocation inside
+/// `Item { name: String::from("hi") }` returned from `make_item`) are
+/// NOT reachable via this walk and WILL fire `RegionRootEscape` notes
+/// even though they travel together with the canonical FreshInCaller
+/// return value. That's intentional and permitted by spec §4.4: the
+/// "alloc is the return value" exemption covers only the top-level
+/// return argument itself. Field allocations escape to the caller's
+/// arena along with the parent struct, and surfacing them as notes
+/// keeps the agent aware of every allocation that lives for the
+/// caller-chain lifetime.
 fn collect_return_value_sources(start: InstId, func: &Function, out: &mut BTreeSet<InstId>) {
     let mut stack = vec![start];
     while let Some(id) = stack.pop() {

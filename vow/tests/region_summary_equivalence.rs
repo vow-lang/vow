@@ -38,7 +38,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use vow_diag::Severity;
-use vow_ir::{RegionConstraint, decode_module, encode_module};
+use vow_ir::{decode_module, encode_module, RegionConstraint};
 
 /// Assert canonical-form invariants on every function's summary.
 fn assert_canonical_summaries(module: &vow_ir::Module) {
@@ -150,8 +150,8 @@ fn small_module_uninit_never_leaks_after_round_trip() {
     // run the pass, encode + decode via the public .vmod path, and
     // assert canonical-form invariants survive the round trip.
     use vow_ir::{
-        BasicBlock, BlockId, FuncId, Function, HiddenRegionIdx, Inst, InstData, InstId, Module,
-        Opcode, RegionId, RegionSummary, Ty, VowEntry, VowId, infer_regions,
+        infer_regions, BasicBlock, BlockId, FuncId, Function, HiddenRegionIdx, Inst, InstData,
+        InstId, Module, Opcode, RegionId, RegionSummary, Ty, VowEntry, VowId,
     };
     use vow_syntax::ast::Effect;
     use vow_syntax::span::Span;
@@ -336,5 +336,18 @@ fn rust_routed_aggregate_via_callee_store_effect_compiles() {
     assert!(
         conflicts.is_empty(),
         "routed aggregate must not trip RegionConflict; diagnostics: {diagnostics:?}"
+    );
+    // The fixture's `use_caller` function has a Caller-region `Payload{n:1}`
+    // alloc that is routed through `put` — it must surface as a
+    // `RegionRootEscape` note. Closes the gap a regression that silently
+    // dropped all notes would otherwise slip through.
+    let notes: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .collect();
+    assert!(
+        !notes.is_empty(),
+        "routed aggregate must emit at least one RegionRootEscape note; \
+         diagnostics: {diagnostics:?}"
     );
 }
