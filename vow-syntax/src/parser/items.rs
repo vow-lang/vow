@@ -380,6 +380,22 @@ mod tests {
     }
 
     #[test]
+    fn item_spans_carry_nonzero_length() {
+        // Pins parity with the self-hosted parser fix for issue #316: every
+        // top-level item must carry a span whose `len` covers the item's
+        // textual extent. A regression that drops back to `len = 0` would
+        // produce diagnostics with `length: 0`, which is what #316 was about.
+        let src = "struct Point { x: i32, y: i32 }";
+        let s = match parse_item(src) {
+            Item::Struct(s) => s,
+            other => panic!("expected struct, got {:?}", other),
+        };
+        assert_eq!(s.span.start, 0);
+        assert_eq!(s.span.len as usize, src.len());
+        assert!(s.span.len > 0);
+    }
+
+    #[test]
     fn parse_linear_struct() {
         let src = "linear struct Handle { fd: i32 }";
         let item = parse_item(src);

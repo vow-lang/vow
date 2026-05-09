@@ -72,7 +72,15 @@ skip() {
 json_field() {
   local json="$1"
   local field="$2"
-  python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('$field',''))" <<< "$json"
+  python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except Exception:
+    print('')
+    sys.exit(0)
+print(d.get('$field', '') if isinstance(d, dict) else '')
+" <<< "$json"
 }
 
 json_path_field() {
@@ -122,6 +130,7 @@ parse_annotations() {
   TEST_SKIP=""
   TEST_STDIN=""
   TEST_STDIN_FILE=""
+  TEST_STDERR_JSON=""
 
   while IFS= read -r line; do
     if [[ "$line" =~ ^//\ TEST:\ exit\ ([0-9]+) ]]; then
@@ -148,6 +157,8 @@ parse_annotations() {
       TEST_STDIN_FILE="$(dirname "$file")/${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ skip\ \"(.+)\" ]]; then
       TEST_SKIP="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^//\ TEST:\ stderr-json\ (.+) ]]; then
+      TEST_STDERR_JSON="${BASH_REMATCH[1]}"
     elif [[ ! "$line" =~ ^// ]]; then
       break
     fi
@@ -477,6 +488,36 @@ print('|'.join(codes))
     expected_stderr="$(echo -e "$TEST_STDERR")"
     if [[ "$actual_stderr" != *"$expected_stderr"* ]]; then
       fail "$name" "stderr missing: $expected_stderr"
+      continue
+    fi
+  fi
+
+  # JSON-shape assertion. The annotation supplies a Python boolean expression
+  # evaluated with `d` bound to the full parsed build_json, `xs` to its
+  # `diagnostics` array, and `x` to `xs[0]` if present. Keeps existing
+  # `error_code` and substring checks composable with structural assertions
+  # (e.g. span/length, hint contents).
+  if [[ -n "$TEST_STDERR_JSON" ]]; then
+    json_check="$(EXPR="$TEST_STDERR_JSON" python3 -c "
+import json, sys, os
+expr = os.environ['EXPR']
+try:
+    d = json.loads(sys.stdin.read())
+except Exception as e:
+    print('false'); print(f'json parse: {e}'); sys.exit(0)
+xs = d.get('diagnostics', []) or []
+x = xs[0] if xs else {}
+try:
+    ok = bool(eval(expr))
+except Exception as e:
+    print('false'); print(f'expr error: {e}'); sys.exit(0)
+print('true' if ok else 'false')
+print(json.dumps(x))
+" <<< "$build_json")"
+    json_pass="$(echo "$json_check" | head -1)"
+    json_detail="$(echo "$json_check" | tail -1)"
+    if [[ "$json_pass" != "true" ]]; then
+      fail "$name" "stderr-json failed: $TEST_STDERR_JSON (x=$json_detail)"
       continue
     fi
   fi
