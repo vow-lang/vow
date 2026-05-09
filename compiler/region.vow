@@ -252,12 +252,8 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
     check_region_store_conflicts_module(
         m,
         id_to_inst_per_fn,
-        id_to_block_per_fn,
-        block_parent_per_fn,
-        block_depth_per_fn,
         region_keys,
         region_vals,
-        int_kinds,
         dctx,
     );
 
@@ -885,19 +881,13 @@ fn unique_store_target_count(flat: Vec<i64>) -> i64 {
 
 fn check_region_store_conflicts_module(
     m: IrModule, id_to_inst_per_fn: Vec<Vec<IrInst>>,
-    id_to_block_per_fn: Vec<Vec<i64>>,
-    block_parent_per_fn: Vec<Vec<i64>>, block_depth_per_fn: Vec<Vec<i64>>,
     region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
-    int_kinds: Vec<i64>,
     dctx: DiagCtx
 ) {
     let mut fi: i64 = 0;
     while fi < m.functions.len() {
         let f: IrFunction = m.functions[fi];
         let id_to_inst: Vec<IrInst> = id_to_inst_per_fn[fi];
-        let id_to_block: Vec<i64> = id_to_block_per_fn[fi];
-        let parents: Vec<i64> = block_parent_per_fn[fi];
-        let depths: Vec<i64> = block_depth_per_fn[fi];
         let rkeys: Vec<i64> = region_keys[fi];
         let rvals: Vec<i64> = region_vals[fi];
         // Ambiguous-slot guard: codegen lays out hidden arena slots as
@@ -927,12 +917,8 @@ fn check_region_store_conflicts_module(
                             m.functions[callee_idx].rsum_store_effects,
                             inst,
                             id_to_inst,
-                            id_to_block,
-                            parents,
-                            depths,
                             rkeys,
                             rvals,
-                            int_kinds,
                             ambiguous_caller_slot,
                             dctx,
                             f.source_file,
@@ -949,8 +935,7 @@ fn check_region_store_conflicts_module(
 
 fn check_store_effects_at_call(
     flat: Vec<i64>, call_inst: IrInst, id_to_inst: Vec<IrInst>,
-    id_to_block: Vec<i64>, parents: Vec<i64>, depths: Vec<i64>,
-    region_keys: Vec<i64>, region_vals: Vec<i64>, int_kinds: Vec<i64>,
+    region_keys: Vec<i64>, region_vals: Vec<i64>,
     ambiguous_caller_slot: bool,
     dctx: DiagCtx, source_file: String
 ) {
@@ -974,12 +959,8 @@ fn check_store_effects_at_call(
                     call_inst.args[source_param],
                     call_inst,
                     id_to_inst,
-                    id_to_block,
-                    parents,
-                    depths,
                     region_keys,
                     region_vals,
-                    int_kinds,
                     ambiguous_caller_slot,
                     dctx,
                 );
@@ -1097,38 +1078,10 @@ fn collect_returned_ids(bks: Vec<IrBlock>) -> Vec<i64> {
     out
 }
 
-// Walk `child` up `parents` to see whether `candidate_ancestor` is reachable
-// (an ancestor in the block tree). Returns true if child == candidate_ancestor
-// or if any parent of child is candidate_ancestor. Bounded by `depths` to
-// terminate cleanly on malformed parent chains.
-fn block_is_ancestor(parents: Vec<i64>, depths: Vec<i64>, child: i64, candidate_ancestor: i64) -> bool {
-    if child == candidate_ancestor {
-        return true;
-    }
-    let mut cur: i64 = child;
-    let mut steps: i64 = block_depth_at(depths, child);
-    if steps < 0 {
-        steps = 0;
-    }
-    while steps > 0 {
-        cur = block_parent_at(parents, cur);
-        if cur < 0 {
-            return false;
-        }
-        if cur == candidate_ancestor {
-            return true;
-        }
-        steps = steps - 1;
-    }
-    false
-}
-
 fn check_store_conflict(
     source_file: String, target_arg_id: i64, source_arg_id: i64, call_inst: IrInst,
-    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>,
-    parents: Vec<i64>, depths: Vec<i64>,
+    id_to_inst: Vec<IrInst>,
     region_keys: Vec<i64>, region_vals: Vec<i64>,
-    int_kinds: Vec<i64>,
     ambiguous_caller_slot: bool,
     dctx: DiagCtx
 ) {
