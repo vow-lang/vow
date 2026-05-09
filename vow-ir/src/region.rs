@@ -1537,24 +1537,25 @@ fn analyze_function(
 }
 
 /// Walk back from a Return-argument id, recording the id itself plus every
-/// Upsilon arm source for any Phi reached. Used to expand
-/// `emit_root_escape_notes`'s skip-set so the underlying `RegionAlloc`s
-/// merged through a Phi for conditional-construction patterns
-/// (`if cond { X{..} } else { X{..} }`) are recognised as canonical
-/// FreshInCaller return values rather than side-effect escapes.
+/// source that flows into it through Phi arms (via Upsilon insts) or struct
+/// field initializers (via FieldSet insts whose target pointer is already in
+/// the skip-set). Used to expand `emit_root_escape_notes`'s skip-set so the
+/// underlying `RegionAlloc`s merged through a Phi (`if cond { X{..} } else
+/// { X{..} }`) or installed as a field of a returned struct
+/// (`Item { name: String::from("hi") }` from `make_item`) are recognised as
+/// canonical FreshInCaller return values rather than side-effect escapes.
 ///
-/// Conservative scope: this walk follows Phi → Upsilon chains only.
-/// Sub-allocations that form fields of a returned struct
-/// (e.g. the `String::from("hi")` heap allocation inside
-/// `Item { name: String::from("hi") }` returned from `make_item`) are
-/// NOT reachable via this walk and WILL fire `RegionRootEscape` notes
-/// even though they travel together with the canonical FreshInCaller
-/// return value. That's intentional and permitted by spec §4.4: the
-/// "alloc is the return value" exemption covers only the top-level
-/// return argument itself. Field allocations escape to the caller's
-/// arena along with the parent struct, and surfacing them as notes
-/// keeps the agent aware of every allocation that lives for the
-/// caller-chain lifetime.
+/// Per spec §4.4, the "alloc is the return value" exemption covers the
+/// top-level return argument and any allocation it transitively owns via
+/// `FieldSet` initializers — those field allocations share the parent
+/// struct's caller-arena lifetime, so the parent's escape note (when
+/// applicable) already conveys the full lifetime story; surfacing the
+/// children adds noise without information.
+///
+/// Safety: expansion is rooted at confirmed skip-set members. The FieldSet
+/// edge fires only when `args[0]` (the struct pointer) is already in
+/// `out`, and the BFS pushes `args[1]` (the field value); the existing
+/// `out.insert(id)` cycle guard handles any reconvergence.
 fn collect_return_value_sources(start: InstId, func: &Function, out: &mut BTreeSet<InstId>) {
     let mut stack = vec![start];
     while let Some(id) = stack.pop() {
@@ -1568,6 +1569,12 @@ fn collect_return_value_sources(start: InstId, func: &Function, out: &mut BTreeS
                     && let Some(&arm) = inst.args.first()
                 {
                     stack.push(arm);
+                }
+                if inst.opcode == Opcode::FieldSet
+                    && inst.args.len() >= 2
+                    && inst.args[0] == id
+                {
+                    stack.push(inst.args[1]);
                 }
             }
         }

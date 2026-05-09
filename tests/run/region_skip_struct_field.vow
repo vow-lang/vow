@@ -1,0 +1,22 @@
+// TEST: stdout ""
+// Issue #319 — RegionRootEscape skip-set extends through StructNew
+// field initializers. `make_item` returns an `Item` whose `name` field
+// is a fresh `String::from("hi")` allocation. Because the parent `Item`
+// is on the canonical FreshInCaller return path, the inner `String`
+// allocation should not fire a RegionRootEscape note: it shares the
+// caller-arena lifetime of the parent struct, and the parent's note
+// (when applicable) already conveys the escape information.
+module Repro
+
+pub struct Item {
+    name: String,
+}
+
+fn make_item() -> Item {
+    Item { name: String::from("hi") }
+}
+
+fn main() -> i32 {
+    let item: Item = make_item();
+    0
+}

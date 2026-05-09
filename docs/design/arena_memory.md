@@ -849,7 +849,19 @@ the diagnostic is non-blocking and informational.
 The note SHOULD NOT fire for the canonical `FreshInCaller`
 return-value pattern (`fn make_X() -> X`), where the alloc is the
 return value — that's the documented mechanism for producing values
-in a caller's arena and carries no hidden surprise.
+in a caller's arena and carries no hidden surprise. The exemption
+extends transitively to allocations installed as fields of the
+returned struct via field initializers (`Item { name:
+String::from("hi") }` from `make_item() -> Item`): those field
+allocations share the parent struct's caller-arena lifetime, and
+the parent's note (when applicable) already conveys the full
+escape information — surfacing the children adds noise without
+information. The exemption is strictly structural: it follows the
+return value through Phi arms (via Upsilon) and through field
+initializers (via the lowered FieldSet whose target pointer is in
+the skip-set). It does NOT extend to post-allocation mutation
+through Store, nor to values routed through callee store-effect
+chains, both of which represent genuine side-effect escapes.
 
 Rationale: structured rejection on genuine constraint failures is
 the CEGIS feedback signal; structured visibility on root routing

@@ -362,6 +362,7 @@ fn rust_routed_aggregate_via_callee_store_effect_compiles() {
          diagnostics: {diagnostics:?}"
     );
 }
+<<<<<<< HEAD
 
 /// Issue #320 regression guard: an internal `Call` whose callee returns
 /// `FreshInCaller`, routed into a parameter container via a sibling callee's
@@ -534,5 +535,65 @@ fn rust_split_targets_repro_compiles() {
         conflicts.is_empty(),
         "issue #317 repro must not trip RegionConflict; diagnostics: \
          {diagnostics:?}"
+    );
+}
+
+/// Issue #319: the `RegionRootEscape` skip-set's BFS must trace through
+/// `FieldSet` instructions, so an allocation that flows into a field of
+/// a returned struct does not fire a note. The fixture's
+/// `make_item() -> Item { Item { name: String::from("hi") } }` should
+/// emit zero notes — the parent `Item` is on the canonical FreshInCaller
+/// return path, and the inner `String` allocation shares its lifetime.
+#[test]
+fn rust_struct_field_initializer_alloc_skipped() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let fixture = root
+        .join("tests")
+        .join("run")
+        .join("region_skip_struct_field.vow");
+    let out = Command::new(env!("CARGO_BIN_EXE_vow"))
+        .args(["build", "--no-verify"])
+        .arg(&fixture)
+        .output()
+        .expect("failed to run vow");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("failed to parse vow stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let status = parsed["status"].as_str();
+    let runtime_link_failure = status == Some("CompileFailed")
+        && parsed["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("libvow_runtime.a"));
+    assert!(
+        matches!(status, Some("Verified") | Some("Unverified")) || runtime_link_failure,
+        "expected Verified/Unverified status (or link-only failure on \
+         missing libvow_runtime.a), got {status:?}\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    let diagnostics = parsed["diagnostics"]
+        .as_array()
+        .expect("diagnostics should be an array");
+    let conflicts: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionConflict"))
+        .collect();
+    assert!(
+        conflicts.is_empty(),
+        "field-initializer fixture must not trip RegionConflict; \
+         diagnostics: {diagnostics:?}"
+    );
+    let notes: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .collect();
+    assert!(
+        notes.is_empty(),
+        "field-initializer allocations of a returned struct must not \
+         fire RegionRootEscape; got {} note(s): {notes:?}",
+        notes.len(),
     );
 }
