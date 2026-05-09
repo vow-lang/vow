@@ -79,7 +79,10 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
     // Root in `region_keys/vals` for codegen conservatism; capturing the
     // original Caller(_) here keeps the note pass visible to issue #320's
     // case where the rewrite would otherwise silence a real root-region
-    // placement. Mirrors the Rust pass's local `note_region_map`.
+    // placement. Mirrors the Rust pass's local `note_region_map`; the
+    // per-fn slot is reset at the top of each `analyze_function` call so
+    // only the convergence iteration's captures contribute (matching
+    // `let mut note_region_map = BTreeMap::new()` in the Rust mirror).
     let note_region_keys: Vec<Vec<i64>> = Vec::new();
     let note_region_vals: Vec<Vec<i64>> = Vec::new();
     let mut ri: i64 = 0;
@@ -1356,6 +1359,16 @@ fn analyze_function(
     region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
     note_region_keys: Vec<Vec<i64>>, note_region_vals: Vec<Vec<i64>>,
 ) -> bool {
+    // Reset this function's note-region snapshot before populating it again
+    // so only the convergence iteration's captures contribute. Without this,
+    // an earlier iteration's Caller(_) entry could persist past a final-
+    // iteration LUB that resolves directly to Root (bypassing the rewrite
+    // gate) and cause self-hosted to emit notes the Rust mirror's per-call-
+    // fresh `note_region_map` would not. Mirrors the Rust pass's
+    // `let mut note_region_map = BTreeMap::new()` at the top of
+    // `analyze_function` (vow-ir/src/region.rs:1427).
+    note_region_keys[fidx].clear();
+    note_region_vals[fidx].clear();
     let f: IrFunction = m.functions[fidx];
     let bks: Vec<IrBlock> = f.blocks;
     let n_bks: i64 = bks.len();
@@ -1499,19 +1512,14 @@ fn analyze_function(
                 // Issue #320: capture the pre-rewrite Caller(_) so the note
                 // pass can still surface internal-call heap producers routed
                 // through a hidden caller slot. The rewrite below collapses
-                // them to Root for codegen conservatism, which would
-                // otherwise silence the diagnostic. The SCC fixed-point
-                // accumulates across iterations here (vs. per-call in the
-                // Rust mirror), but the LUB lattice ascends monotonically
-                // (Block ⊑ Caller ⊑ Root), so a stale Caller(_) entry still
-                // corresponds to a real pre-rewrite state and firing the
-                // note on it remains correct.
-                if rinst.op == IOP_CALL() && rinst.dk != IDATA_CALL_EXTERN()
-                    && region_kind(rgn) == REGION_KIND_CALLER() {
-                    put_inst_region(note_region_keys[fidx], note_region_vals[fidx], rinst.id, rgn);
-                }
+                // them to Root for codegen conservatism, which would otherwise
+                // silence the diagnostic. Mirrors the nested structure at
+                // vow-ir/src/region.rs:1437-1455.
                 if rinst.op == IOP_CALL() && rinst.dk != IDATA_CALL_EXTERN() {
                     let rk: i64 = region_kind(rgn);
+                    if rk == REGION_KIND_CALLER() {
+                        put_inst_region(note_region_keys[fidx], note_region_vals[fidx], rinst.id, rgn);
+                    }
                     if rk == REGION_KIND_BLOCK() || rk == REGION_KIND_CALLER() {
                         rgn = region_root();
                     }
