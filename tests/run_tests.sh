@@ -158,6 +158,7 @@ parse_annotations() {
     elif [[ "$line" =~ ^//\ TEST:\ skip\ \"(.+)\" ]]; then
       TEST_SKIP="${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ build-json\ (.+) ]]; then
+      # Only enforced by Phase 5 (error/) — annotation is parsed elsewhere but not checked.
       TEST_BUILD_JSON="${BASH_REMATCH[1]}"
     elif [[ ! "$line" =~ ^// ]]; then
       break
