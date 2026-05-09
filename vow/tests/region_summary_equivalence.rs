@@ -416,10 +416,17 @@ fn rust_internal_call_fresh_return_emits_region_root_escape_note() {
         .iter()
         .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
         .collect();
-    assert!(
-        !notes.is_empty(),
-        "internal-call FreshInCaller routed into a parameter container must emit at \
-         least one RegionRootEscape note (issue #320); diagnostics: {diagnostics:?}"
+    // Issue #320 acceptance criterion #1 explicitly requires *exactly one*
+    // note for this source-level fixture; the Rust pipeline is deterministic
+    // for this shape, so pin the count rather than just `!notes.is_empty()`.
+    // The self-hosted parity test below stays at the looser bound because of
+    // the documented #318 gate over-approximation.
+    assert_eq!(
+        notes.len(),
+        1,
+        "internal-call FreshInCaller routed into a parameter container must emit \
+         exactly one RegionRootEscape note (issue #320 acceptance #1); \
+         diagnostics: {diagnostics:?}"
     );
 }
 
