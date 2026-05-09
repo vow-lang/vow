@@ -6090,15 +6090,28 @@ mod tests {
         let mut m = module(vec![id_fn, helper, caller]);
         infer_regions(&mut m);
 
+        // Both routed args trip the conservative reject:
+        //   * arg 1 (CallTarget-AliasOf id(fresh1)) — exercised by the new
+        //     CallTarget arm in `underlying_caller_via_aliases_inner`.
+        //   * arg 3 (direct fresh alloc) — exercised by the existing
+        //     ambiguous_caller_slot direct-Caller match.
+        // Asserting `== 2` (rather than `!is_empty()`) means a regression
+        // where the CallTarget-AliasOf trace silently breaks but the
+        // direct alloc still fires would fail loudly with `1 != 2`
+        // instead of being silently masked. Same shape as the
+        // `region_conflict_when_divergent_phi_mixes_caller_arm_in_ambiguous_mode`
+        // and `region_conflict_when_multiple_caller_slots_make_caller0_ambiguous`
+        // count assertions.
         let conflicts: Vec<_> = m
             .warnings
             .iter()
             .filter(|d| d.code == ErrorCode::RegionConflict)
             .collect();
-        assert!(
-            !conflicts.is_empty(),
-            "CallTarget-AliasOf source over a fresh alloc must trip RegionConflict in ambiguous mode; \
-             warnings: {:?}",
+        assert_eq!(
+            conflicts.len(),
+            2,
+            "expected exactly 2 RegionConflict diagnostics — one per ambiguous routed arg, \
+             with the CallTarget-AliasOf path independently exercised; warnings: {:?}",
             m.warnings
         );
     }
