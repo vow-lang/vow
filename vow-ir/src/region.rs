@@ -5710,13 +5710,14 @@ mod tests {
             inst(2, Opcode::Store, Ty::Unit, vec![0, 1], InstData::None),
             inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
         ];
-        let callee = function(
+        let mut callee = function(
             0,
             "store_into",
             vec![Ty::Ptr, Ty::Ptr],
             Ty::Unit,
             vec![block(0, callee_insts)],
         );
+        callee.source_file = "callee.vow".to_string();
         // Caller: takes a parameter container `a`, allocates `routed`,
         // routes it through the callee, returns Void. Inherits the
         // callee's store-effect → 1 store target, no FreshInCaller
@@ -5739,13 +5740,14 @@ mod tests {
             ),
             inst(13, Opcode::Return, Ty::Unit, vec![], InstData::None),
         ];
-        let caller = function(
+        let mut caller = function(
             1,
             "publishes_one_store",
             vec![Ty::Ptr],
             Ty::Unit,
             vec![block(0, caller_insts)],
         );
+        caller.source_file = "caller.vow".to_string();
         let mut m = module(vec![callee, caller]);
         infer_regions(&mut m);
 
@@ -5770,6 +5772,16 @@ mod tests {
             "expected exactly one RegionRootEscape note for the routed alloc; \
              warnings: {:?}",
             m.warnings
+        );
+        // Issue #254 regression guard for the note path: source-file
+        // attribution must come from the analyzing caller's source_file,
+        // not the callee's. `emit_root_escape_notes` consults
+        // `func.source_file` directly; this assertion exercises that
+        // plumbing for `RegionRootEscape` (the conflict path is covered
+        // by `region_conflict_when_multiple_caller_slots_make_caller0_ambiguous`).
+        assert_eq!(
+            notes[0].primary.file, "caller.vow",
+            "RegionRootEscape primary span must point at the analyzing function's source file"
         );
     }
 

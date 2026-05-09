@@ -906,6 +906,12 @@ fn check_region_store_conflicts_module(
         // routing path until inference produces the correct
         // HiddenRegionIdx(N).
         let returns_fresh: bool = f.rsum_return_kind == RSUM_KIND_FRESH_IN_CALLER();
+        // Precondition: `f.rsum_store_effects` must be target-sorted (see
+        // `canonicalize_store_effects` in vmod write/read paths).
+        // `unique_store_target_count` performs adjacency dedup and would
+        // silently under-count an unsorted array, making
+        // `ambiguous_caller_slot` false when it should be true and
+        // permitting a slot misroute without diagnostic.
         let unique_store_targets: i64 = unique_store_target_count(f.rsum_store_effects);
         let return_slots: i64 = if returns_fresh { 1 } else { 0 };
         let total_hidden_slots: i64 = return_slots + unique_store_targets;
@@ -1035,6 +1041,9 @@ fn emit_root_escape_notes_module(
         // an actual error. Same predicate as in
         // `check_region_store_conflicts_module`.
         let returns_fresh: bool = return_kind == RSUM_KIND_FRESH_IN_CALLER();
+        // Precondition: `f.rsum_store_effects` must be target-sorted
+        // (see `canonicalize_store_effects`). Same dedup-correctness
+        // contract as in `check_region_store_conflicts_module`.
         let unique_st: i64 = unique_store_target_count(f.rsum_store_effects);
         let return_slot_n: i64 = if returns_fresh { 1 } else { 0 };
         let total_slots: i64 = return_slot_n + unique_st;
