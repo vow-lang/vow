@@ -847,6 +847,15 @@ fn region_root_escape_note_count_parity_rust_vs_self_hosted() {
 
     let rust_count = count_notes(std::path::Path::new(env!("CARGO_BIN_EXE_vow")), "rust vow");
     let self_hosted_count = count_notes(&vowc, "build/vowc");
+    // Floor: the fixture is constructed to trigger at least one note in each
+    // compiler. A joint regression to zero (e.g. gate logic accidentally
+    // suppressed everywhere) would make the parity assertion below pass
+    // silently; this assertion catches that.
+    assert!(
+        rust_count > 0,
+        "rust vow emitted 0 RegionRootEscape notes on region_root_escape_parity.vow — \
+         gate may be suppressed"
+    );
     assert_eq!(
         rust_count, self_hosted_count,
         "RegionRootEscape note-count parity broken: rust={rust_count}, self-hosted={self_hosted_count} \

@@ -277,8 +277,7 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
     // to a caller. See arena_memory.md §4.4.
     emit_root_escape_notes_module(m, region_keys, region_vals,
                                    note_region_keys, note_region_vals,
-                                   int_kinds, int_se_targets, int_se_src_kinds,
-                                   dctx);
+                                   int_kinds, int_se_src_kinds, dctx);
 
     // Commit per-inst regions.
     let mut fi2: i64 = 0;
@@ -1112,7 +1111,6 @@ fn emit_root_escape_notes_module(
     region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
     note_region_keys: Vec<Vec<i64>>, note_region_vals: Vec<Vec<i64>>,
     int_kinds: Vec<i64>,
-    int_se_targets: Vec<Vec<i64>>,
     int_se_src_kinds: Vec<Vec<i64>>,
     dctx: DiagCtx
 ) {
