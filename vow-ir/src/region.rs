@@ -5955,21 +5955,21 @@ mod tests {
         ];
         let caller_b3 = vec![
             inst(14, Opcode::Phi, Ty::Ptr, vec![], InstData::None),
+            // helper(p, phi, q, q) — slot-0 source is the divergent Phi
+            // (the case under test); slot-2 source is `q` (parameter,
+            // non-Caller terminus → conflict check early-returns). Using
+            // a parameter for arg 3 (instead of an unconditional fresh
+            // alloc) isolates the Phi reject path: this test now fails
+            // iff the Phi widening regresses, with no covering conflict
+            // from a sibling alloc.
             inst(
                 15,
-                Opcode::RegionAlloc,
-                Ty::Ptr,
-                vec![],
-                InstData::AllocSize { size: 16, align: 8 },
-            ),
-            inst(
-                16,
                 Opcode::Call,
                 Ty::Unit,
-                vec![10, 14, 11, 15],
+                vec![10, 14, 11, 11],
                 InstData::CallTarget(FuncId(0)),
             ),
-            inst(17, Opcode::Return, Ty::Unit, vec![], InstData::None),
+            inst(16, Opcode::Return, Ty::Unit, vec![], InstData::None),
         ];
         let mut caller = function(
             1,
@@ -5987,20 +5987,21 @@ mod tests {
         let mut m = module(vec![callee, caller]);
         infer_regions(&mut m);
 
-        // The divergent Phi (one Caller-arm, one param-arm) at arg 1
-        // must trip the conservative reject. The unconditional fresh
-        // alloc at arg 3 also trips the reject (same all-Caller terminus
-        // as the existing multi-slot test), so we expect at least one
-        // RegionConflict total — but specifically one that targets the
-        // divergent-Phi argument.
+        // Exactly one conflict — the divergent Phi at arg 1 trips the
+        // any-Caller-arm reject (UU widening). The slot-2 store has a
+        // parameter source so it doesn't reach the Caller terminus and
+        // the conflict check returns early. If the Phi reject regresses,
+        // `conflicts.len() == 0` and this test fails loudly instead of
+        // being silently covered by a sibling alloc.
         let conflicts: Vec<_> = m
             .warnings
             .iter()
             .filter(|d| d.code == ErrorCode::RegionConflict)
             .collect();
-        assert!(
-            !conflicts.is_empty(),
-            "divergent Phi with one Caller arm must trip RegionConflict in ambiguous mode; \
+        assert_eq!(
+            conflicts.len(),
+            1,
+            "expected exactly one RegionConflict from the divergent-Phi reject path; \
              warnings: {:?}",
             m.warnings
         );
