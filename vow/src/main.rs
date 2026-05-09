@@ -4319,7 +4319,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "EsbmcNotFound",
         "IoError",
         "RegionConflict",
-        "RegionLinear"
+        "RegionLinear",
+        "RegionRootEscape"
       ],
       "description": "Machine-readable error code"
     },

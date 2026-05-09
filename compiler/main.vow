@@ -5038,7 +5038,8 @@ fn skill_full() -> String {
     r.push_str(String::from("        \"EsbmcNotFound\",\n"));
     r.push_str(String::from("        \"IoError\",\n"));
     r.push_str(String::from("        \"RegionConflict\",\n"));
-    r.push_str(String::from("        \"RegionLinear\"\n"));
+    r.push_str(String::from("        \"RegionLinear\",\n"));
+    r.push_str(String::from("        \"RegionRootEscape\"\n"));
     r.push_str(String::from("      ],\n"));
     r.push_str(String::from("      \"description\": \"Machine-readable error code\"\n"));
     r.push_str(String::from("    },\n"));
