@@ -2502,7 +2502,10 @@ fn underlying_caller_via_aliases_inner(
                     {
                         let mut arm_seen = seen.clone();
                         if let Some(arm_rgn) = underlying_caller_via_aliases_inner(
-                            arm_id, inst_lookup, region_map, &mut arm_seen,
+                            arm_id,
+                            inst_lookup,
+                            region_map,
+                            &mut arm_seen,
                         ) && matches!(arm_rgn, RegionId::Caller(_))
                         {
                             return Some(arm_rgn);
