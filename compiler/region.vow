@@ -642,6 +642,12 @@ fn put_inst_region(keys: Vec<i64>, vals: Vec<i64>, id: i64, rgn: i64) {
 // canon_flat encodes the canonical wire shape used by `IrFunction.rsum_store_effects`,
 // matching `vow-ir/src/serialize.rs::write_region_constraint` discriminants:
 //   per effect: target_u32, constraint_kind, (aux_u32)?, (alias_count, alias_u32...)?
+//
+// Sort invariant: the produced flat array is sorted by ascending target.
+// Adjacency-dedup consumers depend on this — see
+// `unique_store_target_count` (called from `check_region_store_conflicts_module`
+// and `emit_root_escape_notes_module`). If the sort order ever changes,
+// switch those consumers to an explicit set or update them in lockstep.
 fn canonicalize_store_effects(
     targets: Vec<i64>, kinds: Vec<i64>, aux: Vec<i64>, aliases: Vec<Vec<i64>>
 ) -> Vec<i64> {
@@ -1129,9 +1135,9 @@ fn emit_root_escape_notes_module(
 // (`if cond { X{..} } else { X{..} }`) where the Phi is returned but the
 // underlying RegionAllocs in each arm are the actual heap producers.
 fn collect_returned_ids(bks: Vec<IrBlock>) -> Vec<i64> {
-    let out: Vec<i64> = Vec::new();
+    let mut out: Vec<i64> = Vec::new();
     // First gather direct Return arguments.
-    let stack: Vec<i64> = Vec::new();
+    let mut stack: Vec<i64> = Vec::new();
     let mut bi: i64 = 0;
     while bi < bks.len() {
         let blk: IrBlock = bks[bi];
