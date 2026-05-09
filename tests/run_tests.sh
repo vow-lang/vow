@@ -130,7 +130,7 @@ parse_annotations() {
   TEST_SKIP=""
   TEST_STDIN=""
   TEST_STDIN_FILE=""
-  TEST_STDERR_JSON=""
+  TEST_BUILD_JSON=""
 
   while IFS= read -r line; do
     if [[ "$line" =~ ^//\ TEST:\ exit\ ([0-9]+) ]]; then
@@ -157,8 +157,8 @@ parse_annotations() {
       TEST_STDIN_FILE="$(dirname "$file")/${BASH_REMATCH[1]}"
     elif [[ "$line" =~ ^//\ TEST:\ skip\ \"(.+)\" ]]; then
       TEST_SKIP="${BASH_REMATCH[1]}"
-    elif [[ "$line" =~ ^//\ TEST:\ stderr-json\ (.+) ]]; then
-      TEST_STDERR_JSON="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^//\ TEST:\ build-json\ (.+) ]]; then
+      TEST_BUILD_JSON="${BASH_REMATCH[1]}"
     elif [[ ! "$line" =~ ^// ]]; then
       break
     fi
@@ -497,8 +497,8 @@ print('|'.join(codes))
   # `diagnostics` array, and `x` to `xs[0]` if present. Keeps existing
   # `error_code` and substring checks composable with structural assertions
   # (e.g. span/length, hint contents).
-  if [[ -n "$TEST_STDERR_JSON" ]]; then
-    json_check="$(EXPR="$TEST_STDERR_JSON" python3 -c "
+  if [[ -n "$TEST_BUILD_JSON" ]]; then
+    json_check="$(EXPR="$TEST_BUILD_JSON" python3 -c "
 import json, sys, os
 expr = os.environ['EXPR']
 try:
@@ -517,7 +517,7 @@ print(json.dumps(x))
     json_pass="$(echo "$json_check" | head -1)"
     json_detail="$(echo "$json_check" | tail -1)"
     if [[ "$json_pass" != "true" ]]; then
-      fail "$name" "stderr-json failed: $TEST_STDERR_JSON (x=$json_detail)"
+      fail "$name" "build-json failed: $TEST_BUILD_JSON (x=$json_detail)"
       continue
     fi
   fi

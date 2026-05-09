@@ -1,5 +1,5 @@
 // TEST: error-code RegionLinear
-// TEST: stderr-json x['span']['length'] > 0
+// TEST: build-json x['span']['length'] > 0
 module LinearRegionBranchPartial
 
 linear struct Handle {
