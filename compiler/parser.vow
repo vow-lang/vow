@@ -688,9 +688,9 @@ fn parse_postfix(p: Parser) -> i64 {
     // Capture span_start before the leading primary expression is parsed
     // so postfix-extended expressions (calls, methods, indexes, casts)
     // can stamp `arena_add_expr` with a span covering the whole chain.
-    // Issue #316: `EXPR_CALL` previously packed `0`, which the lowerer
-    // forwarded into `IrInst.ostart/olen`, leaving region-pass diagnostics
-    // anchored to offset 0.
+    // `EXPR_CALL` previously packed `0` here, which the lowerer forwarded
+    // into `IrInst.ostart/olen`, leaving region-pass diagnostics anchored
+    // to offset 0.
     let span_start: i64 = peek(p).span_start;
     let mut e: i64 = parse_primary(p);
     let mut cont: bool = true;
@@ -751,9 +751,9 @@ fn parse_call_args(p: Parser) -> i64 {
 fn parse_primary(p: Parser) -> i64 {
     let t: Token = peek(p);
     let tag: i64 = t.tag;
-    // Issue #316: heap-producing expressions (struct literals, calls,
-    // namespaced enum/struct ctors via parse_path_expr) need real spans
-    // so the region pass's `RegionRootEscape` notes anchor to source.
+    // Heap-producing expressions (struct literals, calls, namespaced
+    // enum/struct ctors via parse_path_expr) need real spans so the
+    // region pass's `RegionRootEscape` notes anchor to source.
     let span_start: i64 = t.span_start;
     if tag == tok_lit_int() {
         let _adv: Token = advance(p);
@@ -872,7 +872,6 @@ fn parse_primary(p: Parser) -> i64 {
 // `span_start` is the offset of the path's first identifier (captured by
 // the caller in `parse_primary` before that ident was advanced past), so
 // the resulting `EXPR_ECTOR`/`EXPR_SLIT` node spans the whole construct.
-// Issue #316: see parse_postfix / parse_primary comments for context.
 fn parse_path_expr(p: Parser, first_sid: i64, span_start: i64) -> i64 {
     let path_items: Vec<i64> = Vec::new();
     path_items.push(first_sid);
