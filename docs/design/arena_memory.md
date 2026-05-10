@@ -857,20 +857,27 @@ allocations share the parent struct's caller-arena lifetime, and
 the parent's note (when applicable) already conveys the full
 escape information — surfacing the children adds noise without
 information. The exemption is strictly structural: it follows the
-return value through Phi arms (via Upsilon) and through FieldSet
-edges, gated on the FieldSet target pointer being itself a fresh
-`RegionAlloc` (not a `GetArg` parameter alias or other non-fresh
-value). The structural test is **`GetArg` vs `RegionAlloc` as the
-FieldSet target**, not `Store` vs `FieldSet`: parameter mutation
-(`target.name = ...; return target`) and callee store-effect routing
-both correctly fall outside the exemption. One known conservative
-approximation: when a fresh struct's same field is overwritten
-before the return (`x.f = A; x.f = B; return x`), the overwritten
-allocation A also enters the skip-set and is not flagged, even
-though it is no longer reachable from the returned value (tracked in
-issue #326). `Store` is also out of scope for the exemption: it
-represents arbitrary post-allocation mutation through a pointer with
-unknown aliasing, semantically distinct from constructor-time field
+return value through Phi arms (via Upsilon) and through the
+**currently-installed** FieldSet edges — that is, the textually-last
+FieldSet to each `(target, field_idx)` pair within each basic
+block. The exemption is gated on the FieldSet target pointer being
+itself a fresh `RegionAlloc` (not a `GetArg` parameter alias or
+other non-fresh value). The structural test is **`GetArg` vs
+`RegionAlloc` as the FieldSet target**, not `Store` vs `FieldSet`:
+parameter mutation (`target.name = ...; return target`) and callee
+store-effect routing both correctly fall outside the exemption.
+Per-block last-write dedup is what restores precision against the
+construct-then-overwrite pattern (`x.f = A; x.f = B; return x`):
+allocation `A` is dead by the end of the block — no longer
+reachable from the returned struct — so it is excluded from the
+skip-set and remains flaggable (issue #326). The dedup is
+conservative across blocks: a FieldSet in one block whose
+`(target, field_idx)` is overwritten by a FieldSet in another
+block is still treated as live, biasing toward false positives in
+keeping with the Note's non-blocking informational character.
+`Store` is also out of scope for the exemption: it represents
+arbitrary post-allocation mutation through a pointer with unknown
+aliasing, semantically distinct from constructor-time field
 initialization.
 
 Rationale: structured rejection on genuine constraint failures is
