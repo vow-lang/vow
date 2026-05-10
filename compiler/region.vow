@@ -1200,8 +1200,10 @@ fn emit_root_escape_notes_module(
 // (`target.name = ...; return target`); spec §4.4.
 fn collect_returned_ids(bks: Vec<IrBlock>) -> Vec<i64> {
     let mut out: Vec<i64> = Vec::new();
-    // First gather direct Return arguments.
     let mut stack: Vec<i64> = Vec::new();
+    let mut region_alloc_ids: Vec<i64> = Vec::new();
+    // Single setup pass: gather Return-arg seeds and the RegionAlloc-id
+    // gate set in the same scan over `bks`.
     let mut bi: i64 = 0;
     while bi < bks.len() {
         let blk: IrBlock = bks[bi];
@@ -1211,23 +1213,12 @@ fn collect_returned_ids(bks: Vec<IrBlock>) -> Vec<i64> {
             if inst.op == IOP_RETURN() && inst.args.len() > 0 {
                 stack.push(inst.args[0]);
             }
+            if inst.op == IOP_REGION_ALLOC() {
+                region_alloc_ids.push(inst.id);
+            }
             ii = ii + 1;
         }
         bi = bi + 1;
-    }
-    let mut region_alloc_ids: Vec<i64> = Vec::new();
-    let mut rai: i64 = 0;
-    while rai < bks.len() {
-        let rblk: IrBlock = bks[rai];
-        let mut rii: i64 = 0;
-        while rii < rblk.insts.len() {
-            let rinst: IrInst = rblk.insts[rii];
-            if rinst.op == IOP_REGION_ALLOC() {
-                region_alloc_ids.push(rinst.id);
-            }
-            rii = rii + 1;
-        }
-        rai = rai + 1;
     }
     while stack.len() > 0 {
         let id: i64 = stack[stack.len() - 1];
