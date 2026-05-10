@@ -108,6 +108,24 @@ fn span_pack(start: i64, len: i64) -> i64 vow {
     start * 65536 + len
 }
 
+fn span_end_here(p: Parser) -> i64 {
+    if p.pos > 0 {
+        let prev: Token = p.tokens[p.pos - 1];
+        prev.span_start + prev.span_len
+    } else {
+        0
+    }
+}
+
+// Length clamped to [0, 65535] to fit span_pack's 16-bit len slot.
+fn span_pack_to_here(p: Parser, span_start: i64) -> i64 {
+    let end: i64 = span_end_here(p);
+    let mut len: i64 = end - span_start;
+    if len < 0 { len = 0; }
+    if len > 65535 { len = 65535; }
+    span_pack(span_start, len)
+}
+
 fn push_error(p: Parser, msg: String) {
     let t: Token = peek(p);
     let d: Diagnostic = diag_error(EC_UNEXPECTED_TOKEN(), msg, p.file, t.span_start, t.span_len);
@@ -244,7 +262,7 @@ fn parse_fn_def(p: Parser) -> i64 {
     let eff: i64 = parse_effects(p);
     let vow_lid: i64 = parse_vow_block(p);
     let body_bid: i64 = parse_block(p);
-    let span: i64 = span_pack(span_start, 0);
+    let span: i64 = span_pack_to_here(p, span_start);
     arena_add_fn(p.arena, name_sid, params_lid, ret_tid, eff, body_bid, vow_lid, span)
 }
 
@@ -269,7 +287,7 @@ fn parse_struct_def(p: Parser, is_linear: i64) -> i64 {
     }
     let _rb: bool = expect(p, tok_rbrace());
     let fields_lid: i64 = arena_add_list(p.arena, field_items);
-    let span: i64 = span_pack(span_start, 0);
+    let span: i64 = span_pack_to_here(p, span_start);
     arena_add_sdef(p.arena, name_sid, fields_lid, is_linear, span)
 }
 
@@ -321,7 +339,7 @@ fn parse_enum_def(p: Parser) -> i64 {
     }
     let _rb: bool = expect(p, tok_rbrace());
     let variants_lid: i64 = arena_add_list(p.arena, variant_items);
-    let span: i64 = span_pack(span_start, 0);
+    let span: i64 = span_pack_to_here(p, span_start);
     arena_add_edef(p.arena, name_sid, variants_lid, span)
 }
 
@@ -497,7 +515,7 @@ fn parse_block(p: Parser) -> i64 {
     }
     let _rb: bool = expect(p, tok_rbrace());
     let stmts_lid: i64 = arena_add_list(p.arena, stmt_items);
-    let span: i64 = span_pack(span_start, 0);
+    let span: i64 = span_pack_to_here(p, span_start);
     arena_add_blk(p.arena, stmts_lid, -1, span)
 }
 
@@ -540,7 +558,7 @@ fn parse_let_stmt(p: Parser) -> i64 {
         let _sc: Token = advance(p);
     }
     let pat_pid: i64 = arena_add_pat(p.arena, PAT_IDENT(), name_sid, is_mut, 0);
-    let span: i64 = span_pack(span_start, 0);
+    let span: i64 = span_pack_to_here(p, span_start);
     arena_add_stmt(p.arena, STMT_LET(), pat_pid, annot_tid, init_eid, span)
 }
 

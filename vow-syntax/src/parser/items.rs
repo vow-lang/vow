@@ -380,6 +380,19 @@ mod tests {
     }
 
     #[test]
+    fn item_spans_carry_nonzero_length() {
+        // Parity pin for #316: top-level item span.len must cover its textual extent.
+        let src = "struct Point { x: i32, y: i32 }";
+        let s = match parse_item(src) {
+            Item::Struct(s) => s,
+            other => panic!("expected struct, got {:?}", other),
+        };
+        assert_eq!(s.span.start, 0);
+        assert_eq!(s.span.len as usize, src.len());
+        assert!(s.span.len > 0);
+    }
+
+    #[test]
     fn parse_linear_struct() {
         let src = "linear struct Handle { fd: i32 }";
         let item = parse_item(src);
