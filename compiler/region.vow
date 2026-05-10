@@ -1193,16 +1193,17 @@ fn emit_root_escape_notes_module(
     }
 }
 
-// Collect the IDs of every value reachable from a Return — directly, and
-// through Phi nodes via their Upsilon arms. Used by
-// `emit_root_escape_notes_module` to skip notes on the canonical
-// FreshInCaller return path, including conditional-construction patterns
-// (`if cond { X{..} } else { X{..} }`) where the Phi is returned but the
-// underlying RegionAllocs in each arm are the actual heap producers.
+// Build the FreshInCaller return-value skip-set used by
+// `emit_root_escape_notes_module`. The FieldSet edge is gated on
+// `region_alloc_ids` so it follows initializers of a fresh struct
+// (`Item { name: ... }`) but not mutations into a parameter
+// (`target.name = ...; return target`); spec §4.4.
 fn collect_returned_ids(bks: Vec<IrBlock>) -> Vec<i64> {
     let mut out: Vec<i64> = Vec::new();
-    // First gather direct Return arguments.
     let mut stack: Vec<i64> = Vec::new();
+    let mut region_alloc_ids: Vec<i64> = Vec::new();
+    // Single setup pass: gather Return-arg seeds and the RegionAlloc-id
+    // gate set in the same scan over `bks`.
     let mut bi: i64 = 0;
     while bi < bks.len() {
         let blk: IrBlock = bks[bi];
@@ -1212,11 +1213,13 @@ fn collect_returned_ids(bks: Vec<IrBlock>) -> Vec<i64> {
             if inst.op == IOP_RETURN() && inst.args.len() > 0 {
                 stack.push(inst.args[0]);
             }
+            if inst.op == IOP_REGION_ALLOC() {
+                region_alloc_ids.push(inst.id);
+            }
             ii = ii + 1;
         }
         bi = bi + 1;
     }
-    // DFS expansion through Phi arms via Upsilon insts.
     while stack.len() > 0 {
         let id: i64 = stack[stack.len() - 1];
         stack.pop();
@@ -1224,16 +1227,22 @@ fn collect_returned_ids(bks: Vec<IrBlock>) -> Vec<i64> {
             continue;
         }
         out.push(id);
+        let id_is_fresh_alloc: bool = region_vec_contains_i64(region_alloc_ids, id);
         let mut sbi: i64 = 0;
         while sbi < bks.len() {
             let sblk: IrBlock = bks[sbi];
             let mut sii: i64 = 0;
             while sii < sblk.insts.len() {
-                let up: IrInst = sblk.insts[sii];
-                if up.op == IOP_UPSILON() && up.dk == IDATA_PHI_TARGET()
-                    && up.dv == id && up.args.len() > 0
+                let inst: IrInst = sblk.insts[sii];
+                if inst.op == IOP_UPSILON() && inst.dk == IDATA_PHI_TARGET()
+                    && inst.dv == id && inst.args.len() > 0
                 {
-                    stack.push(up.args[0]);
+                    stack.push(inst.args[0]);
+                }
+                if id_is_fresh_alloc && inst.op == IOP_FIELD_SET()
+                    && inst.args.len() >= 2 && inst.args[0] == id
+                {
+                    stack.push(inst.args[1]);
                 }
                 sii = sii + 1;
             }

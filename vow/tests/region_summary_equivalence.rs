@@ -38,7 +38,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use vow_diag::Severity;
-use vow_ir::{decode_module, encode_module, RegionConstraint};
+use vow_ir::{RegionConstraint, decode_module, encode_module};
 
 /// Assert canonical-form invariants on every function's summary.
 fn assert_canonical_summaries(module: &vow_ir::Module) {
@@ -150,8 +150,8 @@ fn small_module_uninit_never_leaks_after_round_trip() {
     // run the pass, encode + decode via the public .vmod path, and
     // assert canonical-form invariants survive the round trip.
     use vow_ir::{
-        infer_regions, BasicBlock, BlockId, FuncId, Function, HiddenRegionIdx, Inst, InstData,
-        InstId, Module, Opcode, RegionId, RegionSummary, Ty, VowEntry, VowId,
+        BasicBlock, BlockId, FuncId, Function, HiddenRegionIdx, Inst, InstData, InstId, Module,
+        Opcode, RegionId, RegionSummary, Ty, VowEntry, VowId, infer_regions,
     };
     use vow_syntax::ast::Effect;
     use vow_syntax::span::Span;
@@ -534,5 +534,258 @@ fn rust_split_targets_repro_compiles() {
         conflicts.is_empty(),
         "issue #317 repro must not trip RegionConflict; diagnostics: \
          {diagnostics:?}"
+    );
+}
+
+/// Issue #319: the `RegionRootEscape` skip-set's BFS must trace through
+/// `FieldSet` instructions, so an allocation that flows into a field of
+/// a returned struct does not fire a note. The fixture's
+/// `make_item() -> Item { Item { name: String::from("hi") } }` should
+/// emit zero notes — the parent `Item` is on the canonical FreshInCaller
+/// return path, and the inner `String` allocation shares its lifetime.
+#[test]
+fn rust_struct_field_initializer_alloc_skipped() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let fixture = root
+        .join("tests")
+        .join("run")
+        .join("region_skip_struct_field.vow");
+    let out = Command::new(env!("CARGO_BIN_EXE_vow"))
+        .args(["build", "--no-verify"])
+        .arg(&fixture)
+        .output()
+        .expect("failed to run vow");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("failed to parse vow stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let status = parsed["status"].as_str();
+    let runtime_link_failure = status == Some("CompileFailed")
+        && parsed["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("libvow_runtime.a"));
+    assert!(
+        matches!(status, Some("Verified") | Some("Unverified")) || runtime_link_failure,
+        "expected Verified/Unverified status (or link-only failure on \
+         missing libvow_runtime.a), got {status:?}\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    let diagnostics = parsed["diagnostics"]
+        .as_array()
+        .expect("diagnostics should be an array");
+    let conflicts: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionConflict"))
+        .collect();
+    assert!(
+        conflicts.is_empty(),
+        "field-initializer fixture must not trip RegionConflict; \
+         diagnostics: {diagnostics:?}"
+    );
+    let notes: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .collect();
+    assert!(
+        notes.is_empty(),
+        "field-initializer allocations of a returned struct must not \
+         fire RegionRootEscape; got {} note(s): {notes:?}",
+        notes.len(),
+    );
+}
+
+/// Issue #319 regression: the FieldSet skip-set extension must distinguish
+/// a fresh struct's field initializer from a mutation into a caller-owned
+/// container. `fn fill(target: Box) -> Box { target.name = ...; target }`
+/// returns the parameter `target` after mutating its field — the stored
+/// String is a genuine store-effect escape (caller-owned container), not
+/// a field initializer of a freshly-allocated struct, and the
+/// `RegionRootEscape` note must keep firing. The BFS gates the FieldSet
+/// edge on `args[0]` being produced by `Opcode::RegionAlloc`, which
+/// excludes parameter (`GetArg`) targets.
+#[test]
+fn rust_param_field_mutation_emits_root_escape_note() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let fixture = root
+        .join("tests")
+        .join("run")
+        .join("region_param_field_mutation.vow");
+    let out = Command::new(env!("CARGO_BIN_EXE_vow"))
+        .args(["build", "--no-verify"])
+        .arg(&fixture)
+        .output()
+        .expect("failed to run vow");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("failed to parse vow stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let status = parsed["status"].as_str();
+    let runtime_link_failure = status == Some("CompileFailed")
+        && parsed["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("libvow_runtime.a"));
+    assert!(
+        matches!(status, Some("Verified") | Some("Unverified")) || runtime_link_failure,
+        "expected Verified/Unverified status (or link-only failure on \
+         missing libvow_runtime.a), got {status:?}\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    let diagnostics = parsed["diagnostics"]
+        .as_array()
+        .expect("diagnostics should be an array");
+    let notes: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .collect();
+    assert!(
+        !notes.is_empty(),
+        "FieldSet into a parameter container must keep firing \
+         RegionRootEscape; got 0 notes: {diagnostics:?}",
+    );
+}
+
+/// Issue #319 regression (self-hosted parity): confirms the self-hosted
+/// `collect_returned_ids` mirrors the Rust gate. Without this, a regression
+/// where the self-hosted FieldSet edge was inadvertently un-gated (or the
+/// `IOP_REGION_ALLOC` predicate was inverted) would slip past the `tests/run/`
+/// shell harness — that harness only validates exit + stdout, not diagnostic
+/// counts. Skips when `build/vowc` is absent (e.g. fresh clone without
+/// bootstrap).
+#[test]
+fn self_hosted_param_field_mutation_emits_root_escape_note() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let vowc = repo_root.join("build").join("vowc");
+    if !vowc.exists() {
+        eprintln!("SKIP: build/vowc not present (run scripts/bootstrap.sh first)");
+        return;
+    }
+    let fixture = repo_root
+        .join("tests")
+        .join("run")
+        .join("region_param_field_mutation.vow");
+    let out = Command::new(&vowc)
+        .args(["build", "--no-verify"])
+        .arg(&fixture)
+        .output()
+        .expect("failed to run build/vowc");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("failed to parse build/vowc stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let diagnostics = parsed["diagnostics"]
+        .as_array()
+        .expect("diagnostics should be an array");
+    let notes: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .collect();
+    assert!(
+        !notes.is_empty(),
+        "self-hosted: FieldSet into a parameter container must keep firing \
+         RegionRootEscape; got 0 notes: {diagnostics:?}",
+    );
+}
+
+/// Issue #319 self-hosted parity (positive case): confirms the self-hosted
+/// compiler still suppresses the note for the canonical
+/// `make_item() -> Item { Item { name: ... } }` pattern after the gate
+/// change. Pairs with `rust_struct_field_initializer_alloc_skipped` to
+/// keep both compilers structurally aligned.
+#[test]
+fn self_hosted_struct_field_initializer_alloc_skipped() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let vowc = repo_root.join("build").join("vowc");
+    if !vowc.exists() {
+        eprintln!("SKIP: build/vowc not present (run scripts/bootstrap.sh first)");
+        return;
+    }
+    let fixture = repo_root
+        .join("tests")
+        .join("run")
+        .join("region_skip_struct_field.vow");
+    let out = Command::new(&vowc)
+        .args(["build", "--no-verify"])
+        .arg(&fixture)
+        .output()
+        .expect("failed to run build/vowc");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("failed to parse build/vowc stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let diagnostics = parsed["diagnostics"]
+        .as_array()
+        .expect("diagnostics should be an array");
+    let notes: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .collect();
+    assert!(
+        notes.is_empty(),
+        "self-hosted: field-initializer allocations of a returned struct must \
+         not fire RegionRootEscape; got {} note(s): {notes:?}",
+        notes.len(),
+    );
+}
+
+/// Issue #319: pin the post-change note count for the original fixture
+/// (`tests/run/region_helper_arena_push.vow`). The inner `Vec::new()` from
+/// `arena_new() -> Arena { entries: Vec::new() }` is suppressed (returned
+/// struct's field initializer); `add_named`'s `Item` and `String::from(..)`
+/// allocations remain (consumed by `push_item`, not returned). Catches
+/// both over-suppression (count drops below 2) and under-suppression
+/// (count exceeds 2 — would indicate the field-initializer skip-set
+/// regressed).
+#[test]
+fn rust_arena_push_fixture_pins_note_count() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let fixture = root
+        .join("tests")
+        .join("run")
+        .join("region_helper_arena_push.vow");
+    let out = Command::new(env!("CARGO_BIN_EXE_vow"))
+        .args(["build", "--no-verify"])
+        .arg(&fixture)
+        .output()
+        .expect("failed to run vow");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("failed to parse vow stdout as JSON: {e}\nstdout: {stdout}"));
+    let diagnostics = parsed["diagnostics"]
+        .as_array()
+        .expect("diagnostics should be an array");
+    let notes: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .collect();
+    // 2 is the post-#319 expected floor: Item + String in `add_named`,
+    // both consumed by push_item not returned. A future suppression
+    // improvement (e.g. #326's per-block last-write tracking, or
+    // following Call results through the skip-set for factory-function
+    // fields) may legitimately reduce this — update the count alongside
+    // the relevant change rather than treating it as a regression.
+    assert_eq!(
+        notes.len(),
+        2,
+        "region_helper_arena_push.vow should emit exactly 2 RegionRootEscape notes \
+         (Item + String in add_named, both consumed by push_item not returned). \
+         Got {} note(s): {notes:?}",
+        notes.len(),
     );
 }

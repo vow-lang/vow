@@ -1536,31 +1536,23 @@ fn analyze_function(
     summary
 }
 
-/// Walk back from a Return-argument id, recording the id itself plus every
-/// Upsilon arm source for any Phi reached. Used to expand
-/// `emit_root_escape_notes`'s skip-set so the underlying `RegionAlloc`s
-/// merged through a Phi for conditional-construction patterns
-/// (`if cond { X{..} } else { X{..} }`) are recognised as canonical
-/// FreshInCaller return values rather than side-effect escapes.
-///
-/// Conservative scope: this walk follows Phi → Upsilon chains only.
-/// Sub-allocations that form fields of a returned struct
-/// (e.g. the `String::from("hi")` heap allocation inside
-/// `Item { name: String::from("hi") }` returned from `make_item`) are
-/// NOT reachable via this walk and WILL fire `RegionRootEscape` notes
-/// even though they travel together with the canonical FreshInCaller
-/// return value. That's intentional and permitted by spec §4.4: the
-/// "alloc is the return value" exemption covers only the top-level
-/// return argument itself. Field allocations escape to the caller's
-/// arena along with the parent struct, and surfacing them as notes
-/// keeps the agent aware of every allocation that lives for the
-/// caller-chain lifetime.
-fn collect_return_value_sources(start: InstId, func: &Function, out: &mut BTreeSet<InstId>) {
+/// Build the FreshInCaller return-value skip-set used by
+/// `emit_root_escape_notes`. The FieldSet edge is gated on
+/// `region_alloc_ids` so it follows initializers of a fresh struct
+/// (`Item { name: ... }`) but not mutations into a parameter
+/// (`target.name = ...; return target`); spec §4.4.
+fn collect_return_value_sources(
+    start: InstId,
+    func: &Function,
+    region_alloc_ids: &BTreeSet<InstId>,
+    out: &mut BTreeSet<InstId>,
+) {
     let mut stack = vec![start];
     while let Some(id) = stack.pop() {
         if !out.insert(id) {
             continue;
         }
+        let id_is_fresh_alloc = region_alloc_ids.contains(&id);
         for blk in &func.blocks {
             for inst in &blk.insts {
                 if inst.opcode == Opcode::Upsilon
@@ -1568,6 +1560,13 @@ fn collect_return_value_sources(start: InstId, func: &Function, out: &mut BTreeS
                     && let Some(&arm) = inst.args.first()
                 {
                     stack.push(arm);
+                }
+                if id_is_fresh_alloc
+                    && inst.opcode == Opcode::FieldSet
+                    && inst.args.len() >= 2
+                    && inst.args[0] == id
+                {
+                    stack.push(inst.args[1]);
                 }
             }
         }
@@ -1588,18 +1587,20 @@ fn emit_root_escape_notes(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let source_file: &str = &func.source_file;
-    // Pre-collect IDs of every value reachable from a `Return` — directly,
-    // and through Phi nodes via their Upsilon arms. Allocations on the
-    // canonical FreshInCaller return path (including Phi-merged arms in
-    // `if cond { Foo{..} } else { Foo{..} }`) shouldn't fire the note;
-    // only side-effect escapes through store-effect chains should.
     let mut returned_ids: BTreeSet<InstId> = BTreeSet::new();
+    let region_alloc_ids: BTreeSet<InstId> = func
+        .blocks
+        .iter()
+        .flat_map(|b| b.insts.iter())
+        .filter(|i| i.opcode == Opcode::RegionAlloc)
+        .map(|i| i.id)
+        .collect();
     for block in &func.blocks {
         for inst in &block.insts {
             if inst.opcode == Opcode::Return
                 && let Some(&rv) = inst.args.first()
             {
-                collect_return_value_sources(rv, func, &mut returned_ids);
+                collect_return_value_sources(rv, func, &region_alloc_ids, &mut returned_ids);
             }
         }
     }
