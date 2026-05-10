@@ -38,7 +38,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use vow_diag::Severity;
-use vow_ir::{RegionConstraint, decode_module, encode_module};
+use vow_ir::{decode_module, encode_module, RegionConstraint};
 
 /// Assert canonical-form invariants on every function's summary.
 fn assert_canonical_summaries(module: &vow_ir::Module) {
@@ -150,8 +150,8 @@ fn small_module_uninit_never_leaks_after_round_trip() {
     // run the pass, encode + decode via the public .vmod path, and
     // assert canonical-form invariants survive the round trip.
     use vow_ir::{
-        BasicBlock, BlockId, FuncId, Function, HiddenRegionIdx, Inst, InstData, InstId, Module,
-        Opcode, RegionId, RegionSummary, Ty, VowEntry, VowId, infer_regions,
+        infer_regions, BasicBlock, BlockId, FuncId, Function, HiddenRegionIdx, Inst, InstData,
+        InstId, Module, Opcode, RegionId, RegionSummary, Ty, VowEntry, VowId,
     };
     use vow_syntax::ast::Effect;
     use vow_syntax::span::Span;
@@ -362,7 +362,6 @@ fn rust_routed_aggregate_via_callee_store_effect_compiles() {
          diagnostics: {diagnostics:?}"
     );
 }
-<<<<<<< HEAD
 
 /// Issue #320 regression guard: an internal `Call` whose callee returns
 /// `FreshInCaller`, routed into a parameter container via a sibling callee's
@@ -775,6 +774,12 @@ fn rust_arena_push_fixture_pins_note_count() {
         .iter()
         .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
         .collect();
+    // 2 is the post-#319 expected floor: Item + String in `add_named`,
+    // both consumed by push_item not returned. A future suppression
+    // improvement (e.g. #326's per-block last-write tracking, or
+    // following Call results through the skip-set for factory-function
+    // fields) may legitimately reduce this — update the count alongside
+    // the relevant change rather than treating it as a regression.
     assert_eq!(
         notes.len(),
         2,

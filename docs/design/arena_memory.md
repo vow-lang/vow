@@ -857,11 +857,21 @@ allocations share the parent struct's caller-arena lifetime, and
 the parent's note (when applicable) already conveys the full
 escape information — surfacing the children adds noise without
 information. The exemption is strictly structural: it follows the
-return value through Phi arms (via Upsilon) and through field
-initializers (via the lowered FieldSet whose target pointer is in
-the skip-set). It does NOT extend to post-allocation mutation
-through Store, nor to values routed through callee store-effect
-chains, both of which represent genuine side-effect escapes.
+return value through Phi arms (via Upsilon) and through FieldSet
+edges, gated on the FieldSet target pointer being itself a fresh
+`RegionAlloc` (not a `GetArg` parameter alias or other non-fresh
+value). The structural test is **`GetArg` vs `RegionAlloc` as the
+FieldSet target**, not `Store` vs `FieldSet`: parameter mutation
+(`target.name = ...; return target`) and callee store-effect routing
+both correctly fall outside the exemption. One known conservative
+approximation: when a fresh struct's same field is overwritten
+before the return (`x.f = A; x.f = B; return x`), the overwritten
+allocation A also enters the skip-set and is not flagged, even
+though it is no longer reachable from the returned value (tracked in
+issue #326). `Store` is also out of scope for the exemption: it
+represents arbitrary post-allocation mutation through a pointer with
+unknown aliasing, semantically distinct from constructor-time field
+initialization.
 
 Rationale: structured rejection on genuine constraint failures is
 the CEGIS feedback signal; structured visibility on root routing
