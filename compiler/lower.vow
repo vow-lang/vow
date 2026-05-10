@@ -853,6 +853,10 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let call_args: Vec<i64> = Vec::new();
         call_args.push(str_id);
         let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_from_cstr"));
+        // Issue #316: anchor the string-allocation Call to the literal so
+        // RegionRootEscape notes (and any future call-anchored diagnostic)
+        // resolve back to the source string instead of offset 0.
+        lctx_set_inst_span(ctx, result, expr_span(a, eid));
         lctx_tag(ctx, result, String::from("String"));
         return result;
     }

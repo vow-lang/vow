@@ -790,6 +790,68 @@ fn rust_arena_push_fixture_pins_note_count() {
     );
 }
 
+/// Issue #316 acceptance criterion #1: every `RegionRootEscape` note must
+/// carry a non-zero `span.length` when the underlying IR instruction has a
+/// span set. The Rust pipeline already does this; the self-hosted compiler
+/// emits `length: 0` (and often `offset: 0`) on the `region_helper_arena_push`
+/// fixture's notes, leaving the diagnostic unanchored to source.
+///
+/// Skips cleanly if `build/vowc` is absent (the self-hosted binary is
+/// produced by `scripts/bootstrap.sh`, not a `cargo test` prerequisite).
+#[test]
+fn selfhosted_region_root_escape_notes_carry_nonzero_span_length() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let fixture = root
+        .join("tests")
+        .join("run")
+        .join("region_helper_arena_push.vow");
+    let vowc = root.join("build").join("vowc");
+    if !vowc.exists() {
+        eprintln!(
+            "skipping {}: build/vowc not present (run scripts/bootstrap.sh)",
+            module_path!()
+        );
+        return;
+    }
+
+    let out = Command::new(&vowc)
+        .args(["build", "--no-verify"])
+        .arg(&fixture)
+        .output()
+        .expect("failed to run build/vowc");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("failed to parse build/vowc stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let diagnostics = parsed["diagnostics"]
+        .as_array()
+        .expect("diagnostics should be an array");
+    let notes: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .collect();
+    assert!(
+        !notes.is_empty(),
+        "fixture should emit at least one RegionRootEscape note (matches \
+         rust_arena_push_fixture_pins_note_count); got 0"
+    );
+    let zero_len: Vec<_> = notes
+        .iter()
+        .filter(|n| n["span"]["length"].as_i64() == Some(0))
+        .collect();
+    assert!(
+        zero_len.is_empty(),
+        "every RegionRootEscape note must carry span.length > 0 (issue #316 \
+         acceptance #1); {} of {} notes had length=0: {zero_len:?}",
+        zero_len.len(),
+        notes.len()
+    );
+}
+
 /// Issue #318 regression guard — Rust↔self-hosted RegionRootEscape
 /// note-count parity on a fixture exercising mixed store-effect source
 /// kinds (ConstantGlobal + AliasOf).

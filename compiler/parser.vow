@@ -685,6 +685,13 @@ fn parse_unary(p: Parser) -> i64 {
 }
 
 fn parse_postfix(p: Parser) -> i64 {
+    // Capture span_start before the leading primary expression is parsed
+    // so postfix-extended expressions (calls, methods, indexes, casts)
+    // can stamp `arena_add_expr` with a span covering the whole chain.
+    // Issue #316: `EXPR_CALL` previously packed `0`, which the lowerer
+    // forwarded into `IrInst.ostart/olen`, leaving region-pass diagnostics
+    // anchored to offset 0.
+    let span_start: i64 = peek(p).span_start;
     let mut e: i64 = parse_primary(p);
     let mut cont: bool = true;
     while cont {
@@ -694,9 +701,9 @@ fn parse_postfix(p: Parser) -> i64 {
                 let fname: i64 = expect_ident(p);
                 if at(p, tok_lparen()) {
                     let args_lid: i64 = parse_call_args(p);
-                    e = arena_add_expr(p.arena, EXPR_METHOD(), e, fname, args_lid, 0);
+                    e = arena_add_expr(p.arena, EXPR_METHOD(), e, fname, args_lid, span_pack_to_here(p, span_start));
                 } else {
-                    e = arena_add_expr(p.arena, EXPR_FIELD(), e, fname, 0, 0);
+                    e = arena_add_expr(p.arena, EXPR_FIELD(), e, fname, 0, span_pack_to_here(p, span_start));
                 }
             } else {
                 cont = false;
@@ -705,21 +712,21 @@ fn parse_postfix(p: Parser) -> i64 {
             let _lb: Token = advance(p);
             let idx: i64 = parse_expr(p);
             let _rb: bool = expect(p, tok_rbracket());
-            e = arena_add_expr(p.arena, EXPR_INDEX(), e, idx, 0, 0);
+            e = arena_add_expr(p.arena, EXPR_INDEX(), e, idx, 0, span_pack_to_here(p, span_start));
         } else if at(p, tok_lparen()) {
             let args_lid: i64 = parse_call_args(p);
-            e = arena_add_expr(p.arena, EXPR_CALL(), e, args_lid, 0, 0);
+            e = arena_add_expr(p.arena, EXPR_CALL(), e, args_lid, 0, span_pack_to_here(p, span_start));
         } else if at(p, tok_question()) {
             let _q: Token = advance(p);
-            e = arena_add_expr(p.arena, EXPR_QUESTION(), e, 0, 0, 0);
+            e = arena_add_expr(p.arena, EXPR_QUESTION(), e, 0, 0, span_pack_to_here(p, span_start));
         } else if at(p, tok_kw_as()) {
             let _as: Token = advance(p);
             let target_tid: i64 = parse_type(p);
-            e = arena_add_expr(p.arena, EXPR_CAST(), e, target_tid, 0, 0);
+            e = arena_add_expr(p.arena, EXPR_CAST(), e, target_tid, 0, span_pack_to_here(p, span_start));
         } else if at(p, tok_eq()) {
             let _eq: Token = advance(p);
             let rhs: i64 = parse_expr(p);
-            e = arena_add_expr(p.arena, EXPR_ASSIGN(), e, rhs, 0, 0);
+            e = arena_add_expr(p.arena, EXPR_ASSIGN(), e, rhs, 0, span_pack_to_here(p, span_start));
             cont = false;
         } else {
             cont = false;
@@ -744,6 +751,10 @@ fn parse_call_args(p: Parser) -> i64 {
 fn parse_primary(p: Parser) -> i64 {
     let t: Token = peek(p);
     let tag: i64 = t.tag;
+    // Issue #316: heap-producing expressions (struct literals, calls,
+    // namespaced enum/struct ctors via parse_path_expr) need real spans
+    // so the region pass's `RegionRootEscape` notes anchor to source.
+    let span_start: i64 = t.span_start;
     if tag == tok_lit_int() {
         let _adv: Token = advance(p);
         arena_add_expr(p.arena, EXPR_LIT_INT(), t.int_val, 0, 0, 0)
@@ -763,7 +774,7 @@ fn parse_primary(p: Parser) -> i64 {
     } else if tag == tok_lit_string() {
         let _adv: Token = advance(p);
         let sid: i64 = arena_intern_str(p.arena, t.str_val);
-        arena_add_expr(p.arena, EXPR_LIT_STR(), sid, 0, 0, 0)
+        arena_add_expr(p.arena, EXPR_LIT_STR(), sid, 0, 0, span_pack_to_here(p, span_start))
     } else if tag == tok_ident() {
         let name_str: String = t.str_val;
         if p.in_ensures == 1 && name_str == String::from("result") {
@@ -774,7 +785,7 @@ fn parse_primary(p: Parser) -> i64 {
         let _adv: Token = advance(p);
         let sid: i64 = arena_intern_str(p.arena, name_str);
         if at(p, tok_colon_colon()) {
-            parse_path_expr(p, sid)
+            parse_path_expr(p, sid, span_start)
         } else if at(p, tok_lbrace()) && first_byte >= 65 && first_byte <= 90 && looks_like_struct_literal(p) {
             let path_items: Vec<i64> = Vec::new();
             path_items.push(sid);
@@ -793,7 +804,7 @@ fn parse_primary(p: Parser) -> i64 {
             }
             let _rb: bool = expect(p, tok_rbrace());
             let fields_lid: i64 = arena_add_list(p.arena, field_items);
-            arena_add_expr(p.arena, EXPR_SLIT(), path_lid, fields_lid, 0, 0)
+            arena_add_expr(p.arena, EXPR_SLIT(), path_lid, fields_lid, 0, span_pack_to_here(p, span_start))
         } else {
             arena_add_expr(p.arena, EXPR_IDENT(), sid, 0, 0, 0)
         }
@@ -858,7 +869,11 @@ fn parse_primary(p: Parser) -> i64 {
     }
 }
 
-fn parse_path_expr(p: Parser, first_sid: i64) -> i64 {
+// `span_start` is the offset of the path's first identifier (captured by
+// the caller in `parse_primary` before that ident was advanced past), so
+// the resulting `EXPR_ECTOR`/`EXPR_SLIT` node spans the whole construct.
+// Issue #316: see parse_postfix / parse_primary comments for context.
+fn parse_path_expr(p: Parser, first_sid: i64, span_start: i64) -> i64 {
     let path_items: Vec<i64> = Vec::new();
     path_items.push(first_sid);
     while at(p, tok_colon_colon()) {
@@ -883,7 +898,7 @@ fn parse_path_expr(p: Parser, first_sid: i64) -> i64 {
             }
             let _rb: bool = expect(p, tok_rbrace());
             let vals_lid: i64 = arena_add_list(p.arena, val_items);
-            arena_add_expr(p.arena, EXPR_ECTOR(), path_lid, vals_lid, 0, 0)
+            arena_add_expr(p.arena, EXPR_ECTOR(), path_lid, vals_lid, 0, span_pack_to_here(p, span_start))
         } else if looks_like_struct_literal(p) {
             let _lb: Token = advance(p);
             let field_items: Vec<i64> = Vec::new();
@@ -899,15 +914,15 @@ fn parse_path_expr(p: Parser, first_sid: i64) -> i64 {
             }
             let _rb: bool = expect(p, tok_rbrace());
             let fields_lid: i64 = arena_add_list(p.arena, field_items);
-            arena_add_expr(p.arena, EXPR_SLIT(), path_lid, fields_lid, 0, 0)
+            arena_add_expr(p.arena, EXPR_SLIT(), path_lid, fields_lid, 0, span_pack_to_here(p, span_start))
         } else {
-            arena_add_expr(p.arena, EXPR_ECTOR(), path_lid, arena_add_list(p.arena, Vec::new()), 0, 0)
+            arena_add_expr(p.arena, EXPR_ECTOR(), path_lid, arena_add_list(p.arena, Vec::new()), 0, span_pack_to_here(p, span_start))
         }
     } else if at(p, tok_lparen()) {
         let args_lid: i64 = parse_call_args(p);
-        arena_add_expr(p.arena, EXPR_ECTOR(), path_lid, args_lid, 0, 0)
+        arena_add_expr(p.arena, EXPR_ECTOR(), path_lid, args_lid, 0, span_pack_to_here(p, span_start))
     } else {
-        arena_add_expr(p.arena, EXPR_ECTOR(), path_lid, arena_add_list(p.arena, Vec::new()), 0, 0)
+        arena_add_expr(p.arena, EXPR_ECTOR(), path_lid, arena_add_list(p.arena, Vec::new()), 0, span_pack_to_here(p, span_start))
     }
 }
 
