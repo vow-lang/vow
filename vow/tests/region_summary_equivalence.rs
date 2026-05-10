@@ -38,7 +38,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use vow_diag::Severity;
-use vow_ir::{RegionConstraint, decode_module, encode_module};
+use vow_ir::{decode_module, encode_module, RegionConstraint};
 
 /// Assert canonical-form invariants on every function's summary.
 fn assert_canonical_summaries(module: &vow_ir::Module) {
@@ -150,8 +150,8 @@ fn small_module_uninit_never_leaks_after_round_trip() {
     // run the pass, encode + decode via the public .vmod path, and
     // assert canonical-form invariants survive the round trip.
     use vow_ir::{
-        BasicBlock, BlockId, FuncId, Function, HiddenRegionIdx, Inst, InstData, InstId, Module,
-        Opcode, RegionId, RegionSummary, Ty, VowEntry, VowId, infer_regions,
+        infer_regions, BasicBlock, BlockId, FuncId, Function, HiddenRegionIdx, Inst, InstData,
+        InstId, Module, Opcode, RegionId, RegionSummary, Ty, VowEntry, VowId,
     };
     use vow_syntax::ast::Effect;
     use vow_syntax::span::Span;
@@ -693,6 +693,102 @@ fn self_hosted_param_field_mutation_emits_root_escape_note() {
         !notes.is_empty(),
         "self-hosted: FieldSet into a parameter container must keep firing \
          RegionRootEscape; got 0 notes: {diagnostics:?}",
+    );
+}
+
+/// Issue #326: the FieldSet skip-set must NOT suppress an allocation that is
+/// overwritten before the return. `make_item()` constructs an `Item` whose
+/// `name` is `String::from("first")` and then overwrites `item.name` with
+/// `String::from("second")` before returning `item`. The `"first"` allocation
+/// is no longer reachable from the returned struct — it inherits caller-region
+/// routing only through a transient FieldSet that is dead by the Return — and
+/// must fire `RegionRootEscape`. Per-block last-write dedup keyed on
+/// `(target, field_idx)` keeps only the textually-last FieldSet to a given
+/// `(target, field_idx)` in each block in the BFS skip-set.
+#[test]
+fn rust_field_overwrite_emits_root_escape_note() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let fixture = root
+        .join("tests")
+        .join("run")
+        .join("region_field_overwrite.vow");
+    let out = Command::new(env!("CARGO_BIN_EXE_vow"))
+        .args(["build", "--no-verify"])
+        .arg(&fixture)
+        .output()
+        .expect("failed to run vow");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("failed to parse vow stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let status = parsed["status"].as_str();
+    let runtime_link_failure = status == Some("CompileFailed")
+        && parsed["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("libvow_runtime.a"));
+    assert!(
+        matches!(status, Some("Verified") | Some("Unverified")) || runtime_link_failure,
+        "expected Verified/Unverified status (or link-only failure on \
+         missing libvow_runtime.a), got {status:?}\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    let diagnostics = parsed["diagnostics"]
+        .as_array()
+        .expect("diagnostics should be an array");
+    let notes: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .collect();
+    assert!(
+        !notes.is_empty(),
+        "overwritten field initializer must fire RegionRootEscape \
+         (the dead allocation is no longer reachable from the returned struct); \
+         got 0 notes: {diagnostics:?}",
+    );
+}
+
+/// Issue #326 (self-hosted parity): mirrors `rust_field_overwrite_emits_root_escape_note`.
+/// Skips when `build/vowc` is absent (e.g. fresh clone without bootstrap).
+#[test]
+fn self_hosted_field_overwrite_emits_root_escape_note() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let vowc = repo_root.join("build").join("vowc");
+    if !vowc.exists() {
+        eprintln!("SKIP: build/vowc not present (run scripts/bootstrap.sh first)");
+        return;
+    }
+    let fixture = repo_root
+        .join("tests")
+        .join("run")
+        .join("region_field_overwrite.vow");
+    let out = Command::new(&vowc)
+        .args(["build", "--no-verify"])
+        .arg(&fixture)
+        .output()
+        .expect("failed to run build/vowc");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("failed to parse build/vowc stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let diagnostics = parsed["diagnostics"]
+        .as_array()
+        .expect("diagnostics should be an array");
+    let notes: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .collect();
+    assert!(
+        !notes.is_empty(),
+        "self-hosted: overwritten field initializer must fire RegionRootEscape \
+         (the dead allocation is no longer reachable from the returned struct); \
+         got 0 notes: {diagnostics:?}",
     );
 }
 

@@ -1,0 +1,28 @@
+// TEST: stdout ""
+// Issue #326 — RegionRootEscape skip-set must NOT suppress an
+// allocation that is overwritten before the return. The first
+// String::from("first") is no longer reachable from the returned
+// `Item` after `item.name = String::from("second")` overwrites the
+// field, so it should fire a RegionRootEscape note.
+//
+// The diagnostic-count assertion (>=1 RegionRootEscape note) lives
+// in `vow/tests/region_summary_equivalence.rs` (rust_* and
+// self_hosted_* field_overwrite tests). The `// TEST: stdout ""`
+// annotation here only validates compile + run; it does NOT guard
+// the negative diagnostic case.
+module Repro
+
+pub struct Item {
+    name: String,
+}
+
+fn make_item() -> Item {
+    let item: Item = Item { name: String::from("first") };
+    item.name = String::from("second");
+    item
+}
+
+fn main() -> i32 {
+    let it: Item = make_item();
+    0
+}
