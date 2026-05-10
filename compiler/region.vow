@@ -1193,28 +1193,11 @@ fn emit_root_escape_notes_module(
     }
 }
 
-// Collect the IDs of every value reachable from a Return — directly,
-// through Phi nodes via their Upsilon arms, and through struct field
-// initializers (FieldSet insts whose target pointer is itself a fresh
-// RegionAlloc already in the skip-set). Used by
-// `emit_root_escape_notes_module` to skip notes on the canonical
-// FreshInCaller return path, including:
-//   - conditional-construction patterns
-//     (`if cond { X{..} } else { X{..} }`) where the Phi is returned but
-//     the underlying RegionAllocs in each arm are the actual heap
-//     producers; and
-//   - struct field initializers of a freshly-allocated returned struct
-//     (`Item { name: String::from("hi") }` from `make_item`) where the
-//     inner allocation shares the parent struct's caller-arena lifetime
-//     per spec §4.4.
-//
-// The exemption deliberately does NOT extend to FieldSets whose target
-// is a parameter or other non-fresh pointer (e.g.
-// `target.name = String::from("hi"); return target`): mutations into a
-// caller-owned container are genuine store-effect escapes, not field
-// initializers, and must keep firing the note. We distinguish the two
-// cases by checking that the target id was produced by IOP_REGION_ALLOC
-// — only then is it a fresh aggregate.
+// Build the FreshInCaller return-value skip-set used by
+// `emit_root_escape_notes_module`. The FieldSet edge is gated on
+// `region_alloc_ids` so it follows initializers of a fresh struct
+// (`Item { name: ... }`) but not mutations into a parameter
+// (`target.name = ...; return target`); spec §4.4.
 fn collect_returned_ids(bks: Vec<IrBlock>) -> Vec<i64> {
     let mut out: Vec<i64> = Vec::new();
     // First gather direct Return arguments.
@@ -1232,11 +1215,6 @@ fn collect_returned_ids(bks: Vec<IrBlock>) -> Vec<i64> {
         }
         bi = bi + 1;
     }
-    // Pre-collect RegionAlloc-produced IDs so the FieldSet edge below
-    // can gate on "target is a fresh aggregate" without re-scanning per
-    // pop. Linear scan via `region_vec_contains_i64` is consistent with
-    // the existing `out` skip check (Vow's stdlib has no ordered-set
-    // type — same caveat as the perf note above on `returned_ids`).
     let mut region_alloc_ids: Vec<i64> = Vec::new();
     let mut rai: i64 = 0;
     while rai < bks.len() {
@@ -1251,9 +1229,6 @@ fn collect_returned_ids(bks: Vec<IrBlock>) -> Vec<i64> {
         }
         rai = rai + 1;
     }
-    // DFS expansion through Phi arms (via Upsilon) and through struct
-    // field initializers (via FieldSet whose target pointer is itself a
-    // fresh RegionAlloc already in the skip-set).
     while stack.len() > 0 {
         let id: i64 = stack[stack.len() - 1];
         stack.pop();

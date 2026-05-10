@@ -741,3 +741,46 @@ fn self_hosted_struct_field_initializer_alloc_skipped() {
         notes.len(),
     );
 }
+
+/// Issue #319: pin the post-change note count for the original fixture
+/// (`tests/run/region_helper_arena_push.vow`). The inner `Vec::new()` from
+/// `arena_new() -> Arena { entries: Vec::new() }` is suppressed (returned
+/// struct's field initializer); `add_named`'s `Item` and `String::from(..)`
+/// allocations remain (consumed by `push_item`, not returned). Catches
+/// both over-suppression (count drops below 2) and under-suppression
+/// (count exceeds 2 — would indicate the field-initializer skip-set
+/// regressed).
+#[test]
+fn rust_arena_push_fixture_pins_note_count() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let fixture = root
+        .join("tests")
+        .join("run")
+        .join("region_helper_arena_push.vow");
+    let out = Command::new(env!("CARGO_BIN_EXE_vow"))
+        .args(["build", "--no-verify"])
+        .arg(&fixture)
+        .output()
+        .expect("failed to run vow");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("failed to parse vow stdout as JSON: {e}\nstdout: {stdout}"));
+    let diagnostics = parsed["diagnostics"]
+        .as_array()
+        .expect("diagnostics should be an array");
+    let notes: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .collect();
+    assert_eq!(
+        notes.len(),
+        2,
+        "region_helper_arena_push.vow should emit exactly 2 RegionRootEscape notes \
+         (Item + String in add_named, both consumed by push_item not returned). \
+         Got {} note(s): {notes:?}",
+        notes.len(),
+    );
+}

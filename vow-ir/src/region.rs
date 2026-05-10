@@ -1536,30 +1536,11 @@ fn analyze_function(
     summary
 }
 
-/// Walk back from a Return-argument id, recording the id itself plus every
-/// source that flows into it through Phi arms (via Upsilon insts) or struct
-/// field initializers (via FieldSet insts whose target pointer is itself a
-/// fresh `RegionAlloc` already in the skip-set). Used to expand
-/// `emit_root_escape_notes`'s skip-set so the underlying `RegionAlloc`s
-/// merged through a Phi (`if cond { X{..} } else { X{..} }`) or installed
-/// as a field of a freshly-allocated returned struct
-/// (`Item { name: String::from("hi") }` from `make_item`) are recognised
-/// as canonical FreshInCaller return values rather than side-effect
-/// escapes.
-///
-/// Per spec §4.4, the "alloc is the return value" exemption covers the
-/// top-level return argument and any allocation it transitively owns via
-/// FieldSet initializers of a freshly-allocated struct. Critically, the
-/// exemption does NOT extend to FieldSets whose target is a parameter or
-/// other non-fresh pointer (e.g. `target.name = String::from("hi")`
-/// followed by `return target`): mutations into a caller-owned container
-/// are genuine store-effect escapes, not field initializers, and must keep
-/// firing the note. We distinguish the two cases by checking that the
-/// target id was produced by `Opcode::RegionAlloc` — only then is it a
-/// fresh aggregate and its FieldSet a constructor-style initialization.
-/// `region_alloc_ids` is precomputed once per function in
-/// `emit_root_escape_notes` and threaded in, so functions with multiple
-/// `Return` instructions don't rebuild it per call.
+/// Build the FreshInCaller return-value skip-set used by
+/// `emit_root_escape_notes`. The FieldSet edge is gated on
+/// `region_alloc_ids` so it follows initializers of a fresh struct
+/// (`Item { name: ... }`) but not mutations into a parameter
+/// (`target.name = ...; return target`); spec §4.4.
 fn collect_return_value_sources(
     start: InstId,
     func: &Function,
@@ -1571,9 +1552,6 @@ fn collect_return_value_sources(
         if !out.insert(id) {
             continue;
         }
-        // Hoist the FieldSet gate's `id`-dependent component out of the
-        // inner loop — it's constant for this BFS iteration and matches
-        // the structural pattern in self-hosted `collect_returned_ids`.
         let id_is_fresh_alloc = region_alloc_ids.contains(&id);
         for blk in &func.blocks {
             for inst in &blk.insts {
@@ -1609,21 +1587,7 @@ fn emit_root_escape_notes(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let source_file: &str = &func.source_file;
-    // Pre-collect IDs of every value reachable from a `Return` — directly,
-    // through Phi nodes via their Upsilon arms, and through field
-    // initializers (via FieldSet insts whose target pointer is itself a
-    // fresh RegionAlloc already in the skip-set). Allocations on the
-    // canonical FreshInCaller return path — Phi-merged arms in
-    // `if cond { Foo{..} } else { Foo{..} }` and field initializers in
-    // `Foo { name: String::from("hi") }` from a returning function —
-    // shouldn't fire the note; only side-effect escapes through
-    // store-effect chains (FieldSets into parameter-rooted containers,
-    // calls into caller-owned aggregates) should.
     let mut returned_ids: BTreeSet<InstId> = BTreeSet::new();
-    // Pre-compute the RegionAlloc-id set once per function. The FieldSet
-    // edge inside `collect_return_value_sources` uses it to gate "target
-    // is a fresh aggregate"; lifting it out of the per-Return helper
-    // avoids rebuilding for functions with multiple `Return` insts.
     let region_alloc_ids: BTreeSet<InstId> = func
         .blocks
         .iter()
