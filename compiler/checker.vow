@@ -253,7 +253,7 @@ fn register_const(e: CheckEnv, m: Module, cid: i64) [io] {
     let val: i64 = {
         if val_tag == EXPR_LIT_INT() {
             if resolved_tid != CTY_I64() && resolved_tid != CTY_I32() {
-                env_emit_error(e, String::from("const has integer value but non-integer type"), expr_span(a, val_eid));
+                env_emit_error(e, String::from("const has integer value but non-integer type"), cdef_span(a, cid));
             }
             expr_a(a, val_eid)
         } else if val_tag == EXPR_LIT_BOOL() {

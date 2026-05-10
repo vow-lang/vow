@@ -194,6 +194,10 @@ fn parse_path(p: Parser) -> i64 {
 }
 
 fn parse_const_def(p: Parser) -> i64 {
+    let span_start: i64 = {
+        let t: Token = peek(p);
+        t.span_start
+    };
     let _kw: bool = expect(p, tok_kw_const());
     let name_sid: i64 = expect_ident(p);
     let _colon: bool = expect(p, tok_colon());
@@ -201,7 +205,8 @@ fn parse_const_def(p: Parser) -> i64 {
     let _eq: bool = expect(p, tok_eq());
     let value_eid: i64 = parse_expr(p);
     let _semi: bool = expect(p, tok_semicolon());
-    arena_add_cdef(p.arena, name_sid, type_tid, value_eid)
+    let span: i64 = span_pack_to_here(p, span_start);
+    arena_add_cdef(p.arena, name_sid, type_tid, value_eid, span)
 }
 
 fn parse_item(p: Parser) -> i64 {

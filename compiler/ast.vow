@@ -206,9 +206,9 @@ fn sdef_fields_lid(a: AstArena, sid: i64) -> i64 { a.sdef_data[sid * 4 + 1] }
 fn edef_name_sid(a: AstArena, eid: i64) -> i64 { a.edef_data[eid * 3] }
 fn edef_variants_lid(a: AstArena, eid: i64) -> i64 { a.edef_data[eid * 3 + 1] }
 
-fn cdef_name_sid(a: AstArena, cid: i64) -> i64 { a.cdef_data[cid * 3] }
-fn cdef_type_tid(a: AstArena, cid: i64) -> i64 { a.cdef_data[cid * 3 + 1] }
-fn cdef_value_eid(a: AstArena, cid: i64) -> i64 { a.cdef_data[cid * 3 + 2] }
+fn cdef_name_sid(a: AstArena, cid: i64) -> i64 { a.cdef_data[cid * 4] }
+fn cdef_type_tid(a: AstArena, cid: i64) -> i64 { a.cdef_data[cid * 4 + 1] }
+fn cdef_value_eid(a: AstArena, cid: i64) -> i64 { a.cdef_data[cid * 4 + 2] }
 
 fn clone_string(src: String) -> String {
     let out: String = String::from("");
@@ -231,6 +231,7 @@ fn type_span(a: AstArena, tid: i64) -> i64 { a.type_data[tid * 4 + 3] }
 fn pat_span(a: AstArena, pid: i64) -> i64 { a.pat_data[pid * 4 + 3] }
 fn sdef_span(a: AstArena, sid: i64) -> i64 { a.sdef_data[sid * 4 + 3] }
 fn edef_span(a: AstArena, eid: i64) -> i64 { a.edef_data[eid * 3 + 2] }
+fn cdef_span(a: AstArena, cid: i64) -> i64 { a.cdef_data[cid * 4 + 3] }
 
 fn arena_add_stmt(a: AstArena, tag: i64, av: i64, bv: i64, cv: i64, span: i64) -> i64 {
     let sid: i64 = a.stmt_data.len() / 5;
@@ -299,11 +300,12 @@ fn arena_add_edef(a: AstArena, name_sid: i64, variants_lid: i64, span: i64) -> i
     eid
 }
 
-fn arena_add_cdef(a: AstArena, name_sid: i64, type_tid: i64, value_eid: i64) -> i64 {
-    let cid: i64 = a.cdef_data.len() / 3;
+fn arena_add_cdef(a: AstArena, name_sid: i64, type_tid: i64, value_eid: i64, span: i64) -> i64 {
+    let cid: i64 = a.cdef_data.len() / 4;
     a.cdef_data.push(name_sid);
     a.cdef_data.push(type_tid);
     a.cdef_data.push(value_eid);
+    a.cdef_data.push(span);
     cid
 }
 
