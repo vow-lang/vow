@@ -60,6 +60,58 @@ def _format_values(values: dict[str, str]) -> str:
     return ", ".join(f"{k}={v}" for k, v in values.items())
 
 
+def _format_source_span(source: object) -> str:
+    """Format a structured source span while tolerating older JSON shapes."""
+    if not source:
+        return ""
+    if not isinstance(source, dict):
+        return str(source)
+
+    file = source.get("file", "?")
+    offset = source.get("offset")
+    length = source.get("length")
+    if offset is None:
+        return str(file)
+    if length is None:
+        return f"{file}@{offset}"
+    return f"{file}@{offset}+{length}"
+
+
+def _format_call_sites(call_sites: object) -> str:
+    if not isinstance(call_sites, list):
+        return ""
+
+    formatted = []
+    for call_site in call_sites:
+        if not isinstance(call_site, dict):
+            continue
+        caller = call_site.get("caller_function", "?")
+        span = _format_source_span(call_site)
+        formatted.append(f"{caller} in {span}" if span else str(caller))
+    return "; ".join(formatted)
+
+
+def _format_violating_args(violating_args: object) -> str:
+    if not isinstance(violating_args, list):
+        return ""
+
+    formatted = []
+    for arg in violating_args:
+        if not isinstance(arg, dict):
+            continue
+        param = arg.get("param", "?")
+        value = arg.get("value", "?")
+        offset = arg.get("arg_offset")
+        length = arg.get("arg_length")
+        if offset is None:
+            formatted.append(f"{param}={value}")
+        elif length is None:
+            formatted.append(f"{param}={value} at arg@{offset}")
+        else:
+            formatted.append(f"{param}={value} at arg@{offset}+{length}")
+    return "; ".join(formatted)
+
+
 def curate_verify_output(
     parsed_json: dict,
     iteration: int,
@@ -104,6 +156,18 @@ def curate_verify_output(
             parts.append(f"- Violation: `{vtype}: {violation}` (vow_id={vow_id}, blame={blame})")
             parts.append(f"- Variable values at failure: {_format_values(values)}")
 
+            source = _format_source_span(ce.get("source"))
+            if source:
+                parts.append(f"- Violated contract source: {source}")
+
+            call_sites = _format_call_sites(ce.get("call_sites"))
+            if call_sites:
+                parts.append(f"- Caller context: {call_sites}")
+
+            violating_args = _format_violating_args(ce.get("violating_args"))
+            if violating_args:
+                parts.append(f"- Violating arguments: {violating_args}")
+
             exec_path = ce.get("execution_path", [])
             if exec_path:
                 blocks = [str(step.get("block_id", "?")) for step in exec_path]
@@ -139,9 +203,17 @@ def curate_verify_output(
                 f"{', '.join(var_hints)}. Tighten the invariant or strengthen the loop guard."
             )
         elif vtype == "requires" and values:
+            context_hint = ""
+            if (
+                _format_call_sites(ce0.get("call_sites"))
+                or _format_violating_args(ce0.get("violating_args"))
+            ):
+                context_hint = " Use the caller context above to locate the bad call and argument values."
             parts.append(
                 f"**Hint:** The precondition `{violation}` was violated by the caller. "
-                f"Add bounds to the function's `requires` clause to exclude this input."
+                f"To repair it, fix the call site, guard before the call, or correct the precondition "
+                f"only if the precondition itself is semantically wrong."
+                f"{context_hint}"
             )
         elif vtype == "ensures" and values:
             parts.append(
