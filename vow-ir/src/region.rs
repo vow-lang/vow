@@ -1571,6 +1571,10 @@ fn collect_return_value_sources(
         if !out.insert(id) {
             continue;
         }
+        // Hoist the FieldSet gate's `id`-dependent component out of the
+        // inner loop — it's constant for this BFS iteration and matches
+        // the structural pattern in self-hosted `collect_returned_ids`.
+        let id_is_fresh_alloc = region_alloc_ids.contains(&id);
         for blk in &func.blocks {
             for inst in &blk.insts {
                 if inst.opcode == Opcode::Upsilon
@@ -1579,10 +1583,10 @@ fn collect_return_value_sources(
                 {
                     stack.push(arm);
                 }
-                if inst.opcode == Opcode::FieldSet
+                if id_is_fresh_alloc
+                    && inst.opcode == Opcode::FieldSet
                     && inst.args.len() >= 2
                     && inst.args[0] == id
-                    && region_alloc_ids.contains(&id)
                 {
                     stack.push(inst.args[1]);
                 }
