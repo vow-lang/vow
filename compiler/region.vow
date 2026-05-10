@@ -1242,16 +1242,16 @@ fn collect_returned_ids(bks: Vec<IrBlock>) -> Vec<i64> {
             let sblk: IrBlock = bks[sbi];
             let mut sii: i64 = 0;
             while sii < sblk.insts.len() {
-                let up: IrInst = sblk.insts[sii];
-                if up.op == IOP_UPSILON() && up.dk == IDATA_PHI_TARGET()
-                    && up.dv == id && up.args.len() > 0
+                let inst: IrInst = sblk.insts[sii];
+                if inst.op == IOP_UPSILON() && inst.dk == IDATA_PHI_TARGET()
+                    && inst.dv == id && inst.args.len() > 0
                 {
-                    stack.push(up.args[0]);
+                    stack.push(inst.args[0]);
                 }
-                if id_is_fresh_alloc && up.op == IOP_FIELD_SET()
-                    && up.args.len() >= 2 && up.args[0] == id
+                if id_is_fresh_alloc && inst.op == IOP_FIELD_SET()
+                    && inst.args.len() >= 2 && inst.args[0] == id
                 {
-                    stack.push(up.args[1]);
+                    stack.push(inst.args[1]);
                 }
                 sii = sii + 1;
             }
