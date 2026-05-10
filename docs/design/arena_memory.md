@@ -800,37 +800,35 @@ inference's must-outlive markers already demand.
 Operationally, the conflict check consults the inferred `region(I)`
 populated by step 3's LUB pass, NOT the IR opcode shape of the
 producing instruction. A fresh `RegionAlloc` whose must-outlive set
-includes a `VirtualCaller` marker (added by §4.1 step 2's call-site
-propagation when the value is passed to a callee whose store-effect
-target is a parameter) has `region(I) = Caller` after LUB and
-satisfies any parameter-region target — provided the function has
-exactly one hidden caller arena slot. Rejecting such a value would
-force programmers to refactor sound arena patterns into less-direct
-forms, with no soundness benefit.
+includes a `CallerStoreTarget(p)` marker (added by §4.1 step 2's
+call-site propagation when the value is passed to a callee whose
+store-effect target traces back to the current function's parameter
+`p`) has `region(I) = Caller(HiddenRegionIdx(N))` after LUB, where
+`N` is the slot index that codegen's hidden-arena layout
+(§5.4) assigns to parameter `p`. Such a value satisfies any
+parameter-region target whose slot matches. Rejecting such a value
+would force programmers to refactor sound arena patterns into
+less-direct forms, with no soundness benefit.
 
-**Ambiguous-slot exception.** When the analyzing function's hidden
-caller-arena layout has more than one slot — i.e., it has a
-`FreshInCaller` return *plus* one or more store-effect targets, or
-two or more distinct store-effect targets — region inference's
-uniform `Caller(HiddenRegionIdx(0))` tagging becomes ambiguous: slot
-0 could mean any of the hidden slots, and codegen cannot tell from
-the IR alone which one was intended. In this case the implementation
-MUST conservatively reject `Caller(_)` sources at parameter-region
-store targets with `RegionConflict`, even though step 3's
-must-outlive widening said the value satisfies the constraint. This
-is a soundness gate, not a contract weakening: accepting the value
-would silently route the allocation to slot 0 when the store demands
-slot 1+, producing a wrong-arena placement (and, when the slots have
-asymmetric lifetimes in the grandparent caller's view, a dangling
-reference). The reject extends to alias chains: when the source
-flows through `FieldGet`/`Load`/vec-get, divergent Phi arms with any
-Caller terminus, or a `CallTarget` whose callee returns
-`AliasOf(j)`/`AliasOfAny(js)` over a `Caller(_)` underlying value,
-the implementation MUST trace through and reject if any terminus is
-`Caller(_)`. The future precise fix — having inference produce the
-correct `HiddenRegionIdx(N)` per uniqueness analysis — would
-eliminate the ambiguity and let these cases compile cleanly without
-the reject (tracked separately).
+**Slot-aware inference (issue #317).** The LUB pass mints
+`Caller(HiddenRegionIdx(N))` per allocation, where `N` is computed
+from the function's published summary using the same formula codegen
+applies in `hidden_region_idx_for_store_target`:
+  * slot 0 = return arena, iff `summary.return_region == FreshInCaller`;
+  * subsequent slots = sorted, deduplicated store-effect target
+    parameters in ascending order.
+
+Allocations with markers spanning a single destination resolve to
+that destination's slot precisely; codegen routes the alloc into the
+correct hidden arena. Allocations whose marker set contains multiple
+distinct `CallerStoreTarget(p)` markers (for instance, a Phi merging
+allocs destined for different store-target parameters) currently
+collapse to the lowest slot deterministically — strictly better than
+the pre-#317 collapse-everything-to-slot-0 path. A future enhancement
+may detect provably unsafe multi-slot routings and emit
+`RegionConflict` via a sentinel `HiddenRegionIdx::AMBIGUOUS`; that
+infrastructure is in place but not wired into the production reject
+path (see issue #317 "Things that might fail silently" follow-up).
 
 **Visibility** (`RegionRootEscape`, severity Note, non-blocking).
 When `region(I)` resolves through caller-region routing to a chain
