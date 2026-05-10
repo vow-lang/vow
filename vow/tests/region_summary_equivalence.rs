@@ -650,3 +650,94 @@ fn rust_param_field_mutation_emits_root_escape_note() {
          RegionRootEscape; got 0 notes: {diagnostics:?}",
     );
 }
+
+/// Issue #319 regression (self-hosted parity): confirms the self-hosted
+/// `collect_returned_ids` mirrors the Rust gate. Without this, a regression
+/// where the self-hosted FieldSet edge was inadvertently un-gated (or the
+/// `IOP_REGION_ALLOC` predicate was inverted) would slip past the `tests/run/`
+/// shell harness — that harness only validates exit + stdout, not diagnostic
+/// counts. Skips when `build/vowc` is absent (e.g. fresh clone without
+/// bootstrap).
+#[test]
+fn self_hosted_param_field_mutation_emits_root_escape_note() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let vowc = repo_root.join("build").join("vowc");
+    if !vowc.exists() {
+        eprintln!("SKIP: build/vowc not present (run scripts/bootstrap.sh first)");
+        return;
+    }
+    let fixture = repo_root
+        .join("tests")
+        .join("run")
+        .join("region_param_field_mutation.vow");
+    let out = Command::new(&vowc)
+        .args(["build", "--no-verify"])
+        .arg(&fixture)
+        .output()
+        .expect("failed to run build/vowc");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("failed to parse build/vowc stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let diagnostics = parsed["diagnostics"]
+        .as_array()
+        .expect("diagnostics should be an array");
+    let notes: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .collect();
+    assert!(
+        !notes.is_empty(),
+        "self-hosted: FieldSet into a parameter container must keep firing \
+         RegionRootEscape; got 0 notes: {diagnostics:?}",
+    );
+}
+
+/// Issue #319 self-hosted parity (positive case): confirms the self-hosted
+/// compiler still suppresses the note for the canonical
+/// `make_item() -> Item { Item { name: ... } }` pattern after the gate
+/// change. Pairs with `rust_struct_field_initializer_alloc_skipped` to
+/// keep both compilers structurally aligned.
+#[test]
+fn self_hosted_struct_field_initializer_alloc_skipped() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let vowc = repo_root.join("build").join("vowc");
+    if !vowc.exists() {
+        eprintln!("SKIP: build/vowc not present (run scripts/bootstrap.sh first)");
+        return;
+    }
+    let fixture = repo_root
+        .join("tests")
+        .join("run")
+        .join("region_skip_struct_field.vow");
+    let out = Command::new(&vowc)
+        .args(["build", "--no-verify"])
+        .arg(&fixture)
+        .output()
+        .expect("failed to run build/vowc");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("failed to parse build/vowc stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let diagnostics = parsed["diagnostics"]
+        .as_array()
+        .expect("diagnostics should be an array");
+    let notes: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .collect();
+    assert!(
+        notes.is_empty(),
+        "self-hosted: field-initializer allocations of a returned struct must \
+         not fire RegionRootEscape; got {} note(s): {notes:?}",
+        notes.len(),
+    );
+}

@@ -1557,17 +1557,15 @@ fn analyze_function(
 /// firing the note. We distinguish the two cases by checking that the
 /// target id was produced by `Opcode::RegionAlloc` — only then is it a
 /// fresh aggregate and its FieldSet a constructor-style initialization.
-fn collect_return_value_sources(start: InstId, func: &Function, out: &mut BTreeSet<InstId>) {
-    // Pre-compute the set of ids produced by RegionAlloc so the FieldSet
-    // edge below can gate on "target is a fresh aggregate" in O(1) rather
-    // than re-scanning every iteration of the worklist.
-    let region_alloc_ids: BTreeSet<InstId> = func
-        .blocks
-        .iter()
-        .flat_map(|b| b.insts.iter())
-        .filter(|i| i.opcode == Opcode::RegionAlloc)
-        .map(|i| i.id)
-        .collect();
+/// `region_alloc_ids` is precomputed once per function in
+/// `emit_root_escape_notes` and threaded in, so functions with multiple
+/// `Return` instructions don't rebuild it per call.
+fn collect_return_value_sources(
+    start: InstId,
+    func: &Function,
+    region_alloc_ids: &BTreeSet<InstId>,
+    out: &mut BTreeSet<InstId>,
+) {
     let mut stack = vec![start];
     while let Some(id) = stack.pop() {
         if !out.insert(id) {
@@ -1618,12 +1616,23 @@ fn emit_root_escape_notes(
     // store-effect chains (FieldSets into parameter-rooted containers,
     // calls into caller-owned aggregates) should.
     let mut returned_ids: BTreeSet<InstId> = BTreeSet::new();
+    // Pre-compute the RegionAlloc-id set once per function. The FieldSet
+    // edge inside `collect_return_value_sources` uses it to gate "target
+    // is a fresh aggregate"; lifting it out of the per-Return helper
+    // avoids rebuilding for functions with multiple `Return` insts.
+    let region_alloc_ids: BTreeSet<InstId> = func
+        .blocks
+        .iter()
+        .flat_map(|b| b.insts.iter())
+        .filter(|i| i.opcode == Opcode::RegionAlloc)
+        .map(|i| i.id)
+        .collect();
     for block in &func.blocks {
         for inst in &block.insts {
             if inst.opcode == Opcode::Return
                 && let Some(&rv) = inst.args.first()
             {
-                collect_return_value_sources(rv, func, &mut returned_ids);
+                collect_return_value_sources(rv, func, &region_alloc_ids, &mut returned_ids);
             }
         }
     }
