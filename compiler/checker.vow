@@ -253,12 +253,12 @@ fn register_const(e: CheckEnv, m: Module, cid: i64) [io] {
     let val: i64 = {
         if val_tag == EXPR_LIT_INT() {
             if resolved_tid != CTY_I64() && resolved_tid != CTY_I32() {
-                env_emit_error(e, String::from("const has integer value but non-integer type"), expr_span(a, val_eid));
+                env_emit_error(e, String::from("const has integer value but non-integer type"), cdef_span(a, cid));
             }
             expr_a(a, val_eid)
         } else if val_tag == EXPR_LIT_BOOL() {
             if resolved_tid != CTY_BOOL() {
-                env_emit_error(e, String::from("const has bool value but non-bool type"), expr_span(a, val_eid));
+                env_emit_error(e, String::from("const has bool value but non-bool type"), cdef_span(a, cid));
             }
             expr_a(a, val_eid)
         } else if val_tag == EXPR_UNOP() {
@@ -268,7 +268,7 @@ fn register_const(e: CheckEnv, m: Module, cid: i64) [io] {
                 0
             } else {
                 if resolved_tid != CTY_I64() && resolved_tid != CTY_I32() {
-                    env_emit_error(e, String::from("const has negated value but non-integer type"), expr_span(a, val_eid));
+                    env_emit_error(e, String::from("const has negated value but non-integer type"), cdef_span(a, cid));
                 }
                 let inner_eid: i64 = expr_b(a, val_eid);
                 let inner_tag: i64 = expr_tag(a, inner_eid);
