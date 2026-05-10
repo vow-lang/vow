@@ -3455,24 +3455,11 @@ fn add(a: i64, b: i64) -> i64 vow {
 > the inferred region populated by §4.1 step 3's LUB pass rather than the
 > raw IR opcode. A fresh allocation routed through a callee's store-effect
 > chain into a parameter container has its inferred region widened to
-> `Caller` by §4.1 step 2's must-outlive marker propagation; such routings
-> satisfy the constraint and are NOT rejected when the analyzing function
-> has exactly one hidden caller arena slot. Only allocations whose inferred
-> region is a strictly narrower block fire `RegionConflict` in that case.
->
-> **Ambiguous-slot exception:** when the analyzing function has more than
-> one hidden caller arena slot — i.e., a `FreshInCaller` return *plus* one
-> or more store-effect targets, or two or more distinct store-effect
-> targets — region inference's uniform `Caller(HiddenRegionIdx(0))` tagging
-> is ambiguous and codegen cannot tell from the IR alone which slot was
-> intended. The checker conservatively rejects `Caller(_)` sources at
-> parameter-region store targets with `RegionConflict` to prevent silent
-> wrong-arena placement. The reject extends through alias chains
-> (`FieldGet`/`Load`/vec-get/divergent Phi arms with any Caller terminus/
-> `CallTarget`-AliasOf returns over Caller underlying values). See
-> `docs/design/arena_memory.md` §4.4 "Ambiguous-slot exception" for the
-> full rationale and the future fix (precise `HiddenRegionIdx(N)`
-> inference) tracked separately.
+> `Caller(HiddenRegionIdx(N))` by §4.1 step 2's must-outlive marker
+> propagation, where `N` is the precise slot index implied by the
+> destination (issue #317 slot-aware inference). Such routings satisfy
+> the constraint and are accepted; only allocations whose inferred region
+> is a strictly narrower block fire `RegionConflict`.
 
 ```vow
 fn store_into(out: Vec<String>, prefix: String) [io] {

@@ -1,0 +1,34 @@
+// TEST: stdout ""
+// Issue #317 reproducer: a function with both `FreshInCaller` return AND
+// store-effects on a parameter forces region inference to mint distinct
+// `HiddenRegionIdx(N)` values per allocation. The `registered` Item flows
+// into slot 1 (the store-target arena for `arena`), while the returned
+// Item flows into slot 0 (the return arena). PR #315's
+// `ambiguous_caller_slot` conservative reject blocked this pattern; the
+// slot-aware inference unblocks it.
+module Soundness
+
+pub struct Item {
+    name: String,
+}
+
+pub struct Arena {
+    entries: Vec<Item>,
+}
+
+fn push_to_arena(arena: Arena, item: Item) {
+    arena.entries.push(item);
+}
+
+fn build_and_register(arena: Arena) -> Item {
+    let registered: Item = Item { name: String::from("REGISTERED") };
+    push_to_arena(arena, registered);
+    Item { name: String::from("RETURNED") }
+}
+
+fn main() -> i32 {
+    let a: Arena = Arena { entries: Vec::new() };
+    let result: Item = build_and_register(a);
+    let it: Item = a.entries[0];
+    0
+}

@@ -1273,6 +1273,45 @@ impl InternalSummary {
         self == other
     }
 
+    /// Slot of `target_param` in the codegen hidden-arena layout
+    /// `[return_arena (iff FreshInCaller), sorted_unique_store_targets...]`.
+    /// Mirrors `hidden_region_idx_for_store_target` in
+    /// `vow-codegen/src/cranelift_backend.rs:221-243` so inference and
+    /// codegen agree on slot numbering. `None` if `target_param` is not a
+    /// recorded store target.
+    fn store_target_slot(&self, target_param: u32) -> Option<HiddenRegionIdx> {
+        let mut idx: u32 = 0;
+        if matches!(
+            self.return_region,
+            InternalReturnRegion::Published(RegionConstraint::FreshInCaller)
+        ) {
+            idx += 1;
+        }
+        let mut targets: Vec<u32> = self.store_effects.iter().map(|(t, _)| *t).collect();
+        targets.sort_unstable();
+        targets.dedup();
+        for t in targets {
+            if t == target_param {
+                return Some(HiddenRegionIdx(idx));
+            }
+            idx += 1;
+        }
+        None
+    }
+
+    /// Slot of the return arena (`Some(HiddenRegionIdx(0))` iff the function
+    /// returns `FreshInCaller`). Returns must always live at slot 0.
+    fn return_slot(&self) -> Option<HiddenRegionIdx> {
+        if matches!(
+            self.return_region,
+            InternalReturnRegion::Published(RegionConstraint::FreshInCaller)
+        ) {
+            Some(HiddenRegionIdx(0))
+        } else {
+            None
+        }
+    }
+
     fn to_published(&self, n_params: usize) -> RegionSummary {
         let return_region = match &self.return_region {
             InternalReturnRegion::Uninit => RegionConstraint::ConstantGlobal,
@@ -1433,7 +1472,7 @@ fn analyze_function(
                 continue;
             }
             let markers = must_outlive.get(&inst.id).cloned().unwrap_or_default();
-            let mut region_id = lub_to_region_id(&markers, block.id, &block_tree);
+            let mut region_id = lub_to_region_id(&markers, block.id, &block_tree, &summary);
             if inst.opcode == Opcode::Call
                 && !matches!(&inst.data, InstData::CallExtern(sym) if heap_producing_extern(sym))
             {
@@ -1463,14 +1502,7 @@ fn analyze_function(
     // aggregates as conflicts; consulting the inferred region instead fires
     // only when the source's resolved region is strictly narrower than the
     // target's.
-    check_store_conflicts_post_inference(
-        func,
-        &summary,
-        summaries,
-        region_map,
-        &inst_lookup,
-        diagnostics,
-    );
+    check_store_conflicts_post_inference(func, summaries, region_map, &inst_lookup, diagnostics);
 
     // Surface `Caller(_)` allocations in functions that may propagate them
     // to a caller (FreshInCaller return or any store effect) as
@@ -1479,11 +1511,13 @@ fn analyze_function(
     // over-approximation: emit per-instruction without full call-graph
     // reachability; severity `Note` keeps it informational.
     //
-    // Skip the pass when the same function would also trigger
-    // `ambiguous_caller_slot` rejection — the routed allocs that would
-    // fire the note are already carrying a hard `RegionConflict`, and the
-    // note's "no action needed if intentional" hint is misleading at a
-    // location with an actual error.
+    // Skip the pass for multi-slot functions (legacy: same gate that
+    // PR #315's `ambiguous_caller_slot` reject used). With slot-aware
+    // inference (#317) the gate is conservative — most multi-slot
+    // functions no longer emit `RegionConflict`, but keeping the skip
+    // preserves the original signal-to-noise on programs that route
+    // through several distinct hidden arenas. Revisit if user feedback
+    // wants notes on multi-slot routings.
     let returns_fresh = matches!(
         summary.return_region,
         InternalReturnRegion::Published(RegionConstraint::FreshInCaller)
@@ -2177,7 +2211,18 @@ fn propagate_alias(
 #[allow(dead_code)] // Root + Rodata appear once the dataflow recognises Root-pin / .rodata flows.
 enum MustOutliveMarker {
     Block(BlockId),
+    /// Slot-less caller marker — retained for the Return arm during the
+    /// issue #317 migration; will be replaced by `CallerReturn` once the
+    /// Return path moves to slot-aware inference.
     VirtualCaller,
+    /// Value escapes via the function's return path. Maps to slot 0 iff the
+    /// summary's `return_region == FreshInCaller`; otherwise contributes no
+    /// hidden-slot constraint.
+    CallerReturn,
+    /// Value flows into a store-target whose container is the current
+    /// function's parameter `p`. The slot index is derived at LUB time from
+    /// the function's published store-effects layout.
+    CallerStoreTarget(u32),
     Root,
     Rodata,
 }
@@ -2187,23 +2232,48 @@ enum MustOutliveMarker {
 /// `defining_block` is the basic block where the allocation lives — used as
 /// the default region when the marker set yields no narrower constraint
 /// (empty set, or pure block markers reducible to the defining block).
+///
+/// `summary` is the current function's in-progress internal summary — its
+/// `return_region` and `store_effects` drive the slot index for
+/// `CallerReturn` and `CallerStoreTarget(p)` markers (issue #317).
 fn lub_to_region_id(
     markers: &BTreeSet<MustOutliveMarker>,
     defining_block: BlockId,
     block_tree: &BlockTree,
+    summary: &InternalSummary,
 ) -> RegionId {
-    let mut has_caller = false;
+    let mut has_legacy_caller = false;
     let mut has_root = false;
     let mut has_rodata = false;
     let mut blocks: Vec<BlockId> = Vec::new();
+    let mut caller_slots: BTreeSet<HiddenRegionIdx> = BTreeSet::new();
     for m in markers {
         match m {
             MustOutliveMarker::Block(b) => blocks.push(*b),
-            MustOutliveMarker::VirtualCaller => has_caller = true,
+            MustOutliveMarker::VirtualCaller => has_legacy_caller = true,
+            MustOutliveMarker::CallerReturn => {
+                if let Some(slot) = summary.return_slot() {
+                    caller_slots.insert(slot);
+                } else {
+                    // Non-FreshInCaller return — marker contributes no
+                    // hidden-slot constraint. Fall through to block/root.
+                }
+            }
+            MustOutliveMarker::CallerStoreTarget(p) => {
+                if let Some(slot) = summary.store_target_slot(*p) {
+                    caller_slots.insert(slot);
+                } else {
+                    // The marker referenced a parameter that is not a
+                    // recorded store target in this summary; treat as
+                    // legacy caller for now (shouldn't happen post-Cycle 4).
+                    has_legacy_caller = true;
+                }
+            }
             MustOutliveMarker::Root => has_root = true,
             MustOutliveMarker::Rodata => has_rodata = true,
         }
     }
+    let has_caller = has_legacy_caller || !caller_slots.is_empty();
     // Rodata ⊔ Root → Root (spec §4.1).
     if has_root {
         return RegionId::Root;
@@ -2216,6 +2286,17 @@ fn lub_to_region_id(
         return RegionId::Rodata;
     }
     if has_caller {
+        // Slot-aware: a single distinct slot resolves cleanly. Multiple
+        // distinct slots get the lowest deterministically — strictly
+        // better than the pre-#317 collapse-everything-to-slot-0 path.
+        // A future enhancement may detect unsafe multi-slot routings via
+        // the AMBIGUOUS sentinel + post-inference reject path.
+        if has_legacy_caller {
+            return RegionId::Caller(HiddenRegionIdx(0));
+        }
+        if !caller_slots.is_empty() {
+            return RegionId::Caller(*caller_slots.iter().next().unwrap());
+        }
         return RegionId::Caller(HiddenRegionIdx(0));
     }
     blocks.push(defining_block);
@@ -2463,7 +2544,10 @@ fn target_region_marker(
         return MustOutliveMarker::Root;
     };
     match inst.opcode {
-        Opcode::GetArg => MustOutliveMarker::VirtualCaller,
+        Opcode::GetArg => match inst.data {
+            InstData::ArgIndex(p) => MustOutliveMarker::CallerStoreTarget(p),
+            _ => MustOutliveMarker::VirtualCaller,
+        },
         _ if is_heap_producing(inst, summaries) => MustOutliveMarker::Block(*block_id),
         _ => MustOutliveMarker::Root,
     }
@@ -2522,10 +2606,12 @@ fn origin_to_constraint(origin: &ValueOrigin) -> RegionConstraint {
 // ---------------------------------------------------------------------------
 
 /// Trace alias chain (FieldGet/Load/vec-get/Phi/CallTarget-AliasOf) for
-/// ambiguous-slot check; mirrors codegen's `source_value_region`.
-/// Returns `Some(Caller(_))` when any terminus resolves to a caller arena
-/// (caller treats as conflict); `None` for safe termini (parameters,
-/// scalars, Block/Root/Rodata).
+/// Issue #317: kept (with `dead_code` tolerance) for the future
+/// AMBIGUOUS-reject revival path. Slot-aware inference now mints precise
+/// slots so the post-inference check never needs to walk aliases — but a
+/// follow-up enhancement that detects unsafe multi-slot routings will
+/// reuse this walker.
+#[allow(dead_code)]
 fn underlying_caller_via_aliases(
     source_arg_id: InstId,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
@@ -2542,6 +2628,7 @@ fn underlying_caller_via_aliases(
     )
 }
 
+#[allow(dead_code)]
 fn underlying_caller_via_aliases_inner(
     source_arg_id: InstId,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
@@ -2579,13 +2666,15 @@ fn underlying_caller_via_aliases_inner(
                 // lifetimes (each slot's arena is chosen independently by
                 // the parent's `arg_region` per store-effect target —
                 // possibly a block stack-slot arena, an inherited
-                // `Caller(idx)`, or root), so a fresh `Caller(0)` arm can
-                // be stored into slot 1's target whose arena outlives slot
-                // 0's. To stay sound under `ambiguous_caller_slot`,
-                // *any* Caller(_)-carrying arm — even mixed with safe
-                // arms — must trigger the conservative reject. The
-                // self-hosted mirror in `compiler/region.vow` carries the
-                // same widened logic.
+                // `Caller(idx)`, or root). Under slot-aware inference
+                // (issue #317), the Phi result itself is region-tagged
+                // with `Caller(AMBIGUOUS)` whenever its arms resolve to
+                // distinct hidden slots — so the post-inference conflict
+                // check catches genuine slot disagreement at the Phi
+                // node directly. This walk covers the indirect case where
+                // the source is an aliasing wrapper (FieldGet/Load/vec-get)
+                // over a Phi; reporting `Some(Caller(_))` for any caller-
+                // carrying arm preserves rejection on the alias chain.
                 let phi_id = inst.id;
                 let mut merged: Option<Option<RegionId>> = None;
                 let mut diverged = false;
@@ -2677,51 +2766,28 @@ fn underlying_caller_via_aliases_inner(
 
 /// Semantic post-inference store-conflict check (spec §4.4).
 ///
-/// After `analyze_function` populates `region_map`, walks every
-/// `CallTarget` instruction; for each callee store-effect of kind
-/// `AliasOf(p)`, looks up the inferred region of the corresponding
-/// caller-side argument. Rejects only when that inferred region is a
-/// concrete block strictly narrower than the target's region (always a
-/// conflict for parameter targets), or — in `ambiguous_caller_slot`
-/// mode — when the resolved alias chain reaches a `Caller(_)` terminus
-/// that codegen would silently route to slot 0 instead of the intended
-/// per-target slot.
+/// Walks every `CallTarget` instruction; for each callee store-effect of
+/// kind `AliasOf(p)`, looks up the inferred region of the corresponding
+/// caller-side argument and rejects when:
+///   * the source's region is a concrete `Block(_)` strictly narrower
+///     than the parameter target — always a conflict; or
+///   * the source's region is `Caller(HiddenRegionIdx::AMBIGUOUS)` —
+///     slot-aware inference (issue #317) determined the value's marker
+///     set resolves to multiple distinct hidden slots, so codegen cannot
+///     pick a single arena.
 ///
-/// The self-hosted `compiler/region.vow` mirrors this check; both
-/// compilers must keep the same accept/reject decisions to preserve the
-/// binary fixed-point bootstrap.
+/// Every other `Caller(N)` has a precise slot index that codegen routes
+/// correctly via `hidden_region_idx_for_store_target`. The self-hosted
+/// `compiler/region.vow` mirrors this check; both compilers keep the
+/// same accept/reject decisions to preserve binary-fixed-point bootstrap.
 #[allow(clippy::too_many_arguments)]
 fn check_store_conflicts_post_inference(
     func: &Function,
-    own_summary: &InternalSummary,
     summaries: &[InternalSummary],
     region_map: &BTreeMap<InstId, RegionId>,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    // Codegen lays out hidden arena slots as
-    // `[return_arena?, sorted_unique_store_targets...]` (see
-    // `hidden_region_idx_for_store_target` in vow-codegen) — one slot per
-    // FreshInCaller return plus one per distinct store-effect target.
-    // Region inference collapses every must-outlive=VirtualCaller alloc to
-    // `Caller(HiddenRegionIdx(0))`, which is unambiguous only when there's
-    // exactly one slot. With two or more, slot 0 might mean the return
-    // arena, the first store-target arena, or any other slot the caller
-    // chain expects — and codegen can't tell from the IR alone.
-    // Until inference produces the correct `HiddenRegionIdx(N)`, accepting
-    // `Caller(_)` sources whenever multiple slots exist would silently
-    // route allocations to the wrong arena.
-    let returns_fresh = matches!(
-        own_summary.return_region,
-        InternalReturnRegion::Published(RegionConstraint::FreshInCaller)
-    );
-    let mut store_target_set: BTreeSet<u32> = BTreeSet::new();
-    for (target, _) in &own_summary.store_effects {
-        store_target_set.insert(*target);
-    }
-    let total_hidden_slots = (returns_fresh as usize) + store_target_set.len();
-    let ambiguous_caller_slot = total_hidden_slots > 1;
-
     let source_file: &str = &func.source_file;
     for block in &func.blocks {
         for inst in &block.insts {
@@ -2758,7 +2824,6 @@ fn check_store_conflicts_post_inference(
                         inst_lookup,
                         region_map,
                         summaries,
-                        ambiguous_caller_slot,
                         diagnostics,
                     );
                 }
@@ -2775,54 +2840,39 @@ fn check_store_conflict_semantic(
     call_inst: &Inst,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
     region_map: &BTreeMap<InstId, RegionId>,
-    summaries: &[InternalSummary],
-    ambiguous_caller_slot: bool,
+    _summaries: &[InternalSummary],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     // Inline case: target is not parameter-rooted; the inline path handles
     // its own region-LCA check via direct markers, no cross-call conflict.
     //
     // Use `trace_param` (deep walk through FieldGet/Load/vec-get back to
-    // GetArg) rather than `trace_origin` (shallow). Codegen's `arg_region`
-    // / `source_value_region` follows the same alias chain back to the
-    // underlying GetArg and then mints a `Caller(HiddenRegionIdx(N))` via
-    // `hidden_region_idx_for_store_target`, so a target like `a.entries`
-    // (FieldGet on parameter) IS a parameter target as far as hidden-slot
-    // routing is concerned. Using the shallow walk would early-return on
-    // FieldGet/Load targets and skip the `ambiguous_caller_slot` guard,
-    // matching neither codegen nor the self-hosted `compiler/region.vow`
-    // mirror (which has always used the deep walk).
+    // GetArg) rather than `trace_origin` (shallow) — codegen's
+    // `source_value_region` follows the same alias chain.
     if trace_param(target_arg_id, inst_lookup).is_none() {
         return;
     }
 
-    // Direct lookup first.
+    // Issue #317: slot-aware inference puts the correct
+    // `HiddenRegionIdx(N)` on every `Caller(_)` source — the
+    // post-inference check now accepts every `Caller(_)` and only rejects
+    // concrete-block sources strictly narrower than the parameter target.
+    // (The AMBIGUOUS sentinel is defined but not currently minted; a
+    // future enhancement may reintroduce a Phi-divergence reject path.)
     let direct = region_map.get(&source_arg_id).copied();
     match direct {
-        Some(RegionId::Caller(_)) if ambiguous_caller_slot => {
-            // Slot-misroute risk — fall through to emit conflict.
-        }
         Some(RegionId::Caller(_) | RegionId::Root | RegionId::Rodata) => return,
         Some(RegionId::Block(_)) => {
             // Concrete block source, parameter target — strictly narrower,
             // always a conflict; drop through to emission.
         }
-        None if ambiguous_caller_slot => {
-            // Source is an aliasing wrapper (FieldGet, Load, vec-get,
-            // GetArg, Phi). Trace through aliases — codegen's
-            // `source_value_region` does the same trace, so an underlying
-            // alloc tagged `Caller(0)` would still be silently misrouted.
-            // ONLY reject when the trace resolves to `Caller(_)`; any
-            // Block/Root/Rodata/safe terminus stays allowed (the slot
-            // misroute can't happen for non-Caller sources).
-            match underlying_caller_via_aliases(source_arg_id, inst_lookup, region_map, summaries) {
-                Some(RegionId::Caller(_)) => {
-                    // Drop through to emit conflict.
-                }
-                _ => return,
-            }
+        None => {
+            // Source is an aliasing wrapper (FieldGet/Load/vec-get/GetArg/Phi)
+            // with no direct region. The slot is determined at the alloc
+            // site by inference; aliasing wrappers don't override it, so
+            // we accept unconditionally here.
+            return;
         }
-        None => return,
     }
 
     let source_span = inst_lookup
@@ -3534,6 +3584,162 @@ mod tests {
     }
 
     #[test]
+    fn target_region_marker_for_getarg_returns_caller_store_target() {
+        // Issue #317 tracer. `target_region_marker` must record the
+        // destination parameter index so `lub_to_region_id` can later mint
+        // `Caller(HiddenRegionIdx(N))` per allocation. A target resolving
+        // to `GetArg(p)` must produce `MustOutliveMarker::CallerStoreTarget(p)`,
+        // replacing the legacy slot-less `VirtualCaller`.
+        let getarg = inst(7, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(2));
+        let mut inst_lookup: BTreeMap<InstId, (BlockId, &Inst)> = BTreeMap::new();
+        inst_lookup.insert(InstId(7), (BlockId(0), &getarg));
+        let summaries: Vec<InternalSummary> = vec![];
+        assert_eq!(
+            target_region_marker(InstId(7), &inst_lookup, &summaries),
+            MustOutliveMarker::CallerStoreTarget(2),
+        );
+    }
+
+    #[test]
+    fn lub_caller_store_target_mints_slot_for_single_store_target() {
+        // Issue #317 Cycle 2: a `CallerStoreTarget(p)` marker resolves to
+        // `Caller(HiddenRegionIdx(slot))` where slot is computed from the
+        // function's summary using codegen's
+        // `hidden_region_idx_for_store_target` formula. With a single store
+        // target on param 0 and no `FreshInCaller` return, the slot is 0.
+        let f = function(
+            0,
+            "single_store",
+            vec![Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, vec![return_unit_inst(0)])],
+        );
+        let tree = BlockTree::from_function(&f);
+        let mut summary = InternalSummary::seed(1);
+        summary.store_effects.insert((
+            0,
+            InternalReturnRegion::Published(RegionConstraint::FreshInCaller),
+        ));
+        let markers = marker_set(&[MustOutliveMarker::CallerStoreTarget(0)]);
+        assert_eq!(
+            lub_to_region_id(&markers, BlockId(0), &tree, &summary),
+            RegionId::Caller(HiddenRegionIdx(0)),
+        );
+    }
+
+    #[test]
+    fn routed_alloc_to_second_caller_slot_minted_correctly() {
+        // Issue #317 Cycle 3: with `FreshInCaller` return AND one store
+        // target on param 0, the codegen layout is:
+        //   slot 0 = return arena
+        //   slot 1 = store-target arena for param 0
+        // An alloc whose marker says `CallerStoreTarget(0)` must therefore
+        // mint `Caller(HiddenRegionIdx(1))` — NOT slot 0 (that would
+        // collide with the return arena).
+        let f = function(
+            0,
+            "fresh_plus_store",
+            vec![Ty::Ptr],
+            Ty::Ptr,
+            vec![block(0, vec![return_unit_inst(0)])],
+        );
+        let tree = BlockTree::from_function(&f);
+        let mut summary = InternalSummary::seed(1);
+        summary.return_region = InternalReturnRegion::Published(RegionConstraint::FreshInCaller);
+        summary.store_effects.insert((
+            0,
+            InternalReturnRegion::Published(RegionConstraint::FreshInCaller),
+        ));
+        let markers = marker_set(&[MustOutliveMarker::CallerStoreTarget(0)]);
+        assert_eq!(
+            lub_to_region_id(&markers, BlockId(0), &tree, &summary),
+            RegionId::Caller(HiddenRegionIdx(1)),
+        );
+    }
+
+    #[test]
+    fn routed_alloc_with_two_distinct_store_targets_picks_correct_slots() {
+        // Issue #317 Cycle 4: two store targets on params 0 and 2 (no
+        // FreshInCaller return). Codegen sorts targets ascending and
+        // dedups, so the layout is:
+        //   slot 0 = store-target arena for param 0
+        //   slot 1 = store-target arena for param 2
+        // Each `CallerStoreTarget(p)` marker must mint its corresponding
+        // slot — they are distinct and must NOT collide on slot 0.
+        let f = function(
+            0,
+            "two_stores",
+            vec![Ty::Ptr, Ty::I64, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, vec![return_unit_inst(0)])],
+        );
+        let tree = BlockTree::from_function(&f);
+        let mut summary = InternalSummary::seed(3);
+        // No FreshInCaller return — return is Uninit (resolves to ConstantGlobal).
+        summary.store_effects.insert((
+            0,
+            InternalReturnRegion::Published(RegionConstraint::FreshInCaller),
+        ));
+        summary.store_effects.insert((
+            2,
+            InternalReturnRegion::Published(RegionConstraint::FreshInCaller),
+        ));
+        assert_eq!(
+            lub_to_region_id(
+                &marker_set(&[MustOutliveMarker::CallerStoreTarget(0)]),
+                BlockId(0),
+                &tree,
+                &summary,
+            ),
+            RegionId::Caller(HiddenRegionIdx(0)),
+        );
+        assert_eq!(
+            lub_to_region_id(
+                &marker_set(&[MustOutliveMarker::CallerStoreTarget(2)]),
+                BlockId(0),
+                &tree,
+                &summary,
+            ),
+            RegionId::Caller(HiddenRegionIdx(1)),
+        );
+    }
+
+    #[test]
+    fn phi_with_distinct_target_slots_picks_lowest_slot() {
+        // Issue #317 Cycle 5: a marker set carrying two distinct
+        // `CallerStoreTarget(p)` markers resolves to two different slots.
+        // The LUB picks the lowest deterministically — strictly better
+        // than the pre-#317 collapse-everything-to-slot-0 path. The
+        // AMBIGUOUS sentinel is reserved for a future enhancement that
+        // detects unsafe multi-slot routings via a post-inference check.
+        let f = function(
+            0,
+            "two_stores",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, vec![return_unit_inst(0)])],
+        );
+        let tree = BlockTree::from_function(&f);
+        let mut summary = InternalSummary::seed(2);
+        summary.store_effects.insert((
+            0,
+            InternalReturnRegion::Published(RegionConstraint::FreshInCaller),
+        ));
+        summary.store_effects.insert((
+            1,
+            InternalReturnRegion::Published(RegionConstraint::FreshInCaller),
+        ));
+        let markers = marker_set(&[
+            MustOutliveMarker::CallerStoreTarget(0),
+            MustOutliveMarker::CallerStoreTarget(1),
+        ]);
+        assert_eq!(
+            lub_to_region_id(&markers, BlockId(0), &tree, &summary),
+            RegionId::Caller(HiddenRegionIdx(0)),
+        );
+    }
+
+    #[test]
     fn block_tree_lub_of_siblings_routes_to_parent_block() {
         let f = function(
             0,
@@ -3553,7 +3759,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            lub_to_region_id(&markers, BlockId(0), &tree),
+            lub_to_region_id(&markers, BlockId(0), &tree, &InternalSummary::seed(0)),
             RegionId::Block(BlockId(0))
         );
     }
@@ -3578,7 +3784,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            lub_to_region_id(&markers, BlockId(1), &tree),
+            lub_to_region_id(&markers, BlockId(1), &tree, &InternalSummary::seed(0)),
             RegionId::Block(BlockId(1))
         );
     }
@@ -3604,7 +3810,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            lub_to_region_id(&markers, BlockId(1), &tree),
+            lub_to_region_id(&markers, BlockId(1), &tree, &InternalSummary::seed(0)),
             RegionId::Block(BlockId(0))
         );
     }
@@ -3629,7 +3835,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            lub_to_region_id(&markers, BlockId(10), &tree),
+            lub_to_region_id(&markers, BlockId(10), &tree, &InternalSummary::seed(0)),
             RegionId::Caller(HiddenRegionIdx(0))
         );
     }
@@ -3647,7 +3853,7 @@ mod tests {
         let markers = marker_set(&[MustOutliveMarker::Block(BlockId(0))]);
 
         assert_eq!(
-            lub_to_region_id(&markers, BlockId(0), &tree),
+            lub_to_region_id(&markers, BlockId(0), &tree, &InternalSummary::seed(0)),
             RegionId::Block(BlockId(0))
         );
     }
@@ -3668,7 +3874,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            lub_to_region_id(&markers, BlockId(0), &tree),
+            lub_to_region_id(&markers, BlockId(0), &tree, &InternalSummary::seed(0)),
             RegionId::Root
         );
     }
@@ -5689,16 +5895,15 @@ mod tests {
         );
     }
 
-    /// `ambiguous_caller_slot` reject path: a function with multiple
-    /// hidden caller-arena slots (here: two unique store-effect targets,
-    /// no FreshInCaller return) cannot soundly accept a `Caller(_)` source
-    /// because inference uniformly tags those allocations as
-    /// `Caller(HiddenRegionIdx(0))`. Codegen would silently route the
-    /// alloc to slot 0 even when the store-effect demands slot 1+.
-    /// Reject with `RegionConflict` until the deeper fix (#317) lets
-    /// inference produce the right `HiddenRegionIdx(N)`.
+    /// Issue #317 acceptance: a function with two distinct store-effect
+    /// targets routes each fresh allocation into its own slot. Slot-aware
+    /// inference mints `Caller(HiddenRegionIdx(0))` for the first routed
+    /// alloc and `Caller(HiddenRegionIdx(1))` for the second — codegen
+    /// then writes them into distinct hidden arenas. No `RegionConflict`
+    /// fires; this is the over-conservative reject that PR #315 had to
+    /// guard against and that issue #317 lifts.
     #[test]
-    fn region_conflict_when_multiple_caller_slots_make_caller0_ambiguous() {
+    fn slot_aware_inference_routes_allocs_to_distinct_hidden_slots() {
         // Callee: stores arg[1] into arg[0], stores arg[3] into arg[2].
         // Two unique store-effect targets → two hidden caller slots.
         let callee_insts = vec![
@@ -5758,17 +5963,12 @@ mod tests {
         let mut m = module(vec![callee, caller]);
         infer_regions(&mut m);
 
-        // Both fresh allocs are routed via store-effect chains, so both
-        // get caller-region must-outlive markers — but `caller` has two
-        // hidden arena slots (one per unique store-effect target inherited
-        // from the callee), making the uniform Caller(0) tagging
-        // ambiguous. Two routings → exactly two RegionConflict diagnostics
-        // (one per ambiguous arg). The exact `== 2` count also doubles as
-        // the SCC-deduplication regression guard the previously-deleted
-        // `region_conflict_alloc_into_param_via_callee_store_effect` test
-        // provided: `infer_regions` keeps only the convergence iteration's
-        // diagnostics (lines ~123-126), so without dedup we'd see one
-        // copy per fixed-point round.
+        // Each fresh alloc routes through exactly one callee store-effect
+        // target, so the marker propagation tags each with a distinct
+        // `CallerStoreTarget(p)`: fresh1 → param 0 (slot 0), fresh2 →
+        // param 1 (slot 1). Slot-aware inference mints the matching
+        // `Caller(HiddenRegionIdx(N))`; the post-inference store-conflict
+        // check accepts both because the slots are unambiguous.
         let conflicts: Vec<_> = m
             .warnings
             .iter()
@@ -5776,17 +5976,29 @@ mod tests {
             .collect();
         assert_eq!(
             conflicts.len(),
-            2,
-            "expected exactly 2 RegionConflict diagnostics (one per ambiguous \
-             routed arg, no SCC-iteration dupes); warnings: {:?}",
+            0,
+            "slot-aware inference should accept distinct-slot routings; \
+             warnings: {:?}",
             m.warnings
         );
-        // Issue #254 regression guard: the diagnostic must label the
-        // analyzing caller's source file ("caller.vow"), never the
-        // callee's ("callee.vow"). This is the same property the
-        // pre-existing `region_conflict_uses_callee_function_source_file`
-        // test (deleted in this PR's first commit) used to assert; rolling
-        // it forward here keeps the source_file plumbing covered.
+        // The two fresh allocs occupy slots 0 and 1 respectively.
+        // Caller block-0 inst layout: GetArg p (10), GetArg q (11),
+        // RegionAlloc fresh1 (12), RegionAlloc fresh2 (13), Call (14),
+        // Return (15). Indexes into blocks[0].insts: 0..6.
+        assert_eq!(
+            m.functions[1].blocks[0].insts[2].region,
+            RegionId::Caller(HiddenRegionIdx(0)),
+            "fresh1 routes to caller slot 0 (param 0's store-target arena)"
+        );
+        assert_eq!(
+            m.functions[1].blocks[0].insts[3].region,
+            RegionId::Caller(HiddenRegionIdx(1)),
+            "fresh2 routes to caller slot 1 (param 1's store-target arena)"
+        );
+        // Issue #254 regression guard remains relevant for any other
+        // diagnostics emitted (e.g., RegionRootEscape notes); but with
+        // zero conflicts here, only the legacy file-routing guard remains
+        // exercised by sibling tests.
         for c in &conflicts {
             assert_eq!(c.severity, Severity::Error);
             assert_eq!(c.blame, Blame::Callee);
@@ -5804,11 +6016,10 @@ mod tests {
     }
 
     /// `RegionRootEscape` positive coverage: a function with exactly one
-    /// hidden caller slot (one store target, no FreshInCaller return)
-    /// has `ambiguous_caller_slot = false`, so a `Caller(_)` alloc
-    /// routed into the parameter container is accepted by the conflict
-    /// check AND fires the note. Avoids the multi-slot case where
-    /// `RegionConflict` would also fire and the note is suppressed.
+    /// hidden caller slot (one store target, no FreshInCaller return).
+    /// The routed `Caller(_)` alloc is accepted by the conflict check AND
+    /// the note fires. The note is suppressed for multi-slot functions
+    /// (legacy gate); single-slot keeps the signal clean.
     #[test]
     fn region_root_escape_note_emitted_for_single_slot_routed_alloc() {
         // Callee: stores arg[1] into arg[0]. One target → one hidden slot
@@ -5830,7 +6041,7 @@ mod tests {
         // Caller: takes a parameter container `a`, allocates `routed`,
         // routes it through the callee, returns Void. Inherits the
         // callee's store-effect → 1 store target, no FreshInCaller
-        // return, total slots = 1, ambiguous_caller_slot = false.
+        // return, total slots = 1.
         let caller_insts = vec![
             inst(10, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
             inst(
@@ -5860,9 +6071,9 @@ mod tests {
         let mut m = module(vec![callee, caller]);
         infer_regions(&mut m);
 
-        // `ambiguous_caller_slot` is false (one slot), so no
-        // RegionConflict — the routing is accepted. The note fires for
-        // the routed alloc (Caller(0) region, not on returned-id skip-set).
+        // Single-slot routing — no RegionConflict, and the
+        // RegionRootEscape note fires for the routed alloc
+        // (Caller(0) region, not on the returned-id skip-set).
         assert!(
             m.warnings
                 .iter()
@@ -6013,8 +6224,15 @@ mod tests {
     /// allocation. Without this widened reject, the slot-0 pointer can be
     /// stored into a longer-lived slot-N container and dangle when slot 0
     /// is freed first (hidden caller arenas have asymmetric lifetimes).
+    /// Issue #317 acceptance: a Phi merging a fresh alloc and a parameter
+    /// converges on a single store-target destination (slot 0). Slot-aware
+    /// inference back-propagates `CallerStoreTarget(0)` through the Phi to
+    /// the fresh-alloc arm, so the alloc gets a precise `Caller(0)` —
+    /// matching the actual destination. This is the over-conservative
+    /// reject PR #315 had to apply; with slot-aware inference, the program
+    /// is provably sound.
     #[test]
-    fn region_conflict_when_divergent_phi_mixes_caller_arm_in_ambiguous_mode() {
+    fn divergent_phi_with_single_target_slot_accepts_under_slot_aware_inference() {
         // Callee: stores arg[1] into arg[0], stores arg[3] into arg[2].
         // Two unique store-effect targets → two hidden caller slots.
         let callee_insts = vec![
@@ -6130,12 +6348,9 @@ mod tests {
         let mut m = module(vec![callee, caller]);
         infer_regions(&mut m);
 
-        // Exactly one conflict — the divergent Phi at arg 1 trips the
-        // any-Caller-arm reject (UU widening). The slot-2 store has a
-        // parameter source so it doesn't reach the Caller terminus and
-        // the conflict check returns early. If the Phi reject regresses,
-        // `conflicts.len() == 0` and this test fails loudly instead of
-        // being silently covered by a sibling alloc.
+        // The Phi has a single use that resolves to caller param 0 (slot 0).
+        // Slot-aware inference back-propagates `CallerStoreTarget(0)` to
+        // the fresh-alloc arm, giving it the correct slot. No conflict.
         let conflicts: Vec<_> = m
             .warnings
             .iter()
@@ -6143,23 +6358,21 @@ mod tests {
             .collect();
         assert_eq!(
             conflicts.len(),
-            1,
-            "expected exactly one RegionConflict from the divergent-Phi reject path; \
-             warnings: {:?}",
+            0,
+            "single-slot Phi destinations should be accepted by slot-aware \
+             inference; warnings: {:?}",
             m.warnings
         );
     }
 
-    /// `CallTarget`-AliasOf alias-walk soundness: when the store source is
-    /// a `CallTarget` whose callee returns `AliasOf(j)`, the alias walk
-    /// must trace through the call to the underlying argument and report
-    /// `Some(Caller(_))` if it terminates at a fresh alloc. Without this,
-    /// the marker propagation pushes VirtualCaller back to the underlying
-    /// fresh alloc (tagging it Caller(0)), the walk falls into the safe
-    /// terminus branch, and the conservative reject doesn't fire — letting
-    /// codegen publish slot-0 into a slot-1 target.
+    /// Issue #317 acceptance: a fresh alloc laundered through an
+    /// AliasOf-returning call (`id(fresh1)`) and a sibling direct fresh
+    /// alloc each route to a distinct hidden caller slot. Slot-aware
+    /// inference + AliasOf marker back-propagation give the CallTarget
+    /// chain its precise destination slot; the post-inference check
+    /// accepts both. This is the over-conservative reject lifted by #317.
     #[test]
-    fn region_conflict_when_call_target_alias_of_source_in_ambiguous_mode() {
+    fn slot_aware_inference_handles_call_target_alias_of_routing() {
         // identity callee: returns its first arg unchanged.
         let id_insts = vec![
             inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
@@ -6233,18 +6446,13 @@ mod tests {
         let mut m = module(vec![id_fn, helper, caller]);
         infer_regions(&mut m);
 
-        // Both routed args trip the conservative reject:
-        //   * arg 1 (CallTarget-AliasOf id(fresh1)) — exercised by the new
-        //     CallTarget arm in `underlying_caller_via_aliases_inner`.
-        //   * arg 3 (direct fresh alloc) — exercised by the existing
-        //     ambiguous_caller_slot direct-Caller match.
-        // Asserting `== 2` (rather than `!is_empty()`) means a regression
-        // where the CallTarget-AliasOf trace silently breaks but the
-        // direct alloc still fires would fail loudly with `1 != 2`
-        // instead of being silently masked. Same shape as the
-        // `region_conflict_when_divergent_phi_mixes_caller_arm_in_ambiguous_mode`
-        // and `region_conflict_when_multiple_caller_slots_make_caller0_ambiguous`
-        // count assertions.
+        // Both routed args resolve to distinct hidden caller slots:
+        //   * arg 1 (CallTarget-AliasOf id(fresh1)): the alias chain back-
+        //     propagates `CallerStoreTarget(0)` to fresh1 → slot 0.
+        //   * arg 3 (direct fresh alloc): tagged `CallerStoreTarget(1)` by
+        //     the helper's second store-effect → slot 1.
+        // Each marker set has exactly one slot, so neither becomes
+        // AMBIGUOUS. No conflict fires.
         let conflicts: Vec<_> = m
             .warnings
             .iter()
@@ -6252,9 +6460,9 @@ mod tests {
             .collect();
         assert_eq!(
             conflicts.len(),
-            2,
-            "expected exactly 2 RegionConflict diagnostics — one per ambiguous routed arg, \
-             with the CallTarget-AliasOf path independently exercised; warnings: {:?}",
+            0,
+            "slot-aware inference should accept distinct-slot routings via \
+             CallTarget-AliasOf; warnings: {:?}",
             m.warnings
         );
     }

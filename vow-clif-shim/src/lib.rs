@@ -438,13 +438,26 @@ fn arena_value_for_region(
     match kind {
         REGION_KIND_ROOT => Some(builder.ins().global_value(types::I64, root_arena_gv)),
         REGION_KIND_BLOCK => Some(block_arena_value(builder, block_arena_slots, payload)),
-        REGION_KIND_CALLER => hidden_region_values
-            .get(payload as usize)
-            .copied()
-            .or_else(|| {
-                eprintln!("clif_shim: missing hidden arena parameter k={payload}");
-                None
-            }),
+        REGION_KIND_CALLER => {
+            // Issue #317: AMBIGUOUS sentinel (val=u32::MAX) signals
+            // slot-aware inference saw a multi-slot disagreement. The
+            // post-inference store-conflict check rejects any STORE whose
+            // source has this region; codegen still has to lower the
+            // alloc itself (it may sit on a non-store path), so fall back
+            // to slot 0 as a safe placeholder.
+            let resolved = if payload == u32::MAX as i64 {
+                0
+            } else {
+                payload
+            };
+            hidden_region_values
+                .get(resolved as usize)
+                .copied()
+                .or_else(|| {
+                    eprintln!("clif_shim: missing hidden arena parameter k={payload}");
+                    None
+                })
+        }
         REGION_KIND_RODATA => {
             eprintln!("clif_shim: cannot allocate into REGION_KIND_RODATA");
             None

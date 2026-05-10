@@ -38,7 +38,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use vow_diag::Severity;
-use vow_ir::{RegionConstraint, decode_module, encode_module};
+use vow_ir::{decode_module, encode_module, RegionConstraint};
 
 /// Assert canonical-form invariants on every function's summary.
 fn assert_canonical_summaries(module: &vow_ir::Module) {
@@ -150,8 +150,8 @@ fn small_module_uninit_never_leaks_after_round_trip() {
     // run the pass, encode + decode via the public .vmod path, and
     // assert canonical-form invariants survive the round trip.
     use vow_ir::{
-        BasicBlock, BlockId, FuncId, Function, HiddenRegionIdx, Inst, InstData, InstId, Module,
-        Opcode, RegionId, RegionSummary, Ty, VowEntry, VowId, infer_regions,
+        infer_regions, BasicBlock, BlockId, FuncId, Function, HiddenRegionIdx, Inst, InstData,
+        InstId, Module, Opcode, RegionId, RegionSummary, Ty, VowEntry, VowId,
     };
     use vow_syntax::ast::Effect;
     use vow_syntax::span::Span;
@@ -478,5 +478,61 @@ fn selfhosted_internal_call_fresh_return_emits_region_root_escape_note() {
         !notes.is_empty(),
         "self-hosted build/vowc must also emit at least one RegionRootEscape note for \
          the internal-call rewrite path (issue #320 acceptance #3); diagnostics: {diagnostics:?}"
+    );
+}
+
+/// Issue #317 acceptance: a function with both `FreshInCaller` return AND
+/// store-effects on a parameter must compile cleanly. Slot-aware region
+/// inference assigns the registered `Item` to slot 1 (the parameter's
+/// store-target arena) and the returned `Item` to slot 0 (the return
+/// arena), so codegen routes each allocation to the correct hidden
+/// arena. PR #315's `ambiguous_caller_slot` conservative reject blocked
+/// this pattern; #317 unblocks it.
+#[test]
+fn rust_split_targets_repro_compiles() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let fixture = root
+        .join("tests")
+        .join("run")
+        .join("region_split_targets.vow");
+    let out = Command::new(env!("CARGO_BIN_EXE_vow"))
+        .args(["build", "--no-verify"])
+        .arg(&fixture)
+        .output()
+        .expect("failed to run vow");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("failed to parse vow stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let status = parsed["status"].as_str();
+    // Tolerate link-only failure when run without `cargo build --release
+    // --all` — the region pass still runs and the diagnostics list is
+    // populated regardless. See sibling
+    // `rust_routed_aggregate_via_callee_store_effect_compiles` for the
+    // same accommodation.
+    let runtime_link_failure = status == Some("CompileFailed")
+        && parsed["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("libvow_runtime.a"));
+    assert!(
+        matches!(status, Some("Verified") | Some("Unverified")) || runtime_link_failure,
+        "expected Verified/Unverified status (or link-only failure), got \
+         {status:?}\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    let diagnostics = parsed["diagnostics"]
+        .as_array()
+        .expect("diagnostics should be an array");
+    let conflicts: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionConflict"))
+        .collect();
+    assert!(
+        conflicts.is_empty(),
+        "issue #317 repro must not trip RegionConflict; diagnostics: \
+         {diagnostics:?}"
     );
 }
