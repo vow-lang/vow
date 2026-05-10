@@ -1,0 +1,37 @@
+// TEST: stdout ""
+// Issue #320 fixture: an internal `Call` whose callee publishes
+// `FreshInCaller` is heap-producing in the caller. When its result is routed
+// into a parameter container via a sibling callee's store effect, region
+// inference's LUB resolves the call result's region to `Caller(_)` — but
+// `analyze_function`'s conservative codegen pass rewrites that to `Root`
+// before the note pass. The pre-rewrite `note_region_map` preserves the
+// original `Caller(_)` so a `RegionRootEscape` note still fires.
+//
+// Companion to `tests/run/region_helper_routed_aggregate.vow` (which
+// exercises the canonical direct-`RegionAlloc{Caller(_)}` path that already
+// fires the note today).
+module RegionInternalCallRootEscape
+
+struct Box {
+    value: Payload,
+}
+
+struct Payload {
+    n: i64,
+}
+
+fn make_payload() -> Payload {
+    Payload { n: 1 }
+}
+
+fn put(target: Box, value: Payload) {
+    target.value = value;
+}
+
+fn use_caller(target: Box) {
+    put(target, make_payload());
+}
+
+fn main() -> i32 {
+    0
+}

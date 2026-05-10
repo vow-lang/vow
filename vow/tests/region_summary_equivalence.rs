@@ -362,3 +362,121 @@ fn rust_routed_aggregate_via_callee_store_effect_compiles() {
          diagnostics: {diagnostics:?}"
     );
 }
+
+/// Issue #320 regression guard: an internal `Call` whose callee returns
+/// `FreshInCaller`, routed into a parameter container via a sibling callee's
+/// store effect, must surface a `RegionRootEscape` note. Pre-fix, the
+/// conservative `Caller(_) → Root` rewrite for internal-call results in
+/// `analyze_function` collapsed the region before the note pass observed it,
+/// so this fixture emitted zero notes. The pre-rewrite `note_region_map`
+/// preserves the original `Caller(_)` so the note still fires.
+#[test]
+fn rust_internal_call_fresh_return_emits_region_root_escape_note() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let fixture = root
+        .join("tests")
+        .join("run")
+        .join("region_internal_call_root_escape.vow");
+    let out = Command::new(env!("CARGO_BIN_EXE_vow"))
+        .args(["build", "--no-verify"])
+        .arg(&fixture)
+        .output()
+        .expect("failed to run vow");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("failed to parse vow stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let status = parsed["status"].as_str();
+    // Same link-failure tolerance as `rust_routed_aggregate_via_callee_store_effect_compiles`.
+    let runtime_link_failure = status == Some("CompileFailed")
+        && parsed["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("libvow_runtime.a"));
+    assert!(
+        matches!(status, Some("Verified") | Some("Unverified")) || runtime_link_failure,
+        "expected Verified/Unverified status (or link-only failure on \
+         missing libvow_runtime.a), got {status:?}\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    let diagnostics = parsed["diagnostics"]
+        .as_array()
+        .expect("diagnostics should be an array");
+    let conflicts: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionConflict"))
+        .collect();
+    assert!(
+        conflicts.is_empty(),
+        "single-slot routing must not trip RegionConflict; diagnostics: {diagnostics:?}"
+    );
+    let notes: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .collect();
+    // Issue #320 acceptance criterion #1 explicitly requires *exactly one*
+    // note for this source-level fixture; the Rust pipeline is deterministic
+    // for this shape, so pin the count rather than just `!notes.is_empty()`.
+    // The self-hosted parity test below stays at the looser bound because of
+    // the documented #318 gate over-approximation.
+    assert_eq!(
+        notes.len(),
+        1,
+        "internal-call FreshInCaller routed into a parameter container must emit \
+         exactly one RegionRootEscape note (issue #320 acceptance #1); \
+         diagnostics: {diagnostics:?}"
+    );
+}
+
+/// Issue #320 cross-compiler parity: the self-hosted `build/vowc` must also
+/// fire a `RegionRootEscape` note for the internal-call rewrite path. This
+/// is the first cross-compiler diagnostic check in this file (the file's
+/// header at lines 24-35 deferred parity to a follow-up); we add it here
+/// because acceptance criterion #3 of issue #320 explicitly requires both
+/// compilers fire on the same input, and the shell-suite mechanism only
+/// asserts runtime stdout, not diagnostic content. Skips when `build/vowc`
+/// is not yet built (pre-bootstrap), consistent with the project's pattern
+/// of tolerating optional artifacts.
+#[test]
+fn selfhosted_internal_call_fresh_return_emits_region_root_escape_note() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let vowc = root.join("build").join("vowc");
+    if !vowc.exists() {
+        eprintln!(
+            "skipping {}: build/vowc not present (run scripts/bootstrap.sh first)",
+            "selfhosted_internal_call_fresh_return_emits_region_root_escape_note"
+        );
+        return;
+    }
+    let fixture = root
+        .join("tests")
+        .join("run")
+        .join("region_internal_call_root_escape.vow");
+    let out = Command::new(&vowc)
+        .args(["build", "--no-verify"])
+        .arg(&fixture)
+        .output()
+        .expect("failed to run build/vowc");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("failed to parse build/vowc stdout as JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let diagnostics = parsed["diagnostics"]
+        .as_array()
+        .expect("diagnostics should be an array");
+    let notes: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d["error_code"].as_str() == Some("RegionRootEscape"))
+        .collect();
+    assert!(
+        !notes.is_empty(),
+        "self-hosted build/vowc must also emit at least one RegionRootEscape note for \
+         the internal-call rewrite path (issue #320 acceptance #3); diagnostics: {diagnostics:?}"
+    );
+}
