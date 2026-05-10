@@ -1568,6 +1568,7 @@ fn collect_live_field_set_ids(func: &Function) -> BTreeSet<InstId> {
 ///      `RegionAlloc` (excludes mutations into parameter containers);
 ///   2. `live_field_set_ids` — within each block, only the textually-last
 ///      FieldSet for each `(target, field_idx)` pair (issue #326).
+///
 /// See spec §4.4 (visibility — field-initializer exemption).
 fn collect_return_value_sources(
     start: InstId,
