@@ -789,3 +789,76 @@ fn rust_arena_push_fixture_pins_note_count() {
         notes.len(),
     );
 }
+
+/// Issue #318 regression guard — Rust↔self-hosted RegionRootEscape
+/// note-count parity on a fixture exercising mixed store-effect source
+/// kinds (ConstantGlobal + AliasOf).
+///
+/// The divergence the gate alignment closes is structural: today both
+/// compilers' `add_store_effect` paths supply only `Published(_)`-equivalent
+/// kinds, so this test passes both before and after the alignment. Its
+/// value is forward-looking — a future code path that publishes a
+/// non-Published kind on either side cannot silently widen the
+/// note-emission gate without also tripping this assertion.
+///
+/// Skips cleanly if `build/vowc` is absent (the self-hosted binary is
+/// produced by `scripts/bootstrap.sh`, which is not a `cargo test`
+/// prerequisite).
+#[test]
+fn region_root_escape_note_count_parity_rust_vs_self_hosted() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let fixture = root
+        .join("tests")
+        .join("run")
+        .join("region_root_escape_parity.vow");
+    let vowc = root.join("build").join("vowc");
+    if !vowc.exists() {
+        eprintln!(
+            "skipping {}: build/vowc not present (run scripts/bootstrap.sh)",
+            module_path!()
+        );
+        return;
+    }
+
+    let count_notes = |bin: &std::path::Path, label: &str| -> usize {
+        let out = Command::new(bin)
+            .args(["build", "--no-verify"])
+            .arg(&fixture)
+            .output()
+            .unwrap_or_else(|e| panic!("failed to run {label}: {e}"));
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+            panic!(
+                "failed to parse {label} stdout as JSON: {e}\n\
+                     stdout: {stdout}\nstderr: {stderr}"
+            )
+        });
+        parsed["diagnostics"]
+            .as_array()
+            .expect("diagnostics should be an array in compiler JSON output")
+            .iter()
+            .filter(|x| x["error_code"].as_str() == Some("RegionRootEscape"))
+            .count()
+    };
+
+    let rust_count = count_notes(std::path::Path::new(env!("CARGO_BIN_EXE_vow")), "rust vow");
+    let self_hosted_count = count_notes(&vowc, "build/vowc");
+    // Floor: the fixture is constructed to trigger at least one note in each
+    // compiler. A joint regression to zero (e.g. gate logic accidentally
+    // suppressed everywhere) would make the parity assertion below pass
+    // silently; this assertion catches that.
+    assert!(
+        rust_count > 0,
+        "rust vow emitted 0 RegionRootEscape notes on region_root_escape_parity.vow — \
+         gate may be suppressed"
+    );
+    assert_eq!(
+        rust_count, self_hosted_count,
+        "RegionRootEscape note-count parity broken: rust={rust_count}, self-hosted={self_hosted_count} \
+         on tests/run/region_root_escape_parity.vow"
+    );
+}

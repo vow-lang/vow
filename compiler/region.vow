@@ -277,7 +277,7 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
     // to a caller. See arena_memory.md §4.4.
     emit_root_escape_notes_module(m, region_keys, region_vals,
                                    note_region_keys, note_region_vals,
-                                   int_kinds, int_se_targets, dctx);
+                                   int_kinds, int_se_src_kinds, dctx);
 
     // Commit per-inst regions.
     let mut fi2: i64 = 0;
@@ -979,6 +979,25 @@ fn unique_store_target_count(flat: Vec<i64>) -> i64 {
     count
 }
 
+// Mirrors Rust's `any_published_store` filter at vow-ir/src/region.rs:1481-1484.
+// Returns true if the parallel `int_se_src_kinds[fi]` array contains any
+// kind other than RSUM_INTERNAL_UNINIT(). This is exact (not merely
+// conservative) because the integer encoding is closed: Published kinds
+// map to {0..3} and RSUM_INTERNAL_UNINIT = -1 is the only non-Published
+// value. As long as that invariant holds, `!= UNINIT` ≡ `is Published`,
+// and `add_store_effect` is the single chokepoint that writes
+// `int_se_src_kinds`, so adding a future non-Published kind requires
+// either extending the encoding past {0..3} or adding a new sentinel —
+// both of which would force this gate's review.
+fn any_published_se_kind(kinds: Vec<i64>) -> bool {
+    let mut i: i64 = 0;
+    while i < kinds.len() {
+        if kinds[i] != RSUM_INTERNAL_UNINIT() { return true; }
+        i = i + 1;
+    }
+    false
+}
+
 fn check_region_store_conflicts_module(
     m: IrModule, id_to_inst_per_fn: Vec<Vec<IrInst>>,
     region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
@@ -1092,27 +1111,20 @@ fn emit_root_escape_notes_module(
     region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
     note_region_keys: Vec<Vec<i64>>, note_region_vals: Vec<Vec<i64>>,
     int_kinds: Vec<i64>,
-    int_se_targets: Vec<Vec<i64>>,
+    int_se_src_kinds: Vec<Vec<i64>>,
     dctx: DiagCtx
 ) {
     let mut fi: i64 = 0;
     while fi < m.functions.len() {
         let f: IrFunction = m.functions[fi];
         let return_kind: i64 = int_kinds[fi];
-        // Divergence from Rust's mirror: Rust filters
-        // `summary.store_effects` to `Published(_)` constraints (excludes
-        // Unresolved/NotPublished); self-hosted's flat `int_se_targets`
-        // doesn't carry that distinction, so any non-empty entry triggers
-        // the gate. Conservative over-approximation — fires the note for
-        // a few functions Rust would skip — and spec-allowed for non-
-        // blocking notes. Same family as the
-        // `unique_store_target_count` adjacency-dedup asymmetry.
-        // TODO(#318): when the .vmod schema gains a publication
-        // discriminator at this layer, re-align with Rust's
-        // `Published(_)` filter so both compilers emit the same set
-        // of `RegionRootEscape` notes.
+        // Mirrors Rust's `any_published_store` filter at
+        // vow-ir/src/region.rs:1481-1484: only count store_effects whose
+        // source constraint is `Published(_)` (excludes the Uninit seed).
+        // `int_se_src_kinds` already carries the discriminator, written
+        // in lockstep with `int_se_targets` via `add_store_effect`.
         let has_publishable: bool = return_kind == RSUM_KIND_FRESH_IN_CALLER()
-            || int_se_targets[fi].len() > 0;
+            || any_published_se_kind(int_se_src_kinds[fi]);
         if !has_publishable {
             fi = fi + 1;
             continue;
