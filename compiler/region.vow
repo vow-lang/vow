@@ -1159,7 +1159,8 @@ fn emit_root_escape_notes_module(
         // current stdlib has no equivalent ordered-set type; the linear
         // scan is fine for typical functions but would diverge on very
         // large `returned_ids` — track if it ever bites.
-        let returned_ids: Vec<i64> = collect_returned_ids(bks);
+        let live_field_set_ids: Vec<i64> = collect_live_field_set_ids(bks);
+        let returned_ids: Vec<i64> = collect_returned_ids(bks, live_field_set_ids);
         let mut bi: i64 = 0;
         while bi < bks.len() {
             let blk: IrBlock = bks[bi];
@@ -1206,11 +1207,13 @@ fn emit_root_escape_notes_module(
 }
 
 // Build the FreshInCaller return-value skip-set used by
-// `emit_root_escape_notes_module`. The FieldSet edge is gated on
-// `region_alloc_ids` so it follows initializers of a fresh struct
-// (`Item { name: ... }`) but not mutations into a parameter
-// (`target.name = ...; return target`); spec §4.4.
-fn collect_returned_ids(bks: Vec<IrBlock>) -> Vec<i64> {
+// `emit_root_escape_notes_module`. The FieldSet edge is gated on:
+//   1. `region_alloc_ids` — the target pointer must be a fresh
+//      `RegionAlloc` (excludes mutations into parameter containers);
+//   2. `live_field_set_ids` — within each block, only the textually-last
+//      FieldSet for each `(target, field_idx)` pair (issue #326).
+// See spec §4.4 (visibility — field-initializer exemption).
+fn collect_returned_ids(bks: Vec<IrBlock>, live_field_set_ids: Vec<i64>) -> Vec<i64> {
     let mut out: Vec<i64> = Vec::new();
     let mut stack: Vec<i64> = Vec::new();
     let mut region_alloc_ids: Vec<i64> = Vec::new();
@@ -1253,6 +1256,7 @@ fn collect_returned_ids(bks: Vec<IrBlock>) -> Vec<i64> {
                 }
                 if id_is_fresh_alloc && inst.op == IOP_FIELD_SET()
                     && inst.args.len() >= 2 && inst.args[0] == id
+                    && region_vec_contains_i64(live_field_set_ids, inst.id)
                 {
                     stack.push(inst.args[1]);
                 }
@@ -4231,4 +4235,65 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
         fi = fi + 1;
     }
     m
+}
+
+// Linear scan over parallel `(target, field_idx)` arrays. Returns true iff
+// the pair `(t, f)` already appears at some matching index. Used by
+// `collect_live_field_set_ids` to dedup FieldSets keyed on
+// `(target_inst_id, field_idx)` per block.
+fn pair_seen(targets: Vec<i64>, fidxs: Vec<i64>, t: i64, f: i64) -> bool {
+    let n: i64 = targets.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if targets[i] == t && fidxs[i] == f { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// Per-block last-write set keyed on `(target_inst_id, field_idx)` over
+// FieldSet instructions, used by `collect_returned_ids` to gate the
+// FieldSet skip-set edge. Within each block, only the textually-last
+// FieldSet for each `(target, field_idx)` pair survives — earlier writes
+// are dead by the end of the block, so their RHS allocations no longer
+// inherit the returned struct's caller-region routing and must remain
+// flaggable by `RegionRootEscape` (issue #326). Cross-block FieldSets
+// remain conservatively independent: a write in one block whose pair is
+// overwritten by a write in another block is still treated as live.
+//
+// Implementation: per block, walk insts in REVERSE order and keep the
+// FIRST FieldSet seen for each `(target, field_idx)` pair. Reverse-walk
+// + first-seen-wins is equivalent to forward-walk + last-write-wins for
+// the same key. The result Vec is sorted ascending so iteration order in
+// callers (`region_vec_contains_i64` membership checks) is independent
+// of block-walk order, mirroring the codebase's BTreeMap precedent on
+// the Rust side.
+fn collect_live_field_set_ids(bks: Vec<IrBlock>) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut bi: i64 = 0;
+    while bi < bks.len() {
+        let blk: IrBlock = bks[bi];
+        let seen_targets: Vec<i64> = Vec::new();
+        let seen_fidxs: Vec<i64> = Vec::new();
+        let mut ii: i64 = blk.insts.len() - 1;
+        while ii >= 0 {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_FIELD_SET()
+                && inst.args.len() >= 2
+                && inst.dk == IDATA_FIELD()
+            {
+                let tgt: i64 = inst.args[0];
+                let fidx: i64 = inst.dv;
+                if !pair_seen(seen_targets, seen_fidxs, tgt, fidx) {
+                    seen_targets.push(tgt);
+                    seen_fidxs.push(fidx);
+                    out.push(inst.id);
+                }
+            }
+            ii = ii - 1;
+        }
+        bi = bi + 1;
+    }
+    sort_i64_vec_inplace(out);
+    out
 }

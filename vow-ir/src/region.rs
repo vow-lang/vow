@@ -1536,15 +1536,45 @@ fn analyze_function(
     summary
 }
 
+/// Per-block last-write set keyed on `(target_inst_id, field_idx)` over
+/// FieldSet instructions, used by `collect_return_value_sources` to gate
+/// the FieldSet skip-set edge. Within each block, only the textually-last
+/// FieldSet for each `(target, field_idx)` pair survives — earlier writes
+/// are dead by the end of the block, so their RHS allocations no longer
+/// inherit the returned struct's caller-region routing and must remain
+/// flaggable by `RegionRootEscape` (issue #326). Cross-block FieldSets
+/// remain conservatively independent: a write in one block whose pair is
+/// overwritten by a write in another block is still treated as live.
+fn collect_live_field_set_ids(func: &Function) -> BTreeSet<InstId> {
+    let mut out: BTreeSet<InstId> = BTreeSet::new();
+    for block in &func.blocks {
+        let mut last: BTreeMap<(InstId, u32), InstId> = BTreeMap::new();
+        for inst in &block.insts {
+            if inst.opcode == Opcode::FieldSet
+                && inst.args.len() >= 2
+                && let InstData::FieldIndex(idx) = inst.data
+            {
+                last.insert((inst.args[0], idx), inst.id);
+            }
+        }
+        out.extend(last.into_values());
+    }
+    out
+}
+
 /// Build the FreshInCaller return-value skip-set used by
-/// `emit_root_escape_notes`. The FieldSet edge is gated on
-/// `region_alloc_ids` so it follows initializers of a fresh struct
-/// (`Item { name: ... }`) but not mutations into a parameter
-/// (`target.name = ...; return target`); spec §4.4.
+/// `emit_root_escape_notes`. The FieldSet edge is gated on:
+///   1. `region_alloc_ids` — the target pointer must be a fresh
+///      `RegionAlloc` (excludes mutations into parameter containers);
+///   2. `live_field_set_ids` — within each block, only the textually-last
+///      FieldSet for each `(target, field_idx)` pair (issue #326).
+///
+/// See spec §4.4 (visibility — field-initializer exemption).
 fn collect_return_value_sources(
     start: InstId,
     func: &Function,
     region_alloc_ids: &BTreeSet<InstId>,
+    live_field_set_ids: &BTreeSet<InstId>,
     out: &mut BTreeSet<InstId>,
 ) {
     let mut stack = vec![start];
@@ -1565,6 +1595,7 @@ fn collect_return_value_sources(
                     && inst.opcode == Opcode::FieldSet
                     && inst.args.len() >= 2
                     && inst.args[0] == id
+                    && live_field_set_ids.contains(&inst.id)
                 {
                     stack.push(inst.args[1]);
                 }
@@ -1595,12 +1626,19 @@ fn emit_root_escape_notes(
         .filter(|i| i.opcode == Opcode::RegionAlloc)
         .map(|i| i.id)
         .collect();
+    let live_field_set_ids = collect_live_field_set_ids(func);
     for block in &func.blocks {
         for inst in &block.insts {
             if inst.opcode == Opcode::Return
                 && let Some(&rv) = inst.args.first()
             {
-                collect_return_value_sources(rv, func, &region_alloc_ids, &mut returned_ids);
+                collect_return_value_sources(
+                    rv,
+                    func,
+                    &region_alloc_ids,
+                    &live_field_set_ids,
+                    &mut returned_ids,
+                );
             }
         }
     }
