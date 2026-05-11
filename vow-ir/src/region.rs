@@ -83,8 +83,9 @@ pub fn infer_regions(module: &mut Module) {
     // SCCs come out in reverse topological order from Tarjan; that's the
     // order we want — callees before callers.
     for scc in &sccs {
-        // Lattice height per function: |params| + 2 (Uninit → AliasOf →
-        // AliasOfAny → FreshInCaller), plus one boolean rodata-return bit.
+        // Lattice height per function: |params| + 3
+        // (Uninit → AliasOf → AliasOfAny → FreshInCaller, plus one
+        // monotone rodata-return bit).
         // store_effects bound: |params|. Total bound for the SCC: sum * 2
         // to give monotone slack.
         let mut bound: usize = 0;
@@ -1460,8 +1461,13 @@ fn analyze_function(
     // path; the in-handle_inst Return shortcut only flags virtual-caller
     // escape on the must_outlive set.
     summary.return_region = compute_return_region(func, &inst_lookup, &phi_arms, summaries);
-    summary.return_may_be_rodata =
-        compute_return_may_be_rodata(func, &inst_lookup, &phi_arms, summaries);
+    let rodata_trace = RodataTrace {
+        inst_lookup: &inst_lookup,
+        phi_arms: &phi_arms,
+        summaries,
+        block_tree: &block_tree,
+    };
+    summary.return_may_be_rodata = compute_return_may_be_rodata(func, &rodata_trace);
 
     // Pre-rewrite `Caller(_)` regions for the `RegionRootEscape` note pass.
     // The rewrite below collapses internal-call results from `Caller(_)` to
@@ -1507,7 +1513,7 @@ fn analyze_function(
     // aggregates as conflicts; consulting the inferred region instead fires
     // only when the source's resolved region is strictly narrower than the
     // target's.
-    check_literal_mutations_post_inference(func, summaries, &phi_arms, &inst_lookup, diagnostics);
+    check_literal_mutations_post_inference(func, &rodata_trace, diagnostics);
     check_store_conflicts_post_inference(func, summaries, region_map, &inst_lookup, diagnostics);
 
     // Surface `Caller(_)` allocations in functions that may propagate them
@@ -1994,24 +2000,29 @@ fn handle_inst(
     }
 }
 
+struct RodataTrace<'a> {
+    inst_lookup: &'a BTreeMap<InstId, (BlockId, &'a Inst)>,
+    phi_arms: &'a BTreeMap<InstId, Vec<InstId>>,
+    summaries: &'a [InternalSummary],
+    block_tree: &'a BlockTree,
+}
+
 fn value_may_be_rodata(
     id: InstId,
-    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
-    phi_arms: &BTreeMap<InstId, Vec<InstId>>,
-    summaries: &[InternalSummary],
+    trace: &RodataTrace<'_>,
     visiting: &mut VecDeque<InstId>,
 ) -> bool {
     if visiting.contains(&id) {
         return false;
     }
-    let Some((_, inst)) = inst_lookup.get(&id) else {
+    let Some((_, inst)) = trace.inst_lookup.get(&id) else {
         return false;
     };
     match inst.opcode {
         Opcode::Call => match &inst.data {
             InstData::CallExtern(sym) if sym == "__vow_string_literal" => true,
             InstData::CallTarget(callee_id) => {
-                let Some(summary) = summaries.get(callee_id.0 as usize) else {
+                let Some(summary) = trace.summaries.get(callee_id.0 as usize) else {
                     return false;
                 };
                 if summary.return_may_be_rodata {
@@ -2021,9 +2032,7 @@ fn value_may_be_rodata(
                 let result = return_region_may_be_rodata(
                     &summary.return_region,
                     &inst.args,
-                    inst_lookup,
-                    phi_arms,
-                    summaries,
+                    trace,
                     visiting,
                 );
                 visiting.pop_back();
@@ -2032,13 +2041,13 @@ fn value_may_be_rodata(
             _ => false,
         },
         Opcode::Phi => {
-            let Some(arms) = phi_arms.get(&id) else {
+            let Some(arms) = trace.phi_arms.get(&id) else {
                 return false;
             };
             visiting.push_back(id);
             let result = arms
                 .iter()
-                .any(|arm| value_may_be_rodata(*arm, inst_lookup, phi_arms, summaries, visiting));
+                .any(|arm| value_may_be_rodata(*arm, trace, visiting));
             visiting.pop_back();
             result
         }
@@ -2051,15 +2060,8 @@ fn value_may_be_rodata(
                 _ => return false,
             };
             visiting.push_back(id);
-            let result = stored_value_may_be_rodata(
-                id,
-                target_id,
-                Some(field_idx),
-                inst_lookup,
-                phi_arms,
-                summaries,
-                visiting,
-            );
+            let result =
+                stored_value_may_be_rodata(id, target_id, Some(field_idx), trace, visiting);
             visiting.pop_back();
             result
         }
@@ -2068,15 +2070,7 @@ fn value_may_be_rodata(
                 return false;
             };
             visiting.push_back(id);
-            let result = stored_value_may_be_rodata(
-                id,
-                target_id,
-                None,
-                inst_lookup,
-                phi_arms,
-                summaries,
-                visiting,
-            );
+            let result = stored_value_may_be_rodata(id, target_id, None, trace, visiting);
             visiting.pop_back();
             result
         }
@@ -2088,18 +2082,17 @@ fn stored_value_may_be_rodata(
     read_id: InstId,
     target_id: InstId,
     field_idx: Option<u32>,
-    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
-    phi_arms: &BTreeMap<InstId, Vec<InstId>>,
-    summaries: &[InternalSummary],
+    trace: &RodataTrace<'_>,
     visiting: &mut VecDeque<InstId>,
 ) -> bool {
-    let Some((read_block, _)) = inst_lookup.get(&read_id) else {
+    let Some((read_block, _)) = trace.inst_lookup.get(&read_id) else {
         return false;
     };
 
     let mut same_block_last: Option<(InstId, InstId)> = None;
+    let mut dominating_last: Option<(u32, InstId, InstId)> = None;
     let mut cross_block_sources: Vec<InstId> = Vec::new();
-    for (&write_id, (write_block, write_inst)) in inst_lookup {
+    for (&write_id, (write_block, write_inst)) in trace.inst_lookup {
         if write_id.0 >= read_id.0 || write_inst.args.len() < 2 {
             continue;
         }
@@ -2120,25 +2113,34 @@ fn stored_value_may_be_rodata(
                 Some((prev_id, _)) if prev_id.0 > write_id.0 => {}
                 _ => same_block_last = Some((write_id, source_id)),
             }
+        } else if trace.block_tree.is_ancestor(*write_block, *read_block) {
+            let write_depth = trace.block_tree.depth_of(*write_block);
+            match dominating_last {
+                Some((prev_depth, prev_id, _))
+                    if (prev_depth, prev_id.0) > (write_depth, write_id.0) => {}
+                _ => dominating_last = Some((write_depth, write_id, source_id)),
+            }
         } else {
             cross_block_sources.push(source_id);
         }
     }
 
     if let Some((_, source_id)) = same_block_last {
-        return value_may_be_rodata(source_id, inst_lookup, phi_arms, summaries, visiting);
+        return value_may_be_rodata(source_id, trace, visiting);
     }
+    if let Some((_, _, source_id)) = dominating_last
+        && value_may_be_rodata(source_id, trace, visiting)
+    {
+        return true;
+    }
+    // Branch-local writes can still override an ancestor-block baseline on
+    // the paths that take them, so keep them in the conservative source set.
     cross_block_sources
         .into_iter()
-        .any(|source_id| value_may_be_rodata(source_id, inst_lookup, phi_arms, summaries, visiting))
+        .any(|source_id| value_may_be_rodata(source_id, trace, visiting))
 }
 
-fn compute_return_may_be_rodata(
-    func: &Function,
-    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
-    phi_arms: &BTreeMap<InstId, Vec<InstId>>,
-    summaries: &[InternalSummary],
-) -> bool {
+fn compute_return_may_be_rodata(func: &Function, trace: &RodataTrace<'_>) -> bool {
     if is_scalar_ty(func.return_ty) {
         return false;
     }
@@ -2146,13 +2148,7 @@ fn compute_return_may_be_rodata(
         for inst in &block.insts {
             if inst.opcode == Opcode::Return
                 && let Some(&arg_id) = inst.args.first()
-                && value_may_be_rodata(
-                    arg_id,
-                    inst_lookup,
-                    phi_arms,
-                    summaries,
-                    &mut VecDeque::new(),
-                )
+                && value_may_be_rodata(arg_id, trace, &mut VecDeque::new())
             {
                 return true;
             }
@@ -2164,21 +2160,17 @@ fn compute_return_may_be_rodata(
 fn return_region_may_be_rodata(
     return_region: &InternalReturnRegion,
     args: &[InstId],
-    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
-    phi_arms: &BTreeMap<InstId, Vec<InstId>>,
-    summaries: &[InternalSummary],
+    trace: &RodataTrace<'_>,
     visiting: &mut VecDeque<InstId>,
 ) -> bool {
     match return_region {
-        InternalReturnRegion::Published(RegionConstraint::AliasOf(i)) => {
-            args.get(*i as usize).is_some_and(|arg| {
-                value_may_be_rodata(*arg, inst_lookup, phi_arms, summaries, visiting)
-            })
-        }
+        InternalReturnRegion::Published(RegionConstraint::AliasOf(i)) => args
+            .get(*i as usize)
+            .is_some_and(|arg| value_may_be_rodata(*arg, trace, visiting)),
         InternalReturnRegion::Published(RegionConstraint::AliasOfAny(indices)) => indices
             .iter()
             .filter_map(|i| args.get(*i as usize))
-            .any(|arg| value_may_be_rodata(*arg, inst_lookup, phi_arms, summaries, visiting)),
+            .any(|arg| value_may_be_rodata(*arg, trace, visiting)),
         _ => false,
     }
 }
@@ -2860,9 +2852,7 @@ fn origin_to_constraint(origin: &ValueOrigin) -> RegionConstraint {
 
 fn check_literal_mutations_post_inference(
     func: &Function,
-    summaries: &[InternalSummary],
-    phi_arms: &BTreeMap<InstId, Vec<InstId>>,
-    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+    trace: &RodataTrace<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let source_file: &str = &func.source_file;
@@ -2874,19 +2864,13 @@ fn check_literal_mutations_post_inference(
             match &inst.data {
                 InstData::CallExtern(sym) => {
                     if let Some(target_id) = extern_growth_target(sym, &inst.args)
-                        && value_may_be_rodata(
-                            target_id,
-                            inst_lookup,
-                            phi_arms,
-                            summaries,
-                            &mut VecDeque::new(),
-                        )
+                        && value_may_be_rodata(target_id, trace, &mut VecDeque::new())
                     {
                         emit_region_literal_mutation(
                             source_file,
                             target_id,
                             inst,
-                            inst_lookup,
+                            trace.inst_lookup,
                             extern_mutation_operation(sym).unwrap_or("container mutation"),
                             diagnostics,
                         );
@@ -2894,7 +2878,7 @@ fn check_literal_mutations_post_inference(
                 }
                 InstData::CallTarget(callee) => {
                     let callee_idx = callee.0 as usize;
-                    let Some(callee_summary) = summaries.get(callee_idx) else {
+                    let Some(callee_summary) = trace.summaries.get(callee_idx) else {
                         continue;
                     };
                     let mut checked_targets = BTreeSet::new();
@@ -2907,18 +2891,12 @@ fn check_literal_mutations_post_inference(
                         let Some(&target_id) = inst.args.get(target_idx) else {
                             continue;
                         };
-                        if value_may_be_rodata(
-                            target_id,
-                            inst_lookup,
-                            phi_arms,
-                            summaries,
-                            &mut VecDeque::new(),
-                        ) {
+                        if value_may_be_rodata(target_id, trace, &mut VecDeque::new()) {
                             emit_region_literal_mutation(
                                 source_file,
                                 target_id,
                                 inst,
-                                inst_lookup,
+                                trace.inst_lookup,
                                 "mutating callee parameter",
                                 diagnostics,
                             );
@@ -3816,6 +3794,183 @@ mod tests {
                 .iter()
                 .all(|d| d.code != ErrorCode::RegionLiteralMutation),
             "a same-block mutable overwrite before the field read should not inherit the stale literal"
+        );
+    }
+
+    #[test]
+    fn field_get_rodata_check_uses_dominating_last_write() {
+        let entry = vec![
+            inst(
+                0,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![1],
+                InstData::CallExtern("__vow_string_literal".to_string()),
+            ),
+            inst(
+                3,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![0, 2],
+                InstData::FieldIndex(0),
+            ),
+            inst(
+                4,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![2],
+                InstData::CallExtern("__vow_string_clone".to_string()),
+            ),
+            inst(
+                5,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![0, 4],
+                InstData::FieldIndex(0),
+            ),
+            jump_inst(6, 1),
+        ];
+        let body = vec![
+            inst(
+                7,
+                Opcode::FieldGet,
+                Ty::Ptr,
+                vec![0],
+                InstData::FieldIndex(0),
+            ),
+            inst(8, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(33)),
+            inst(
+                9,
+                Opcode::Call,
+                Ty::Unit,
+                vec![7, 8],
+                InstData::CallExtern("__vow_string_push_byte".to_string()),
+            ),
+            inst(10, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(
+            0,
+            "field_dominating_overwrite",
+            vec![],
+            Ty::Unit,
+            vec![block(0, entry), block(1, body)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert!(
+            m.warnings
+                .iter()
+                .all(|d| d.code != ErrorCode::RegionLiteralMutation),
+            "a mutable overwrite in a dominating block should replace the stale literal source"
+        );
+    }
+
+    #[test]
+    fn field_get_rodata_check_keeps_branch_overwrites_conservative() {
+        let entry = vec![
+            inst(
+                0,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![1],
+                InstData::CallExtern("__vow_string_literal".to_string()),
+            ),
+            inst(
+                3,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![2],
+                InstData::CallExtern("__vow_string_clone".to_string()),
+            ),
+            inst(
+                4,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![0, 3],
+                InstData::FieldIndex(0),
+            ),
+            branch_inst(5, 1, 2),
+        ];
+        let then_block = vec![
+            inst(6, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
+            inst(
+                7,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![6],
+                InstData::CallExtern("__vow_string_literal".to_string()),
+            ),
+            inst(
+                8,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![0, 7],
+                InstData::FieldIndex(0),
+            ),
+            jump_inst(9, 3),
+        ];
+        let else_block = vec![jump_inst(10, 3)];
+        let merge = vec![
+            inst(
+                11,
+                Opcode::FieldGet,
+                Ty::Ptr,
+                vec![0],
+                InstData::FieldIndex(0),
+            ),
+            inst(
+                12,
+                Opcode::ConstI64,
+                Ty::I64,
+                vec![],
+                InstData::ConstI64(33),
+            ),
+            inst(
+                13,
+                Opcode::Call,
+                Ty::Unit,
+                vec![11, 12],
+                InstData::CallExtern("__vow_string_push_byte".to_string()),
+            ),
+            inst(14, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(
+            0,
+            "field_branch_literal_overwrite",
+            vec![],
+            Ty::Unit,
+            vec![
+                block(0, entry),
+                block(1, then_block),
+                block(2, else_block),
+                block(3, merge),
+            ],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert!(
+            m.warnings
+                .iter()
+                .any(|d| d.code == ErrorCode::RegionLiteralMutation),
+            "a branch-local literal write can reach the later field mutation"
         );
     }
 

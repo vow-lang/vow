@@ -131,17 +131,18 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
         let scc: Vec<i64> = sccs[scc_i];
         let scc_n: i64 = scc.len();
 
-        // Loose iteration bound, mirrors vow-ir/src/region.rs:79-86:
-        // lattice height per function is |params|+2
-        // (Uninit → AliasOf → AliasOfAny → FreshInCaller); store_effects
-        // bound is |params|; total bound for the SCC is sum * 2 for monotone
-        // slack. Finite lattice; if exceeded, emit ICE diagnostic (no panic).
+        // Loose iteration bound, mirrors vow-ir/src/region.rs:
+        // lattice height per function is |params|+3
+        // (Uninit → AliasOf → AliasOfAny → FreshInCaller, plus the
+        // monotone rodata-return bit); store_effects bound is |params|.
+        // Total bound for the SCC is sum * 2 for monotone slack. Finite
+        // lattice; if exceeded, emit ICE diagnostic (no panic).
         let mut bound: i64 = 0;
         let mut bi: i64 = 0;
         while bi < scc_n {
             let fidx: i64 = scc[bi];
             let nparams: i64 = m.functions[fidx].params.len();
-            bound = bound + (nparams + 2) * 2;
+            bound = bound + (nparams + 3) * 2;
             bi = bi + 1;
         }
         if bound < 8 { bound = 8; }
@@ -271,6 +272,8 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
         m,
         id_to_inst_per_fn,
         id_to_block_per_fn,
+        block_parent_per_fn,
+        block_depth_per_fn,
         phi_arms_per_fn,
         int_return_rodata,
         region_keys,
@@ -1007,6 +1010,7 @@ fn any_published_se_kind(kinds: Vec<i64>) -> bool {
 
 fn check_region_store_conflicts_module(
     m: IrModule, id_to_inst_per_fn: Vec<Vec<IrInst>>, id_to_block_per_fn: Vec<Vec<i64>>,
+    block_parent_per_fn: Vec<Vec<i64>>, block_depth_per_fn: Vec<Vec<i64>>,
     phi_arms_per_fn: Vec<Vec<Vec<i64>>>,
     return_rodata: Vec<bool>,
     region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
@@ -1017,6 +1021,8 @@ fn check_region_store_conflicts_module(
         let f: IrFunction = m.functions[fi];
         let id_to_inst: Vec<IrInst> = id_to_inst_per_fn[fi];
         let id_to_block: Vec<i64> = id_to_block_per_fn[fi];
+        let block_parent: Vec<i64> = block_parent_per_fn[fi];
+        let block_depth: Vec<i64> = block_depth_per_fn[fi];
         let phi_arms: Vec<Vec<i64>> = phi_arms_per_fn[fi];
         let rkeys: Vec<i64> = region_keys[fi];
         let rvals: Vec<i64> = region_vals[fi];
@@ -1037,7 +1043,7 @@ fn check_region_store_conflicts_module(
                     if growth_target_pos >= 0 && growth_target_pos < inst.args.len() {
                         let target_arg: i64 = inst.args[growth_target_pos];
                         let visiting: Vec<i64> = Vec::new();
-                        if value_may_be_rodata(id_to_inst, id_to_block, phi_arms, m.functions, return_rodata, target_arg, visiting) {
+                        if value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m.functions, return_rodata, target_arg, visiting) {
                             emit_region_literal_mutation(
                                 f.source_file,
                                 target_arg,
@@ -1057,6 +1063,8 @@ fn check_region_store_conflicts_module(
                             inst,
                             id_to_inst,
                             id_to_block,
+                            block_parent,
+                            block_depth,
                             phi_arms,
                             rkeys,
                             rvals,
@@ -1077,6 +1085,7 @@ fn check_region_store_conflicts_module(
 
 fn check_store_effects_at_call(
     flat: Vec<i64>, call_inst: IrInst, id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>,
+    block_parent: Vec<i64>, block_depth: Vec<i64>,
     phi_arms: Vec<Vec<i64>>,
     region_keys: Vec<i64>, region_vals: Vec<i64>,
     m_functions: Vec<IrFunction>,
@@ -1096,7 +1105,7 @@ fn check_store_effects_at_call(
         {
             checked_targets.push(target);
             let visiting: Vec<i64> = Vec::new();
-            if value_may_be_rodata(id_to_inst, id_to_block, phi_arms, m_functions, return_rodata, call_inst.args[target], visiting) {
+            if value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata, call_inst.args[target], visiting) {
                 emit_region_literal_mutation(
                     source_file,
                     call_inst.args[target],
@@ -1448,7 +1457,8 @@ fn extern_mutation_operation(sym: String) -> String {
 }
 
 fn value_may_be_rodata(
-    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, phi_arms: Vec<Vec<i64>>, m_functions: Vec<IrFunction>,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>, m_functions: Vec<IrFunction>,
     return_rodata: Vec<bool>, id: i64, visiting: Vec<i64>
 ) -> bool {
     if region_vec_contains_i64(visiting, id) {
@@ -1478,6 +1488,8 @@ fn value_may_be_rodata(
                 inst.args,
                 id_to_inst,
                 id_to_block,
+                block_parent,
+                block_depth,
                 phi_arms,
                 m_functions,
                 return_rodata,
@@ -1492,7 +1504,7 @@ fn value_may_be_rodata(
         let arms: Vec<i64> = phi_arms[id];
         let mut ai: i64 = 0;
         while ai < arms.len() {
-            if value_may_be_rodata(id_to_inst, id_to_block, phi_arms, m_functions, return_rodata, arms[ai], visiting) {
+            if value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata, arms[ai], visiting) {
                 visiting.pop();
                 return true;
             }
@@ -1503,7 +1515,7 @@ fn value_may_be_rodata(
     if inst.op == IOP_FIELD_GET() && inst.dk == IDATA_FIELD() && inst.args.len() > 0 {
         visiting.push(id);
         let result2: bool = stored_value_may_be_rodata(
-            id_to_inst, id_to_block, phi_arms, m_functions, return_rodata,
+            id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata,
             id, inst.args[0], true, inst.dv, visiting
         );
         visiting.pop();
@@ -1512,7 +1524,7 @@ fn value_may_be_rodata(
     if inst.op == IOP_LOAD() && inst.args.len() > 0 {
         visiting.push(id);
         let result3: bool = stored_value_may_be_rodata(
-            id_to_inst, id_to_block, phi_arms, m_functions, return_rodata,
+            id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata,
             id, inst.args[0], false, 0, visiting
         );
         visiting.pop();
@@ -1522,12 +1534,15 @@ fn value_may_be_rodata(
 }
 
 fn rodata_storage_sources(
-    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
     read_id: i64, target_id: i64, has_field: bool, field_idx: i64
 ) -> Vec<i64> {
     let read_block: i64 = lookup_inst_block(id_to_block, read_id);
     let mut same_write: i64 = -1;
     let mut same_source: i64 = -1;
+    let mut dom_depth: i64 = -1;
+    let mut dom_write: i64 = -1;
+    let mut dom_source: i64 = -1;
     let cross_block_sources: Vec<i64> = Vec::new();
     let mut wi: i64 = 0;
     while wi < id_to_inst.len() {
@@ -1552,6 +1567,15 @@ fn rodata_storage_sources(
                         same_write = write_inst.id;
                         same_source = write_inst.args[1];
                     }
+                } else if block_tree_is_ancestor(block_parent, write_block, read_block) {
+                    let write_depth: i64 = block_depth_at(block_depth, write_block);
+                    if dom_write < 0 || write_depth > dom_depth
+                        || (write_depth == dom_depth && write_inst.id > dom_write)
+                    {
+                        dom_depth = write_depth;
+                        dom_write = write_inst.id;
+                        dom_source = write_inst.args[1];
+                    }
                 } else {
                     cross_block_sources.push(write_inst.args[1]);
                 }
@@ -1564,18 +1588,22 @@ fn rodata_storage_sources(
         out.push(same_source);
         return out;
     }
+    if dom_source >= 0 {
+        cross_block_sources.push(dom_source);
+    }
     cross_block_sources
 }
 
 fn stored_value_may_be_rodata(
-    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, phi_arms: Vec<Vec<i64>>,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>,
     m_functions: Vec<IrFunction>, return_rodata: Vec<bool>,
     read_id: i64, target_id: i64, has_field: bool, field_idx: i64, visiting: Vec<i64>
 ) -> bool {
-    let sources: Vec<i64> = rodata_storage_sources(id_to_inst, id_to_block, read_id, target_id, has_field, field_idx);
+    let sources: Vec<i64> = rodata_storage_sources(id_to_inst, id_to_block, block_parent, block_depth, read_id, target_id, has_field, field_idx);
     let mut si: i64 = 0;
     while si < sources.len() {
-        if value_may_be_rodata(id_to_inst, id_to_block, phi_arms, m_functions, return_rodata, sources[si], visiting) {
+        if value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata, sources[si], visiting) {
             return true;
         }
         si = si + 1;
@@ -1585,12 +1613,13 @@ fn stored_value_may_be_rodata(
 
 fn return_region_may_be_rodata(
     kind: i64, aux: i64, aliases: Vec<i64>, args: Vec<i64>,
-    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, phi_arms: Vec<Vec<i64>>, m_functions: Vec<IrFunction>,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>, m_functions: Vec<IrFunction>,
     return_rodata: Vec<bool>, visiting: Vec<i64>
 ) -> bool {
     if kind == RSUM_KIND_ALIAS_OF() {
         if aux >= 0 && aux < args.len() {
-            return value_may_be_rodata(id_to_inst, id_to_block, phi_arms, m_functions, return_rodata, args[aux], visiting);
+            return value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata, args[aux], visiting);
         }
         return false;
     }
@@ -1599,7 +1628,7 @@ fn return_region_may_be_rodata(
         while ai < aliases.len() {
             let arg_idx: i64 = aliases[ai];
             if arg_idx >= 0 && arg_idx < args.len()
-                && value_may_be_rodata(id_to_inst, id_to_block, phi_arms, m_functions, return_rodata, args[arg_idx], visiting)
+                && value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata, args[arg_idx], visiting)
             {
                 return true;
             }
@@ -1610,7 +1639,8 @@ fn return_region_may_be_rodata(
 }
 
 fn value_may_be_rodata_internal(
-    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, phi_arms: Vec<Vec<i64>>,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>,
     int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
     return_rodata: Vec<bool>, id: i64, visiting: Vec<i64>
 ) -> bool {
@@ -1640,6 +1670,8 @@ fn value_may_be_rodata_internal(
                 inst.args,
                 id_to_inst,
                 id_to_block,
+                block_parent,
+                block_depth,
                 phi_arms,
                 int_kinds,
                 int_auxs,
@@ -1659,6 +1691,8 @@ fn value_may_be_rodata_internal(
             if value_may_be_rodata_internal(
                 id_to_inst,
                 id_to_block,
+                block_parent,
+                block_depth,
                 phi_arms,
                 int_kinds,
                 int_auxs,
@@ -1679,6 +1713,8 @@ fn value_may_be_rodata_internal(
         let result2: bool = stored_value_may_be_rodata_internal(
             id_to_inst,
             id_to_block,
+            block_parent,
+            block_depth,
             phi_arms,
             int_kinds,
             int_auxs,
@@ -1698,6 +1734,8 @@ fn value_may_be_rodata_internal(
         let result3: bool = stored_value_may_be_rodata_internal(
             id_to_inst,
             id_to_block,
+            block_parent,
+            block_depth,
             phi_arms,
             int_kinds,
             int_auxs,
@@ -1716,17 +1754,20 @@ fn value_may_be_rodata_internal(
 }
 
 fn stored_value_may_be_rodata_internal(
-    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, phi_arms: Vec<Vec<i64>>,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>,
     int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
     return_rodata: Vec<bool>, read_id: i64, target_id: i64, has_field: bool, field_idx: i64,
     visiting: Vec<i64>
 ) -> bool {
-    let sources: Vec<i64> = rodata_storage_sources(id_to_inst, id_to_block, read_id, target_id, has_field, field_idx);
+    let sources: Vec<i64> = rodata_storage_sources(id_to_inst, id_to_block, block_parent, block_depth, read_id, target_id, has_field, field_idx);
     let mut si: i64 = 0;
     while si < sources.len() {
         if value_may_be_rodata_internal(
             id_to_inst,
             id_to_block,
+            block_parent,
+            block_depth,
             phi_arms,
             int_kinds,
             int_auxs,
@@ -1744,7 +1785,8 @@ fn stored_value_may_be_rodata_internal(
 
 fn return_region_may_be_rodata_internal(
     kind: i64, aux: i64, aliases: Vec<i64>, args: Vec<i64>,
-    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, phi_arms: Vec<Vec<i64>>,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>,
     int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
     return_rodata: Vec<bool>, visiting: Vec<i64>
 ) -> bool {
@@ -1753,6 +1795,8 @@ fn return_region_may_be_rodata_internal(
             return value_may_be_rodata_internal(
                 id_to_inst,
                 id_to_block,
+                block_parent,
+                block_depth,
                 phi_arms,
                 int_kinds,
                 int_auxs,
@@ -1772,6 +1816,8 @@ fn return_region_may_be_rodata_internal(
                 && value_may_be_rodata_internal(
                     id_to_inst,
                     id_to_block,
+                    block_parent,
+                    block_depth,
                     phi_arms,
                     int_kinds,
                     int_auxs,
@@ -1883,6 +1929,8 @@ fn analyze_function(
                     if value_may_be_rodata_internal(
                         id_to_inst,
                         id_to_block,
+                        block_parent,
+                        block_depth,
                         phi_arms,
                         int_kinds,
                         int_auxs,
