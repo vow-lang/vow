@@ -3308,7 +3308,7 @@ fn check_store_conflict_semantic(
     call_inst: &Inst,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
     region_map: &BTreeMap<InstId, RegionId>,
-    _summaries: &[InternalSummary],
+    summaries: &[InternalSummary],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     // Inline case: target is not parameter-rooted; the inline path handles
@@ -3335,7 +3335,7 @@ fn check_store_conflict_semantic(
         Some(RegionId::Caller(idx)) if idx.is_ambiguous() => {
             let source_is_fresh_heap = inst_lookup
                 .get(&source_arg_id)
-                .is_some_and(|(_, inst)| is_heap_producing(inst, _summaries));
+                .is_some_and(|(_, inst)| is_heap_producing(inst, summaries));
             if !source_is_fresh_heap {
                 return;
             }
