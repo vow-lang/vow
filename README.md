@@ -43,9 +43,10 @@ already has a `.claude/` directory, the compiler installs the skill at:
 .claude/skills/vow-toolchain/
 ```
 
-Claude Code's skill matcher discovers it automatically via the `paths: "**/*.vow"`
-frontmatter, so the skill loads on demand whenever an agent reads, writes, or edits
-a `.vow` file. Auto-install is silent, runs at most once (it leaves any existing
+Claude Code discovers it from the `.claude/skills/` directory and uses the
+frontmatter description/`when_to_use` metadata to load it for `.vow` file work
+as well as creation and verification-debugging prompts before a `.vow` file
+exists. Auto-install is silent, runs at most once (it leaves any existing
 `SKILL.md` untouched), and is skipped entirely when `.claude/` is absent — so
 non-Claude-Code projects are never touched.
 

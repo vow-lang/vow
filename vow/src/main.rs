@@ -1472,7 +1472,6 @@ when_to_use: >-
   "fix this counterexample", "add contracts", "why did verification fail",
   "ESBMC", "vow build", or "vow verify".
 argument-hint: "[file.vow]"
-paths: "**/*.vow"
 allowed-tools: "Bash(build/vowc *) Bash(vow *) Bash(vowc *) Bash(ulimit *)"
 ---
 
@@ -1526,7 +1525,6 @@ when_to_use: >-
   "fix this counterexample", "add contracts", "why did verification fail",
   "ESBMC", "vow build", or "vow verify".
 argument-hint: "[file.vow]"
-paths: "**/*.vow"
 allowed-tools: "Bash(build/vowc *) Bash(vow *) Bash(vowc *) Bash(ulimit *)"
 ---
 
@@ -2525,7 +2523,7 @@ vow skill install --global  # install to $HOME/.claude/skills/vow-toolchain/ on 
 
 `print` writes the concise installed `SKILL.md` entrypoint (with YAML frontmatter) to stdout. `print --bundle` writes a complete self-contained skill document to stdout for non–Claude Code harnesses that cannot load supporting files.
 
-`install` writes `SKILL.md` plus supporting files under `reference/`, `examples/`, and `schemas/`. Claude Code's skill matcher auto-discovers it via the `paths: "**/*.vow"` frontmatter, so the skill loads on demand whenever an agent works with `.vow` files.
+`install` writes `SKILL.md` plus supporting files under `reference/`, `examples/`, and `schemas/`. Claude Code discovers the skill from the `.claude/skills/` directory and uses the frontmatter description/`when_to_use` metadata to load it for `.vow` file work as well as creation and verification-debugging prompts before a `.vow` file exists.
 
 When no scope flag is provided, `install` prompts on stderr for local (`./.claude`) or global (`$HOME/.claude`) installation. Scripts and agents should pass `--local` or `--global` explicitly. `--local` requires the current directory to contain both `.git` and `.claude/`; otherwise it exits with an error and writes nothing. `--global` installs under `$HOME/.claude/skills/vow-toolchain/` and fails if `$HOME` is unset or empty.
 
@@ -5593,7 +5591,7 @@ vow skill install --global  # install to $HOME/.claude/skills/vow-toolchain/ on 
 
 `print` writes the concise installed `SKILL.md` entrypoint (with YAML frontmatter) to stdout. `print --bundle` writes a complete self-contained skill document to stdout for non–Claude Code harnesses that cannot load supporting files.
 
-`install` writes `SKILL.md` plus supporting files under `reference/`, `examples/`, and `schemas/`. Claude Code's skill matcher auto-discovers it via the `paths: "**/*.vow"` frontmatter, so the skill loads on demand whenever an agent works with `.vow` files.
+`install` writes `SKILL.md` plus supporting files under `reference/`, `examples/`, and `schemas/`. Claude Code discovers the skill from the `.claude/skills/` directory and uses the frontmatter description/`when_to_use` metadata to load it for `.vow` file work as well as creation and verification-debugging prompts before a `.vow` file exists.
 
 When no scope flag is provided, `install` prompts on stderr for local (`./.claude`) or global (`$HOME/.claude`) installation. Scripts and agents should pass `--local` or `--global` explicitly. `--local` requires the current directory to contain both `.git` and `.claude/`; otherwise it exits with an error and writes nothing. `--global` installs under `$HOME/.claude/skills/vow-toolchain/` and fails if `$HOME` is unset or empty.
 
@@ -10559,7 +10557,8 @@ fn main() -> i32 [io] {
         let skill_dir = dir.path().join(".claude/skills/vow-toolchain");
         let contents = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
         assert!(contents.starts_with("---\nname: vow-toolchain\n"));
-        assert!(contents.contains("paths: \"**/*.vow\""));
+        assert!(contents.contains("when_to_use: >-"));
+        assert!(!contents.contains("\npaths:"));
         assert!(contents.lines().count() < 500);
         assert!(
             !contents.contains("```json"),
@@ -10577,6 +10576,7 @@ fn main() -> i32 [io] {
     fn skill_bundle_markdown_contains_full_skill_document() {
         let out = skill_bundle_markdown();
         assert!(out.starts_with("---\nname: vow-toolchain\n"));
+        assert!(!out.contains("\npaths:"));
         assert!(out.contains("# Vow Language Reference"));
         assert!(out.contains("### `vow skill`"));
         assert!(out.contains("schemas/build-result.schema.json"));
