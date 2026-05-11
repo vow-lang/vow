@@ -2021,6 +2021,17 @@ fn value_may_be_rodata(
     match inst.opcode {
         Opcode::Call => match &inst.data {
             InstData::CallExtern(sym) if sym == "__vow_string_literal" => true,
+            InstData::CallExtern(sym)
+                if matches!(sym.as_str(), "__vow_vec_get_val" | "__vow_vec_get") =>
+            {
+                let Some(&target_id) = inst.args.first() else {
+                    return false;
+                };
+                visiting.push_back(id);
+                let result = vec_element_value_may_be_rodata(id, target_id, trace, visiting);
+                visiting.pop_back();
+                result
+            }
             InstData::CallTarget(callee_id) => {
                 let Some(summary) = trace.summaries.get(callee_id.0 as usize) else {
                     return false;
@@ -2075,6 +2086,49 @@ fn value_may_be_rodata(
             result
         }
         _ => false,
+    }
+}
+
+fn vec_element_value_may_be_rodata(
+    read_id: InstId,
+    target_id: InstId,
+    trace: &RodataTrace<'_>,
+    visiting: &mut VecDeque<InstId>,
+) -> bool {
+    for (&write_id, (_, write_inst)) in trace.inst_lookup {
+        if write_id.0 >= read_id.0 {
+            continue;
+        }
+        let Some(source_id) = vec_element_write_source(write_inst, target_id) else {
+            continue;
+        };
+        // Without index equality/range reasoning, any earlier element write
+        // to this vector may be the value read by `__vow_vec_get_val`.
+        if value_may_be_rodata(source_id, trace, visiting) {
+            return true;
+        }
+    }
+    false
+}
+
+fn vec_element_write_source(inst: &Inst, target_id: InstId) -> Option<InstId> {
+    let Opcode::Call = inst.opcode else {
+        return None;
+    };
+    let InstData::CallExtern(sym) = &inst.data else {
+        return None;
+    };
+    match sym.as_str() {
+        "__vow_vec_push_val" if inst.args.len() >= 2 && inst.args[0] == target_id => {
+            Some(inst.args[1])
+        }
+        "__vow_vec_push_val_in_arena" if inst.args.len() >= 3 && inst.args[1] == target_id => {
+            Some(inst.args[2])
+        }
+        "__vow_vec_set_val" if inst.args.len() >= 3 && inst.args[0] == target_id => {
+            Some(inst.args[2])
+        }
+        _ => None,
     }
 }
 
@@ -3971,6 +4025,67 @@ mod tests {
                 .iter()
                 .any(|d| d.code == ErrorCode::RegionLiteralMutation),
             "a branch-local literal write can reach the later field mutation"
+        );
+    }
+
+    #[test]
+    fn vec_get_rodata_check_traces_element_writes() {
+        let insts = vec![
+            inst(
+                0,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![],
+                InstData::CallExtern("__vow_vec_new".to_string()),
+            ),
+            inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![1],
+                InstData::CallExtern("__vow_string_literal".to_string()),
+            ),
+            inst(
+                3,
+                Opcode::Call,
+                Ty::Unit,
+                vec![0, 2],
+                InstData::CallExtern("__vow_vec_push_val".to_string()),
+            ),
+            inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(
+                5,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0, 4],
+                InstData::CallExtern("__vow_vec_get_val".to_string()),
+            ),
+            inst(6, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(33)),
+            inst(
+                7,
+                Opcode::Call,
+                Ty::Unit,
+                vec![5, 6],
+                InstData::CallExtern("__vow_string_push_byte".to_string()),
+            ),
+            inst(8, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(
+            0,
+            "vec_literal_element_mutation",
+            vec![],
+            Ty::Unit,
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert!(
+            m.warnings
+                .iter()
+                .any(|d| d.code == ErrorCode::RegionLiteralMutation),
+            "a literal stored in a Vec and read back through indexing should stay rodata-backed"
         );
     }
 

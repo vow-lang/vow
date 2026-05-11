@@ -1315,12 +1315,6 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 if second_name == String::from("from") {
                     if n_args != 1 {
                         env_emit_error(e, String::from("String::from expects one String argument"), expr_span(a, eid));
-                        let mut ai: i64 = 0;
-                        while ai < n_args {
-                            let arg_eid: i64 = list_get(a, args_lid, ai);
-                            check_expr(e, m, arg_eid);
-                            ai = ai + 1;
-                        }
                         return CTY_STR();
                     }
                     if first_arg_tid != CTY_STR() && first_arg_tid != CTY_NEVER() {
