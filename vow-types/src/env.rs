@@ -280,6 +280,14 @@ impl TypeEnv {
             },
         );
         env.define_fn(
+            "string_matches_literal_at",
+            FnSig {
+                params: vec![Ty::Str, Ty::I64, Ty::Str],
+                return_ty: Ty::I64,
+                effects: BTreeSet::new(),
+            },
+        );
+        env.define_fn(
             "string_trim",
             FnSig {
                 params: vec![Ty::Str],

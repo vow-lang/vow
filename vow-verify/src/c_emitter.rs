@@ -168,6 +168,7 @@ fn string_model_receiver_arg(name: &str) -> Option<usize> {
         | "__vow_string_byte_at"
         | "__vow_string_eq"
         | "__vow_string_contains"
+        | "__vow_string_matches_literal_at"
         | "__vow_string_print" => Some(0),
         _ => None,
     }
@@ -330,6 +331,7 @@ fn is_known_builtin(name: &str) -> bool {
             | "__vow_string_byte_at"
             | "__vow_string_eq"
             | "__vow_string_contains"
+            | "__vow_string_matches_literal_at"
             | "__vow_string_substr"
             | "__vow_string_substr_in_arena"
             | "__vow_string_substring"
@@ -679,6 +681,7 @@ fn emit_inst(
     const_fns: &HashMap<FuncId, ConstantValue>,
     modelable_fns: &HashSet<FuncId>,
     eq_pairs: &[(u32, u32)],
+    inst_by_id: &HashMap<u32, &Inst>,
     module: &Module,
     limits: &VerifyLimits,
 ) {
@@ -1125,8 +1128,42 @@ fn emit_inst(
                              \x20     }}\n\
                              \x20     if (__match) {{ v{id} = 1; break; }}\n\
                              \x20   }}\n\
-                             \x20 }}\n"
+                            \x20 }}\n"
                         ));
+                    }
+                    "__vow_string_matches_literal_at" => {
+                        let s = inst.args[0].0;
+                        let pos = inst.args[1].0;
+                        let literal_ptr = inst.args[2].0;
+                        let literal = inst_by_id.get(&literal_ptr).and_then(|literal_inst| {
+                            if let InstData::ConstStr(idx) = &literal_inst.data {
+                                module.strings.get(*idx as usize)
+                            } else {
+                                None
+                            }
+                        });
+                        if let Some(literal) = literal {
+                            let bytes = literal.as_bytes();
+                            let len = bytes.len();
+                            out.push_str(&format!("  v{id} = 0;\n"));
+                            out.push_str(&format!(
+                                "  if (v{pos} >= 0 && v{pos} <= v{s}.len && {len}LL <= v{s}.len - v{pos}) {{\n"
+                            ));
+                            if bytes.is_empty() {
+                                out.push_str(&format!("    v{id} = 1;\n"));
+                            } else {
+                                out.push_str("    _Bool __match = 1;\n");
+                                for (idx, byte) in bytes.iter().enumerate() {
+                                    out.push_str(&format!(
+                                        "    if ((unsigned char)v{s}.data[v{pos} + {idx}] != {byte}) {{ __match = 0; }}\n"
+                                    ));
+                                }
+                                out.push_str(&format!("    v{id} = __match ? 1 : 0;\n"));
+                            }
+                            out.push_str("  }\n");
+                        } else {
+                            emit_unmodelled(inst, out);
+                        }
                     }
                     "__vow_string_substr" | "__vow_string_substr_in_arena" => {
                         let (s_arg, start_arg, len_arg) = if name == "__vow_string_substr_in_arena"
@@ -1783,6 +1820,12 @@ pub fn emit_c_function_full(
             "  _Bool __str_eq_{lo}_{hi} = __VERIFIER_nondet_bool();\n"
         ));
     }
+    let mut inst_by_id: HashMap<u32, &Inst> = HashMap::new();
+    for block in &func.blocks {
+        for inst in &block.insts {
+            inst_by_id.insert(inst.id.0, inst);
+        }
+    }
 
     // Block-visit tracking variables
     for block in &func.blocks {
@@ -1833,6 +1876,7 @@ pub fn emit_c_function_full(
                 const_fns,
                 modelable_fns,
                 &eq_pairs,
+                &inst_by_id,
                 module,
                 limits,
             );
@@ -1858,6 +1902,7 @@ pub fn emit_c_function_full(
                 const_fns,
                 modelable_fns,
                 &eq_pairs,
+                &inst_by_id,
                 module,
                 limits,
             );
@@ -2230,6 +2275,67 @@ mod tests {
         assert!(c.contains("int64_t add("), "signature: {c}");
         assert!(c.contains("v2 = v0 + v1"), "add: {c}");
         assert!(c.contains("return v2"), "return: {c}");
+    }
+
+    #[test]
+    fn emit_string_matches_literal_at_uses_static_bytes() {
+        let func = Function {
+            id: FuncId(0),
+            name: "matches_literal".to_string(),
+            params: vec![Ty::Ptr, Ty::I64],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
+                    inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                    inst(3, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(3)),
+                    inst(
+                        4,
+                        Opcode::Call,
+                        Ty::I64,
+                        vec![0, 1, 2, 3],
+                        InstData::CallExtern("__vow_string_matches_literal_at".to_string()),
+                    ),
+                    inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        let module = Module {
+            name: "test".to_string(),
+            functions: vec![func.clone()],
+            strings: vec!["a\0b".to_string()],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+
+        let c = emit_c_function_full(
+            &func,
+            &HashMap::new(),
+            &HashSet::new(),
+            &module,
+            &VerifyLimits::default(),
+        );
+
+        assert!(
+            c.contains("v4 = 0;") && !c.contains("v4 = __VERIFIER_nondet_long"),
+            "literal helper should be modeled deterministically: {c}"
+        );
+        assert!(c.contains("3LL <= v0.len - v1"), "byte length guard: {c}");
+        assert!(
+            c.contains("(unsigned char)v0.data[v1 + 0] != 97")
+                && c.contains("(unsigned char)v0.data[v1 + 1] != 0")
+                && c.contains("(unsigned char)v0.data[v1 + 2] != 98"),
+            "literal bytes should be embedded as constants: {c}"
+        );
     }
 
     #[test]
@@ -5374,6 +5480,7 @@ mod tests {
             &const_fns,
             &HashSet::new(),
             &[],
+            &HashMap::new(),
             &empty_module,
             &VerifyLimits::default(),
         );
@@ -5411,6 +5518,7 @@ mod tests {
             &HashMap::new(),
             &HashSet::new(),
             &[],
+            &HashMap::new(),
             &empty_module,
             &VerifyLimits::default(),
         );

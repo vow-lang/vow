@@ -315,7 +315,14 @@ fn block_arena_slot(
     slots: &mut BTreeMap<BlockId, StackSlot>,
     block_id: BlockId,
 ) -> StackSlot {
-    block_arena_slot_with_created(builder, slots, block_id).0
+    let (slot, created) = block_arena_slot_with_created(builder, slots, block_id);
+    if created {
+        let zero = builder.ins().iconst(types::I64, 0);
+        for offset in (0..VOW_ARENA_HEADER_SIZE as i32).step_by(8) {
+            builder.ins().stack_store(zero, slot, offset);
+        }
+    }
+    slot
 }
 
 fn block_arena_slot_with_created(
@@ -2238,6 +2245,13 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // haystack ptr
             sig.params.push(AbiParam::new(types::I64)); // needle ptr
             sig.returns.push(AbiParam::new(types::I8)); // bool
+        }
+        "__vow_string_matches_literal_at" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.params.push(AbiParam::new(types::I64)); // offset
+            sig.params.push(AbiParam::new(types::I64)); // literal bytes ptr
+            sig.params.push(AbiParam::new(types::I64)); // literal byte len
+            sig.returns.push(AbiParam::new(types::I64)); // 1 if matched, else 0
         }
         "__vow_string_push_str" => {
             sig.params.push(AbiParam::new(types::I64)); // dest ptr

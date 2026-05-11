@@ -847,6 +847,49 @@ impl<'e> Checker<'e> {
                     }
                     return arg_ty;
                 }
+                if name == "string_matches_literal_at" {
+                    let expected = [Ty::Str, Ty::I64, Ty::Str];
+                    if args.len() != expected.len() {
+                        self.emit_error_with_hints(
+                            ErrorCode::TypeMismatch,
+                            format!(
+                                "function `string_matches_literal_at` expects 3 arguments but got {}",
+                                args.len()
+                            ),
+                            expr.span,
+                            vec!["expected signature: (String, i64, string literal)".to_string()],
+                        );
+                    }
+                    for (arg, expected_ty) in args.iter().zip(expected.iter()) {
+                        let arg_ty = self.check_expr(arg);
+                        let coercible = arg_ty == Ty::I32
+                            && expected_ty.is_integer()
+                            && *expected_ty != Ty::I32;
+                        if arg_ty != *expected_ty && arg_ty != Ty::Never && !coercible {
+                            self.emit_error_with_hints(
+                                ErrorCode::TypeMismatch,
+                                format!(
+                                    "argument has type `{arg_ty}` but function expects `{expected_ty}`"
+                                ),
+                                arg.span,
+                                vec![format!("parameter expects `{expected_ty}`, got `{arg_ty}`")],
+                            );
+                        }
+                    }
+                    if let Some(literal_arg) = args.get(2)
+                        && !matches!(literal_arg.kind, ExprKind::Lit(Lit::String(_)))
+                    {
+                        self.emit_error_with_hints(
+                            ErrorCode::StaticLiteralRequired,
+                            "string_matches_literal_at requires a string literal as its third argument",
+                            literal_arg.span,
+                            vec![
+                                "pass the literal directly so the compiler can lower it without allocating a String".to_string(),
+                            ],
+                        );
+                    }
+                    return Ty::I64;
+                }
                 let (param_tys, return_ty) = match self.env.lookup_fn(name) {
                     Some(sig) => (sig.params.clone(), sig.return_ty.clone()),
                     None => {

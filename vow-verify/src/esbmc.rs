@@ -252,7 +252,14 @@ pub fn emit_verify_c_source(
     let callee_ids = collect_modelable_callees(func, module, const_fns, &mut modelable_cache);
 
     let mut c_src = if callee_ids.is_empty() {
-        emit_c_module(&[func], const_fns, limits)
+        emit_c_module_with_callees(
+            func,
+            module,
+            const_fns,
+            &[],
+            &std::collections::HashSet::new(),
+            limits,
+        )
     } else {
         let modelable_fns: std::collections::HashSet<FuncId> = callee_ids.iter().copied().collect();
         emit_c_module_with_callees(func, module, const_fns, &callee_ids, &modelable_fns, limits)

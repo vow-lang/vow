@@ -626,6 +626,7 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("string_split") { return String::from("__vow_string_split"); }
     if name == String::from("string_starts_with") { return String::from("__vow_string_starts_with"); }
     if name == String::from("string_ends_with") { return String::from("__vow_string_ends_with"); }
+    if name == String::from("string_matches_literal_at") { return String::from("__vow_string_matches_literal_at"); }
     if name == String::from("string_trim") { return String::from("__vow_string_trim"); }
     if name == String::from("string_to_upper") { return String::from("__vow_string_to_upper"); }
     if name == String::from("string_to_lower") { return String::from("__vow_string_to_lower"); }
@@ -688,6 +689,7 @@ fn builtin_ret_ty(name: String) -> i64 {
     if name == String::from("string_split") { return ITY_PTR(); }
     if name == String::from("string_starts_with") { return ITY_I64(); }
     if name == String::from("string_ends_with") { return ITY_I64(); }
+    if name == String::from("string_matches_literal_at") { return ITY_I64(); }
     if name == String::from("string_trim") { return ITY_PTR(); }
     if name == String::from("string_to_upper") { return ITY_PTR(); }
     if name == String::from("string_to_lower") { return ITY_PTR(); }
@@ -1047,6 +1049,34 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 // tags in sync with the Rust lowerer, or pin_to_root(expr) becomes a no-op here.
                 return source_id;
             }
+        }
+        if fn_name == String::from("string_matches_literal_at") {
+            let nargs: i64 = list_len(a, args_lid);
+            if nargs >= 3 {
+                let string_eid: i64 = list_get(a, args_lid, 0);
+                let pos_eid: i64 = list_get(a, args_lid, 1);
+                let literal_eid: i64 = list_get(a, args_lid, 2);
+                if expr_tag(a, literal_eid) == EXPR_LIT_STR() {
+                    let string_id: i64 = lower_consumed_expr(ctx, string_eid);
+                    let pos_id: i64 = lower_consumed_expr(ctx, pos_eid);
+                    let sid: i64 = expr_a(a, literal_eid);
+                    let lit: String = arena_str(a, sid);
+                    let lit_len: i64 = lit.len();
+                    let pool_idx: i64 = lctx_intern_str(ctx, lit);
+                    let no_args: Vec<i64> = Vec::new();
+                    let literal_ptr: i64 = lctx_emit(ctx, IOP_CONST_STR(), ITY_PTR(), no_args, IDATA_CONST_STR(), pool_idx, 0, String::from(""));
+                    let len_args: Vec<i64> = Vec::new();
+                    let literal_len: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), len_args, IDATA_CONST_I64(), lit_len, 0, String::from(""));
+                    let call_args: Vec<i64> = Vec::new();
+                    call_args.push(string_id);
+                    call_args.push(pos_id);
+                    call_args.push(literal_ptr);
+                    call_args.push(literal_len);
+                    return lctx_emit(ctx, IOP_CALL(), ITY_I64(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_matches_literal_at"));
+                }
+            }
+            let unit_args: Vec<i64> = Vec::new();
+            return lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), unit_args, IDATA_NONE(), 0, 0, String::from(""));
         }
         let debug_ext: String = debug_builtin_to_extern(fn_name);
         if debug_ext != String::from("") {

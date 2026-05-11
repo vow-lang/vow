@@ -1529,6 +1529,35 @@ pub unsafe extern "C" fn __vow_string_contains(haystack: *const u8, needle: *con
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_matches_literal_at(
+    s: *const u8,
+    pos: i64,
+    literal_ptr: *const u8,
+    literal_len: i64,
+) -> i64 {
+    if s.is_null() || literal_ptr.is_null() || pos < 0 || literal_len < 0 {
+        return 0;
+    }
+    sanitize_on_read(s as usize, 0);
+    let v = unsafe { &*(s as *const VowVec) };
+    let Ok(pos) = usize::try_from(pos) else {
+        return 0;
+    };
+    let Ok(literal_len) = usize::try_from(literal_len) else {
+        return 0;
+    };
+    let Some(end) = pos.checked_add(literal_len) else {
+        return 0;
+    };
+    if end > v.len {
+        return 0;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let literal = unsafe { std::slice::from_raw_parts(literal_ptr, literal_len) };
+    if bytes[pos..end] == *literal { 1 } else { 0 }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_push_str_in_arena(
     arena: *mut VowArena,
     dest: *mut u8,
@@ -3648,6 +3677,44 @@ mod tests {
         assert_eq!(digits_bytes, b"-42");
 
         unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn string_matches_literal_at_uses_pointer_and_byte_len() {
+        let mut bytes = b"za\0bq".to_vec();
+        let s = VowVec {
+            ptr: bytes.as_mut_ptr(),
+            len: bytes.len(),
+            cap: bytes.len(),
+        };
+        let literal = b"a\0b";
+        let empty = b"";
+        let s_ptr = &s as *const VowVec as *const u8;
+
+        assert_eq!(
+            unsafe {
+                __vow_string_matches_literal_at(s_ptr, 1, literal.as_ptr(), literal.len() as i64)
+            },
+            1
+        );
+        assert_eq!(
+            unsafe {
+                __vow_string_matches_literal_at(s_ptr, 2, literal.as_ptr(), literal.len() as i64)
+            },
+            0
+        );
+        assert_eq!(
+            unsafe { __vow_string_matches_literal_at(s_ptr, -1, literal.as_ptr(), 3) },
+            0
+        );
+        assert_eq!(
+            unsafe { __vow_string_matches_literal_at(s_ptr, 5, empty.as_ptr(), 0) },
+            1
+        );
+        assert_eq!(
+            unsafe { __vow_string_matches_literal_at(s_ptr, 6, empty.as_ptr(), 0) },
+            0
+        );
     }
 
     #[test]

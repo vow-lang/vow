@@ -723,6 +723,7 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 | `string_split`        | `fn(s: String, delim: String) -> Vec<String>`    | `[]`    |
 | `string_starts_with`  | `fn(s: String, prefix: String) -> i64`           | `[]`    |
 | `string_ends_with`    | `fn(s: String, suffix: String) -> i64`           | `[]`    |
+| `string_matches_literal_at` | `fn(s: String, pos: i64, literal: String) -> i64` | `[]` |
 | `string_trim`         | `fn(s: String) -> String`                        | `[]`    |
 | `string_to_upper`     | `fn(s: String) -> String`                        | `[]`    |
 | `string_to_lower`     | `fn(s: String) -> String`                        | `[]`    |
@@ -801,7 +802,9 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 
 **Filesystem return values:** `fs_write`, `fs_mkdir`, `fs_remove`, `fs_remove_dir`, and `fs_rename` return `i64`: 0 on success, non-zero on failure. `fs_open`, `fs_status`, and `fs_close` use the streaming status codes above. `fs_exists` and `fs_is_dir` are predicates: they return 1 for true, 0 for false. Errors (null pointer, invalid UTF-8) also return 0, so callers cannot distinguish "false" from "error".
 
-**`string_starts_with` / `string_ends_with` return values:** Return `i64`: 1 if true, 0 if false.
+**`string_starts_with` / `string_ends_with` / `string_matches_literal_at` return values:** Return `i64`: 1 if true, 0 if false.
+
+**`string_matches_literal_at` literal operand:** The third argument must be written as a string literal at the call site. The compiler lowers that literal to static bytes plus an explicit byte length, so no temporary `String` allocation is created and embedded NUL bytes are preserved. Passing a variable or computed `String` as the third argument is a type-check error (`StaticLiteralRequired`). Use `string_starts_with`, `string_ends_with`, or `String` methods when the needle must be dynamic.
 
 **`process_run` vs `process_start`:** `process_run(cmd, args)` runs a subprocess synchronously and returns its exit code. After it returns, `process_get_stdout()` and `process_get_stderr()` retrieve the captured output of the most recent `process_run` call. `process_start(cmd, args)` launches a subprocess asynchronously and returns a process ID. Use `process_wait(pid)` to wait for completion and get the exit code, and `process_stdout_for(pid)` / `process_stderr_for(pid)` to retrieve output.
 
