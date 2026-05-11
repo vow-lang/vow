@@ -2339,6 +2339,20 @@ fn cemit_preamble(need_shl_i64: i64, need_shr_i64: i64, need_shl_u64: i64, need_
     cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, VOW_VEC_MAX(), VOW_STRING_MAX(), VOW_HASHMAP_MAX(), VOW_BTREEMAP_MAX())
 }
 
+fn string_max_for_literals(m: IrModule, string_max: i64) -> i64 {
+    let strings: Vec<String> = m.strings;
+    let mut max_len: i64 = string_max;
+    let mut i: i64 = 0;
+    while i < strings.len() {
+        let len: i64 = strings[i].len();
+        if len > max_len {
+            max_len = len;
+        }
+        i = i + 1;
+    }
+    max_len
+}
+
 fn emit_forward_declaration(out: String, f: IrFunction) {
     let ret_c: String = {
         if f.return_ty == ITY_UNIT() {
@@ -2376,12 +2390,13 @@ fn emit_forward_declaration(out: String, f: IrFunction) {
 
 fn emit_c_module(m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> String {
     let fns: Vec<IrFunction> = m.functions;
+    let model_string_max: i64 = string_max_for_literals(m, string_max);
     let n: i64 = fns.len();
     let need_shl_i64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHL_I64());
     let need_shr_i64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHR_I64());
     let need_shl_u64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHL_U64());
     let need_shr_u64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHR_U64());
-    let out: String = cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, vec_max, string_max, hashmap_max, btreemap_max);
+    let out: String = cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, vec_max, model_string_max, hashmap_max, btreemap_max);
 
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
     let empty_modelable: Vec<i64> = Vec::new();
@@ -2389,7 +2404,7 @@ fn emit_c_module(m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, b
     let mut fi: i64 = 0;
     while fi < fns.len() {
         let f: IrFunction = fns[fi];
-        emit_c_function(out, f, const_fn_indices, empty_modelable, m, vec_max, string_max, hashmap_max, btreemap_max);
+        emit_c_function(out, f, const_fn_indices, empty_modelable, m, vec_max, model_string_max, hashmap_max, btreemap_max);
         out.push_byte(10);
         fi = fi + 1;
     }
@@ -2420,11 +2435,12 @@ fn scan_shift_op_in_module_fns(fns: Vec<IrFunction>, target_fi: i64, callee_fis:
 fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>, modelable_fi_set: Vec<i64>,
                               vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> String {
     let fns: Vec<IrFunction> = m.functions;
+    let model_string_max: i64 = string_max_for_literals(m, string_max);
     let need_shl_i64: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHL_I64());
     let need_shr_i64: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHR_I64());
     let need_shl_u64: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHL_U64());
     let need_shr_u64: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHR_U64());
-    let out: String = cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, vec_max, string_max, hashmap_max, btreemap_max);
+    let out: String = cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, vec_max, model_string_max, hashmap_max, btreemap_max);
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
 
     let mut ci: i64 = 0;
@@ -2452,7 +2468,7 @@ fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>,
         while fi < fns.len() {
             let callee: IrFunction = fns[fi];
             if callee.id == cfid {
-                emit_c_function(out, callee, const_fn_indices, modelable_fi_set, m, vec_max, string_max, hashmap_max, btreemap_max);
+                emit_c_function(out, callee, const_fn_indices, modelable_fi_set, m, vec_max, model_string_max, hashmap_max, btreemap_max);
                 out.push_byte(10);
                 fi = fns.len();
             }
@@ -2465,7 +2481,7 @@ fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>,
     while fi < fns.len() {
         let f: IrFunction = fns[fi];
         if f.id == target_fi {
-            emit_c_function(out, f, const_fn_indices, modelable_fi_set, m, vec_max, string_max, hashmap_max, btreemap_max);
+            emit_c_function(out, f, const_fn_indices, modelable_fi_set, m, vec_max, model_string_max, hashmap_max, btreemap_max);
             out.push_byte(10);
             fi = fns.len();
         }

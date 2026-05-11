@@ -2061,6 +2061,14 @@ fn emit_c_preamble(out: &mut String, shifts: &ShiftNeeds, limits: &VerifyLimits)
     }
 }
 
+fn limits_with_literal_string_capacity(module: &Module, limits: &VerifyLimits) -> VerifyLimits {
+    let mut effective = *limits;
+    if let Some(max_literal_len) = module.strings.iter().map(|s| s.len()).max() {
+        effective.string_max = effective.string_max.max(max_literal_len);
+    }
+    effective
+}
+
 fn emit_forward_declaration(func: &Function, out: &mut String) {
     let ret_c = match func.return_ty {
         Ty::Unit => "void",
@@ -2114,6 +2122,7 @@ pub fn emit_c_module_with_callees(
     limits: &VerifyLimits,
 ) -> String {
     let mut out = String::new();
+    let effective_limits = limits_with_literal_string_capacity(module, limits);
 
     // Collect all functions (target + callees) for shift scanning
     let mut all_funcs: Vec<&Function> = vec![target];
@@ -2123,7 +2132,7 @@ pub fn emit_c_module_with_callees(
         }
     }
     let shifts = scan_shift_needs(&all_funcs);
-    emit_c_preamble(&mut out, &shifts, limits);
+    emit_c_preamble(&mut out, &shifts, &effective_limits);
 
     // Forward declarations for all callees
     for fid in callee_ids {
@@ -2143,7 +2152,7 @@ pub fn emit_c_module_with_callees(
                 const_fns,
                 modelable_fns,
                 module,
-                limits,
+                &effective_limits,
             ));
             out.push('\n');
         }
@@ -2155,7 +2164,7 @@ pub fn emit_c_module_with_callees(
         const_fns,
         modelable_fns,
         module,
-        limits,
+        &effective_limits,
     ));
     out.push('\n');
     out
@@ -4232,6 +4241,54 @@ mod tests {
         assert!(
             c.contains("v1.data[4] = (int8_t)111;"),
             "literal byte o from pool: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_c_module_grows_string_model_for_literal_bytes() {
+        let func = make_func(
+            "make_literal",
+            vec![],
+            Ty::Ptr,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                inst(
+                    1,
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![0],
+                    InstData::CallExtern("__vow_string_literal".to_string()),
+                ),
+                inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+            ],
+        );
+        let module = Module {
+            name: String::new(),
+            functions: vec![func.clone()],
+            strings: vec!["hello".to_string()],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        let limits = VerifyLimits {
+            string_max: 4,
+            ..VerifyLimits::default()
+        };
+        let c = emit_c_module_with_callees(
+            &func,
+            &module,
+            &HashMap::new(),
+            &[],
+            &HashSet::new(),
+            &limits,
+        );
+        assert!(
+            c.contains("typedef struct { int64_t len; int8_t data[5]; } __vow_string_t;"),
+            "literal bytes must fit in the string model: {c}"
+        );
+        assert!(
+            c.contains("v1.data[4] = (int8_t)111;"),
+            "last literal byte should be emitted without exceeding the model: {c}"
         );
     }
 
