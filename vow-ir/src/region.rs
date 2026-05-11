@@ -2573,9 +2573,11 @@ fn propagate_alias(
 #[allow(dead_code)] // Root + Rodata appear once the dataflow recognises Root-pin / .rodata flows.
 enum MustOutliveMarker {
     Block(BlockId),
-    /// Slot-less caller marker — retained for the Return arm during the
-    /// issue #317 migration; will be replaced by `CallerReturn` once the
-    /// Return path moves to slot-aware inference.
+    /// Slot-less caller marker — defensive fallback for the unreachable
+    /// `GetArg` whose `InstData` is not `ArgIndex` in `target_region_marker`
+    /// (see this file's match on `inst.data`). The Return arm migrated to
+    /// `CallerReturn` in #342; this variant no longer participates in
+    /// slot-aware return inference.
     VirtualCaller,
     /// Value escapes via the function's return path. Maps to slot 0 iff the
     /// summary's `return_region == FreshInCaller`; otherwise falls back to
