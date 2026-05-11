@@ -8474,9 +8474,13 @@ fn install_skill_tree(root: String) -> String [io, write] {
     let ref_dir: String = str3(dir, String::from("/"), String::from("reference"));
     let examples_dir: String = str3(dir, String::from("/"), String::from("examples"));
     let schemas_dir: String = str3(dir, String::from("/"), String::from("schemas"));
-    fs_mkdir(ref_dir);
-    fs_mkdir(examples_dir);
-    fs_mkdir(schemas_dir);
+    let rr: i64 = fs_mkdir(ref_dir);
+    let er: i64 = fs_mkdir(examples_dir);
+    let sr: i64 = fs_mkdir(schemas_dir);
+    if rr < 0 || er < 0 || sr < 0 {
+        eprintln_str("vow skill install: cannot create support subdirectories");
+        return String::from("");
+    }
 
     let path: String = str3(dir, String::from("/"), String::from("SKILL.md"));
     let wr: i64 = fs_write(path, skill_entrypoint());
