@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::ffi::{CStr, c_char};
 use std::io::Write as _;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 
 thread_local! {
     static LAST_STDOUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
@@ -637,9 +637,10 @@ pub struct VowArena {
     pub chunk_end: usize,
     pub last_alloc_start: *mut u8,
     pub last_alloc_size: usize,
+    pub retained_bytes: usize,
 }
 
-const _: () = assert!(core::mem::size_of::<VowArena>() == 48);
+const _: () = assert!(core::mem::size_of::<VowArena>() == 56);
 
 const CHUNK_PAYLOAD: usize = 4096;
 const CHUNK_LINK_BYTES: usize = 8;
@@ -651,6 +652,73 @@ const fn normal_chunk_total() -> usize {
 
 const fn oversized_chunk_total(bytes: usize, align: usize) -> usize {
     CHUNK_LINK_BYTES + bytes + (align - 1)
+}
+
+static MEMORY_CURRENT_BYTES: AtomicUsize = AtomicUsize::new(0);
+static MEMORY_PEAK_BYTES: AtomicUsize = AtomicUsize::new(0);
+static MEMORY_ROOT_ARENA_BYTES: AtomicUsize = AtomicUsize::new(0);
+static MEMORY_ALLOC_COUNT: AtomicU64 = AtomicU64::new(0);
+
+fn atomic_usize_add_saturating(counter: &AtomicUsize, delta: usize) -> usize {
+    let mut current = counter.load(Ordering::Relaxed);
+    loop {
+        let next = current.saturating_add(delta);
+        match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return next,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+fn atomic_usize_sub_saturating(counter: &AtomicUsize, delta: usize) -> usize {
+    let mut current = counter.load(Ordering::Relaxed);
+    loop {
+        let next = current.saturating_sub(delta);
+        match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return next,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+fn memory_update_peak(current: usize) {
+    let mut peak = MEMORY_PEAK_BYTES.load(Ordering::Relaxed);
+    while current > peak {
+        match MEMORY_PEAK_BYTES.compare_exchange_weak(
+            peak,
+            current,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(observed) => peak = observed,
+        }
+    }
+}
+
+fn arena_is_root(a: *mut VowArena) -> bool {
+    std::ptr::addr_eq(a as *const VowArena, &raw const __vow_root_arena)
+}
+
+fn memory_note_chunk_alloc(a: *mut VowArena, bytes: usize) {
+    let current = atomic_usize_add_saturating(&MEMORY_CURRENT_BYTES, bytes);
+    memory_update_peak(current);
+    if arena_is_root(a) {
+        atomic_usize_add_saturating(&MEMORY_ROOT_ARENA_BYTES, bytes);
+    }
+}
+
+fn memory_note_arena_release(a: *mut VowArena, bytes: usize) {
+    atomic_usize_sub_saturating(&MEMORY_CURRENT_BYTES, bytes);
+    if arena_is_root(a) {
+        atomic_usize_sub_saturating(&MEMORY_ROOT_ARENA_BYTES, bytes);
+    }
+}
+
+fn memory_note_alloc_request() {
+    let _ = MEMORY_ALLOC_COUNT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+        Some(count.saturating_add(1))
+    });
 }
 
 // libc::malloc a chunk of `total` bytes and zero the next-chunk link word at
@@ -683,6 +751,7 @@ pub unsafe extern "C" fn __vow_arena_init_closed(a: *mut VowArena) {
     arena.chunk_end = 0;
     arena.last_alloc_start = core::ptr::null_mut();
     arena.last_alloc_size = 0;
+    arena.retained_bytes = 0;
 }
 
 #[unsafe(no_mangle)]
@@ -704,11 +773,14 @@ pub unsafe extern "C" fn __vow_arena_open(a: *mut VowArena) {
     arena.chunk_end = base as usize + total;
     arena.last_alloc_start = core::ptr::null_mut();
     arena.last_alloc_size = 0;
+    arena.retained_bytes = total;
+    memory_note_chunk_alloc(a, total);
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_arena_close(a: *mut VowArena) {
     let arena = unsafe { &mut *a };
+    let retained_bytes = arena.retained_bytes;
     let mut chunk = arena.first_chunk;
     while !chunk.is_null() {
         let next = unsafe { *(chunk as *mut *mut u8) };
@@ -724,6 +796,8 @@ pub unsafe extern "C" fn __vow_arena_close(a: *mut VowArena) {
     arena.chunk_end = 0;
     arena.last_alloc_start = core::ptr::null_mut();
     arena.last_alloc_size = 0;
+    arena.retained_bytes = 0;
+    memory_note_arena_release(a, retained_bytes);
 }
 
 #[unsafe(no_mangle)]
@@ -748,6 +822,7 @@ pub unsafe extern "C" fn __vow_arena_alloc(
         arena.cursor = aligned_cursor + bytes;
         arena.last_alloc_start = aligned_cursor as *mut u8;
         arena.last_alloc_size = bytes;
+        memory_note_alloc_request();
         return aligned_cursor as *mut u8;
     }
     // Need a new chunk. Use the oversized path whenever (a) bytes exceed the
@@ -771,7 +846,25 @@ pub unsafe extern "C" fn __vow_arena_alloc(
     arena.chunk_end = new_base as usize + total;
     arena.last_alloc_start = start as *mut u8;
     arena.last_alloc_size = bytes;
+    arena.retained_bytes = arena.retained_bytes.saturating_add(total);
+    memory_note_chunk_alloc(a, total);
+    memory_note_alloc_request();
     start as *mut u8
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_memory_root_arena_bytes() -> u64 {
+    MEMORY_ROOT_ARENA_BYTES.load(Ordering::Relaxed) as u64
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_memory_peak_bytes() -> u64 {
+    MEMORY_PEAK_BYTES.load(Ordering::Relaxed) as u64
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn __vow_memory_alloc_count_since_start() -> u64 {
+    MEMORY_ALLOC_COUNT.load(Ordering::Relaxed)
 }
 
 #[unsafe(no_mangle)]
@@ -807,6 +900,7 @@ pub static mut __vow_root_arena: VowArena = VowArena {
     chunk_end: 0,
     last_alloc_start: core::ptr::null_mut(),
     last_alloc_size: 0,
+    retained_bytes: 0,
 };
 
 static ROOT_ARENA_INITIALIZED: AtomicBool = AtomicBool::new(false);
@@ -3273,6 +3367,7 @@ mod tests {
             chunk_end: 0,
             last_alloc_start: core::ptr::null_mut(),
             last_alloc_size: 0,
+            retained_bytes: 0,
         }
     }
 

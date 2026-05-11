@@ -374,6 +374,30 @@ impl TypeEnv {
             },
         );
         env.define_fn(
+            "memory_root_arena_bytes",
+            FnSig {
+                params: vec![],
+                return_ty: Ty::U64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "memory_peak_bytes",
+            FnSig {
+                params: vec![],
+                return_ty: Ty::U64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "memory_alloc_count_since_start",
+            FnSig {
+                params: vec![],
+                return_ty: Ty::U64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
             "hex_encode",
             FnSig {
                 params: vec![Ty::Applied(
