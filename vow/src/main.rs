@@ -321,7 +321,7 @@ struct SkillArgs {
 enum SkillAction {
     /// Print the skill document to stdout (default)
     Print,
-    /// Install the skill to .claude/commands/vow-toolchain.md
+    /// Install the skill to .claude/skills/vow-toolchain/SKILL.md
     Install,
 }
 
@@ -2447,12 +2447,14 @@ Generate or install the Claude Code skill document for the current compiler vers
 ```
 vow skill              # print skill document to stdout (default: print)
 vow skill print        # same as above
-vow skill install      # install to .claude/commands/vow-toolchain.md
+vow skill install      # install to .claude/skills/vow-toolchain/SKILL.md
 ```
 
-`print` writes the complete skill markdown (with YAML frontmatter) to stdout. Pipe to a file or use `install` to place it directly.
+`print` writes the complete skill markdown (with YAML frontmatter) to stdout. Pipe it into a system prompt for non–Claude Code harnesses.
 
-`install` creates `.claude/commands/` in the current directory if needed and writes the skill document there. Claude Code discovers it automatically.
+`install` creates `.claude/skills/vow-toolchain/` in the current directory if needed and writes `SKILL.md` there. Claude Code's skill matcher auto-discovers it via the `globs: "**/*.vow"` frontmatter, so the skill loads on demand whenever an agent works with `.vow` files.
+
+**Auto-install on build.** The first time `vow build` (or the legacy `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow-toolchain/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.
 
 ### `vow test`
 
@@ -4572,11 +4574,11 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
 // GENERATE:SKILL_FULL:END
 
 fn install_skill_to(root: &Path) -> std::io::Result<PathBuf> {
-    let dir = root.join(".claude/commands");
+    let dir = root.join(".claude/skills/vow-toolchain");
     std::fs::create_dir_all(&dir).map_err(|e| {
         std::io::Error::new(e.kind(), format!("cannot create {}: {}", dir.display(), e))
     })?;
-    let path = dir.join("vow-toolchain.md");
+    let path = dir.join("SKILL.md");
     std::fs::write(&path, skill_full_markdown()).map_err(|e| {
         std::io::Error::new(e.kind(), format!("cannot write {}: {}", path.display(), e))
     })?;
@@ -4591,6 +4593,21 @@ fn run_skill_install() {
             std::process::exit(1);
         }
     }
+}
+
+/// First-run auto-install: when `.claude/` already exists in the working
+/// directory but the Vow skill is not yet installed, drop a fresh copy in
+/// place. Silent on success, silent on failure — must never fail the build.
+fn maybe_auto_install_skill(cwd: &Path) {
+    let claude_dir = cwd.join(".claude");
+    if !claude_dir.is_dir() {
+        return;
+    }
+    let target = claude_dir.join("skills/vow-toolchain/SKILL.md");
+    if target.exists() {
+        return;
+    }
+    let _ = install_skill_to(cwd);
 }
 
 // ---------------------------------------------------------------------------
@@ -6783,6 +6800,9 @@ fn main() {
             validate_limits(&limits);
             let jobs = resolve_verify_jobs(b.verify_jobs);
             let bconfig = make_solver_config(b.solver, b.encoding, b.timeout);
+            if let Ok(cwd) = std::env::current_dir() {
+                maybe_auto_install_skill(&cwd);
+            }
             run_build_command(
                 &source,
                 b.output.as_deref(),
@@ -6976,6 +6996,9 @@ fn main() {
             validate_limits(&limits);
             let jobs = resolve_verify_jobs(args.verify_jobs);
             let config = make_solver_config(args.solver, args.encoding, args.timeout);
+            if let Ok(cwd) = std::env::current_dir() {
+                maybe_auto_install_skill(&cwd);
+            }
             run_build_command(
                 &source,
                 args.output.as_deref(),
@@ -7306,14 +7329,49 @@ fn main() -> i32 [io] {
     }
 
     #[test]
-    fn skill_install_writes_claude_command_file() {
+    fn skill_install_writes_claude_skill_file() {
         let dir = TempDir::new().unwrap();
         install_skill_to(dir.path()).unwrap();
 
-        let installed = dir.path().join(".claude/commands/vow-toolchain.md");
+        let installed = dir.path().join(".claude/skills/vow-toolchain/SKILL.md");
         let contents = std::fs::read_to_string(installed).unwrap();
         assert!(contents.starts_with("---\nname: vow-toolchain\n"));
         assert!(contents.contains("# Vow Language Reference"));
+    }
+
+    #[test]
+    fn auto_install_skill_skips_when_no_claude_dir() {
+        let dir = TempDir::new().unwrap();
+        maybe_auto_install_skill(dir.path());
+        let claude_dir = dir.path().join(".claude");
+        assert!(
+            !claude_dir.exists(),
+            "auto-install must not create .claude/ when absent"
+        );
+    }
+
+    #[test]
+    fn auto_install_skill_installs_when_claude_dir_present() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        maybe_auto_install_skill(dir.path());
+        let installed = dir.path().join(".claude/skills/vow-toolchain/SKILL.md");
+        assert!(
+            installed.exists(),
+            "auto-install must populate the skill when .claude/ is present"
+        );
+    }
+
+    #[test]
+    fn auto_install_skill_leaves_existing_file_untouched() {
+        let dir = TempDir::new().unwrap();
+        let target_dir = dir.path().join(".claude/skills/vow-toolchain");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let target = target_dir.join("SKILL.md");
+        std::fs::write(&target, "user-managed content").unwrap();
+        maybe_auto_install_skill(dir.path());
+        let contents = std::fs::read_to_string(&target).unwrap();
+        assert_eq!(contents, "user-managed content");
     }
 
     #[test]

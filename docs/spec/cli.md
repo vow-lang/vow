@@ -86,12 +86,14 @@ Generate or install the Claude Code skill document for the current compiler vers
 ```
 vow skill              # print skill document to stdout (default: print)
 vow skill print        # same as above
-vow skill install      # install to .claude/commands/vow-toolchain.md
+vow skill install      # install to .claude/skills/vow-toolchain/SKILL.md
 ```
 
-`print` writes the complete skill markdown (with YAML frontmatter) to stdout. Pipe to a file or use `install` to place it directly.
+`print` writes the complete skill markdown (with YAML frontmatter) to stdout. Pipe it into a system prompt for non–Claude Code harnesses.
 
-`install` creates `.claude/commands/` in the current directory if needed and writes the skill document there. Claude Code discovers it automatically.
+`install` creates `.claude/skills/vow-toolchain/` in the current directory if needed and writes `SKILL.md` there. Claude Code's skill matcher auto-discovers it via the `globs: "**/*.vow"` frontmatter, so the skill loads on demand whenever an agent works with `.vow` files.
+
+**Auto-install on build.** The first time `vow build` (or the legacy `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow-toolchain/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.
 
 ### `vow test`
 

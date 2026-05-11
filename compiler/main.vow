@@ -3166,12 +3166,14 @@ fn skill_full() -> String {
     r.push_str(String::from("```\n"));
     r.push_str(String::from("vow skill              # print skill document to stdout (default: print)\n"));
     r.push_str(String::from("vow skill print        # same as above\n"));
-    r.push_str(String::from("vow skill install      # install to .claude/commands/vow-toolchain.md\n"));
+    r.push_str(String::from("vow skill install      # install to .claude/skills/vow-toolchain/SKILL.md\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`print` writes the complete skill markdown (with YAML frontmatter) to stdout. Pipe to a file or use `install` to place it directly.\n"));
+    r.push_str(String::from("`print` writes the complete skill markdown (with YAML frontmatter) to stdout. Pipe it into a system prompt for non–Claude Code harnesses.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("`install` creates `.claude/commands/` in the current directory if needed and writes the skill document there. Claude Code discovers it automatically.\n"));
+    r.push_str(String::from("`install` creates `.claude/skills/vow-toolchain/` in the current directory if needed and writes `SKILL.md` there. Claude Code's skill matcher auto-discovers it via the `globs: \"**/*.vow\"` frontmatter, so the skill loads on demand whenever an agent works with `.vow` files.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Auto-install on build.** The first time `vow build` (or the legacy `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow-toolchain/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow test`\n"));
     r.push_str(String::from("\n"));
@@ -5304,23 +5306,39 @@ fn run_skill(argv: Vec<String>) -> i32 [io, write] {
         }
     }
     if do_install {
-        let dir: String = String::from(".claude/commands");
+        let dir: String = String::from(".claude/skills/vow-toolchain");
         let mk: i64 = fs_mkdir(dir);
         if mk < 0 {
-            eprintln_str("vow skill install: cannot create .claude/commands/");
+            eprintln_str("vow skill install: cannot create .claude/skills/vow-toolchain/");
             return 1;
         }
-        let path: String = String::from(".claude/commands/vow-toolchain.md");
+        let path: String = String::from(".claude/skills/vow-toolchain/SKILL.md");
         let wr: i64 = fs_write(path, skill_full());
         if wr < 0 {
-            eprintln_str("vow skill install: cannot write .claude/commands/vow-toolchain.md");
+            eprintln_str("vow skill install: cannot write .claude/skills/vow-toolchain/SKILL.md");
             return 1;
         }
-        eprintln_str("installed skill to .claude/commands/vow-toolchain.md");
+        eprintln_str("installed skill to .claude/skills/vow-toolchain/SKILL.md");
         return 0;
     }
     print_str(skill_full());
     0
+}
+
+fn maybe_auto_install_skill() [io, write] {
+    if fs_is_dir(String::from(".claude")) != 1 {
+        return;
+    }
+    let target: String = String::from(".claude/skills/vow-toolchain/SKILL.md");
+    if fs_exists(target) == 1 {
+        return;
+    }
+    let dir: String = String::from(".claude/skills/vow-toolchain");
+    let mk: i64 = fs_mkdir(dir);
+    if mk < 0 {
+        return;
+    }
+    fs_write(target, skill_full());
 }
 
 fn vow_kind_from_desc(desc: String) -> String {
@@ -5564,6 +5582,7 @@ fn main() -> i32 [io, write] {
         return run_skill(argv);
     }
     if cmd == CMD_BUILD() {
+        maybe_auto_install_skill();
         return run_build(argv);
     }
     if cmd == CMD_VERIFY() {
@@ -5575,5 +5594,6 @@ fn main() -> i32 [io, write] {
     if cmd == CMD_MUTANTS() {
         return run_mutants(argv);
     }
+    maybe_auto_install_skill();
     run_legacy(argv)
 }
