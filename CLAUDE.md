@@ -107,7 +107,7 @@ This builds `./target/release/vow` (stage 0), then uses it to compile and verify
 The Claude Code skill document is embedded in the compiler and generated on demand:
 ```bash
 build/vowc skill print                            # print skill to stdout
-build/vowc skill install                          # install to .claude/commands/vow-toolchain.md
+build/vowc skill install                          # install to .claude/skills/vow-toolchain/SKILL.md
 ```
 
 After updating a spec file, regenerate `--help` / embedded skill and rebuild:
