@@ -1411,6 +1411,9 @@ fn extern_mutation_operation(sym: String) -> String {
     if sym == String::from("__vow_vec_push") || sym == String::from("__vow_vec_push_in_arena") {
         return String::from("Vec::push");
     }
+    if sym == String::from("__vow_vec_clear") {
+        return String::from("Vec::clear");
+    }
     if sym == String::from("__vow_vec_reserve_in_arena") {
         return String::from("Vec::reserve");
     }
@@ -1419,6 +1422,9 @@ fn extern_mutation_operation(sym: String) -> String {
     }
     if sym == String::from("__vow_string_push_byte") || sym == String::from("__vow_string_push_byte_in_arena") {
         return String::from("String::push_byte");
+    }
+    if sym == String::from("__vow_string_clear") {
+        return String::from("String::clear");
     }
     if sym == String::from("__vow_map_insert") || sym == String::from("__vow_map_insert_in_arena") {
         return String::from("HashMap::insert");
@@ -3617,11 +3623,13 @@ fn extern_store_source_pos(sym: String, edge_idx: i64) -> i64 {
 
 fn extern_growth_target_pos(sym: String) -> i64 {
     if sym == String::from("__vow_vec_push") { return 0; }
+    if sym == String::from("__vow_vec_clear") { return 0; }
     if sym == String::from("__vow_vec_push_in_arena") { return 1; }
     if sym == String::from("__vow_vec_reserve_in_arena") { return 1; }
     if sym == String::from("__vow_string_push_str") { return 0; }
     if sym == String::from("__vow_string_push_str_in_arena") { return 1; }
     if sym == String::from("__vow_string_push_byte") { return 0; }
+    if sym == String::from("__vow_string_clear") { return 0; }
     if sym == String::from("__vow_string_push_byte_in_arena") { return 1; }
     if sym == String::from("__vow_map_insert") { return 0; }
     if sym == String::from("__vow_map_insert_in_arena") { return 1; }

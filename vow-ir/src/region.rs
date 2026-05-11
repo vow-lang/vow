@@ -1761,10 +1761,12 @@ fn for_each_extern_store_edge(sym: &str, args: &[InstId], mut visit: impl FnMut(
 fn extern_growth_target(sym: &str, args: &[InstId]) -> Option<InstId> {
     match sym {
         "__vow_vec_push" if !args.is_empty() => Some(args[0]),
+        "__vow_vec_clear" if !args.is_empty() => Some(args[0]),
         "__vow_vec_push_in_arena" | "__vow_vec_reserve_in_arena" if args.len() >= 2 => {
             Some(args[1])
         }
         "__vow_string_push_str" | "__vow_string_push_byte" if !args.is_empty() => Some(args[0]),
+        "__vow_string_clear" if !args.is_empty() => Some(args[0]),
         "__vow_string_push_str_in_arena" | "__vow_string_push_byte_in_arena" if args.len() >= 2 => {
             Some(args[1])
         }
@@ -1777,9 +1779,11 @@ fn extern_growth_target(sym: &str, args: &[InstId]) -> Option<InstId> {
 fn extern_mutation_operation(sym: &str) -> Option<&'static str> {
     match sym {
         "__vow_vec_push" | "__vow_vec_push_in_arena" => Some("Vec::push"),
+        "__vow_vec_clear" => Some("Vec::clear"),
         "__vow_vec_reserve_in_arena" => Some("Vec::reserve"),
         "__vow_string_push_str" | "__vow_string_push_str_in_arena" => Some("String::push_str"),
         "__vow_string_push_byte" | "__vow_string_push_byte_in_arena" => Some("String::push_byte"),
+        "__vow_string_clear" => Some("String::clear"),
         "__vow_map_insert" | "__vow_map_insert_in_arena" => Some("HashMap::insert"),
         _ => None,
     }
