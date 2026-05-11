@@ -48,7 +48,9 @@ frontmatter description/`when_to_use` metadata to load it for `.vow` file work
 as well as creation and verification-debugging prompts before a `.vow` file
 exists. Auto-install is silent, runs at most once (it leaves any existing
 `SKILL.md` untouched), and is skipped entirely when `.claude/` is absent — so
-non-Claude-Code projects are never touched.
+non-Claude-Code projects are never touched. Unlike explicit `--local`,
+auto-install only requires `.claude/`; it does not require the directory to be a
+git checkout.
 
 To install the skill explicitly (for a fresh checkout, or when bringing a Vow
 toolchain into a project that already has `.claude/`):

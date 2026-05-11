@@ -98,7 +98,7 @@ vow skill install --global  # install to $HOME/.claude/skills/vow-toolchain/ on 
 
 When no scope flag is provided, `install` prompts on stderr for local (`./.claude`) or global (`$HOME/.claude`) installation. Scripts and agents should pass `--local` or `--global` explicitly. `--local` requires the current directory to contain both `.git` and `.claude/`; otherwise it exits with an error and writes nothing. `--global` installs under `$HOME/.claude/skills/vow-toolchain/` and fails if `$HOME` is unset or empty.
 
-**Auto-install on build.** The first time `vow build` (or the legacy `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow-toolchain/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.
+**Auto-install on build.** The first time `vow build` (or the legacy `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow-toolchain/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Unlike explicit `--local`, auto-install only requires `.claude/`; it does not require the directory to be a git checkout. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.
 
 ### `vow test`
 
