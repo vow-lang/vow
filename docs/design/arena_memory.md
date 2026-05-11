@@ -840,15 +840,14 @@ applies in `hidden_region_idx_for_store_target`:
 
 Allocations with markers spanning a single destination resolve to
 that destination's slot precisely; codegen routes the alloc into the
-correct hidden arena. Allocations whose marker set contains multiple
-distinct `CallerStoreTarget(p)` markers (for instance, a Phi merging
-allocs destined for different store-target parameters) currently
-collapse to the lowest slot deterministically — strictly better than
-the pre-#317 collapse-everything-to-slot-0 path. A future enhancement
-may detect provably unsafe multi-slot routings and emit
-`RegionConflict` via a sentinel `HiddenRegionIdx::AMBIGUOUS`; that
-infrastructure is in place but not wired into the production reject
-path (see issue #317 "Things that might fail silently" follow-up).
+correct hidden arena. Allocations whose marker set spans more than one
+hidden caller-arena slot (for example, the same allocation is both
+returned through `FreshInCaller` and stored into a parameter target, or
+stored into two distinct parameter targets) resolve to the sentinel
+`Caller(HiddenRegionIdx::AMBIGUOUS)`. Any subsequent parameter-rooted
+store of that directly fresh heap value MUST be rejected with
+`RegionConflict`; choosing an arbitrary slot would route at least one
+escaped pointer into the wrong arena lifetime.
 
 **Visibility** (`RegionRootEscape`, severity Note, non-blocking).
 When `region(I)` resolves through caller-region routing to a chain

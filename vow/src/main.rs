@@ -3561,9 +3561,13 @@ fn add(a: i64, b: i64) -> i64 vow {
 > chain into a parameter container has its inferred region widened to
 > `Caller(HiddenRegionIdx(N))` by §4.1 step 2's must-outlive marker
 > propagation, where `N` is the precise slot index implied by the
-> destination (issue #317 slot-aware inference). Such routings satisfy
-> the constraint and are accepted; only allocations whose inferred region
-> is a strictly narrower block fire `RegionConflict`.
+> destination (issue #317 slot-aware inference). Such single-slot routings
+> satisfy the constraint and are accepted. Allocations whose caller-region
+> markers require more than one hidden caller-arena slot resolve to
+> `Caller(HiddenRegionIdx::AMBIGUOUS)` and are rejected when the directly
+> fresh heap value is stored into a parameter-rooted target; allocations
+> whose inferred region is a strictly narrower block also fire
+> `RegionConflict`.
 
 ```vow
 fn store_into(out: Vec<String>, prefix: String) [io] {

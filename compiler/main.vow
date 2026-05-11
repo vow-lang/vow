@@ -4269,9 +4269,13 @@ fn skill_bundle() -> String {
     r.push_str(String::from("> chain into a parameter container has its inferred region widened to\n"));
     r.push_str(String::from("> `Caller(HiddenRegionIdx(N))` by §4.1 step 2's must-outlive marker\n"));
     r.push_str(String::from("> propagation, where `N` is the precise slot index implied by the\n"));
-    r.push_str(String::from("> destination (issue #317 slot-aware inference). Such routings satisfy\n"));
-    r.push_str(String::from("> the constraint and are accepted; only allocations whose inferred region\n"));
-    r.push_str(String::from("> is a strictly narrower block fire `RegionConflict`.\n"));
+    r.push_str(String::from("> destination (issue #317 slot-aware inference). Such single-slot routings\n"));
+    r.push_str(String::from("> satisfy the constraint and are accepted. Allocations whose caller-region\n"));
+    r.push_str(String::from("> markers require more than one hidden caller-arena slot resolve to\n"));
+    r.push_str(String::from("> `Caller(HiddenRegionIdx::AMBIGUOUS)` and are rejected when the directly\n"));
+    r.push_str(String::from("> fresh heap value is stored into a parameter-rooted target; allocations\n"));
+    r.push_str(String::from("> whose inferred region is a strictly narrower block also fire\n"));
+    r.push_str(String::from("> `RegionConflict`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn store_into(out: Vec<String>, prefix: String) [io] {\n"));
