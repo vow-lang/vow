@@ -4374,7 +4374,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("### RegionLiteralMutation\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**When:** A `Vec`, `String`, or `HashMap` mutation is attempted on a literal-backed container -- one whose descriptor carries the `VOW_CAP_RODATA` sentinel (backing lives in `.rodata` or was pinned to the root region). See `docs/design/arena_memory.md` §6.1, §7.3.\n"));
+    r.push_str(String::from("**When:** A `Vec`, `String`, or `HashMap` mutation is attempted on a literal-backed container -- one whose descriptor carries the `VOW_CAP_RODATA` sentinel (backing lives in `.rodata` or was pinned to the root region). Calls that statically trace a mutating target to a literal are rejected during compilation with this code; a runtime fallback emits the JSON shape below if an unchecked mutation reaches a `VOW_CAP_RODATA` descriptor. See `docs/design/arena_memory.md` §6.1, §7.3.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```json\n"));
     r.push_str(String::from("{\"error\":\"RegionLiteralMutation\",\"operation\":\"String::push_str\",\"origin\":\"rodata\"}\n"));
@@ -7488,7 +7488,7 @@ fn skill_support_content_3() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("### RegionLiteralMutation\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**When:** A `Vec`, `String`, or `HashMap` mutation is attempted on a literal-backed container -- one whose descriptor carries the `VOW_CAP_RODATA` sentinel (backing lives in `.rodata` or was pinned to the root region). See `docs/design/arena_memory.md` §6.1, §7.3.\n"));
+    r.push_str(String::from("**When:** A `Vec`, `String`, or `HashMap` mutation is attempted on a literal-backed container -- one whose descriptor carries the `VOW_CAP_RODATA` sentinel (backing lives in `.rodata` or was pinned to the root region). Calls that statically trace a mutating target to a literal are rejected during compilation with this code; a runtime fallback emits the JSON shape below if an unchecked mutation reaches a `VOW_CAP_RODATA` descriptor. See `docs/design/arena_memory.md` §6.1, §7.3.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```json\n"));
     r.push_str(String::from("{\"error\":\"RegionLiteralMutation\",\"operation\":\"String::push_str\",\"origin\":\"rodata\"}\n"));

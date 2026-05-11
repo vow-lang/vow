@@ -68,6 +68,7 @@ pub enum ErrorCode {
     IoError,
     // Region inference (arena-per-scope, Phase 3)
     RegionConflict,
+    RegionLiteralMutation,
     RegionLinear,
     // Note: program-lifetime root-arena placement. See arena_memory.md §4.4.
     RegionRootEscape,

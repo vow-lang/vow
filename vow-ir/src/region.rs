@@ -1502,6 +1502,7 @@ fn analyze_function(
     // aggregates as conflicts; consulting the inferred region instead fires
     // only when the source's resolved region is strictly narrower than the
     // target's.
+    check_literal_mutations_post_inference(func, summaries, &phi_arms, &inst_lookup, diagnostics);
     check_store_conflicts_post_inference(func, summaries, region_map, &inst_lookup, diagnostics);
 
     // Surface `Caller(_)` allocations in functions that may propagate them
@@ -1773,6 +1774,17 @@ fn extern_growth_target(sym: &str, args: &[InstId]) -> Option<InstId> {
     }
 }
 
+fn extern_mutation_operation(sym: &str) -> Option<&'static str> {
+    match sym {
+        "__vow_vec_push" | "__vow_vec_push_in_arena" => Some("Vec::push"),
+        "__vow_vec_reserve_in_arena" => Some("Vec::reserve"),
+        "__vow_string_push_str" | "__vow_string_push_str_in_arena" => Some("String::push_str"),
+        "__vow_string_push_byte" | "__vow_string_push_byte_in_arena" => Some("String::push_byte"),
+        "__vow_map_insert" | "__vow_map_insert_in_arena" => Some("HashMap::insert"),
+        _ => None,
+    }
+}
+
 fn is_heap_producing(inst: &Inst, summaries: &[InternalSummary]) -> bool {
     matches!(inst.opcode, Opcode::RegionAlloc)
         || matches!(
@@ -1968,6 +1980,77 @@ fn handle_inst(
             // CallExtern (no CallTarget): default ConstantGlobal, no constraints.
         }
         _ => {}
+    }
+}
+
+fn value_may_be_rodata(
+    id: InstId,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+    phi_arms: &BTreeMap<InstId, Vec<InstId>>,
+    summaries: &[InternalSummary],
+    visiting: &mut VecDeque<InstId>,
+) -> bool {
+    if visiting.contains(&id) {
+        return false;
+    }
+    let Some((_, inst)) = inst_lookup.get(&id) else {
+        return false;
+    };
+    match inst.opcode {
+        Opcode::Call => match &inst.data {
+            InstData::CallExtern(sym) if sym == "__vow_string_literal" => true,
+            InstData::CallTarget(callee_id) => {
+                let Some(summary) = summaries.get(callee_id.0 as usize) else {
+                    return false;
+                };
+                visiting.push_back(id);
+                let result = return_region_may_be_rodata(
+                    &summary.return_region,
+                    &inst.args,
+                    inst_lookup,
+                    phi_arms,
+                    summaries,
+                    visiting,
+                );
+                visiting.pop_back();
+                result
+            }
+            _ => false,
+        },
+        Opcode::Phi => {
+            let Some(arms) = phi_arms.get(&id) else {
+                return false;
+            };
+            visiting.push_back(id);
+            let result = arms
+                .iter()
+                .any(|arm| value_may_be_rodata(*arm, inst_lookup, phi_arms, summaries, visiting));
+            visiting.pop_back();
+            result
+        }
+        _ => false,
+    }
+}
+
+fn return_region_may_be_rodata(
+    return_region: &InternalReturnRegion,
+    args: &[InstId],
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+    phi_arms: &BTreeMap<InstId, Vec<InstId>>,
+    summaries: &[InternalSummary],
+    visiting: &mut VecDeque<InstId>,
+) -> bool {
+    match return_region {
+        InternalReturnRegion::Published(RegionConstraint::AliasOf(i)) => {
+            args.get(*i as usize).is_some_and(|arg| {
+                value_may_be_rodata(*arg, inst_lookup, phi_arms, summaries, visiting)
+            })
+        }
+        InternalReturnRegion::Published(RegionConstraint::AliasOfAny(indices)) => indices
+            .iter()
+            .filter_map(|i| args.get(*i as usize))
+            .any(|arg| value_may_be_rodata(*arg, inst_lookup, phi_arms, summaries, visiting)),
+        _ => false,
     }
 }
 
@@ -2645,6 +2728,113 @@ fn origin_to_constraint(origin: &ValueOrigin) -> RegionConstraint {
 // ---------------------------------------------------------------------------
 // Conflict detection
 // ---------------------------------------------------------------------------
+
+fn check_literal_mutations_post_inference(
+    func: &Function,
+    summaries: &[InternalSummary],
+    phi_arms: &BTreeMap<InstId, Vec<InstId>>,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let source_file: &str = &func.source_file;
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.opcode != Opcode::Call {
+                continue;
+            }
+            match &inst.data {
+                InstData::CallExtern(sym) => {
+                    if let Some(target_id) = extern_growth_target(sym, &inst.args)
+                        && value_may_be_rodata(
+                            target_id,
+                            inst_lookup,
+                            phi_arms,
+                            summaries,
+                            &mut VecDeque::new(),
+                        )
+                    {
+                        emit_region_literal_mutation(
+                            source_file,
+                            target_id,
+                            inst,
+                            inst_lookup,
+                            extern_mutation_operation(sym).unwrap_or("container mutation"),
+                            diagnostics,
+                        );
+                    }
+                }
+                InstData::CallTarget(callee) => {
+                    let callee_idx = callee.0 as usize;
+                    let Some(callee_summary) = summaries.get(callee_idx) else {
+                        continue;
+                    };
+                    let mut checked_targets = BTreeSet::new();
+                    for effect in &callee_summary.store_effects {
+                        let target = effect.0;
+                        if !checked_targets.insert(target) {
+                            continue;
+                        }
+                        let target_idx = target as usize;
+                        let Some(&target_id) = inst.args.get(target_idx) else {
+                            continue;
+                        };
+                        if value_may_be_rodata(
+                            target_id,
+                            inst_lookup,
+                            phi_arms,
+                            summaries,
+                            &mut VecDeque::new(),
+                        ) {
+                            emit_region_literal_mutation(
+                                source_file,
+                                target_id,
+                                inst,
+                                inst_lookup,
+                                "mutating callee parameter",
+                                diagnostics,
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+fn emit_region_literal_mutation(
+    source_file: &str,
+    target_id: InstId,
+    call_inst: &Inst,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+    operation: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let target_span = inst_lookup
+        .get(&target_id)
+        .map(|(_, i)| i.origin)
+        .unwrap_or(call_inst.origin);
+
+    diagnostics.push(Diagnostic {
+        severity: Severity::Error,
+        code: ErrorCode::RegionLiteralMutation,
+        message: format!(
+            "literal-backed value cannot be mutated by {operation}; make an explicit mutable copy first"
+        ),
+        primary: SourceLocation {
+            file: source_file.to_string(),
+            byte_offset: target_span.start,
+            byte_len: target_span.len,
+        },
+        secondary: vec![SourceLocation {
+            file: source_file.to_string(),
+            byte_offset: call_inst.origin.start,
+            byte_len: call_inst.origin.len,
+        }],
+        blame: Blame::Caller,
+        hints: vec!["use `String::from(literal)` before passing the value to mutating String operations".to_string()],
+    });
+}
 
 /// Trace alias chain (FieldGet/Load/vec-get/Phi/CallTarget-AliasOf) for
 /// Issue #317: kept (with `dead_code` tolerance) for the future

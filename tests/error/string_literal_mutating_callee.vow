@@ -1,0 +1,11 @@
+// TEST: error-code RegionLiteralMutation
+module StringLiteralMutatingCallee
+
+fn bump(s: String) {
+    s.push_byte(33);
+}
+
+fn main() -> i32 [io] {
+    bump("a");
+    0
+}

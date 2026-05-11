@@ -266,6 +266,7 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
     check_region_store_conflicts_module(
         m,
         id_to_inst_per_fn,
+        phi_arms_per_fn,
         region_keys,
         region_vals,
         dctx,
@@ -999,7 +1000,7 @@ fn any_published_se_kind(kinds: Vec<i64>) -> bool {
 }
 
 fn check_region_store_conflicts_module(
-    m: IrModule, id_to_inst_per_fn: Vec<Vec<IrInst>>,
+    m: IrModule, id_to_inst_per_fn: Vec<Vec<IrInst>>, phi_arms_per_fn: Vec<Vec<Vec<i64>>>,
     region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
     dctx: DiagCtx
 ) {
@@ -1007,6 +1008,7 @@ fn check_region_store_conflicts_module(
     while fi < m.functions.len() {
         let f: IrFunction = m.functions[fi];
         let id_to_inst: Vec<IrInst> = id_to_inst_per_fn[fi];
+        let phi_arms: Vec<Vec<i64>> = phi_arms_per_fn[fi];
         let rkeys: Vec<i64> = region_keys[fi];
         let rvals: Vec<i64> = region_vals[fi];
         // Issue #317: slot-aware region inference now mints
@@ -1021,6 +1023,23 @@ fn check_region_store_conflicts_module(
             let mut ii: i64 = 0;
             while ii < blk.insts.len() {
                 let inst: IrInst = blk.insts[ii];
+                if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
+                    let growth_target_pos: i64 = extern_growth_target_pos(inst.ds);
+                    if growth_target_pos >= 0 && growth_target_pos < inst.args.len() {
+                        let target_arg: i64 = inst.args[growth_target_pos];
+                        let visiting: Vec<i64> = Vec::new();
+                        if value_may_be_rodata(id_to_inst, phi_arms, m.functions, target_arg, visiting) {
+                            emit_region_literal_mutation(
+                                f.source_file,
+                                target_arg,
+                                inst,
+                                id_to_inst,
+                                extern_mutation_operation(inst.ds),
+                                dctx
+                            );
+                        }
+                    }
+                }
                 if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
                     let callee_idx: i64 = inst.dv;
                     if callee_idx >= 0 && callee_idx < m.functions.len() {
@@ -1028,6 +1047,7 @@ fn check_region_store_conflicts_module(
                             m.functions[callee_idx].rsum_store_effects,
                             inst,
                             id_to_inst,
+                            phi_arms,
                             rkeys,
                             rvals,
                             m.functions,
@@ -1046,17 +1066,35 @@ fn check_region_store_conflicts_module(
 
 fn check_store_effects_at_call(
     flat: Vec<i64>, call_inst: IrInst, id_to_inst: Vec<IrInst>,
+    phi_arms: Vec<Vec<i64>>,
     region_keys: Vec<i64>, region_vals: Vec<i64>,
     m_functions: Vec<IrFunction>,
     dctx: DiagCtx, source_file: String
 ) {
     let mut i: i64 = 0;
+    let checked_targets: Vec<i64> = Vec::new();
     while i < flat.len() {
         let target: i64 = flat[i];
         i = i + 1;
         if i >= flat.len() { return; }
         let kind: i64 = flat[i];
         i = i + 1;
+        if target >= 0 && target < call_inst.args.len()
+            && !region_vec_contains_i64(checked_targets, target)
+        {
+            checked_targets.push(target);
+            let visiting: Vec<i64> = Vec::new();
+            if value_may_be_rodata(id_to_inst, phi_arms, m_functions, call_inst.args[target], visiting) {
+                emit_region_literal_mutation(
+                    source_file,
+                    call_inst.args[target],
+                    call_inst,
+                    id_to_inst,
+                    String::from("mutating callee parameter"),
+                    dctx
+                );
+            }
+        }
         if kind == RSUM_KIND_ALIAS_OF() {
             if i >= flat.len() { return; }
             let source_param: i64 = flat[i];
@@ -1366,6 +1404,133 @@ fn check_store_conflict(
         d,
         String::from("hoist the allocation to a wider scope, copy the value into the outer arena, or restructure the return flow so the value escapes to the caller")
     );
+    diag_ctx_emit(dctx, d);
+}
+
+fn extern_mutation_operation(sym: String) -> String {
+    if sym == String::from("__vow_vec_push") || sym == String::from("__vow_vec_push_in_arena") {
+        return String::from("Vec::push");
+    }
+    if sym == String::from("__vow_vec_reserve_in_arena") {
+        return String::from("Vec::reserve");
+    }
+    if sym == String::from("__vow_string_push_str") || sym == String::from("__vow_string_push_str_in_arena") {
+        return String::from("String::push_str");
+    }
+    if sym == String::from("__vow_string_push_byte") || sym == String::from("__vow_string_push_byte_in_arena") {
+        return String::from("String::push_byte");
+    }
+    if sym == String::from("__vow_map_insert") || sym == String::from("__vow_map_insert_in_arena") {
+        return String::from("HashMap::insert");
+    }
+    String::from("container mutation")
+}
+
+fn value_may_be_rodata(
+    id_to_inst: Vec<IrInst>, phi_arms: Vec<Vec<i64>>, m_functions: Vec<IrFunction>,
+    id: i64, visiting: Vec<i64>
+) -> bool {
+    if region_vec_contains_i64(visiting, id) {
+        return false;
+    }
+    let inst: IrInst = lookup_inst_or_default(id_to_inst, id);
+    if inst.id < 0 {
+        return false;
+    }
+    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
+        && inst.ds == String::from("__vow_string_literal")
+    {
+        return true;
+    }
+    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
+        let callee_idx: i64 = inst.dv;
+        if callee_idx >= 0 && callee_idx < m_functions.len() {
+            let callee: IrFunction = m_functions[callee_idx];
+            visiting.push(id);
+            let result: bool = return_region_may_be_rodata(
+                callee.rsum_return_kind,
+                callee.rsum_return_aux,
+                callee.rsum_return_aliases,
+                inst.args,
+                id_to_inst,
+                phi_arms,
+                m_functions,
+                visiting
+            );
+            visiting.pop();
+            return result;
+        }
+    }
+    if inst.op == IOP_PHI() && id >= 0 && id < phi_arms.len() {
+        visiting.push(id);
+        let arms: Vec<i64> = phi_arms[id];
+        let mut ai: i64 = 0;
+        while ai < arms.len() {
+            if value_may_be_rodata(id_to_inst, phi_arms, m_functions, arms[ai], visiting) {
+                visiting.pop();
+                return true;
+            }
+            ai = ai + 1;
+        }
+        visiting.pop();
+    }
+    false
+}
+
+fn return_region_may_be_rodata(
+    kind: i64, aux: i64, aliases: Vec<i64>, args: Vec<i64>,
+    id_to_inst: Vec<IrInst>, phi_arms: Vec<Vec<i64>>, m_functions: Vec<IrFunction>,
+    visiting: Vec<i64>
+) -> bool {
+    if kind == RSUM_KIND_ALIAS_OF() {
+        if aux >= 0 && aux < args.len() {
+            return value_may_be_rodata(id_to_inst, phi_arms, m_functions, args[aux], visiting);
+        }
+        return false;
+    }
+    if kind == RSUM_KIND_ALIAS_OF_ANY() {
+        let mut ai: i64 = 0;
+        while ai < aliases.len() {
+            let arg_idx: i64 = aliases[ai];
+            if arg_idx >= 0 && arg_idx < args.len()
+                && value_may_be_rodata(id_to_inst, phi_arms, m_functions, args[arg_idx], visiting)
+            {
+                return true;
+            }
+            ai = ai + 1;
+        }
+    }
+    false
+}
+
+fn emit_region_literal_mutation(
+    source_file: String, target_arg_id: i64, call_inst: IrInst, id_to_inst: Vec<IrInst>,
+    operation: String, dctx: DiagCtx
+) {
+    let target_inst: IrInst = lookup_inst_or_default(id_to_inst, target_arg_id);
+    let span_start: i64 = if target_inst.id >= 0 && target_inst.olen > 0 {
+        target_inst.ostart
+    } else {
+        call_inst.ostart
+    };
+    let span_len: i64 = if target_inst.id >= 0 && target_inst.olen > 0 {
+        target_inst.olen
+    } else {
+        call_inst.olen
+    };
+    let msg: String = String::from("literal-backed value cannot be mutated by ");
+    msg.push_str(operation);
+    msg.push_str(String::from("; make an explicit mutable copy first"));
+    let d: Diagnostic = diag_new(
+        SEV_ERROR(),
+        EC_REGION_LITERAL_MUTATION(),
+        msg,
+        source_file,
+        span_start,
+        span_len,
+        DIAG_BLAME_CALLER()
+    );
+    diag_add_hint(d, String::from("use `String::from(literal)` before passing the value to mutating String operations"));
     diag_ctx_emit(dctx, d);
 }
 

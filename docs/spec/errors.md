@@ -384,7 +384,7 @@ The `blame` field indicates who is at fault:
 
 ### RegionLiteralMutation
 
-**When:** A `Vec`, `String`, or `HashMap` mutation is attempted on a literal-backed container — one whose descriptor carries the `VOW_CAP_RODATA` sentinel (backing lives in `.rodata` or was pinned to the root region). See `docs/design/arena_memory.md` §6.1, §7.3.
+**When:** A `Vec`, `String`, or `HashMap` mutation is attempted on a literal-backed container — one whose descriptor carries the `VOW_CAP_RODATA` sentinel (backing lives in `.rodata` or was pinned to the root region). Calls that statically trace a mutating target to a literal are rejected during compilation with this code; a runtime fallback emits the JSON shape below if an unchecked mutation reaches a `VOW_CAP_RODATA` descriptor. See `docs/design/arena_memory.md` §6.1, §7.3.
 
 ```json
 {"error":"RegionLiteralMutation","operation":"String::push_str","origin":"rodata"}

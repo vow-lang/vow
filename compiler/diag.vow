@@ -36,6 +36,7 @@ fn EC_BTREEMAP_VALUE_TYPE_MUST_BE_I64() -> i64 vow { ensures: result >= 0 } { 22
 // Note: program-lifetime root-arena placement. See arena_memory.md §4.4.
 fn EC_REGION_ROOT_ESCAPE() -> i64 vow { ensures: result >= 0 } { 23 }
 fn EC_STATIC_LITERAL_REQUIRED() -> i64 vow { ensures: result >= 0 } { 24 }
+fn EC_REGION_LITERAL_MUTATION() -> i64 vow { ensures: result >= 0 } { 25 }
 
 struct Diagnostic {
     severity: i64,
@@ -224,6 +225,9 @@ fn ec_name(code: i64) -> String {
     if code == EC_REGION_CONFLICT() {
         String::from("RegionConflict")
     } else {
+    if code == EC_REGION_LITERAL_MUTATION() {
+        String::from("RegionLiteralMutation")
+    } else {
     if code == EC_REGION_LINEAR() {
         String::from("RegionLinear")
     } else {
@@ -240,7 +244,7 @@ fn ec_name(code: i64) -> String {
         String::from("RegionRootEscape")
     } else {
         String::from("IoError")
-    }}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 fn sev_name_lower(s: i64) -> String {
