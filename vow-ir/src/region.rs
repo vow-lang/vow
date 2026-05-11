@@ -84,12 +84,13 @@ pub fn infer_regions(module: &mut Module) {
     // order we want — callees before callers.
     for scc in &sccs {
         // Lattice height per function: |params| + 2 (Uninit → AliasOf →
-        // AliasOfAny → FreshInCaller). store_effects bound: |params|. Total
-        // bound for the SCC: sum * 2 to give monotone slack.
+        // AliasOfAny → FreshInCaller), plus one boolean rodata-return bit.
+        // store_effects bound: |params|. Total bound for the SCC: sum * 2
+        // to give monotone slack.
         let mut bound: usize = 0;
         for &fidx in scc {
             let nparams = module.functions[fidx as usize].params.len();
-            bound = bound.saturating_add(nparams.saturating_add(2).saturating_mul(2));
+            bound = bound.saturating_add(nparams.saturating_add(3).saturating_mul(2));
         }
         bound = bound.max(8); // ensure SCCs of size 1 still get a few rounds
 
@@ -1254,6 +1255,7 @@ fn internal_compiler_error(message: &str) -> Diagnostic {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct InternalSummary {
     return_region: InternalReturnRegion,
+    return_may_be_rodata: bool,
     /// Set of (target_param_index, source_constraint) pairs. We use a set
     /// rather than a Vec so set-inclusion is the join.
     store_effects: BTreeSet<(u32, InternalReturnRegion)>,
@@ -1264,6 +1266,7 @@ impl InternalSummary {
     fn seed(n_params: usize) -> Self {
         Self {
             return_region: InternalReturnRegion::Uninit,
+            return_may_be_rodata: false,
             store_effects: BTreeSet::new(),
             n_params,
         }
@@ -1457,6 +1460,8 @@ fn analyze_function(
     // path; the in-handle_inst Return shortcut only flags virtual-caller
     // escape on the must_outlive set.
     summary.return_region = compute_return_region(func, &inst_lookup, &phi_arms, summaries);
+    summary.return_may_be_rodata =
+        compute_return_may_be_rodata(func, &inst_lookup, &phi_arms, summaries);
 
     // Pre-rewrite `Caller(_)` regions for the `RegionRootEscape` note pass.
     // The rewrite below collapses internal-call results from `Caller(_)` to
@@ -1772,6 +1777,7 @@ fn extern_growth_target(sym: &str, args: &[InstId]) -> Option<InstId> {
         }
         "__vow_map_insert" if !args.is_empty() => Some(args[0]),
         "__vow_map_insert_in_arena" if args.len() >= 2 => Some(args[1]),
+        "__vow_btreemap_insert" if !args.is_empty() => Some(args[0]),
         _ => None,
     }
 }
@@ -1785,6 +1791,7 @@ fn extern_mutation_operation(sym: &str) -> Option<&'static str> {
         "__vow_string_push_byte" | "__vow_string_push_byte_in_arena" => Some("String::push_byte"),
         "__vow_string_clear" => Some("String::clear"),
         "__vow_map_insert" | "__vow_map_insert_in_arena" => Some("HashMap::insert"),
+        "__vow_btreemap_insert" => Some("BTreeMap::insert"),
         _ => None,
     }
 }
@@ -2007,6 +2014,9 @@ fn value_may_be_rodata(
                 let Some(summary) = summaries.get(callee_id.0 as usize) else {
                     return false;
                 };
+                if summary.return_may_be_rodata {
+                    return true;
+                }
                 visiting.push_back(id);
                 let result = return_region_may_be_rodata(
                     &summary.return_region,
@@ -2034,6 +2044,34 @@ fn value_may_be_rodata(
         }
         _ => false,
     }
+}
+
+fn compute_return_may_be_rodata(
+    func: &Function,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+    phi_arms: &BTreeMap<InstId, Vec<InstId>>,
+    summaries: &[InternalSummary],
+) -> bool {
+    if is_scalar_ty(func.return_ty) {
+        return false;
+    }
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.opcode == Opcode::Return
+                && let Some(&arg_id) = inst.args.first()
+                && value_may_be_rodata(
+                    arg_id,
+                    inst_lookup,
+                    phi_arms,
+                    summaries,
+                    &mut VecDeque::new(),
+                )
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn return_region_may_be_rodata(

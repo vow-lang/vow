@@ -1459,6 +1459,8 @@ pub unsafe extern "C" fn __vow_string_clone_in_arena(
     unsafe { __vow_string_clone_into_arena(arena, source) }
 }
 
+// Kept distinct from `__vow_string_clone`: pin_to_root means "extend lifetime
+// to root", not just "produce a mutable copy", even though both copy today.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_pin_to_root(source: *const u8) -> *mut u8 {
     let _guard = ROOT_ARENA_LOCK.lock().unwrap();
