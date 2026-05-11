@@ -1,0 +1,15 @@
+module StringMatchesLiteralAtVerify
+
+fn matched_literal_implies_bytes(s: String, pos: i64) -> bool vow {
+    requires: pos >= 0
+    requires: s.len() >= 2
+    requires: pos <= s.len() - 2
+    requires: string_matches_literal_at(s, pos, "ab") == 1
+    ensures: result == true
+} {
+    s.byte_at(pos) == 97 && s.byte_at(pos + 1) == 98
+}
+
+fn main() -> i32 [io] {
+    0
+}

@@ -772,6 +772,36 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 }
                 return arg_tid;
             }
+            if name == String::from("string_matches_literal_at") {
+                if n_args != 3 {
+                    env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
+                    return CTY_NEVER();
+                }
+                let s_eid: i64 = list_get(a, args_lid, 0);
+                let pos_eid: i64 = list_get(a, args_lid, 1);
+                let literal_eid: i64 = list_get(a, args_lid, 2);
+                let s_tid: i64 = check_expr(e, m, s_eid);
+                let pos_tid: i64 = check_expr(e, m, pos_eid);
+                let literal_tid: i64 = check_expr(e, m, literal_eid);
+                if !is_coercible(e.ts, s_tid, CTY_STR()) {
+                    env_emit_error(e, String::from("argument has wrong type for string_matches_literal_at"), expr_span(a, s_eid));
+                }
+                if !is_coercible(e.ts, pos_tid, CTY_I64()) {
+                    env_emit_error(e, String::from("argument has wrong type for string_matches_literal_at"), expr_span(a, pos_eid));
+                }
+                if !is_coercible(e.ts, literal_tid, CTY_STR()) {
+                    env_emit_error(e, String::from("argument has wrong type for string_matches_literal_at"), expr_span(a, literal_eid));
+                }
+                if expr_tag(a, literal_eid) != EXPR_LIT_STR() {
+                    env_emit_error_code(
+                        e,
+                        EC_STATIC_LITERAL_REQUIRED(),
+                        String::from("string_matches_literal_at requires a string literal as its third argument"),
+                        expr_span(a, literal_eid)
+                    );
+                }
+                return CTY_I64();
+            }
             let fidx: i64 = env_lookup_fn(e, name);
             if fidx == -1 {
                 let msg: String = String::from("undefined function `");

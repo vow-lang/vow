@@ -5,7 +5,7 @@ use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use vow_ir::{FuncId, Function, Module, Ty};
+use vow_ir::{FuncId, Function, InstData, Module, Ty};
 
 use crate::solver_strategy::{SolverConfig, run_with_fallback};
 
@@ -252,7 +252,14 @@ pub fn emit_verify_c_source(
     let callee_ids = collect_modelable_callees(func, module, const_fns, &mut modelable_cache);
 
     let mut c_src = if callee_ids.is_empty() {
-        emit_c_module(&[func], const_fns, limits)
+        emit_c_module_with_callees(
+            func,
+            module,
+            const_fns,
+            &[],
+            &std::collections::HashSet::new(),
+            limits,
+        )
     } else {
         let modelable_fns: std::collections::HashSet<FuncId> = callee_ids.iter().copied().collect();
         emit_c_module_with_callees(func, module, const_fns, &callee_ids, &modelable_fns, limits)
@@ -319,6 +326,12 @@ fn verify_function_inner(
     const_fns: &HashMap<FuncId, ConstantValue>,
     limits: &VerifyLimits,
 ) -> VerificationResult {
+    if let Some(reason) = no_module_verification_reason(func) {
+        return VerificationResult::Skipped {
+            reason: format!("{reason}; use verify_function_with_module"),
+        };
+    }
+
     let esbmc = match find_esbmc() {
         Some(p) => p,
         None => return VerificationResult::ToolNotFound,
@@ -334,6 +347,19 @@ fn verify_function_inner(
         &func.name,
         &SolverConfig::default_config(),
     )
+}
+
+fn no_module_verification_reason(func: &Function) -> Option<&'static str> {
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if let InstData::CallExtern(name) = &inst.data
+                && name == "__vow_string_matches_literal_at"
+            {
+                return Some("string_matches_literal_at requires the module string pool");
+            }
+        }
+    }
+    None
 }
 
 pub fn run_esbmc_k_induction(
@@ -1489,6 +1515,50 @@ VERIFICATION FAILED";
                 eprintln!("SKIP: esbmc not found");
             }
             other => panic!("expected Failed or ToolNotFound, got {other:?}"),
+        }
+    }
+
+    fn literal_matcher_func() -> Function {
+        Function {
+            id: FuncId(0),
+            name: "literal_matcher".to_string(),
+            params: vec![Ty::Ptr],
+            param_names: vec!["s".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                    inst(3, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                    inst(
+                        4,
+                        Opcode::Call,
+                        Ty::I64,
+                        vec![0, 1, 2, 3],
+                        InstData::CallExtern("__vow_string_matches_literal_at".to_string()),
+                    ),
+                    inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        }
+    }
+
+    #[test]
+    fn verify_function_without_module_skips_literal_matcher() {
+        let func = literal_matcher_func();
+        match verify_function(&func, &VerifyLimits::default()) {
+            VerificationResult::Skipped { reason } => {
+                assert!(reason.contains("string_matches_literal_at"));
+                assert!(reason.contains("module string pool"));
+            }
+            other => panic!("expected Skipped before ESBMC lookup, got {other:?}"),
         }
     }
 

@@ -792,11 +792,44 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
         }
         ExprKind::Call { callee, args } => {
-            let arg_ids: Vec<InstId> = args.iter().map(|a| lower_consumed_expr(ctx, a)).collect();
             let callee_name = match &callee.kind {
                 ExprKind::Ident(name) => name.clone(),
                 _ => todo!("non-ident callee in Call lowering"),
             };
+            if callee_name == "string_matches_literal_at" {
+                let string_id = args
+                    .first()
+                    .map(|a| lower_consumed_expr(ctx, a))
+                    .unwrap_or_else(|| {
+                        ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                    });
+                let pos_id = args
+                    .get(1)
+                    .map(|a| lower_consumed_expr(ctx, a))
+                    .unwrap_or_else(|| {
+                        ctx.emit(
+                            Opcode::ConstI64,
+                            Ty::I64,
+                            vec![],
+                            InstData::ConstI64(0),
+                            span,
+                        )
+                    });
+                if let Some((literal_ptr, literal_len)) = args
+                    .get(2)
+                    .and_then(|arg| lower_static_string_literal(ctx, arg))
+                {
+                    return ctx.emit(
+                        Opcode::Call,
+                        Ty::I64,
+                        vec![string_id, pos_id, literal_ptr, literal_len],
+                        InstData::CallExtern("__vow_string_matches_literal_at".to_string()),
+                        span,
+                    );
+                }
+                return ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span);
+            }
+            let arg_ids: Vec<InstId> = args.iter().map(|a| lower_consumed_expr(ctx, a)).collect();
             if callee_name == "pin_to_root" {
                 let Some(source_id) = arg_ids.first().copied() else {
                     return ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span);
@@ -2806,6 +2839,34 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
     }
 }
 
+fn lower_static_string_literal(
+    ctx: &mut LowerCtx,
+    expr: &vow_syntax::ast::Expr,
+) -> Option<(InstId, InstId)> {
+    let Lit::String(s) = (match &expr.kind {
+        ExprKind::Lit(lit) => lit,
+        _ => return None,
+    }) else {
+        return None;
+    };
+    let idx = ctx.intern_str(s);
+    let ptr = ctx.emit(
+        Opcode::ConstStr,
+        Ty::Ptr,
+        vec![],
+        InstData::ConstStr(idx),
+        expr.span,
+    );
+    let len = ctx.emit(
+        Opcode::ConstI64,
+        Ty::I64,
+        vec![],
+        InstData::ConstI64(s.len() as i64),
+        expr.span,
+    );
+    Some((ptr, len))
+}
+
 fn lower_consumed_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
     let id = lower_expr(ctx, expr);
     ctx.emit_linear_consume_if_needed(id, expr.span);
@@ -3462,6 +3523,13 @@ mod tests {
         }
     }
 
+    fn string_expr(v: &str) -> Expr {
+        Expr {
+            kind: ExprKind::Lit(Lit::String(v.to_string())),
+            span: sp(),
+        }
+    }
+
     fn bool_expr(v: bool) -> Expr {
         Expr {
             kind: ExprKind::Lit(Lit::Bool(v)),
@@ -3628,6 +3696,73 @@ mod tests {
             assert_eq!(vow_builtin_to_runtime(name), Some((symbol, ty)));
         }
         assert_eq!(vow_builtin_to_runtime("missing_builtin"), None);
+    }
+
+    #[test]
+    fn string_matches_literal_at_lowers_literal_without_allocation() {
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(call_expr(
+                "string_matches_literal_at",
+                vec![ident_expr("s"), ident_expr("pos"), string_expr("ab\0cd")],
+            ))),
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "matches_literal",
+            vec![make_param("s", string_ty()), make_param("pos", i64_ty())],
+            i64_ty(),
+            body,
+            vec![],
+        );
+        let (func, strings, warnings) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        assert_eq!(strings, vec!["ab\0cd".to_string()]);
+
+        let insts: Vec<&Inst> = func
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .collect();
+        assert!(
+            insts.iter().any(|inst| {
+                inst.opcode == Opcode::Call
+                    && inst.data
+                        == InstData::CallExtern("__vow_string_matches_literal_at".to_string())
+            }),
+            "expected direct runtime helper call in {insts:#?}"
+        );
+        assert!(
+            !insts.iter().any(|inst| {
+                inst.opcode == Opcode::Call
+                    && inst.data == InstData::CallExtern("__vow_string_from_cstr".to_string())
+            }),
+            "literal matcher must not allocate a temporary String"
+        );
+        assert!(
+            insts.iter().any(|inst| {
+                inst.opcode == Opcode::ConstStr && inst.data == InstData::ConstStr(0)
+            }),
+            "expected static literal pointer"
+        );
+        assert!(
+            insts.iter().any(|inst| {
+                inst.opcode == Opcode::ConstI64 && inst.data == InstData::ConstI64(5)
+            }),
+            "expected byte length, including embedded NUL"
+        );
     }
 
     #[test]

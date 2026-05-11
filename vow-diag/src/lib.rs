@@ -44,6 +44,7 @@ pub enum ErrorCode {
     MissingDelimiter,
     // Type errors
     TypeMismatch,
+    StaticLiteralRequired,
     EffectViolation,
     LinearTypeViolation,
     NonExhaustiveMatch,

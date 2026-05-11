@@ -1,0 +1,12 @@
+// TEST: error-code StaticLiteralRequired
+// TEST: stderr "string literal"
+module StringMatchesLiteralDynamic
+
+fn main() -> i32 {
+    let line: String = String::from("{\"name\":\"vow\"}");
+    let key: String = String::from("\"name\"");
+    if string_matches_literal_at(line, 1, key) == 1 {
+        return 1;
+    }
+    0
+}

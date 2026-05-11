@@ -70,6 +70,21 @@ fn f() -> i32 {
 
 **Fix:** Change the expression or the declared type to match.
 
+### StaticLiteralRequired
+
+**Phase:** Type Checker
+**Meaning:** A compiler intrinsic requires a string literal operand so it can be lowered without allocation.
+
+```vow
+fn f(s: String, key: String) -> i64 {
+    string_matches_literal_at(s, 0, key)
+}
+```
+
+**Output:** `string_matches_literal_at requires a string literal as its third argument`
+
+**Fix:** Pass a literal directly, for example `string_matches_literal_at(s, 0, "name")`.
+
 ### EffectViolation
 
 **Phase:** Type Checker
