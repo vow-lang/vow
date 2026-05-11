@@ -843,7 +843,7 @@ const VEC_INITIAL_CAP: usize = 8;
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_vec_new(elem_size: usize, align: usize) -> *mut u8 {
     let _ = elem_size;
-    let header_ptr = unsafe { root_arena_alloc_zeroed(24, 8) } as *mut VowVec;
+    let header_ptr = __vow_malloc(24, 8) as *mut VowVec;
     // Lazy allocation: don't allocate buffer until first push.
     // Use a dangling aligned pointer so from_raw_parts with len=0 is safe.
     unsafe {
@@ -875,7 +875,11 @@ unsafe fn __vow_vec_reserve(vec: *mut u8, additional: usize, elem_size: usize, e
     }
     let old_size = v.cap * elem_size;
     let new_size = new_cap * elem_size;
-    let new_ptr = unsafe { root_arena_grow_backing(v.ptr, old_size, new_size, elem_align) };
+    let new_ptr = __vow_malloc(new_size, elem_align);
+    if old_size > 0 {
+        unsafe { std::ptr::copy_nonoverlapping(v.ptr, new_ptr, old_size) };
+        unsafe { __vow_free(v.ptr, old_size, elem_align) };
+    }
     v.ptr = new_ptr;
     v.cap = new_cap;
 }
@@ -2073,9 +2077,9 @@ const MAP_INITIAL_CAP: usize = 8;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn __vow_map_new() -> *mut u8 {
-    let header_ptr = unsafe { root_arena_alloc_zeroed(24, 8) } as *mut VowMap;
+    let header_ptr = __vow_malloc(24, 8) as *mut VowMap;
     let buf_size = MAP_INITIAL_CAP * MAP_ENTRY_BYTES;
-    let buf_ptr = unsafe { root_arena_alloc_zeroed(buf_size, 8) };
+    let buf_ptr = __vow_malloc(buf_size, 8);
     unsafe {
         (*header_ptr).ptr = buf_ptr;
         (*header_ptr).len = 0;
@@ -2101,7 +2105,9 @@ pub unsafe extern "C" fn __vow_map_insert(map: *mut u8, key: i64, val: i64) {
         let old_size = m.cap * MAP_ENTRY_BYTES;
         let new_cap = m.cap * 2;
         let new_size = new_cap * MAP_ENTRY_BYTES;
-        let new_ptr = unsafe { root_arena_grow_backing(m.ptr, old_size, new_size, 8) };
+        let new_ptr = __vow_malloc(new_size, 8);
+        unsafe { std::ptr::copy_nonoverlapping(m.ptr, new_ptr, old_size) };
+        unsafe { __vow_free(m.ptr, old_size, 8) };
         m.ptr = new_ptr;
         m.cap = new_cap;
     }
@@ -2167,17 +2173,38 @@ pub unsafe extern "C" fn __vow_map_len(map: *const u8) -> usize {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_free(s: *mut u8) {
-    let _ = s;
+    if s.is_null() {
+        return;
+    }
+    let vec = unsafe { &mut *(s as *mut VowVec) };
+    if vec.cap != 0 && vec.cap != VOW_CAP_RODATA {
+        unsafe { __vow_free(vec.ptr, vec.cap, 1) };
+    }
+    unsafe { __vow_free(s, 24, 8) };
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_vec_free_val(v: *mut u8) {
-    let _ = v;
+    if v.is_null() {
+        return;
+    }
+    let vec = unsafe { &mut *(v as *mut VowVec) };
+    if vec.cap != 0 && vec.cap != VOW_CAP_RODATA {
+        unsafe { __vow_free(vec.ptr, vec.cap * 8, 8) };
+    }
+    unsafe { __vow_free(v, 24, 8) };
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_map_free(m: *mut u8) {
-    let _ = m;
+    if m.is_null() {
+        return;
+    }
+    let map = unsafe { &mut *(m as *mut VowMap) };
+    if map.cap != 0 && map.cap != VOW_CAP_RODATA {
+        unsafe { __vow_free(map.ptr, map.cap * MAP_ENTRY_BYTES, 8) };
+    }
+    unsafe { __vow_free(m, 24, 8) };
 }
 
 // ---------------------------------------------------------------------------
@@ -2829,34 +2856,31 @@ mod tests {
     }
 
     #[test]
-    fn legacy_typed_free_noop_worker() {
-        if std::env::var("VOW_LEGACY_FREE_NOOP_WORKER").is_err() {
+    fn typed_free_worker() {
+        if std::env::var("VOW_TYPED_FREE_WORKER").is_err() {
             return;
         }
-        __vow_sanitize_init();
         let v = __vow_vec_new_val();
         unsafe { __vow_vec_push_val(v, 1) };
         unsafe { __vow_vec_free_val(v) };
-        unsafe { __vow_vec_free_val(v) };
-        unsafe { __vow_vec_push_val(v, 2) };
-        assert_eq!(unsafe { __vow_vec_len(v) }, 2);
+        let s = unsafe { __vow_string_new(b"ok".as_ptr() as *const i8, 2) };
+        unsafe { __vow_string_free(s) };
+        let m = __vow_map_new();
+        unsafe { __vow_map_insert(m, 1, 2) };
+        unsafe { __vow_map_free(m) };
     }
 
     #[test]
-    fn legacy_typed_free_symbols_are_noops() {
+    fn typed_free_symbols_release_allocations() {
         let exe = std::env::current_exe().expect("current test exe");
         let output = std::process::Command::new(exe)
-            .env("VOW_LEGACY_FREE_NOOP_WORKER", "1")
-            .args([
-                "tests::legacy_typed_free_noop_worker",
-                "--exact",
-                "--nocapture",
-            ])
+            .env("VOW_TYPED_FREE_WORKER", "1")
+            .args(["tests::typed_free_worker", "--exact", "--nocapture"])
             .output()
-            .expect("spawn legacy free worker");
+            .expect("spawn typed free worker");
         assert!(
             output.status.success(),
-            "legacy free worker failed\nstdout:\n{}\nstderr:\n{}",
+            "typed free worker failed\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
