@@ -314,16 +314,19 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
         "usage": "vow <command> [OPTIONS] <source.vow>",
         "legacy_usage": "vow [OPTIONS] <source.vow> (equivalent to vow build)",
         "references": {
-            "grammar": "docs/skill/grammar.md",
-            "cli": "docs/skill/cli.md",
-            "errors": "docs/skill/errors.md",
-            "examples": "docs/skill/examples.md",
+            "grammar": "reference/grammar.md",
+            "cli": "reference/cli.md",
+            "contracts": "reference/contracts.md",
+            "errors": "reference/errors.md",
+            "examples": "examples/examples.md",
             "schemas": {
-                "build_result": "docs/skill/schemas/build-result.schema.json",
-                "contracts_result": "docs/skill/schemas/contracts-result.schema.json",
-                "diagnostic": "docs/skill/schemas/diagnostic.schema.json",
-                "counterexample": "docs/skill/schemas/counterexample.schema.json",
-                "vow_violation": "docs/skill/schemas/vow-violation.schema.json",
+                "build_result": "schemas/build-result.schema.json",
+                "contracts_result": "schemas/contracts-result.schema.json",
+                "diagnostic": "schemas/diagnostic.schema.json",
+                "counterexample": "schemas/counterexample.schema.json",
+                "mutants_result": "schemas/mutants-result.schema.json",
+                "test_result": "schemas/test-result.schema.json",
+                "vow_violation": "schemas/vow-violation.schema.json",
             },
         },
         "invocation": {
@@ -356,7 +359,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
                 "options": build_option_entries,
                 "stdout": {
                     "format": "json",
-                    "schema_ref": "docs/skill/schemas/build-result.schema.json",
+                    "schema_ref": "schemas/build-result.schema.json",
                     "suppressed_by": ["--dump-ir"],
                 },
                 "stderr": {
@@ -377,7 +380,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
                 "options": verify_option_entries,
                 "stdout": {
                     "format": "json",
-                    "schema_ref": "docs/skill/schemas/build-result.schema.json",
+                    "schema_ref": "schemas/build-result.schema.json",
                     "fixed_fields": {"executable": None},
                 },
                 "notes": [
@@ -430,7 +433,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
                 "options": contracts_option_entries,
                 "stdout": {
                     "format": "json",
-                    "schema_ref": "docs/skill/schemas/contracts-result.schema.json",
+                    "schema_ref": "schemas/contracts-result.schema.json",
                 },
                 "notes": [
                     "runs frontend only by default",
@@ -449,21 +452,21 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
         },
         "outputs": {
             "build_result": {
-                "schema_ref": "docs/skill/schemas/build-result.schema.json",
+                "schema_ref": "schemas/build-result.schema.json",
                 "emitted_by": ["build", "verify"],
                 "status_values": ["Verified", "Unverified", "CompileFailed", "VerifyFailed"],
                 "legacy_fields": ["counterexample"],
             },
             "contracts_result": {
-                "schema_ref": "docs/skill/schemas/contracts-result.schema.json",
+                "schema_ref": "schemas/contracts-result.schema.json",
                 "emitted_by": ["contracts"],
             },
             "diagnostic": {
-                "schema_ref": "docs/skill/schemas/diagnostic.schema.json",
+                "schema_ref": "schemas/diagnostic.schema.json",
                 "embedded_in": "build_result.diagnostics",
             },
             "runtime_vow_violation": {
-                "schema_ref": "docs/skill/schemas/vow-violation.schema.json",
+                "schema_ref": "schemas/vow-violation.schema.json",
                 "emitted_on": "stderr",
                 "requires_mode": "debug",
             },
@@ -482,7 +485,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
             "counterexample": "ESBMC counterexample description (VerifyFailed)",
         },
         "diagnostics": {
-            "schema_ref": "docs/skill/schemas/diagnostic.schema.json",
+            "schema_ref": "schemas/diagnostic.schema.json",
             "fields": [
                 "error_code",
                 "message",
@@ -616,7 +619,8 @@ def build_help_human(data: dict) -> str:
     lines.append("  vow test [OPTIONS] [<path>]          Run tests with JSON results")
     lines.append("  vow contracts [OPTIONS] <source.vow> List all contracts")
     lines.append("  vow decl [OPTIONS] <source.vow>    Emit declaration file (.vow.d)")
-    lines.append("  vow skill [print|install]           Generate or install Claude Code skill")
+    lines.append("  vow skill [print [--bundle]|install [--local|--global]]")
+    lines.append("                                        Generate or install Claude Code skill")
     lines.append("  vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)")
     lines.append("")
 
@@ -824,26 +828,17 @@ SKILL_FRONTMATTER = """\
 ---
 name: vow-toolchain
 description: >-
-  Write, compile, debug, and verify Vow programs (.vow files). Covers the
-  CEGIS workflow (counterexample-guided inductive synthesis), contract
-  authoring (requires, ensures, invariant), fixing VerifyFailed
-  counterexamples, resolving CompileFailed diagnostics, loop invariants,
-  the Vow effect system, and running vow build / vow verify. Use when the
-  user says "write a Vow program", "fix this counterexample", "add
-  contracts", "why did verification fail", "ESBMC", or "vow build".
-globs: "**/*.vow"
+  Write, compile, debug, and verify Vow programs (.vow files) with contracts,
+  CEGIS, ESBMC counterexamples, diagnostics, and vow build / vow verify.
+when_to_use: >-
+  Use when the user edits or creates .vow files, says "write a Vow program",
+  "fix this counterexample", "add contracts", "why did verification fail",
+  "ESBMC", "vow build", or "vow verify".
+argument-hint: "[file.vow]"
 ---"""
 
 
-def build_skill_markdown() -> str:
-    """Assemble the full skill document from spec files.
-
-    Produces a single self-contained markdown file with YAML frontmatter,
-    suitable for installation as a Claude Code skill/command.
-    """
-    parts: list[str] = [SKILL_FRONTMATTER, ""]
-
-    # Index/overview (strip sections between OMIT-FROM-SKILL markers)
+def _index_for_skill() -> str:
     index_text = INDEX.read_text()
     omit_start = "<!-- OMIT-FROM-SKILL-START -->"
     omit_end = "<!-- OMIT-FROM-SKILL-END -->"
@@ -851,9 +846,67 @@ def build_skill_markdown() -> str:
     if start_idx != -1:
         end_idx = index_text.find(omit_end, start_idx)
         if end_idx != -1:
-            index_text = (index_text[:start_idx].rstrip() +
-                          index_text[end_idx + len(omit_end):])
-    parts.append(index_text.rstrip())
+            index_text = (
+                index_text[:start_idx].rstrip()
+                + index_text[end_idx + len(omit_end):]
+            )
+    return index_text.rstrip()
+
+
+def build_skill_entrypoint() -> str:
+    """Build the concise installed SKILL.md entrypoint."""
+    return "\n".join(
+        [
+            SKILL_FRONTMATTER,
+            "",
+            "# Vow Toolchain",
+            "",
+            "Use this skill when writing, compiling, debugging, or verifying Vow programs.",
+            "Keep the workflow tight: run the compiler, read the structured JSON, fix the",
+            "program or contract, and repeat until the result is `Verified`.",
+            "",
+            "## Installed toolchain (live)",
+            "",
+            "!`(command -v vow >/dev/null 2>&1 && vow --help 2>/dev/null | head -200) || (command -v build/vowc >/dev/null 2>&1 && build/vowc --help 2>/dev/null | head -200)`",
+            "",
+            "## Core workflow",
+            "",
+            "1. Write a `.vow` file with explicit contracts.",
+            "2. Run `ulimit -v 2000000; build/vowc build <file.vow>`.",
+            "3. Parse stdout JSON and inspect `status`, `diagnostics`, and `counterexamples`.",
+            "4. Fix compile errors, verification failures, or weak contracts, then rerun.",
+            "",
+            "## Minimal program",
+            "",
+            "```vow",
+            "module Hello",
+            "",
+            "fn main() -> i32 [io] {",
+            "    print_str(\"Hello, world!\");",
+            "    0",
+            "}",
+            "```",
+            "",
+            "## Reference files",
+            "",
+            "- Grammar, types, effects, builtins: [reference/grammar.md](reference/grammar.md)",
+            "- CLI commands, flags, JSON output: [reference/cli.md](reference/cli.md)",
+            "- Contracts and CEGIS guidance: [reference/contracts.md](reference/contracts.md)",
+            "- Diagnostics and fixes: [reference/errors.md](reference/errors.md)",
+            "- Worked examples: [examples/examples.md](examples/examples.md)",
+            "- JSON schemas: [schemas/](schemas/)",
+        ]
+    )
+
+
+def build_skill_bundle() -> str:
+    """Assemble the full self-contained skill document from spec files.
+
+    Produces a single self-contained markdown file with YAML frontmatter,
+    suitable for raw API/system-prompt use.
+    """
+    parts: list[str] = [SKILL_FRONTMATTER, ""]
+    parts.append(_index_for_skill())
     parts.append("")
 
     # Append each spec file
@@ -882,18 +935,112 @@ def build_skill_markdown() -> str:
     return "\n".join(parts)
 
 
-def inject_skill_rust(content: str, skill_md: str) -> str:
-    """Inject skill_full_markdown() into Rust main.rs."""
-    replacement = f'// GENERATE:SKILL_FULL:START\nfn skill_full_markdown() -> String {{\n    r##"{skill_md}"##\n    .to_string()\n}}\n// GENERATE:SKILL_FULL:END'
+def build_skill_support_files() -> dict[str, str]:
+    support: dict[str, str] = {
+        "reference/grammar.md": GRAMMAR.read_text().rstrip() + "\n",
+        "reference/cli.md": CLI.read_text().rstrip() + "\n",
+        "reference/contracts.md": CONTRACTS.read_text().rstrip() + "\n",
+        "reference/errors.md": ERRORS.read_text().rstrip() + "\n",
+        "examples/examples.md": EXAMPLES.read_text().rstrip() + "\n",
+    }
+    for sf in sorted(SCHEMAS_DIR.glob("*.json")):
+        support[f"schemas/{sf.name}"] = sf.read_text().rstrip() + "\n"
+    return support
+
+
+def _rust_raw_string(text: str) -> str:
+    for n in range(1, 16):
+        hashes = "#" * n
+        if f'"{hashes}' not in text:
+            return f'r{hashes}"{text}"{hashes}'
+    raise ValueError("could not find Rust raw string delimiter")
+
+
+def inject_skill_rust(
+    content: str, entrypoint_md: str, bundle_md: str, support_files: dict[str, str]
+) -> str:
+    """Inject generated skill helpers into Rust main.rs."""
+    entries = ",\n        ".join(
+        f"({_rust_raw_string(path)}, {_rust_raw_string(body)})"
+        for path, body in support_files.items()
+    )
+    replacement = f'''// GENERATE:SKILL_FULL:START
+fn skill_entrypoint_markdown() -> String {{
+    {_rust_raw_string(entrypoint_md)}
+    .to_string()
+}}
+
+fn skill_bundle_markdown() -> String {{
+    {_rust_raw_string(bundle_md)}
+    .to_string()
+}}
+
+fn skill_support_files() -> &'static [(&'static str, &'static str)] {{
+    &[
+        {entries}
+    ]
+}}
+// GENERATE:SKILL_FULL:END'''
     return _replace_between_markers(
         content, "// GENERATE:SKILL_FULL:START", "// GENERATE:SKILL_FULL:END", replacement,
     )
 
 
-def inject_skill_vow(content: str, skill_md: str) -> str:
-    """Inject skill_full() into self-hosted main.vow."""
-    first, rest = _vow_pushstr_body(skill_md)
-    fn_body = f'// GENERATE:SKILL_FULL:START\nfn skill_full() -> String {{\n    let r: String = String::from("{first}\\n");\n{rest}\n    r\n}}\n// GENERATE:SKILL_FULL:END'
+def inject_skill_vow(
+    content: str, entrypoint_md: str, bundle_md: str, support_files: dict[str, str]
+) -> str:
+    """Inject generated skill helpers into self-hosted main.vow."""
+    first_entrypoint, rest_entrypoint = _vow_pushstr_body(entrypoint_md)
+    first_bundle, rest_bundle = _vow_pushstr_body(bundle_md)
+
+    sections = [
+        "// GENERATE:SKILL_FULL:START",
+        "fn skill_entrypoint() -> String {",
+        f'    let r: String = String::from("{first_entrypoint}\\n");',
+        rest_entrypoint,
+        "    r",
+        "}",
+        "",
+        "fn skill_bundle() -> String {",
+        f'    let r: String = String::from("{first_bundle}\\n");',
+        rest_bundle,
+        "    r",
+        "}",
+        "fn skill_support_paths() -> Vec<String> {",
+        "    let v: Vec<String> = Vec::new();",
+    ]
+    for path in support_files:
+        escaped = path.replace("\\", "\\\\").replace('"', '\\"')
+        sections.append(f'    v.push(String::from("{escaped}"));')
+    sections.extend(["    v", "}", ""])
+
+    content_fn_names = []
+    for idx, body in enumerate(support_files.values()):
+        fn_name = f"skill_support_content_{idx}"
+        content_fn_names.append(fn_name)
+        first, rest = _vow_pushstr_body(body)
+        sections.extend(
+            [
+                f"fn {fn_name}() -> String {{",
+                f'    let r: String = String::from("{first}\\n");',
+                rest,
+                "    r",
+                "}",
+                "",
+            ]
+        )
+
+    sections.extend(
+        [
+            "fn skill_support_contents() -> Vec<String> {",
+            "    let v: Vec<String> = Vec::new();",
+        ]
+    )
+    for fn_name in content_fn_names:
+        sections.append(f"    v.push({fn_name}());")
+    sections.extend(["    v", "}", "// GENERATE:SKILL_FULL:END"])
+
+    fn_body = "\n".join(sections)
     return _replace_between_markers(
         content, "// GENERATE:SKILL_FULL:START", "// GENERATE:SKILL_FULL:END", fn_body,
     )
@@ -917,7 +1064,9 @@ def main() -> None:
     # Validate the generated JSON is parseable
     json.loads(json_str)
 
-    skill_md = build_skill_markdown()
+    skill_entrypoint_md = build_skill_entrypoint()
+    skill_bundle_md = build_skill_bundle()
+    skill_support_files = build_skill_support_files()
 
     if check_only:
         print("Generated JSON is valid.")
@@ -927,18 +1076,20 @@ def main() -> None:
         print(f"  build_options: {len(data['build_options'])}")
         print(f"  test_options: {len(data['test_options'])}")
         print(f"  verify_options: {len(data['verify_options'])}")
-        print(f"  skill_markdown: {len(skill_md)} bytes")
+        print(f"  skill_entrypoint: {len(skill_entrypoint_md)} bytes")
+        print(f"  skill_bundle: {len(skill_bundle_md)} bytes")
+        print(f"  skill_support_files: {len(skill_support_files)}")
         return
 
     # Inject into Rust
     new_rs = inject_rust(MAIN_RS, json_str, human_str)
-    new_rs = inject_skill_rust(new_rs, skill_md)
+    new_rs = inject_skill_rust(new_rs, skill_entrypoint_md, skill_bundle_md, skill_support_files)
     MAIN_RS.write_text(new_rs)
     print(f"Updated {MAIN_RS}")
 
     # Inject into self-hosted
     new_vow = inject_vow(MAIN_VOW, json_str, human_str)
-    new_vow = inject_skill_vow(new_vow, skill_md)
+    new_vow = inject_skill_vow(new_vow, skill_entrypoint_md, skill_bundle_md, skill_support_files)
     MAIN_VOW.write_text(new_vow)
     print(f"Updated {MAIN_VOW}")
 

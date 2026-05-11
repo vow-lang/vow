@@ -85,15 +85,20 @@ Generate or install the Claude Code skill document for the current compiler vers
 
 ```
 vow skill              # print skill document to stdout (default: print)
-vow skill print        # same as above
-vow skill install      # install to .claude/skills/vow-toolchain/SKILL.md
+vow skill print        # print concise Claude Code SKILL.md entrypoint
+vow skill print --bundle  # print self-contained bundle for raw API harnesses
+vow skill install      # prompt for local or global install target
+vow skill install --local   # install to ./.claude/skills/vow-toolchain/
+vow skill install --global  # install to $HOME/.claude/skills/vow-toolchain/ on Linux
 ```
 
-`print` writes the complete skill markdown (with YAML frontmatter) to stdout. Pipe it into a system prompt for non–Claude Code harnesses.
+`print` writes the concise installed `SKILL.md` entrypoint (with YAML frontmatter) to stdout. `print --bundle` writes a complete self-contained skill document to stdout for non–Claude Code harnesses that cannot load supporting files.
 
-`install` creates `.claude/skills/vow-toolchain/` in the current directory if needed and writes `SKILL.md` there. Claude Code's skill matcher auto-discovers it via the `globs: "**/*.vow"` frontmatter, so the skill loads on demand whenever an agent works with `.vow` files.
+`install` writes `SKILL.md` plus supporting files under `reference/`, `examples/`, and `schemas/`. Claude Code discovers the skill from the `.claude/skills/` directory and uses the frontmatter description/`when_to_use` metadata to load it for `.vow` file work as well as creation and verification-debugging prompts before a `.vow` file exists.
 
-**Auto-install on build.** The first time `vow build` (or the legacy `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow-toolchain/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.
+When no scope flag is provided, `install` prompts on stderr for local (`./.claude`) or global (`$HOME/.claude`) installation. Scripts and agents should pass `--local` or `--global` explicitly. `--local` requires the current directory to contain both `.git` and `.claude/`; otherwise it exits with an error and writes nothing. `--global` installs under `$HOME/.claude/skills/vow-toolchain/` and fails if `$HOME` is unset or empty.
+
+**Auto-install on build.** The first time `vow build` (or the legacy `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow-toolchain/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Unlike explicit `--local`, auto-install only requires `.claude/`; it does not require the directory to be a git checkout. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.
 
 ### `vow test`
 
