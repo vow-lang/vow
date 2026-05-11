@@ -396,17 +396,6 @@ fn source_value_region(
     {
         return RegionId::Caller(hidden_idx);
     }
-    if matches!(source.opcode, Opcode::FieldGet | Opcode::Load)
-        && let Some(source_id) = source.args.first()
-    {
-        return arg_region_inner(*source_id, inst_index, current_summary, phi_data, seen);
-    }
-    if let (Opcode::Call, InstData::CallExtern(sym)) = (&source.opcode, &source.data)
-        && matches!(sym.as_str(), "__vow_vec_get_val" | "__vow_vec_get")
-        && let Some(source_id) = source.args.first()
-    {
-        return arg_region_inner(*source_id, inst_index, current_summary, phi_data, seen);
-    }
     if source.opcode == Opcode::Phi {
         let mut merged: Option<RegionId> = None;
         for upsilons in phi_data.block_upsilons.values() {
@@ -4596,7 +4585,7 @@ mod tests {
     }
 
     #[test]
-    fn projected_parameter_region_string_push_byte_imports_arena_variant() {
+    fn projected_parameter_region_string_push_byte_keeps_default_variant() {
         let grow_projection = Function {
             id: FuncId(0),
             name: "grow_projection".to_string(),
@@ -4685,8 +4674,8 @@ mod tests {
             .symbols()
             .filter_map(|symbol| symbol.name().ok().map(str::to_string))
             .collect();
-        assert!(symbols.contains("__vow_string_push_byte_in_arena"));
-        assert!(!symbols.contains("__vow_string_push_byte"));
+        assert!(symbols.contains("__vow_string_push_byte"));
+        assert!(!symbols.contains("__vow_string_push_byte_in_arena"));
     }
 
     #[test]

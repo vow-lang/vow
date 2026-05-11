@@ -334,44 +334,6 @@ fn inst_region_for_value_inner(
     {
         return rgn;
     }
-    if matches!(
-        inst_op_by_id.get(&inst_id).copied(),
-        Some(IOP_FIELD_GET | IOP_LOAD)
-    ) && let Some(&source_id) = inst_first_arg_by_id.get(&inst_id)
-    {
-        return inst_region_for_value_inner(
-            source_id,
-            inst_region_by_id,
-            inst_data_by_id,
-            inst_op_by_id,
-            inst_ds_by_id,
-            inst_first_arg_by_id,
-            upsilon_sources_by_phi,
-            return_kind,
-            store_effects,
-            seen,
-        );
-    }
-    if inst_op_by_id.get(&inst_id).copied() == Some(IOP_CALL)
-        && let Some(&(dk, _)) = inst_data_by_id.get(&inst_id)
-        && dk == IDATA_CALL_EXTERN
-        && let Some(sym) = inst_ds_by_id.get(&inst_id)
-        && matches!(sym.as_str(), "__vow_vec_get_val" | "__vow_vec_get")
-        && let Some(&source_id) = inst_first_arg_by_id.get(&inst_id)
-    {
-        return inst_region_for_value_inner(
-            source_id,
-            inst_region_by_id,
-            inst_data_by_id,
-            inst_op_by_id,
-            inst_ds_by_id,
-            inst_first_arg_by_id,
-            upsilon_sources_by_phi,
-            return_kind,
-            store_effects,
-            seen,
-        );
-    }
     if inst_op_by_id.get(&inst_id).copied() == Some(IOP_PHI)
         && let Some(sources) = upsilon_sources_by_phi.get(&inst_id)
     {
