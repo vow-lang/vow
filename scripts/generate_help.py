@@ -1040,7 +1040,7 @@ def inject_skill_vow(
         sections.append(f"    v.push({fn_name}());")
     sections.extend(["    v", "}", "// GENERATE:SKILL_FULL:END"])
 
-    fn_body = "\n".join(line for line in sections if line is not None)
+    fn_body = "\n".join(sections)
     return _replace_between_markers(
         content, "// GENERATE:SKILL_FULL:START", "// GENERATE:SKILL_FULL:END", fn_body,
     )
