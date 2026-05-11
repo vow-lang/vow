@@ -320,9 +320,20 @@ struct SkillArgs {
 #[derive(clap::Subcommand, Debug)]
 enum SkillAction {
     /// Print the skill document to stdout (default)
-    Print,
-    /// Install the skill to .claude/skills/vow-toolchain/SKILL.md
-    Install,
+    Print {
+        /// Print the full self-contained bundle for raw API harnesses
+        #[arg(long)]
+        bundle: bool,
+    },
+    /// Install the skill to .claude/skills/vow-toolchain/
+    Install {
+        /// Install into the current git project's .claude/ directory
+        #[arg(long)]
+        local: bool,
+        /// Install into $HOME/.claude/ on Linux
+        #[arg(long)]
+        global: bool,
+    },
 }
 
 #[derive(clap::Args, Debug)]
@@ -359,16 +370,19 @@ fn skill_json() -> String {
   "usage": "vow <command> [OPTIONS] <source.vow>",
   "legacy_usage": "vow [OPTIONS] <source.vow> (equivalent to vow build)",
   "references": {
-    "grammar": "docs/skill/grammar.md",
-    "cli": "docs/skill/cli.md",
-    "errors": "docs/skill/errors.md",
-    "examples": "docs/skill/examples.md",
+    "grammar": "reference/grammar.md",
+    "cli": "reference/cli.md",
+    "contracts": "reference/contracts.md",
+    "errors": "reference/errors.md",
+    "examples": "examples/examples.md",
     "schemas": {
-      "build_result": "docs/skill/schemas/build-result.schema.json",
-      "contracts_result": "docs/skill/schemas/contracts-result.schema.json",
-      "diagnostic": "docs/skill/schemas/diagnostic.schema.json",
-      "counterexample": "docs/skill/schemas/counterexample.schema.json",
-      "vow_violation": "docs/skill/schemas/vow-violation.schema.json"
+      "build_result": "schemas/build-result.schema.json",
+      "contracts_result": "schemas/contracts-result.schema.json",
+      "diagnostic": "schemas/diagnostic.schema.json",
+      "counterexample": "schemas/counterexample.schema.json",
+      "mutants_result": "schemas/mutants-result.schema.json",
+      "test_result": "schemas/test-result.schema.json",
+      "vow_violation": "schemas/vow-violation.schema.json"
     }
   },
   "invocation": {
@@ -544,7 +558,7 @@ fn skill_json() -> String {
       ],
       "stdout": {
         "format": "json",
-        "schema_ref": "docs/skill/schemas/build-result.schema.json",
+        "schema_ref": "schemas/build-result.schema.json",
         "suppressed_by": [
           "--dump-ir"
         ]
@@ -665,7 +679,7 @@ fn skill_json() -> String {
       ],
       "stdout": {
         "format": "json",
-        "schema_ref": "docs/skill/schemas/build-result.schema.json",
+        "schema_ref": "schemas/build-result.schema.json",
         "fixed_fields": {
           "executable": null
         }
@@ -913,7 +927,7 @@ fn skill_json() -> String {
       ],
       "stdout": {
         "format": "json",
-        "schema_ref": "docs/skill/schemas/contracts-result.schema.json"
+        "schema_ref": "schemas/contracts-result.schema.json"
       },
       "notes": [
         "runs frontend only by default",
@@ -983,7 +997,7 @@ fn skill_json() -> String {
   },
   "outputs": {
     "build_result": {
-      "schema_ref": "docs/skill/schemas/build-result.schema.json",
+      "schema_ref": "schemas/build-result.schema.json",
       "emitted_by": [
         "build",
         "verify"
@@ -999,17 +1013,17 @@ fn skill_json() -> String {
       ]
     },
     "contracts_result": {
-      "schema_ref": "docs/skill/schemas/contracts-result.schema.json",
+      "schema_ref": "schemas/contracts-result.schema.json",
       "emitted_by": [
         "contracts"
       ]
     },
     "diagnostic": {
-      "schema_ref": "docs/skill/schemas/diagnostic.schema.json",
+      "schema_ref": "schemas/diagnostic.schema.json",
       "embedded_in": "build_result.diagnostics"
     },
     "runtime_vow_violation": {
-      "schema_ref": "docs/skill/schemas/vow-violation.schema.json",
+      "schema_ref": "schemas/vow-violation.schema.json",
       "emitted_on": "stderr",
       "requires_mode": "debug"
     },
@@ -1028,7 +1042,7 @@ fn skill_json() -> String {
     "counterexample": "ESBMC counterexample description (VerifyFailed)"
   },
   "diagnostics": {
-    "schema_ref": "docs/skill/schemas/diagnostic.schema.json",
+    "schema_ref": "schemas/diagnostic.schema.json",
     "fields": [
       "error_code",
       "message",
@@ -1327,7 +1341,8 @@ USAGE
   vow test [OPTIONS] [<path>]          Run tests with JSON results
   vow contracts [OPTIONS] <source.vow> List all contracts
   vow decl [OPTIONS] <source.vow>    Emit declaration file (.vow.d)
-  vow skill [print|install]           Generate or install Claude Code skill
+  vow skill [print [--bundle]|install [--local|--global]]
+                                        Generate or install Claude Code skill
   vow [OPTIONS] <source.vow>          Legacy mode (same as vow build)
 
 BUILD OPTIONS
@@ -1446,18 +1461,73 @@ VERIFICATION DEFAULTS (configurable via --max-k-step, --vec-max, --string-max, -
 // GENERATE:SKILL_HUMAN:END
 
 // GENERATE:SKILL_FULL:START
-fn skill_full_markdown() -> String {
+fn skill_entrypoint_markdown() -> String {
+    r#"---
+name: vow-toolchain
+description: >-
+  Write, compile, debug, and verify Vow programs (.vow files) with contracts,
+  CEGIS, ESBMC counterexamples, diagnostics, and vow build / vow verify.
+when_to_use: >-
+  Use when the user edits or creates .vow files, says "write a Vow program",
+  "fix this counterexample", "add contracts", "why did verification fail",
+  "ESBMC", "vow build", or "vow verify".
+argument-hint: "[file.vow]"
+paths: "**/*.vow"
+allowed-tools: "Bash(build/vowc *) Bash(vow *) Bash(vowc *) Bash(ulimit *)"
+---
+
+# Vow Toolchain
+
+Use this skill when writing, compiling, debugging, or verifying Vow programs.
+Keep the workflow tight: run the compiler, read the structured JSON, fix the
+program or contract, and repeat until the result is `Verified`.
+
+## Installed toolchain (live)
+
+!`(command -v vow >/dev/null 2>&1 && vow --help 2>/dev/null | head -200) || (command -v build/vowc >/dev/null 2>&1 && build/vowc --help 2>/dev/null | head -200)`
+
+## Core workflow
+
+1. Write a `.vow` file with explicit contracts.
+2. Run `ulimit -v 2000000; build/vowc build <file.vow>`.
+3. Parse stdout JSON and inspect `status`, `diagnostics`, and `counterexamples`.
+4. Fix compile errors, verification failures, or weak contracts, then rerun.
+
+## Minimal program
+
+```vow
+module Hello
+
+fn main() -> i32 [io] {
+    print_str("Hello, world!");
+    0
+}
+```
+
+## Reference files
+
+- Grammar, types, effects, builtins: [reference/grammar.md](reference/grammar.md)
+- CLI commands, flags, JSON output: [reference/cli.md](reference/cli.md)
+- Contracts and CEGIS guidance: [reference/contracts.md](reference/contracts.md)
+- Diagnostics and fixes: [reference/errors.md](reference/errors.md)
+- Worked examples: [examples/examples.md](examples/examples.md)
+- JSON schemas: [schemas/](schemas/)"#
+    .to_string()
+}
+
+fn skill_bundle_markdown() -> String {
     r##"---
 name: vow-toolchain
 description: >-
-  Write, compile, debug, and verify Vow programs (.vow files). Covers the
-  CEGIS workflow (counterexample-guided inductive synthesis), contract
-  authoring (requires, ensures, invariant), fixing VerifyFailed
-  counterexamples, resolving CompileFailed diagnostics, loop invariants,
-  the Vow effect system, and running vow build / vow verify. Use when the
-  user says "write a Vow program", "fix this counterexample", "add
-  contracts", "why did verification fail", "ESBMC", or "vow build".
-globs: "**/*.vow"
+  Write, compile, debug, and verify Vow programs (.vow files) with contracts,
+  CEGIS, ESBMC counterexamples, diagnostics, and vow build / vow verify.
+when_to_use: >-
+  Use when the user edits or creates .vow files, says "write a Vow program",
+  "fix this counterexample", "add contracts", "why did verification fail",
+  "ESBMC", "vow build", or "vow verify".
+argument-hint: "[file.vow]"
+paths: "**/*.vow"
+allowed-tools: "Bash(build/vowc *) Bash(vow *) Bash(vowc *) Bash(ulimit *)"
 ---
 
 # Vow Language Reference
@@ -2446,13 +2516,18 @@ Generate or install the Claude Code skill document for the current compiler vers
 
 ```
 vow skill              # print skill document to stdout (default: print)
-vow skill print        # same as above
-vow skill install      # install to .claude/skills/vow-toolchain/SKILL.md
+vow skill print        # print concise Claude Code SKILL.md entrypoint
+vow skill print --bundle  # print self-contained bundle for raw API harnesses
+vow skill install      # prompt for local or global install target
+vow skill install --local   # install to ./.claude/skills/vow-toolchain/
+vow skill install --global  # install to $HOME/.claude/skills/vow-toolchain/ on Linux
 ```
 
-`print` writes the complete skill markdown (with YAML frontmatter) to stdout. Pipe it into a system prompt for non–Claude Code harnesses.
+`print` writes the concise installed `SKILL.md` entrypoint (with YAML frontmatter) to stdout. `print --bundle` writes a complete self-contained skill document to stdout for non–Claude Code harnesses that cannot load supporting files.
 
-`install` creates `.claude/skills/vow-toolchain/` in the current directory if needed and writes `SKILL.md` there. Claude Code's skill matcher auto-discovers it via the `globs: "**/*.vow"` frontmatter, so the skill loads on demand whenever an agent works with `.vow` files.
+`install` writes `SKILL.md` plus supporting files under `reference/`, `examples/`, and `schemas/`. Claude Code's skill matcher auto-discovers it via the `paths: "**/*.vow"` frontmatter, so the skill loads on demand whenever an agent works with `.vow` files.
+
+When no scope flag is provided, `install` prompts on stderr for local (`./.claude`) or global (`$HOME/.claude`) installation. Scripts and agents should pass `--local` or `--global` explicitly. `--local` requires the current directory to contain both `.git` and `.claude/`; otherwise it exits with an error and writes nothing. `--global` installs under `$HOME/.claude/skills/vow-toolchain/` and fails if `$HOME` is unset or empty.
 
 **Auto-install on build.** The first time `vow build` (or the legacy `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow-toolchain/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.
 
@@ -4571,25 +4646,3176 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
 "##
     .to_string()
 }
+
+fn skill_support_files() -> &'static [(&'static str, &'static str)] {
+    &[
+        (
+            r#"reference/grammar.md"#,
+            r#"# Vow Grammar Reference
+
+Complete grammar for the Vow programming language. Vow source files use the `.vow` extension.
+
+**Line comments.** `//` starts a line comment extending to end of line. Comments are stripped during lexing and never enter the token stream. Block comments (`/* */`) are not supported. Machine-relevant intent belongs in contracts; comments are for non-semantic rationale.
+
+## Module Declaration
+
+Every file begins with a module declaration:
+
+```
+module <Name>
+```
+
+`<Name>` is a PascalCase identifier. There is no semicolon.
+
+## Use Declarations
+
+Import other modules with dot-separated paths:
+
+```
+use foo.bar
+```
+
+This resolves to `<rootdir>/foo/bar.vow` relative to the main source file.
+
+## Const Declarations
+
+Named constants with compile-time values:
+
+```vow
+const MAX_SIZE: i64 = 1024;
+const NEG_ONE: i64 = -1;
+const DEBUG: bool = true;
+```
+
+Supported value forms: integer literals, boolean literals, negated integer literals. Constants are inlined at every use site (zero runtime cost). The type must be `i64`, `i32`, or `bool`. Constants are referenced by name in expressions like any other identifier.
+
+## Functions
+
+### Pure Function
+
+```vow
+fn add(x: i64, y: i64) -> i64 {
+    x + y
+}
+```
+
+### Function with Effects
+
+```vow
+fn main() -> i32 [io] {
+    print_str("hello");
+    0
+}
+```
+
+Effects appear in brackets after the return type: `[io]`, `[read, write]`, `[io, panic]`.
+
+### Function with Vow Block
+
+```vow
+fn divide(x: i64, y: i64) -> i64 vow {
+    requires: y != 0
+} {
+    x / y
+}
+```
+
+The `vow` block sits between the signature and the body. Clauses:
+- `requires: <expr>` — precondition (blame: Caller)
+- `ensures: <expr>` — postcondition (blame: Callee); use `result` for the return value
+- `invariant: <expr>` — loop invariant (blame: Callee)
+
+Multiple clauses are separated by commas:
+
+```vow
+fn clamp(x: i64, lo: i64, hi: i64) -> i64 vow {
+    requires: lo <= hi,
+    ensures: result >= lo,
+    ensures: result <= hi
+} {
+    if x < lo { lo } else { if x > hi { hi } else { x } }
+}
+```
+
+### Where Clauses (Refinement Types on Parameters)
+
+```vow
+fn safe_sub(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {
+    requires: a >= b,
+    ensures: result >= 0
+} {
+    a - b
+}
+```
+
+`where` constraints on parameters become additional `requires` in verification. Each `where` clause can only reference its own parameter — it cannot reference other parameters.
+
+### Public Functions
+
+```vow
+pub fn api_function(x: i64) -> i64 {
+    x
+}
+```
+
+## Types
+
+### Primitive Types
+
+| Type   | Description              |
+|--------|--------------------------|
+| `i32`  | 32-bit signed integer    |
+| `i64`  | 64-bit signed integer    |
+| `u8`   | 8-bit unsigned integer   |
+| `u64`  | 64-bit unsigned integer  |
+| `f32`  | 32-bit float (limited support — avoid in contracts) |
+| `f64`  | 64-bit float (limited support — avoid in contracts) |
+| `bool` | Boolean                  |
+| `()`   | Unit type                |
+| `!`    | Never type (diverges)    |
+
+### Built-in Parameterized Types
+
+| Type               | Description                     |
+|--------------------|---------------------------------|
+| `Vec<T>`           | Growable array                  |
+| `Option<T>`        | Optional value (Some/None)      |
+| `Result<T, E>`     | Success or error                |
+| `String`           | UTF-8 string (backed by Vec<u8>)|
+| `HashMap<K, V>`    | Key-value map (linear scan)     |
+| `BTreeMap<K, V>`   | Sorted key-value map (binary search; ascending iteration). Phase 1: `K = V = i64` only |
+
+### User-Defined Types
+
+Structs and enums (see below).
+
+## Literals
+
+### Integer Literals
+
+```vow
+42
+-1
+0
+```
+
+All unsuffixed integer literals are `i64`. Integer literals coerce to `u64` in annotation context (e.g. `let x: u64 = 42;`).
+
+Suffixed integer literals: `42u64` produces a `u64` value directly.
+
+### Float Literals
+
+```vow
+3.14
+-0.5
+```
+
+### Boolean Literals
+
+```vow
+true
+false
+```
+
+### String Literals
+
+```vow
+"hello, world"
+"line one\nline two"
+"tab\there"
+"null\0byte"
+"escaped\\backslash"
+"escaped\"quote"
+```
+
+Supported escape sequences: `\n`, `\t`, `\r`, `\\`, `\"`, `\0`.
+
+## Operators
+
+### Wrapping Arithmetic (default)
+
+| Operator | Meaning        |
+|----------|----------------|
+| `+`      | Add (wrapping) |
+| `-`      | Sub (wrapping) |
+| `*`      | Mul (wrapping) |
+| `/`      | Div (wrapping) |
+| `%`      | Rem (wrapping) |
+
+Wrapping operators silently wrap on overflow. For `u64` operands, division and remainder use unsigned semantics.
+
+### Checked Arithmetic
+
+| Operator | Meaning           |
+|----------|-------------------|
+| `+!`     | Add (checked)     |
+| `-!`     | Sub (checked)     |
+| `*!`     | Mul (checked)     |
+| `/!`     | Div (checked)     |
+| `%!`     | Rem (checked)     |
+
+Checked operators abort with `ArithmeticOverflow` on overflow.
+
+### Comparison Operators
+
+| Operator | Meaning                |
+|----------|------------------------|
+| `==`     | Equal                  |
+| `!=`     | Not equal              |
+| `<`      | Less than              |
+| `<=`     | Less than or equal     |
+| `>`      | Greater than           |
+| `>=`     | Greater than or equal  |
+
+### Bitwise Operators
+
+| Operator | Meaning      |
+|----------|--------------|
+| `&`      | Bitwise AND  |
+| `\|`     | Bitwise OR   |
+| `^`      | Bitwise XOR  |
+| `<<`     | Left shift   |
+| `>>`     | Right shift  |
+
+Bitwise operators require integer operands of the same type. Shift expressions return the left operand's type. `>>` is arithmetic for `i64` and logical for `u64`.
+
+Unsuffixed integer literals are `i64` by default but coerce to the other operand's integer type when used with a bitwise or shift operator. The same coercion applies to constant expressions composed entirely of unsuffixed integer literals — including arithmetic (`1 + 1`), bitwise (`1 << 3`), and unary negation (`-5`). For example, given `let x: u64 = ...`, the expressions `x << 3`, `3 & x`, and `x << (1 + 1)` all type-check (the literal-constant side coerces to `u64`). This matches the coercion rule already used by arithmetic operators and comparisons. Use a `u64` suffix (`3u64`) to force the `u64` type explicitly.
+
+### Logical Operators
+
+| Operator | Meaning    |
+|----------|------------|
+| `&&`     | Logical AND (short-circuit) |
+| `\|\|`   | Logical OR (short-circuit) |
+| `!`      | Logical NOT|
+
+`&&` and `||` use short-circuit evaluation: for `a && b`, `b` is only evaluated if `a` is true; for `a || b`, `b` is only evaluated if `a` is false.
+
+### Operator Precedence
+
+From loosest to tightest, Vow follows the usual C/Rust precedence for logical and bitwise operators:
+
+`||`, `&&`, comparisons (`== != < <= > >=`), `|`, `^`, `&`, `<< >>`, `+ -`, `* / %`
+
+Unary `-`, `!`, `&`, and `?` bind tighter than every binary operator.
+
+Single `&` is overloaded by position: prefix `&expr` is borrow, while infix `lhs & rhs` is bitwise AND.
+
+### Unary Operators
+
+| Operator | Meaning    |
+|----------|------------|
+| `-`      | Negation (not allowed on `u64`) |
+| `!`      | Logical NOT|
+| `&`      | Borrow     |
+| `?`      | Unwrap (propagate error) |
+
+### Type Cast
+
+```vow
+x as u64    // i64 -> u64
+y as i64    // u64 -> i64
+```
+
+The `as` operator converts between `i64` and `u64`. No implicit conversions: `i64 + u64` is a type error.
+
+In debug mode, out-of-range casts (negative i64 to u64, or u64 > i64::MAX to i64) are no-ops at the machine level (bit reinterpretation). In release mode, the same applies.
+
+## Let Bindings
+
+### Immutable
+
+```vow
+let x: i64 = 42;
+```
+
+### Mutable
+
+```vow
+let mut i: i64 = 0;
+i = i + 1;
+```
+
+### Pattern Destructuring
+
+```vow
+let (a, b): (i64, i64) = (1, 2);
+```
+
+## Control Flow
+
+### If / Else
+
+```vow
+if x > 0 {
+    x
+} else {
+    0 - x
+}
+```
+
+`if`/`else` is an expression — both branches must have the same type. There is no `else if` keyword; nest `if` inside `else`:
+
+```vow
+if x < lo {
+    lo
+} else {
+    if x > hi {
+        hi
+    } else {
+        x
+    }
+}
+```
+
+### While Loop
+
+```vow
+while i > 0 {
+    i = i - 1;
+}
+```
+
+### While Loop with Invariant
+
+```vow
+while i < n vow {
+    invariant: i >= 0,
+    invariant: i <= n
+} {
+    v.push(i);
+    i = i + 1;
+}
+```
+
+### For-Each Loop
+
+```vow
+for x in vec {
+    print_i64(x);
+}
+```
+
+Iterates over each element of a `Vec<T>`. The loop variable `x` is bound to each element in turn. Desugars to a `while` loop with index arithmetic — zero verification overhead.
+
+### For-Each Loop with Invariant
+
+```vow
+for x in vec vow {
+    invariant: total >= 0
+} {
+    total = total + x;
+}
+```
+
+### Loop (Infinite)
+
+`loop` creates an infinite loop. The expression returns the type of the `break` value:
+
+```vow
+let idx: i64 = loop {
+    if data[i] == target {
+        break i;
+    }
+    i = i + 1;
+    if i >= n { break -1; }
+};
+```
+
+ESBMC cannot verify unbounded `loop` constructs — use `while` with invariants for verifiable loops.
+
+### Break
+
+`break` exits the innermost loop. Inside `loop`, `break value` sets the loop's result:
+
+```vow
+break;           // exit while or loop (loop returns Unit)
+break value;     // exit loop with a value (only inside loop, not while)
+```
+
+### Continue
+
+`continue` skips the remaining statements in the current loop iteration and jumps back to the loop header:
+
+```vow
+continue;        // skip to next iteration of while, loop, or for
+```
+
+Inside `while` and `loop`, `continue` emits back-edge values for any mutated variables. Inside `for`, it also advances the loop index.
+
+### Return
+
+```vow
+return;
+return value;
+```
+
+## Struct Definitions
+
+```vow
+struct Point {
+    x: i64,
+    y: i64,
+}
+```
+
+### Linear Structs
+
+```vow
+linear struct FileHandle {
+    fd: i64,
+}
+```
+
+Linear struct values carry a linear obligation. The obligation must either be consumed before the value's owning region closes or transferred to the caller by returning the value.
+
+### Struct Literals
+
+Struct literal names must be PascalCase:
+
+```vow
+let p: Point = Point { x: 1, y: 2 };
+```
+
+### Field Access
+
+```vow
+p.x
+```
+
+### Field Assignment
+
+```vow
+p.x = 10;
+```
+
+### Passing Semantics
+
+Structs are heap-allocated. A struct value is a pointer to a heap region, so passing a struct to a function passes the pointer — the function operates on the same heap data, not a copy. Field assignments inside the called function are visible to the caller:
+
+```vow
+fn shift_right(p: Point, dx: i64) {
+    p.x = p.x + dx;
+}
+
+fn main() -> i32 [io] {
+    let p: Point = Point { x: 0, y: 0 };
+    shift_right(p, 5);
+    print_i64(p.x);  // 5 — mutation visible to caller
+    0
+}
+```
+
+This enables in-place mutation patterns (e.g., make/unmake in search trees) without cloning. The same aliasing semantics apply when structs are stored in containers — see [Indexing](#indexing). To avoid aliasing, construct a fresh struct literal with the desired field values.
+
+**Note:** For `linear struct` types, passing the value to a function consumes it; the caller cannot access it afterward. Returning a linear value transfers the obligation to the caller, so this is the normal way to hand an updated linear value back out of a function.
+
+## Enum Definitions
+
+```vow
+enum Shape {
+    Circle(i64),
+    Rect(i64, i64),
+    Empty,
+}
+```
+
+Variant kinds: unit (`Empty`), tuple (`Circle(i64)`), struct (`Named { x: i64 }`).
+
+### Enum Construction
+
+```vow
+let s: Shape = Shape::Circle(5);
+let none: Option<i64> = Option::None;
+let some: Option<i64> = Option::Some(42);
+```
+
+### Built-in Enums
+
+`Option<T>` has variants `Some(T)` and `None`.
+`Result<T, E>` has variants `Ok(T)` and `Err(E)`.
+
+## Pattern Matching
+
+```vow
+match value {
+    Pattern1 => expr1,
+    Pattern2 => expr2,
+    _ => default_expr,
+}
+```
+
+Match is an expression. All arms must return the same type. Patterns must be exhaustive.
+
+### Pattern Kinds
+
+| Pattern                      | Example                          |
+|------------------------------|----------------------------------|
+| Wildcard                     | `_`                              |
+| Identifier binding           | `x`                              |
+| Mutable identifier           | `mut x`                          |
+| Literal                      | `0`, `true`, `"hello"`           |
+| Tuple                        | `(a, b)`                         |
+| Enum variant (unit)          | `Option::None`                   |
+| Enum variant (tuple)         | `Option::Some(x)`                |
+| Enum variant (struct)        | `Shape::Named { x, y }`         |
+| Or pattern                   | `0 \| 1 \| 2`                   |
+| Struct pattern               | `Point { x, y }`                |
+
+## Method Calls
+
+```vow
+v.push(42);
+v.len()
+s.byte_at(0)
+m.contains_key(k)
+```
+
+### Vec<T> Methods
+
+| Method         | Signature                        |
+|----------------|----------------------------------|
+| `Vec::new()`   | `() -> Vec<T>`                   |
+| `Vec::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> Vec<T>` for flat scalar `T` |
+| `.push(val)`   | `(T) -> ()`                      |
+| `.pop()`       | `() -> ()`                       |
+| `.len()`       | `() -> i64`                      |
+| `.clear()`     | `() -> ()` — frees buffer, resets to empty |
+| `.truncate(n)` | `(i64) -> ()` — shrinks to n elements, frees excess memory |
+| `v[i]`         | Index read — copies slot value; aliases heap types (panics if out of bounds) |
+| `v[i] = val`   | Index write — copies value into slot |
+
+### String Methods
+
+| Method              | Signature                   |
+|---------------------|-----------------------------|
+| `String::from(lit)` | `(&str) -> String`          |
+| `String::new()`     | `() -> String`              |
+| `String::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> String` |
+| `.len()`            | `() -> i64`                 |
+| `.byte_at(i)`       | `(i64) -> i64`              |
+| `.push_byte(b)`     | `(i64) -> ()`               |
+| `.push_str(s)`      | `(String) -> ()`            |
+| `.clear()`          | `() -> ()` — frees buffer, resets to empty |
+| `.contains(s)`      | `(String) -> bool`          |
+| `.eq(s)`            | `(String) -> bool`          |
+| `.substring(start, end)` | `(i64, i64) -> String` |
+| `.parse_i64()`      | `() -> Option<i64>`         |
+| `.parse_u64()`      | `() -> Option<u64>`         |
+
+### HashMap<K, V> Methods
+
+| Method              | Signature                   |
+|---------------------|-----------------------------|
+| `HashMap::new()`    | `() -> HashMap<K, V>`       |
+| `.insert(k, v)`     | `(K, V) -> ()`              |
+| `.get(k)`           | `(K) -> V`                  |
+| `.contains_key(k)`  | `(K) -> bool`               |
+| `.remove(k)`        | `(K) -> ()`                 |
+| `.len()`            | `() -> i64`                 |
+
+### BTreeMap<K, V> Methods
+
+In Phase 1, both `K` and `V` must be `i64`. K violations raise `BTreeMapKeyTypeMustBeI64`; V violations raise `BTreeMapValueTypeMustBeI64`.
+The runtime helpers and ESBMC C model are hard-coded to i64 keys + i64 values; widening V
+to support struct payloads is a planned follow-up.
+Storage is two parallel sorted arrays (binary-search lookup, sorted-insert writes).
+Iteration order is ascending by key and is **deterministic across runs and compilers** —
+prefer `BTreeMap` over `HashMap` for any map whose iteration affects compiler output.
+
+| Method              | Signature                   |
+|---------------------|-----------------------------|
+| `BTreeMap::new()`   | `() -> BTreeMap<K, V>`      |
+| `.insert(k, v)`     | `(K, V) -> Option<V>` (returns the previous value bound to `k`, if any) |
+| `.get(k)`           | `(K) -> Option<V>` (returns the value bound to `k`, or `None`)          |
+| `.contains(k)`      | `(K) -> bool`               |
+| `.len()`            | `() -> i64`                 |
+
+### Option<T> Methods
+
+| Method      | Signature                              |
+|-------------|----------------------------------------|
+| `.unwrap()` | `() -> T` (panics on None; requires `[panic]` effect) |
+
+The `?` operator on `Option<T>` or `Result<T, E>` propagates `None`/`Err` to the caller (the calling function must return `Option` or `Result`).
+
+## Indexing
+
+```vow
+let val: i64 = v[0];
+v[i] = new_val;
+```
+
+Indexing uses **copy semantics**: `v[i]` copies the 8-byte slot value and `v[i] = val` copies a value into the slot. The base container is not consumed.
+
+For primitive types (`i64`, `bool`), this is a genuine value copy — the result is independent of the container. For heap types (`Vec<T>`, `String`, structs, enums), the 8-byte slot holds a pointer, so indexing copies the pointer, creating an **alias**. Both the container slot and the local variable point to the same heap data:
+
+```vow
+let buckets: Vec<Vec<i64>> = Vec::new();
+buckets.push(Vec::new());
+let b: Vec<i64> = buckets[0];  // b aliases buckets[0]
+b.push(42);                     // visible through buckets[0]
+```
+
+This aliasing is the intended behavior for arena and hash-table patterns where bucket contents are read and mutated repeatedly through index access.
+
+## Extern Blocks
+
+Declare external C functions (a `vow` contract block is required):
+
+```vow
+extern "C" vow {
+    requires: fd >= 0
+    ensures: return >= 0
+}
+{
+    fn write(fd: i32, ptr: i64, len: i64) -> i64 [io]
+}
+```
+
+Omitting the `vow` block produces a `MissingContract` error (see [errors.md](errors.md)).
+
+## Type Aliases
+
+```vow
+type Score = i64
+```
+
+## Effect System
+
+Effects are explicit. Every function declares which side effects it may perform. Pure functions (no effects) need no annotation.
+
+### Effect Types
+
+| Effect   | Meaning                              |
+|----------|--------------------------------------|
+| `io`     | Standard I/O (print, stdin, network) |
+| `read`   | File system reads                    |
+| `write`  | File system writes                   |
+| `panic`  | May panic (unwrap, etc.)             |
+| `unsafe` | Unsafe operations (FFI, raw memory)  |
+
+Each effect is independent — `io` is not a superset of `read` or `write`.
+
+### Propagation
+
+A function must declare every effect that any function it calls may produce:
+
+```vow
+fn do_io() -> () [io] {
+    print_str("hi");
+}
+
+fn caller() -> () [io] {
+    do_io();
+}
+```
+
+If `caller` omitted `[io]`, the type checker would emit `EffectViolation`.
+
+### Contract Purity
+
+Contract expressions (`requires`, `ensures`, `invariant`) must be pure — they cannot call effectful functions.
+
+### Builtin Function Signatures
+
+#### FFI Wrapper Intrinsics
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `pin_to_root`    | `fn(value: String) -> String` and `fn<T>(value: Vec<T>) -> Vec<T>` for flat scalar `T` | `[]` |
+
+`pin_to_root` is a compiler intrinsic, not a user-defined generic. Each call site is monomorphised from the argument type. It always deep-copies the supported heap value into root storage; it does not inspect descriptor tags and does not claim idempotency. The current supported forms are `String` and `Vec<T>` where `T` is a flat scalar slot type (`i*`, `u*`, `f32`, `f64`, `bool`). Pointer-containing payloads, user structs, enums, and maps require hand-written deep-copy wrappers at the FFI boundary.
+
+`String::from_raw_parts_copy(ptr: i64, len: i64)` copies `len` bytes from a raw C pointer into a fresh `String`. `Vec::from_raw_parts_copy(ptr: i64, len: i64)` copies `len` flat scalar slots into a fresh `Vec<T>`. The surface length type is `i64`; the code generator converts pointer and length values to the platform pointer-sized ABI type at the FFI boundary. Both helpers have a `FreshInCaller` return summary.
+
+For pointer-containing C payloads, a wrapper must be written per type: call the extern, recursively copy every Vow-owned heap subobject into the target region, free every C-owned pointer according to the extern's ownership contract, then return the Vow-placed value. A bytewise copy of a pointer-containing payload is unsound because it preserves stale pointers into C-owned storage.
+
+#### Print / IO
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `print_str`      | `fn(s: String) -> ()`                      | `[io]`     |
+| `print_i64`      | `fn(v: i64) -> ()`                         | `[io]`     |
+| `print_u64`      | `fn(v: u64) -> ()`                         | `[io]`     |
+| `eprintln_str`   | `fn(s: String) -> ()`                      | `[io]`     |
+
+#### Debug
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `debug_str`      | `fn(s: String) -> ()`                      | `[]`       |
+| `debug_i64`      | `fn(v: i64) -> ()`                         | `[]`       |
+| `debug_u64`      | `fn(v: u64) -> ()`                         | `[]`       |
+
+**Debug print semantics:** Debug prints are effect-free and callable from pure functions. In debug and sanitize modes (`--mode debug`, `--mode sanitize`), they write to stderr. In release and profile modes, the debug call itself is not emitted — no function call occurs. However, argument expressions are still evaluated (e.g., `String::from("label")` still allocates). They are also no-ops during verification. Use them to trace values inside pure kernel code without restructuring the effect hierarchy.
+
+#### Filesystem
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `fs_read`        | `fn(path: String) -> String`               | `[read]`   |
+| `fs_open`        | `fn(path: String) -> i64`                  | `[read]`   |
+| `fs_read_line`   | `fn(handle: i64) -> String`                | `[read]`   |
+| `fs_status`      | `fn(handle: i64) -> i64`                   | `[read]`   |
+| `fs_close`       | `fn(handle: i64) -> i64`                   | `[read]`   |
+| `fs_write`       | `fn(path: String, data: String) -> i64`    | `[write]`  |
+| `fs_exists`      | `fn(path: String) -> i64`                  | `[read]`   |
+| `fs_mkdir`       | `fn(path: String) -> i64`                  | `[io]`     |
+| `fs_listdir`     | `fn(path: String) -> Vec<String>`          | `[read]`   |
+| `fs_remove`      | `fn(path: String) -> i64`                  | `[io]`     |
+| `fs_remove_dir`  | `fn(path: String) -> i64`                  | `[io]`     |
+| `fs_is_dir`      | `fn(path: String) -> i64`                  | `[read]`   |
+| `fs_rename`      | `fn(old: String, new: String) -> i64`      | `[io]`     |
+
+#### String Operations
+
+| Function              | Signature                                        | Effects |
+|-----------------------|--------------------------------------------------|---------|
+| `string_substr`       | `fn(s: String, start: i64, len: i64) -> String`  | `[]`    |
+| `string_split`        | `fn(s: String, delim: String) -> Vec<String>`    | `[]`    |
+| `string_starts_with`  | `fn(s: String, prefix: String) -> i64`           | `[]`    |
+| `string_ends_with`    | `fn(s: String, suffix: String) -> i64`           | `[]`    |
+| `string_trim`         | `fn(s: String) -> String`                        | `[]`    |
+| `string_to_upper`     | `fn(s: String) -> String`                        | `[]`    |
+| `string_to_lower`     | `fn(s: String) -> String`                        | `[]`    |
+| `string_replace`      | `fn(s: String, from: String, to: String) -> String` | `[]` |
+| `string_join`         | `fn(parts: Vec<String>, sep: String) -> String`  | `[]`    |
+
+#### Conversion
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `parse_i64`      | `fn(s: String) -> i64`                     | `[]`       |
+| `i64_to_string`  | `fn(v: i64) -> String`                     | `[]`       |
+
+#### Collections
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `vec_sort`       | `fn(v: Vec<i64>) -> Vec<i64>`              | `[]`       |
+
+#### Time
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `time_unix`      | `fn() -> i64`                              | `[io]`     |
+| `time_unix_ms`   | `fn() -> i64`                              | `[io]`     |
+
+#### System
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `num_cpus`       | `fn() -> i64`                              | `[io]`     |
+
+`num_cpus()` returns the number of available logical CPUs (from `std::thread::available_parallelism`), or `1` if the query fails. Used to size worker pools (e.g. the default `--verify-jobs` value).
+
+#### Encoding
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `hex_encode`     | `fn(data: Vec<u8>) -> String`              | `[]`       |
+| `hex_decode`     | `fn(s: String) -> Vec<u8>`                 | `[]`       |
+
+#### Input
+
+| Function         | Signature                                  | Effects    |
+|------------------|--------------------------------------------|------------|
+| `args`           | `fn() -> Vec<String>`                      | `[read]`   |
+| `stdin_read`     | `fn() -> String`                           | `[read]`   |
+| `stdin_read_line`| `fn() -> String`                           | `[read]`   |
+| `stdin_ready`    | `fn() -> bool`                             | `[read]`   |
+
+#### Process Management
+
+| Function              | Signature                                        | Effects |
+|-----------------------|--------------------------------------------------|---------|
+| `process_exit`        | `fn(code: i64) -> !`                             | `[io]`  |
+| `process_run`         | `fn(cmd: String, args: Vec<String>) -> i64`      | `[io]`  |
+| `process_get_stdout`  | `fn() -> String`                                 | `[io]`  |
+| `process_get_stderr`  | `fn() -> String`                                 | `[io]`  |
+| `process_start`       | `fn(cmd: String, args: Vec<String>) -> i64`      | `[io]`  |
+| `process_wait`        | `fn(pid: i64) -> i64`                            | `[io]`  |
+| `process_wait_timeout`| `fn(pid: i64, timeout_ms: i64) -> i64`           | `[io]`  |
+| `process_kill`        | `fn(pid: i64) -> i64`                             | `[io]`  |
+| `process_stdout_for`  | `fn(pid: i64) -> String`                         | `[io]`  |
+| `process_stderr_for`  | `fn(pid: i64) -> String`                         | `[io]`  |
+
+**`args` semantics:** `args()` returns all process arguments including the program name at index 0 (matching C `argv` and Rust `std::env::args()` conventions). For `./my_program foo bar`, `args()` returns `["./my_program", "foo", "bar"]`. Use `args[1]` onward for user-supplied arguments. The Vec is empty only if the OS provides no arguments (unusual). Returns an empty String element if an argument is empty (`""`). Non-UTF-8 arguments are included as-is (byte content preserved).
+
+**`fs_read` semantics:** `fs_read(path)` opens the file at `path`, reads its entire contents, and returns a String. Returns `""` (empty String) on any error (file not found, permission denied, I/O error, non-UTF-8 path). Does not block on regular files. Callers should check `result.len() == 0` to detect failure.
+
+**Streaming file input:** `fs_open(path)` opens a file for incremental reading and returns a positive handle, or `-1` on path/open error. `fs_read_line(handle)` reads one line from the current cursor and returns it as a String, including the trailing newline when present. It returns `""` at EOF, for an invalid handle, or after a read error. A blank line is returned as `"\n"`, so newline-delimited callers can distinguish a real blank line from EOF by content. After `fs_read_line(handle)` returns `""`, call `fs_status(handle)` to distinguish EOF from error: `0` means the handle is open with no EOF/error state, `1` means EOF, and `-1` means invalid handle or read error. `fs_status(handle)` reports the result of the most recent `fs_read_line(handle)` call on that open handle; read it immediately after a `""` return because later reads may update it. `fs_close(handle)` releases the handle and returns `0` on success or `-1` for an invalid/already-closed handle. Long-running programs must close handles they no longer need. All streaming handle operations use the `[read]` effect, including `fs_close`, because closing a read handle releases read-stream state and does not mutate filesystem contents. The current runtime stores streaming handles in one process-global table, and `fs_read_line` holds that table lock while it reads the next line. This keeps the API simple for single-stream file processing, but it is not intended for latency-sensitive concurrent reads from multiple slow handles.
+
+**Filesystem return values:** `fs_write`, `fs_mkdir`, `fs_remove`, `fs_remove_dir`, and `fs_rename` return `i64`: 0 on success, non-zero on failure. `fs_open`, `fs_status`, and `fs_close` use the streaming status codes above. `fs_exists` and `fs_is_dir` are predicates: they return 1 for true, 0 for false. Errors (null pointer, invalid UTF-8) also return 0, so callers cannot distinguish "false" from "error".
+
+**`string_starts_with` / `string_ends_with` return values:** Return `i64`: 1 if true, 0 if false.
+
+**`process_run` vs `process_start`:** `process_run(cmd, args)` runs a subprocess synchronously and returns its exit code. After it returns, `process_get_stdout()` and `process_get_stderr()` retrieve the captured output of the most recent `process_run` call. `process_start(cmd, args)` launches a subprocess asynchronously and returns a process ID. Use `process_wait(pid)` to wait for completion and get the exit code, and `process_stdout_for(pid)` / `process_stderr_for(pid)` to retrieve output.
+
+**`process_wait_timeout`:** `process_wait_timeout(pid, timeout_ms)` polls a process started with `process_start` until it exits or the timeout (in milliseconds) elapses. Returns the exit code on completion, `-1` on error, or `-2` on timeout. After a timeout, the process is still running; use `process_kill(pid)` to terminate it.
+
+**`process_kill`:** `process_kill(pid)` sends a kill signal to a running process and waits for it to exit. Returns 0 on success, -1 on error. No-op (returns 0) if the process has already completed.
+
+**`stdin_read` vs `stdin_read_line`:** `stdin_read()` reads the entire stdin stream into a single String (unbounded memory). `stdin_read_line()` reads one line at a time, including the trailing newline. Returns `""` (empty string) at EOF. The returned String is runtime scratch storage valid until the next `stdin_read_line()` call. Process each line before reading the next one for bounded memory; use `pin_to_root(line)` before the next read when a line must be stored, returned, passed to a function that may store it, mutated, or otherwise retained. The direct scratch line is read-only. The scratch buffer keeps the largest line capacity seen so far, so memory is bounded by maximum line length rather than total input, but one very large line can retain that capacity for the process lifetime.
+
+```vow
+let lines: Vec<String> = Vec::new();
+let mut line: String = stdin_read_line();
+while str_len(line) > 0 {
+    // Without pin_to_root, lines.push(line) would store the scratch alias, not a copy.
+    lines.push(pin_to_root(line));
+    line = stdin_read_line();
+}
+```
+
+```vow
+let mut line: String = stdin_read_line();
+while str_len(line) > 0 {
+    // process line (has trailing \n)
+    line = stdin_read_line();
+}
+```
+
+**`stdin_ready`:** `stdin_ready()` returns `true` if `stdin_read_line()` would return immediately without blocking, `false` otherwise. Uses a non-blocking poll with zero timeout. Use this in computation loops that must remain responsive to external input:
+
+```vow
+while !stdin_ready() && depth < max_depth {
+    // continue searching
+    depth = depth + 1;
+}
+if stdin_ready() {
+    let cmd: String = stdin_read_line();
+    // handle command
+}
+```
+
+## Canonical Form
+
+The canonical printer normalizes source: `parse → print → parse` is idempotent. Effects are sorted alphabetically, indentation uses 4 spaces, trailing expressions omit semicolons.
+"#,
+        ),
+        (
+            r#"reference/cli.md"#,
+            r#"# Vow CLI Reference
+
+## Commands
+
+### `vow build` (default)
+
+Compile source to native executable. Verifies contracts by default.
+
+```
+vow build [OPTIONS] <source.vow>
+vow [OPTIONS] <source.vow>          # legacy (equivalent)
+```
+
+**Options:**
+
+| Flag              | Default     | Description                                |
+|-------------------|-------------|--------------------------------------------|
+| `-o, --output`    | `build/<stem>` | Output executable path                  |
+| `--mode <debug\|release\|profile\|sanitize>` | `release` | Build mode: debug inserts runtime vow checks, profile inserts call counters and prints report on normal exit, sanitize adds debug checks + Vec provenance tracking |
+| `--no-verify`     | (off)       | Skip ESBMC static verification            |
+| `--dump-ir`       | (off)       | Print IR text to stdout and exit (no JSON output, no codegen) |
+| `--debug-trace <off\|calls\|full>` | `off` | Emit JSON trace lines to stderr at runtime |
+| `--no-cache`    | (off)       | Disable verification result caching, and (for `--no-verify` builds) the compile-object cache. See "Compile-object cache behavior" below |
+| `--max-k-step <N>` | `50`     | ESBMC incremental BMC max iterations          |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
+| `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
+| `--vec-max <N>` | `128`       | Max Vec capacity for verification model      |
+| `--string-max <N>` | `256`    | Max String capacity for verification model   |
+| `--hashmap-max <N>` | `64`    | Max HashMap capacity for verification model  |
+| `--btreemap-max <N>` | `64`   | Max BTreeMap capacity for verification model |
+| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
+
+**Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever ESBMC verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.
+
+### `vow verify`
+
+Verify contracts only — no executable output. Emits the same JSON format as `vow build` but `executable` is always `null`.
+
+```
+vow verify [OPTIONS] <source.vow>
+```
+
+**Options:**
+
+| Flag              | Default     | Description                                |
+|-------------------|-------------|--------------------------------------------|
+| `--no-cache`      | (off)       | Disable verification result caching        |
+| `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations       |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver; auto selects per-function via heuristic |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode: bv (bit-vector) or ir (integer/real arithmetic); ir requires z3 |
+| `--timeout <N>` | `300` (or `30` when `--encoding` is `auto`) | ESBMC per-function timeout in seconds. Under `--encoding auto`, a 30s default is applied so the BV-timeout fallback to `--encoding ir --solver z3` can trigger when bit-vector solving takes too long. With explicit encodings, a 300s safety watchdog bounds the run; explicit `--timeout` overrides both. `--timeout 0` is honoured as an immediate watchdog kill |
+| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
+| `--string-max <N>`| `256`       | Max String capacity for verification model |
+| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
+| `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|
+| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
+
+### `vow contracts`
+
+List all contracts (requires, ensures, invariant) in a program. Runs frontend only by default (no codegen, no verification).
+
+```
+vow contracts [OPTIONS] <source.vow>
+```
+
+**Options:**
+
+| Flag              | Default     | Description                                |
+|-------------------|-------------|--------------------------------------------|
+| `--verify`        | (off)       | Run ESBMC verification and report per-contract status |
+| `--no-cache`      | (off)       | Disable verification result caching        |
+| `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations       |
+| `--solver <boolector\|z3\|bitwuzla\|auto>` | `auto` | ESBMC SMT solver (with --verify)           |
+| `--encoding <bv\|ir\|auto>` | `auto` | ESBMC encoding mode (with --verify); ir requires z3 |
+| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
+| `--string-max <N>`| `256`       | Max String capacity for verification model |
+| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
+| `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|
+| `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |
+
+### `vow skill`
+
+Generate or install the Claude Code skill document for the current compiler version. The skill is embedded in the compiler binary, ensuring the documentation always matches the installed toolchain.
+
+```
+vow skill              # print skill document to stdout (default: print)
+vow skill print        # print concise Claude Code SKILL.md entrypoint
+vow skill print --bundle  # print self-contained bundle for raw API harnesses
+vow skill install      # prompt for local or global install target
+vow skill install --local   # install to ./.claude/skills/vow-toolchain/
+vow skill install --global  # install to $HOME/.claude/skills/vow-toolchain/ on Linux
+```
+
+`print` writes the concise installed `SKILL.md` entrypoint (with YAML frontmatter) to stdout. `print --bundle` writes a complete self-contained skill document to stdout for non–Claude Code harnesses that cannot load supporting files.
+
+`install` writes `SKILL.md` plus supporting files under `reference/`, `examples/`, and `schemas/`. Claude Code's skill matcher auto-discovers it via the `paths: "**/*.vow"` frontmatter, so the skill loads on demand whenever an agent works with `.vow` files.
+
+When no scope flag is provided, `install` prompts on stderr for local (`./.claude`) or global (`$HOME/.claude`) installation. Scripts and agents should pass `--local` or `--global` explicitly. `--local` requires the current directory to contain both `.git` and `.claude/`; otherwise it exits with an error and writes nothing. `--global` installs under `$HOME/.claude/skills/vow-toolchain/` and fails if `$HOME` is unset or empty.
+
+**Auto-install on build.** The first time `vow build` (or the legacy `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow-toolchain/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.
+
+### `vow test`
+
+Discover, compile, run, and report on Vow test files. Tests are normal `.vow` programs with `main() -> i32` — no test-specific syntax.
+
+```
+vow test [OPTIONS] [<path>]
+```
+
+**Options:**
+
+| Flag              | Default     | Description                                |
+|-------------------|-------------|--------------------------------------------|
+| `<path>`          | `.`         | Directory to scan or single `.vow` file    |
+| `--verify`        | (off)       | Run ESBMC verification on test files       |
+| `--filter <pat>`  | (none)      | Only run tests whose name contains pat     |
+| `--mode debug`    | (default)   | Insert runtime vow checks                 |
+| `--mode release`  | `debug`     | Omit all vow checks for performance       |
+| `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
+| `--max-k-step <N>` | `50`       | ESBMC incremental BMC max iterations (with --verify) |
+| `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
+| `--string-max <N>`| `256`       | Max String capacity for verification model |
+| `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
+| `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|
+| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs (with --verify) |
+
+Test discovery: files matching `test_*.vow` or `*_test.vow` in the given directory, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
+
+**Test Output JSON:**
+
+```json
+{
+  "status": "TestsPassed",
+  "total": 3,
+  "passed": 3,
+  "failed": 0,
+  "skipped": 0,
+  "tests": [
+    {
+      "file": "compiler/test_arith.vow",
+      "name": "test_arith",
+      "status": "passed",
+      "exit_code": 0,
+      "stdout": "7",
+      "stderr": "",
+      "duration_ms": 72,
+      "diagnostics": [],
+      "counterexamples": []
+    }
+  ],
+  "contract_density": {
+    "functions_total": 1,
+    "functions_with_vows": 0,
+    "density_pct": 0.0
+  }
+}
+```
+
+| Status Field   | Meaning                                           |
+|----------------|---------------------------------------------------|
+| `TestsPassed`  | All tests passed                                  |
+| `TestsFailed`  | One or more tests failed                          |
+
+Per-test status: `passed`, `failed`, `timeout`, `compile_error`, `verify_failed`, `skipped`.
+
+### `vow decl`
+
+Emit declaration file output only.
+
+```
+vow decl [OPTIONS] <source.vow>
+```
+
+**Options:**
+
+| Flag              | Default     | Description                                |
+|-------------------|-------------|--------------------------------------------|
+| `-o, --output`    | `<source>.vow.d` | Output declaration file path          |
+
+### `vow mutants` (self-hosted only)
+
+Run mutation testing on a Vow source tree. Implemented in the self-hosted compiler only; the Rust bootstrap compiler emits an error pointing the user to `build/vowc`. See `docs/mutants.md` for full details on output schema, mutation kinds, skip-list, and known limitations.
+
+```
+vowc mutants version
+vowc mutants list  [--root DIR] [--shard X/Y]
+vowc mutants run   [--root DIR] [--shard X/Y]
+                   [--tier1-cmd 'cmd'] [--tier2-cmd 'cmd']
+                   [--tier1-timeout-secs N] [--tier2-timeout-secs N]
+                   [--tier2-budget-secs N]
+                   [--workdir DIR] [--output-dir DIR] [--force-unlock]
+```
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--root` | `compiler` | Directory whose `*.vow` files are mutated. `test_*.vow` files are excluded. |
+| `--shard X/Y` | `0/1` | Round-robin split of the deterministic mutant ID space. Mutant `id` is selected iff `id % Y == X`. |
+| `--tier1-cmd` | `scripts/bootstrap.sh --skip-cargo` | Fast oracle. Anything but exit 0 = caught at Tier 1. |
+| `--tier2-cmd` | `scripts/full_test.sh` | Full oracle. Only run on Tier-1 survivors. |
+| `--tier1-timeout-secs` | `180` | Per-mutant Tier-1 wall-clock cap. |
+| `--tier2-timeout-secs` | `3600` | Per-mutant Tier-2 wall-clock cap. |
+| `--tier2-budget-secs` | `7200` | Per-shard total Tier-2 budget. Once exhausted, surviving Tier-1 mutants are emitted with `status:"unrun"`. |
+| `--workdir` | `/tmp/vow-mutants-<ms>` | Path of the throwaway `git worktree` used for all mutations. |
+| `--output-dir` | `mutants.out` | Directory for `mutants.json`, `outcomes.json`, status text files, `diff/`, `logs/`. |
+| `--force-unlock` | off | Remove a stale `output_dir/.lock` before starting. |
+
+Output schemas: see `docs/spec/schemas/mutants-result.schema.json`.
+
+### `vow --help`
+
+`vow --help` is agent-first. It emits versioned JSON capability data for the tool, command set,
+language surface, result schemas, and implementation status. `--help --human` exists only as a
+legacy compatibility mode and is not the canonical interface.
+
+```
+vow --help               # versioned JSON tool-help protocol
+vow --help --human       # legacy compatibility text
+vow build --help         # same JSON (works on all subcommands)
+vow verify --help --human  # same legacy text (works on all subcommands)
+```
+
+## Exit Codes
+
+| Code | Meaning                              |
+|------|--------------------------------------|
+| `0`  | Success (Verified or Unverified)     |
+| `1`  | Failure (CompileFailed or VerifyFailed) |
+
+## Build Output JSON
+
+`vow build` and `vow verify` emit a single JSON object to stdout. Schema: [`schemas/build-result.schema.json`](schemas/build-result.schema.json).
+
+**Note:** `--dump-ir` suppresses JSON output — only IR text is printed.
+
+### Status Values
+
+| Status          | Meaning                                     |
+|-----------------|---------------------------------------------|
+| `Verified`      | Compiled + all contracts proved by ESBMC. Functions whose bodies the verifier cannot model (`RegionAlloc`, `FieldSet`, `Linear*`, `Load`/`Store`, `RemF*`, effectful) are reported as a `VerificationSkipped` *Warning* in `diagnostics[]` and the build still succeeds — their contracts are documentary, runtime-checked under `--mode debug`. |
+| `Unverified`    | Compiled with `--no-verify` (ESBMC skipped)  |
+| `CompileFailed` | Parse error, type error, module load error, or link failure |
+| `VerifyFailed`  | ESBMC found a counterexample, timed out, errored, or was not found |
+
+### Verified Example
+
+```json
+{
+  "status": "Verified",
+  "executable": "examples/divide",
+  "diagnostics": [],
+  "counterexamples": []
+}
+```
+
+### CompileFailed Example
+
+```json
+{
+  "status": "CompileFailed",
+  "executable": null,
+  "diagnostics": [
+    {
+      "error_code": "TypeMismatch",
+      "message": "function body has type `bool` but declared return type is `i32`",
+      "severity": "error",
+      "span": {
+        "file": "bad.vow",
+        "offset": 25,
+        "length": 8
+      }
+    }
+  ],
+  "message": "type error",
+  "counterexamples": []
+}
+```
+
+### VerifyFailed Example
+
+```json
+{
+  "status": "VerifyFailed",
+  "executable": "examples/cegis_broken",
+  "diagnostics": [],
+  "function": "safe_sub",
+  "counterexample": "[Counterexample]",
+  "counterexamples": [
+    {
+      "function": "safe_sub",
+      "inputs": { "a": "-9223372036854775808", "b": "0" },
+      "violation": "ensures result >= 0",
+      "vow_id": 1,
+      "source": {
+        "file": "examples/cegis_broken.vow",
+        "offset": 76,
+        "length": 20
+      }
+    }
+  ]
+}
+```
+
+### Fields Reference
+
+| Field              | Type                | When Present      | Description                               |
+|--------------------|---------------------|-------------------|-------------------------------------------|
+| `status`           | string              | Always            | One of the four status values             |
+| `executable`       | string \| null      | Always            | Path to binary, null on compile failure or library module (no main) |
+| `diagnostics`      | array               | Always            | Compiler diagnostics (see schema)         |
+| `message`          | string              | CompileFailed     | Error category ("parse error", "type error", "module load error", or link error detail) |
+| `function`         | string              | VerifyFailed      | Function where verification failed        |
+| `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
+| `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
+| `verify_status`    | string              | On backend failure | `"timeout"`, `"error"`, or `"tool_not_found"` |
+| `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
+
+## Contracts Output JSON
+
+`vow contracts` emits a single JSON object to stdout. Schema: [`schemas/contracts-result.schema.json`](schemas/contracts-result.schema.json).
+
+### Example (without --verify)
+
+```json
+{
+  "contracts": [
+    {
+      "vow_id": 0,
+      "function": "divide",
+      "kind": "requires",
+      "description": "requires y != 0",
+      "blame": "Caller",
+      "source": { "file": "divide.vow", "offset": 42 },
+      "status": "not_verified"
+    }
+  ],
+  "summary": { "total": 1, "proven": 0, "failed": 0, "timeout": 0, "error": 0, "not_verified": 1, "skipped": 0 }
+}
+```
+
+### Example (with --verify)
+
+```json
+{
+  "contracts": [
+    {
+      "vow_id": 0,
+      "function": "divide",
+      "kind": "requires",
+      "description": "requires y != 0",
+      "blame": "Caller",
+      "source": { "file": "divide.vow", "offset": 42 },
+      "status": "proven"
+    }
+  ],
+  "summary": { "total": 1, "proven": 1, "failed": 0, "timeout": 0, "error": 0, "not_verified": 0, "skipped": 0 }
+}
+```
+
+### Contract Fields
+
+| Field         | Type    | Description                                              |
+|---------------|---------|----------------------------------------------------------|
+| `vow_id`      | integer | Unique contract identifier within the program            |
+| `function`    | string  | Function containing this contract                        |
+| `kind`        | string  | `"requires"`, `"ensures"`, or `"invariant"`              |
+| `description` | string  | Full contract text                                       |
+| `blame`       | string  | `"Caller"` (requires) or `"Callee"` (ensures/invariant)  |
+| `source`      | object  | `{ "file": string, "offset": integer }`                  |
+| `status`      | string  | `"proven"`, `"proven-ir"`, `"failed"`, `"unknown"`, `"timeout"`, `"error"`, `"not_verified"`, or `"skipped"` |
+
+### Status Values
+
+| Status          | Meaning                                              |
+|-----------------|------------------------------------------------------|
+| `not_verified`  | Verification not requested (no `--verify` flag)      |
+| `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |
+| `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
+| `failed`        | ESBMC found a counterexample violating this contract |
+| `unknown`       | Another contract in the same function failed; this one was not individually checked |
+| `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
+| `error`         | ESBMC error or tool not found                        |
+| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]`. |
+
+## Trace Output (stderr, --debug-trace)
+
+When `--debug-trace=calls` or `--debug-trace=full` is used, the compiled binary emits JSON lines to stderr:
+
+### calls mode
+```json
+{"event":"enter","fn":"main"}
+{"event":"enter","fn":"divide"}
+{"event":"exit","fn":"divide"}
+{"event":"exit","fn":"main"}
+```
+
+### full mode (adds vow check results)
+```json
+{"event":"enter","fn":"divide"}
+{"event":"vow","fn":"divide","vow_id":0,"passed":true}
+{"event":"exit","fn":"divide"}
+```
+
+## Profile Output (stderr, profile mode)
+
+When `--mode profile` is used, the compiled binary prints a call-count report to stderr on normal exit (via `atexit`). The report is not printed if the program is killed by a signal or calls `abort()`.
+
+```
+--- vow profile report ---
+function                                        calls       %
+-------------------------------------------------------------
+infer                                         4812399   48.2%
+is_def_eq_core                                3201882   32.1%
+whnf                                           984201    9.9%
+main                                                1    0.0%
+-------------------------------------------------------------
+total calls: 9998483, unique functions: 12
+```
+
+The report lists the top 20 most-called functions sorted by call count. No vow checks are emitted in profile mode.
+
+## Runtime Error JSON (stderr, debug/sanitize mode)
+
+When a compiled program runs in debug mode (`--mode debug`) or sanitize mode (`--mode sanitize`) and violates a vow at runtime, it emits JSON to stderr before aborting.
+
+### VowViolation
+
+```json
+{"error":"VowViolation","vow_id":0,"blame":"Caller","description":"y != 0","file":"divide.vow","offset":42,"values":{"y":0}}
+```
+
+Schema: [`schemas/vow-violation.schema.json`](schemas/vow-violation.schema.json).
+
+### ArithmeticOverflow
+
+```json
+{"error":"ArithmeticOverflow"}
+```
+
+Emitted when a checked arithmetic operator (`+!`, `-!`, etc.) overflows at runtime.
+
+### UnwrapOnNone
+
+```json
+{"error":"UnwrapOnNone"}
+```
+
+Emitted when `.unwrap()` is called on `Option::None`.
+
+### IndexOutOfBounds
+
+```json
+{"error":"IndexOutOfBounds"}
+```
+
+Emitted when a `Vec` index is out of bounds.
+
+### UseAfterFree (sanitize mode only)
+
+```json
+{"error":"UseAfterFree","op":"push","vec":"0x55a1b2c3d4e0"}
+```
+
+Emitted when a Vec operation is attempted on a Vec that has already been freed.
+
+### DoubleFree (sanitize mode only)
+
+```json
+{"error":"DoubleFree","vec":"0x55a1b2c3d4e0"}
+```
+
+Emitted when a Vec is freed twice.
+
+### StaleIndex (sanitize mode only)
+
+```json
+{"error":"StaleIndex","index":5,"expected_gen":3,"actual_gen":7,"vec":"0x55a1b2c3d4e0"}
+```
+
+Emitted when `__vow_sanitize_check_generation` detects that a Vec slot's generation counter does not match the expected value, indicating the slot was overwritten since the index was recorded.
+
+## Agent Decision Tree
+
+```
+Parse JSON from stdout
+├── status == "Verified"       → Success. Binary at `executable`.
+├── status == "Unverified"     → Compiled but unverified. ESBMC missing or --no-verify.
+├── status == "CompileFailed"  → Read `diagnostics[]` for error details.
+│   ├── error_code is parse error  → Fix syntax (see grammar.md)
+│   └── error_code is type error   → Fix types (see errors.md)
+└── status == "VerifyFailed"   → Read `counterexamples[]`.
+    ├── Check `inputs` for the violating values
+    ├── Check `violation` for which contract failed
+    ├── Check `source` for the location
+    └── Fix the contract or the implementation, then rebuild
+```
+
+Always check stderr for human-readable diagnostics alongside the JSON on stdout.
+"#,
+        ),
+        (
+            r#"reference/contracts.md"#,
+            r#"# Contract Authoring and Verification
+
+Vow uses ESBMC (bounded model checker) for static contract verification. This document covers contract patterns, verification behavior, and common pitfalls.
+
+## Verification Pipeline
+
+Codegen (Cranelift) and verification run in parallel:
+
+```
+Vow Source → Parse → Type Check → IR Lower ─┬─→ Cranelift → executable
+                                              └─→ C Emit → ESBMC → proof / counterexample
+```
+
+Contract clauses become IR opcodes. The C emitter translates `requires` to `__ESBMC_assume()` (the verifier assumes preconditions hold) and `ensures`/`invariant` to `__ESBMC_assert()` (the verifier checks postconditions).
+
+### ESBMC Configuration
+
+- Verification strategy: **k-induction-parallel** (incremental BMC + k-induction proof)
+- Incremental BMC with `--max-k-step` (default: **50**) — loops are verified incrementally up to N iterations
+- Architecture: 64-bit
+- Array bounds / pointer checks disabled (Vow handles these in its own model)
+
+### Collection Models for Verification
+
+ESBMC uses bounded models for collection types. Defaults are shown below; override with `--vec-max`, `--string-max`, `--hashmap-max`:
+
+| Type              | Default Max Capacity | CLI Flag | Supported Operations |
+|-------------------|---------------------|----------|----------------------------------------------|
+| `Vec<T>`          | 128                 | `--vec-max <N>` | `new`, `push`, `pop`, `len`, `get`, `set`    |
+| `String`          | 256                 | `--string-max <N>` | `from`, `len`, `push_byte`, `push_str`, `byte_at` |
+| `HashMap<K, V>`   | 64                  | `--hashmap-max <N>` | `new`, `insert`, `get`, `contains_key`, `len`|
+
+These support the same operations as the runtime but with bounded storage. `String::from` produces a nondeterministic length (0 to max-1) in verification.
+
+## Blame Model
+
+| Clause      | Blame  | Who is at fault                                    |
+|-------------|--------|----------------------------------------------------|
+| `requires`  | Caller | The caller passed invalid arguments                |
+| `ensures`   | Callee | The function body doesn't satisfy the postcondition|
+| `invariant` | Callee | The loop body breaks the invariant                 |
+
+## Integer Contracts
+
+### Non-zero Guard
+
+```vow
+fn divide(x: i64, y: i64) -> i64 vow {
+    requires: y != 0
+} {
+    x / y
+}
+```
+
+### Range Bounds
+
+Use range bounds only when they reflect genuine semantic constraints (e.g., overflow prevention), not to appease the verifier:
+
+```vow
+fn safe_add(a: i64, b: i64) -> i64 vow {
+    requires: a >= 0,
+    requires: b >= 0,
+    requires: a <= 4611686018427387903,
+    requires: b <= 4611686018427387903,
+    ensures: result >= a,
+    ensures: result >= b
+} {
+    a + b
+}
+```
+
+The bounds here prevent `a + b` from overflowing `i64` — a legitimate semantic concern, not a verifier limitation.
+
+### Equality Postcondition
+
+```vow
+fn twice(x: i64) -> i64 vow {
+    ensures: result == x + x
+} {
+    x + x
+}
+```
+
+### Negation
+
+```vow
+fn negate(x: i64) -> i64 vow {
+    ensures: result + x == 0
+} {
+    0 - x
+}
+```
+
+**Warning:** Fails for `x = -9223372036854775808` (i64 min) due to wrapping overflow. Add `requires: x > -9223372036854775808` if needed.
+
+## Vec Contracts
+
+### Bounds Check
+
+```vow
+fn get_element(v: Vec<i64>, i: i64) -> i64 vow {
+    requires: i >= 0,
+    requires: i < v.len()
+} {
+    v[i]
+}
+```
+
+### Fill Pattern with Loop Invariant
+
+See the worked CEGIS example in [examples.md](examples.md#3-vec-fill--loop-invariant).
+
+## String Contracts
+
+### Non-empty String
+
+```vow
+fn make_greeting() -> String vow {
+    ensures: result.len() > 0
+} {
+    let s: String = String::from("");
+    s.push_byte(72);
+    s
+}
+```
+
+## HashMap Contracts
+
+### Contains Key After Insert
+
+```vow
+fn insert_and_check() -> HashMap<i64, i64> vow {
+    ensures: result.contains_key(42)
+} {
+    let m: HashMap<i64, i64> = HashMap::new();
+    m.insert(42, 100);
+    m
+}
+```
+
+## Loop Invariants
+
+### Counter Bounds
+
+The most common loop invariant pattern bounds the loop counter:
+
+```vow
+while i < n vow {
+    invariant: i >= 0,
+    invariant: i <= n
+} {
+    i = i + 1;
+}
+```
+
+### Search Range
+
+```vow
+fn bisect(lo: i64, hi: i64) -> i64 vow {
+    requires: hi >= lo
+} {
+    let mut lo: i64 = lo;
+    let mut hi: i64 = hi;
+    while lo + 1 < hi vow {
+        invariant: hi - lo >= 0
+    } {
+        let mid: i64 = lo + (hi - lo) / 2;
+        lo = mid;
+    }
+    lo
+}
+```
+
+## Where Clause Patterns
+
+Where clauses on parameters become refinement types (additional `requires` for verification):
+
+```vow
+fn bounded_add(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {
+    requires: a <= 4611686018427387903,
+    requires: b <= 4611686018427387903,
+    ensures: result >= a,
+    ensures: result >= b
+} {
+    a + b
+}
+```
+
+Each `where` clause can only reference its own parameter.
+
+## Anti-Patterns
+
+### Over-Specifying
+
+```vow
+fn add(x: i64, y: i64) -> i64 vow {
+    ensures: result == x + y
+} {
+    x + y
+}
+```
+
+Fails when `x + y` overflows. The contract mirrors the implementation exactly — it verifies nothing useful and breaks on edge cases.
+
+**Fix:** Add bounds (`requires: x >= 0, ...`) or verify a weaker property.
+
+### Wrapping Arithmetic Overflow
+
+Default arithmetic (`+`, `-`, `*`) wraps on overflow. Contracts that assume no overflow will be violated:
+
+```vow
+fn double(x: i64) -> i64 vow {
+    ensures: result > x
+} {
+    x + x
+}
+```
+
+ESBMC finds: `x = 4611686018427387904` → `result = -9223372036854775808` (wraps negative).
+
+**Fix:** Bound the input or use checked arithmetic (`+!`).
+
+### Non-Inductive Loop Invariant
+
+An invariant must hold at the **start** of every iteration, not just at the end:
+
+```vow
+while i < n vow {
+    invariant: v.len() == n
+} { ... }
+```
+
+This is not inductive — `v.len() == n` is only true after the loop.
+
+**Fix:** Use `invariant: i >= 0, invariant: i <= n`.
+
+### Unbound Loop Iterations
+
+Without a bound on loop iterations, ESBMC may timeout (default max-k-step is 50):
+
+```vow
+fn fill(n: i64) -> Vec<i64> vow {
+    requires: n >= 0,
+    ensures: result.len() == n
+} { ... }
+```
+
+ESBMC will only verify this for small `n` values. **Do not** add `requires: n <= 8` to the contract — that would distort the semantic specification. The contract is correct as-is; ESBMC's bounded verification provides partial assurance.
+
+### Verification-Driven Bounds (Anti-Pattern)
+
+**Never** add artificial bounds to contracts solely to help ESBMC verify them:
+
+```vow
+// WRONG: bounds exist only to appease the verifier
+fn gcd(a: i64, b: i64) -> i64 vow {
+    requires: a >= 0,
+    requires: b >= 0,
+    requires: a + b > 0,
+    requires: a <= 15,   // <-- verifier artifact, not semantic
+    requires: b <= 15,   // <-- verifier artifact, not semantic
+    ensures: result > 0
+} { ... }
+```
+
+```vow
+// CORRECT: only genuine semantic constraints
+fn gcd(a: i64, b: i64) -> i64 vow {
+    requires: a >= 0,
+    requires: b >= 0,
+    requires: a + b > 0,
+    ensures: result > 0
+} { ... }
+```
+
+Contracts express what is mathematically required for correctness. ESBMC verifies within its capabilities (bounded loops, bounded arithmetic) — if it cannot fully prove a correct contract, that is acceptable. Partial verification is better than a distorted specification.
+
+## Interpreting Counterexamples
+
+A counterexample in the JSON output:
+
+```json
+{
+  "function": "safe_sub",
+  "inputs": { "a": "-9223372036854775808", "b": "0" },
+  "violation": "ensures result >= 0",
+  "vow_id": 1,
+  "source": { "file": "cegis_broken.vow", "offset": 76, "length": 20 }
+}
+```
+
+| Field       | Meaning                                                |
+|-------------|--------------------------------------------------------|
+| `function`  | Which function failed                                  |
+| `inputs`    | Parameter values that trigger the violation            |
+| `violation` | Which contract clause was violated                     |
+| `vow_id`    | Internal ID linking to the specific vow clause         |
+| `source`    | Byte offset in the source file of the violated clause  |
+
+Variable names prefixed with `_esbmc_` are ESBMC internal variables; named inputs map directly to function parameters.
+
+## Unsigned Integer Contracts
+
+The `u64` type works naturally in contracts. Use `as u64` to cast literal values in contract expressions:
+
+```vow
+fn safe_add(a: u64, b: u64) -> u64
+vow {
+    requires: a <= 1000 as u64
+    requires: b <= 1000 as u64
+    ensures: result >= a
+    ensures: result >= b
+}
+{
+    a + b
+}
+```
+
+ESBMC verifies `u64` contracts using `uint64_t` and unsigned nondet values.
+
+## Extern Block Contracts
+
+Every `extern "C"` block **must** include a `vow { ... }` contract specifying the expected behavior of foreign functions. Omitting the contract is a `MissingContract` error.
+
+```vow
+extern "C" vow {
+    requires: fd >= 0
+    ensures: return >= 0
+}
+{
+    fn write(fd: i32, ptr: i64, len: i64) -> i64 [io]
+}
+```
+
+The contract applies to all functions declared in the block. ESBMC uses `requires` as assumptions and `ensures` as assertions when verifying callers of extern functions.
+"#,
+        ),
+        (
+            r#"reference/errors.md"#,
+            r#"# Vow Error Catalog
+
+Every Vow error has a machine-readable `error_code` in the JSON output. This document lists all error codes, their phase, meaning, an example trigger, and how to fix them.
+
+## Compile-Time Errors
+
+These appear in the `diagnostics` array of the build output JSON.
+
+### UnterminatedString
+
+**Phase:** Lexer
+**Meaning:** A string literal was opened with `"` but never closed.
+
+```vow
+fn f() -> () [io] {
+    print_str("hello);
+}
+```
+
+**Fix:** Close the string with a matching `"`.
+
+### InvalidCharacter
+
+**Phase:** Lexer
+**Meaning:** The source contains a character the lexer does not recognize.
+
+```vow
+fn f() -> i64 {
+    x @ y
+}
+```
+
+**Fix:** Remove the invalid character. Vow has no `@` operator.
+
+### UnexpectedToken
+
+**Phase:** Parser
+**Meaning:** The parser encountered a token it did not expect at that position.
+
+```vow
+module M 123
+```
+
+**Fix:** Check the syntax around the reported span. Common causes: missing `{`, `}`, `(`, `)`, or a keyword in the wrong position.
+
+### MissingDelimiter
+
+**Phase:** Parser
+**Meaning:** A matching delimiter (`}`, `)`, `]`) is missing.
+
+```vow
+fn f() -> i64 {
+    42
+```
+
+**Fix:** Add the missing closing delimiter.
+
+### TypeMismatch
+
+**Phase:** Type Checker
+**Meaning:** An expression has a different type than expected.
+
+```vow
+fn f() -> i32 {
+    true
+}
+```
+
+**Output:** `function body has type 'bool' but declared return type is 'i32'`
+
+**Fix:** Change the expression or the declared type to match.
+
+### EffectViolation
+
+**Phase:** Type Checker
+**Meaning:** A function calls another function with effects not declared in its own signature.
+
+```vow
+fn f() -> () {
+    print_str("hi");
+}
+```
+
+**Fix:** Add the required effect to the function signature: `fn f() -> () [io]`.
+
+### LinearTypeViolation
+
+**Phase:** Type Checker
+**Meaning:** A value of a `linear struct` type is used in a way that is immediately invalid before region inference runs, such as consuming it twice, consuming it inside a loop that may execute more than once, or consuming it after only some control-flow paths already consumed it.
+
+```vow
+linear struct Handle { fd: i64 }
+
+fn f(h: Handle) -> Handle {
+    let h2: Handle = h;
+    let h3: Handle = h;  // h was already consumed
+    h2
+}
+```
+
+**Fix:** Restructure ownership so each path uses a consumed linear value at most once. Obligations that are simply left live at scope exit are reported later as `RegionLinear`.
+
+### RegionLinear
+
+**Phase:** Region Inference
+**Meaning:** A `linear struct` value can remain live when its owning region closes. Returning the value transfers the linear obligation to the caller; consuming it before the close satisfies the obligation.
+
+```vow
+linear struct Handle { fd: i64 }
+
+fn f() -> i64 {
+    let h: Handle = Handle { fd: 1 };
+    0
+}
+```
+
+**Fix:** Consume the value before the region closes, or return it so the caller receives the obligation.
+
+### NonExhaustiveMatch
+
+**Phase:** Type Checker
+**Meaning:** A `match` expression does not cover all possible variants.
+
+```vow
+fn f(o: Option<i64>) -> i64 {
+    match o {
+        Option::Some(x) => x,
+    }
+}
+```
+
+**Fix:** Add a `_ => ...` wildcard arm or cover all variants (`Option::None => ...`).
+
+### UnknownMethod
+
+**Phase:** Type Checker
+**Meaning:** A method call uses a name that does not exist on the receiver type.
+
+```vow
+fn f() -> () {
+    let v: Vec<i64> = Vec::new();
+    v.psh(42);
+}
+```
+
+**Output:** `unknown method 'psh' on type 'Vec<i64>'`
+
+**Fix:** Check the method name for typos. Use `--help` to see available methods for each type.
+
+### UnsupportedFeature
+
+**Phase:** Type Checker
+**Meaning:** A language feature that is not supported in Vow was used.
+
+```vow
+trait Foo {
+    fn bar() -> i64;
+}
+```
+
+**Output:** `trait blocks are not supported in Vow`
+
+**Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
+
+### BTreeMapKeyTypeMustBeI64
+
+**Phase:** Type Checker
+**Meaning:** A `BTreeMap<K, V>` was instantiated with `K` not equal to `i64`. Phase 1 of the BTreeMap stdlib only supports `i64` keys; the runtime helpers and ESBMC C model are hard-coded to i64.
+
+```vow
+fn f() -> () {
+    let m: BTreeMap<bool, i64> = BTreeMap::new();
+    m.insert(true, 1);
+}
+```
+
+**Output:** `BTreeMap key type must be i64; found 'bool'`
+
+**Fix:** Use `BTreeMap<i64, V>`. If you need string or struct keys, hash or intern them to `i64` at the call site and keep a side-table for the originals.
+
+### BTreeMapValueTypeMustBeI64
+
+**Phase:** Type Checker
+**Meaning:** A `BTreeMap<K, V>` was instantiated with `V` not equal to `i64`. Phase 1 only supports `i64` values; the runtime helpers and ESBMC C model are hard-coded to i64 values. Widening V to struct payloads is a planned follow-up to the BTreeMap stdlib work.
+
+```vow
+fn f() -> () {
+    let n: BTreeMap<i64, String> = BTreeMap::new();
+}
+```
+
+**Output:** `BTreeMap value type must be i64 in Phase 1; found 'String'`
+
+**Fix:** Use `BTreeMap<i64, i64>`. For richer values, store an integer index/handle and keep the actual values in a separate `Vec<V>`.
+
+### MissingContract
+
+**Phase:** Type Checker
+**Meaning:** An `extern "C"` block was declared without a `vow { ... }` contract. Every foreign function call requires a mandatory contract specifying expected behavior.
+
+```vow
+extern "C" {
+    fn write(fd: i32, ptr: i64, len: i64) -> i64 [io];
+}
+```
+
+**Output:** `extern block requires a vow contract`
+
+**Fix:** Add a `vow { ... }` block to the extern declaration with `requires` and/or `ensures` clauses.
+
+### ContractTypeMismatch
+
+**Phase:** Type Checker
+**Meaning:** A `requires`, `ensures`, or `invariant` clause expression does not have type `bool`.
+
+```vow
+fn add(a: i64, b: i64) -> i64 vow {
+    requires: a + b
+} {
+    a + b
+}
+```
+
+**Output:** `` `requires` clause has type `i64` but must be `bool` ``
+
+**Fix:** Ensure every contract clause is a boolean expression (comparison, logical operator, or a call to a predicate function returning `bool`).
+
+### VowRequiresViolated
+
+**Phase:** Verification (ESBMC)
+**Meaning:** ESBMC found inputs that violate a `requires` precondition. This is a **static** verification error — it means the function's callers can reach it with invalid arguments.
+
+**Fix:** Strengthen the `requires` clause, or fix the callers to pass valid arguments.
+
+### VowEnsuresViolated
+
+**Phase:** Verification (ESBMC)
+**Meaning:** ESBMC found inputs where the function's return value does not satisfy the `ensures` postcondition.
+
+**Fix:** Fix the function body to satisfy the postcondition, or weaken the `ensures` clause.
+
+### VowInvariantViolated
+
+**Phase:** Verification (ESBMC)
+**Meaning:** ESBMC found a loop iteration where the `invariant` does not hold.
+
+**Fix:** Strengthen the invariant or fix the loop body.
+
+### EsbmcNotFound
+
+**Phase:** Verification
+**Meaning:** ESBMC is not installed or not on `$PATH`. When verification is enabled (the default for `vowc build`, always for `vowc verify`), the compiler checks for ESBMC upfront before compilation. If ESBMC is not found, the build aborts immediately with exit code 1.
+
+**Fix:** Install ESBMC, or use `--no-verify` to skip verification: `vowc build --no-verify <file>`.
+
+### RegionConflict
+
+**Phase:** Region Inference (arena-per-scope, Phase 3)
+**Meaning:** A heap-typed value's required lifetime cannot be satisfied by the regions the surrounding code provides. This fires when an interprocedural store-effect constraint is unsatisfiable against the **inferred** region — that is, the value's `region(I) = LUB(must_outlive(I))` resolves to a concrete block strictly narrower than the target container's region.
+
+> **Coverage note (as of issue #314):** the check is now semantic, consulting
+> the inferred region populated by §4.1 step 3's LUB pass rather than the
+> raw IR opcode. A fresh allocation routed through a callee's store-effect
+> chain into a parameter container has its inferred region widened to
+> `Caller(HiddenRegionIdx(N))` by §4.1 step 2's must-outlive marker
+> propagation, where `N` is the precise slot index implied by the
+> destination (issue #317 slot-aware inference). Such routings satisfy
+> the constraint and are accepted; only allocations whose inferred region
+> is a strictly narrower block fire `RegionConflict`.
+
+```vow
+fn store_into(out: Vec<String>, prefix: String) [io] {
+    let s: String = String::from(prefix);
+    s.push_str(String::from(" world"));
+    out.push(s);  // s is allocated in this function's scope but escapes into out's region
+}
+```
+
+**Fix:** Move the allocation to a wider scope, or copy the value into the target region (e.g., `String::from(s)` into the outer arena). For routings that compile cleanly but you'd like to know about (root-region placement), see `RegionRootEscape` below. See `docs/design/arena_memory.md` §4.4 for the full rejection vs. visibility distinction.
+
+### RegionRootEscape
+
+**Phase:** Region Inference (arena-per-scope, Phase 3)
+**Severity:** Note (informational — does not fail the build)
+**Meaning:** A heap allocation's inferred region is `Caller`, and the surrounding function publishes a `FreshInCaller` return summary or store effect — so the allocation may flow up the caller chain to `main` and ultimately land in the root region (`__vow_root_arena`, never freed). This is a memory-cost decision the compiler surfaces visibly per `docs/design/arena_memory.md` §4.4: silent root-region placement caused growth-with-no-signal in earlier compiler versions, and the note restores that signal without conflating it with unsoundness (`RegionConflict`).
+
+The note is conservative — it fires for any `Caller`-region allocation in a function that could route to a caller, even if the actual concrete chain in this program doesn't reach `main`. False positives are tolerated because the diagnostic is non-blocking.
+
+```json
+{
+  "error_code": "RegionRootEscape",
+  "severity": "note",
+  "message": "allocation may live in the root region: routed via store-effect chain to a caller whose target_region ultimately resolves to root",
+  "hints": [
+    "if intentional (e.g. program-lifetime data), no action needed; if you want this allocation freed earlier, restructure so the value is returned rather than stored into a parameter container"
+  ]
+}
+```
+
+**Fix:** Often none — if the program is short-lived (a checker, a CLI tool) or the values are genuinely program-lifetime, the note is informational. To free the allocation earlier, restructure so the value is **returned** from the constructing function rather than stored into a parameter container; the canonical `FreshInCaller` return path (`fn make_X() -> X`) does not trigger the note for the returned value or any allocation installed as a field of the returned struct (e.g. `Item { name: String::from("hi") }`). The exemption applies only to the *currently-installed* field initializers — a field overwritten before the return (`x.f = A; x.f = B; return x`) does not suppress the dead allocation `A`, which fires the note as expected (per-block last-write dedup, issue #326).
+
+### VerificationSkipped
+
+**Phase:** Verification (Warning, not Error — does not fail the build)
+**Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and the `Linear*` family. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
+
+```json
+{
+  "error_code": "VerificationSkipped",
+  "severity": "warning",
+  "message": "skipped verification of `ir_inst_set_region`: function `ir_inst_set_region` is not modelable in the verifier (contains unsupported opcode `RegionAlloc`)",
+  "hints": [
+    "the contract is documentary; runtime checks still apply in --mode debug"
+  ]
+}
+```
+
+**Why this isn't a failure.** Per `CLAUDE.md`'s "Contract Authoring" guidance, contracts express semantic correctness and must not be weakened to fit the verifier. When the verifier's bounded model checker cannot represent a function's body, the right response is to skip with a structured warning, not to fail closed inline (which historically tripped a defense-in-depth `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")` and broke the bootstrap on every vowed struct-builder).
+
+**Fix:** None required for the build to pass. If you want static verification of the contract, refactor the function so its body uses only modelable opcodes — typically by splitting allocation/initialisation away from the contract-bearing computation.
+
+## Runtime Errors
+
+These are emitted to stderr as JSON when a compiled program runs (debug mode for VowViolation).
+
+### VowViolation
+
+**When:** Debug mode only (`--mode debug`). A `requires`, `ensures`, or `invariant` predicate evaluates to false at runtime.
+
+```json
+{"error":"VowViolation","vow_id":0,"blame":"Caller","description":"y != 0","file":"divide.vow","offset":42,"values":{"y":0}}
+```
+
+The `blame` field indicates who is at fault:
+- `Caller` — a `requires` was violated (the caller passed bad arguments)
+- `Callee` — an `ensures` or `invariant` was violated (the function has a bug)
+
+**Fix:** See the `description` and `values` fields to understand which predicate failed and with what runtime values.
+
+### ArithmeticOverflow
+
+**When:** A checked arithmetic operator (`+!`, `-!`, `*!`, `/!`, `%!`) overflows at runtime.
+
+```json
+{"error":"ArithmeticOverflow"}
+```
+
+**Fix:** Use wrapping arithmetic (`+`, `-`, etc.) if overflow is acceptable, or add bounds contracts to prevent overflow.
+
+### UnwrapOnNone
+
+**When:** `.unwrap()` is called on `Option::None`.
+
+```json
+{"error":"UnwrapOnNone"}
+```
+
+**Fix:** Use `match` to handle `None`, or add contracts that guarantee the value is `Some`.
+
+### IndexOutOfBounds
+
+**When:** A `Vec` index access (`v[i]` or `v[i] = val`) uses an index outside `0..v.len()`.
+
+```json
+{"error":"IndexOutOfBounds"}
+```
+
+**Fix:** Add a bounds check before indexing, or add contracts: `requires: i >= 0, requires: i < v.len()`.
+
+### RegionLiteralMutation
+
+**When:** A `Vec`, `String`, or `HashMap` mutation is attempted on a literal-backed container — one whose descriptor carries the `VOW_CAP_RODATA` sentinel (backing lives in `.rodata` or was pinned to the root region). See `docs/design/arena_memory.md` §6.1, §7.3.
+
+```json
+{"error":"RegionLiteralMutation","operation":"String::push_str","origin":"rodata"}
+```
+
+A plain-text hint follows on the next line (not a JSON field). The hint text is dispatched on the operation's type prefix:
+
+```
+hint: use String::from(literal) to obtain a mutable copy       # for String::* operations
+hint: use Vec::from(literal) to obtain a mutable copy          # for Vec::*    operations
+hint: construct a mutable HashMap and copy entries before mutating  # for HashMap::* operations
+```
+
+The `operation` field identifies the source-level method that trapped (e.g., `Vec::push`, `Vec::pop`, `HashMap::insert`, `String::clear`). The `origin` field identifies the storage class of the immutable backing; today only `rodata` is emitted.
+
+**Fix:** Obtain an explicit mutable copy before mutation: `String::from(literal)`, `Vec::from(literal)`, etc.
+
+### StackOverflow
+
+**When:** The native call stack is exhausted, typically due to unbounded recursion.
+
+```json
+{"error":"StackOverflow"}
+```
+
+In debug or sanitize mode, the diagnostic includes call depth and the function that was executing when the overflow occurred:
+
+```json
+{"error":"StackOverflow","depth":10693,"function":"recurse"}
+```
+
+The signal handler is installed in **all** build modes. The `depth` and `function` fields are only available in debug/sanitize mode where call-depth instrumentation is emitted.
+
+**Fix:** Add a base case to recursive functions, or restructure the algorithm to use iteration instead of recursion.
+
+### OutOfMemory
+
+**When:** A runtime arena operation (`__vow_arena_open` or `__vow_arena_alloc`) failed because the underlying `malloc` returned null. Non-recoverable from within Vow (`docs/design/arena_memory.md` §3.3, §16).
+
+```json
+{"error":"OutOfMemory","operation":"arena_alloc"}
+```
+
+The `operation` field is `arena_open` for the initial chunk allocation or `arena_alloc` for a later fallback chunk allocation.
+
+**Fix:** Reduce working-set size, raise the process memory limit, or run on a machine with more memory. This is not a Vow program error.
+
+## Warnings
+
+### LoweringWarning
+
+**Phase:** IR Lowering
+**Meaning:** The IR lowerer could not resolve a struct type tag or field name, defaulting to index 0. This usually indicates a missing type annotation on a `let` binding, causing the compiler to lose track of which struct type a pointer refers to.
+
+**Fix:** Add an explicit type annotation: `let x: MyStruct = ...;` so the compiler can track struct type tags through the IR.
+"#,
+        ),
+        (
+            r#"examples/examples.md"#,
+            r#"# Worked Examples
+
+Verification workflow examples. The first three demonstrate Counterexample-Guided Inductive Synthesis (CEGIS) cycles: write spec, build, read JSON, diagnose, fix, verify. The fourth shows break-with-value in loop expressions. The fifth shows an EOF-safe interactive command loop using `stdin_read_line()`. The sixth shows bounded-memory streaming file input.
+
+## 1. Safe Division — Requires Pattern
+
+### Goal
+
+Write a division function that is safe (cannot divide by zero).
+
+### Step 1: Write the spec
+
+```vow
+module Divide
+
+fn divide(x: i64, y: i64) -> i64 vow {
+    requires: y != 0
+} {
+    x / y
+}
+
+fn main() -> i32 [io] {
+    divide(10, 0);
+    0
+}
+```
+
+### Step 2: Build and verify
+
+```
+$ vow build examples/divide.vow
+```
+
+```json
+{"status":"Verified","executable":"examples/divide","diagnostics":[],"counterexamples":[]}
+```
+
+ESBMC proves the contract: whenever `y != 0` holds, the division is safe.
+
+### Step 3: Runtime behavior (debug mode)
+
+The `main()` calls `divide(10, 0)` which violates `requires: y != 0`. In debug mode:
+
+```
+$ vow build --mode debug --no-verify examples/divide.vow -o /tmp/divide_debug
+$ /tmp/divide_debug
+```
+
+Stderr:
+```json
+{"error":"VowViolation","vow_id":0,"blame":"Caller","description":"y != 0","file":"examples/divide.vow","offset":56,"values":{"y":0}}
+```
+
+The `blame: "Caller"` tells you: `main()` passed `y=0`, which violates the precondition.
+
+---
+
+## 2. CEGIS Broken → Fixed — The Core Workflow
+
+### Goal
+
+Write `safe_sub(a, b)` that always returns a non-negative result.
+
+### Step 1: Initial attempt (broken)
+
+```vow
+module CegisBroken
+
+fn safe_sub(a: i64, b: i64 where b >= 0) -> i64 vow {
+    ensures: result >= 0
+} {
+    a - b
+}
+
+fn main() -> i32 [io] {
+    print_i64(safe_sub(10, 3));
+    0
+}
+```
+
+### Step 2: Build
+
+```
+$ vow build examples/cegis_broken.vow
+```
+
+```json
+{
+  "status": "VerifyFailed",
+  "executable": "examples/cegis_broken",
+  "diagnostics": [],
+  "function": "safe_sub",
+  "counterexample": "[Counterexample]",
+  "counterexamples": [
+    {
+      "function": "safe_sub",
+      "inputs": { "a": "-9223372036854775808", "b": "0" },
+      "violation": "ensures result >= 0",
+      "vow_id": 1,
+      "source": { "file": "examples/cegis_broken.vow", "offset": 76, "length": 20 }
+    }
+  ]
+}
+```
+
+### Step 3: Diagnose
+
+The counterexample shows `a = -9223372036854775808` (i64 min), `b = 0`. Then `a - b = a`, which is negative. The `ensures: result >= 0` is violated.
+
+**Root cause:** We need `a >= b` to guarantee a non-negative result, and `a >= 0` to prevent negative inputs.
+
+### Step 4: Fix
+
+```vow
+module CegisFixed
+
+fn safe_sub(a: i64 where a >= 0, b: i64 where b >= 0) -> i64 vow {
+    requires: a >= b,
+    ensures: result >= 0
+} {
+    a - b
+}
+
+fn main() -> i32 [io] {
+    print_i64(safe_sub(10, 3));
+    0
+}
+```
+
+### Step 5: Verify
+
+```
+$ vow build examples/cegis_fixed.vow
+```
+
+```json
+{"status":"Verified","executable":"examples/cegis_fixed","diagnostics":[],"counterexamples":[]}
+```
+
+Verified. With `a >= 0`, `b >= 0`, and `a >= b`, ESBMC proves `result >= 0`.
+
+---
+
+## 3. Vec Fill — Loop Invariant
+
+### Goal
+
+Fill a vector with `n` elements and prove its length equals `n`.
+
+### Step 1: Write the spec
+
+```vow
+module VecFill
+
+fn fill_vec(n: i64) -> Vec<i64> vow {
+    requires: n >= 0,
+    requires: n <= 8,
+    ensures: result.len() == n
+} {
+    let v: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n vow {
+        invariant: i >= 0,
+        invariant: i <= n
+    } {
+        v.push(i);
+        i = i + 1;
+    }
+    v
+}
+
+fn main() -> i32 [io] {
+    let v: Vec<i64> = fill_vec(5);
+    print_i64(v.len());
+    0
+}
+```
+
+### Step 2: Build and verify
+
+```
+$ vow build examples/vec_fill.vow
+```
+
+```json
+{"status":"Verified","executable":"examples/vec_fill","diagnostics":[],"counterexamples":[]}
+```
+
+**Key points:**
+- `requires: n <= 8` keeps iterations tractable for verification
+- `invariant: i >= 0, invariant: i <= n` is inductive: true on entry, preserved by the loop body
+- The Vec model tracks `len`, so ESBMC can reason about `result.len() == n`
+
+---
+
+## 4. Linear Search — Break-with-Value
+
+### Goal
+
+Search a vector for a target value and return its index, or `-1` if not found. Uses `loop` with `break <value>` to produce a result directly from the loop expression.
+
+### Step 1: Write the spec
+
+```vow
+module Search
+
+fn linear_search(data: Vec<i64>, target: i64) -> i64
+    vow { requires: data.len() > 0 }
+{
+    let mut i: i64 = 0;
+    let n: i64 = data.len();
+    let result: i64 = loop {
+        if i >= n {
+            break -1;
+        }
+        if data[i] == target {
+            break i;
+        }
+        i = i + 1;
+    };
+    result
+}
+
+fn main() -> i32 [io] {
+    let data: Vec<i64> = Vec::new();
+    data.push(10);
+    data.push(20);
+    data.push(30);
+    data.push(40);
+    data.push(50);
+
+    let idx: i64 = linear_search(data, 30);
+    print_i64(idx);
+
+    let idx2: i64 = linear_search(data, 99);
+    print_i64(idx2);
+    0
+}
+```
+
+### Step 2: Build and verify
+
+```
+$ vow build examples/search.vow
+```
+
+```json
+{"status":"Verified","executable":"examples/search","diagnostics":[],"counterexamples":[]}
+```
+
+**Key points:**
+- `loop { ... break <value>; ... }` is an expression that evaluates to the break value
+- All `break` expressions in a `loop` must produce the same type (`i64` here)
+- `break <value>` is only allowed in `loop`, not in `while` (which always evaluates to `()`)
+- The result is bound with `let result: i64 = loop { ... };`
+
+---
+
+## 5. Command Loop — EOF-Safe `stdin_read_line`
+
+### Goal
+
+Write a line-oriented command interpreter that reads from stdin, dispatches commands, skips empty lines, and exits cleanly on EOF. This is the canonical pattern for CI-safe interactive programs.
+
+### Step 1: Write the program
+
+```vow
+module CmdLoop
+
+fn trim_newline(s: String) -> String {
+    let n: i64 = s.len();
+    if n == 0 { return s; }
+    let last: i64 = s.byte_at(n - 1);
+    if last == 10 {
+        if n >= 2 {
+            let prev: i64 = s.byte_at(n - 2);
+            if prev == 13 {
+                return s.substring(0, n - 2);
+            }
+        }
+        return s.substring(0, n - 1);
+    }
+    s
+}
+
+fn skip_spaces(s: String, start: i64) -> i64 {
+    let mut i: i64 = start;
+    let n: i64 = s.len();
+    while i < n {
+        if s.byte_at(i) != 32 { return i; }
+        i = i + 1;
+    }
+    i
+}
+
+fn main() -> i32 [read, io] {
+    let mut line: String = stdin_read_line();
+    while line.len() > 0 {
+        let cmd: String = trim_newline(line);
+
+        if cmd.len() > 0 {
+            if cmd.eq(String::from("quit")) {
+                return 0;
+            }
+
+            if cmd.eq(String::from("hello")) {
+                print_str(String::from("Hello, world!\n"));
+            } else {
+                if cmd.len() >= 5 {
+                    let prefix: String = cmd.substring(0, 5);
+                    if prefix.eq(String::from("echo ")) {
+                        let start: i64 = skip_spaces(cmd, 5);
+                        let text: String = cmd.substring(start, cmd.len());
+                        print_str(text);
+                        print_str(String::from("\n"));
+                    } else {
+                        print_str(String::from("unknown: "));
+                        print_str(cmd);
+                        print_str(String::from("\n"));
+                    }
+                } else {
+                    print_str(String::from("unknown: "));
+                    print_str(cmd);
+                    print_str(String::from("\n"));
+                }
+            }
+        }
+
+        line = stdin_read_line();
+    }
+    0
+}
+```
+
+### Step 2: Build
+
+```
+$ vow build --no-verify examples/cmdloop.vow -o /tmp/cmdloop
+```
+
+```json
+{"status":"Unverified","executable":"/tmp/cmdloop","diagnostics":[],"counterexamples":[]}
+```
+
+No contracts here — this example focuses on the I/O pattern, not verification.
+
+### Step 3: Run with piped input
+
+```
+$ printf 'hello\necho Vow is great\n\nbogus\nquit\n' | /tmp/cmdloop
+Hello, world!
+Vow is great
+unknown: bogus
+```
+
+The `quit` command causes an early `return 0`. Empty lines are silently skipped.
+
+### Step 4: Run with EOF (no quit)
+
+```
+$ printf 'hello\necho test\n' | /tmp/cmdloop
+Hello, world!
+test
+```
+
+When stdin is exhausted, `stdin_read_line()` returns `""` (length 0), the `while` condition fails, and the program exits cleanly with code 0.
+
+### Key points
+
+- **EOF detection:** `stdin_read_line()` returns `""` at EOF. Check `.len() > 0` to exit the loop.
+- **Newline stripping:** `stdin_read_line()` includes the trailing `\n` (or `\r\n`). Strip it with `byte_at` + `substring` before comparing commands.
+- **Empty line handling:** After trimming, `cmd.len() == 0` means the line was blank — skip it.
+- **Effects:** `stdin_read_line()` requires `[read]`; `print_str()` requires `[io]`. The `main` function declares both.
+- **CI-safe:** No blocking reads, no prompts — the program processes whatever stdin provides and exits at EOF. Safe to run in pipelines and test harnesses.
+
+## 6. Streaming File Input
+
+`fs_read(path)` materializes the entire file as one `String`. Use `fs_open` plus `fs_read_line` for newline-delimited files that may be large.
+
+```vow
+module StreamingFile
+
+fn main() -> i32 [read, io] {
+    let argv: Vec<String> = args();
+    if argv.len() < 2 {
+        eprintln_str(String::from("usage: streaming_file <path>"));
+        return 1;
+    }
+
+    let h: i64 = fs_open(argv[1]);
+    if h < 0 {
+        eprintln_str(String::from("could not open input"));
+        return 1;
+    }
+
+    let mut lines: i64 = 0;
+    let mut bytes: i64 = 0;
+    let mut line: String = fs_read_line(h);
+    while line.len() > 0 {
+        lines = lines + 1;
+        bytes = bytes + line.len();
+        line = fs_read_line(h);
+    }
+
+    if fs_status(h) != 1 {
+        fs_close(h);
+        eprintln_str(String::from("read error"));
+        return 1;
+    }
+    if fs_close(h) != 0 {
+        eprintln_str(String::from("close error"));
+        return 1;
+    }
+
+    print_i64(lines);
+    print_str(String::from("\n"));
+    print_i64(bytes);
+    print_str(String::from("\n"));
+    0
+}
+```
+
+Key points:
+
+- `fs_read_line(handle)` includes the trailing newline when present.
+- Blank lines are returned as `"\n"`; EOF returns `""`.
+- Check `fs_status(handle)` after `fs_read_line(handle)` returns `""`: `1` means EOF, `-1` means invalid handle or read error.
+- Close each successful handle with `fs_close(handle)` and check for a non-zero close result.
+
+## 7. BTreeMap basic usage
+
+`BTreeMap<i64, V>` is the deterministic alternative to `HashMap` — sorted ascending by key, binary-search lookup. Use it when iteration order affects program output (codegen, serialization, or any reproducible build).
+
+```vow
+module BTreeMapExample
+
+fn fetch(m: BTreeMap<i64, i64>) -> Option<i64> [io] {
+    let r: Option<i64> = m.get(7);
+    let v: i64 = r?;
+    print_i64(v);
+    print_str(String::from("\n"));
+    Option::Some(v)
+}
+
+fn main() -> i32 [io] {
+    let m: BTreeMap<i64, i64> = BTreeMap::new();
+    m.insert(7, 42);
+    let prev: Option<i64> = m.insert(7, 99);
+    // prev is Some(42); the second insert overwrote the first.
+    fetch(m);
+    print_i64(m.len());
+    0
+}
+```
+
+Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get` returns `Option<V>`. Use `?` to short-circuit on `None`. Phase 1 only supports `i64` keys; using any other key type raises `BTreeMapKeyTypeMustBeI64`.
+
+### Why BTreeMap and not HashMap
+
+`HashMap.insert` returns `()` and its iteration order is unspecified. For maps whose iteration is observable in the output binary, the byte-identical bootstrap requirement (`stage1 == stage2` sha256) demands deterministic order. `BTreeMap` provides it; `HashMap` does not.
+"#,
+        ),
+        (
+            r#"schemas/build-result.schema.json"#,
+            r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vow-lang.dev/schemas/build-result.schema.json",
+  "title": "BuildResult",
+  "description": "JSON output from `vow build` on stdout",
+  "type": "object",
+  "required": ["status", "executable", "diagnostics", "counterexamples"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["Verified", "Unverified", "CompileFailed", "VerifyFailed"],
+      "description": "Build outcome"
+    },
+    "executable": {
+      "type": ["string", "null"],
+      "description": "Path to compiled binary, or null on failure or when source has no main function (library module)"
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "diagnostic.schema.json" },
+      "description": "Compiler diagnostics (parse errors, type errors, vow violations)"
+    },
+    "message": {
+      "type": "string",
+      "description": "Error detail (present only when status is CompileFailed)"
+    },
+    "function": {
+      "type": "string",
+      "description": "Function name (present only when status is VerifyFailed)"
+    },
+    "counterexample": {
+      "type": "string",
+      "description": "Legacy counterexample description (present only when status is VerifyFailed)"
+    },
+    "counterexamples": {
+      "type": "array",
+      "items": { "$ref": "counterexample.schema.json" },
+      "description": "Structured counterexamples from ESBMC verification"
+    },
+    "verify_status": {
+      "type": "string",
+      "enum": ["timeout", "error", "tool_not_found"],
+      "description": "Verification sub-status (present only when the verification backend did not produce a proof or counterexample)"
+    },
+    "verify_message": {
+      "type": "string",
+      "description": "Verification backend error detail (present only when verify_status is set)"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "CompileFailed" } } },
+      "then": { "required": ["message"] }
+    },
+    {
+      "if": { "properties": { "status": { "const": "VerifyFailed" } } },
+      "then": { "required": ["function", "counterexample"] }
+    }
+  ],
+  "additionalProperties": false
+}
+"#,
+        ),
+        (
+            r#"schemas/contracts-result.schema.json"#,
+            r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vow-lang.dev/schemas/contracts-result.schema.json",
+  "title": "ContractsResult",
+  "description": "JSON output from `vow contracts` on stdout",
+  "type": "object",
+  "required": ["contracts", "summary"],
+  "properties": {
+    "contracts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["vow_id", "function", "kind", "description", "blame", "source", "status"],
+        "properties": {
+          "vow_id": {
+            "type": "integer",
+            "description": "Unique contract identifier within the program"
+          },
+          "function": {
+            "type": "string",
+            "description": "Function containing this contract"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["requires", "ensures", "invariant"],
+            "description": "Contract kind"
+          },
+          "description": {
+            "type": "string",
+            "description": "Full contract text"
+          },
+          "blame": {
+            "type": "string",
+            "enum": ["Caller", "Callee"],
+            "description": "Blame assignment: Caller for requires, Callee for ensures/invariant"
+          },
+          "source": {
+            "type": "object",
+            "required": ["file", "offset"],
+            "properties": {
+              "file": {
+                "type": "string",
+                "description": "Source file path"
+              },
+              "offset": {
+                "type": "integer",
+                "description": "Byte offset in source file"
+              }
+            },
+            "additionalProperties": false
+          },
+          "status": {
+            "type": "string",
+            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
+            "description": "Verification status"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["total", "proven", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
+      "properties": {
+        "total": { "type": "integer" },
+        "proven": { "type": "integer" },
+        "failed": { "type": "integer" },
+        "unknown": { "type": "integer" },
+        "timeout": { "type": "integer" },
+        "error": { "type": "integer" },
+        "not_verified": { "type": "integer" },
+        "skipped": { "type": "integer" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
+"#,
+        ),
+        (
+            r#"schemas/counterexample.schema.json"#,
+            r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vow-lang.dev/schemas/counterexample.schema.json",
+  "title": "Counterexample",
+  "description": "A structured counterexample from ESBMC verification failure",
+  "type": "object",
+  "required": ["function", "inputs", "violation", "vow_id", "source"],
+  "properties": {
+    "function": {
+      "type": "string",
+      "description": "Name of the function where verification failed"
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Map of parameter names to counterexample values"
+    },
+    "violation": {
+      "type": "string",
+      "description": "Description of the violated contract"
+    },
+    "vow_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Numeric ID of the violated vow (matches vow_id in VowViolation)"
+    },
+    "source": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["file", "offset", "length"],
+          "properties": {
+            "file": { "type": "string", "description": "Source file path" },
+            "offset": { "type": "integer", "minimum": 0, "description": "Byte offset of the vow clause" },
+            "length": { "type": "integer", "minimum": 0, "description": "Byte length of the vow clause" }
+          },
+          "additionalProperties": false
+        },
+        { "type": "null" }
+      ],
+      "description": "Source location of the violated vow clause, or null"
+    }
+  },
+  "additionalProperties": false
+}
+"#,
+        ),
+        (
+            r#"schemas/diagnostic.schema.json"#,
+            r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vow-lang.dev/schemas/diagnostic.schema.json",
+  "title": "Diagnostic",
+  "description": "A single compiler diagnostic (error, warning, or note)",
+  "type": "object",
+  "required": ["error_code", "message", "severity", "span"],
+  "properties": {
+    "error_code": {
+      "type": "string",
+      "enum": [
+        "UnterminatedString",
+        "InvalidCharacter",
+        "UnexpectedToken",
+        "MissingDelimiter",
+        "TypeMismatch",
+        "EffectViolation",
+        "LinearTypeViolation",
+        "NonExhaustiveMatch",
+        "VowRequiresViolated",
+        "VowEnsuresViolated",
+        "VowInvariantViolated",
+        "UnknownMethod",
+        "UnsupportedFeature",
+        "LoweringWarning",
+        "MissingContract",
+        "ContractTypeMismatch",
+        "EsbmcNotFound",
+        "IoError",
+        "RegionConflict",
+        "RegionLinear",
+        "RegionRootEscape"
+      ],
+      "description": "Machine-readable error code"
+    },
+    "message": {
+      "type": "string",
+      "description": "Human-readable error message"
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["error", "warning", "note"],
+      "description": "Diagnostic severity"
+    },
+    "span": {
+      "type": "object",
+      "required": ["file", "offset", "length"],
+      "properties": {
+        "file": { "type": "string", "description": "Source file path" },
+        "offset": { "type": "integer", "minimum": 0, "description": "Byte offset from start of file" },
+        "length": { "type": "integer", "minimum": 0, "description": "Byte length of the span" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
+"#,
+        ),
+        (
+            r#"schemas/mutants-result.schema.json"#,
+            r##"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vow-lang.org/schemas/mutants-result.schema.json",
+  "title": "MutantsOutput",
+  "description": "Output of `vow-mutants run` populates a directory (default `mutants.out/`). Each file has its own schema; the union is documented here.",
+  "$defs": {
+    "Mutant": {
+      "description": "Per-mutant catalog record (in mutants.json).",
+      "type": "object",
+      "required": ["name", "file", "line", "col", "off", "len", "kind", "from", "to", "label", "clause_index"],
+      "properties": {
+        "name":         { "type": "string", "description": "Stable cargo-mutants-style name: `file:line:col: <label>`." },
+        "file":         { "type": "string", "description": "Repo-relative source path. Independent of --workdir." },
+        "line":         { "type": "integer", "minimum": 1, "description": "1-based source line of `off`." },
+        "col":          { "type": "integer", "minimum": 1, "description": "1-based source column of `off`." },
+        "off":          { "type": "integer", "minimum": 0, "description": "Byte offset of the mutation site." },
+        "len":          { "type": "integer", "minimum": 0, "description": "Byte length of the mutation span." },
+        "kind":         { "enum": ["op-flip", "const-flip", "body-replace", "contract-weaken"] },
+        "from":         { "type": "string", "description": "Original source text at the site (empty for body-replace)." },
+        "to":           { "type": "string", "description": "Replacement text spliced in for this mutation." },
+        "label":        { "type": "string", "description": "Human-readable summary of the mutation." },
+        "clause_index": { "type": "integer", "minimum": 0, "description": "Disambiguates sibling contract clauses on the same function. 0 for non-contract sites." }
+      },
+      "additionalProperties": false
+    },
+    "Outcome": {
+      "description": "Per-mutant verdict (in outcomes.json).",
+      "type": "object",
+      "required": ["id", "name", "status", "tier", "oracle_ms"],
+      "properties": {
+        "id":         { "type": "integer", "minimum": 0, "description": "Position of this mutant within the shard's `mutants.json` array." },
+        "name":       { "type": "string", "description": "Same name as the corresponding Mutant record." },
+        "status":     { "enum": ["caught", "missed", "timeout", "unviable", "unrun"] },
+        "tier":       { "enum": [1, 2], "description": "Oracle tier that produced the verdict." },
+        "oracle_ms":  { "type": "integer", "minimum": 0, "description": "Per-mutant oracle wall-clock in milliseconds. Non-deterministic — excluded from the determinism guarantee." }
+      },
+      "additionalProperties": false
+    },
+    "Summary": {
+      "description": "Aggregate counts across all of this shard's mutants. Same shape as the stdout summary line.",
+      "type": "object",
+      "required": ["total", "caught", "missed", "timeout", "unviable", "unrun", "shard"],
+      "properties": {
+        "total":     { "type": "integer", "minimum": 0 },
+        "caught":    { "type": "integer", "minimum": 0 },
+        "missed":    { "type": "integer", "minimum": 0 },
+        "timeout":   { "type": "integer", "minimum": 0 },
+        "unviable":  { "type": "integer", "minimum": 0 },
+        "unrun":     { "type": "integer", "minimum": 0, "description": "Tier-1 survivors not run because the Tier-2 budget was exhausted." },
+        "shard":     { "type": "string", "pattern": "^[0-9]+/[1-9][0-9]*$" }
+      },
+      "additionalProperties": false
+    },
+    "MutantsJson": {
+      "description": "Format of `mutants.out/mutants.json`. Written before testing begins.",
+      "type": "object",
+      "required": ["version", "tool", "shard", "mutants"],
+      "properties": {
+        "version":  { "const": 1 },
+        "tool":     { "const": "vow-mutants" },
+        "shard":    { "type": "string", "pattern": "^[0-9]+/[1-9][0-9]*$" },
+        "mutants":  { "type": "array", "items": { "$ref": "#/$defs/Mutant" } }
+      },
+      "additionalProperties": false
+    },
+    "OutcomesJson": {
+      "description": "Format of `mutants.out/outcomes.json`. Written after all mutants in this shard have been classified.",
+      "type": "object",
+      "required": ["version", "summary", "outcomes"],
+      "properties": {
+        "version":  { "const": 1 },
+        "summary":  { "$ref": "#/$defs/Summary" },
+        "outcomes": { "type": "array", "items": { "$ref": "#/$defs/Outcome" } }
+      },
+      "additionalProperties": false
+    }
+  }
+}
+"##,
+        ),
+        (
+            r#"schemas/test-result.schema.json"#,
+            r##"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vow-lang.dev/schemas/test-result.schema.json",
+  "title": "TestResult",
+  "description": "JSON output from `vow test` on stdout",
+  "type": "object",
+  "required": ["status", "total", "passed", "failed", "skipped", "tests", "contract_density"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["TestsPassed", "TestsFailed"],
+      "description": "Overall test outcome"
+    },
+    "total": {
+      "type": "integer",
+      "description": "Total number of tests discovered"
+    },
+    "passed": {
+      "type": "integer",
+      "description": "Number of tests that passed"
+    },
+    "failed": {
+      "type": "integer",
+      "description": "Number of tests that failed"
+    },
+    "skipped": {
+      "type": "integer",
+      "description": "Number of tests that were skipped"
+    },
+    "tests": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/TestEntry" },
+      "description": "Per-test results"
+    },
+    "contract_density": {
+      "$ref": "#/$defs/ContractDensity",
+      "description": "Contract density across tested modules"
+    }
+  },
+  "$defs": {
+    "TestEntry": {
+      "type": "object",
+      "required": ["file", "name", "status", "stdout", "stderr", "duration_ms", "diagnostics", "counterexamples"],
+      "properties": {
+        "file": { "type": "string", "description": "Path to the test .vow file" },
+        "name": { "type": "string", "description": "Test name (file stem)" },
+        "status": {
+          "type": "string",
+          "enum": ["passed", "failed", "timeout", "skipped", "compile_error", "verify_failed"],
+          "description": "Per-test outcome"
+        },
+        "exit_code": {
+          "type": ["integer", "null"],
+          "description": "Process exit code, null on compile/verify failure or timeout"
+        },
+        "stdout": { "type": "string", "description": "Captured stdout from test binary" },
+        "stderr": { "type": "string", "description": "Captured stderr from test binary" },
+        "duration_ms": { "type": "integer", "description": "Wall-clock duration in milliseconds" },
+        "diagnostics": {
+          "type": "array",
+          "items": { "$ref": "diagnostic.schema.json" },
+          "description": "Compiler diagnostics (on compile_error)"
+        },
+        "counterexamples": {
+          "type": "array",
+          "items": { "$ref": "counterexample.schema.json" },
+          "description": "ESBMC counterexamples (on verify_failed)"
+        }
+      }
+    },
+    "ContractDensity": {
+      "type": "object",
+      "required": ["functions_total", "functions_with_vows", "density_pct"],
+      "properties": {
+        "functions_total": { "type": "integer", "description": "Total non-main functions across tested modules" },
+        "functions_with_vows": { "type": "integer", "description": "Functions with at least one vow block" },
+        "density_pct": { "type": "number", "description": "Percentage of functions with vow contracts" }
+      }
+    }
+  }
+}
+"##,
+        ),
+        (
+            r#"schemas/vow-violation.schema.json"#,
+            r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vow-lang.dev/schemas/vow-violation.schema.json",
+  "title": "VowViolation",
+  "description": "Runtime vow violation emitted to stderr (debug mode only). This is emitted by the vow-runtime C code, not by serde.",
+  "type": "object",
+  "required": ["error", "vow_id", "blame", "description", "file", "offset"],
+  "properties": {
+    "error": {
+      "type": "string",
+      "const": "VowViolation",
+      "description": "Always the string VowViolation"
+    },
+    "vow_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Numeric ID of the violated vow"
+    },
+    "blame": {
+      "type": "string",
+      "enum": ["Caller", "Callee"],
+      "description": "Who is blamed: Caller for requires violations, Callee for ensures/invariant"
+    },
+    "description": {
+      "type": "string",
+      "description": "The contract predicate text"
+    },
+    "file": {
+      "type": "string",
+      "description": "Source file path"
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Byte offset of the vow in the source file"
+    },
+    "values": {
+      "type": "object",
+      "additionalProperties": {
+        "type": ["integer", "number", "boolean"]
+      },
+      "description": "Runtime values of free variables in the predicate (optional, present when bindings exist)"
+    }
+  },
+  "additionalProperties": false
+}
+"#,
+        ),
+    ]
+}
 // GENERATE:SKILL_FULL:END
 
-fn install_skill_to(root: &Path) -> std::io::Result<PathBuf> {
+fn install_skill_tree_to(root: &Path) -> std::io::Result<PathBuf> {
     let dir = root.join(".claude/skills/vow-toolchain");
     std::fs::create_dir_all(&dir).map_err(|e| {
         std::io::Error::new(e.kind(), format!("cannot create {}: {}", dir.display(), e))
     })?;
     let path = dir.join("SKILL.md");
-    std::fs::write(&path, skill_full_markdown()).map_err(|e| {
+    std::fs::write(&path, skill_entrypoint_markdown()).map_err(|e| {
         std::io::Error::new(e.kind(), format!("cannot write {}: {}", path.display(), e))
     })?;
+    for (relative_path, contents) in skill_support_files() {
+        let support_path = dir.join(relative_path);
+        if let Some(parent) = support_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                std::io::Error::new(
+                    e.kind(),
+                    format!("cannot create {}: {}", parent.display(), e),
+                )
+            })?;
+        }
+        std::fs::write(&support_path, contents).map_err(|e| {
+            std::io::Error::new(
+                e.kind(),
+                format!("cannot write {}: {}", support_path.display(), e),
+            )
+        })?;
+    }
     Ok(path)
 }
 
-fn run_skill_install() {
-    match install_skill_to(Path::new("")) {
+fn run_skill_install_scoped<R: std::io::BufRead, W: std::io::Write>(
+    cwd: &Path,
+    home: Option<&Path>,
+    local: bool,
+    global: bool,
+    stdin: &mut R,
+    stderr: &mut W,
+) -> Result<PathBuf, String> {
+    if local && global {
+        return Err("vow skill install: --local and --global are mutually exclusive".to_string());
+    }
+
+    let mut use_local = local;
+    let mut use_global = global;
+    if !use_local && !use_global {
+        stderr
+            .write_all(b"Install Vow skill locally (./.claude) or globally (~/.claude)? [l/g]: ")
+            .map_err(|e| format!("vow skill install: cannot write prompt: {e}"))?;
+        let mut answer = String::new();
+        stdin
+            .read_line(&mut answer)
+            .map_err(|e| format!("vow skill install: cannot read answer: {e}"))?;
+        let normalized = answer.trim().to_ascii_lowercase();
+        if normalized == "l" || normalized == "local" {
+            use_local = true;
+        } else if normalized == "g" || normalized == "global" {
+            use_global = true;
+        } else {
+            return Err(
+                "vow skill install: stdin closed or unrecognised answer; pass --local or --global"
+                    .to_string(),
+            );
+        }
+    }
+
+    let root = if use_local {
+        if !cwd.join(".claude").is_dir() {
+            return Err(
+                "vow skill install: --local requires a .claude/ directory in the current project"
+                    .to_string(),
+            );
+        }
+        if !cwd.join(".git").exists() {
+            return Err(
+                "vow skill install: --local requires the current project to be a git checkout"
+                    .to_string(),
+            );
+        }
+        cwd.to_path_buf()
+    } else if use_global {
+        home.filter(|path| !path.as_os_str().is_empty())
+            .ok_or_else(|| "vow skill install: --global requires $HOME".to_string())?
+            .to_path_buf()
+    } else {
+        return Err("vow skill install: no install target selected".to_string());
+    };
+
+    install_skill_tree_to(&root).map_err(|e| format!("vow skill install: {e}"))
+}
+
+fn run_skill_install(local: bool, global: bool) {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let stdin = std::io::stdin();
+    let mut stdin = stdin.lock();
+    let stderr = std::io::stderr();
+    let mut stderr = stderr.lock();
+    match run_skill_install_scoped(
+        &cwd,
+        home.as_deref(),
+        local,
+        global,
+        &mut stdin,
+        &mut stderr,
+    ) {
         Ok(path) => eprintln!("installed skill to {}", path.display()),
         Err(e) => {
-            eprintln!("vow skill install: {}", e);
+            eprintln!("{e}");
             std::process::exit(1);
         }
     }
@@ -4607,7 +7833,7 @@ fn maybe_auto_install_skill(cwd: &Path) {
     if target.exists() {
         return;
     }
-    let _ = install_skill_to(cwd);
+    let _ = install_skill_tree_to(cwd);
 }
 
 // ---------------------------------------------------------------------------
@@ -6941,11 +10167,17 @@ fn main() {
                 return;
             }
             match s.action {
-                Some(SkillAction::Install) => {
-                    run_skill_install();
+                Some(SkillAction::Install { local, global }) => {
+                    run_skill_install(local, global);
                 }
-                Some(SkillAction::Print) | None => {
-                    println!("{}", skill_full_markdown());
+                Some(SkillAction::Print { bundle: true }) => {
+                    println!("{}", skill_bundle_markdown());
+                }
+                Some(SkillAction::Print { bundle: false }) => {
+                    println!("{}", skill_entrypoint_markdown());
+                }
+                None => {
+                    println!("{}", skill_entrypoint_markdown());
                 }
             }
         }
@@ -7320,23 +10552,25 @@ fn main() -> i32 [io] {
     }
 
     #[test]
-    fn skill_full_markdown_contains_installable_skill_document() {
-        let out = skill_full_markdown();
-        assert!(out.starts_with("---\nname: vow-toolchain\n"));
-        assert!(out.contains("# Vow Language Reference"));
-        assert!(out.contains("## `vow skill`"));
-        assert!(out.contains("schemas/build-result.schema.json"));
-    }
-
-    #[test]
-    fn skill_install_writes_claude_skill_file() {
+    fn skill_install_writes_concise_entrypoint_and_support_files() {
         let dir = TempDir::new().unwrap();
-        install_skill_to(dir.path()).unwrap();
+        install_skill_tree_to(dir.path()).unwrap();
 
-        let installed = dir.path().join(".claude/skills/vow-toolchain/SKILL.md");
-        let contents = std::fs::read_to_string(installed).unwrap();
+        let skill_dir = dir.path().join(".claude/skills/vow-toolchain");
+        let contents = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
         assert!(contents.starts_with("---\nname: vow-toolchain\n"));
-        assert!(contents.contains("# Vow Language Reference"));
+        assert!(contents.contains("paths: \"**/*.vow\""));
+        assert!(contents.lines().count() < 500);
+        assert!(
+            !contents.contains("```json"),
+            "SKILL.md entrypoint should link to schemas, not inline them"
+        );
+
+        let grammar = std::fs::read_to_string(skill_dir.join("reference/grammar.md")).unwrap();
+        assert!(grammar.contains("# Vow Grammar Reference"));
+        let schema =
+            std::fs::read_to_string(skill_dir.join("schemas/build-result.schema.json")).unwrap();
+        assert!(schema.contains("\"title\": \"BuildResult\""));
     }
 
     #[test]
@@ -7372,6 +10606,122 @@ fn main() -> i32 [io] {
         maybe_auto_install_skill(dir.path());
         let contents = std::fs::read_to_string(&target).unwrap();
         assert_eq!(contents, "user-managed content");
+    }
+
+    #[test]
+    fn skill_install_local_writes_into_current_git_project() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        std::fs::write(dir.path().join(".git"), "gitdir: ../real-git-dir\n").unwrap();
+        let mut stdin = std::io::Cursor::new(Vec::<u8>::new());
+        let mut stderr = Vec::new();
+
+        let installed =
+            run_skill_install_scoped(dir.path(), None, true, false, &mut stdin, &mut stderr)
+                .unwrap();
+
+        assert_eq!(
+            installed,
+            dir.path().join(".claude/skills/vow-toolchain/SKILL.md")
+        );
+        assert!(installed.exists());
+        assert!(
+            dir.path()
+                .join(".claude/skills/vow-toolchain/reference/cli.md")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn skill_install_accepts_explicit_scope_flags() {
+        let parsed = Args::try_parse_from(["vow", "skill", "install", "--local"]).unwrap();
+        let Some(Command::Skill(skill)) = parsed.command else {
+            panic!("expected skill command");
+        };
+        let Some(SkillAction::Install { local, global }) = skill.action else {
+            panic!("expected install action");
+        };
+        assert!(local);
+        assert!(!global);
+
+        let parsed = Args::try_parse_from(["vow", "skill", "install", "--global"]).unwrap();
+        let Some(Command::Skill(skill)) = parsed.command else {
+            panic!("expected skill command");
+        };
+        let Some(SkillAction::Install { local, global }) = skill.action else {
+            panic!("expected install action");
+        };
+        assert!(!local);
+        assert!(global);
+    }
+
+    #[test]
+    fn skill_install_global_writes_under_home() {
+        let cwd = TempDir::new().unwrap();
+        let home = TempDir::new().unwrap();
+        let mut stdin = std::io::Cursor::new(Vec::<u8>::new());
+        let mut stderr = Vec::new();
+
+        let installed = run_skill_install_scoped(
+            cwd.path(),
+            Some(home.path()),
+            false,
+            true,
+            &mut stdin,
+            &mut stderr,
+        )
+        .unwrap();
+
+        assert_eq!(
+            installed,
+            home.path().join(".claude/skills/vow-toolchain/SKILL.md")
+        );
+        assert!(installed.exists());
+        assert!(
+            home.path()
+                .join(".claude/skills/vow-toolchain/schemas/diagnostic.schema.json")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn skill_install_local_requires_git_and_claude_project() {
+        let dir = TempDir::new().unwrap();
+        let mut stdin = std::io::Cursor::new(Vec::<u8>::new());
+        let mut stderr = Vec::new();
+
+        let err = run_skill_install_scoped(dir.path(), None, true, false, &mut stdin, &mut stderr)
+            .unwrap_err();
+        assert!(err.contains(".claude"));
+
+        std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        let err = run_skill_install_scoped(dir.path(), None, true, false, &mut stdin, &mut stderr)
+            .unwrap_err();
+        assert!(err.contains("git"));
+    }
+
+    #[test]
+    fn skill_install_prompts_when_scope_is_omitted() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
+        std::fs::write(dir.path().join(".git"), "gitdir: ../real-git-dir\n").unwrap();
+        let mut stdin = std::io::Cursor::new(b"local\n".to_vec());
+        let mut stderr = Vec::new();
+
+        let installed =
+            run_skill_install_scoped(dir.path(), None, false, false, &mut stdin, &mut stderr)
+                .unwrap();
+        assert_eq!(
+            installed,
+            dir.path().join(".claude/skills/vow-toolchain/SKILL.md")
+        );
+        assert!(String::from_utf8(stderr).unwrap().contains("[l/g]"));
+
+        let mut stdin = std::io::Cursor::new(Vec::<u8>::new());
+        let mut stderr = Vec::new();
+        let err = run_skill_install_scoped(dir.path(), None, false, false, &mut stdin, &mut stderr)
+            .unwrap_err();
+        assert!(err.contains("--local or --global"));
     }
 
     #[test]
