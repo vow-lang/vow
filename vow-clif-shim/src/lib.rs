@@ -289,8 +289,6 @@ fn inst_region_for_value(
     inst_region_by_id: &HashMap<i64, i64>,
     inst_data_by_id: &HashMap<i64, (i64, i64)>,
     inst_op_by_id: &HashMap<i64, i64>,
-    inst_ds_by_id: &HashMap<i64, String>,
-    inst_first_arg_by_id: &HashMap<i64, i64>,
     upsilon_sources_by_phi: &HashMap<i64, Vec<i64>>,
     return_kind: i64,
     store_effects: &[i64],
@@ -300,8 +298,6 @@ fn inst_region_for_value(
         inst_region_by_id,
         inst_data_by_id,
         inst_op_by_id,
-        inst_ds_by_id,
-        inst_first_arg_by_id,
         upsilon_sources_by_phi,
         return_kind,
         store_effects,
@@ -315,8 +311,6 @@ fn inst_region_for_value_inner(
     inst_region_by_id: &HashMap<i64, i64>,
     inst_data_by_id: &HashMap<i64, (i64, i64)>,
     inst_op_by_id: &HashMap<i64, i64>,
-    inst_ds_by_id: &HashMap<i64, String>,
-    inst_first_arg_by_id: &HashMap<i64, i64>,
     upsilon_sources_by_phi: &HashMap<i64, Vec<i64>>,
     return_kind: i64,
     store_effects: &[i64],
@@ -345,8 +339,6 @@ fn inst_region_for_value_inner(
                 inst_region_by_id,
                 inst_data_by_id,
                 inst_op_by_id,
-                inst_ds_by_id,
-                inst_first_arg_by_id,
                 upsilon_sources_by_phi,
                 return_kind,
                 store_effects,
@@ -1113,8 +1105,6 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     let mut inst_region_by_id: HashMap<i64, i64> = HashMap::new();
     let mut inst_data_by_id: HashMap<i64, (i64, i64)> = HashMap::new();
     let mut inst_op_by_id: HashMap<i64, i64> = HashMap::new();
-    let mut inst_ds_by_id: HashMap<i64, String> = HashMap::new();
-    let mut inst_first_arg_by_id: HashMap<i64, i64> = HashMap::new();
     let mut upsilon_sources_by_phi: HashMap<i64, Vec<i64>> = HashMap::new();
     for bi in 0..nb {
         let start = block_starts[bi] as usize;
@@ -1128,15 +1118,6 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
             inst_op_by_id.insert(inst_ids[idx], inst_ops[idx]);
             let aoff = arg_offsets[idx] as usize;
             let alen = arg_lengths[idx] as usize;
-            if alen > 0 {
-                inst_first_arg_by_id.insert(inst_ids[idx], all_args[aoff]);
-            }
-            if inst_dks[idx] == IDATA_CALL_EXTERN {
-                inst_ds_by_id.insert(
-                    inst_ids[idx],
-                    unsafe { read_vow_string(inst_ds_ptrs[idx]) }.to_string(),
-                );
-            }
             if inst_ops[idx] == IOP_UPSILON && inst_dks[idx] == IDATA_PHI_TARGET && alen > 0 {
                 upsilon_sources_by_phi
                     .entry(inst_dvs[idx])
@@ -2196,8 +2177,6 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                     &inst_region_by_id,
                                     &inst_data_by_id,
                                     &inst_op_by_id,
-                                    &inst_ds_by_id,
-                                    &inst_first_arg_by_id,
                                     &upsilon_sources_by_phi,
                                     decl.return_kind,
                                     &decl.store_effects,
@@ -2300,8 +2279,6 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                         &inst_region_by_id,
                                         &inst_data_by_id,
                                         &inst_op_by_id,
-                                        &inst_ds_by_id,
-                                        &inst_first_arg_by_id,
                                         &upsilon_sources_by_phi,
                                         current_decl.return_kind,
                                         &current_decl.store_effects,
