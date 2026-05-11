@@ -381,6 +381,14 @@ fn region_to_arena_value(
     }
 }
 
+// Projection results (`FieldGet`, `Load`, `__vow_vec_get*`) are intentionally
+// NOT traced through to their container here: a pointer-valued field or Vec
+// element does not share its container's arena lifetime, so routing string
+// mutation into the container's arena would create a use-after-free when the
+// container outlives the string (or vice versa). Only direct hidden-caller
+// parameters (`GetArg` → `Caller`) and Phi merges over safe sources are
+// tracked. If safe projection semantics are ever added, extend this function;
+// do not re-introduce the unconditional FieldGet/Load/vec_get tracing.
 fn source_value_region(
     source: &Inst,
     inst_index: &HashMap<InstId, &Inst>,
