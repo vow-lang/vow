@@ -1563,6 +1563,7 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, m: IrModule, vec_max
         let blocks: Vec<IrBlock> = f.blocks;
         let mut bi: i64 = 0;
         while bi < blocks.len() {
+            if found { break; }
             let blk: IrBlock = blocks[bi];
             let insts: Vec<IrInst> = blk.insts;
             let mut ii: i64 = 0;
@@ -1575,6 +1576,7 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, m: IrModule, vec_max
                         found = true;
                     }
                 }
+                if found { break; }
                 ii = ii + 1;
             }
             bi = bi + 1;

@@ -48,7 +48,6 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "string_split" => Some(("__vow_string_split", Ty::Ptr)),
         "string_starts_with" => Some(("__vow_string_starts_with", Ty::I64)),
         "string_ends_with" => Some(("__vow_string_ends_with", Ty::I64)),
-        "string_matches_literal_at" => Some(("__vow_string_matches_literal_at", Ty::I64)),
         "string_trim" => Some(("__vow_string_trim", Ty::Ptr)),
         "string_to_upper" => Some(("__vow_string_to_upper", Ty::Ptr)),
         "string_to_lower" => Some(("__vow_string_to_lower", Ty::Ptr)),
@@ -2862,7 +2861,7 @@ fn lower_static_string_literal(
         Opcode::ConstI64,
         Ty::I64,
         vec![],
-        InstData::ConstI64(s.as_bytes().len() as i64),
+        InstData::ConstI64(s.len() as i64),
         expr.span,
     );
     Some((ptr, len))
@@ -3630,11 +3629,6 @@ mod tests {
             ("string_split", "__vow_string_split", Ty::Ptr),
             ("string_starts_with", "__vow_string_starts_with", Ty::I64),
             ("string_ends_with", "__vow_string_ends_with", Ty::I64),
-            (
-                "string_matches_literal_at",
-                "__vow_string_matches_literal_at",
-                Ty::I64,
-            ),
             ("string_trim", "__vow_string_trim", Ty::Ptr),
             ("string_to_upper", "__vow_string_to_upper", Ty::Ptr),
             ("string_to_lower", "__vow_string_to_lower", Ty::Ptr),

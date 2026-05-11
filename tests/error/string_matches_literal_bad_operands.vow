@@ -1,0 +1,10 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "string_matches_literal_at"
+module StringMatchesLiteralBadOperands
+
+fn main() -> i32 {
+    if string_matches_literal_at(1, 0, "x") == 1 {
+        return 1;
+    }
+    0
+}

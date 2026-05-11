@@ -723,7 +723,7 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 | `string_split`        | `fn(s: String, delim: String) -> Vec<String>`    | `[]`    |
 | `string_starts_with`  | `fn(s: String, prefix: String) -> i64`           | `[]`    |
 | `string_ends_with`    | `fn(s: String, suffix: String) -> i64`           | `[]`    |
-| `string_matches_literal_at` | `fn(s: String, pos: i64, literal: String) -> i64` | `[]` |
+| `string_matches_literal_at` | `fn(s: String, pos: i64, literal: String literal) -> i64` | `[]` |
 | `string_trim`         | `fn(s: String) -> String`                        | `[]`    |
 | `string_to_upper`     | `fn(s: String) -> String`                        | `[]`    |
 | `string_to_lower`     | `fn(s: String) -> String`                        | `[]`    |
