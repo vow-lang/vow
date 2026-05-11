@@ -1390,6 +1390,7 @@ fn check_store_conflict(
         return;
     }
     let src_rgn: i64 = lookup_inst_region(region_keys, region_vals, source_arg_id);
+    let mut ambiguous_multi_slot: bool = false;
     if src_rgn < 0 {
         return;
     } else {
@@ -1408,7 +1409,10 @@ fn check_store_conflict(
         {
             return;
         } else {
-            // Unknown source kind, or a heap-producing Caller(AMBIGUOUS) source — be conservative and emit.
+            // Heap-producing Caller(AMBIGUOUS) source — flag for the
+            // ambiguous-slot diagnostic phrasing below.
+            ambiguous_multi_slot = src_kind == REGION_KIND_CALLER()
+                && is_caller_ambiguous(src_rgn);
         }
     }
 
@@ -1423,19 +1427,26 @@ fn check_store_conflict(
     // currently models a single span + hints only; secondary spans need a
     // structural extension to `diag_new` and the JSON / human emitters.
     // Tracked alongside the other self-hosted diagnostic-infra gaps.
+    let message: String = if ambiguous_multi_slot {
+        String::from("value's region cannot satisfy target container's region: allocation routes to multiple distinct caller arena slots")
+    } else {
+        String::from("value's region cannot satisfy target container's region: block-local allocation stored into a parameter region")
+    };
+    let hint: String = if ambiguous_multi_slot {
+        String::from("split the allocation so each target container receives its own fresh value, or copy the value into the matching arena per destination — a single allocation cannot live in more than one hidden caller arena")
+    } else {
+        String::from("hoist the allocation to a wider scope, copy the value into the outer arena, or restructure the return flow so the value escapes to the caller")
+    };
     let d: Diagnostic = diag_new(
         SEV_ERROR(),
         EC_REGION_CONFLICT(),
-        String::from("value's region cannot satisfy target container's region: block-local allocation stored into a parameter region"),
+        message,
         source_file,
         span_start,
         span_len,
         DIAG_BLAME_CALLEE()
     );
-    diag_add_hint(
-        d,
-        String::from("hoist the allocation to a wider scope, copy the value into the outer arena, or restructure the return flow so the value escapes to the caller")
-    );
+    diag_add_hint(d, hint);
     diag_ctx_emit(dctx, d);
 }
 

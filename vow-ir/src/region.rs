@@ -3331,7 +3331,7 @@ fn check_store_conflict_semantic(
     }
 
     let source_region = region_map.get(&source_arg_id).copied();
-    match source_region {
+    let ambiguous_multi_slot = match source_region {
         Some(RegionId::Caller(idx)) if idx.is_ambiguous() => {
             let source_is_fresh_heap = inst_lookup
                 .get(&source_arg_id)
@@ -3343,14 +3343,16 @@ fn check_store_conflict_semantic(
             // satisfy more than one hidden caller arena slot. Codegen cannot
             // route one allocation to multiple caller arenas, so reject the
             // store.
+            true
         }
         Some(RegionId::Caller(_) | RegionId::Root | RegionId::Rodata) => return,
         Some(RegionId::Block(_)) => {
             // Concrete block source, parameter target — strictly narrower,
             // always a conflict; drop through to emission.
+            false
         }
         None => return,
-    }
+    };
 
     let source_span = inst_lookup
         .get(&source_arg_id)
@@ -3361,12 +3363,29 @@ fn check_store_conflict_semantic(
         .map(|(_, i)| i.origin)
         .unwrap_or(call_inst.origin);
 
+    let (message, hint) = if ambiguous_multi_slot {
+        (
+            "value's region cannot satisfy target container's region: \
+             allocation routes to multiple distinct caller arena slots",
+            "split the allocation so each target container receives its own \
+             fresh value, or copy the value into the matching arena per \
+             destination — a single allocation cannot live in more than one \
+             hidden caller arena",
+        )
+    } else {
+        (
+            "value's region cannot satisfy target container's region: \
+             block-local allocation stored into a parameter region",
+            "hoist the allocation to a wider scope, copy the value into the \
+             outer arena, or restructure the return flow so the value \
+             escapes to the caller",
+        )
+    };
+
     diagnostics.push(Diagnostic {
         severity: Severity::Error,
         code: ErrorCode::RegionConflict,
-        message: "value's region cannot satisfy target container's region: \
-                  block-local allocation stored into a parameter region"
-            .to_string(),
+        message: message.to_string(),
         primary: SourceLocation {
             file: source_file.to_string(),
             byte_offset: source_span.start,
@@ -3385,12 +3404,7 @@ fn check_store_conflict_semantic(
             },
         ],
         blame: Blame::Callee,
-        hints: vec![
-            "hoist the allocation to a wider scope, copy the value into the \
-             outer arena, or restructure the return flow so the value \
-             escapes to the caller"
-                .to_string(),
-        ],
+        hints: vec![hint.to_string()],
     });
 }
 
