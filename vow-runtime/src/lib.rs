@@ -1452,6 +1452,9 @@ pub unsafe extern "C" fn __vow_string_clone_in_arena(
     arena: *mut VowArena,
     source: *const u8,
 ) -> *mut u8 {
+    if arena.is_null() {
+        null_arena_trap("String::clone");
+    }
     unsafe { __vow_string_clone_into_arena(arena, source) }
 }
 
@@ -4158,6 +4161,11 @@ mod tests {
             eprintln!("rodata_trap_worker: null arena string from_cstr did NOT trap");
             std::process::exit(42);
         }
+        if op == "String::clone_in_arena_null" {
+            let _ = unsafe { __vow_string_clone_in_arena(std::ptr::null_mut(), std::ptr::null()) };
+            eprintln!("rodata_trap_worker: null arena string clone did NOT trap");
+            std::process::exit(42);
+        }
         if op == "String::push_str_in_arena_null" {
             let mut dest = VowVec {
                 ptr: 8 as *mut u8,
@@ -4428,6 +4436,11 @@ mod tests {
     #[test]
     fn explicit_arena_string_from_cstr_null_arena_traps() {
         assert_runtime_invariant_null_arena("String::from_cstr_in_arena_null", "String::from_cstr");
+    }
+
+    #[test]
+    fn explicit_arena_string_clone_null_arena_traps() {
+        assert_runtime_invariant_null_arena("String::clone_in_arena_null", "String::clone");
     }
 
     #[test]

@@ -1570,8 +1570,29 @@ impl<'e> Checker<'e> {
                 // Handle compiler-known builtins: Option, Result, Vec, String, HashMap
                 match (enum_name, variant_name) {
                     ("String", "from") => {
-                        if let Some(arg) = fields.first() {
-                            self.check_expr(arg);
+                        if fields.len() != 1 {
+                            self.emit_error_with_hints(
+                                ErrorCode::TypeMismatch,
+                                format!("String::from expects 1 argument but got {}", fields.len()),
+                                expr.span,
+                                vec!["expected signature: (s: String) -> String".to_string()],
+                            );
+                            for field in fields {
+                                self.check_expr(field);
+                            }
+                            return Ty::Str;
+                        }
+                        let arg = &fields[0];
+                        let arg_ty = self.check_expr(arg);
+                        if arg_ty != Ty::Str && arg_ty != Ty::Never {
+                            self.emit_error_with_hints(
+                                ErrorCode::TypeMismatch,
+                                format!(
+                                    "String::from argument has type `{arg_ty}` but expects `String`"
+                                ),
+                                arg.span,
+                                vec!["expected signature: (s: String) -> String".to_string()],
+                            );
                         }
                         return Ty::Str;
                     }
@@ -2155,6 +2176,10 @@ mod tests {
 
     fn bool_lit() -> Expr {
         make_expr(ExprKind::Lit(Lit::Bool(true)))
+    }
+
+    fn string_lit(value: &str) -> Expr {
+        make_expr(ExprKind::Lit(Lit::String(value.to_string())))
     }
 
     fn float_lit() -> Expr {
@@ -3176,6 +3201,46 @@ mod tests {
             )
         );
         assert!(!checker.has_errors());
+    }
+
+    #[test]
+    fn enum_construct_string_from_accepts_string() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let ty = checker.check_expr(&make_expr(ExprKind::EnumConstruct {
+            path: vec!["String".to_string(), "from".to_string()],
+            fields: vec![string_lit("hello")],
+        }));
+        assert_eq!(ty, Ty::Str);
+        assert!(!checker.has_errors());
+    }
+
+    #[test]
+    fn enum_construct_string_from_rejects_non_string() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let ty = checker.check_expr(&make_expr(ExprKind::EnumConstruct {
+            path: vec!["String".to_string(), "from".to_string()],
+            fields: vec![int_lit()],
+        }));
+        assert_eq!(ty, Ty::Str);
+        assert!(checker.has_errors());
+        assert_eq!(emitter.0[0].code, ErrorCode::TypeMismatch);
+        assert!(emitter.0[0].message.contains("String::from"));
+    }
+
+    #[test]
+    fn enum_construct_string_from_requires_one_argument() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let ty = checker.check_expr(&make_expr(ExprKind::EnumConstruct {
+            path: vec!["String".to_string(), "from".to_string()],
+            fields: vec![],
+        }));
+        assert_eq!(ty, Ty::Str);
+        assert!(checker.has_errors());
+        assert_eq!(emitter.0[0].code, ErrorCode::TypeMismatch);
+        assert!(emitter.0[0].message.contains("String::from"));
     }
 
     // --- Let binding annotation coercion ---

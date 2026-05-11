@@ -1,0 +1,8 @@
+// TEST: error-code TypeMismatch
+// TEST: stderr "String::from"
+module StringFromWrongType
+
+fn main() -> i32 {
+    let s: String = String::from(1);
+    0
+}

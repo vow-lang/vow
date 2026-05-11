@@ -30,7 +30,7 @@ ESBMC uses bounded models for collection types. Defaults are shown below; overri
 | `String`          | 256                 | `--string-max <N>` | `from`, `len`, `push_byte`, `push_str`, `byte_at`, `matches_literal_at` |
 | `HashMap<K, V>`   | 64                  | `--hashmap-max <N>` | `new`, `insert`, `get`, `contains_key`, `len`|
 
-These support the same operations as the runtime but with bounded storage. `String::from` produces a nondeterministic length (0 to max-1) in verification. `string_matches_literal_at` is modeled against the literal's concrete bytes and byte length; the third argument must be a string literal so the verifier never has to infer static text from a dynamic `String`.
+These support the same operations as the runtime but with bounded storage. String literals carry their concrete length and bytes in verification, and `String::from` copies that model from its source value. Operations whose bytes are not statically known, such as `String::from_cstr`, produce a nondeterministic length (0 to max-1). `string_matches_literal_at` is modeled against the literal's concrete bytes and byte length; the third argument must be a string literal so the verifier never has to infer static text from a dynamic `String`.
 
 ## Blame Model
 

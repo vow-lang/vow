@@ -1,0 +1,12 @@
+module StringLiteralByteAt
+
+fn literal_first_byte() -> i64 vow {
+    ensures: result == 104
+} {
+    let s: String = String::from("hello");
+    s.byte_at(0)
+}
+
+fn main() -> i32 [io] {
+    0
+}

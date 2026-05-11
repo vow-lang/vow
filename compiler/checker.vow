@@ -1275,9 +1275,13 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let first_name: String = arena_str(a, first_sid);
         let n_args: i64 = list_len(a, args_lid);
         let mut i: i64 = 0;
+        let mut first_arg_tid: i64 = CTY_UNKNOWN();
         while i < n_args {
             let arg_eid: i64 = list_get(a, args_lid, i);
-            let _arg_tid: i64 = check_expr(e, m, arg_eid);
+            let arg_tid: i64 = check_expr(e, m, arg_eid);
+            if i == 0 {
+                first_arg_tid = arg_tid;
+            }
             i = i + 1;
         }
         if first_name == String::from("Option") {
@@ -1305,6 +1309,16 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 if second_name == String::from("from_raw_parts_copy") {
                     if n_args != 2 {
                         env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
+                    }
+                    return CTY_STR();
+                }
+                if second_name == String::from("from") {
+                    if n_args != 1 {
+                        env_emit_error(e, String::from("String::from expects one String argument"), expr_span(a, eid));
+                        return CTY_STR();
+                    }
+                    if first_arg_tid != CTY_STR() && first_arg_tid != CTY_NEVER() {
+                        env_emit_error(e, String::from("String::from argument must be String"), expr_span(a, eid));
                     }
                     return CTY_STR();
                 }

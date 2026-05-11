@@ -1212,6 +1212,8 @@ fn root_escape_span_start(inst: IrInst, id_to_inst: Vec<IrInst>) -> i64 {
     if inst.olen > 0 {
         return inst.ostart;
     }
+    // Self-hosted lowering gives synthetic __vow_string_literal calls zero span;
+    // fall back to the literal operand span. Rust lowering anchors the call itself.
     if inst.op == IOP_CALL() && inst.args.len() > 0 {
         let source: IrInst = lookup_inst_or_default(id_to_inst, inst.args[0]);
         if source.id >= 0 && source.olen > 0 {

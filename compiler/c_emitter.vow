@@ -1462,7 +1462,13 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, m: IrModule, vec_max
         if lit_idx >= 0 {
             let strings: Vec<String> = m.strings;
             if lit_idx < strings.len() {
-                out.push_str(str5(String::from("  v"), ids, String::from(".len = "), i64_to_str(strings[lit_idx].len()), String::from(";\n")));
+                let literal: String = strings[lit_idx];
+                out.push_str(str5(String::from("  v"), ids, String::from(".len = "), i64_to_str(literal.len()), String::from(";\n")));
+                let mut j: i64 = 0;
+                while j < literal.len() {
+                    out.push_str(str6(String::from("  v"), ids, String::from(".data["), i64_to_str(j), String::from("] = (int8_t)"), str2(i64_to_str(literal.byte_at(j)), String::from(";\n"))));
+                    j = j + 1;
+                }
                 return;
             }
         }

@@ -1058,14 +1058,16 @@ fn emit_inst(
                         emit_nondet_string_len(id, limits.string_max, out);
                     }
                     "__vow_string_literal" => {
-                        let literal_len = inst
+                        let literal = inst
                             .args
                             .first()
                             .and_then(|arg| const_str_indices.get(&arg.0))
-                            .and_then(|idx| module.strings.get(*idx as usize))
-                            .map(|s| s.len());
-                        if let Some(len) = literal_len {
-                            out.push_str(&format!("  v{id}.len = {len};\n"));
+                            .and_then(|idx| module.strings.get(*idx as usize));
+                        if let Some(literal) = literal {
+                            out.push_str(&format!("  v{id}.len = {};\n", literal.len()));
+                            for (idx, byte) in literal.as_bytes().iter().enumerate() {
+                                out.push_str(&format!("  v{id}.data[{idx}] = (int8_t){byte};\n"));
+                            }
                         } else {
                             emit_nondet_string_len(id, limits.string_max, out);
                         }
@@ -4223,6 +4225,14 @@ mod tests {
         );
         assert!(c.contains("__vow_string_t v1;"), "string struct decl: {c}");
         assert!(c.contains("v1.len = 5;"), "literal len from pool: {c}");
+        assert!(
+            c.contains("v1.data[0] = (int8_t)104;"),
+            "literal byte h from pool: {c}"
+        );
+        assert!(
+            c.contains("v1.data[4] = (int8_t)111;"),
+            "literal byte o from pool: {c}"
+        );
     }
 
     #[test]
