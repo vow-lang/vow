@@ -620,10 +620,10 @@ fn routed_vec_extern(sym: &str, inst_rgn: i64, receiver_rgn: i64) -> (&str, Opti
 }
 
 /// Size of `vow_runtime::VowArena` in bytes — asserted in
-/// `vow-runtime/src/lib.rs` (`assert!(size_of::<VowArena>() == 48)`).
+/// `vow-runtime/src/lib.rs` (`assert!(size_of::<VowArena>() == 56)`).
 /// Mirrors the same constant in `vow-codegen/src/cranelift_backend.rs`
 /// so a future `VowArena` resize updates both backends in lockstep.
-const VOW_ARENA_HEADER_SIZE: u32 = 48;
+const VOW_ARENA_HEADER_SIZE: u32 = 56;
 /// Log₂ of the `VowArena` header alignment (8 bytes — contains
 /// pointers). Mirrors `vow-codegen`.
 const VOW_ARENA_HEADER_ALIGN_LOG2: u8 = 3;
@@ -1418,7 +1418,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
         .declare_data_in_func(root_arena_id, builder.func);
     // Per-block VowArena stack-slot map. Lazily populated on first use of
     // a given BlockId by `IOP_REGION_OPEN` / `IOP_REGION_CLOSE` /
-    // `IOP_REGION_ALLOC` with `REGION_KIND_BLOCK`. `VowArena` is 48 bytes,
+    // `IOP_REGION_ALLOC` with `REGION_KIND_BLOCK`. `VowArena` is 56 bytes,
     // 8-byte aligned (asserted in `vow-runtime/src/lib.rs`).
     //
     // BTreeMap (not HashMap) for the same reason `slot_map` below uses one
@@ -3216,6 +3216,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_num_cpus" => {
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_memory_root_arena_bytes"
+        | "__vow_memory_peak_bytes"
+        | "__vow_memory_alloc_count_since_start" => {
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_hex_encode" => {

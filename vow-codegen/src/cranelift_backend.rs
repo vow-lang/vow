@@ -302,8 +302,8 @@ struct LowerCtx<'a> {
 }
 
 /// Size of `vow_runtime::VowArena` in bytes — asserted in
-/// `vow-runtime/src/lib.rs` (`assert!(size_of::<VowArena>() == 48)`).
-const VOW_ARENA_HEADER_SIZE: u32 = 48;
+/// `vow-runtime/src/lib.rs` (`assert!(size_of::<VowArena>() == 56)`).
+const VOW_ARENA_HEADER_SIZE: u32 = 56;
 /// Alignment for the `VowArena` header (contains pointers).
 const VOW_ARENA_HEADER_ALIGN_LOG2: u8 = 3;
 
@@ -2447,6 +2447,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         }
         "__vow_num_cpus" => {
             sig.returns.push(AbiParam::new(types::I64)); // available CPU count
+        }
+        "__vow_memory_root_arena_bytes"
+        | "__vow_memory_peak_bytes"
+        | "__vow_memory_alloc_count_since_start" => {
+            sig.returns.push(AbiParam::new(types::I64)); // u64 counter
         }
         "__vow_hex_encode" => {
             sig.params.push(AbiParam::new(types::I64)); // vec ptr

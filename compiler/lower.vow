@@ -637,6 +637,9 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("time_unix") { return String::from("__vow_time_unix"); }
     if name == String::from("time_unix_ms") { return String::from("__vow_time_unix_ms"); }
     if name == String::from("num_cpus") { return String::from("__vow_num_cpus"); }
+    if name == String::from("memory_root_arena_bytes") { return String::from("__vow_memory_root_arena_bytes"); }
+    if name == String::from("memory_peak_bytes") { return String::from("__vow_memory_peak_bytes"); }
+    if name == String::from("memory_alloc_count_since_start") { return String::from("__vow_memory_alloc_count_since_start"); }
     if name == String::from("hex_encode") { return String::from("__vow_hex_encode"); }
     if name == String::from("hex_decode") { return String::from("__vow_hex_decode"); }
     if name == String::from("args") { return String::from("__vow_args"); }
@@ -696,6 +699,9 @@ fn builtin_ret_ty(name: String) -> i64 {
     if name == String::from("time_unix") { return ITY_I64(); }
     if name == String::from("time_unix_ms") { return ITY_I64(); }
     if name == String::from("num_cpus") { return ITY_I64(); }
+    if name == String::from("memory_root_arena_bytes") { return ITY_U64(); }
+    if name == String::from("memory_peak_bytes") { return ITY_U64(); }
+    if name == String::from("memory_alloc_count_since_start") { return ITY_U64(); }
     if name == String::from("hex_encode") { return ITY_PTR(); }
     if name == String::from("hex_decode") { return ITY_PTR(); }
     if name == String::from("args") { return ITY_PTR(); }

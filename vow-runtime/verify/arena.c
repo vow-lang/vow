@@ -31,6 +31,7 @@ struct VowArena {
     uintptr_t chunk_end;
     void*     last_alloc_start;
     uintptr_t last_alloc_size;
+    uintptr_t retained_bytes;
 };
 
 #define CHUNK_LINK_BYTES    8
@@ -81,6 +82,7 @@ void __vow_arena_init_closed(struct VowArena* a) {
     a->chunk_end = 0;
     a->last_alloc_start = NULL;
     a->last_alloc_size = 0;
+    a->retained_bytes = 0;
 }
 
 void __vow_arena_open(struct VowArena* a) {
@@ -97,6 +99,7 @@ void __vow_arena_open(struct VowArena* a) {
     a->chunk_end = (uintptr_t)base + total;
     a->last_alloc_start = NULL;
     a->last_alloc_size = 0;
+    a->retained_bytes = total;
 }
 
 void __vow_arena_close(struct VowArena* a) {
@@ -112,6 +115,7 @@ void __vow_arena_close(struct VowArena* a) {
     a->chunk_end = 0;
     a->last_alloc_start = NULL;
     a->last_alloc_size = 0;
+    a->retained_bytes = 0;
 }
 
 void* __vow_arena_alloc(struct VowArena* a, uintptr_t bytes, uintptr_t align) {
@@ -134,6 +138,7 @@ void* __vow_arena_alloc(struct VowArena* a, uintptr_t bytes, uintptr_t align) {
     a->chunk_end = (uintptr_t)new_base + total;
     a->last_alloc_start = (void*)start;
     a->last_alloc_size = bytes;
+    a->retained_bytes += total;
     return (void*)start;
 }
 
@@ -159,11 +164,13 @@ int main(void) {
     void* opened_current_chunk = a.current_chunk;
     uintptr_t opened_cursor = a.cursor;
     uintptr_t opened_chunk_end = a.chunk_end;
+    uintptr_t opened_retained_bytes = a.retained_bytes;
     __vow_arena_open(&a);
     assert(a.first_chunk == opened_first_chunk);
     assert(a.current_chunk == opened_current_chunk);
     assert(a.cursor == opened_cursor);
     assert(a.chunk_end == opened_chunk_end);
+    assert(a.retained_bytes == opened_retained_bytes);
 
     /* Perform up to two symbolic allocations bounded in size. With large
      * symbolic alignments each alloc may take the oversized path (own

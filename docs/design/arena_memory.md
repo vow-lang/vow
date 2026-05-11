@@ -118,7 +118,7 @@ chunk.
 
 ### 3.1. Arena header
 
-Each arena is represented by a 48-byte header:
+Each arena is represented by a 56-byte header:
 
 ```c
 struct VowArena {
@@ -128,6 +128,7 @@ struct VowArena {
     uintptr_t chunk_end;        // one past last usable byte in current chunk
     void*     last_alloc_start; // most recent allocation, for try_extend
     uintptr_t last_alloc_size;  // size of most recent allocation
+    uintptr_t retained_bytes;   // total bytes retained by chunk chain
 };
 ```
 
@@ -166,6 +167,9 @@ void     __vow_arena_init_closed(struct VowArena* a);
 void*    __vow_arena_alloc(struct VowArena* a, uintptr_t bytes, uintptr_t align);
 int64_t  __vow_arena_try_extend(struct VowArena* a, void* ptr,
                                 uintptr_t old_size, uintptr_t new_size);
+uint64_t __vow_memory_root_arena_bytes(void);
+uint64_t __vow_memory_peak_bytes(void);
+uint64_t __vow_memory_alloc_count_since_start(void);
 ```
 
 Return-type note: `__vow_arena_try_extend` returns `int64_t` (`1`
@@ -194,14 +198,16 @@ the root-region OOM policy in §16); the trap is not recoverable from
 within Vow.
 
 **`__vow_arena_close(a)`**: walks the chunk chain, calls `free` on
-each chunk, leaves `*a` in an undefined state. Callers MUST NOT
-dereference `a` after close.
+each chunk, and zeros `*a`. The zeroed state makes double-close a safe
+no-op and updates memory-query counters consistently.
 
 **`__vow_arena_alloc(a, bytes, align)`**: returns an aligned pointer
 into `a`'s current chunk. If the current chunk does not have room,
 allocates a new chunk (size per §3.2) and links it at the tail.
 Updates `cursor` and `chunk_end` to the new chunk. Also records
-`ptr` and `bytes` in `last_alloc_*`.
+`ptr` and `bytes` in `last_alloc_*`, increments the successful arena
+allocation request counter, and increases `retained_bytes` when a new
+chunk is linked.
 
 **`__vow_arena_try_extend(a, ptr, old_size, new_size)`**: returns
 `1` (success) if and only if `ptr == a->last_alloc_start` AND
@@ -222,6 +228,13 @@ arena header unchanged; the caller MUST fall back to a fresh
 If `__vow_arena_alloc`'s fallback `malloc` for a new chunk fails,
 the runtime traps with the same structured OOM error as
 `__vow_arena_open` (§16).
+
+The `__vow_memory_*` functions expose low-overhead runtime query
+builtins. They return root-region retained chunk bytes, peak live
+retained chunk bytes across all open arenas, and successful arena
+allocation request count since process start. `__vow_arena_try_extend`
+does not increment the allocation request count because it reuses the
+current chunk without issuing a fresh arena allocation.
 
 #### Vec runtime allocation API
 
