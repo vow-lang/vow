@@ -10574,6 +10574,15 @@ fn main() -> i32 [io] {
     }
 
     #[test]
+    fn skill_bundle_markdown_contains_full_skill_document() {
+        let out = skill_bundle_markdown();
+        assert!(out.starts_with("---\nname: vow-toolchain\n"));
+        assert!(out.contains("# Vow Language Reference"));
+        assert!(out.contains("### `vow skill`"));
+        assert!(out.contains("schemas/build-result.schema.json"));
+    }
+
+    #[test]
     fn auto_install_skill_skips_when_no_claude_dir() {
         let dir = TempDir::new().unwrap();
         maybe_auto_install_skill(dir.path());
