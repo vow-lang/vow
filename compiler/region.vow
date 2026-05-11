@@ -2691,6 +2691,11 @@ fn direct_markers_collect_regions(
                             linear_insert_i64(markers, target_marker2);
                             push_region_work(work, seen, inst.args[target_pos2]);
                         }
+                        if (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
+                            && ai == 0
+                        {
+                            push_region_work(work, seen, inst.id);
+                        }
                     }
                 }
                 ai = ai + 1;
@@ -2831,22 +2836,27 @@ fn direct_markers_collect_concrete_blocks(
                             push_region_work(work, seen, inst.id);
                         }
                     }
-	                    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
-	                        let target_pos2: i64 = extern_store_target_for_source(inst.ds, ai);
-	                        if target_pos2 >= 0 && target_pos2 < inst.args.len() {
-	                            let target_block2: i64 = target_marker_concrete_block(
-	                                id_to_inst,
-	                                id_to_block,
-	                                inst.args[target_pos2],
-	                                int_kinds
-	                            );
-	                            if target_block2 < 0 {
-	                                return false;
-	                            }
-	                            linear_insert_i64(markers, target_block2);
-	                            push_region_work(work, seen, inst.args[target_pos2]);
-	                        }
-	                    }
+                    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
+                        let target_pos2: i64 = extern_store_target_for_source(inst.ds, ai);
+                        if target_pos2 >= 0 && target_pos2 < inst.args.len() {
+                            let target_block2: i64 = target_marker_concrete_block(
+                                id_to_inst,
+                                id_to_block,
+                                inst.args[target_pos2],
+                                int_kinds
+                            );
+                            if target_block2 < 0 {
+                                return false;
+                            }
+                            linear_insert_i64(markers, target_block2);
+                            push_region_work(work, seen, inst.args[target_pos2]);
+                        }
+                        if (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
+                            && ai == 0
+                        {
+                            push_region_work(work, seen, inst.id);
+                        }
+                    }
                 }
                 ai = ai + 1;
             }
@@ -4228,6 +4238,14 @@ fn lookup_inst_or_default(id_to_inst: Vec<IrInst>, id: i64) -> IrInst {
 }
 
 fn trace_origin_shallow(id_to_inst: Vec<IrInst>, id: i64) -> DeepRet {
+    let visiting: Vec<i64> = Vec::new();
+    trace_origin_shallow_inner(id_to_inst, id, visiting)
+}
+
+fn trace_origin_shallow_inner(id_to_inst: Vec<IrInst>, id: i64, visiting: Vec<i64>) -> DeepRet {
+    if region_vec_contains_i64(visiting, id) {
+        return deep_ret_const_global();
+    }
     let inst: IrInst = lookup_inst_or_default(id_to_inst, id);
     if inst.id < 0 {
         return deep_ret_const_global();
@@ -4240,6 +4258,15 @@ fn trace_origin_shallow(id_to_inst: Vec<IrInst>, id: i64) -> DeepRet {
     }
     if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && heap_producing_extern(inst.ds) {
         return DeepRet { kind: RSUM_KIND_FRESH_IN_CALLER(), aux: 0, aliases: Vec::new() };
+    }
+    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
+        && (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
+        && inst.args.len() > 0
+    {
+        visiting.push(id);
+        let r: DeepRet = trace_origin_shallow_inner(id_to_inst, inst.args[0], visiting);
+        visiting.pop();
+        return r;
     }
     if is_const_op(inst.op) {
         return deep_ret_const_global();

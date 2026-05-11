@@ -2464,6 +2464,11 @@ fn propagate_alias_markers(
                         for_each_extern_store_edge(sym, &inst.args, |target_id, source_id| {
                             alias_edges.push((target_id, source_id));
                         });
+                        if matches!(sym.as_str(), "__vow_vec_get_val" | "__vow_vec_get")
+                            && let Some(&source) = inst.args.first()
+                        {
+                            alias_edges.push((inst.id, source));
+                        }
                     }
                     let InstData::CallTarget(callee_id) = &inst.data else {
                         continue;
@@ -2791,10 +2796,24 @@ fn origin_to_internal_inner(
         | Opcode::ConstBool
         | Opcode::ConstUnit => InternalReturnRegion::Published(RegionConstraint::ConstantGlobal),
         Opcode::Call => {
-            if let InstData::CallExtern(sym) = &inst.data
-                && heap_producing_extern(sym)
-            {
-                return InternalReturnRegion::Published(RegionConstraint::FreshInCaller);
+            if let InstData::CallExtern(sym) = &inst.data {
+                if heap_producing_extern(sym) {
+                    return InternalReturnRegion::Published(RegionConstraint::FreshInCaller);
+                }
+                if matches!(sym.as_str(), "__vow_vec_get_val" | "__vow_vec_get")
+                    && let Some(&source) = inst.args.first()
+                {
+                    visiting.push_back(id);
+                    let r = origin_to_internal_inner(
+                        source,
+                        inst_lookup,
+                        phi_arms,
+                        summaries,
+                        visiting,
+                    );
+                    visiting.pop_back();
+                    return r;
+                }
             }
             if let InstData::CallExtern(sym) = &inst.data
                 && matches!(sym.as_str(), "__vow_vec_get_val" | "__vow_vec_get")
@@ -2905,30 +2924,47 @@ enum ValueOrigin {
 }
 
 fn trace_origin(id: InstId, inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>) -> ValueOrigin {
+    let mut visiting = VecDeque::new();
+    trace_origin_inner(id, inst_lookup, &mut visiting)
+}
+
+fn trace_origin_inner(
+    id: InstId,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+    visiting: &mut VecDeque<InstId>,
+) -> ValueOrigin {
+    if visiting.contains(&id) {
+        return ValueOrigin::Other;
+    }
     let (_, inst) = match inst_lookup.get(&id) {
         Some(v) => v,
         None => return ValueOrigin::Other,
     };
-    match inst.opcode {
-        Opcode::GetArg => {
-            if let InstData::ArgIndex(i) = inst.data {
-                ValueOrigin::Param(i)
-            } else {
-                ValueOrigin::Other
-            }
-        }
-        Opcode::RegionAlloc => ValueOrigin::RegionAlloc,
-        Opcode::Call if matches!(&inst.data, InstData::CallExtern(sym) if heap_producing_extern(sym)) => {
+    match (&inst.opcode, &inst.data) {
+        (Opcode::GetArg, InstData::ArgIndex(i)) => ValueOrigin::Param(*i),
+        (Opcode::RegionAlloc, _) => ValueOrigin::RegionAlloc,
+        (Opcode::Call, InstData::CallExtern(sym)) if heap_producing_extern(sym) => {
             ValueOrigin::RegionAlloc
         }
-        Opcode::ConstStr
-        | Opcode::ConstI32
-        | Opcode::ConstI64
-        | Opcode::ConstU64
-        | Opcode::ConstF32
-        | Opcode::ConstF64
-        | Opcode::ConstBool
-        | Opcode::ConstUnit => ValueOrigin::Constant,
+        (Opcode::Call, InstData::CallExtern(sym))
+            if matches!(sym.as_str(), "__vow_vec_get_val" | "__vow_vec_get") =>
+        {
+            let Some(&source) = inst.args.first() else {
+                return ValueOrigin::Other;
+            };
+            visiting.push_back(id);
+            let result = trace_origin_inner(source, inst_lookup, visiting);
+            visiting.pop_back();
+            result
+        }
+        (Opcode::ConstStr, _)
+        | (Opcode::ConstI32, _)
+        | (Opcode::ConstI64, _)
+        | (Opcode::ConstU64, _)
+        | (Opcode::ConstF32, _)
+        | (Opcode::ConstF64, _)
+        | (Opcode::ConstBool, _)
+        | (Opcode::ConstUnit, _) => ValueOrigin::Constant,
         _ => ValueOrigin::Other,
     }
 }
@@ -6346,6 +6382,50 @@ mod tests {
                 "{sym} should be treated as a fresh heap producer"
             );
         }
+    }
+
+    #[test]
+    fn returning_element_from_fresh_string_split_lifts_split_to_caller_region() {
+        let insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0, 1],
+                InstData::CallExtern("__vow_string_split".to_string()),
+            ),
+            inst(3, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(
+                4,
+                Opcode::Call,
+                Ty::I64,
+                vec![2, 3],
+                InstData::CallExtern("__vow_vec_get_val".to_string()),
+            ),
+            inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
+        ];
+        let f = function(
+            0,
+            "first_split_part",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Ptr,
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert_eq!(
+            m.functions[0].blocks[0].insts[2].region,
+            RegionId::Caller(HiddenRegionIdx(0)),
+            "String::split elements can escape through Vec indexing, so the split allocation must outlive the caller"
+        );
+        assert_eq!(
+            m.functions[0].summary.return_region,
+            RegionConstraint::FreshInCaller,
+            "returning a Vec-indexed split element should publish FreshInCaller"
+        );
     }
 
     #[test]
