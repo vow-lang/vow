@@ -8529,6 +8529,8 @@ fn install_skill_tree(root: String, emit_errors: bool) -> String [io, write] {
     path
 }
 
+// Self-hosted Vow has no getenv builtin, so read $HOME through sh.
+// A shell failure is reported like an unset or empty HOME by the caller.
 fn skill_home_dir() -> String [io] {
     let pargs: Vec<String> = Vec::new();
     pargs.push(String::from("-c"));
