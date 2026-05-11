@@ -2042,8 +2042,95 @@ fn value_may_be_rodata(
             visiting.pop_back();
             result
         }
+        Opcode::FieldGet => {
+            let Some(&target_id) = inst.args.first() else {
+                return false;
+            };
+            let field_idx = match &inst.data {
+                InstData::FieldIndex(idx) => *idx,
+                _ => return false,
+            };
+            visiting.push_back(id);
+            let result = stored_value_may_be_rodata(
+                id,
+                target_id,
+                Some(field_idx),
+                inst_lookup,
+                phi_arms,
+                summaries,
+                visiting,
+            );
+            visiting.pop_back();
+            result
+        }
+        Opcode::Load => {
+            let Some(&target_id) = inst.args.first() else {
+                return false;
+            };
+            visiting.push_back(id);
+            let result = stored_value_may_be_rodata(
+                id,
+                target_id,
+                None,
+                inst_lookup,
+                phi_arms,
+                summaries,
+                visiting,
+            );
+            visiting.pop_back();
+            result
+        }
         _ => false,
     }
+}
+
+fn stored_value_may_be_rodata(
+    read_id: InstId,
+    target_id: InstId,
+    field_idx: Option<u32>,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+    phi_arms: &BTreeMap<InstId, Vec<InstId>>,
+    summaries: &[InternalSummary],
+    visiting: &mut VecDeque<InstId>,
+) -> bool {
+    let Some((read_block, _)) = inst_lookup.get(&read_id) else {
+        return false;
+    };
+
+    let mut same_block_last: Option<(InstId, InstId)> = None;
+    let mut cross_block_sources: Vec<InstId> = Vec::new();
+    for (&write_id, (write_block, write_inst)) in inst_lookup {
+        if write_id.0 >= read_id.0 || write_inst.args.len() < 2 {
+            continue;
+        }
+        let writes_target = match field_idx {
+            Some(idx) => {
+                write_inst.opcode == Opcode::FieldSet
+                    && write_inst.args[0] == target_id
+                    && matches!(&write_inst.data, InstData::FieldIndex(write_idx) if *write_idx == idx)
+            }
+            None => write_inst.opcode == Opcode::Store && write_inst.args[0] == target_id,
+        };
+        if !writes_target {
+            continue;
+        }
+        let source_id = write_inst.args[1];
+        if write_block == read_block {
+            match same_block_last {
+                Some((prev_id, _)) if prev_id.0 > write_id.0 => {}
+                _ => same_block_last = Some((write_id, source_id)),
+            }
+        } else {
+            cross_block_sources.push(source_id);
+        }
+    }
+
+    if let Some((_, source_id)) = same_block_last {
+        return value_may_be_rodata(source_id, inst_lookup, phi_arms, summaries, visiting);
+    }
+    cross_block_sources
+        .into_iter()
+        .any(|source_id| value_may_be_rodata(source_id, inst_lookup, phi_arms, summaries, visiting))
 }
 
 fn compute_return_may_be_rodata(
@@ -3547,6 +3634,188 @@ mod tests {
         assert_eq!(
             m.functions[0].summary.return_region,
             RegionConstraint::ConstantGlobal
+        );
+    }
+
+    #[test]
+    fn literal_mutation_through_field_get_is_rejected() {
+        let insts = vec![
+            inst(
+                0,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![1],
+                InstData::CallExtern("__vow_string_literal".to_string()),
+            ),
+            inst(
+                3,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![0, 2],
+                InstData::FieldIndex(0),
+            ),
+            inst(
+                4,
+                Opcode::FieldGet,
+                Ty::Ptr,
+                vec![0],
+                InstData::FieldIndex(0),
+            ),
+            inst(5, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(33)),
+            inst(
+                6,
+                Opcode::Call,
+                Ty::Unit,
+                vec![4, 5],
+                InstData::CallExtern("__vow_string_push_byte".to_string()),
+            ),
+            inst(7, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(
+            0,
+            "field_literal_mutation",
+            vec![],
+            Ty::Unit,
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert!(
+            m.warnings
+                .iter()
+                .any(|d| d.code == ErrorCode::RegionLiteralMutation),
+            "mutating a literal-backed value through a field read must be rejected"
+        );
+    }
+
+    #[test]
+    fn literal_mutation_through_load_is_rejected() {
+        let insts = vec![
+            inst(
+                0,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![1],
+                InstData::CallExtern("__vow_string_literal".to_string()),
+            ),
+            inst(3, Opcode::Store, Ty::Unit, vec![0, 2], InstData::None),
+            inst(4, Opcode::Load, Ty::Ptr, vec![0], InstData::None),
+            inst(5, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(33)),
+            inst(
+                6,
+                Opcode::Call,
+                Ty::Unit,
+                vec![4, 5],
+                InstData::CallExtern("__vow_string_push_byte".to_string()),
+            ),
+            inst(7, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(
+            0,
+            "load_literal_mutation",
+            vec![],
+            Ty::Unit,
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert!(
+            m.warnings
+                .iter()
+                .any(|d| d.code == ErrorCode::RegionLiteralMutation),
+            "mutating a literal-backed value through a load must be rejected"
+        );
+    }
+
+    #[test]
+    fn field_get_rodata_check_uses_same_block_last_write() {
+        let insts = vec![
+            inst(
+                0,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![1],
+                InstData::CallExtern("__vow_string_literal".to_string()),
+            ),
+            inst(
+                3,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![0, 2],
+                InstData::FieldIndex(0),
+            ),
+            inst(
+                4,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![2],
+                InstData::CallExtern("__vow_string_clone".to_string()),
+            ),
+            inst(
+                5,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![0, 4],
+                InstData::FieldIndex(0),
+            ),
+            inst(
+                6,
+                Opcode::FieldGet,
+                Ty::Ptr,
+                vec![0],
+                InstData::FieldIndex(0),
+            ),
+            inst(7, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(33)),
+            inst(
+                8,
+                Opcode::Call,
+                Ty::Unit,
+                vec![6, 7],
+                InstData::CallExtern("__vow_string_push_byte".to_string()),
+            ),
+            inst(9, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(
+            0,
+            "field_overwrite",
+            vec![],
+            Ty::Unit,
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert!(
+            m.warnings
+                .iter()
+                .all(|d| d.code != ErrorCode::RegionLiteralMutation),
+            "a same-block mutable overwrite before the field read should not inherit the stale literal"
         );
     }
 
