@@ -259,7 +259,8 @@ fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec
             }
             if all_proven == 1 {
                 if skip_if_non_modelable(f, ir_mod, const_fn_indices, dctx) {
-                    // Skipped: do not enqueue ESBMC. Build/run continues with the warning.
+                    // Fail closed: a skipped contract is not statically proved.
+                    all_proven = 0;
                 } else {
                     eprintln_str(str3(String::from("Verifying "), f.name, String::from("...")));
                     let h: i64 = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max);
@@ -563,7 +564,8 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
                 }
                 if all_proven == 1 {
                     if skip_if_non_modelable(f, ir_mod, const_fn_indices, dctx) {
-                        // Skipped: do not enqueue ESBMC. Build continues with the warning.
+                        // Fail closed: a skipped contract is not statically proved.
+                        all_proven = 0;
                     } else {
                         eprintln_str(str3(String::from("Starting verification of "), f.name, String::from("...")));
                         let h: i64 = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max);

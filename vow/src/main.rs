@@ -5127,7 +5127,10 @@ fn run_verification_sync(
                 PerFuncResult::Halt(out) => return (out, skipped),
             }
         }
-        return (VerifyOutcome::Proven, skipped);
+        if skipped.is_empty() {
+            return (VerifyOutcome::Proven, skipped);
+        }
+        return (VerifyOutcome::Skipped, skipped);
     }
 
     // Stop after first halt-class outcome (Failed/Error/Timeout/ToolNotFound);
@@ -5195,7 +5198,18 @@ fn run_verification_sync(
         .into_iter()
         .flatten()
         .next()
-        .unwrap_or(VerifyOutcome::Proven);
+        .unwrap_or_else(|| {
+            if skipped_acc
+                .lock()
+                .expect("verify skipped mutex poisoned")
+                .iter()
+                .any(Option::is_some)
+            {
+                VerifyOutcome::Skipped
+            } else {
+                VerifyOutcome::Proven
+            }
+        });
     let skipped: Vec<SkippedFunction> = skipped_acc
         .into_inner()
         .expect("verify skipped mutex poisoned")
@@ -6051,7 +6065,7 @@ fn run_build_command(
     }
     if matches!(
         &result.status,
-        BuildStatus::CompileFailed { .. } | BuildStatus::VerifyFailed { .. }
+        BuildStatus::CompileFailed { .. } | BuildStatus::VerifyFailed { .. } | BuildStatus::Unverified
     ) {
         std::process::exit(1);
     }
