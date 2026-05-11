@@ -1259,7 +1259,7 @@ fn skill_json() -> String {
         "v[i] = val"
       ],
       "String": [
-        "String::from(lit)",
+        "String::from(s)",
         "String::new()",
         "String::from_raw_parts_copy(ptr, len)",
         ".len()",
@@ -1763,6 +1763,10 @@ false
 
 Supported escape sequences: `\n`, `\t`, `\r`, `\\`, `\"`, `\0`.
 
+String literals have type `String` and are backed by a read-only static
+descriptor. Passing or returning a literal does not allocate. To obtain a
+mutable, arena-owned copy, use `String::from("...")`.
+
 ## Operators
 
 ### Wrapping Arithmetic (default)
@@ -2122,7 +2126,7 @@ m.contains_key(k)
 
 | Method              | Signature                   |
 |---------------------|-----------------------------|
-| `String::from(lit)` | `(&str) -> String`          |
+| `String::from(s)`   | `(String) -> String` — mutable copy |
 | `String::new()`     | `() -> String`              |
 | `String::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> String` |
 | `.len()`            | `() -> i64`                 |
@@ -2281,7 +2285,7 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 | `debug_i64`      | `fn(v: i64) -> ()`                         | `[]`       |
 | `debug_u64`      | `fn(v: u64) -> ()`                         | `[]`       |
 
-**Debug print semantics:** Debug prints are effect-free and callable from pure functions. In debug and sanitize modes (`--mode debug`, `--mode sanitize`), they write to stderr. In release and profile modes, the debug call itself is not emitted — no function call occurs. However, argument expressions are still evaluated (e.g., `String::from("label")` still allocates). They are also no-ops during verification. Use them to trace values inside pure kernel code without restructuring the effect hierarchy.
+**Debug print semantics:** Debug prints are effect-free and callable from pure functions. In debug and sanitize modes (`--mode debug`, `--mode sanitize`), they write to stderr. In release and profile modes, the debug call itself is not emitted — no function call occurs. However, argument expressions are still evaluated (a direct literal such as `"label"` is static, while `String::from("label")` still allocates a mutable copy). They are also no-ops during verification. Use them to trace values inside pure kernel code without restructuring the effect hierarchy.
 
 #### Filesystem
 
@@ -4854,6 +4858,10 @@ false
 
 Supported escape sequences: `\n`, `\t`, `\r`, `\\`, `\"`, `\0`.
 
+String literals have type `String` and are backed by a read-only static
+descriptor. Passing or returning a literal does not allocate. To obtain a
+mutable, arena-owned copy, use `String::from("...")`.
+
 ## Operators
 
 ### Wrapping Arithmetic (default)
@@ -5213,7 +5221,7 @@ m.contains_key(k)
 
 | Method              | Signature                   |
 |---------------------|-----------------------------|
-| `String::from(lit)` | `(&str) -> String`          |
+| `String::from(s)`   | `(String) -> String` — mutable copy |
 | `String::new()`     | `() -> String`              |
 | `String::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> String` |
 | `.len()`            | `() -> i64`                 |
@@ -5372,7 +5380,7 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 | `debug_i64`      | `fn(v: i64) -> ()`                         | `[]`       |
 | `debug_u64`      | `fn(v: u64) -> ()`                         | `[]`       |
 
-**Debug print semantics:** Debug prints are effect-free and callable from pure functions. In debug and sanitize modes (`--mode debug`, `--mode sanitize`), they write to stderr. In release and profile modes, the debug call itself is not emitted — no function call occurs. However, argument expressions are still evaluated (e.g., `String::from("label")` still allocates). They are also no-ops during verification. Use them to trace values inside pure kernel code without restructuring the effect hierarchy.
+**Debug print semantics:** Debug prints are effect-free and callable from pure functions. In debug and sanitize modes (`--mode debug`, `--mode sanitize`), they write to stderr. In release and profile modes, the debug call itself is not emitted — no function call occurs. However, argument expressions are still evaluated (a direct literal such as `"label"` is static, while `String::from("label")` still allocates a mutable copy). They are also no-ops during verification. Use them to trace values inside pure kernel code without restructuring the effect hierarchy.
 
 #### Filesystem
 
@@ -5400,6 +5408,7 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 | `string_split`        | `fn(s: String, delim: String) -> Vec<String>`    | `[]`    |
 | `string_starts_with`  | `fn(s: String, prefix: String) -> i64`           | `[]`    |
 | `string_ends_with`    | `fn(s: String, suffix: String) -> i64`           | `[]`    |
+| `string_matches_literal_at` | `fn(s: String, pos: i64, literal: String literal) -> i64` | `[]` |
 | `string_trim`         | `fn(s: String) -> String`                        | `[]`    |
 | `string_to_upper`     | `fn(s: String) -> String`                        | `[]`    |
 | `string_to_lower`     | `fn(s: String) -> String`                        | `[]`    |
@@ -5431,8 +5440,13 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 | Function         | Signature                                  | Effects    |
 |------------------|--------------------------------------------|------------|
 | `num_cpus`       | `fn() -> i64`                              | `[io]`     |
+| `memory_root_arena_bytes` | `fn() -> u64`                    | `[io]`     |
+| `memory_peak_bytes` | `fn() -> u64`                           | `[io]`     |
+| `memory_alloc_count_since_start` | `fn() -> u64`              | `[io]`     |
 
 `num_cpus()` returns the number of available logical CPUs (from `std::thread::available_parallelism`), or `1` if the query fails. Used to size worker pools (e.g. the default `--verify-jobs` value).
+
+`memory_root_arena_bytes()` returns the current bytes retained by root-region arena chunks. `memory_peak_bytes()` returns the peak live bytes retained by all open arena chunks since process start. `memory_alloc_count_since_start()` returns the number of successful Vow arena allocation requests since process start. These queries do not allocate; they are effectful because they observe runtime process state.
 
 #### Encoding
 
@@ -5473,7 +5487,9 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 
 **Filesystem return values:** `fs_write`, `fs_mkdir`, `fs_remove`, `fs_remove_dir`, and `fs_rename` return `i64`: 0 on success, non-zero on failure. `fs_open`, `fs_status`, and `fs_close` use the streaming status codes above. `fs_exists` and `fs_is_dir` are predicates: they return 1 for true, 0 for false. Errors (null pointer, invalid UTF-8) also return 0, so callers cannot distinguish "false" from "error".
 
-**`string_starts_with` / `string_ends_with` return values:** Return `i64`: 1 if true, 0 if false.
+**`string_starts_with` / `string_ends_with` / `string_matches_literal_at` return values:** Return `i64`: 1 if true, 0 if false.
+
+**`string_matches_literal_at` literal operand:** The third argument must be written as a string literal at the call site. The compiler lowers that literal to static bytes plus an explicit byte length, so no temporary `String` allocation is created and embedded NUL bytes are preserved. Passing a variable or computed `String` as the third argument is a type-check error (`StaticLiteralRequired`). Use `string_starts_with`, `string_ends_with`, or `String` methods when the needle must be dynamic.
 
 **`process_run` vs `process_start`:** `process_run(cmd, args)` runs a subprocess synchronously and returns its exit code. After it returns, `process_get_stdout()` and `process_get_stderr()` retrieve the captured output of the most recent `process_run` call. `process_start(cmd, args)` launches a subprocess asynchronously and returns a process ID. Use `process_wait(pid)` to wait for completion and get the exit code, and `process_stdout_for(pid)` / `process_stderr_for(pid)` to retrieve output.
 
@@ -6052,10 +6068,10 @@ ESBMC uses bounded models for collection types. Defaults are shown below; overri
 | Type              | Default Max Capacity | CLI Flag | Supported Operations |
 |-------------------|---------------------|----------|----------------------------------------------|
 | `Vec<T>`          | 128                 | `--vec-max <N>` | `new`, `push`, `pop`, `len`, `get`, `set`    |
-| `String`          | 256                 | `--string-max <N>` | `from`, `len`, `push_byte`, `push_str`, `byte_at` |
+| `String`          | 256                 | `--string-max <N>` | `from`, `len`, `push_byte`, `push_str`, `byte_at`, `matches_literal_at` |
 | `HashMap<K, V>`   | 64                  | `--hashmap-max <N>` | `new`, `insert`, `get`, `contains_key`, `len`|
 
-These support the same operations as the runtime but with bounded storage. `String::from` produces a nondeterministic length (0 to max-1) in verification.
+These support the same operations as the runtime but with bounded storage. `String::from` produces a nondeterministic length (0 to max-1) in verification. `string_matches_literal_at` is modeled against the literal's concrete bytes and byte length; the third argument must be a string literal so the verifier never has to infer static text from a dynamic `String`.
 
 ## Blame Model
 
@@ -6433,6 +6449,21 @@ fn f() -> i32 {
 **Output:** `function body has type 'bool' but declared return type is 'i32'`
 
 **Fix:** Change the expression or the declared type to match.
+
+### StaticLiteralRequired
+
+**Phase:** Type Checker
+**Meaning:** A compiler intrinsic requires a string literal operand so it can be lowered without allocation.
+
+```vow
+fn f(s: String, key: String) -> i64 {
+    string_matches_literal_at(s, 0, key)
+}
+```
+
+**Output:** `string_matches_literal_at requires a string literal as its third argument`
+
+**Fix:** Pass a literal directly, for example `string_matches_literal_at(s, 0, "name")`.
 
 ### EffectViolation
 
@@ -7469,6 +7500,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
         "UnexpectedToken",
         "MissingDelimiter",
         "TypeMismatch",
+        "StaticLiteralRequired",
         "EffectViolation",
         "LinearTypeViolation",
         "NonExhaustiveMatch",

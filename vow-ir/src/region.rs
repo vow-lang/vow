@@ -1706,6 +1706,8 @@ fn string_creation_extern(sym: &str) -> bool {
             | "__vow_string_new_in_arena"
             | "__vow_string_from_cstr"
             | "__vow_string_from_cstr_in_arena"
+            | "__vow_string_clone"
+            | "__vow_string_clone_in_arena"
             | "__vow_string_substr"
             | "__vow_string_substr_in_arena"
             | "__vow_string_substring"
@@ -5070,6 +5072,37 @@ mod tests {
             m.functions[0].blocks[0].insts[1].region,
             RegionId::Block(BlockId(0)),
             "String::from_cstr should be treated as a fresh heap producer"
+        );
+    }
+
+    #[test]
+    fn string_clone_non_escaping_allocates_in_block_region() {
+        let insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(
+                1,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0],
+                InstData::CallExtern("__vow_string_clone".to_string()),
+            ),
+            inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+        ];
+        let f = function(
+            0,
+            "clone_string",
+            vec![Ty::Ptr],
+            Ty::I64,
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert_eq!(
+            m.functions[0].blocks[0].insts[1].region,
+            RegionId::Block(BlockId(0)),
+            "String::from clone wrapper should be treated as a fresh heap producer"
         );
     }
 

@@ -633,7 +633,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     Opcode::Call,
                     Ty::Ptr,
                     vec![cstr],
-                    InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    InstData::CallExtern("__vow_string_literal".to_string()),
                     span,
                 );
                 ctx.inst_struct_type.insert(vow_str, "String".to_string());
@@ -1926,13 +1926,18 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         ExprKind::EnumConstruct { path, fields } => {
             let enum_name = path.first().map(|s| s.as_str()).unwrap_or("");
             let variant_name = path.get(1).map(|s| s.as_str()).unwrap_or("");
-            // String::from(lit) builtin: lower_expr for Lit::String already calls
-            // __vow_string_from_cstr and returns a tagged VowVec; no second call needed.
             if enum_name == "String" && variant_name == "from" {
-                let lit_expr = fields.first().expect("String::from requires an argument");
-                let ptr_id = lower_expr(ctx, lit_expr);
-                ctx.inst_struct_type.insert(ptr_id, "String".to_string());
-                return ptr_id;
+                let source_expr = fields.first().expect("String::from requires an argument");
+                let source = lower_expr(ctx, source_expr);
+                let cloned = ctx.emit(
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![source],
+                    InstData::CallExtern("__vow_string_clone".to_string()),
+                    span,
+                );
+                ctx.inst_struct_type.insert(cloned, "String".to_string());
+                return cloned;
             }
             if enum_name == "String" && variant_name == "from_raw_parts_copy" {
                 let ptr_id = fields
@@ -3537,6 +3542,16 @@ mod tests {
         }
     }
 
+    fn string_from_expr(arg: Expr) -> Expr {
+        Expr {
+            kind: ExprKind::EnumConstruct {
+                path: vec!["String".to_string(), "from".to_string()],
+                fields: vec![arg],
+            },
+            span: sp(),
+        }
+    }
+
     fn ident_expr(name: &str) -> Expr {
         Expr {
             kind: ExprKind::Ident(name.to_string()),
@@ -3762,6 +3777,85 @@ mod tests {
                 inst.opcode == Opcode::ConstI64 && inst.data == InstData::ConstI64(5)
             }),
             "expected byte length, including embedded NUL"
+        );
+    }
+
+    #[test]
+    fn string_literal_lowers_to_static_descriptor_call() {
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(string_expr("hello"))),
+            span: sp(),
+        };
+        let fn_def = make_fn("literal", vec![], string_ty(), body, vec![]);
+        let (func, pool, diags) = lower_function(
+            &fn_def,
+            "test.vow",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(pool, vec!["hello".to_string()]);
+        let extern_calls: Vec<&str> = func
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insts)
+            .filter_map(|inst| match &inst.data {
+                InstData::CallExtern(symbol) => Some(symbol.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            extern_calls.contains(&"__vow_string_literal"),
+            "{extern_calls:?}"
+        );
+        assert!(
+            !extern_calls.contains(&"__vow_string_from_cstr"),
+            "{extern_calls:?}"
+        );
+    }
+
+    #[test]
+    fn string_from_lowers_to_clone_of_literal() {
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(string_from_expr(string_expr("hello")))),
+            span: sp(),
+        };
+        let fn_def = make_fn("owned", vec![], string_ty(), body, vec![]);
+        let (func, _, diags) = lower_function(
+            &fn_def,
+            "test.vow",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        assert!(diags.is_empty(), "{diags:?}");
+        let extern_calls: Vec<&str> = func
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insts)
+            .filter_map(|inst| match &inst.data {
+                InstData::CallExtern(symbol) => Some(symbol.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            extern_calls,
+            vec!["__vow_string_literal", "__vow_string_clone"]
         );
     }
 

@@ -44,7 +44,7 @@ fn get_source_path(argv: Vec<String>) -> String {
         if first_byte != 45 {
             if i > 1 {
                 let prev: String = argv[i - 1];
-                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--max-k-step") || prev == String::from("--debug-trace") || prev == String::from("--filter") || prev == String::from("--timeout") || prev == String::from("--solver") || prev == String::from("--encoding") || prev == String::from("--vec-max") || prev == String::from("--string-max") || prev == String::from("--hashmap-max") || prev == String::from("--btreemap-max") || prev == String::from("--verify-jobs") {
+                if prev == "-o" || prev == "--mode" || prev == "--max-k-step" || prev == "--debug-trace" || prev == "--filter" || prev == "--timeout" || prev == "--solver" || prev == "--encoding" || prev == "--vec-max" || prev == "--string-max" || prev == "--hashmap-max" || prev == "--btreemap-max" || prev == "--verify-jobs" {
                     i = i - 1;
                 } else {
                     return a;
@@ -67,7 +67,7 @@ fn get_source_path_sub(argv: Vec<String>) -> String {
         if first_byte != 45 {
             if i > 2 {
                 let prev: String = argv[i - 1];
-                if prev == String::from("-o") || prev == String::from("--mode") || prev == String::from("--max-k-step") || prev == String::from("--debug-trace") || prev == String::from("--filter") || prev == String::from("--timeout") || prev == String::from("--solver") || prev == String::from("--encoding") || prev == String::from("--vec-max") || prev == String::from("--string-max") || prev == String::from("--hashmap-max") || prev == String::from("--btreemap-max") || prev == String::from("--verify-jobs") {
+                if prev == "-o" || prev == "--mode" || prev == "--max-k-step" || prev == "--debug-trace" || prev == "--filter" || prev == "--timeout" || prev == "--solver" || prev == "--encoding" || prev == "--vec-max" || prev == "--string-max" || prev == "--hashmap-max" || prev == "--btreemap-max" || prev == "--verify-jobs" {
                     i = i - 1;
                 } else {
                     return a;
@@ -146,22 +146,22 @@ fn get_subcommand(argv: Vec<String>) -> i64 {
         return CMD_NONE();
     }
     let sub: String = argv[1];
-    if sub == String::from("build") {
+    if sub == "build" {
         return CMD_BUILD();
     }
-    if sub == String::from("verify") {
+    if sub == "verify" {
         return CMD_VERIFY();
     }
-    if sub == String::from("test") {
+    if sub == "test" {
         return CMD_TEST();
     }
-    if sub == String::from("contracts") {
+    if sub == "contracts" {
         return CMD_CONTRACTS();
     }
-    if sub == String::from("skill") {
+    if sub == "skill" {
         return CMD_SKILL();
     }
-    if sub == String::from("mutants") {
+    if sub == "mutants" {
         return CMD_MUTANTS();
     }
     CMD_NONE()
@@ -311,7 +311,7 @@ fn validate_limits(vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max
 }
 
 fn resolve_verify_jobs(argv: Vec<String>) -> i64 [io] {
-    let raw: String = get_flag_arg(argv, String::from("--verify-jobs"));
+    let raw: String = get_flag_arg(argv, "--verify-jobs");
     if raw.len() == 0 {
         let n: i64 = num_cpus() / 2;
         if n < 1 { 1 } else { n }
@@ -424,25 +424,25 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
         diag_emit_verify_json(String::from("CompileFailed"), dctx, Vec::new());
         return 1;
     }
-    let max_k_step_str: String = get_flag_arg(argv, String::from("--max-k-step"));
+    let max_k_step_str: String = get_flag_arg(argv, "--max-k-step");
     let max_k_step: String = {
         if max_k_step_str.len() > 0 { max_k_step_str }
         else { String::from("50") }
     };
-    let vec_max_str: String = get_flag_arg(argv, String::from("--vec-max"));
+    let vec_max_str: String = get_flag_arg(argv, "--vec-max");
     let vec_max: i64 = { if vec_max_str.len() > 0 { parse_i64(vec_max_str) } else { 128 } };
-    let string_max_str: String = get_flag_arg(argv, String::from("--string-max"));
+    let string_max_str: String = get_flag_arg(argv, "--string-max");
     let string_max: i64 = { if string_max_str.len() > 0 { parse_i64(string_max_str) } else { 256 } };
-    let hashmap_max_str: String = get_flag_arg(argv, String::from("--hashmap-max"));
+    let hashmap_max_str: String = get_flag_arg(argv, "--hashmap-max");
     let hashmap_max: i64 = { if hashmap_max_str.len() > 0 { parse_i64(hashmap_max_str) } else { 64 } };
-    let btreemap_max_str: String = get_flag_arg(argv, String::from("--btreemap-max"));
+    let btreemap_max_str: String = get_flag_arg(argv, "--btreemap-max");
     let btreemap_max: i64 = { if btreemap_max_str.len() > 0 { parse_i64(btreemap_max_str) } else { 64 } };
     validate_limits(vec_max, string_max, hashmap_max, btreemap_max);
     let jobs: i64 = resolve_verify_jobs(argv);
-    let use_cache: bool = !has_flag(argv, String::from("--no-cache"));
-    let mut solver: String = get_flag_arg(argv, String::from("--solver"));
-    let encoding: String = get_flag_arg(argv, String::from("--encoding"));
-    let timeout_secs: String = get_flag_arg(argv, String::from("--timeout"));
+    let use_cache: bool = !has_flag(argv, "--no-cache");
+    let mut solver: String = get_flag_arg(argv, "--solver");
+    let encoding: String = get_flag_arg(argv, "--encoding");
+    let timeout_secs: String = get_flag_arg(argv, "--timeout");
     if encoding == String::from("ir") {
         if solver == String::from("boolector") || solver == String::from("bitwuzla") {
             eprintln_str(String::from("error: --encoding ir requires --solver z3"));
@@ -491,34 +491,34 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         return 1;
     }
     let out: String = {
-        if has_flag(argv, String::from("-o")) {
-            get_flag_arg(argv, String::from("-o"))
+        if has_flag(argv, "-o") {
+            get_flag_arg(argv, "-o")
         } else {
             default_output(path)
         }
     };
-    let mode_str: String = get_flag_arg(argv, String::from("--mode"));
+    let mode_str: String = get_flag_arg(argv, "--mode");
     let mode: i64 = {
         if mode_str == String::from("debug") { 1 }
         else if mode_str == String::from("profile") { 2 }
         else if mode_str == String::from("sanitize") { 3 }
         else { 0 }
     };
-    let trace_str: String = get_flag_arg(argv, String::from("--debug-trace"));
+    let trace_str: String = get_flag_arg(argv, "--debug-trace");
     let trace: i64 = {
         if trace_str == String::from("calls") { 1 }
         else if trace_str == String::from("full") { 2 }
         else { 0 }
     };
     let ir_mod: IrModule = fr.ir_mod;
-    if has_flag(argv, String::from("--dump-ir")) {
+    if has_flag(argv, "--dump-ir") {
         emit_ir_warnings(ir_mod, dctx);
         let ir_text: String = print_module(ir_mod);
         print_str(ir_text);
         return 0;
     }
     emit_ir_warnings(ir_mod, dctx);
-    let do_verify: bool = !has_flag(argv, String::from("--no-verify"));
+    let do_verify: bool = !has_flag(argv, "--no-verify");
     if do_verify {
         if !esbmc_exists() {
             eprintln_str(String::from("error: ESBMC not found; install ESBMC or use --no-verify to skip verification"));
@@ -526,15 +526,15 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
             return 1;
         }
     }
-    let use_cache: bool = !has_flag(argv, String::from("--no-cache"));
-    let max_k_step_str: String = get_flag_arg(argv, String::from("--max-k-step"));
+    let use_cache: bool = !has_flag(argv, "--no-cache");
+    let max_k_step_str: String = get_flag_arg(argv, "--max-k-step");
     let max_k_step: String = {
         if max_k_step_str.len() > 0 { max_k_step_str }
         else { String::from("50") }
     };
-    let mut solver: String = get_flag_arg(argv, String::from("--solver"));
-    let encoding: String = get_flag_arg(argv, String::from("--encoding"));
-    let timeout_secs: String = get_flag_arg(argv, String::from("--timeout"));
+    let mut solver: String = get_flag_arg(argv, "--solver");
+    let encoding: String = get_flag_arg(argv, "--encoding");
+    let timeout_secs: String = get_flag_arg(argv, "--timeout");
     if encoding == String::from("ir") {
         if solver == String::from("boolector") || solver == String::from("bitwuzla") {
             eprintln_str(String::from("error: --encoding ir requires --solver z3"));
@@ -544,13 +544,13 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
             solver = String::from("z3");
         }
     }
-    let vec_max_str: String = get_flag_arg(argv, String::from("--vec-max"));
+    let vec_max_str: String = get_flag_arg(argv, "--vec-max");
     let vec_max: i64 = { if vec_max_str.len() > 0 { parse_i64(vec_max_str) } else { 128 } };
-    let string_max_str: String = get_flag_arg(argv, String::from("--string-max"));
+    let string_max_str: String = get_flag_arg(argv, "--string-max");
     let string_max: i64 = { if string_max_str.len() > 0 { parse_i64(string_max_str) } else { 256 } };
-    let hashmap_max_str: String = get_flag_arg(argv, String::from("--hashmap-max"));
+    let hashmap_max_str: String = get_flag_arg(argv, "--hashmap-max");
     let hashmap_max: i64 = { if hashmap_max_str.len() > 0 { parse_i64(hashmap_max_str) } else { 64 } };
-    let btreemap_max_str: String = get_flag_arg(argv, String::from("--btreemap-max"));
+    let btreemap_max_str: String = get_flag_arg(argv, "--btreemap-max");
     let btreemap_max: i64 = { if btreemap_max_str.len() > 0 { parse_i64(btreemap_max_str) } else { 64 } };
     validate_limits(vec_max, string_max, hashmap_max, btreemap_max);
     let jobs: i64 = resolve_verify_jobs(argv);
@@ -685,27 +685,27 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
     if path.len() == 0 {
         path = String::from(".");
     }
-    let filter: String = get_flag_arg(argv, String::from("--filter"));
-    let mode_str: String = get_flag_arg(argv, String::from("--mode"));
+    let filter: String = get_flag_arg(argv, "--filter");
+    let mode_str: String = get_flag_arg(argv, "--mode");
     let mode: i64 = {
         if mode_str == String::from("release") { 0 }
         else { 1 }
     };
-    let timeout_str: String = get_flag_arg(argv, String::from("--timeout"));
+    let timeout_str: String = get_flag_arg(argv, "--timeout");
     let timeout_ms: i64 = {
         if timeout_str.len() > 0 { parse_i64(timeout_str) }
         else { 30000 }
     };
-    let do_verify: bool = has_flag(argv, String::from("--verify"));
-    let t_mks_str: String = get_flag_arg(argv, String::from("--max-k-step"));
+    let do_verify: bool = has_flag(argv, "--verify");
+    let t_mks_str: String = get_flag_arg(argv, "--max-k-step");
     let t_max_k_step: String = { if t_mks_str.len() > 0 { t_mks_str } else { String::from("50") } };
-    let t_vm_str: String = get_flag_arg(argv, String::from("--vec-max"));
+    let t_vm_str: String = get_flag_arg(argv, "--vec-max");
     let t_vec_max: i64 = { if t_vm_str.len() > 0 { parse_i64(t_vm_str) } else { 128 } };
-    let t_sm_str: String = get_flag_arg(argv, String::from("--string-max"));
+    let t_sm_str: String = get_flag_arg(argv, "--string-max");
     let t_string_max: i64 = { if t_sm_str.len() > 0 { parse_i64(t_sm_str) } else { 256 } };
-    let t_hm_str: String = get_flag_arg(argv, String::from("--hashmap-max"));
+    let t_hm_str: String = get_flag_arg(argv, "--hashmap-max");
     let t_hashmap_max: i64 = { if t_hm_str.len() > 0 { parse_i64(t_hm_str) } else { 64 } };
-    let t_bm_str: String = get_flag_arg(argv, String::from("--btreemap-max"));
+    let t_bm_str: String = get_flag_arg(argv, "--btreemap-max");
     let t_btreemap_max: i64 = { if t_bm_str.len() > 0 { parse_i64(t_bm_str) } else { 64 } };
     validate_limits(t_vec_max, t_string_max, t_hashmap_max, t_btreemap_max);
     let t_jobs: i64 = resolve_verify_jobs(argv);
@@ -738,7 +738,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
         }
     }
 
-    fs_mkdir(String::from("build"));
+    fs_mkdir("build");
 
     let entries_json: Vec<String> = Vec::new();
     let mut passed: i64 = 0;
@@ -961,7 +961,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
 }
 
 fn run_legacy(argv: Vec<String>) -> i32 [io] {
-    let has_output: bool = has_flag(argv, String::from("-o"));
+    let has_output: bool = has_flag(argv, "-o");
     let path: String = get_source_path(argv);
     if path.len() == 0 {
         eprintln_str("usage: main [-o <output>] <file.vow>");
@@ -974,8 +974,8 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
     let n_errors: i64 = checked.n_errors;
     let ir_mod: IrModule = fr.ir_mod;
     diag_ctx_print_all(dctx);
-    let emit_c: bool = has_flag(argv, String::from("--emit-c"));
-    let do_verify: bool = has_flag(argv, String::from("--verify"));
+    let emit_c: bool = has_flag(argv, "--emit-c");
+    let do_verify: bool = has_flag(argv, "--verify");
     if do_verify {
         eprintln_str(str4(i64_to_str(n_items), String::from(" items, "), i64_to_str(n_errors), String::from(" errors")));
     } else {
@@ -997,20 +997,20 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
                 diag_emit_verify_json(String::from("VerifyFailed"), dctx, Vec::new());
                 return 1;
             }
-            let max_k_step_str: String = get_flag_arg(argv, String::from("--max-k-step"));
+            let max_k_step_str: String = get_flag_arg(argv, "--max-k-step");
             let max_k_step: String = {
                 if max_k_step_str.len() > 0 { max_k_step_str }
                 else { String::from("50") }
             };
-            let vec_max_leg: i64 = { let s: String = get_flag_arg(argv, String::from("--vec-max")); if s.len() > 0 { parse_i64(s) } else { 128 } };
-            let string_max_leg: i64 = { let s: String = get_flag_arg(argv, String::from("--string-max")); if s.len() > 0 { parse_i64(s) } else { 256 } };
-            let hashmap_max_leg: i64 = { let s: String = get_flag_arg(argv, String::from("--hashmap-max")); if s.len() > 0 { parse_i64(s) } else { 64 } };
-            let btreemap_max_leg: i64 = { let s: String = get_flag_arg(argv, String::from("--btreemap-max")); if s.len() > 0 { parse_i64(s) } else { 64 } };
+            let vec_max_leg: i64 = { let s: String = get_flag_arg(argv, "--vec-max"); if s.len() > 0 { parse_i64(s) } else { 128 } };
+            let string_max_leg: i64 = { let s: String = get_flag_arg(argv, "--string-max"); if s.len() > 0 { parse_i64(s) } else { 256 } };
+            let hashmap_max_leg: i64 = { let s: String = get_flag_arg(argv, "--hashmap-max"); if s.len() > 0 { parse_i64(s) } else { 64 } };
+            let btreemap_max_leg: i64 = { let s: String = get_flag_arg(argv, "--btreemap-max"); if s.len() > 0 { parse_i64(s) } else { 64 } };
             validate_limits(vec_max_leg, string_max_leg, hashmap_max_leg, btreemap_max_leg);
             emit_ir_warnings(ir_mod, dctx);
             let fns: Vec<IrFunction> = ir_mod.functions;
             let ces: Vec<VerifyCE> = Vec::new();
-            let use_cache_leg: bool = !has_flag(argv, String::from("--no-cache"));
+            let use_cache_leg: bool = !has_flag(argv, "--no-cache");
             let jobs_leg: i64 = resolve_verify_jobs(argv);
             let const_fn_indices_leg: Vec<i64> = detect_const_fns(ir_mod);
             let all_proven: i64 = run_verify_loop(fns, ir_mod, const_fn_indices_leg, dctx, path, ces, max_k_step, use_cache_leg, String::from(""), String::from(""), String::from(""), vec_max_leg, string_max_leg, hashmap_max_leg, btreemap_max_leg, jobs_leg);
@@ -1030,15 +1030,15 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
             let c_code: String = emit_c_module(ir_mod, VOW_VEC_MAX(), VOW_STRING_MAX(), VOW_HASHMAP_MAX(), VOW_BTREEMAP_MAX());
             print_str(c_code);
         } else if has_output {
-            let out: String = get_flag_arg(argv, String::from("-o"));
-            let mode_str: String = get_flag_arg(argv, String::from("--mode"));
+            let out: String = get_flag_arg(argv, "-o");
+            let mode_str: String = get_flag_arg(argv, "--mode");
             let mode: i64 = {
                 if mode_str == String::from("debug") { 1 }
                 else if mode_str == String::from("profile") { 2 }
                 else if mode_str == String::from("sanitize") { 3 }
                 else { 0 }
             };
-            let trace_str: String = get_flag_arg(argv, String::from("--debug-trace"));
+            let trace_str: String = get_flag_arg(argv, "--debug-trace");
             let trace: i64 = {
                 if trace_str == String::from("calls") { 1 }
                 else if trace_str == String::from("full") { 2 }
@@ -1967,7 +1967,7 @@ fn skill_json() -> String {
     r.push_str(String::from("        \"v[i] = val\"\n"));
     r.push_str(String::from("      ],\n"));
     r.push_str(String::from("      \"String\": [\n"));
-    r.push_str(String::from("        \"String::from(lit)\",\n"));
+    r.push_str(String::from("        \"String::from(s)\",\n"));
     r.push_str(String::from("        \"String::new()\",\n"));
     r.push_str(String::from("        \"String::from_raw_parts_copy(ptr, len)\",\n"));
     r.push_str(String::from("        \".len()\",\n"));
@@ -2471,6 +2471,10 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Supported escape sequences: `\\n`, `\\t`, `\\r`, `\\\\`, `\\\"`, `\\0`.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("String literals have type `String` and are backed by a read-only static\n"));
+    r.push_str(String::from("descriptor. Passing or returning a literal does not allocate. To obtain a\n"));
+    r.push_str(String::from("mutable, arena-owned copy, use `String::from(\"...\")`.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("## Operators\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Wrapping Arithmetic (default)\n"));
@@ -2830,7 +2834,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Method              | Signature                   |\n"));
     r.push_str(String::from("|---------------------|-----------------------------|\n"));
-    r.push_str(String::from("| `String::from(lit)` | `(&str) -> String`          |\n"));
+    r.push_str(String::from("| `String::from(s)`   | `(String) -> String` -- mutable copy |\n"));
     r.push_str(String::from("| `String::new()`     | `() -> String`              |\n"));
     r.push_str(String::from("| `String::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> String` |\n"));
     r.push_str(String::from("| `.len()`            | `() -> i64`                 |\n"));
@@ -2989,7 +2993,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `debug_i64`      | `fn(v: i64) -> ()`                         | `[]`       |\n"));
     r.push_str(String::from("| `debug_u64`      | `fn(v: u64) -> ()`                         | `[]`       |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Debug print semantics:** Debug prints are effect-free and callable from pure functions. In debug and sanitize modes (`--mode debug`, `--mode sanitize`), they write to stderr. In release and profile modes, the debug call itself is not emitted -- no function call occurs. However, argument expressions are still evaluated (e.g., `String::from(\"label\")` still allocates). They are also no-ops during verification. Use them to trace values inside pure kernel code without restructuring the effect hierarchy.\n"));
+    r.push_str(String::from("**Debug print semantics:** Debug prints are effect-free and callable from pure functions. In debug and sanitize modes (`--mode debug`, `--mode sanitize`), they write to stderr. In release and profile modes, the debug call itself is not emitted -- no function call occurs. However, argument expressions are still evaluated (a direct literal such as `\"label\"` is static, while `String::from(\"label\")` still allocates a mutable copy). They are also no-ops during verification. Use them to trace values inside pure kernel code without restructuring the effect hierarchy.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("#### Filesystem\n"));
     r.push_str(String::from("\n"));
@@ -5575,6 +5579,10 @@ fn skill_support_content_0() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("Supported escape sequences: `\\n`, `\\t`, `\\r`, `\\\\`, `\\\"`, `\\0`.\n"));
     r.push_str(String::from("\n"));
+    r.push_str(String::from("String literals have type `String` and are backed by a read-only static\n"));
+    r.push_str(String::from("descriptor. Passing or returning a literal does not allocate. To obtain a\n"));
+    r.push_str(String::from("mutable, arena-owned copy, use `String::from(\"...\")`.\n"));
+    r.push_str(String::from("\n"));
     r.push_str(String::from("## Operators\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Wrapping Arithmetic (default)\n"));
@@ -5934,7 +5942,7 @@ fn skill_support_content_0() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("| Method              | Signature                   |\n"));
     r.push_str(String::from("|---------------------|-----------------------------|\n"));
-    r.push_str(String::from("| `String::from(lit)` | `(&str) -> String`          |\n"));
+    r.push_str(String::from("| `String::from(s)`   | `(String) -> String` -- mutable copy |\n"));
     r.push_str(String::from("| `String::new()`     | `() -> String`              |\n"));
     r.push_str(String::from("| `String::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> String` |\n"));
     r.push_str(String::from("| `.len()`            | `() -> i64`                 |\n"));
@@ -6093,7 +6101,7 @@ fn skill_support_content_0() -> String {
     r.push_str(String::from("| `debug_i64`      | `fn(v: i64) -> ()`                         | `[]`       |\n"));
     r.push_str(String::from("| `debug_u64`      | `fn(v: u64) -> ()`                         | `[]`       |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Debug print semantics:** Debug prints are effect-free and callable from pure functions. In debug and sanitize modes (`--mode debug`, `--mode sanitize`), they write to stderr. In release and profile modes, the debug call itself is not emitted -- no function call occurs. However, argument expressions are still evaluated (e.g., `String::from(\"label\")` still allocates). They are also no-ops during verification. Use them to trace values inside pure kernel code without restructuring the effect hierarchy.\n"));
+    r.push_str(String::from("**Debug print semantics:** Debug prints are effect-free and callable from pure functions. In debug and sanitize modes (`--mode debug`, `--mode sanitize`), they write to stderr. In release and profile modes, the debug call itself is not emitted -- no function call occurs. However, argument expressions are still evaluated (a direct literal such as `\"label\"` is static, while `String::from(\"label\")` still allocates a mutable copy). They are also no-ops during verification. Use them to trace values inside pure kernel code without restructuring the effect hierarchy.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("#### Filesystem\n"));
     r.push_str(String::from("\n"));
@@ -6121,6 +6129,7 @@ fn skill_support_content_0() -> String {
     r.push_str(String::from("| `string_split`        | `fn(s: String, delim: String) -> Vec<String>`    | `[]`    |\n"));
     r.push_str(String::from("| `string_starts_with`  | `fn(s: String, prefix: String) -> i64`           | `[]`    |\n"));
     r.push_str(String::from("| `string_ends_with`    | `fn(s: String, suffix: String) -> i64`           | `[]`    |\n"));
+    r.push_str(String::from("| `string_matches_literal_at` | `fn(s: String, pos: i64, literal: String literal) -> i64` | `[]` |\n"));
     r.push_str(String::from("| `string_trim`         | `fn(s: String) -> String`                        | `[]`    |\n"));
     r.push_str(String::from("| `string_to_upper`     | `fn(s: String) -> String`                        | `[]`    |\n"));
     r.push_str(String::from("| `string_to_lower`     | `fn(s: String) -> String`                        | `[]`    |\n"));
@@ -6152,8 +6161,13 @@ fn skill_support_content_0() -> String {
     r.push_str(String::from("| Function         | Signature                                  | Effects    |\n"));
     r.push_str(String::from("|------------------|--------------------------------------------|------------|\n"));
     r.push_str(String::from("| `num_cpus`       | `fn() -> i64`                              | `[io]`     |\n"));
+    r.push_str(String::from("| `memory_root_arena_bytes` | `fn() -> u64`                    | `[io]`     |\n"));
+    r.push_str(String::from("| `memory_peak_bytes` | `fn() -> u64`                           | `[io]`     |\n"));
+    r.push_str(String::from("| `memory_alloc_count_since_start` | `fn() -> u64`              | `[io]`     |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`num_cpus()` returns the number of available logical CPUs (from `std::thread::available_parallelism`), or `1` if the query fails. Used to size worker pools (e.g. the default `--verify-jobs` value).\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("`memory_root_arena_bytes()` returns the current bytes retained by root-region arena chunks. `memory_peak_bytes()` returns the peak live bytes retained by all open arena chunks since process start. `memory_alloc_count_since_start()` returns the number of successful Vow arena allocation requests since process start. These queries do not allocate; they are effectful because they observe runtime process state.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("#### Encoding\n"));
     r.push_str(String::from("\n"));
@@ -6194,7 +6208,9 @@ fn skill_support_content_0() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Filesystem return values:** `fs_write`, `fs_mkdir`, `fs_remove`, `fs_remove_dir`, and `fs_rename` return `i64`: 0 on success, non-zero on failure. `fs_open`, `fs_status`, and `fs_close` use the streaming status codes above. `fs_exists` and `fs_is_dir` are predicates: they return 1 for true, 0 for false. Errors (null pointer, invalid UTF-8) also return 0, so callers cannot distinguish \"false\" from \"error\".\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**`string_starts_with` / `string_ends_with` return values:** Return `i64`: 1 if true, 0 if false.\n"));
+    r.push_str(String::from("**`string_starts_with` / `string_ends_with` / `string_matches_literal_at` return values:** Return `i64`: 1 if true, 0 if false.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**`string_matches_literal_at` literal operand:** The third argument must be written as a string literal at the call site. The compiler lowers that literal to static bytes plus an explicit byte length, so no temporary `String` allocation is created and embedded NUL bytes are preserved. Passing a variable or computed `String` as the third argument is a type-check error (`StaticLiteralRequired`). Use `string_starts_with`, `string_ends_with`, or `String` methods when the needle must be dynamic.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**`process_run` vs `process_start`:** `process_run(cmd, args)` runs a subprocess synchronously and returns its exit code. After it returns, `process_get_stdout()` and `process_get_stderr()` retrieve the captured output of the most recent `process_run` call. `process_start(cmd, args)` launches a subprocess asynchronously and returns a process ID. Use `process_wait(pid)` to wait for completion and get the exit code, and `process_stdout_for(pid)` / `process_stderr_for(pid)` to retrieve output.\n"));
     r.push_str(String::from("\n"));
@@ -6775,10 +6791,10 @@ fn skill_support_content_2() -> String {
     r.push_str(String::from("| Type              | Default Max Capacity | CLI Flag | Supported Operations |\n"));
     r.push_str(String::from("|-------------------|---------------------|----------|----------------------------------------------|\n"));
     r.push_str(String::from("| `Vec<T>`          | 128                 | `--vec-max <N>` | `new`, `push`, `pop`, `len`, `get`, `set`    |\n"));
-    r.push_str(String::from("| `String`          | 256                 | `--string-max <N>` | `from`, `len`, `push_byte`, `push_str`, `byte_at` |\n"));
+    r.push_str(String::from("| `String`          | 256                 | `--string-max <N>` | `from`, `len`, `push_byte`, `push_str`, `byte_at`, `matches_literal_at` |\n"));
     r.push_str(String::from("| `HashMap<K, V>`   | 64                  | `--hashmap-max <N>` | `new`, `insert`, `get`, `contains_key`, `len`|\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("These support the same operations as the runtime but with bounded storage. `String::from` produces a nondeterministic length (0 to max-1) in verification.\n"));
+    r.push_str(String::from("These support the same operations as the runtime but with bounded storage. `String::from` produces a nondeterministic length (0 to max-1) in verification. `string_matches_literal_at` is modeled against the literal's concrete bytes and byte length; the third argument must be a string literal so the verifier never has to infer static text from a dynamic `String`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Blame Model\n"));
     r.push_str(String::from("\n"));
@@ -7157,6 +7173,21 @@ fn skill_support_content_3() -> String {
     r.push_str(String::from("**Output:** `function body has type 'bool' but declared return type is 'i32'`\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Fix:** Change the expression or the declared type to match.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("### StaticLiteralRequired\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Phase:** Type Checker\n"));
+    r.push_str(String::from("**Meaning:** A compiler intrinsic requires a string literal operand so it can be lowered without allocation.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("```vow\n"));
+    r.push_str(String::from("fn f(s: String, key: String) -> i64 {\n"));
+    r.push_str(String::from("    string_matches_literal_at(s, 0, key)\n"));
+    r.push_str(String::from("}\n"));
+    r.push_str(String::from("```\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Output:** `string_matches_literal_at requires a string literal as its third argument`\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Fix:** Pass a literal directly, for example `string_matches_literal_at(s, 0, \"name\")`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### EffectViolation\n"));
     r.push_str(String::from("\n"));
@@ -8198,6 +8229,7 @@ fn skill_support_content_8() -> String {
     r.push_str(String::from("        \"UnexpectedToken\",\n"));
     r.push_str(String::from("        \"MissingDelimiter\",\n"));
     r.push_str(String::from("        \"TypeMismatch\",\n"));
+    r.push_str(String::from("        \"StaticLiteralRequired\",\n"));
     r.push_str(String::from("        \"EffectViolation\",\n"));
     r.push_str(String::from("        \"LinearTypeViolation\",\n"));
     r.push_str(String::from("        \"NonExhaustiveMatch\",\n"));
@@ -8647,10 +8679,10 @@ fn run_skill(argv: Vec<String>) -> i32 [io, read, write] {
 }
 
 fn maybe_auto_install_skill() [io, write] {
-    if fs_is_dir(String::from(".claude")) != 1 {
+    if fs_is_dir(".claude") != 1 {
         return;
     }
-    let target: String = String::from(".claude/skills/vow-toolchain/SKILL.md");
+    let target: String = ".claude/skills/vow-toolchain/SKILL.md";
     if fs_exists(target) == 1 {
         return;
     }
@@ -8683,16 +8715,16 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     }
     let ir_mod: IrModule = fr.ir_mod;
 
-    let do_verify: bool = has_flag(argv, String::from("--verify"));
-    let use_cache: bool = !has_flag(argv, String::from("--no-cache"));
-    let mks_str: String = get_flag_arg(argv, String::from("--max-k-step"));
+    let do_verify: bool = has_flag(argv, "--verify");
+    let use_cache: bool = !has_flag(argv, "--no-cache");
+    let mks_str: String = get_flag_arg(argv, "--max-k-step");
     let max_k_step: String = {
         if mks_str.len() > 0 { mks_str }
         else { String::from("50") }
     };
-    let mut solver: String = get_flag_arg(argv, String::from("--solver"));
-    let encoding: String = get_flag_arg(argv, String::from("--encoding"));
-    let timeout_secs: String = get_flag_arg(argv, String::from("--timeout"));
+    let mut solver: String = get_flag_arg(argv, "--solver");
+    let encoding: String = get_flag_arg(argv, "--encoding");
+    let timeout_secs: String = get_flag_arg(argv, "--timeout");
     if encoding == String::from("ir") {
         if solver == String::from("boolector") || solver == String::from("bitwuzla") {
             eprintln_str(String::from("error: --encoding ir requires --solver z3"));
@@ -8702,10 +8734,10 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
             solver = String::from("z3");
         }
     }
-    let vec_max_c: i64 = { let s: String = get_flag_arg(argv, String::from("--vec-max")); if s.len() > 0 { parse_i64(s) } else { 128 } };
-    let string_max_c: i64 = { let s: String = get_flag_arg(argv, String::from("--string-max")); if s.len() > 0 { parse_i64(s) } else { 256 } };
-    let hashmap_max_c: i64 = { let s: String = get_flag_arg(argv, String::from("--hashmap-max")); if s.len() > 0 { parse_i64(s) } else { 64 } };
-    let btreemap_max_c: i64 = { let s: String = get_flag_arg(argv, String::from("--btreemap-max")); if s.len() > 0 { parse_i64(s) } else { 64 } };
+    let vec_max_c: i64 = { let s: String = get_flag_arg(argv, "--vec-max"); if s.len() > 0 { parse_i64(s) } else { 128 } };
+    let string_max_c: i64 = { let s: String = get_flag_arg(argv, "--string-max"); if s.len() > 0 { parse_i64(s) } else { 256 } };
+    let hashmap_max_c: i64 = { let s: String = get_flag_arg(argv, "--hashmap-max"); if s.len() > 0 { parse_i64(s) } else { 64 } };
+    let btreemap_max_c: i64 = { let s: String = get_flag_arg(argv, "--btreemap-max"); if s.len() > 0 { parse_i64(s) } else { 64 } };
     validate_limits(vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
     // Accepted for CLI parity with build/verify/test; validates a 0 rejection
     // uniformly, then is discarded because the contracts verify loop is serial.
@@ -8878,8 +8910,8 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
 
 fn main() -> i32 [io, read, write] {
     let argv: Vec<String> = args();
-    if has_flag(argv, String::from("--help")) {
-        if has_flag(argv, String::from("--human")) {
+    if has_flag(argv, "--help") {
+        if has_flag(argv, "--human") {
             print_str(skill_human());
         } else {
             print_str(skill_json());

@@ -1441,6 +1441,21 @@ pub unsafe extern "C" fn __vow_string_clone_into_arena(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_clone(source: *const u8) -> *mut u8 {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { __vow_string_clone_into_arena(&raw mut __vow_root_arena, source) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_clone_in_arena(
+    arena: *mut VowArena,
+    source: *const u8,
+) -> *mut u8 {
+    unsafe { __vow_string_clone_into_arena(arena, source) }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_pin_to_root(source: *const u8) -> *mut u8 {
     let _guard = ROOT_ARENA_LOCK.lock().unwrap();
     unsafe { ensure_root_arena_locked() };
@@ -3905,6 +3920,24 @@ mod tests {
         let pinned_vals = unsafe { std::slice::from_raw_parts(pv.ptr as *const i64, pv.len) };
         assert_eq!(pinned_vals, &[7, 8]);
         unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn string_clone_wrapper_copies_rodata_into_root() {
+        let bytes: &[u8] = b"hello";
+        let source = VowVec {
+            ptr: bytes.as_ptr() as *mut u8,
+            len: bytes.len(),
+            cap: VOW_CAP_RODATA,
+        };
+
+        let cloned = unsafe { __vow_string_clone(&source as *const VowVec as *const u8) };
+        let cv = unsafe { &*(cloned as *const VowVec) };
+        assert_eq!(cv.len, 5);
+        assert_eq!(cv.cap, 5, "clone must be mutable, not rodata");
+        assert_ne!(cv.ptr, source.ptr, "clone must copy backing bytes");
+        let cloned_bytes = unsafe { std::slice::from_raw_parts(cv.ptr, cv.len) };
+        assert_eq!(cloned_bytes, b"hello");
     }
 
     #[test]

@@ -858,7 +858,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let str_id: i64 = lctx_emit(ctx, IOP_CONST_STR(), ITY_PTR(), args, IDATA_CONST_STR(), pool_idx, 0, String::from(""));
         let call_args: Vec<i64> = Vec::new();
         call_args.push(str_id);
-        let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_from_cstr"));
+        let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_literal"));
         // Anchor this Call to the literal span: the IOP_CONST_STR above is
         // not the heap producer, so the call needs its own span for
         // call-anchored diagnostics.
@@ -2001,9 +2001,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let nargs: i64 = list_len(a, fields_lid);
             if nargs > 0 {
                 let arg_eid: i64 = list_get(a, fields_lid, 0);
-                let ptr_id: i64 = lower_expr(ctx, arg_eid);
-                lctx_tag(ctx, ptr_id, String::from("String"));
-                return ptr_id;
+                let source_id: i64 = lower_expr(ctx, arg_eid);
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(source_id);
+                let clone_id: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_clone"));
+                lctx_tag(ctx, clone_id, String::from("String"));
+                return clone_id;
             }
         }
 

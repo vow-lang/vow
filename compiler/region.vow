@@ -275,7 +275,7 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
     // (program-lifetime placement) as `RegionRootEscape` notes — gated by
     // `int_kinds` so we only fire on functions that may propagate the alloc
     // to a caller. See arena_memory.md §4.4.
-    emit_root_escape_notes_module(m, region_keys, region_vals,
+    emit_root_escape_notes_module(m, id_to_inst_per_fn, region_keys, region_vals,
                                    note_region_keys, note_region_vals,
                                    int_kinds, int_se_src_kinds, dctx);
 
@@ -1108,6 +1108,7 @@ fn check_store_effects_at_call(
 // an informational diagnostic.
 fn emit_root_escape_notes_module(
     m: IrModule,
+    id_to_inst_per_fn: Vec<Vec<IrInst>>,
     region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
     note_region_keys: Vec<Vec<i64>>, note_region_vals: Vec<Vec<i64>>,
     int_kinds: Vec<i64>,
@@ -1150,6 +1151,7 @@ fn emit_root_escape_notes_module(
         let rvals: Vec<i64> = region_vals[fi];
         let note_rkeys: Vec<i64> = note_region_keys[fi];
         let note_rvals: Vec<i64> = note_region_vals[fi];
+        let id_to_inst: Vec<IrInst> = id_to_inst_per_fn[fi];
         let bks: Vec<IrBlock> = f.blocks;
         // Pre-collect returned IDs once per function so the inner skip is O(N)
         // total instead of O(N*Returns) — was O(N²) for functions with many
@@ -1180,8 +1182,8 @@ fn emit_root_escape_notes_module(
                     // Skip the value being returned — that's the canonical
                     // FreshInCaller return path, not a side-effect escape.
                     if !region_vec_contains_i64(returned_ids, inst.id) {
-                        let span_start: i64 = inst.ostart;
-                        let span_len: i64 = inst.olen;
+                        let span_start: i64 = root_escape_span_start(inst, id_to_inst);
+                        let span_len: i64 = root_escape_span_len(inst, id_to_inst);
                         let d: Diagnostic = diag_new(
                             SEV_NOTE(),
                             EC_REGION_ROOT_ESCAPE(),
@@ -1204,6 +1206,32 @@ fn emit_root_escape_notes_module(
         }
         fi = fi + 1;
     }
+}
+
+fn root_escape_span_start(inst: IrInst, id_to_inst: Vec<IrInst>) -> i64 {
+    if inst.olen > 0 {
+        return inst.ostart;
+    }
+    if inst.op == IOP_CALL() && inst.args.len() > 0 {
+        let source: IrInst = lookup_inst_or_default(id_to_inst, inst.args[0]);
+        if source.id >= 0 && source.olen > 0 {
+            return source.ostart;
+        }
+    }
+    inst.ostart
+}
+
+fn root_escape_span_len(inst: IrInst, id_to_inst: Vec<IrInst>) -> i64 {
+    if inst.olen > 0 {
+        return inst.olen;
+    }
+    if inst.op == IOP_CALL() && inst.args.len() > 0 {
+        let source: IrInst = lookup_inst_or_default(id_to_inst, inst.args[0]);
+        if source.id >= 0 && source.olen > 0 {
+            return source.olen;
+        }
+    }
+    inst.olen
 }
 
 // Build the FreshInCaller return-value skip-set used by
@@ -3349,6 +3377,8 @@ fn string_creation_extern(sym: String) -> bool {
         || sym == String::from("__vow_string_new_in_arena")
         || sym == String::from("__vow_string_from_cstr")
         || sym == String::from("__vow_string_from_cstr_in_arena")
+        || sym == String::from("__vow_string_clone")
+        || sym == String::from("__vow_string_clone_in_arena")
         || sym == String::from("__vow_string_substr")
         || sym == String::from("__vow_string_substr_in_arena")
         || sym == String::from("__vow_string_substring")

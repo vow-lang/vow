@@ -177,6 +177,10 @@ false
 
 Supported escape sequences: `\n`, `\t`, `\r`, `\\`, `\"`, `\0`.
 
+String literals have type `String` and are backed by a read-only static
+descriptor. Passing or returning a literal does not allocate. To obtain a
+mutable, arena-owned copy, use `String::from("...")`.
+
 ## Operators
 
 ### Wrapping Arithmetic (default)
@@ -536,7 +540,7 @@ m.contains_key(k)
 
 | Method              | Signature                   |
 |---------------------|-----------------------------|
-| `String::from(lit)` | `(&str) -> String`          |
+| `String::from(s)`   | `(String) -> String` — mutable copy |
 | `String::new()`     | `() -> String`              |
 | `String::from_raw_parts_copy(ptr, len)` | `(i64, i64) -> String` |
 | `.len()`            | `() -> i64`                 |
@@ -695,7 +699,7 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 | `debug_i64`      | `fn(v: i64) -> ()`                         | `[]`       |
 | `debug_u64`      | `fn(v: u64) -> ()`                         | `[]`       |
 
-**Debug print semantics:** Debug prints are effect-free and callable from pure functions. In debug and sanitize modes (`--mode debug`, `--mode sanitize`), they write to stderr. In release and profile modes, the debug call itself is not emitted — no function call occurs. However, argument expressions are still evaluated (e.g., `String::from("label")` still allocates). They are also no-ops during verification. Use them to trace values inside pure kernel code without restructuring the effect hierarchy.
+**Debug print semantics:** Debug prints are effect-free and callable from pure functions. In debug and sanitize modes (`--mode debug`, `--mode sanitize`), they write to stderr. In release and profile modes, the debug call itself is not emitted — no function call occurs. However, argument expressions are still evaluated (a direct literal such as `"label"` is static, while `String::from("label")` still allocates a mutable copy). They are also no-ops during verification. Use them to trace values inside pure kernel code without restructuring the effect hierarchy.
 
 #### Filesystem
 

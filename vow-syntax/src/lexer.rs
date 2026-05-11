@@ -361,7 +361,7 @@ impl<'src> Lexer<'src> {
 
     fn lex_string(&mut self, start: usize) -> Result<Token, LexError> {
         self.pos += 1; // consume opening '"'
-        let mut value = String::new();
+        let mut value = Vec::new();
         loop {
             if self.pos >= self.src.len() {
                 return Err(LexError {
@@ -374,7 +374,10 @@ impl<'src> Lexer<'src> {
                 self.pos += 1; // consume closing '"'
                 let len = (self.pos - start) as u32;
                 return Ok(Token::new(
-                    TokenKind::LitString(value),
+                    TokenKind::LitString(String::from_utf8(value).map_err(|_| LexError {
+                        message: "invalid UTF-8 in string literal".to_string(),
+                        span: Span::new(start as u32, len),
+                    })?),
                     Span::new(start as u32, len),
                 ));
             }
@@ -388,20 +391,20 @@ impl<'src> Lexer<'src> {
                 }
                 let esc = self.current_byte();
                 match esc {
-                    b'n' => value.push('\n'),
-                    b't' => value.push('\t'),
-                    b'r' => value.push('\r'),
-                    b'\\' => value.push('\\'),
-                    b'"' => value.push('"'),
-                    b'0' => value.push('\0'),
+                    b'n' => value.push(b'\n'),
+                    b't' => value.push(b'\t'),
+                    b'r' => value.push(b'\r'),
+                    b'\\' => value.push(b'\\'),
+                    b'"' => value.push(b'"'),
+                    b'0' => value.push(b'\0'),
                     _ => {
-                        value.push('\\');
-                        value.push(esc as char);
+                        value.push(b'\\');
+                        value.push(esc);
                     }
                 }
                 self.pos += 1;
             } else {
-                value.push(b as char);
+                value.push(b);
                 self.pos += 1;
             }
         }
@@ -489,6 +492,12 @@ mod tests {
     fn lex_string_literal() {
         let kinds = lex("\"hello world\"");
         assert!(matches!(&kinds[0], TokenKind::LitString(s) if s == "hello world"));
+    }
+
+    #[test]
+    fn lex_string_literal_preserves_utf8_bytes() {
+        let kinds = lex("\"+ → -\"");
+        assert!(matches!(&kinds[0], TokenKind::LitString(s) if s == "+ → -"));
     }
 
     #[test]
