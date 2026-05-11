@@ -2180,7 +2180,6 @@ fn skill_entrypoint() -> String {
     r.push_str(String::from("  \"fix this counterexample\", \"add contracts\", \"why did verification fail\",\n"));
     r.push_str(String::from("  \"ESBMC\", \"vow build\", or \"vow verify\".\n"));
     r.push_str(String::from("argument-hint: \"[file.vow]\"\n"));
-    r.push_str(String::from("allowed-tools: \"Bash(build/vowc *) Bash(vow *) Bash(vowc *) Bash(ulimit *)\"\n"));
     r.push_str(String::from("---\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("# Vow Toolchain\n"));
@@ -2233,7 +2232,6 @@ fn skill_bundle() -> String {
     r.push_str(String::from("  \"fix this counterexample\", \"add contracts\", \"why did verification fail\",\n"));
     r.push_str(String::from("  \"ESBMC\", \"vow build\", or \"vow verify\".\n"));
     r.push_str(String::from("argument-hint: \"[file.vow]\"\n"));
-    r.push_str(String::from("allowed-tools: \"Bash(build/vowc *) Bash(vow *) Bash(vowc *) Bash(ulimit *)\"\n"));
     r.push_str(String::from("---\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("# Vow Language Reference\n"));

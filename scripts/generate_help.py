@@ -835,7 +835,6 @@ when_to_use: >-
   "fix this counterexample", "add contracts", "why did verification fail",
   "ESBMC", "vow build", or "vow verify".
 argument-hint: "[file.vow]"
-allowed-tools: "Bash(build/vowc *) Bash(vow *) Bash(vowc *) Bash(ulimit *)"
 ---"""
 
 

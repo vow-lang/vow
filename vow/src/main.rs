@@ -1472,7 +1472,6 @@ when_to_use: >-
   "fix this counterexample", "add contracts", "why did verification fail",
   "ESBMC", "vow build", or "vow verify".
 argument-hint: "[file.vow]"
-allowed-tools: "Bash(build/vowc *) Bash(vow *) Bash(vowc *) Bash(ulimit *)"
 ---
 
 # Vow Toolchain
@@ -1525,7 +1524,6 @@ when_to_use: >-
   "fix this counterexample", "add contracts", "why did verification fail",
   "ESBMC", "vow build", or "vow verify".
 argument-hint: "[file.vow]"
-allowed-tools: "Bash(build/vowc *) Bash(vow *) Bash(vowc *) Bash(ulimit *)"
 ---
 
 # Vow Language Reference
@@ -10559,6 +10557,7 @@ fn main() -> i32 [io] {
         assert!(contents.starts_with("---\nname: vow-toolchain\n"));
         assert!(contents.contains("when_to_use: >-"));
         assert!(!contents.contains("\npaths:"));
+        assert!(!contents.contains("\nallowed-tools:"));
         assert!(contents.lines().count() < 500);
         assert!(
             !contents.contains("```json"),
@@ -10577,6 +10576,7 @@ fn main() -> i32 [io] {
         let out = skill_bundle_markdown();
         assert!(out.starts_with("---\nname: vow-toolchain\n"));
         assert!(!out.contains("\npaths:"));
+        assert!(!out.contains("\nallowed-tools:"));
         assert!(out.contains("# Vow Language Reference"));
         assert!(out.contains("### `vow skill`"));
         assert!(out.contains("schemas/build-result.schema.json"));
@@ -10603,6 +10603,8 @@ fn main() -> i32 [io] {
             installed.exists(),
             "auto-install must populate the skill when .claude/ is present"
         );
+        let contents = std::fs::read_to_string(installed).unwrap();
+        assert!(!contents.contains("\nallowed-tools:"));
     }
 
     #[test]
