@@ -202,7 +202,7 @@ def curate_verify_output(
                 f"**Hint:** The loop invariant `{violation}` was falsified with "
                 f"{', '.join(var_hints)}. Tighten the invariant or strengthen the loop guard."
             )
-        elif vtype == "requires" and values:
+        elif vtype == "requires":
             context_hint = ""
             if (
                 _format_call_sites(ce0.get("call_sites"))
@@ -211,8 +211,7 @@ def curate_verify_output(
                 context_hint = " Use the caller context above to locate the bad call and argument values."
             parts.append(
                 f"**Hint:** The precondition `{violation}` was violated by the caller. "
-                f"To repair it, fix the call site, guard before the call, or correct the precondition "
-                f"only if the precondition itself is semantically wrong."
+                f"To repair it, fix the call site or guard before the call."
                 f"{context_hint}"
             )
         elif vtype == "ensures" and values:

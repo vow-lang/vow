@@ -24,6 +24,7 @@ class CegisPromptTests(unittest.TestCase):
 
         self.assertNotIn("Add bounds", prompt)
         self.assertNotIn("exclude this input", prompt)
+        self.assertNotIn("correct the precondition", prompt)
         self.assertIn("fix the call site", prompt)
         self.assertIn("guard before the call", prompt)
 
@@ -65,6 +66,36 @@ class CegisPromptTests(unittest.TestCase):
         self.assertIn("test.vow@12+8", prompt)
         self.assertIn("main in test.vow@50+15", prompt)
         self.assertIn("y=0 at arg@59+1", prompt)
+        self.assertIn("Use the caller context", prompt)
+
+    def test_requires_context_hint_does_not_require_variable_values(self):
+        prompt = curate_verify_output(
+            {
+                "status": "VerifyFailed",
+                "function": "main",
+                "counterexamples": [
+                    {
+                        "violation": "requires: y != 0",
+                        "blame": "Caller",
+                        "vow_id": 3,
+                        "values": {},
+                        "call_sites": [
+                            {
+                                "caller_function": "main",
+                                "file": "test.vow",
+                                "offset": 50,
+                                "length": 15,
+                            }
+                        ],
+                    }
+                ],
+            },
+            iteration=1,
+            previous_violations=[],
+        )
+
+        self.assertIn("precondition", prompt)
+        self.assertIn("fix the call site", prompt)
         self.assertIn("Use the caller context", prompt)
 
     def test_ensures_feedback_still_points_to_algorithm_logic(self):
