@@ -8597,6 +8597,10 @@ fn run_skill(argv: Vec<String>) -> i32 [io, read, write] {
         }
     }
     if do_install {
+        if do_bundle {
+            eprintln_str("vow skill install: --bundle is only valid with print");
+            return 1;
+        }
         let root: String = skill_install_root(has_flag(argv, String::from("--local")), has_flag(argv, String::from("--global")));
         if root.len() == 0 {
             return 1;
