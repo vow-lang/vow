@@ -860,7 +860,7 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         call_args.push(str_id);
         let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_literal"));
         // Anchor this Call to the literal span: the IOP_CONST_STR above is
-        // not the heap producer, so the call needs its own span for
+        // not the site that produces the VowVec descriptor, so the call needs
         // call-anchored diagnostics.
         lctx_set_inst_span(ctx, result, expr_span(a, eid));
         lctx_tag(ctx, result, String::from("String"));

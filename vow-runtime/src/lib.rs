@@ -1452,6 +1452,7 @@ pub unsafe extern "C" fn __vow_string_clone_in_arena(
     arena: *mut VowArena,
     source: *const u8,
 ) -> *mut u8 {
+    // ABI wrapper: preserve the explicit-arena null guard before delegating.
     if arena.is_null() {
         null_arena_trap("String::clone");
     }

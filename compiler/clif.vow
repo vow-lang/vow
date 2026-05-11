@@ -346,7 +346,7 @@ fn collect_extern_syms(m: IrModule, mode: i64) -> Vec<String> {
             while ii < insts.len() {
                 let inst: IrInst = insts[ii];
                 let skip: bool = inst.op == IOP_DEBUG_CALL() && !has_debug;
-                if inst.dk == IDATA_CALL_EXTERN() && !skip && inst.ds != String::from("__vow_string_literal") {
+                if inst.dk == IDATA_CALL_EXTERN() && !skip && inst.ds != "__vow_string_literal" {
                     let sym: String = clif_routed_extern_symbol(f, inst);
                     if !vec_contains_str(result, sym) {
                         result.push(sym);

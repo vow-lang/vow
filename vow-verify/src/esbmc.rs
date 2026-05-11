@@ -347,6 +347,11 @@ fn no_module_verification_reason(func: &Function) -> Option<&'static str> {
             {
                 return Some("string_matches_literal_at requires the module string pool");
             }
+            if let InstData::CallExtern(name) = &inst.data
+                && name == "__vow_string_literal"
+            {
+                return Some("string literals require the module string pool");
+            }
         }
     }
     None
@@ -1588,6 +1593,47 @@ VERIFICATION FAILED";
         match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Skipped { reason } => {
                 assert!(reason.contains("string_matches_literal_at"));
+                assert!(reason.contains("module string pool"));
+            }
+            other => panic!("expected Skipped before ESBMC lookup, got {other:?}"),
+        }
+    }
+
+    fn direct_string_literal_func() -> Function {
+        Function {
+            id: FuncId(0),
+            name: "direct_string_literal".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                    inst(
+                        1,
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![0],
+                        InstData::CallExtern("__vow_string_literal".to_string()),
+                    ),
+                    inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        }
+    }
+
+    #[test]
+    fn verify_function_without_module_skips_direct_string_literal() {
+        let func = direct_string_literal_func();
+        match verify_function(&func, &VerifyLimits::default()) {
+            VerificationResult::Skipped { reason } => {
+                assert!(reason.contains("string literals"));
                 assert!(reason.contains("module string pool"));
             }
             other => panic!("expected Skipped before ESBMC lookup, got {other:?}"),
