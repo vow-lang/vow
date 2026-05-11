@@ -8464,28 +8464,44 @@ fn skill_install_dir(root: String) -> String {
     str3(root, String::from("/"), String::from(".claude/skills/vow-toolchain"))
 }
 
-fn install_skill_tree(root: String) -> String [io, write] {
+fn skill_parent_dir(path: String) -> String {
+    let n: i64 = path.len();
+    let mut last_slash: i64 = -1;
+    let mut i: i64 = 0;
+    while i < n {
+        if path.byte_at(i) == 47 {
+            last_slash = i;
+        }
+        i = i + 1;
+    }
+    if last_slash < 0 {
+        return String::from("");
+    }
+    let parent: String = String::new();
+    i = 0;
+    while i < last_slash {
+        parent.push_byte(path.byte_at(i));
+        i = i + 1;
+    }
+    parent
+}
+
+fn install_skill_tree(root: String, emit_errors: bool) -> String [io, write] {
     let dir: String = skill_install_dir(root);
     let mk: i64 = fs_mkdir(dir);
     if mk < 0 {
-        eprintln_str(str2(String::from("vow skill install: cannot create "), dir));
-        return String::from("");
-    }
-    let ref_dir: String = str3(dir, String::from("/"), String::from("reference"));
-    let examples_dir: String = str3(dir, String::from("/"), String::from("examples"));
-    let schemas_dir: String = str3(dir, String::from("/"), String::from("schemas"));
-    let rr: i64 = fs_mkdir(ref_dir);
-    let er: i64 = fs_mkdir(examples_dir);
-    let sr: i64 = fs_mkdir(schemas_dir);
-    if rr < 0 || er < 0 || sr < 0 {
-        eprintln_str("vow skill install: cannot create support subdirectories");
+        if emit_errors {
+            eprintln_str(str2(String::from("vow skill install: cannot create "), dir));
+        }
         return String::from("");
     }
 
     let path: String = str3(dir, String::from("/"), String::from("SKILL.md"));
     let wr: i64 = fs_write(path, skill_entrypoint());
     if wr < 0 {
-        eprintln_str(str2(String::from("vow skill install: cannot write "), path));
+        if emit_errors {
+            eprintln_str(str2(String::from("vow skill install: cannot write "), path));
+        }
         return String::from("");
     }
 
@@ -8494,9 +8510,21 @@ fn install_skill_tree(root: String) -> String [io, write] {
     let mut i: i64 = 0;
     while i < paths.len() {
         let support_path: String = str3(dir, String::from("/"), paths[i]);
+        let support_parent: String = skill_parent_dir(support_path);
+        if support_parent.len() > 0 {
+            let parent_mk: i64 = fs_mkdir(support_parent);
+            if parent_mk < 0 {
+                if emit_errors {
+                    eprintln_str(str2(String::from("vow skill install: cannot create "), support_parent));
+                }
+                return String::from("");
+            }
+        }
         let support_wr: i64 = fs_write(support_path, contents[i]);
         if support_wr < 0 {
-            eprintln_str(str2(String::from("vow skill install: cannot write "), support_path));
+            if emit_errors {
+                eprintln_str(str2(String::from("vow skill install: cannot write "), support_path));
+            }
             return String::from("");
         }
         i = i + 1;
@@ -8573,7 +8601,7 @@ fn run_skill(argv: Vec<String>) -> i32 [io, read, write] {
         if root.len() == 0 {
             return 1;
         }
-        let path: String = install_skill_tree(root);
+        let path: String = install_skill_tree(root, true);
         if path.len() == 0 {
             return 1;
         }
@@ -8596,7 +8624,7 @@ fn maybe_auto_install_skill() [io, write] {
     if fs_exists(target) == 1 {
         return;
     }
-    install_skill_tree(String::from(""));
+    install_skill_tree(String::from(""), false);
 }
 
 fn vow_kind_from_desc(desc: String) -> String {
