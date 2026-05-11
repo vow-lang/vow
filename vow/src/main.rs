@@ -3675,14 +3675,14 @@ The `blame` field indicates who is at fault:
 A plain-text hint follows on the next line (not a JSON field). The hint text is dispatched on the operation's type prefix:
 
 ```
-hint: use String::from(literal) to obtain a mutable copy       # for String::* operations
-hint: use Vec::from(literal) to obtain a mutable copy          # for Vec::*    operations
+hint: make an explicit mutable copy with String::from(value) before mutating  # for String::* operations
+hint: construct a mutable Vec and copy entries before mutating                # for Vec::*    operations
 hint: construct a mutable HashMap and copy entries before mutating  # for HashMap::* operations
 ```
 
 The `operation` field identifies the source-level method that trapped (e.g., `Vec::push`, `Vec::pop`, `HashMap::insert`, `String::clear`). The `origin` field identifies the storage class of the immutable backing; today only `rodata` is emitted.
 
-**Fix:** Obtain an explicit mutable copy before mutation: `String::from(literal)`, `Vec::from(literal)`, etc.
+**Fix:** Obtain an explicit mutable copy before mutation: `String::from(value)`, or construct a fresh mutable container and copy the entries you need before mutating.
 
 ### StackOverflow
 
@@ -6773,14 +6773,14 @@ The `blame` field indicates who is at fault:
 A plain-text hint follows on the next line (not a JSON field). The hint text is dispatched on the operation's type prefix:
 
 ```
-hint: use String::from(literal) to obtain a mutable copy       # for String::* operations
-hint: use Vec::from(literal) to obtain a mutable copy          # for Vec::*    operations
+hint: make an explicit mutable copy with String::from(value) before mutating  # for String::* operations
+hint: construct a mutable Vec and copy entries before mutating                # for Vec::*    operations
 hint: construct a mutable HashMap and copy entries before mutating  # for HashMap::* operations
 ```
 
 The `operation` field identifies the source-level method that trapped (e.g., `Vec::push`, `Vec::pop`, `HashMap::insert`, `String::clear`). The `origin` field identifies the storage class of the immutable backing; today only `rodata` is emitted.
 
-**Fix:** Obtain an explicit mutable copy before mutation: `String::from(literal)`, `Vec::from(literal)`, etc.
+**Fix:** Obtain an explicit mutable copy before mutation: `String::from(value)`, or construct a fresh mutable container and copy the entries you need before mutating.
 
 ### StackOverflow
 

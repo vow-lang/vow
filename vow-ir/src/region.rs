@@ -2095,8 +2095,14 @@ fn vec_element_value_may_be_rodata(
     trace: &RodataTrace<'_>,
     visiting: &mut VecDeque<InstId>,
 ) -> bool {
+    let clear_cutoff = vec_element_clear_cutoff(read_id, target_id, trace);
     for (&write_id, (_, write_inst)) in trace.inst_lookup {
         if write_id.0 >= read_id.0 {
+            continue;
+        }
+        if let Some(clear_id) = clear_cutoff
+            && write_id.0 <= clear_id.0
+        {
             continue;
         }
         let Some(source_id) = vec_element_write_source(write_inst, target_id) else {
@@ -2109,6 +2115,39 @@ fn vec_element_value_may_be_rodata(
         }
     }
     false
+}
+
+fn vec_element_clear_cutoff(
+    read_id: InstId,
+    target_id: InstId,
+    trace: &RodataTrace<'_>,
+) -> Option<InstId> {
+    let (read_block, _) = trace.inst_lookup.get(&read_id)?;
+    let mut cutoff: Option<(u32, InstId)> = None;
+    for (&clear_id, (clear_block, clear_inst)) in trace.inst_lookup {
+        if clear_id.0 >= read_id.0 || !vec_clear_targets(clear_inst, target_id) {
+            continue;
+        }
+        if !trace.block_tree.is_ancestor(*clear_block, *read_block) {
+            continue;
+        }
+        let clear_depth = trace.block_tree.depth_of(*clear_block);
+        match cutoff {
+            Some((prev_depth, prev_id)) if (prev_depth, prev_id.0) > (clear_depth, clear_id.0) => {}
+            _ => cutoff = Some((clear_depth, clear_id)),
+        }
+    }
+    cutoff.map(|(_, clear_id)| clear_id)
+}
+
+fn vec_clear_targets(inst: &Inst, target_id: InstId) -> bool {
+    let Opcode::Call = inst.opcode else {
+        return false;
+    };
+    let InstData::CallExtern(sym) = &inst.data else {
+        return false;
+    };
+    sym == "__vow_vec_clear" && inst.args.first() == Some(&target_id)
 }
 
 fn vec_element_write_source(inst: &Inst, target_id: InstId) -> Option<InstId> {
@@ -2993,7 +3032,7 @@ fn emit_region_literal_mutation(
             byte_len: call_inst.origin.len,
         }],
         blame: Blame::Caller,
-        hints: vec!["use `String::from(literal)` before passing the value to mutating String operations".to_string()],
+        hints: vec!["make an explicit mutable copy with `String::from(value)` before passing to a mutating operation".to_string()],
     });
 }
 
@@ -4086,6 +4125,102 @@ mod tests {
                 .iter()
                 .any(|d| d.code == ErrorCode::RegionLiteralMutation),
             "a literal stored in a Vec and read back through indexing should stay rodata-backed"
+        );
+    }
+
+    #[test]
+    fn vec_get_rodata_check_respects_clear_before_later_write() {
+        let insts = vec![
+            inst(
+                0,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![],
+                InstData::CallExtern("__vow_vec_new".to_string()),
+            ),
+            inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![1],
+                InstData::CallExtern("__vow_string_literal".to_string()),
+            ),
+            inst(
+                3,
+                Opcode::Call,
+                Ty::Unit,
+                vec![0, 2],
+                InstData::CallExtern("__vow_vec_push_val".to_string()),
+            ),
+            inst(
+                4,
+                Opcode::Call,
+                Ty::Unit,
+                vec![0],
+                InstData::CallExtern("__vow_vec_clear".to_string()),
+            ),
+            inst(5, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
+            inst(
+                6,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![5],
+                InstData::CallExtern("__vow_string_literal".to_string()),
+            ),
+            inst(
+                7,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![6],
+                InstData::CallExtern("__vow_string_clone".to_string()),
+            ),
+            inst(
+                8,
+                Opcode::Call,
+                Ty::Unit,
+                vec![0, 7],
+                InstData::CallExtern("__vow_vec_push_val".to_string()),
+            ),
+            inst(9, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(
+                10,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0, 9],
+                InstData::CallExtern("__vow_vec_get_val".to_string()),
+            ),
+            inst(
+                11,
+                Opcode::ConstI64,
+                Ty::I64,
+                vec![],
+                InstData::ConstI64(33),
+            ),
+            inst(
+                12,
+                Opcode::Call,
+                Ty::Unit,
+                vec![10, 11],
+                InstData::CallExtern("__vow_string_push_byte".to_string()),
+            ),
+            inst(13, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(
+            0,
+            "vec_clear_then_mutable_element",
+            vec![],
+            Ty::Unit,
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert!(
+            m.warnings
+                .iter()
+                .all(|d| d.code != ErrorCode::RegionLiteralMutation),
+            "Vec::clear should remove earlier literal element sources before a later mutable write"
         );
     }
 
