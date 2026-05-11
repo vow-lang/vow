@@ -278,6 +278,7 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
         int_return_rodata,
         region_keys,
         region_vals,
+        int_kinds,
         dctx,
     );
 
@@ -1014,6 +1015,7 @@ fn check_region_store_conflicts_module(
     phi_arms_per_fn: Vec<Vec<Vec<i64>>>,
     return_rodata: Vec<bool>,
     region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
+    int_kinds: Vec<i64>,
     dctx: DiagCtx
 ) {
     let mut fi: i64 = 0;
@@ -1070,6 +1072,7 @@ fn check_region_store_conflicts_module(
                             rvals,
                             m.functions,
                             return_rodata,
+                            int_kinds,
                             dctx,
                             f.source_file,
                         );
@@ -1090,6 +1093,7 @@ fn check_store_effects_at_call(
     region_keys: Vec<i64>, region_vals: Vec<i64>,
     m_functions: Vec<IrFunction>,
     return_rodata: Vec<bool>,
+    int_kinds: Vec<i64>,
     dctx: DiagCtx, source_file: String
 ) {
     let mut i: i64 = 0;
@@ -1132,6 +1136,7 @@ fn check_store_effects_at_call(
                     region_keys,
                     region_vals,
                     m_functions,
+                    int_kinds,
                     dctx,
                 );
             }
@@ -1361,6 +1366,7 @@ fn check_store_conflict(
     id_to_inst: Vec<IrInst>,
     region_keys: Vec<i64>, region_vals: Vec<i64>,
     m_functions: Vec<IrFunction>,
+    int_kinds: Vec<i64>,
     dctx: DiagCtx
 ) {
     // Consult the inferred region for the source value, not its raw IR
@@ -1398,11 +1404,11 @@ fn check_store_conflict(
             // concrete block source is strictly narrower, always a conflict.
             // Fall through to emission.
         } else if src_kind == REGION_KIND_CALLER() && is_caller_ambiguous(src_rgn)
-            && source_ty_inst.op != IOP_REGION_ALLOC()
+            && !is_heap_producing_for_region(source_ty_inst, int_kinds)
         {
             return;
         } else {
-            // Unknown source kind, or a fresh Caller(AMBIGUOUS) allocation — be conservative and emit.
+            // Unknown source kind, or a heap-producing Caller(AMBIGUOUS) source — be conservative and emit.
         }
     }
 
