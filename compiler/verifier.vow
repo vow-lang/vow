@@ -771,9 +771,16 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
         if r.exit_code == -2 { VERIFY_TIMEOUT() } else { parse_verify_status(combined) }
     };
     let status: i64 = {
-        // IR-only CEs can be infeasible under BV — demote FAILED to TIMEOUT (the caller only reaches us because BV already timed out).
+        // IR-only counterexamples can be infeasible under BV (no overflow
+        // modeling). Callers that distinguish FAILED vs the original BV
+        // status (e.g. `verify_collect_and_report` in compiler/main.vow)
+        // are responsible for surfacing the original BV outcome instead
+        // of the IR FAILED; this helper just passes the raw IR result
+        // through. Callers that don't distinguish (cmd_test/run_test
+        // bounded-pool drains) treat any non-PROVEN/PROVEN_IR as failure
+        // and are unaffected. Demoting FAILED here would clobber the
+        // original BV-Unknown signal in the parallel path.
         if raw_status == VERIFY_PROVEN() { VERIFY_PROVEN_IR() }
-        else if raw_status == VERIFY_FAILED() { VERIFY_TIMEOUT() }
         else { raw_status }
     };
     // No on-disk caching on self-hosted: see the note above resolve_auto_bv_solver.
