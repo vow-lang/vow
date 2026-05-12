@@ -129,8 +129,11 @@ fn is_string_model_creator(name: &str) -> bool {
             name,
             "__vow_string_new"
                 | "__vow_string_new_in_arena"
+                | "__vow_string_literal"
                 | "__vow_string_from_cstr"
                 | "__vow_string_from_cstr_in_arena"
+                | "__vow_string_clone"
+                | "__vow_string_clone_in_arena"
                 | "__vow_string_from_raw_parts_copy"
                 | "__vow_string_pin_to_root"
                 | "__vow_string_substr"
@@ -163,6 +166,8 @@ fn string_model_receiver_arg(name: &str) -> Option<usize> {
         | "__vow_string_push_byte"
         | "__vow_string_substr"
         | "__vow_string_substring"
+        | "__vow_string_clone"
+        | "__vow_string_pin_to_root"
         | "__vow_string_len"
         | "__vow_string_clear"
         | "__vow_string_byte_at"
@@ -170,6 +175,15 @@ fn string_model_receiver_arg(name: &str) -> Option<usize> {
         | "__vow_string_contains"
         | "__vow_string_matches_literal_at"
         | "__vow_string_print" => Some(0),
+        "__vow_string_clone_in_arena" => Some(1),
+        _ => None,
+    }
+}
+
+fn string_model_extra_arg(name: &str) -> Option<usize> {
+    match name {
+        "__vow_string_push_str_in_arena" => Some(2),
+        "__vow_string_push_str" | "__vow_string_eq" | "__vow_string_contains" => Some(1),
         _ => None,
     }
 }
@@ -213,6 +227,12 @@ fn collect_typed_vars(func: &Function, creator: &str, prefix: &str) -> HashSet<u
                         Some(0)
                     };
                     if let Some(arg_idx) = receiver_arg
+                        && let Some(arg) = inst.args.get(arg_idx)
+                    {
+                        vars.insert(arg.0);
+                    }
+                    if prefix == "__vow_string_"
+                        && let Some(arg_idx) = string_model_extra_arg(name)
                         && let Some(arg) = inst.args.get(arg_idx)
                     {
                         vars.insert(arg.0);
@@ -318,8 +338,11 @@ fn is_known_builtin(name: &str) -> bool {
             | "__vow_string_split_in_arena"
             | "__vow_string_new"
             | "__vow_string_new_in_arena"
+            | "__vow_string_literal"
             | "__vow_string_from_cstr"
             | "__vow_string_from_cstr_in_arena"
+            | "__vow_string_clone"
+            | "__vow_string_clone_in_arena"
             | "__vow_string_from_raw_parts_copy"
             | "__vow_string_pin_to_root"
             | "__vow_string_len"
@@ -680,6 +703,7 @@ fn emit_inst(
     option_vars: &HashSet<u32>,
     const_fns: &HashMap<FuncId, ConstantValue>,
     modelable_fns: &HashSet<FuncId>,
+    const_str_indices: &HashMap<u32, u32>,
     eq_pairs: &[(u32, u32)],
     inst_by_id: &HashMap<u32, &Inst>,
     module: &Module,
@@ -1033,6 +1057,21 @@ fn emit_inst(
                     "__vow_string_from_cstr" | "__vow_string_from_cstr_in_arena" => {
                         emit_nondet_string_len(id, limits.string_max, out);
                     }
+                    "__vow_string_literal" => {
+                        let literal = inst
+                            .args
+                            .first()
+                            .and_then(|arg| const_str_indices.get(&arg.0))
+                            .and_then(|idx| module.strings.get(*idx as usize));
+                        if let Some(literal) = literal {
+                            out.push_str(&format!("  v{id}.len = {};\n", literal.len()));
+                            for (idx, byte) in literal.as_bytes().iter().enumerate() {
+                                out.push_str(&format!("  v{id}.data[{idx}] = (int8_t){byte};\n"));
+                            }
+                        } else {
+                            emit_nondet_string_len(id, limits.string_max, out);
+                        }
+                    }
                     "__vow_string_from_raw_parts_copy" => {
                         let len = inst.args[1].0;
                         let string_max = limits.string_max;
@@ -1040,8 +1079,15 @@ fn emit_inst(
                             "  __ESBMC_assume(v{len} >= 0 && v{len} < {string_max});\n  v{id}.len = v{len};\n"
                         ));
                     }
-                    "__vow_string_pin_to_root" => {
-                        let source = inst.args[0].0;
+                    "__vow_string_clone"
+                    | "__vow_string_clone_in_arena"
+                    | "__vow_string_pin_to_root" => {
+                        let source_arg = if name == "__vow_string_clone_in_arena" {
+                            1
+                        } else {
+                            0
+                        };
+                        let source = inst.args[source_arg].0;
                         out.push_str(&format!("  v{id} = v{source};\n"));
                     }
                     "__vow_string_len" => {
@@ -1645,6 +1691,14 @@ pub fn emit_c_function_full(
     let hashmap_vars = collect_typed_vars(func, "__vow_map_new", "__vow_map_");
     let btreemap_vars = collect_typed_vars(func, "__vow_btreemap_new", "__vow_btreemap_");
     let option_vars = collect_option_vars(func);
+    let mut const_str_indices: HashMap<u32, u32> = HashMap::new();
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if let InstData::ConstStr(idx) = inst.data {
+                const_str_indices.insert(inst.id.0, idx);
+            }
+        }
+    }
 
     // Return type (use int64_t for Ptr since structs are opaque in verification)
     let ret_c = match func.return_ty {
@@ -1875,6 +1929,7 @@ pub fn emit_c_function_full(
                 &option_vars,
                 const_fns,
                 modelable_fns,
+                &const_str_indices,
                 &eq_pairs,
                 &inst_by_id,
                 module,
@@ -1901,6 +1956,7 @@ pub fn emit_c_function_full(
                 &option_vars,
                 const_fns,
                 modelable_fns,
+                &const_str_indices,
                 &eq_pairs,
                 &inst_by_id,
                 module,
@@ -2005,6 +2061,14 @@ fn emit_c_preamble(out: &mut String, shifts: &ShiftNeeds, limits: &VerifyLimits)
     }
 }
 
+fn limits_with_literal_string_capacity(module: &Module, limits: &VerifyLimits) -> VerifyLimits {
+    let mut effective = *limits;
+    if let Some(max_literal_len) = module.strings.iter().map(|s| s.len()).max() {
+        effective.string_max = effective.string_max.max(max_literal_len);
+    }
+    effective
+}
+
 fn emit_forward_declaration(func: &Function, out: &mut String) {
     let ret_c = match func.return_ty {
         Ty::Unit => "void",
@@ -2058,6 +2122,7 @@ pub fn emit_c_module_with_callees(
     limits: &VerifyLimits,
 ) -> String {
     let mut out = String::new();
+    let effective_limits = limits_with_literal_string_capacity(module, limits);
 
     // Collect all functions (target + callees) for shift scanning
     let mut all_funcs: Vec<&Function> = vec![target];
@@ -2067,7 +2132,7 @@ pub fn emit_c_module_with_callees(
         }
     }
     let shifts = scan_shift_needs(&all_funcs);
-    emit_c_preamble(&mut out, &shifts, limits);
+    emit_c_preamble(&mut out, &shifts, &effective_limits);
 
     // Forward declarations for all callees
     for fid in callee_ids {
@@ -2087,7 +2152,7 @@ pub fn emit_c_module_with_callees(
                 const_fns,
                 modelable_fns,
                 module,
-                limits,
+                &effective_limits,
             ));
             out.push('\n');
         }
@@ -2099,7 +2164,7 @@ pub fn emit_c_module_with_callees(
         const_fns,
         modelable_fns,
         module,
-        limits,
+        &effective_limits,
     ));
     out.push('\n');
     out
@@ -4135,6 +4200,184 @@ mod tests {
     }
 
     #[test]
+    fn emit_string_literal_uses_pool_length() {
+        let func = make_func(
+            "make_literal",
+            vec![],
+            Ty::Ptr,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                inst(
+                    1,
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![0],
+                    InstData::CallExtern("__vow_string_literal".to_string()),
+                ),
+                inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+            ],
+        );
+        let module = Module {
+            name: String::new(),
+            functions: vec![func.clone()],
+            strings: vec!["hello".to_string()],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        let c = emit_c_function_full(
+            &func,
+            &HashMap::new(),
+            &HashSet::new(),
+            &module,
+            &VerifyLimits::default(),
+        );
+        assert!(c.contains("__vow_string_t v1;"), "string struct decl: {c}");
+        assert!(c.contains("v1.len = 5;"), "literal len from pool: {c}");
+        assert!(
+            c.contains("v1.data[0] = (int8_t)104;"),
+            "literal byte h from pool: {c}"
+        );
+        assert!(
+            c.contains("v1.data[4] = (int8_t)111;"),
+            "literal byte o from pool: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_c_module_grows_string_model_for_literal_bytes() {
+        let func = make_func(
+            "make_literal",
+            vec![],
+            Ty::Ptr,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                inst(
+                    1,
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![0],
+                    InstData::CallExtern("__vow_string_literal".to_string()),
+                ),
+                inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+            ],
+        );
+        let module = Module {
+            name: String::new(),
+            functions: vec![func.clone()],
+            strings: vec!["hello".to_string()],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        let limits = VerifyLimits {
+            string_max: 4,
+            ..VerifyLimits::default()
+        };
+        let c = emit_c_module_with_callees(
+            &func,
+            &module,
+            &HashMap::new(),
+            &[],
+            &HashSet::new(),
+            &limits,
+        );
+        assert!(
+            c.contains("typedef struct { int64_t len; int8_t data[5]; } __vow_string_t;"),
+            "literal bytes must fit in the string model: {c}"
+        );
+        assert!(
+            c.contains("v1.data[4] = (int8_t)111;"),
+            "last literal byte should be emitted without exceeding the model: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_string_clone_copies_source_model() {
+        let func = make_func(
+            "clone_literal",
+            vec![],
+            Ty::Ptr,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                inst(
+                    1,
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![0],
+                    InstData::CallExtern("__vow_string_literal".to_string()),
+                ),
+                inst(
+                    2,
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![1],
+                    InstData::CallExtern("__vow_string_clone".to_string()),
+                ),
+                inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+            ],
+        );
+        let module = Module {
+            name: String::new(),
+            functions: vec![func.clone()],
+            strings: vec!["hello".to_string()],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        let c = emit_c_function_full(
+            &func,
+            &HashMap::new(),
+            &HashSet::new(),
+            &module,
+            &VerifyLimits::default(),
+        );
+        assert!(c.contains("__vow_string_t v2;"), "clone decl: {c}");
+        assert!(c.contains("v2 = v1;"), "clone preserves source model: {c}");
+    }
+
+    #[test]
+    fn emit_string_push_str_models_source_param_as_string() {
+        let func = make_func(
+            "append_param",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Ptr,
+            vec![
+                inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+                inst(
+                    2,
+                    Opcode::Call,
+                    Ty::Unit,
+                    vec![0, 1],
+                    InstData::CallExtern("__vow_string_push_str".to_string()),
+                ),
+                inst(3, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ],
+        );
+        let c = emit_c_function_full(
+            &func,
+            &HashMap::new(),
+            &HashSet::new(),
+            &Module {
+                name: String::new(),
+                functions: vec![func.clone()],
+                strings: vec![],
+                struct_layouts: vec![],
+                enum_layouts: vec![],
+                warnings: vec![],
+            },
+            &VerifyLimits::default(),
+        );
+        assert!(c.contains("__vow_string_t v0;"), "dest param model: {c}");
+        assert!(c.contains("__vow_string_t v1;"), "source param model: {c}");
+        assert!(
+            !c.contains("int64_t v1 = p1;"),
+            "source param must not be scalar: {c}"
+        );
+    }
+
+    #[test]
     fn emit_string_len() {
         use vow_ir::InstId;
         let func = make_func(
@@ -5479,6 +5722,7 @@ mod tests {
             &HashSet::new(),
             &const_fns,
             &HashSet::new(),
+            &HashMap::new(),
             &[],
             &HashMap::new(),
             &empty_module,
@@ -5517,6 +5761,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             &HashSet::new(),
+            &HashMap::new(),
             &[],
             &HashMap::new(),
             &empty_module,

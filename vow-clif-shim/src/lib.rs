@@ -416,14 +416,42 @@ fn block_arena_value(
     block_arena_slots: &mut BTreeMap<i64, StackSlot>,
     block_id: i64,
 ) -> Value {
-    let slot = *block_arena_slots.entry(block_id).or_insert_with(|| {
-        builder.create_sized_stack_slot(StackSlotData::new(
-            StackSlotKind::ExplicitSlot,
-            VOW_ARENA_HEADER_SIZE,
-            VOW_ARENA_HEADER_ALIGN_LOG2,
-        ))
-    });
+    let slot = block_arena_slot(builder, block_arena_slots, block_id);
     builder.ins().stack_addr(types::I64, slot, 0)
+}
+
+fn block_arena_slot(
+    builder: &mut FunctionBuilder<'_>,
+    block_arena_slots: &mut BTreeMap<i64, StackSlot>,
+    block_id: i64,
+) -> StackSlot {
+    let (slot, created) = block_arena_slot_with_created(builder, block_arena_slots, block_id);
+    if created {
+        // The runtime writes the whole address-taken arena header; make
+        // Cranelift reserve the complete declared slot, not just the pointer.
+        let zero = builder.ins().iconst(types::I64, 0);
+        for offset in (0..VOW_ARENA_HEADER_SIZE as i32).step_by(8) {
+            builder.ins().stack_store(zero, slot, offset);
+        }
+    }
+    slot
+}
+
+fn block_arena_slot_with_created(
+    builder: &mut FunctionBuilder<'_>,
+    block_arena_slots: &mut BTreeMap<i64, StackSlot>,
+    block_id: i64,
+) -> (StackSlot, bool) {
+    if let Some(&slot) = block_arena_slots.get(&block_id) {
+        return (slot, false);
+    }
+    let slot = builder.create_sized_stack_slot(StackSlotData::new(
+        StackSlotKind::ExplicitSlot,
+        VOW_ARENA_HEADER_SIZE,
+        VOW_ARENA_HEADER_ALIGN_LOG2,
+    ));
+    block_arena_slots.insert(block_id, slot);
+    (slot, true)
 }
 
 fn arena_value_for_region(
@@ -513,6 +541,13 @@ fn routed_vec_extern(sym: &str, inst_rgn: i64, receiver_rgn: i64) -> (&str, Opti
                 (sym, None)
             } else {
                 ("__vow_string_from_cstr_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_clone" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_clone_in_arena", Some(inst_rgn))
             }
         }
         "__vow_string_substr" => {
@@ -717,6 +752,7 @@ struct ModuleContext {
     obj_module: ObjectModule,
     builder_ctx: FunctionBuilderContext,
     string_data_ids: Vec<DataId>,
+    string_descriptor_data_ids: Vec<DataId>,
     func_decls: Vec<FuncDecl>,
     extern_func_ids: HashMap<String, CraneliftFuncId>,
     mode: i64,       // 0=release, 1=debug, 2=profile, 3=sanitize
@@ -852,6 +888,7 @@ pub extern "C" fn __vow_clif_create(mode: i64, trace_mode: i64) -> i64 {
         obj_module: ObjectModule::new(obj_builder),
         builder_ctx: FunctionBuilderContext::new(),
         string_data_ids: Vec::new(),
+        string_descriptor_data_ids: Vec::new(),
         func_decls: Vec::new(),
         extern_func_ids: HashMap::new(),
         mode,
@@ -889,6 +926,23 @@ pub unsafe extern "C" fn __vow_clif_add_string(ctx_ptr: i64, str_ptr: i64) {
         .define_data(data_id, &desc)
         .expect("define string data");
     ctx.string_data_ids.push(data_id);
+
+    let mut descriptor = vec![0u8; 24];
+    descriptor[8..16].copy_from_slice(&(s.len() as u64).to_le_bytes());
+    descriptor[16..24].copy_from_slice(&u64::MAX.to_le_bytes());
+    let mut desc = DataDescription::new();
+    desc.set_align(8);
+    desc.define(descriptor.into_boxed_slice());
+    let bytes_gv = ctx.obj_module.declare_data_in_data(data_id, &mut desc);
+    desc.write_data_addr(0, bytes_gv, 0);
+    let descriptor_id = ctx
+        .obj_module
+        .declare_anonymous_data(false, false)
+        .expect("declare string descriptor data");
+    ctx.obj_module
+        .define_data(descriptor_id, &desc)
+        .expect("define string descriptor data");
+    ctx.string_descriptor_data_ids.push(descriptor_id);
 }
 
 // ---------------------------------------------------------------------------
@@ -1393,6 +1447,11 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
         let gv = ctx.obj_module.declare_data_in_func(data_id, builder.func);
         string_global_values.insert(idx as i64, gv);
     }
+    let mut string_descriptor_global_values: HashMap<i64, GlobalValue> = HashMap::new();
+    for (idx, &data_id) in ctx.string_descriptor_data_ids.iter().enumerate() {
+        let gv = ctx.obj_module.declare_data_in_func(data_id, builder.func);
+        string_descriptor_global_values.insert(idx as i64, gv);
+    }
 
     // Declare extern function refs
     let mut extern_func_refs: HashMap<String, FuncRef> = HashMap::new();
@@ -1654,13 +1713,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
             builder.ins().stack_store(zero, slot, 0);
         }
         for payload in block_arena_ids {
-            let slot = *block_arena_slots.entry(payload).or_insert_with(|| {
-                builder.create_sized_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    VOW_ARENA_HEADER_SIZE,
-                    VOW_ARENA_HEADER_ALIGN_LOG2,
-                ))
-            });
+            let slot = block_arena_slot(&mut builder, &mut block_arena_slots, payload);
             let arena_addr = builder.ins().stack_addr(types::I64, slot, 0);
             builder.ins().call(arena_init_ref, &[arena_addr]);
         }
@@ -2254,6 +2307,36 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                         }
                         IDATA_CALL_EXTERN => {
                             let sym = unsafe { read_vow_string(inst_ds_ptrs[ii]) };
+                            if sym == "__vow_string_literal" {
+                                if alen == 0 {
+                                    eprintln!(
+                                        "clif_shim: __vow_string_literal missing ConstStr operand"
+                                    );
+                                    return -1;
+                                }
+                                let cstr_id = all_args[aoff];
+                                let Some(&(cstr_dk, cstr_idx)) = inst_data_by_id.get(&cstr_id)
+                                else {
+                                    eprintln!("clif_shim: __vow_string_literal operand not found");
+                                    return -1;
+                                };
+                                if cstr_dk != IDATA_CONST_STR {
+                                    eprintln!(
+                                        "clif_shim: __vow_string_literal operand is not ConstStr"
+                                    );
+                                    return -1;
+                                }
+                                let Some(&gv) = string_descriptor_global_values.get(&cstr_idx)
+                                else {
+                                    eprintln!(
+                                        "clif_shim: missing string descriptor global for literal {cstr_idx}"
+                                    );
+                                    return -1;
+                                };
+                                let ptr = builder.ins().global_value(types::I64, gv);
+                                set_val!(iid, ptr);
+                                continue;
+                            }
                             let receiver_rgn = if alen > 0 {
                                 let receiver_id = all_args[aoff];
                                 let decl = &ctx.func_decls[fi];
@@ -2477,23 +2560,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                         return -1;
                     }
                     let payload = rgn >> 2;
-                    let (slot, created) = if let Some(&slot) = block_arena_slots.get(&payload) {
-                        (slot, false)
-                    } else {
-                        let slot = builder.create_sized_stack_slot(StackSlotData::new(
-                            StackSlotKind::ExplicitSlot,
-                            VOW_ARENA_HEADER_SIZE,
-                            VOW_ARENA_HEADER_ALIGN_LOG2,
-                        ));
-                        block_arena_slots.insert(payload, slot);
-                        (slot, true)
-                    };
-                    if created {
-                        let zero = builder.ins().iconst(types::I64, 0);
-                        for offset in (0..VOW_ARENA_HEADER_SIZE as i32).step_by(8) {
-                            builder.ins().stack_store(zero, slot, offset);
-                        }
-                    }
+                    let slot = block_arena_slot(&mut builder, &mut block_arena_slots, payload);
                     let arena_addr = builder.ins().stack_addr(types::I64, slot, 0);
                     let func_ref = if op == IOP_REGION_OPEN {
                         arena_open_ref
@@ -3000,6 +3067,15 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_string_from_cstr_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_clone" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_clone_in_arena" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));

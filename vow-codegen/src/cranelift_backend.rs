@@ -284,6 +284,7 @@ struct LowerCtx<'a> {
     trace: TraceMode,
     current_ir_block: BlockId,
     string_global_values: &'a HashMap<u32, GlobalValue>,
+    string_descriptor_global_values: &'a HashMap<u32, GlobalValue>,
     extern_func_refs: &'a HashMap<String, FuncRef>,
     vow_desc_global_values: &'a HashMap<u32, GlobalValue>,
     vow_file_global_values: &'a HashMap<u32, GlobalValue>,
@@ -317,6 +318,8 @@ fn block_arena_slot(
 ) -> StackSlot {
     let (slot, created) = block_arena_slot_with_created(builder, slots, block_id);
     if created {
+        // The runtime writes the whole address-taken arena header; make
+        // Cranelift reserve the complete declared slot, not just the pointer.
         let zero = builder.ins().iconst(types::I64, 0);
         for offset in (0..VOW_ARENA_HEADER_SIZE as i32).step_by(8) {
             builder.ins().stack_store(zero, slot, offset);
@@ -529,6 +532,10 @@ fn routed_vec_extern<'a>(
             RegionId::Root => (sym, None),
             region => ("__vow_string_from_cstr_in_arena", Some(region)),
         },
+        "__vow_string_clone" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_string_clone_in_arena", Some(region)),
+        },
         "__vow_string_substr" => match inst.region {
             RegionId::Root => (sym, None),
             region => ("__vow_string_substr_in_arena", Some(region)),
@@ -648,29 +655,44 @@ fn build_inst_index(func: &IrFunction) -> HashMap<InstId, &Inst> {
     index
 }
 
+fn is_string_literal_descriptor_call(inst: &Inst, inst_index: &HashMap<InstId, &Inst>) -> bool {
+    if !matches!(
+        &inst.data,
+        InstData::CallExtern(sym) if sym == "__vow_string_literal"
+    ) {
+        return false;
+    }
+    let Some(cstr_id) = inst.args.first() else {
+        return false;
+    };
+    inst_index
+        .get(cstr_id)
+        .is_some_and(|arg| arg.opcode == Opcode::ConstStr)
+}
+
 /// Decide whether a `FreshInCaller` function's return value needs to be
 /// deep-copied into `target_region` to satisfy the §5.1 representation
 /// promise.
 ///
 /// Walks the value's source transitively through `Phi` (via `Upsilon`
 /// arms). Returns true iff at least one reachable leaf is a
-/// `__vow_string_from_cstr(literal)` call AND every reachable leaf is
+/// `__vow_string_literal(literal)` call AND every reachable leaf is
 /// the same shape (a known-safe `VowString` / `Vec<u8>` descriptor
 /// producer).
 ///
-/// **Why `__vow_string_from_cstr`, not `ConstStr` directly.**
+/// **Why `__vow_string_literal`, not `ConstStr` directly.**
 /// `ConstStr` lowers to a pointer to a NUL-terminated byte blob in a
 /// `.rodata` data section — it is *not* a `VowVec` descriptor.
 /// `__vow_string_clone_into_arena` reads `(ptr, len, cap)` from its
 /// source and copies `len` bytes; firing it on a raw `ConstStr` would
 /// reinterpret arbitrary literal bytes as `{ptr, len, cap}` and corrupt
 /// memory. The Vow lowerer wraps every `String` literal in
-/// `Call __vow_string_from_cstr(ConstStr)` (`vow-ir/src/lower/mod.rs`
-/// `Lit::String`), and that Call's *result* is the actual `VowVec`
-/// descriptor — that's the shape we recognise here.
+/// `Call __vow_string_literal(ConstStr)` (`vow-ir/src/lower/mod.rs`
+/// `Lit::String`), and codegen turns that synthetic call into a static
+/// `VowVec` descriptor — that's the shape we recognise here.
 ///
 /// **Why the all-leaves rule still applies.** A Phi mixing a
-/// `__vow_string_from_cstr` arm with any other leaf shape (a
+/// `__vow_string_literal` arm with any other leaf shape (a
 /// `RegionAlloc`, a `GetArg` of a heap-typed param, a generic call,
 /// …) cannot be safely cloned via the `VowString`-typed primitive: at
 /// runtime the Phi-selected value might not have descriptor layout.
@@ -698,12 +720,7 @@ fn return_source_needs_materialization(
             return false;
         };
         match src.opcode {
-            Opcode::Call
-                if matches!(
-                    &src.data,
-                    InstData::CallExtern(sym) if sym == "__vow_string_from_cstr"
-                ) =>
-            {
+            Opcode::Call if is_string_literal_descriptor_call(src, inst_index) => {
                 saw_safe_leaf = true;
             }
             Opcode::Phi => {
@@ -722,7 +739,7 @@ fn return_source_needs_materialization(
                 // standalone helper) to bring this to O(k_arms) per Phi.
                 // For Phase 4 this scan rarely fires (materialisation
                 // requires a `FreshInCaller` summary AND a
-                // `__vow_string_from_cstr` leaf, which only String-literal
+                // `__vow_string_literal` leaf, which only String-literal
                 // returns produce).
                 for block in &func.blocks {
                     for inst in &block.insts {
@@ -1335,6 +1352,36 @@ fn lower_inst(
         // Function calls
         // ------------------------------------------------------------------
         Opcode::Call => {
+            if let InstData::CallExtern(sym) = &inst.data
+                && sym == "__vow_string_literal"
+            {
+                let cstr_id = inst.args.first().ok_or_else(|| {
+                    CodegenError::UnsupportedOpcode(
+                        "__vow_string_literal missing ConstStr operand".to_string(),
+                    )
+                })?;
+                let cstr_inst = *ctx.inst_index.get(cstr_id).ok_or_else(|| {
+                    CodegenError::UnsupportedOpcode(format!(
+                        "__vow_string_literal operand {:?} not found",
+                        cstr_id
+                    ))
+                })?;
+                let InstData::ConstStr(idx) = cstr_inst.data else {
+                    return Err(CodegenError::UnsupportedOpcode(format!(
+                        "__vow_string_literal operand {:?} is not ConstStr",
+                        cstr_id
+                    )));
+                };
+                let Some(&gv) = ctx.string_descriptor_global_values.get(&idx) else {
+                    return Err(CodegenError::UnsupportedOpcode(format!(
+                        "missing string descriptor global for literal {idx}"
+                    )));
+                };
+                let ptr = builder.ins().global_value(types::I64, gv);
+                ctx.value_map.insert(inst.id, ptr);
+                return Ok(());
+            }
+
             let mut internal_call = false;
             let mut external_target_region = None;
             let func_ref = match &inst.data {
@@ -1820,6 +1867,7 @@ fn compile_ir_function(
     ir_to_cl: &[(IrFuncId, CraneliftFuncId)],
     runtime: &RuntimeIds,
     string_data_ids: &[DataId],
+    string_descriptor_data_ids: &[DataId],
     extern_func_ids: &HashMap<String, CraneliftFuncId>,
     func_summaries: &HashMap<IrFuncId, RegionSummary>,
 ) -> Result<(), CodegenError> {
@@ -1879,6 +1927,11 @@ fn compile_ir_function(
     for (idx, &data_id) in string_data_ids.iter().enumerate() {
         let gv = obj_module.declare_data_in_func(data_id, builder.func);
         string_global_values.insert(idx as u32, gv);
+    }
+    let mut string_descriptor_global_values: HashMap<u32, GlobalValue> = HashMap::new();
+    for (idx, &data_id) in string_descriptor_data_ids.iter().enumerate() {
+        let gv = obj_module.declare_data_in_func(data_id, builder.func);
+        string_descriptor_global_values.insert(idx as u32, gv);
     }
 
     // Build InstId → IrTy map for all instructions
@@ -2089,6 +2142,7 @@ fn compile_ir_function(
             trace,
             current_ir_block: ir_block.id,
             string_global_values: &string_global_values,
+            string_descriptor_global_values: &string_descriptor_global_values,
             extern_func_refs: &extern_func_refs,
             vow_desc_global_values: &vow_desc_global_values,
             vow_file_global_values: &vow_file_global_values,
@@ -2218,6 +2272,15 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // C-string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_string_clone" => {
+            sig.params.push(AbiParam::new(types::I64)); // source string ptr
+            sig.returns.push(AbiParam::new(types::I64)); // copied *VowVec<u8>
+        }
+        "__vow_string_clone_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // source string ptr
+            sig.returns.push(AbiParam::new(types::I64)); // copied *VowVec<u8>
         }
         "__vow_string_pin_to_root" => {
             sig.params.push(AbiParam::new(types::I64)); // source string ptr
@@ -2715,6 +2778,7 @@ impl Backend for CraneliftBackend {
 
         // Create data sections for string constants
         let mut string_data_ids: Vec<DataId> = Vec::new();
+        let mut string_descriptor_data_ids: Vec<DataId> = Vec::new();
         for s in &module.strings {
             let mut bytes = s.as_bytes().to_vec();
             bytes.push(0); // null terminate
@@ -2727,6 +2791,22 @@ impl Backend for CraneliftBackend {
                 .define_data(data_id, &desc)
                 .map_err(|e| CodegenError::FunctionDefine(e.to_string()))?;
             string_data_ids.push(data_id);
+
+            let mut descriptor = vec![0u8; 24];
+            descriptor[8..16].copy_from_slice(&(s.len() as u64).to_le_bytes());
+            descriptor[16..24].copy_from_slice(&u64::MAX.to_le_bytes());
+            let mut desc = DataDescription::new();
+            desc.set_align(8);
+            desc.define(descriptor.into_boxed_slice());
+            let bytes_gv = obj_module.declare_data_in_data(data_id, &mut desc);
+            desc.write_data_addr(0, bytes_gv, 0);
+            let descriptor_id = obj_module
+                .declare_anonymous_data(false, false)
+                .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+            obj_module
+                .define_data(descriptor_id, &desc)
+                .map_err(|e| CodegenError::FunctionDefine(e.to_string()))?;
+            string_descriptor_data_ids.push(descriptor_id);
         }
 
         // Scan all functions for CallExtern symbols and declare them as imports
@@ -2737,6 +2817,9 @@ impl Backend for CraneliftBackend {
             for block in &func.blocks {
                 for inst in &block.insts {
                     if let InstData::CallExtern(sym) = &inst.data {
+                        if sym == "__vow_string_literal" {
+                            continue;
+                        }
                         if inst.opcode == Opcode::DebugCall && !mode.has_debug_checks() {
                             continue;
                         }
@@ -2985,6 +3068,7 @@ impl Backend for CraneliftBackend {
                     stack_exit_id,
                 },
                 &string_data_ids,
+                &string_descriptor_data_ids,
                 &extern_func_ids,
                 &func_summaries,
             )?;
@@ -4456,6 +4540,90 @@ mod tests {
     }
 
     #[test]
+    fn block_region_string_clone_imports_arena_variant() {
+        let mut string_clone = inst(
+            1,
+            Opcode::Call,
+            Ty::Ptr,
+            vec![0],
+            InstData::CallExtern("__vow_string_clone".to_string()),
+        );
+        string_clone.region = RegionId::Block(BlockId(0));
+        let module = make_module(
+            "test",
+            vec![simple_fn(
+                0,
+                "f",
+                vec![Ty::Ptr],
+                Ty::I64,
+                vec![
+                    inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    string_clone,
+                    inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                ],
+            )],
+        );
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(symbols.contains("__vow_string_clone_in_arena"));
+        assert!(!symbols.contains("__vow_string_clone"));
+    }
+
+    #[test]
+    fn static_string_literal_codegen_uses_rodata_descriptor_not_runtime_import() {
+        let mut module = make_module(
+            "test",
+            vec![simple_fn(
+                0,
+                "literal",
+                vec![],
+                Ty::Ptr,
+                vec![
+                    inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                    inst(
+                        1,
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![0],
+                        InstData::CallExtern("__vow_string_literal".to_string()),
+                    ),
+                    inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+                ],
+            )],
+        );
+        module.strings.push("hello".to_string());
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(!symbols.contains("__vow_string_literal"));
+        assert!(!symbols.contains("__vow_string_from_cstr"));
+        assert!(
+            bytes
+                .windows(std::mem::size_of::<usize>())
+                .any(|window| window == usize::MAX.to_le_bytes()),
+            "static String descriptor should encode VOW_CAP_RODATA"
+        );
+    }
+
+    #[test]
     fn block_region_fresh_string_helpers_import_arena_variants() {
         let cases = [
             ("__vow_string_split", "__vow_string_split_in_arena", 2),
@@ -5672,7 +5840,7 @@ mod tests {
         }
     }
 
-    /// Build a `__vow_string_from_cstr(ConstStr)` arm — the actual shape
+    /// Build a `__vow_string_literal(ConstStr)` arm — the actual shape
     /// the Vow lowerer produces for a String literal (see
     /// `vow-ir/src/lower/mod.rs` `Lit::String`). The Call's result is a
     /// `VowVec` descriptor and is the only kind of leaf the
@@ -5690,7 +5858,7 @@ mod tests {
             Opcode::Call,
             Ty::Ptr,
             vec![base_id],
-            InstData::CallExtern("__vow_string_from_cstr".to_string()),
+            InstData::CallExtern("__vow_string_literal".to_string()),
         );
         vec![cstr, call]
     }
@@ -5705,7 +5873,7 @@ mod tests {
     }
 
     /// Acceptance test 2 from issue #198 (safe variant): a Phi whose
-    /// arms are both `__vow_string_from_cstr(literal)` — the actual
+    /// arms are both `__vow_string_literal(literal)` — the actual
     /// lowered shape of a Vow String literal — produces `VowVec`
     /// descriptors on every path. Materialising via
     /// `__vow_string_clone_into_arena` is sound; the clone runtime is
@@ -5720,7 +5888,7 @@ mod tests {
         assert!(result.is_ok(), "{:?}", result.err());
         assert!(
             module_imports_string_clone(&result.unwrap().bytes),
-            "Phi with all `__vow_string_from_cstr` arms must materialise"
+            "Phi with all `__vow_string_literal` arms must materialise"
         );
     }
 
@@ -5764,7 +5932,7 @@ mod tests {
 
     /// Defense-in-depth (codex P1 from PR #230 round-3 review): a Phi
     /// arm that is a *raw* `ConstStr` (not wrapped in
-    /// `__vow_string_from_cstr`) is a c-string pointer, not a `VowVec`
+    /// `__vow_string_literal`) is a c-string pointer, not a `VowVec`
     /// descriptor. Treating it as clone-safe would corrupt memory.
     /// The well-formed Vow lowerer never produces this shape — every
     /// String literal is wrapped in the `from_cstr` Call — but the
@@ -5796,7 +5964,7 @@ mod tests {
     fn fresh_in_caller_string_literal_return_materialises_via_clone() {
         // Phase 4 / S5: a `FreshInCaller` function whose return path is the
         // lowered shape of a Vow String literal —
-        // `Call __vow_string_from_cstr(ConstStr)` — produces a `VowVec`
+        // `Call __vow_string_literal(ConstStr)` — produces a `VowVec`
         // descriptor that must be cloned into `target_region` to satisfy
         // §5.1. The produced object must import
         // `__vow_string_clone_into_arena`.
@@ -5819,7 +5987,7 @@ mod tests {
                             Opcode::Call,
                             Ty::Ptr,
                             vec![0],
-                            InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                            InstData::CallExtern("__vow_string_literal".to_string()),
                         ),
                         inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
                     ],

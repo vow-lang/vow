@@ -6,9 +6,10 @@ use vow_verify::Counterexample;
 use crate::frontend::DependencyManifest;
 
 // Bump this whenever generated object files are no longer ABI-compatible with
-// existing cached artifacts. Phase 7 adds FFI wrapper stdlib intrinsics and
-// runtime helper imports, so pre-cutover objects must not be reused.
-const COMPILE_CACHE_ABI_VERSION: &str = "vec-arena-routing-v1";
+// existing cached artifacts. Static string literals, full-width block arena
+// stack slots, and UTF-8-preserving string lexing all change generated object
+// contents, so pre-cutover objects must not be reused.
+const COMPILE_CACHE_ABI_VERSION: &str = "static-string-arena-slot-utf8-lexer-v1";
 
 pub struct CompileCache {
     dir: PathBuf,

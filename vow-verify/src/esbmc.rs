@@ -251,19 +251,9 @@ pub fn emit_verify_c_source(
     let mut modelable_cache = HashMap::new();
     let callee_ids = collect_modelable_callees(func, module, const_fns, &mut modelable_cache);
 
-    let mut c_src = if callee_ids.is_empty() {
-        emit_c_module_with_callees(
-            func,
-            module,
-            const_fns,
-            &[],
-            &std::collections::HashSet::new(),
-            limits,
-        )
-    } else {
-        let modelable_fns: std::collections::HashSet<FuncId> = callee_ids.iter().copied().collect();
-        emit_c_module_with_callees(func, module, const_fns, &callee_ids, &modelable_fns, limits)
-    };
+    let modelable_fns: std::collections::HashSet<FuncId> = callee_ids.iter().copied().collect();
+    let mut c_src =
+        emit_c_module_with_callees(func, module, const_fns, &callee_ids, &modelable_fns, limits);
     c_src.push_str(&emit_harness(func));
     c_src
 }
@@ -356,6 +346,11 @@ fn no_module_verification_reason(func: &Function) -> Option<&'static str> {
                 && name == "__vow_string_matches_literal_at"
             {
                 return Some("string_matches_literal_at requires the module string pool");
+            }
+            if let InstData::CallExtern(name) = &inst.data
+                && name == "__vow_string_literal"
+            {
+                return Some("string literals require the module string pool");
             }
         }
     }
@@ -637,6 +632,48 @@ mod tests {
             summary: RegionSummary::default(),
             source_file: String::new(),
         }
+    }
+
+    #[test]
+    fn emit_verify_c_source_uses_module_string_pool_without_callees() {
+        let func = Function {
+            id: FuncId(0),
+            name: "make_literal".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                    inst(
+                        1,
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![0],
+                        InstData::CallExtern("__vow_string_literal".to_string()),
+                    ),
+                    inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        let module = Module {
+            name: String::new(),
+            functions: vec![func.clone()],
+            strings: vec!["hello".to_string()],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+
+        let c = emit_verify_c_source(&func, &module, &HashMap::new(), &VerifyLimits::default());
+
+        assert!(c.contains("v1.len = 5;"), "literal len from pool: {c}");
     }
 
     #[test]
@@ -1556,6 +1593,47 @@ VERIFICATION FAILED";
         match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Skipped { reason } => {
                 assert!(reason.contains("string_matches_literal_at"));
+                assert!(reason.contains("module string pool"));
+            }
+            other => panic!("expected Skipped before ESBMC lookup, got {other:?}"),
+        }
+    }
+
+    fn direct_string_literal_func() -> Function {
+        Function {
+            id: FuncId(0),
+            name: "direct_string_literal".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                    inst(
+                        1,
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![0],
+                        InstData::CallExtern("__vow_string_literal".to_string()),
+                    ),
+                    inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        }
+    }
+
+    #[test]
+    fn verify_function_without_module_skips_direct_string_literal() {
+        let func = direct_string_literal_func();
+        match verify_function(&func, &VerifyLimits::default()) {
+            VerificationResult::Skipped { reason } => {
+                assert!(reason.contains("string literals"));
                 assert!(reason.contains("module string pool"));
             }
             other => panic!("expected Skipped before ESBMC lookup, got {other:?}"),

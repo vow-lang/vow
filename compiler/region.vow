@@ -45,6 +45,7 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
     //   int_kind[i]           : i64  -- internal return kind (-1 == Uninit, 0..3 == published)
     //   int_aux[i]            : i64  -- AliasOf single index
     //   int_aliases[i]        : Vec<i64> -- AliasOfAny indices (canonical)
+    //   int_return_rodata[i]  : bool -- return value may be literal-backed read-only storage
     //   int_se_targets[i]     : Vec<i64> -- store-effect targets, parallel with sources
     //   int_se_src_kinds[i]   : Vec<i64>
     //   int_se_src_aux[i]     : Vec<i64>
@@ -52,6 +53,7 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
     let int_kinds: Vec<i64> = Vec::new();
     let int_auxs: Vec<i64> = Vec::new();
     let int_aliases_list: Vec<Vec<i64>> = Vec::new();
+    let int_return_rodata: Vec<bool> = Vec::new();
     let int_se_targets: Vec<Vec<i64>> = Vec::new();
     let int_se_src_kinds: Vec<Vec<i64>> = Vec::new();
     let int_se_src_aux: Vec<Vec<i64>> = Vec::new();
@@ -63,6 +65,7 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
         int_kinds.push(RSUM_INTERNAL_UNINIT());
         int_auxs.push(0);
         int_aliases_list.push(Vec::new());
+        int_return_rodata.push(false);
         int_se_targets.push(Vec::new());
         int_se_src_kinds.push(Vec::new());
         int_se_src_aux.push(Vec::new());
@@ -128,17 +131,18 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
         let scc: Vec<i64> = sccs[scc_i];
         let scc_n: i64 = scc.len();
 
-        // Loose iteration bound, mirrors vow-ir/src/region.rs:79-86:
-        // lattice height per function is |params|+2
-        // (Uninit → AliasOf → AliasOfAny → FreshInCaller); store_effects
-        // bound is |params|; total bound for the SCC is sum * 2 for monotone
-        // slack. Finite lattice; if exceeded, emit ICE diagnostic (no panic).
+        // Loose iteration bound, mirrors vow-ir/src/region.rs:
+        // lattice height per function is |params|+3
+        // (Uninit → AliasOf → AliasOfAny → FreshInCaller, plus the
+        // monotone rodata-return bit); store_effects bound is |params|.
+        // Total bound for the SCC is sum * 2 for monotone slack. Finite
+        // lattice; if exceeded, emit ICE diagnostic (no panic).
         let mut bound: i64 = 0;
         let mut bi: i64 = 0;
         while bi < scc_n {
             let fidx: i64 = scc[bi];
             let nparams: i64 = m.functions[fidx].params.len();
-            bound = bound + (nparams + 2) * 2;
+            bound = bound + (nparams + 3) * 2;
             bi = bi + 1;
         }
         if bound < 8 { bound = 8; }
@@ -156,6 +160,7 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
                     id_to_inst_per_fn[fidx], id_to_block_per_fn[fidx], phi_arms_per_fn[fidx],
                     block_parent_per_fn[fidx], block_depth_per_fn[fidx],
                     int_kinds, int_auxs, int_aliases_list,
+                    int_return_rodata,
                     int_se_targets, int_se_src_kinds, int_se_src_aux, int_se_src_aliases,
                     region_keys, region_vals,
                     note_region_keys, note_region_vals,
@@ -266,6 +271,11 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
     check_region_store_conflicts_module(
         m,
         id_to_inst_per_fn,
+        id_to_block_per_fn,
+        block_parent_per_fn,
+        block_depth_per_fn,
+        phi_arms_per_fn,
+        int_return_rodata,
         region_keys,
         region_vals,
         dctx,
@@ -275,7 +285,7 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
     // (program-lifetime placement) as `RegionRootEscape` notes — gated by
     // `int_kinds` so we only fire on functions that may propagate the alloc
     // to a caller. See arena_memory.md §4.4.
-    emit_root_escape_notes_module(m, region_keys, region_vals,
+    emit_root_escape_notes_module(m, id_to_inst_per_fn, region_keys, region_vals,
                                    note_region_keys, note_region_vals,
                                    int_kinds, int_se_src_kinds, dctx);
 
@@ -999,7 +1009,10 @@ fn any_published_se_kind(kinds: Vec<i64>) -> bool {
 }
 
 fn check_region_store_conflicts_module(
-    m: IrModule, id_to_inst_per_fn: Vec<Vec<IrInst>>,
+    m: IrModule, id_to_inst_per_fn: Vec<Vec<IrInst>>, id_to_block_per_fn: Vec<Vec<i64>>,
+    block_parent_per_fn: Vec<Vec<i64>>, block_depth_per_fn: Vec<Vec<i64>>,
+    phi_arms_per_fn: Vec<Vec<Vec<i64>>>,
+    return_rodata: Vec<bool>,
     region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
     dctx: DiagCtx
 ) {
@@ -1007,6 +1020,10 @@ fn check_region_store_conflicts_module(
     while fi < m.functions.len() {
         let f: IrFunction = m.functions[fi];
         let id_to_inst: Vec<IrInst> = id_to_inst_per_fn[fi];
+        let id_to_block: Vec<i64> = id_to_block_per_fn[fi];
+        let block_parent: Vec<i64> = block_parent_per_fn[fi];
+        let block_depth: Vec<i64> = block_depth_per_fn[fi];
+        let phi_arms: Vec<Vec<i64>> = phi_arms_per_fn[fi];
         let rkeys: Vec<i64> = region_keys[fi];
         let rvals: Vec<i64> = region_vals[fi];
         // Issue #317: slot-aware region inference now mints
@@ -1021,6 +1038,23 @@ fn check_region_store_conflicts_module(
             let mut ii: i64 = 0;
             while ii < blk.insts.len() {
                 let inst: IrInst = blk.insts[ii];
+                if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
+                    let growth_target_pos: i64 = extern_growth_target_pos(inst.ds);
+                    if growth_target_pos >= 0 && growth_target_pos < inst.args.len() {
+                        let target_arg: i64 = inst.args[growth_target_pos];
+                        let visiting: Vec<i64> = Vec::new();
+                        if value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m.functions, return_rodata, target_arg, visiting) {
+                            emit_region_literal_mutation(
+                                f.source_file,
+                                target_arg,
+                                inst,
+                                id_to_inst,
+                                extern_mutation_operation(inst.ds),
+                                dctx
+                            );
+                        }
+                    }
+                }
                 if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
                     let callee_idx: i64 = inst.dv;
                     if callee_idx >= 0 && callee_idx < m.functions.len() {
@@ -1028,9 +1062,14 @@ fn check_region_store_conflicts_module(
                             m.functions[callee_idx].rsum_store_effects,
                             inst,
                             id_to_inst,
+                            id_to_block,
+                            block_parent,
+                            block_depth,
+                            phi_arms,
                             rkeys,
                             rvals,
                             m.functions,
+                            return_rodata,
                             dctx,
                             f.source_file,
                         );
@@ -1045,18 +1084,38 @@ fn check_region_store_conflicts_module(
 }
 
 fn check_store_effects_at_call(
-    flat: Vec<i64>, call_inst: IrInst, id_to_inst: Vec<IrInst>,
+    flat: Vec<i64>, call_inst: IrInst, id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>,
+    block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>,
     region_keys: Vec<i64>, region_vals: Vec<i64>,
     m_functions: Vec<IrFunction>,
+    return_rodata: Vec<bool>,
     dctx: DiagCtx, source_file: String
 ) {
     let mut i: i64 = 0;
+    let checked_targets: Vec<i64> = Vec::new();
     while i < flat.len() {
         let target: i64 = flat[i];
         i = i + 1;
         if i >= flat.len() { return; }
         let kind: i64 = flat[i];
         i = i + 1;
+        if target >= 0 && target < call_inst.args.len()
+            && !region_vec_contains_i64(checked_targets, target)
+        {
+            checked_targets.push(target);
+            let visiting: Vec<i64> = Vec::new();
+            if value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata, call_inst.args[target], visiting) {
+                emit_region_literal_mutation(
+                    source_file,
+                    call_inst.args[target],
+                    call_inst,
+                    id_to_inst,
+                    String::from("mutating callee parameter"),
+                    dctx
+                );
+            }
+        }
         if kind == RSUM_KIND_ALIAS_OF() {
             if i >= flat.len() { return; }
             let source_param: i64 = flat[i];
@@ -1108,6 +1167,7 @@ fn check_store_effects_at_call(
 // an informational diagnostic.
 fn emit_root_escape_notes_module(
     m: IrModule,
+    id_to_inst_per_fn: Vec<Vec<IrInst>>,
     region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
     note_region_keys: Vec<Vec<i64>>, note_region_vals: Vec<Vec<i64>>,
     int_kinds: Vec<i64>,
@@ -1150,6 +1210,7 @@ fn emit_root_escape_notes_module(
         let rvals: Vec<i64> = region_vals[fi];
         let note_rkeys: Vec<i64> = note_region_keys[fi];
         let note_rvals: Vec<i64> = note_region_vals[fi];
+        let id_to_inst: Vec<IrInst> = id_to_inst_per_fn[fi];
         let bks: Vec<IrBlock> = f.blocks;
         // Pre-collect returned IDs once per function so the inner skip is O(N)
         // total instead of O(N*Returns) — was O(N²) for functions with many
@@ -1180,8 +1241,8 @@ fn emit_root_escape_notes_module(
                     // Skip the value being returned — that's the canonical
                     // FreshInCaller return path, not a side-effect escape.
                     if !region_vec_contains_i64(returned_ids, inst.id) {
-                        let span_start: i64 = inst.ostart;
-                        let span_len: i64 = inst.olen;
+                        let span_start: i64 = root_escape_span_start(inst, id_to_inst);
+                        let span_len: i64 = root_escape_span_len(inst, id_to_inst);
                         let d: Diagnostic = diag_new(
                             SEV_NOTE(),
                             EC_REGION_ROOT_ESCAPE(),
@@ -1204,6 +1265,33 @@ fn emit_root_escape_notes_module(
         }
         fi = fi + 1;
     }
+}
+
+fn root_escape_span_start(inst: IrInst, id_to_inst: Vec<IrInst>) -> i64 {
+    if inst.olen > 0 {
+        return inst.ostart;
+    }
+    // Defensive fallback: if a call has no span, use the literal operand span.
+    if inst.op == IOP_CALL() && inst.args.len() > 0 {
+        let source: IrInst = lookup_inst_or_default(id_to_inst, inst.args[0]);
+        if source.id >= 0 && source.olen > 0 {
+            return source.ostart;
+        }
+    }
+    inst.ostart
+}
+
+fn root_escape_span_len(inst: IrInst, id_to_inst: Vec<IrInst>) -> i64 {
+    if inst.olen > 0 {
+        return inst.olen;
+    }
+    if inst.op == IOP_CALL() && inst.args.len() > 0 {
+        let source: IrInst = lookup_inst_or_default(id_to_inst, inst.args[0]);
+        if source.id >= 0 && source.olen > 0 {
+            return source.olen;
+        }
+    }
+    inst.olen
 }
 
 // Build the FreshInCaller return-value skip-set used by
@@ -1340,6 +1428,589 @@ fn check_store_conflict(
     diag_ctx_emit(dctx, d);
 }
 
+fn extern_mutation_operation(sym: String) -> String {
+    if sym == String::from("__vow_vec_push") || sym == String::from("__vow_vec_push_in_arena") {
+        return String::from("Vec::push");
+    }
+    if sym == String::from("__vow_vec_clear") {
+        return String::from("Vec::clear");
+    }
+    if sym == String::from("__vow_vec_reserve_in_arena") {
+        return String::from("Vec::reserve");
+    }
+    if sym == String::from("__vow_string_push_str") || sym == String::from("__vow_string_push_str_in_arena") {
+        return String::from("String::push_str");
+    }
+    if sym == String::from("__vow_string_push_byte") || sym == String::from("__vow_string_push_byte_in_arena") {
+        return String::from("String::push_byte");
+    }
+    if sym == String::from("__vow_string_clear") {
+        return String::from("String::clear");
+    }
+    if sym == String::from("__vow_map_insert") || sym == String::from("__vow_map_insert_in_arena") {
+        return String::from("HashMap::insert");
+    }
+    if sym == String::from("__vow_btreemap_insert") {
+        return String::from("BTreeMap::insert");
+    }
+    String::from("container mutation")
+}
+
+fn value_may_be_rodata(
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>, m_functions: Vec<IrFunction>,
+    return_rodata: Vec<bool>, id: i64, visiting: Vec<i64>
+) -> bool {
+    if region_vec_contains_i64(visiting, id) {
+        return false;
+    }
+    let inst: IrInst = lookup_inst_or_default(id_to_inst, id);
+    if inst.id < 0 {
+        return false;
+    }
+    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
+        && inst.ds == String::from("__vow_string_literal")
+    {
+        return true;
+    }
+    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
+        && (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
+        && inst.args.len() > 0
+    {
+        visiting.push(id);
+        let result0: bool = vec_element_may_be_rodata(
+            id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions,
+            return_rodata, id, inst.args[0], visiting
+        );
+        visiting.pop();
+        return result0;
+    }
+    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
+        let callee_idx: i64 = inst.dv;
+        if callee_idx >= 0 && callee_idx < m_functions.len() {
+            if callee_idx < return_rodata.len() && return_rodata[callee_idx] {
+                return true;
+            }
+            let callee: IrFunction = m_functions[callee_idx];
+            visiting.push(id);
+            let result: bool = return_region_may_be_rodata(
+                callee.rsum_return_kind,
+                callee.rsum_return_aux,
+                callee.rsum_return_aliases,
+                inst.args,
+                id_to_inst,
+                id_to_block,
+                block_parent,
+                block_depth,
+                phi_arms,
+                m_functions,
+                return_rodata,
+                visiting
+            );
+            visiting.pop();
+            return result;
+        }
+    }
+    if inst.op == IOP_PHI() && id >= 0 && id < phi_arms.len() {
+        visiting.push(id);
+        let arms: Vec<i64> = phi_arms[id];
+        let mut ai: i64 = 0;
+        while ai < arms.len() {
+            if value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata, arms[ai], visiting) {
+                visiting.pop();
+                return true;
+            }
+            ai = ai + 1;
+        }
+        visiting.pop();
+    }
+    if inst.op == IOP_FIELD_GET() && inst.dk == IDATA_FIELD() && inst.args.len() > 0 {
+        visiting.push(id);
+        let result2: bool = stored_value_may_be_rodata(
+            id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata,
+            id, inst.args[0], true, inst.dv, visiting
+        );
+        visiting.pop();
+        return result2;
+    }
+    if inst.op == IOP_LOAD() && inst.args.len() > 0 {
+        visiting.push(id);
+        let result3: bool = stored_value_may_be_rodata(
+            id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata,
+            id, inst.args[0], false, 0, visiting
+        );
+        visiting.pop();
+        return result3;
+    }
+    false
+}
+
+fn rodata_storage_sources(
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    read_id: i64, target_id: i64, has_field: bool, field_idx: i64
+) -> Vec<i64> {
+    let read_block: i64 = lookup_inst_block(id_to_block, read_id);
+    let mut same_write: i64 = -1;
+    let mut same_source: i64 = -1;
+    let mut dom_depth: i64 = -1;
+    let mut dom_write: i64 = -1;
+    let mut dom_source: i64 = -1;
+    let cross_block_sources: Vec<i64> = Vec::new();
+    let mut wi: i64 = 0;
+    while wi < id_to_inst.len() {
+        let write_inst: IrInst = id_to_inst[wi];
+        if write_inst.id >= 0 && write_inst.id < read_id && write_inst.args.len() >= 2 {
+            let mut writes_target: bool = false;
+            if has_field {
+                if write_inst.op == IOP_FIELD_SET()
+                    && write_inst.dk == IDATA_FIELD()
+                    && write_inst.args[0] == target_id
+                    && write_inst.dv == field_idx
+                {
+                    writes_target = true;
+                }
+            } else if write_inst.op == IOP_STORE() && write_inst.args[0] == target_id {
+                writes_target = true;
+            }
+            if writes_target {
+                let write_block: i64 = lookup_inst_block(id_to_block, write_inst.id);
+                if write_block == read_block {
+                    if same_write < 0 || write_inst.id > same_write {
+                        same_write = write_inst.id;
+                        same_source = write_inst.args[1];
+                    }
+                } else if block_tree_is_ancestor(block_parent, write_block, read_block) {
+                    let write_depth: i64 = block_depth_at(block_depth, write_block);
+                    if dom_write < 0 || write_depth > dom_depth
+                        || (write_depth == dom_depth && write_inst.id > dom_write)
+                    {
+                        dom_depth = write_depth;
+                        dom_write = write_inst.id;
+                        dom_source = write_inst.args[1];
+                    }
+                } else {
+                    cross_block_sources.push(write_inst.args[1]);
+                }
+            }
+        }
+        wi = wi + 1;
+    }
+    if same_source >= 0 {
+        let out: Vec<i64> = Vec::new();
+        out.push(same_source);
+        return out;
+    }
+    if dom_source >= 0 {
+        cross_block_sources.push(dom_source);
+    }
+    cross_block_sources
+}
+
+fn rodata_vec_element_sources(
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    read_id: i64, target_id: i64
+) -> Vec<i64> {
+    let read_block: i64 = lookup_inst_block(id_to_block, read_id);
+    let mut clear_cutoff: i64 = -1;
+    let mut clear_depth: i64 = -1;
+    let mut ci: i64 = 0;
+    while ci < id_to_inst.len() {
+        let clear_inst: IrInst = id_to_inst[ci];
+        if clear_inst.id >= 0 && clear_inst.id < read_id
+            && clear_inst.op == IOP_CALL()
+            && clear_inst.dk == IDATA_CALL_EXTERN()
+            && clear_inst.ds == String::from("__vow_vec_clear")
+            && clear_inst.args.len() > 0
+            && clear_inst.args[0] == target_id
+        {
+            let clear_block: i64 = lookup_inst_block(id_to_block, clear_inst.id);
+            if block_tree_is_ancestor(block_parent, clear_block, read_block) {
+                let depth: i64 = block_depth_at(block_depth, clear_block);
+                if clear_cutoff < 0 || depth > clear_depth || (depth == clear_depth && clear_inst.id > clear_cutoff) {
+                    clear_depth = depth;
+                    clear_cutoff = clear_inst.id;
+                }
+            }
+        }
+        ci = ci + 1;
+    }
+    // Without index equality/range reasoning, any earlier element write to
+    // this vector may be the value read by __vow_vec_get_val.
+    let sources: Vec<i64> = Vec::new();
+    let mut wi: i64 = 0;
+    while wi < id_to_inst.len() {
+        let write_inst: IrInst = id_to_inst[wi];
+        if write_inst.id >= 0 && write_inst.id < read_id && write_inst.id > clear_cutoff
+            && write_inst.op == IOP_CALL()
+            && write_inst.dk == IDATA_CALL_EXTERN()
+        {
+            if write_inst.ds == String::from("__vow_vec_push_val")
+                && write_inst.args.len() >= 2
+                && write_inst.args[0] == target_id
+            {
+                sources.push(write_inst.args[1]);
+            } else if write_inst.ds == String::from("__vow_vec_push_val_in_arena")
+                && write_inst.args.len() >= 3
+                && write_inst.args[1] == target_id
+            {
+                sources.push(write_inst.args[2]);
+            } else if write_inst.ds == String::from("__vow_vec_set_val")
+                && write_inst.args.len() >= 3
+                && write_inst.args[0] == target_id
+            {
+                sources.push(write_inst.args[2]);
+            }
+        }
+        wi = wi + 1;
+    }
+    sources
+}
+
+fn vec_element_may_be_rodata(
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>, m_functions: Vec<IrFunction>,
+    return_rodata: Vec<bool>, read_id: i64, target_id: i64, visiting: Vec<i64>
+) -> bool {
+    let sources: Vec<i64> = rodata_vec_element_sources(
+        id_to_inst, id_to_block, block_parent, block_depth, read_id, target_id
+    );
+    let mut si: i64 = 0;
+    while si < sources.len() {
+        if value_may_be_rodata(
+            id_to_inst,
+            id_to_block,
+            block_parent,
+            block_depth,
+            phi_arms,
+            m_functions,
+            return_rodata,
+            sources[si],
+            visiting
+        ) {
+            return true;
+        }
+        si = si + 1;
+    }
+    false
+}
+
+fn stored_value_may_be_rodata(
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>,
+    m_functions: Vec<IrFunction>, return_rodata: Vec<bool>,
+    read_id: i64, target_id: i64, has_field: bool, field_idx: i64, visiting: Vec<i64>
+) -> bool {
+    let sources: Vec<i64> = rodata_storage_sources(id_to_inst, id_to_block, block_parent, block_depth, read_id, target_id, has_field, field_idx);
+    let mut si: i64 = 0;
+    while si < sources.len() {
+        if value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata, sources[si], visiting) {
+            return true;
+        }
+        si = si + 1;
+    }
+    false
+}
+
+fn return_region_may_be_rodata(
+    kind: i64, aux: i64, aliases: Vec<i64>, args: Vec<i64>,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>, m_functions: Vec<IrFunction>,
+    return_rodata: Vec<bool>, visiting: Vec<i64>
+) -> bool {
+    if kind == RSUM_KIND_ALIAS_OF() {
+        if aux >= 0 && aux < args.len() {
+            return value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata, args[aux], visiting);
+        }
+        return false;
+    }
+    if kind == RSUM_KIND_ALIAS_OF_ANY() {
+        let mut ai: i64 = 0;
+        while ai < aliases.len() {
+            let arg_idx: i64 = aliases[ai];
+            if arg_idx >= 0 && arg_idx < args.len()
+                && value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata, args[arg_idx], visiting)
+            {
+                return true;
+            }
+            ai = ai + 1;
+        }
+    }
+    false
+}
+
+// Mirrors the post-fixpoint rodata walk while SCC summaries still live in
+// parallel arrays; keep changes in sync with value_may_be_rodata above.
+fn value_may_be_rodata_internal(
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>,
+    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
+    return_rodata: Vec<bool>, id: i64, visiting: Vec<i64>
+) -> bool {
+    if region_vec_contains_i64(visiting, id) {
+        return false;
+    }
+    let inst: IrInst = lookup_inst_or_default(id_to_inst, id);
+    if inst.id < 0 {
+        return false;
+    }
+    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
+        && inst.ds == String::from("__vow_string_literal")
+    {
+        return true;
+    }
+    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
+        && (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
+        && inst.args.len() > 0
+    {
+        visiting.push(id);
+        let result0: bool = vec_element_may_be_rodata_internal(
+            id_to_inst, id_to_block, block_parent, block_depth, phi_arms, int_kinds,
+            int_auxs, int_aliases_list, return_rodata, id, inst.args[0], visiting
+        );
+        visiting.pop();
+        return result0;
+    }
+    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
+        let callee_idx: i64 = inst.dv;
+        if callee_idx >= 0 && callee_idx < int_kinds.len() {
+            if callee_idx < return_rodata.len() && return_rodata[callee_idx] {
+                return true;
+            }
+            visiting.push(id);
+            let result: bool = return_region_may_be_rodata_internal(
+                int_kinds[callee_idx],
+                int_auxs[callee_idx],
+                int_aliases_list[callee_idx],
+                inst.args,
+                id_to_inst,
+                id_to_block,
+                block_parent,
+                block_depth,
+                phi_arms,
+                int_kinds,
+                int_auxs,
+                int_aliases_list,
+                return_rodata,
+                visiting
+            );
+            visiting.pop();
+            return result;
+        }
+    }
+    if inst.op == IOP_PHI() && id >= 0 && id < phi_arms.len() {
+        visiting.push(id);
+        let arms: Vec<i64> = phi_arms[id];
+        let mut ai: i64 = 0;
+        while ai < arms.len() {
+            if value_may_be_rodata_internal(
+                id_to_inst,
+                id_to_block,
+                block_parent,
+                block_depth,
+                phi_arms,
+                int_kinds,
+                int_auxs,
+                int_aliases_list,
+                return_rodata,
+                arms[ai],
+                visiting
+            ) {
+                visiting.pop();
+                return true;
+            }
+            ai = ai + 1;
+        }
+        visiting.pop();
+    }
+    if inst.op == IOP_FIELD_GET() && inst.dk == IDATA_FIELD() && inst.args.len() > 0 {
+        visiting.push(id);
+        let result2: bool = stored_value_may_be_rodata_internal(
+            id_to_inst,
+            id_to_block,
+            block_parent,
+            block_depth,
+            phi_arms,
+            int_kinds,
+            int_auxs,
+            int_aliases_list,
+            return_rodata,
+            id,
+            inst.args[0],
+            true,
+            inst.dv,
+            visiting
+        );
+        visiting.pop();
+        return result2;
+    }
+    if inst.op == IOP_LOAD() && inst.args.len() > 0 {
+        visiting.push(id);
+        let result3: bool = stored_value_may_be_rodata_internal(
+            id_to_inst,
+            id_to_block,
+            block_parent,
+            block_depth,
+            phi_arms,
+            int_kinds,
+            int_auxs,
+            int_aliases_list,
+            return_rodata,
+            id,
+            inst.args[0],
+            false,
+            0,
+            visiting
+        );
+        visiting.pop();
+        return result3;
+    }
+    false
+}
+
+fn vec_element_may_be_rodata_internal(
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>,
+    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
+    return_rodata: Vec<bool>, read_id: i64, target_id: i64, visiting: Vec<i64>
+) -> bool {
+    let sources: Vec<i64> = rodata_vec_element_sources(
+        id_to_inst, id_to_block, block_parent, block_depth, read_id, target_id
+    );
+    let mut si: i64 = 0;
+    while si < sources.len() {
+        if value_may_be_rodata_internal(
+            id_to_inst,
+            id_to_block,
+            block_parent,
+            block_depth,
+            phi_arms,
+            int_kinds,
+            int_auxs,
+            int_aliases_list,
+            return_rodata,
+            sources[si],
+            visiting
+        ) {
+            return true;
+        }
+        si = si + 1;
+    }
+    false
+}
+
+fn stored_value_may_be_rodata_internal(
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>,
+    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
+    return_rodata: Vec<bool>, read_id: i64, target_id: i64, has_field: bool, field_idx: i64,
+    visiting: Vec<i64>
+) -> bool {
+    let sources: Vec<i64> = rodata_storage_sources(id_to_inst, id_to_block, block_parent, block_depth, read_id, target_id, has_field, field_idx);
+    let mut si: i64 = 0;
+    while si < sources.len() {
+        if value_may_be_rodata_internal(
+            id_to_inst,
+            id_to_block,
+            block_parent,
+            block_depth,
+            phi_arms,
+            int_kinds,
+            int_auxs,
+            int_aliases_list,
+            return_rodata,
+            sources[si],
+            visiting
+        ) {
+            return true;
+        }
+        si = si + 1;
+    }
+    false
+}
+
+fn return_region_may_be_rodata_internal(
+    kind: i64, aux: i64, aliases: Vec<i64>, args: Vec<i64>,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>,
+    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
+    return_rodata: Vec<bool>, visiting: Vec<i64>
+) -> bool {
+    if kind == RSUM_KIND_ALIAS_OF() {
+        if aux >= 0 && aux < args.len() {
+            return value_may_be_rodata_internal(
+                id_to_inst,
+                id_to_block,
+                block_parent,
+                block_depth,
+                phi_arms,
+                int_kinds,
+                int_auxs,
+                int_aliases_list,
+                return_rodata,
+                args[aux],
+                visiting
+            );
+        }
+        return false;
+    }
+    if kind == RSUM_KIND_ALIAS_OF_ANY() {
+        let mut ai: i64 = 0;
+        while ai < aliases.len() {
+            let arg_idx: i64 = aliases[ai];
+            if arg_idx >= 0 && arg_idx < args.len()
+                && value_may_be_rodata_internal(
+                    id_to_inst,
+                    id_to_block,
+                    block_parent,
+                    block_depth,
+                    phi_arms,
+                    int_kinds,
+                    int_auxs,
+                    int_aliases_list,
+                    return_rodata,
+                    args[arg_idx],
+                    visiting
+                )
+            {
+                return true;
+            }
+            ai = ai + 1;
+        }
+    }
+    false
+}
+
+fn emit_region_literal_mutation(
+    source_file: String, target_arg_id: i64, call_inst: IrInst, id_to_inst: Vec<IrInst>,
+    operation: String, dctx: DiagCtx
+) {
+    let target_inst: IrInst = lookup_inst_or_default(id_to_inst, target_arg_id);
+    let span_start: i64 = if target_inst.id >= 0 && target_inst.olen > 0 {
+        target_inst.ostart
+    } else {
+        call_inst.ostart
+    };
+    let span_len: i64 = if target_inst.id >= 0 && target_inst.olen > 0 {
+        target_inst.olen
+    } else {
+        call_inst.olen
+    };
+    let msg: String = String::from("literal-backed value cannot be mutated by ");
+    msg.push_str(operation);
+    msg.push_str("; make an explicit mutable copy first");
+    let d: Diagnostic = diag_new(
+        SEV_ERROR(),
+        EC_REGION_LITERAL_MUTATION(),
+        msg,
+        source_file,
+        span_start,
+        span_len,
+        DIAG_BLAME_CALLER()
+    );
+    diag_add_hint(d, String::from("make an explicit mutable copy with `String::from(value)` before passing to a mutating operation"));
+    diag_ctx_emit(dctx, d);
+}
+
 // ---- Per-function analysis ----
 
 // Returns true if the function's internal summary changed.
@@ -1348,6 +2019,7 @@ fn analyze_function(
     id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, phi_arms: Vec<Vec<i64>>,
     block_parent: Vec<i64>, block_depth: Vec<i64>,
     int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
+    int_return_rodata: Vec<bool>,
     int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>,
     int_se_src_aux: Vec<Vec<i64>>, int_se_src_aliases: Vec<Vec<Vec<i64>>>,
     region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
@@ -1370,6 +2042,7 @@ fn analyze_function(
     let prev_kind: i64 = int_kinds[fidx];
     let prev_aux: i64 = int_auxs[fidx];
     let prev_aliases: Vec<i64> = int_aliases_list[fidx];
+    let prev_return_rodata: bool = int_return_rodata[fidx];
     let prev_se_targets: Vec<i64> = clone_i64_vec(int_se_targets[fidx]);
     let prev_se_src_kinds: Vec<i64> = clone_i64_vec(int_se_src_kinds[fidx]);
     let prev_se_src_aux: Vec<i64> = clone_i64_vec(int_se_src_aux[fidx]);
@@ -1380,6 +2053,7 @@ fn analyze_function(
     let mut acc_kind: i64 = RSUM_INTERNAL_UNINIT();
     let mut acc_aux: i64 = 0;
     let mut acc_aliases: Vec<i64> = Vec::new();
+    let mut acc_return_rodata: bool = false;
 
     let mut bi: i64 = 0;
     while bi < n_bks {
@@ -1395,6 +2069,24 @@ fn analyze_function(
                 } else {
                     deep_origin(id_to_inst, phi_arms, inst, int_kinds, int_auxs, int_aliases_list)
                 };
+                if !is_scalar_ity(f.return_ty) && inst.args.len() > 0 {
+                    let visiting: Vec<i64> = Vec::new();
+                    if value_may_be_rodata_internal(
+                        id_to_inst,
+                        id_to_block,
+                        block_parent,
+                        block_depth,
+                        phi_arms,
+                        int_kinds,
+                        int_auxs,
+                        int_aliases_list,
+                        int_return_rodata,
+                        inst.args[0],
+                        visiting
+                    ) {
+                        acc_return_rodata = true;
+                    }
+                }
                 let ret_kind: i64 = ret_dr.kind;
                 let ret_aux: i64 = ret_dr.aux;
                 let ret_aliases: Vec<i64> = ret_dr.aliases;
@@ -1532,9 +2224,11 @@ fn analyze_function(
     int_kinds[fidx] = new_kind;
     int_auxs[fidx] = new_aux;
     int_aliases_list[fidx] = new_aliases;
+    int_return_rodata[fidx] = acc_return_rodata;
 
     // Return whether the summary changed.
     if new_kind != prev_kind { return true; }
+    if acc_return_rodata != prev_return_rodata { return true; }
     if new_kind == RSUM_KIND_ALIAS_OF() && new_aux != prev_aux { return true; }
     if new_kind == RSUM_KIND_ALIAS_OF_ANY() {
         if new_aliases.len() != prev_aliases.len() { return true; }
@@ -3349,6 +4043,8 @@ fn string_creation_extern(sym: String) -> bool {
         || sym == String::from("__vow_string_new_in_arena")
         || sym == String::from("__vow_string_from_cstr")
         || sym == String::from("__vow_string_from_cstr_in_arena")
+        || sym == String::from("__vow_string_clone")
+        || sym == String::from("__vow_string_clone_in_arena")
         || sym == String::from("__vow_string_substr")
         || sym == String::from("__vow_string_substr_in_arena")
         || sym == String::from("__vow_string_substring")
@@ -3421,14 +4117,17 @@ fn extern_store_source_pos(sym: String, edge_idx: i64) -> i64 {
 
 fn extern_growth_target_pos(sym: String) -> i64 {
     if sym == String::from("__vow_vec_push") { return 0; }
+    if sym == String::from("__vow_vec_clear") { return 0; }
     if sym == String::from("__vow_vec_push_in_arena") { return 1; }
     if sym == String::from("__vow_vec_reserve_in_arena") { return 1; }
     if sym == String::from("__vow_string_push_str") { return 0; }
     if sym == String::from("__vow_string_push_str_in_arena") { return 1; }
     if sym == String::from("__vow_string_push_byte") { return 0; }
+    if sym == String::from("__vow_string_clear") { return 0; }
     if sym == String::from("__vow_string_push_byte_in_arena") { return 1; }
     if sym == String::from("__vow_map_insert") { return 0; }
     if sym == String::from("__vow_map_insert_in_arena") { return 1; }
+    if sym == String::from("__vow_btreemap_insert") { return 0; }
     -1
 }
 

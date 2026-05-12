@@ -83,13 +83,15 @@ pub fn infer_regions(module: &mut Module) {
     // SCCs come out in reverse topological order from Tarjan; that's the
     // order we want — callees before callers.
     for scc in &sccs {
-        // Lattice height per function: |params| + 2 (Uninit → AliasOf →
-        // AliasOfAny → FreshInCaller). store_effects bound: |params|. Total
-        // bound for the SCC: sum * 2 to give monotone slack.
+        // Lattice height per function: |params| + 3
+        // (Uninit → AliasOf → AliasOfAny → FreshInCaller, plus one
+        // monotone rodata-return bit).
+        // store_effects bound: |params|. Total bound for the SCC: sum * 2
+        // to give monotone slack.
         let mut bound: usize = 0;
         for &fidx in scc {
             let nparams = module.functions[fidx as usize].params.len();
-            bound = bound.saturating_add(nparams.saturating_add(2).saturating_mul(2));
+            bound = bound.saturating_add(nparams.saturating_add(3).saturating_mul(2));
         }
         bound = bound.max(8); // ensure SCCs of size 1 still get a few rounds
 
@@ -1254,6 +1256,7 @@ fn internal_compiler_error(message: &str) -> Diagnostic {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct InternalSummary {
     return_region: InternalReturnRegion,
+    return_may_be_rodata: bool,
     /// Set of (target_param_index, source_constraint) pairs. We use a set
     /// rather than a Vec so set-inclusion is the join.
     store_effects: BTreeSet<(u32, InternalReturnRegion)>,
@@ -1264,6 +1267,7 @@ impl InternalSummary {
     fn seed(n_params: usize) -> Self {
         Self {
             return_region: InternalReturnRegion::Uninit,
+            return_may_be_rodata: false,
             store_effects: BTreeSet::new(),
             n_params,
         }
@@ -1457,6 +1461,13 @@ fn analyze_function(
     // path; the in-handle_inst Return shortcut only flags virtual-caller
     // escape on the must_outlive set.
     summary.return_region = compute_return_region(func, &inst_lookup, &phi_arms, summaries);
+    let rodata_trace = RodataTrace {
+        inst_lookup: &inst_lookup,
+        phi_arms: &phi_arms,
+        summaries,
+        block_tree: &block_tree,
+    };
+    summary.return_may_be_rodata = compute_return_may_be_rodata(func, &rodata_trace);
 
     // Pre-rewrite `Caller(_)` regions for the `RegionRootEscape` note pass.
     // The rewrite below collapses internal-call results from `Caller(_)` to
@@ -1502,6 +1513,7 @@ fn analyze_function(
     // aggregates as conflicts; consulting the inferred region instead fires
     // only when the source's resolved region is strictly narrower than the
     // target's.
+    check_literal_mutations_post_inference(func, &rodata_trace, diagnostics);
     check_store_conflicts_post_inference(func, summaries, region_map, &inst_lookup, diagnostics);
 
     // Surface `Caller(_)` allocations in functions that may propagate them
@@ -1706,6 +1718,8 @@ fn string_creation_extern(sym: &str) -> bool {
             | "__vow_string_new_in_arena"
             | "__vow_string_from_cstr"
             | "__vow_string_from_cstr_in_arena"
+            | "__vow_string_clone"
+            | "__vow_string_clone_in_arena"
             | "__vow_string_substr"
             | "__vow_string_substr_in_arena"
             | "__vow_string_substring"
@@ -1758,15 +1772,32 @@ fn for_each_extern_store_edge(sym: &str, args: &[InstId], mut visit: impl FnMut(
 fn extern_growth_target(sym: &str, args: &[InstId]) -> Option<InstId> {
     match sym {
         "__vow_vec_push" if !args.is_empty() => Some(args[0]),
+        "__vow_vec_clear" if !args.is_empty() => Some(args[0]),
         "__vow_vec_push_in_arena" | "__vow_vec_reserve_in_arena" if args.len() >= 2 => {
             Some(args[1])
         }
         "__vow_string_push_str" | "__vow_string_push_byte" if !args.is_empty() => Some(args[0]),
+        "__vow_string_clear" if !args.is_empty() => Some(args[0]),
         "__vow_string_push_str_in_arena" | "__vow_string_push_byte_in_arena" if args.len() >= 2 => {
             Some(args[1])
         }
         "__vow_map_insert" if !args.is_empty() => Some(args[0]),
         "__vow_map_insert_in_arena" if args.len() >= 2 => Some(args[1]),
+        "__vow_btreemap_insert" if !args.is_empty() => Some(args[0]),
+        _ => None,
+    }
+}
+
+fn extern_mutation_operation(sym: &str) -> Option<&'static str> {
+    match sym {
+        "__vow_vec_push" | "__vow_vec_push_in_arena" => Some("Vec::push"),
+        "__vow_vec_clear" => Some("Vec::clear"),
+        "__vow_vec_reserve_in_arena" => Some("Vec::reserve"),
+        "__vow_string_push_str" | "__vow_string_push_str_in_arena" => Some("String::push_str"),
+        "__vow_string_push_byte" | "__vow_string_push_byte_in_arena" => Some("String::push_byte"),
+        "__vow_string_clear" => Some("String::clear"),
+        "__vow_map_insert" | "__vow_map_insert_in_arena" => Some("HashMap::insert"),
+        "__vow_btreemap_insert" => Some("BTreeMap::insert"),
         _ => None,
     }
 }
@@ -1966,6 +1997,274 @@ fn handle_inst(
             // CallExtern (no CallTarget): default ConstantGlobal, no constraints.
         }
         _ => {}
+    }
+}
+
+struct RodataTrace<'a> {
+    inst_lookup: &'a BTreeMap<InstId, (BlockId, &'a Inst)>,
+    phi_arms: &'a BTreeMap<InstId, Vec<InstId>>,
+    summaries: &'a [InternalSummary],
+    block_tree: &'a BlockTree,
+}
+
+fn value_may_be_rodata(
+    id: InstId,
+    trace: &RodataTrace<'_>,
+    visiting: &mut VecDeque<InstId>,
+) -> bool {
+    if visiting.contains(&id) {
+        return false;
+    }
+    let Some((_, inst)) = trace.inst_lookup.get(&id) else {
+        return false;
+    };
+    match inst.opcode {
+        Opcode::Call => match &inst.data {
+            InstData::CallExtern(sym) if sym == "__vow_string_literal" => true,
+            InstData::CallExtern(sym)
+                if matches!(sym.as_str(), "__vow_vec_get_val" | "__vow_vec_get") =>
+            {
+                let Some(&target_id) = inst.args.first() else {
+                    return false;
+                };
+                visiting.push_back(id);
+                let result = vec_element_value_may_be_rodata(id, target_id, trace, visiting);
+                visiting.pop_back();
+                result
+            }
+            InstData::CallTarget(callee_id) => {
+                let Some(summary) = trace.summaries.get(callee_id.0 as usize) else {
+                    return false;
+                };
+                if summary.return_may_be_rodata {
+                    return true;
+                }
+                visiting.push_back(id);
+                let result = return_region_may_be_rodata(
+                    &summary.return_region,
+                    &inst.args,
+                    trace,
+                    visiting,
+                );
+                visiting.pop_back();
+                result
+            }
+            _ => false,
+        },
+        Opcode::Phi => {
+            let Some(arms) = trace.phi_arms.get(&id) else {
+                return false;
+            };
+            visiting.push_back(id);
+            let result = arms
+                .iter()
+                .any(|arm| value_may_be_rodata(*arm, trace, visiting));
+            visiting.pop_back();
+            result
+        }
+        Opcode::FieldGet => {
+            let Some(&target_id) = inst.args.first() else {
+                return false;
+            };
+            let field_idx = match &inst.data {
+                InstData::FieldIndex(idx) => *idx,
+                _ => return false,
+            };
+            visiting.push_back(id);
+            let result =
+                stored_value_may_be_rodata(id, target_id, Some(field_idx), trace, visiting);
+            visiting.pop_back();
+            result
+        }
+        Opcode::Load => {
+            let Some(&target_id) = inst.args.first() else {
+                return false;
+            };
+            visiting.push_back(id);
+            let result = stored_value_may_be_rodata(id, target_id, None, trace, visiting);
+            visiting.pop_back();
+            result
+        }
+        _ => false,
+    }
+}
+
+fn vec_element_value_may_be_rodata(
+    read_id: InstId,
+    target_id: InstId,
+    trace: &RodataTrace<'_>,
+    visiting: &mut VecDeque<InstId>,
+) -> bool {
+    let clear_cutoff = vec_element_clear_cutoff(read_id, target_id, trace);
+    for (&write_id, (_, write_inst)) in trace.inst_lookup {
+        if write_id.0 >= read_id.0 {
+            continue;
+        }
+        if let Some(clear_id) = clear_cutoff
+            && write_id.0 <= clear_id.0
+        {
+            continue;
+        }
+        let Some(source_id) = vec_element_write_source(write_inst, target_id) else {
+            continue;
+        };
+        // Without index equality/range reasoning, any earlier element write
+        // to this vector may be the value read by `__vow_vec_get_val`.
+        if value_may_be_rodata(source_id, trace, visiting) {
+            return true;
+        }
+    }
+    false
+}
+
+fn vec_element_clear_cutoff(
+    read_id: InstId,
+    target_id: InstId,
+    trace: &RodataTrace<'_>,
+) -> Option<InstId> {
+    let (read_block, _) = trace.inst_lookup.get(&read_id)?;
+    let mut cutoff: Option<(u32, InstId)> = None;
+    for (&clear_id, (clear_block, clear_inst)) in trace.inst_lookup {
+        if clear_id.0 >= read_id.0 || !vec_clear_targets(clear_inst, target_id) {
+            continue;
+        }
+        if !trace.block_tree.is_ancestor(*clear_block, *read_block) {
+            continue;
+        }
+        let clear_depth = trace.block_tree.depth_of(*clear_block);
+        match cutoff {
+            Some((prev_depth, prev_id)) if (prev_depth, prev_id.0) > (clear_depth, clear_id.0) => {}
+            _ => cutoff = Some((clear_depth, clear_id)),
+        }
+    }
+    cutoff.map(|(_, clear_id)| clear_id)
+}
+
+fn vec_clear_targets(inst: &Inst, target_id: InstId) -> bool {
+    let Opcode::Call = inst.opcode else {
+        return false;
+    };
+    let InstData::CallExtern(sym) = &inst.data else {
+        return false;
+    };
+    sym == "__vow_vec_clear" && inst.args.first() == Some(&target_id)
+}
+
+fn vec_element_write_source(inst: &Inst, target_id: InstId) -> Option<InstId> {
+    let Opcode::Call = inst.opcode else {
+        return None;
+    };
+    let InstData::CallExtern(sym) = &inst.data else {
+        return None;
+    };
+    match sym.as_str() {
+        "__vow_vec_push_val" if inst.args.len() >= 2 && inst.args[0] == target_id => {
+            Some(inst.args[1])
+        }
+        "__vow_vec_push_val_in_arena" if inst.args.len() >= 3 && inst.args[1] == target_id => {
+            Some(inst.args[2])
+        }
+        "__vow_vec_set_val" if inst.args.len() >= 3 && inst.args[0] == target_id => {
+            Some(inst.args[2])
+        }
+        _ => None,
+    }
+}
+
+fn stored_value_may_be_rodata(
+    read_id: InstId,
+    target_id: InstId,
+    field_idx: Option<u32>,
+    trace: &RodataTrace<'_>,
+    visiting: &mut VecDeque<InstId>,
+) -> bool {
+    let Some((read_block, _)) = trace.inst_lookup.get(&read_id) else {
+        return false;
+    };
+
+    let mut same_block_last: Option<(InstId, InstId)> = None;
+    let mut dominating_last: Option<(u32, InstId, InstId)> = None;
+    let mut cross_block_sources: Vec<InstId> = Vec::new();
+    for (&write_id, (write_block, write_inst)) in trace.inst_lookup {
+        if write_id.0 >= read_id.0 || write_inst.args.len() < 2 {
+            continue;
+        }
+        let writes_target = match field_idx {
+            Some(idx) => {
+                write_inst.opcode == Opcode::FieldSet
+                    && write_inst.args[0] == target_id
+                    && matches!(&write_inst.data, InstData::FieldIndex(write_idx) if *write_idx == idx)
+            }
+            None => write_inst.opcode == Opcode::Store && write_inst.args[0] == target_id,
+        };
+        if !writes_target {
+            continue;
+        }
+        let source_id = write_inst.args[1];
+        if write_block == read_block {
+            match same_block_last {
+                Some((prev_id, _)) if prev_id.0 > write_id.0 => {}
+                _ => same_block_last = Some((write_id, source_id)),
+            }
+        } else if trace.block_tree.is_ancestor(*write_block, *read_block) {
+            let write_depth = trace.block_tree.depth_of(*write_block);
+            match dominating_last {
+                Some((prev_depth, prev_id, _))
+                    if (prev_depth, prev_id.0) > (write_depth, write_id.0) => {}
+                _ => dominating_last = Some((write_depth, write_id, source_id)),
+            }
+        } else {
+            cross_block_sources.push(source_id);
+        }
+    }
+
+    if let Some((_, source_id)) = same_block_last {
+        return value_may_be_rodata(source_id, trace, visiting);
+    }
+    if let Some((_, _, source_id)) = dominating_last
+        && value_may_be_rodata(source_id, trace, visiting)
+    {
+        return true;
+    }
+    // Branch-local writes can still override an ancestor-block baseline on
+    // the paths that take them, so keep them in the conservative source set.
+    cross_block_sources
+        .into_iter()
+        .any(|source_id| value_may_be_rodata(source_id, trace, visiting))
+}
+
+fn compute_return_may_be_rodata(func: &Function, trace: &RodataTrace<'_>) -> bool {
+    if is_scalar_ty(func.return_ty) {
+        return false;
+    }
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.opcode == Opcode::Return
+                && let Some(&arg_id) = inst.args.first()
+                && value_may_be_rodata(arg_id, trace, &mut VecDeque::new())
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn return_region_may_be_rodata(
+    return_region: &InternalReturnRegion,
+    args: &[InstId],
+    trace: &RodataTrace<'_>,
+    visiting: &mut VecDeque<InstId>,
+) -> bool {
+    match return_region {
+        InternalReturnRegion::Published(RegionConstraint::AliasOf(i)) => args
+            .get(*i as usize)
+            .is_some_and(|arg| value_may_be_rodata(*arg, trace, visiting)),
+        InternalReturnRegion::Published(RegionConstraint::AliasOfAny(indices)) => indices
+            .iter()
+            .filter_map(|i| args.get(*i as usize))
+            .any(|arg| value_may_be_rodata(*arg, trace, visiting)),
+        _ => false,
     }
 }
 
@@ -2644,6 +2943,99 @@ fn origin_to_constraint(origin: &ValueOrigin) -> RegionConstraint {
 // Conflict detection
 // ---------------------------------------------------------------------------
 
+fn check_literal_mutations_post_inference(
+    func: &Function,
+    trace: &RodataTrace<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let source_file: &str = &func.source_file;
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.opcode != Opcode::Call {
+                continue;
+            }
+            match &inst.data {
+                InstData::CallExtern(sym) => {
+                    if let Some(target_id) = extern_growth_target(sym, &inst.args)
+                        && value_may_be_rodata(target_id, trace, &mut VecDeque::new())
+                    {
+                        emit_region_literal_mutation(
+                            source_file,
+                            target_id,
+                            inst,
+                            trace.inst_lookup,
+                            extern_mutation_operation(sym).unwrap_or("container mutation"),
+                            diagnostics,
+                        );
+                    }
+                }
+                InstData::CallTarget(callee) => {
+                    let callee_idx = callee.0 as usize;
+                    let Some(callee_summary) = trace.summaries.get(callee_idx) else {
+                        continue;
+                    };
+                    let mut checked_targets = BTreeSet::new();
+                    for effect in &callee_summary.store_effects {
+                        let target = effect.0;
+                        if !checked_targets.insert(target) {
+                            continue;
+                        }
+                        let target_idx = target as usize;
+                        let Some(&target_id) = inst.args.get(target_idx) else {
+                            continue;
+                        };
+                        if value_may_be_rodata(target_id, trace, &mut VecDeque::new()) {
+                            emit_region_literal_mutation(
+                                source_file,
+                                target_id,
+                                inst,
+                                trace.inst_lookup,
+                                "mutating callee parameter",
+                                diagnostics,
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+fn emit_region_literal_mutation(
+    source_file: &str,
+    target_id: InstId,
+    call_inst: &Inst,
+    inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
+    operation: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let target_span = inst_lookup
+        .get(&target_id)
+        .map(|(_, i)| i.origin)
+        .unwrap_or(call_inst.origin);
+
+    diagnostics.push(Diagnostic {
+        severity: Severity::Error,
+        code: ErrorCode::RegionLiteralMutation,
+        message: format!(
+            "literal-backed value cannot be mutated by {operation}; make an explicit mutable copy first"
+        ),
+        primary: SourceLocation {
+            file: source_file.to_string(),
+            byte_offset: target_span.start,
+            byte_len: target_span.len,
+        },
+        secondary: vec![SourceLocation {
+            file: source_file.to_string(),
+            byte_offset: call_inst.origin.start,
+            byte_len: call_inst.origin.len,
+        }],
+        blame: Blame::Caller,
+        hints: vec!["make an explicit mutable copy with `String::from(value)` before passing to a mutating operation".to_string()],
+    });
+}
+
 /// Trace alias chain (FieldGet/Load/vec-get/Phi/CallTarget-AliasOf) for
 /// Issue #317: kept (with `dead_code` tolerance) for the future
 /// AMBIGUOUS-reject revival path. Slot-aware inference now mints precise
@@ -3313,6 +3705,522 @@ mod tests {
         assert_eq!(
             m.functions[0].summary.return_region,
             RegionConstraint::ConstantGlobal
+        );
+    }
+
+    #[test]
+    fn literal_mutation_through_field_get_is_rejected() {
+        let insts = vec![
+            inst(
+                0,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![1],
+                InstData::CallExtern("__vow_string_literal".to_string()),
+            ),
+            inst(
+                3,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![0, 2],
+                InstData::FieldIndex(0),
+            ),
+            inst(
+                4,
+                Opcode::FieldGet,
+                Ty::Ptr,
+                vec![0],
+                InstData::FieldIndex(0),
+            ),
+            inst(5, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(33)),
+            inst(
+                6,
+                Opcode::Call,
+                Ty::Unit,
+                vec![4, 5],
+                InstData::CallExtern("__vow_string_push_byte".to_string()),
+            ),
+            inst(7, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(
+            0,
+            "field_literal_mutation",
+            vec![],
+            Ty::Unit,
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert!(
+            m.warnings
+                .iter()
+                .any(|d| d.code == ErrorCode::RegionLiteralMutation),
+            "mutating a literal-backed value through a field read must be rejected"
+        );
+    }
+
+    #[test]
+    fn literal_mutation_through_load_is_rejected() {
+        let insts = vec![
+            inst(
+                0,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![1],
+                InstData::CallExtern("__vow_string_literal".to_string()),
+            ),
+            inst(3, Opcode::Store, Ty::Unit, vec![0, 2], InstData::None),
+            inst(4, Opcode::Load, Ty::Ptr, vec![0], InstData::None),
+            inst(5, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(33)),
+            inst(
+                6,
+                Opcode::Call,
+                Ty::Unit,
+                vec![4, 5],
+                InstData::CallExtern("__vow_string_push_byte".to_string()),
+            ),
+            inst(7, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(
+            0,
+            "load_literal_mutation",
+            vec![],
+            Ty::Unit,
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert!(
+            m.warnings
+                .iter()
+                .any(|d| d.code == ErrorCode::RegionLiteralMutation),
+            "mutating a literal-backed value through a load must be rejected"
+        );
+    }
+
+    #[test]
+    fn field_get_rodata_check_uses_same_block_last_write() {
+        let insts = vec![
+            inst(
+                0,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![1],
+                InstData::CallExtern("__vow_string_literal".to_string()),
+            ),
+            inst(
+                3,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![0, 2],
+                InstData::FieldIndex(0),
+            ),
+            inst(
+                4,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![2],
+                InstData::CallExtern("__vow_string_clone".to_string()),
+            ),
+            inst(
+                5,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![0, 4],
+                InstData::FieldIndex(0),
+            ),
+            inst(
+                6,
+                Opcode::FieldGet,
+                Ty::Ptr,
+                vec![0],
+                InstData::FieldIndex(0),
+            ),
+            inst(7, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(33)),
+            inst(
+                8,
+                Opcode::Call,
+                Ty::Unit,
+                vec![6, 7],
+                InstData::CallExtern("__vow_string_push_byte".to_string()),
+            ),
+            inst(9, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(
+            0,
+            "field_overwrite",
+            vec![],
+            Ty::Unit,
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert!(
+            m.warnings
+                .iter()
+                .all(|d| d.code != ErrorCode::RegionLiteralMutation),
+            "a same-block mutable overwrite before the field read should not inherit the stale literal"
+        );
+    }
+
+    #[test]
+    fn field_get_rodata_check_uses_dominating_last_write() {
+        let entry = vec![
+            inst(
+                0,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![1],
+                InstData::CallExtern("__vow_string_literal".to_string()),
+            ),
+            inst(
+                3,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![0, 2],
+                InstData::FieldIndex(0),
+            ),
+            inst(
+                4,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![2],
+                InstData::CallExtern("__vow_string_clone".to_string()),
+            ),
+            inst(
+                5,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![0, 4],
+                InstData::FieldIndex(0),
+            ),
+            jump_inst(6, 1),
+        ];
+        let body = vec![
+            inst(
+                7,
+                Opcode::FieldGet,
+                Ty::Ptr,
+                vec![0],
+                InstData::FieldIndex(0),
+            ),
+            inst(8, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(33)),
+            inst(
+                9,
+                Opcode::Call,
+                Ty::Unit,
+                vec![7, 8],
+                InstData::CallExtern("__vow_string_push_byte".to_string()),
+            ),
+            inst(10, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(
+            0,
+            "field_dominating_overwrite",
+            vec![],
+            Ty::Unit,
+            vec![block(0, entry), block(1, body)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert!(
+            m.warnings
+                .iter()
+                .all(|d| d.code != ErrorCode::RegionLiteralMutation),
+            "a mutable overwrite in a dominating block should replace the stale literal source"
+        );
+    }
+
+    #[test]
+    fn field_get_rodata_check_keeps_branch_overwrites_conservative() {
+        let entry = vec![
+            inst(
+                0,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![1],
+                InstData::CallExtern("__vow_string_literal".to_string()),
+            ),
+            inst(
+                3,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![2],
+                InstData::CallExtern("__vow_string_clone".to_string()),
+            ),
+            inst(
+                4,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![0, 3],
+                InstData::FieldIndex(0),
+            ),
+            branch_inst(5, 1, 2),
+        ];
+        let then_block = vec![
+            inst(6, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
+            inst(
+                7,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![6],
+                InstData::CallExtern("__vow_string_literal".to_string()),
+            ),
+            inst(
+                8,
+                Opcode::FieldSet,
+                Ty::Unit,
+                vec![0, 7],
+                InstData::FieldIndex(0),
+            ),
+            jump_inst(9, 3),
+        ];
+        let else_block = vec![jump_inst(10, 3)];
+        let merge = vec![
+            inst(
+                11,
+                Opcode::FieldGet,
+                Ty::Ptr,
+                vec![0],
+                InstData::FieldIndex(0),
+            ),
+            inst(
+                12,
+                Opcode::ConstI64,
+                Ty::I64,
+                vec![],
+                InstData::ConstI64(33),
+            ),
+            inst(
+                13,
+                Opcode::Call,
+                Ty::Unit,
+                vec![11, 12],
+                InstData::CallExtern("__vow_string_push_byte".to_string()),
+            ),
+            inst(14, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(
+            0,
+            "field_branch_literal_overwrite",
+            vec![],
+            Ty::Unit,
+            vec![
+                block(0, entry),
+                block(1, then_block),
+                block(2, else_block),
+                block(3, merge),
+            ],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert!(
+            m.warnings
+                .iter()
+                .any(|d| d.code == ErrorCode::RegionLiteralMutation),
+            "a branch-local literal write can reach the later field mutation"
+        );
+    }
+
+    #[test]
+    fn vec_get_rodata_check_traces_element_writes() {
+        let insts = vec![
+            inst(
+                0,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![],
+                InstData::CallExtern("__vow_vec_new".to_string()),
+            ),
+            inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![1],
+                InstData::CallExtern("__vow_string_literal".to_string()),
+            ),
+            inst(
+                3,
+                Opcode::Call,
+                Ty::Unit,
+                vec![0, 2],
+                InstData::CallExtern("__vow_vec_push_val".to_string()),
+            ),
+            inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(
+                5,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0, 4],
+                InstData::CallExtern("__vow_vec_get_val".to_string()),
+            ),
+            inst(6, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(33)),
+            inst(
+                7,
+                Opcode::Call,
+                Ty::Unit,
+                vec![5, 6],
+                InstData::CallExtern("__vow_string_push_byte".to_string()),
+            ),
+            inst(8, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(
+            0,
+            "vec_literal_element_mutation",
+            vec![],
+            Ty::Unit,
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert!(
+            m.warnings
+                .iter()
+                .any(|d| d.code == ErrorCode::RegionLiteralMutation),
+            "a literal stored in a Vec and read back through indexing should stay rodata-backed"
+        );
+    }
+
+    #[test]
+    fn vec_get_rodata_check_respects_clear_before_later_write() {
+        let insts = vec![
+            inst(
+                0,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![],
+                InstData::CallExtern("__vow_vec_new".to_string()),
+            ),
+            inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+            inst(
+                2,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![1],
+                InstData::CallExtern("__vow_string_literal".to_string()),
+            ),
+            inst(
+                3,
+                Opcode::Call,
+                Ty::Unit,
+                vec![0, 2],
+                InstData::CallExtern("__vow_vec_push_val".to_string()),
+            ),
+            inst(
+                4,
+                Opcode::Call,
+                Ty::Unit,
+                vec![0],
+                InstData::CallExtern("__vow_vec_clear".to_string()),
+            ),
+            inst(5, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
+            inst(
+                6,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![5],
+                InstData::CallExtern("__vow_string_literal".to_string()),
+            ),
+            inst(
+                7,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![6],
+                InstData::CallExtern("__vow_string_clone".to_string()),
+            ),
+            inst(
+                8,
+                Opcode::Call,
+                Ty::Unit,
+                vec![0, 7],
+                InstData::CallExtern("__vow_vec_push_val".to_string()),
+            ),
+            inst(9, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(
+                10,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0, 9],
+                InstData::CallExtern("__vow_vec_get_val".to_string()),
+            ),
+            inst(
+                11,
+                Opcode::ConstI64,
+                Ty::I64,
+                vec![],
+                InstData::ConstI64(33),
+            ),
+            inst(
+                12,
+                Opcode::Call,
+                Ty::Unit,
+                vec![10, 11],
+                InstData::CallExtern("__vow_string_push_byte".to_string()),
+            ),
+            inst(13, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let f = function(
+            0,
+            "vec_clear_then_mutable_element",
+            vec![],
+            Ty::Unit,
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert!(
+            m.warnings
+                .iter()
+                .all(|d| d.code != ErrorCode::RegionLiteralMutation),
+            "Vec::clear should remove earlier literal element sources before a later mutable write"
         );
     }
 
@@ -5070,6 +5978,37 @@ mod tests {
             m.functions[0].blocks[0].insts[1].region,
             RegionId::Block(BlockId(0)),
             "String::from_cstr should be treated as a fresh heap producer"
+        );
+    }
+
+    #[test]
+    fn string_clone_non_escaping_allocates_in_block_region() {
+        let insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(
+                1,
+                Opcode::Call,
+                Ty::Ptr,
+                vec![0],
+                InstData::CallExtern("__vow_string_clone".to_string()),
+            ),
+            inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+        ];
+        let f = function(
+            0,
+            "clone_string",
+            vec![Ty::Ptr],
+            Ty::I64,
+            vec![block(0, insts)],
+        );
+        let mut m = module(vec![f]);
+        infer_regions(&mut m);
+
+        assert_eq!(
+            m.functions[0].blocks[0].insts[1].region,
+            RegionId::Block(BlockId(0)),
+            "String::from clone wrapper should be treated as a fresh heap producer"
         );
     }
 

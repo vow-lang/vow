@@ -123,8 +123,11 @@ fn is_known_builtin(name: String) -> bool {
     || name == String::from("__vow_string_split_in_arena")
     || name == String::from("__vow_string_new")
     || name == String::from("__vow_string_new_in_arena")
+    || name == String::from("__vow_string_literal")
     || name == String::from("__vow_string_from_cstr")
     || name == String::from("__vow_string_from_cstr_in_arena")
+    || name == String::from("__vow_string_clone")
+    || name == String::from("__vow_string_clone_in_arena")
     || name == String::from("__vow_string_from_raw_parts_copy")
     || name == String::from("__vow_string_pin_to_root")
     || name == String::from("__vow_string_len")
@@ -485,8 +488,11 @@ fn is_string_model_constructor(name: String) -> bool {
     if is_string_fresh_helper(name) { return true; }
     name == String::from("__vow_string_new")
     || name == String::from("__vow_string_new_in_arena")
+    || name == String::from("__vow_string_literal")
     || name == String::from("__vow_string_from_cstr")
     || name == String::from("__vow_string_from_cstr_in_arena")
+    || name == String::from("__vow_string_clone")
+    || name == String::from("__vow_string_clone_in_arena")
     || name == String::from("__vow_string_from_raw_parts_copy")
     || name == String::from("__vow_string_pin_to_root")
     || name == String::from("__vow_string_substr")
@@ -534,6 +540,9 @@ fn string_model_receiver_arg(name: String) -> i64 {
     if name == String::from("__vow_string_push_byte") { return 0; }
     if name == String::from("__vow_string_substr") { return 0; }
     if name == String::from("__vow_string_substring") { return 0; }
+    if name == String::from("__vow_string_clone") { return 0; }
+    if name == String::from("__vow_string_clone_in_arena") { return 1; }
+    if name == String::from("__vow_string_pin_to_root") { return 0; }
     if name == String::from("__vow_string_len") { return 0; }
     if name == String::from("__vow_string_clear") { return 0; }
     if name == String::from("__vow_string_byte_at") { return 0; }
@@ -541,6 +550,14 @@ fn string_model_receiver_arg(name: String) -> i64 {
     if name == String::from("__vow_string_contains") { return 0; }
     if name == String::from("__vow_string_matches_literal_at") { return 0; }
     if name == String::from("__vow_string_print") { return 0; }
+    -1
+}
+
+fn string_model_extra_arg(name: String) -> i64 {
+    if name == String::from("__vow_string_push_str_in_arena") { return 2; }
+    if name == String::from("__vow_string_push_str") { return 1; }
+    if name == String::from("__vow_string_eq") { return 1; }
+    if name == String::from("__vow_string_contains") { return 1; }
     -1
 }
 
@@ -675,6 +692,12 @@ fn collect_modelled_vars(f: IrFunction, constructor: String, prefix: String) -> 
                     };
                     if receiver_arg >= 0 && iargs.len() > receiver_arg {
                         vec_insert_i64(vars, iargs[receiver_arg]);
+                    }
+                    if prefix == String::from("__vow_string_") {
+                        let extra_arg: i64 = string_model_extra_arg(ds);
+                        if extra_arg >= 0 && iargs.len() > extra_arg {
+                            vec_insert_i64(vars, iargs[extra_arg]);
+                        }
                     }
                 }
             }
@@ -854,6 +877,7 @@ fn emit_cmp(out: String, id: i64, a: i64, b: i64, op: String) {
 fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, string_vars: Vec<i64>,
              hashmap_vars: Vec<i64>, btreemap_vars: Vec<i64>, option_vars: Vec<i64>,
              const_fn_indices: Vec<i64>, modelable_fi_set: Vec<i64>, m: IrModule,
+             const_str_ids: Vec<i64>, const_str_idxs: Vec<i64>,
              eq_lo: Vec<i64>, eq_hi: Vec<i64>,
              vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) {
     let id: i64 = inst.id;
@@ -1094,7 +1118,7 @@ fn emit_inst(out: String, inst: IrInst, f: IrFunction, vec_vars: Vec<i64>, strin
                 return;
             }
             if str_starts_with(ds, String::from("__vow_string_")) {
-                emit_string_op(out, inst, f, m, vec_max, string_max, eq_lo, eq_hi);
+                emit_string_op(out, inst, f, m, vec_max, string_max, const_str_ids, const_str_idxs, eq_lo, eq_hi);
                 return;
             }
             if str_starts_with(ds, String::from("__vow_map_")) {
@@ -1395,7 +1419,20 @@ fn emit_nondet_vec_len(out: String, id: i64, vec_max: i64) {
         str3(String::from(".len < "), i64_to_str(vec_max), String::from(");\n"))));
 }
 
-fn emit_string_op(out: String, inst: IrInst, f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, eq_lo: Vec<i64>, eq_hi: Vec<i64>) {
+fn const_str_index_for(ids: Vec<i64>, idxs: Vec<i64>, id: i64) -> i64 {
+    let mut i: i64 = 0;
+    while i < ids.len() {
+        if ids[i] == id {
+            return idxs[i];
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+fn emit_string_op(out: String, inst: IrInst, f: IrFunction, m: IrModule, vec_max: i64, string_max: i64,
+                  const_str_ids: Vec<i64>, const_str_idxs: Vec<i64>,
+                  eq_lo: Vec<i64>, eq_hi: Vec<i64>) {
     let id: i64 = inst.id;
     let ds: String = inst.ds;
     let iargs: Vec<i64> = inst.args;
@@ -1419,6 +1456,28 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, m: IrModule, vec_max
             str3(String::from(".len < "), i64_to_str(string_max), String::from(");\n"))));
         return;
     }
+    if ds == String::from("__vow_string_literal") {
+        let lit_idx: i64 = if iargs.len() > 0 { const_str_index_for(const_str_ids, const_str_idxs, iargs[0]) } else { -1 };
+        let ids: String = i64_to_str(id);
+        if lit_idx >= 0 {
+            let strings: Vec<String> = m.strings;
+            if lit_idx < strings.len() {
+                let literal: String = strings[lit_idx];
+                out.push_str(str5(String::from("  v"), ids, String::from(".len = "), i64_to_str(literal.len()), String::from(";\n")));
+                let mut j: i64 = 0;
+                while j < literal.len() {
+                    out.push_str(str6(String::from("  v"), ids, String::from(".data["), i64_to_str(j), String::from("] = (int8_t)"), str2(i64_to_str(literal.byte_at(j)), String::from(";\n"))));
+                    j = j + 1;
+                }
+                return;
+            }
+        }
+        out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
+        out.push_str(str5(String::from("  __ESBMC_assume(v"), ids,
+            String::from(".len >= 0 && v"), ids,
+            str3(String::from(".len < "), i64_to_str(string_max), String::from(");\n"))));
+        return;
+    }
     if ds == String::from("__vow_string_from_raw_parts_copy") {
         let len_arg: i64 = iargs[1];
         let ids: String = i64_to_str(id);
@@ -1429,8 +1488,9 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, m: IrModule, vec_max
         out.push_str(str5(String::from("  v"), ids, String::from(".len = v"), ls, String::from(";\n")));
         return;
     }
-    if ds == String::from("__vow_string_pin_to_root") {
-        let src: i64 = iargs[0];
+    if ds == String::from("__vow_string_clone") || ds == String::from("__vow_string_clone_in_arena") || ds == String::from("__vow_string_pin_to_root") {
+        let src_idx: i64 = if ds == String::from("__vow_string_clone_in_arena") { 1 } else { 0 };
+        let src: i64 = iargs[src_idx];
         out.push_str(str5(String::from("  v"), i64_to_str(id),
             String::from(" = v"), i64_to_str(src), String::from(";\n")));
         return;
@@ -1911,6 +1971,8 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
 
     let blocks: Vec<IrBlock> = f.blocks;
     let n_blocks: i64 = blocks.len();
+    let const_str_ids: Vec<i64> = Vec::new();
+    let const_str_idxs: Vec<i64> = Vec::new();
 
     let mut bi: i64 = 0;
     while bi < n_blocks {
@@ -1919,6 +1981,10 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
         let mut ii: i64 = 0;
         while ii < insts.len() {
             let inst: IrInst = insts[ii];
+            if inst.op == IOP_CONST_STR() && inst.dk == IDATA_CONST_STR() {
+                const_str_ids.push(inst.id);
+                const_str_idxs.push(inst.dv);
+            }
             if inst.op == IOP_GET_ARG() && inst.dk == IDATA_ARG_INDEX() {
                 let arg_idx: i64 = inst.dv;
                 let iid: i64 = inst.id;
@@ -2136,7 +2202,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
         let mut ri: i64 = 0;
         while ri < regular.len() {
             let inst: IrInst = insts[regular[ri]];
-            emit_inst(out, inst, f, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars, const_fn_indices, modelable_fi_set, m, eq_lo, eq_hi, vec_max, string_max, hashmap_max, btreemap_max);
+            emit_inst(out, inst, f, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars, const_fn_indices, modelable_fi_set, m, const_str_ids, const_str_idxs, eq_lo, eq_hi, vec_max, string_max, hashmap_max, btreemap_max);
             ri = ri + 1;
         }
 
@@ -2160,7 +2226,7 @@ fn emit_c_function(out: String, f: IrFunction, const_fn_indices: Vec<i64>, model
 
         if terminal_idx >= 0 {
             let term: IrInst = insts[terminal_idx];
-            emit_inst(out, term, f, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars, const_fn_indices, modelable_fi_set, m, eq_lo, eq_hi, vec_max, string_max, hashmap_max, btreemap_max);
+            emit_inst(out, term, f, vec_vars, string_vars, hashmap_vars, btreemap_vars, option_vars, const_fn_indices, modelable_fi_set, m, const_str_ids, const_str_idxs, eq_lo, eq_hi, vec_max, string_max, hashmap_max, btreemap_max);
         }
 
         bi = bi + 1;
@@ -2273,6 +2339,20 @@ fn cemit_preamble(need_shl_i64: i64, need_shr_i64: i64, need_shl_u64: i64, need_
     cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, VOW_VEC_MAX(), VOW_STRING_MAX(), VOW_HASHMAP_MAX(), VOW_BTREEMAP_MAX())
 }
 
+fn string_max_for_literals(m: IrModule, string_max: i64) -> i64 {
+    let strings: Vec<String> = m.strings;
+    let mut max_len: i64 = string_max;
+    let mut i: i64 = 0;
+    while i < strings.len() {
+        let len: i64 = strings[i].len();
+        if len > max_len {
+            max_len = len;
+        }
+        i = i + 1;
+    }
+    max_len
+}
+
 fn emit_forward_declaration(out: String, f: IrFunction) {
     let ret_c: String = {
         if f.return_ty == ITY_UNIT() {
@@ -2310,12 +2390,13 @@ fn emit_forward_declaration(out: String, f: IrFunction) {
 
 fn emit_c_module(m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> String {
     let fns: Vec<IrFunction> = m.functions;
+    let model_string_max: i64 = string_max_for_literals(m, string_max);
     let n: i64 = fns.len();
     let need_shl_i64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHL_I64());
     let need_shr_i64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHR_I64());
     let need_shl_u64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHL_U64());
     let need_shr_u64: i64 = scan_shift_needs_in_fns(fns, 0, n, IOP_SHR_U64());
-    let out: String = cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, vec_max, string_max, hashmap_max, btreemap_max);
+    let out: String = cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, vec_max, model_string_max, hashmap_max, btreemap_max);
 
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
     let empty_modelable: Vec<i64> = Vec::new();
@@ -2323,7 +2404,7 @@ fn emit_c_module(m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, b
     let mut fi: i64 = 0;
     while fi < fns.len() {
         let f: IrFunction = fns[fi];
-        emit_c_function(out, f, const_fn_indices, empty_modelable, m, vec_max, string_max, hashmap_max, btreemap_max);
+        emit_c_function(out, f, const_fn_indices, empty_modelable, m, vec_max, model_string_max, hashmap_max, btreemap_max);
         out.push_byte(10);
         fi = fi + 1;
     }
@@ -2354,11 +2435,12 @@ fn scan_shift_op_in_module_fns(fns: Vec<IrFunction>, target_fi: i64, callee_fis:
 fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>, modelable_fi_set: Vec<i64>,
                               vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> String {
     let fns: Vec<IrFunction> = m.functions;
+    let model_string_max: i64 = string_max_for_literals(m, string_max);
     let need_shl_i64: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHL_I64());
     let need_shr_i64: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHR_I64());
     let need_shl_u64: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHL_U64());
     let need_shr_u64: i64 = scan_shift_op_in_module_fns(fns, target_fi, callee_fis, IOP_SHR_U64());
-    let out: String = cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, vec_max, string_max, hashmap_max, btreemap_max);
+    let out: String = cemit_preamble_with_limits(need_shl_i64, need_shr_i64, need_shl_u64, need_shr_u64, vec_max, model_string_max, hashmap_max, btreemap_max);
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
 
     let mut ci: i64 = 0;
@@ -2386,7 +2468,7 @@ fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>,
         while fi < fns.len() {
             let callee: IrFunction = fns[fi];
             if callee.id == cfid {
-                emit_c_function(out, callee, const_fn_indices, modelable_fi_set, m, vec_max, string_max, hashmap_max, btreemap_max);
+                emit_c_function(out, callee, const_fn_indices, modelable_fi_set, m, vec_max, model_string_max, hashmap_max, btreemap_max);
                 out.push_byte(10);
                 fi = fns.len();
             }
@@ -2399,7 +2481,7 @@ fn emit_c_module_with_callees(m: IrModule, target_fi: i64, callee_fis: Vec<i64>,
     while fi < fns.len() {
         let f: IrFunction = fns[fi];
         if f.id == target_fi {
-            emit_c_function(out, f, const_fn_indices, modelable_fi_set, m, vec_max, string_max, hashmap_max, btreemap_max);
+            emit_c_function(out, f, const_fn_indices, modelable_fi_set, m, vec_max, model_string_max, hashmap_max, btreemap_max);
             out.push_byte(10);
             fi = fns.len();
         }

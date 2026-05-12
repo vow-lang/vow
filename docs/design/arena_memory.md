@@ -285,6 +285,7 @@ The existing root-region String symbols remain ABI-stable:
 ```c
 void* __vow_string_new(const char* ptr, uintptr_t len);
 void* __vow_string_from_cstr(const char* ptr);
+void* __vow_string_clone(const void* source);
 void  __vow_string_push_str(void* dest, const void* src);
 void  __vow_string_push_byte(void* string, int64_t byte);
 void* __vow_string_substr(const void* string, int64_t start, int64_t len);
@@ -301,6 +302,10 @@ void* __vow_string_join(const void* vec, const void* separator);
 These are root wrappers: they open `__vow_root_arena` if needed, then
 delegate to the corresponding explicit-arena primitive with
 `&__vow_root_arena`.
+`__vow_string_clone` deep-copies a `String` descriptor and backing bytes into
+the root arena; `String::from(s)` lowers to this wrapper. Direct string
+literals do not call a runtime wrapper: codegen points at a static
+`{ptr,len,cap=VOW_CAP_RODATA}` descriptor in `.rodata`.
 
 The explicit-arena forms are:
 
@@ -309,6 +314,8 @@ void* __vow_string_new_in_arena(struct VowArena* arena,
                                 const char* ptr, uintptr_t len);
 void* __vow_string_from_cstr_in_arena(struct VowArena* arena,
                                       const char* ptr);
+void* __vow_string_clone_in_arena(struct VowArena* arena,
+                                  const void* source);
 void  __vow_string_push_str_in_arena(struct VowArena* arena,
                                      void* dest, const void* src);
 void  __vow_string_push_byte_in_arena(struct VowArena* arena,
@@ -950,8 +957,7 @@ before return — the compiler MUST insert a copy of that value
 into `target_region` before the return edge. Concretely:
 
 - A `.rodata` literal returned on a `FreshInCaller` path is
-  lowered as `String::from(literal)` / equivalent explicit copy
-  into `target_region`.
+  materialized with an equivalent explicit copy into `target_region`.
 - A parameter alias returned on a `FreshInCaller` path is
   lowered as a deep copy (§8.3 deep-copy discipline) into
   `target_region`.

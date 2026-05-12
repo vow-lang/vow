@@ -1,0 +1,11 @@
+// TEST: error-code RegionLiteralMutation
+module StringLiteralClearCallee
+
+fn clear_it(s: String) {
+    s.clear();
+}
+
+fn main() -> i32 [io] {
+    clear_it("x");
+    0
+}

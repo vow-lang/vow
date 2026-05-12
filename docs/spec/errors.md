@@ -384,7 +384,7 @@ The `blame` field indicates who is at fault:
 
 ### RegionLiteralMutation
 
-**When:** A `Vec`, `String`, or `HashMap` mutation is attempted on a literal-backed container — one whose descriptor carries the `VOW_CAP_RODATA` sentinel (backing lives in `.rodata` or was pinned to the root region). See `docs/design/arena_memory.md` §6.1, §7.3.
+**When:** A `Vec`, `String`, or `HashMap` mutation is attempted on a literal-backed container — one whose descriptor carries the `VOW_CAP_RODATA` sentinel (backing lives in `.rodata` or was pinned to the root region). Calls that statically trace a mutating target to a literal are rejected during compilation with this code; a runtime fallback emits the JSON shape below if an unchecked mutation reaches a `VOW_CAP_RODATA` descriptor. See `docs/design/arena_memory.md` §6.1, §7.3.
 
 ```json
 {"error":"RegionLiteralMutation","operation":"String::push_str","origin":"rodata"}
@@ -393,14 +393,14 @@ The `blame` field indicates who is at fault:
 A plain-text hint follows on the next line (not a JSON field). The hint text is dispatched on the operation's type prefix:
 
 ```
-hint: use String::from(literal) to obtain a mutable copy       # for String::* operations
-hint: use Vec::from(literal) to obtain a mutable copy          # for Vec::*    operations
+hint: make an explicit mutable copy with String::from(value) before mutating  # for String::* operations
+hint: construct a mutable Vec and copy entries before mutating                # for Vec::*    operations
 hint: construct a mutable HashMap and copy entries before mutating  # for HashMap::* operations
 ```
 
 The `operation` field identifies the source-level method that trapped (e.g., `Vec::push`, `Vec::pop`, `HashMap::insert`, `String::clear`). The `origin` field identifies the storage class of the immutable backing; today only `rodata` is emitted.
 
-**Fix:** Obtain an explicit mutable copy before mutation: `String::from(literal)`, `Vec::from(literal)`, etc.
+**Fix:** Obtain an explicit mutable copy before mutation: `String::from(value)`, or construct a fresh mutable container and copy the entries you need before mutating.
 
 ### StackOverflow
 

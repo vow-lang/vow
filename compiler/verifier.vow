@@ -171,6 +171,7 @@ fn emit_harness(f: IrFunction) -> String {
 fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> String {
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
     let callee_fis: Vec<i64> = collect_modelable_callees(f, m, const_fn_indices);
+    let model_string_max: i64 = string_max_for_literals(m, string_max);
 
     let out: String = {
         if callee_fis.len() > 0 {
@@ -180,17 +181,17 @@ fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, 
                 modelable_fi_set.push(callee_fis[ci]);
                 ci = ci + 1;
             }
-            emit_c_module_with_callees(m, f.id, callee_fis, modelable_fi_set, vec_max, string_max, hashmap_max, btreemap_max)
+            emit_c_module_with_callees(m, f.id, callee_fis, modelable_fi_set, vec_max, model_string_max, hashmap_max, btreemap_max)
         } else {
             let preamble: String = cemit_preamble_with_limits(
                 func_has_shift_op(f, IOP_SHL_I64()),
                 func_has_shift_op(f, IOP_SHR_I64()),
                 func_has_shift_op(f, IOP_SHL_U64()),
                 func_has_shift_op(f, IOP_SHR_U64()),
-                vec_max, string_max, hashmap_max, btreemap_max
+                vec_max, model_string_max, hashmap_max, btreemap_max
             );
             let empty_modelable: Vec<i64> = Vec::new();
-            emit_c_function(preamble, f, const_fn_indices, empty_modelable, m, vec_max, string_max, hashmap_max, btreemap_max);
+            emit_c_function(preamble, f, const_fn_indices, empty_modelable, m, vec_max, model_string_max, hashmap_max, btreemap_max);
             preamble.push_byte(10);
             preamble
         }

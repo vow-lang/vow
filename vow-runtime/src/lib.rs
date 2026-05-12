@@ -1441,6 +1441,27 @@ pub unsafe extern "C" fn __vow_string_clone_into_arena(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_clone(source: *const u8) -> *mut u8 {
+    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
+    unsafe { ensure_root_arena_locked() };
+    unsafe { __vow_string_clone_into_arena(&raw mut __vow_root_arena, source) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_string_clone_in_arena(
+    arena: *mut VowArena,
+    source: *const u8,
+) -> *mut u8 {
+    // ABI wrapper: preserve the explicit-arena null guard before delegating.
+    if arena.is_null() {
+        null_arena_trap("String::clone");
+    }
+    unsafe { __vow_string_clone_into_arena(arena, source) }
+}
+
+// Kept distinct from `__vow_string_clone`: pin_to_root means "extend lifetime
+// to root", not just "produce a mutable copy", even though both copy today.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_string_pin_to_root(source: *const u8) -> *mut u8 {
     let _guard = ROOT_ARENA_LOCK.lock().unwrap();
     unsafe { ensure_root_arena_locked() };
@@ -3908,6 +3929,24 @@ mod tests {
     }
 
     #[test]
+    fn string_clone_wrapper_copies_rodata_into_root() {
+        let bytes: &[u8] = b"hello";
+        let source = VowVec {
+            ptr: bytes.as_ptr() as *mut u8,
+            len: bytes.len(),
+            cap: VOW_CAP_RODATA,
+        };
+
+        let cloned = unsafe { __vow_string_clone(&source as *const VowVec as *const u8) };
+        let cv = unsafe { &*(cloned as *const VowVec) };
+        assert_eq!(cv.len, 5);
+        assert_eq!(cv.cap, 5, "clone must be mutable, not rodata");
+        assert_ne!(cv.ptr, source.ptr, "clone must copy backing bytes");
+        let cloned_bytes = unsafe { std::slice::from_raw_parts(cv.ptr, cv.len) };
+        assert_eq!(cloned_bytes, b"hello");
+    }
+
+    #[test]
     fn string_clone_into_arena_handles_empty() {
         let mut a = empty_arena_header();
         unsafe { __vow_arena_open(&mut a) };
@@ -4123,6 +4162,11 @@ mod tests {
         if op == "String::from_cstr_in_arena_null" {
             let _ = unsafe { __vow_string_from_cstr_in_arena(std::ptr::null_mut(), c"x".as_ptr()) };
             eprintln!("rodata_trap_worker: null arena string from_cstr did NOT trap");
+            std::process::exit(42);
+        }
+        if op == "String::clone_in_arena_null" {
+            let _ = unsafe { __vow_string_clone_in_arena(std::ptr::null_mut(), std::ptr::null()) };
+            eprintln!("rodata_trap_worker: null arena string clone did NOT trap");
             std::process::exit(42);
         }
         if op == "String::push_str_in_arena_null" {
@@ -4395,6 +4439,11 @@ mod tests {
     #[test]
     fn explicit_arena_string_from_cstr_null_arena_traps() {
         assert_runtime_invariant_null_arena("String::from_cstr_in_arena_null", "String::from_cstr");
+    }
+
+    #[test]
+    fn explicit_arena_string_clone_null_arena_traps() {
+        assert_runtime_invariant_null_arena("String::clone_in_arena_null", "String::clone");
     }
 
     #[test]

@@ -38,52 +38,52 @@ fn is_ident_cont(b: i64) -> bool vow {
 }
 
 fn keyword_tag(s: String) -> i64 {
-    if s.eq(String::from("fn")) { tok_kw_fn() }
-    else if s.eq(String::from("let")) { tok_kw_let() }
-    else if s.eq(String::from("mut")) { tok_kw_mut() }
-    else if s.eq(String::from("struct")) { tok_kw_struct() }
-    else if s.eq(String::from("enum")) { tok_kw_enum() }
-    else if s.eq(String::from("match")) { tok_kw_match() }
-    else if s.eq(String::from("if")) { tok_kw_if() }
-    else if s.eq(String::from("else")) { tok_kw_else() }
-    else if s.eq(String::from("while")) { tok_kw_while() }
-    else if s.eq(String::from("loop")) { tok_kw_loop() }
-    else if s.eq(String::from("break")) { tok_kw_break() }
-    else if s.eq(String::from("continue")) { tok_kw_continue() }
-    else if s.eq(String::from("return")) { tok_kw_return() }
-    else if s.eq(String::from("pub")) { tok_kw_pub() }
-    else if s.eq(String::from("use")) { tok_kw_use() }
-    else if s.eq(String::from("module")) { tok_kw_module() }
-    else if s.eq(String::from("vow")) { tok_kw_vow() }
-    else if s.eq(String::from("requires")) { tok_kw_requires() }
-    else if s.eq(String::from("ensures")) { tok_kw_ensures() }
-    else if s.eq(String::from("invariant")) { tok_kw_invariant() }
-    else if s.eq(String::from("where")) { tok_kw_where() }
-    else if s.eq(String::from("region")) { tok_kw_region() }
-    else if s.eq(String::from("linear")) { tok_kw_linear() }
-    else if s.eq(String::from("extern")) { tok_kw_extern() }
-    else if s.eq(String::from("impl")) { tok_kw_impl() }
-    else if s.eq(String::from("trait")) { tok_kw_trait() }
-    else if s.eq(String::from("type")) { tok_kw_type() }
-    else if s.eq(String::from("for")) { tok_kw_for() }
-    else if s.eq(String::from("in")) { tok_kw_in() }
-    else if s.eq(String::from("as")) { tok_kw_as() }
-    else if s.eq(String::from("read")) { tok_kw_read() }
-    else if s.eq(String::from("write")) { tok_kw_write() }
-    else if s.eq(String::from("io")) { tok_kw_io() }
-    else if s.eq(String::from("panic")) { tok_kw_panic() }
-    else if s.eq(String::from("unsafe")) { tok_kw_unsafe() }
-    else if s.eq(String::from("const")) { tok_kw_const() }
-    else if s.eq(String::from("true")) { tok_lit_bool() }
-    else if s.eq(String::from("false")) { tok_lit_bool() }
-    else if s.eq(String::from("_")) { tok_underscore() }
+    if s.eq("fn") { tok_kw_fn() }
+    else if s.eq("let") { tok_kw_let() }
+    else if s.eq("mut") { tok_kw_mut() }
+    else if s.eq("struct") { tok_kw_struct() }
+    else if s.eq("enum") { tok_kw_enum() }
+    else if s.eq("match") { tok_kw_match() }
+    else if s.eq("if") { tok_kw_if() }
+    else if s.eq("else") { tok_kw_else() }
+    else if s.eq("while") { tok_kw_while() }
+    else if s.eq("loop") { tok_kw_loop() }
+    else if s.eq("break") { tok_kw_break() }
+    else if s.eq("continue") { tok_kw_continue() }
+    else if s.eq("return") { tok_kw_return() }
+    else if s.eq("pub") { tok_kw_pub() }
+    else if s.eq("use") { tok_kw_use() }
+    else if s.eq("module") { tok_kw_module() }
+    else if s.eq("vow") { tok_kw_vow() }
+    else if s.eq("requires") { tok_kw_requires() }
+    else if s.eq("ensures") { tok_kw_ensures() }
+    else if s.eq("invariant") { tok_kw_invariant() }
+    else if s.eq("where") { tok_kw_where() }
+    else if s.eq("region") { tok_kw_region() }
+    else if s.eq("linear") { tok_kw_linear() }
+    else if s.eq("extern") { tok_kw_extern() }
+    else if s.eq("impl") { tok_kw_impl() }
+    else if s.eq("trait") { tok_kw_trait() }
+    else if s.eq("type") { tok_kw_type() }
+    else if s.eq("for") { tok_kw_for() }
+    else if s.eq("in") { tok_kw_in() }
+    else if s.eq("as") { tok_kw_as() }
+    else if s.eq("read") { tok_kw_read() }
+    else if s.eq("write") { tok_kw_write() }
+    else if s.eq("io") { tok_kw_io() }
+    else if s.eq("panic") { tok_kw_panic() }
+    else if s.eq("unsafe") { tok_kw_unsafe() }
+    else if s.eq("const") { tok_kw_const() }
+    else if s.eq("true") { tok_lit_bool() }
+    else if s.eq("false") { tok_lit_bool() }
+    else if s.eq("_") { tok_underscore() }
     else { tok_ident() }
 }
 
 fn keyword_bool_val(s: String) -> i64 vow {
     ensures: result == 0 || result == 1
 } {
-    if s.eq(String::from("true")) { 1 }
+    if s.eq("true") { 1 }
     else { 0 }
 }
 
