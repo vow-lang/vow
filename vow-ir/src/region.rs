@@ -2796,6 +2796,16 @@ fn origin_to_internal_inner(
             {
                 return InternalReturnRegion::Published(RegionConstraint::FreshInCaller);
             }
+            if let InstData::CallExtern(sym) = &inst.data
+                && matches!(sym.as_str(), "__vow_vec_get_val" | "__vow_vec_get")
+                && let Some(&source) = inst.args.first()
+            {
+                visiting.push_back(id);
+                let r =
+                    origin_to_internal_inner(source, inst_lookup, phi_arms, summaries, visiting);
+                visiting.pop_back();
+                return r;
+            }
             if let InstData::CallTarget(callee_id) = &inst.data
                 && let Some(cs) = summaries.get(callee_id.0 as usize)
             {
@@ -2863,6 +2873,17 @@ fn origin_to_internal_inner(
             }
             visiting.pop_back();
             acc
+        }
+        Opcode::FieldGet | Opcode::Load => {
+            if let Some(&source) = inst.args.first() {
+                visiting.push_back(id);
+                let r =
+                    origin_to_internal_inner(source, inst_lookup, phi_arms, summaries, visiting);
+                visiting.pop_back();
+                r
+            } else {
+                InternalReturnRegion::Published(RegionConstraint::ConstantGlobal)
+            }
         }
         _ => InternalReturnRegion::Published(RegionConstraint::ConstantGlobal),
     }
@@ -4806,11 +4827,13 @@ mod tests {
         ));
         // store_target_slot layout (return is not FreshInCaller, so no
         // return-arena slot): slot 0 = param 0's store target,
-        // slot 1 = param 1's store target.
+        // slot 1 = param 1's store target. AliasOfAny spans both slots, so
+        // the caller return marker is ambiguous rather than arbitrarily
+        // choosing either slot.
         let markers = marker_set(&[MustOutliveMarker::CallerReturn]);
         assert_eq!(
             lub_to_region_id(&markers, BlockId(0), &tree, &summary),
-            RegionId::Caller(HiddenRegionIdx(0)),
+            RegionId::Caller(HiddenRegionIdx::AMBIGUOUS),
         );
     }
 
@@ -4844,6 +4867,81 @@ mod tests {
         assert_eq!(
             lub_to_region_id(&markers, BlockId(0), &tree, &summary),
             RegionId::Caller(HiddenRegionIdx(0)),
+        );
+    }
+
+    #[test]
+    fn field_return_alias_of_param_collapses_with_store_target_marker() {
+        // Bootstrap regression: lower_function_vow mutates a context parameter
+        // through helper calls, then returns a field of that same context.
+        // The returned FieldGet aliases param 0, so CallerReturn and
+        // CallerStoreTarget(0) markers describe one hidden arena slot.
+        let callee_insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(2, Opcode::Store, Ty::Unit, vec![0, 1], InstData::None),
+            inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let callee = function(
+            0,
+            "store_into_ctx",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, callee_insts)],
+        );
+
+        let caller_insts = vec![
+            inst(10, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(
+                11,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                12,
+                Opcode::Call,
+                Ty::Unit,
+                vec![10, 11],
+                InstData::CallTarget(FuncId(0)),
+            ),
+            inst(
+                13,
+                Opcode::FieldGet,
+                Ty::Ptr,
+                vec![10],
+                InstData::FieldIndex(0),
+            ),
+            inst(14, Opcode::Return, Ty::Ptr, vec![13], InstData::None),
+        ];
+        let caller = function(
+            1,
+            "ctx_field_return",
+            vec![Ty::Ptr],
+            Ty::Ptr,
+            vec![block(0, caller_insts)],
+        );
+
+        let mut m = module(vec![callee, caller]);
+        infer_regions(&mut m);
+
+        assert_eq!(
+            m.functions[1].summary.return_region,
+            RegionConstraint::AliasOf(0),
+            "returning a field of a parameter should preserve the parameter alias"
+        );
+        assert_eq!(
+            m.functions[1].blocks[0].insts[1].region,
+            RegionId::Caller(HiddenRegionIdx(0)),
+            "fresh value stored into the returned context should use one caller slot"
+        );
+        assert!(
+            m.warnings
+                .iter()
+                .all(|d| d.code != ErrorCode::RegionConflict),
+            "field-return alias should not trip RegionConflict; warnings: {:?}",
+            m.warnings
         );
     }
 
