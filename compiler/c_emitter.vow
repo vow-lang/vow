@@ -97,10 +97,6 @@ fn is_string_fresh_helper(name: String) -> bool {
     || name == String::from("__vow_string_to_upper_in_arena")
     || name == String::from("__vow_string_to_lower")
     || name == String::from("__vow_string_to_lower_in_arena")
-    || name == String::from("__vow_string_replace")
-    || name == String::from("__vow_string_replace_in_arena")
-    || name == String::from("__vow_string_join")
-    || name == String::from("__vow_string_join_in_arena")
 }
 
 fn is_known_builtin(name: String) -> bool {
@@ -119,8 +115,6 @@ fn is_known_builtin(name: String) -> bool {
     || name == String::from("__vow_vec_len")
     || name == String::from("__vow_vec_pop")
     || name == String::from("__vow_vec_set_val")
-    || name == String::from("__vow_string_split")
-    || name == String::from("__vow_string_split_in_arena")
     || name == String::from("__vow_string_new")
     || name == String::from("__vow_string_new_in_arena")
     || name == String::from("__vow_string_literal")
@@ -480,8 +474,6 @@ fn is_vec_model_constructor(name: String) -> bool {
     || name == String::from("__vow_vec_new_val_in_arena")
     || name == String::from("__vow_vec_from_raw_parts_copy_val")
     || name == String::from("__vow_vec_pin_to_root_val")
-    || name == String::from("__vow_string_split")
-    || name == String::from("__vow_string_split_in_arena")
 }
 
 fn is_string_model_constructor(name: String) -> bool {
@@ -1411,14 +1403,6 @@ fn emit_nondet_string_len(out: String, id: i64, string_max: i64) {
         str3(String::from(".len < "), i64_to_str(string_max), String::from(");\n"))));
 }
 
-fn emit_nondet_vec_len(out: String, id: i64, vec_max: i64) {
-    let ids: String = i64_to_str(id);
-    out.push_str(str3(String::from("  v"), ids, String::from(".len = __VERIFIER_nondet_long();\n")));
-    out.push_str(str5(String::from("  __ESBMC_assume(v"), ids,
-        String::from(".len >= 0 && v"), ids,
-        str3(String::from(".len < "), i64_to_str(vec_max), String::from(");\n"))));
-}
-
 fn const_str_index_for(ids: Vec<i64>, idxs: Vec<i64>, id: i64) -> i64 {
     let mut i: i64 = 0;
     while i < ids.len() {
@@ -1501,10 +1485,6 @@ fn emit_string_op(out: String, inst: IrInst, f: IrFunction, m: IrModule, vec_max
         out.push_str(str5(String::from("  __ESBMC_assume(v"), ids,
             String::from(".len >= 0 && v"), ids,
             str3(String::from(".len < "), i64_to_str(string_max), String::from(");\n"))));
-        return;
-    }
-    if ds == String::from("__vow_string_split") || ds == String::from("__vow_string_split_in_arena") {
-        emit_nondet_vec_len(out, id, vec_max);
         return;
     }
     if is_string_fresh_helper(ds) {

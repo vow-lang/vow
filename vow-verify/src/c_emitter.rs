@@ -102,8 +102,6 @@ fn is_vec_model_creator(name: &str) -> bool {
             | "__vow_vec_new_val_in_arena"
             | "__vow_vec_from_raw_parts_copy_val"
             | "__vow_vec_pin_to_root_val"
-            | "__vow_string_split"
-            | "__vow_string_split_in_arena"
     )
 }
 
@@ -116,10 +114,6 @@ fn is_string_fresh_helper(name: &str) -> bool {
             | "__vow_string_to_upper_in_arena"
             | "__vow_string_to_lower"
             | "__vow_string_to_lower_in_arena"
-            | "__vow_string_replace"
-            | "__vow_string_replace_in_arena"
-            | "__vow_string_join"
-            | "__vow_string_join_in_arena"
     )
 }
 
@@ -334,8 +328,6 @@ fn is_known_builtin(name: &str) -> bool {
             | "__vow_vec_len"
             | "__vow_vec_pop"
             | "__vow_vec_set_val"
-            | "__vow_string_split"
-            | "__vow_string_split_in_arena"
             | "__vow_string_new"
             | "__vow_string_new_in_arena"
             | "__vow_string_literal"
@@ -1097,9 +1089,6 @@ fn emit_inst(
                     "__vow_string_from_i64" | "__vow_string_from_i64_in_arena" => {
                         emit_nondet_string_len(id, limits.string_max, out);
                     }
-                    "__vow_string_split" | "__vow_string_split_in_arena" => {
-                        emit_nondet_vec_len(id, limits.vec_max, out);
-                    }
                     name if is_string_fresh_helper(name) => {
                         emit_nondet_string_len(id, limits.string_max, out);
                     }
@@ -1602,13 +1591,6 @@ fn emit_nondet_string_len(id: u32, string_max: usize, out: &mut String) {
     out.push_str(&format!(
         "  v{id}.len = __VERIFIER_nondet_long();\n\
          \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < {string_max});\n",
-    ));
-}
-
-fn emit_nondet_vec_len(id: u32, vec_max: usize, out: &mut String) {
-    out.push_str(&format!(
-        "  v{id}.len = __VERIFIER_nondet_long();\n\
-         \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < {vec_max});\n",
     ));
 }
 
@@ -3864,25 +3846,19 @@ mod tests {
     }
 
     #[test]
-    fn emit_string_fresh_helpers_are_modelable() {
+    fn emit_non_expanding_string_helpers_are_modelable() {
         use vow_ir::InstId;
 
         let cases = [
-            ("__vow_string_trim", 1, false),
-            ("__vow_string_trim_in_arena", 2, false),
-            ("__vow_string_to_upper", 1, false),
-            ("__vow_string_to_upper_in_arena", 2, false),
-            ("__vow_string_to_lower", 1, false),
-            ("__vow_string_to_lower_in_arena", 2, false),
-            ("__vow_string_replace", 3, false),
-            ("__vow_string_replace_in_arena", 4, false),
-            ("__vow_string_join", 2, false),
-            ("__vow_string_join_in_arena", 3, false),
-            ("__vow_string_split", 2, true),
-            ("__vow_string_split_in_arena", 3, true),
+            ("__vow_string_trim", 1),
+            ("__vow_string_trim_in_arena", 2),
+            ("__vow_string_to_upper", 1),
+            ("__vow_string_to_upper_in_arena", 2),
+            ("__vow_string_to_lower", 1),
+            ("__vow_string_to_lower_in_arena", 2),
         ];
 
-        for (idx, (name, argc, returns_vec)) in cases.iter().enumerate() {
+        for (idx, (name, argc)) in cases.iter().enumerate() {
             let call_id = 20 + idx as u32;
             let args: Vec<InstId> = (0..*argc).map(|i| InstId(i as u32)).collect();
             let mut insts = Vec::new();
@@ -3947,29 +3923,91 @@ mod tests {
                 !c.contains("unsupported opcode in verifier model"),
                 "{name} should not fall through to unsupported: {c}"
             );
-            if *returns_vec {
-                assert!(
-                    c.contains(&format!("__vow_vec_t v{call_id};")),
-                    "{name} result should use the Vec model: {c}"
-                );
-                assert!(
-                    c.contains(&format!(
-                        "__ESBMC_assume(v{call_id}.len >= 0 && v{call_id}.len < 128)"
-                    )),
-                    "{name} result length should be bounded by vec_max: {c}"
-                );
-            } else {
-                assert!(
-                    c.contains(&format!("__vow_string_t v{call_id};")),
-                    "{name} result should use the String model: {c}"
-                );
-                assert!(
-                    c.contains(&format!(
-                        "__ESBMC_assume(v{call_id}.len >= 0 && v{call_id}.len < 256)"
-                    )),
-                    "{name} result length should be bounded by string_max: {c}"
-                );
+            assert!(
+                c.contains(&format!("__vow_string_t v{call_id};")),
+                "{name} result should use the String model: {c}"
+            );
+            assert!(
+                c.contains(&format!(
+                    "__ESBMC_assume(v{call_id}.len >= 0 && v{call_id}.len < 256)"
+                )),
+                "{name} result length should be bounded by string_max: {c}"
+            );
+        }
+    }
+
+    #[test]
+    fn emit_expanding_string_helpers_are_not_modelable() {
+        use vow_ir::InstId;
+
+        let cases = [
+            ("__vow_string_replace", 3),
+            ("__vow_string_replace_in_arena", 4),
+            ("__vow_string_join", 2),
+            ("__vow_string_join_in_arena", 3),
+            ("__vow_string_split", 2),
+            ("__vow_string_split_in_arena", 3),
+        ];
+
+        for (idx, (name, argc)) in cases.iter().enumerate() {
+            let call_id = 40 + idx as u32;
+            let args: Vec<InstId> = (0..*argc).map(|i| InstId(i as u32)).collect();
+            let mut insts = Vec::new();
+            for i in 0..*argc {
+                insts.push(inst(
+                    i as u32,
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    vec![],
+                    InstData::ConstI64(0),
+                ));
             }
+            insts.push(Inst {
+                id: InstId(call_id),
+                opcode: Opcode::Call,
+                ty: Ty::Ptr,
+                args,
+                data: InstData::CallExtern((*name).to_string()),
+                origin: sp(),
+                region: RegionId::Root,
+            });
+            insts.push(inst(
+                call_id + 1,
+                Opcode::Return,
+                Ty::Unit,
+                vec![call_id],
+                InstData::None,
+            ));
+
+            let func = Function {
+                id: FuncId(idx as u32),
+                name: format!("expanding_helper_{idx}"),
+                params: vec![],
+                param_names: vec![],
+                return_ty: Ty::Ptr,
+                effects: vec![],
+                vows: vec![],
+                blocks: vec![BasicBlock {
+                    id: BlockId(0),
+                    insts,
+                }],
+                local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
+                source_file: String::new(),
+            };
+            let module = Module {
+                name: "test".to_string(),
+                functions: vec![func.clone()],
+                strings: vec![],
+                struct_layouts: vec![],
+                enum_layouts: vec![],
+                warnings: vec![],
+            };
+            let reason = non_modelable_reason(&func, &module, &HashMap::new());
+            assert!(
+                matches!(reason.as_deref(), Some(text) if text.contains(name)),
+                "{name} should stay non-modelable until its expanding length semantics are modeled; reason: {reason:?}"
+            );
         }
     }
 
