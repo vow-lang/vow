@@ -771,15 +771,7 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
         if r.exit_code == -2 { VERIFY_TIMEOUT() } else { parse_verify_status(combined) }
     };
     let status: i64 = {
-        // IR-only counterexamples can be infeasible under BV (no overflow
-        // modeling). Callers that distinguish FAILED vs the original BV
-        // status (e.g. `verify_collect_and_report` in compiler/main.vow)
-        // are responsible for surfacing the original BV outcome instead
-        // of the IR FAILED; this helper just passes the raw IR result
-        // through. Callers that don't distinguish (cmd_test/run_test
-        // bounded-pool drains) treat any non-PROVEN/PROVEN_IR as failure
-        // and are unaffected. Demoting FAILED here would clobber the
-        // original BV-Unknown signal in the parallel path.
+        // Pass raw IR status through: distinguishing callers (verify_collect_and_report) surface the original BV outcome for IR FAILED; non-distinguishing callers (run_test) treat any non-PROVEN as failure.
         if raw_status == VERIFY_PROVEN() { VERIFY_PROVEN_IR() }
         else { raw_status }
     };
