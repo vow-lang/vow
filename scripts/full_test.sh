@@ -124,6 +124,7 @@ soft_fail = rs == 'VerifyFailed' and ss == 'VerifyFailed' and rvs and svs
 if soft_fail:
     if rvs != svs:
         errors.append(f'verify_status: {rvs} vs {svs}')
+    # verify_message is not compared — ESBMC-output text varies across runs and would cause brittle parity failures.
 elif rs == 'VerifyFailed' and ss == 'VerifyFailed':
     if len(rc) == 0:
         errors.append('rust has no counterexamples for VerifyFailed')
