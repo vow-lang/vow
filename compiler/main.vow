@@ -353,43 +353,37 @@ fn record_soft_fail(meta: Vec<String>, status: String, message: String, function
 }
 
 // Compute (function, counterexample) for the VerifyFailed top-level JSON fields.
-// Mirrors Rust's BuildStatus::VerifyFailed { function, description } shape so
-// schema validators see the same fields from either compiler. Returns [func, desc].
+// Precondition: status is VerifyFailed (i.e. ces non-empty OR soft_meta has 3 entries).
+// Mirrors Rust's BuildStatus::VerifyFailed { function, description } shape.
 fn vf_legacy_fields(ces: Vec<VerifyCE>, soft_meta: Vec<String>) -> Vec<String> {
     let result: Vec<String> = Vec::new();
     if ces.len() > 0 {
         let ce: VerifyCE = ces[0];
         result.push(ce.function);
-        // Mirrors Rust's CE description: "VerifyFailed: <violation>".
         let desc: String = String::from("VerifyFailed: ");
         desc.push_str(ce.violation);
         result.push(desc);
         return result;
     }
-    if soft_meta.len() >= 3 {
-        let status: String = soft_meta[0];
-        let message: String = soft_meta[1];
-        let func: String = soft_meta[2];
-        result.push(func);
-        let desc: String = String::from("");
-        if status == String::from("timeout") {
-            desc.push_str(String::from("verification timed out"));
-        } else if status == String::from("unknown") {
-            desc.push_str(String::from("verification result unknown: "));
-            desc.push_str(message);
-        } else if status == String::from("error") {
-            desc.push_str(String::from("esbmc error: "));
-            desc.push_str(message);
-        } else if status == String::from("tool_not_found") {
-            desc.push_str(String::from("ESBMC not found"));
-        } else {
-            desc.push_str(message);
-        }
-        result.push(desc);
-        return result;
+    let status: String = soft_meta[0];
+    let message: String = soft_meta[1];
+    let func: String = soft_meta[2];
+    result.push(func);
+    let desc: String = String::from("");
+    if status == String::from("timeout") {
+        desc.push_str(String::from("verification timed out"));
+    } else if status == String::from("unknown") {
+        desc.push_str(String::from("verification result unknown: "));
+        desc.push_str(message);
+    } else if status == String::from("error") {
+        desc.push_str(String::from("esbmc error: "));
+        desc.push_str(message);
+    } else if status == String::from("tool_not_found") {
+        desc.push_str(String::from("ESBMC not found"));
+    } else {
+        desc.push_str(message);
     }
-    result.push(String::from(""));
-    result.push(String::from(""));
+    result.push(desc);
     result
 }
 
@@ -553,8 +547,14 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
     };
     let vstatus: String = { if soft_meta.len() >= 1 { soft_meta[0] } else { String::from("") } };
     let vmsg: String = { if soft_meta.len() >= 2 { soft_meta[1] } else { String::from("") } };
-    let legacy: Vec<String> = vf_legacy_fields(ces, soft_meta);
-    diag_emit_verify_json_full(status_str, dctx, ces, vstatus, vmsg, legacy[0], legacy[1]);
+    let mut vf_func: String = String::from("");
+    let mut vf_ce: String = String::from("");
+    if status_str == String::from("VerifyFailed") {
+        let legacy: Vec<String> = vf_legacy_fields(ces, soft_meta);
+        vf_func = legacy[0];
+        vf_ce = legacy[1];
+    }
+    diag_emit_verify_json_full(status_str, dctx, ces, vstatus, vmsg, vf_func, vf_ce);
     if all_proven == 0 {
         return 1;
     }
@@ -713,8 +713,14 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
     };
     let vstatus: String = { if soft_meta.len() >= 1 { soft_meta[0] } else { String::from("") } };
     let vmsg: String = { if soft_meta.len() >= 2 { soft_meta[1] } else { String::from("") } };
-    let legacy: Vec<String> = vf_legacy_fields(ces, soft_meta);
-    diag_emit_build_verify_json_full(status_str, out, dctx, ces, vstatus, vmsg, legacy[0], legacy[1]);
+    let mut vf_func: String = String::from("");
+    let mut vf_ce: String = String::from("");
+    if status_str == String::from("VerifyFailed") {
+        let legacy: Vec<String> = vf_legacy_fields(ces, soft_meta);
+        vf_func = legacy[0];
+        vf_ce = legacy[1];
+    }
+    diag_emit_build_verify_json_full(status_str, out, dctx, ces, vstatus, vmsg, vf_func, vf_ce);
     if all_proven == 0 {
         return 1;
     }
@@ -1119,8 +1125,14 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
             };
             let vstatus_leg: String = { if soft_meta_leg.len() >= 1 { soft_meta_leg[0] } else { String::from("") } };
             let vmsg_leg: String = { if soft_meta_leg.len() >= 2 { soft_meta_leg[1] } else { String::from("") } };
-            let legacy_leg: Vec<String> = vf_legacy_fields(ces, soft_meta_leg);
-            diag_emit_verify_json_full(status_str, dctx, ces, vstatus_leg, vmsg_leg, legacy_leg[0], legacy_leg[1]);
+            let mut vf_func_leg: String = String::from("");
+            let mut vf_ce_leg: String = String::from("");
+            if status_str == String::from("VerifyFailed") {
+                let legacy_leg: Vec<String> = vf_legacy_fields(ces, soft_meta_leg);
+                vf_func_leg = legacy_leg[0];
+                vf_ce_leg = legacy_leg[1];
+            }
+            diag_emit_verify_json_full(status_str, dctx, ces, vstatus_leg, vmsg_leg, vf_func_leg, vf_ce_leg);
             if all_proven == 0 {
                 return 1;
             }
