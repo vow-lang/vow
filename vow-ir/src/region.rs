@@ -1303,17 +1303,41 @@ impl InternalSummary {
         None
     }
 
-    /// Slot of the return arena (`Some(HiddenRegionIdx(0))` iff the function
-    /// returns `FreshInCaller`). Returns must always live at slot 0.
-    fn return_slot(&self) -> Option<HiddenRegionIdx> {
-        if matches!(
-            self.return_region,
-            InternalReturnRegion::Published(RegionConstraint::FreshInCaller)
-        ) {
-            Some(HiddenRegionIdx(0))
-        } else {
-            None
+    /// Hidden caller-arena slots that the return value can escape through.
+    ///
+    /// Issue #369: a `CallerReturn` marker on an allocation means the value
+    /// reaches the caller via the function's return path. Codegen routes
+    /// such a value into the slot dictated by the return summary:
+    ///
+    /// * `FreshInCaller` — slot 0 (the return arena).
+    /// * `AliasOf(p)` — same arena as param `p`'s store-target slot, when
+    ///   `p` is a recorded store target. If `p` is not a store target the
+    ///   set is empty and the caller-side fallback applies.
+    /// * `AliasOfAny(ps)` — union of `store_target_slot(p)` for known `p`.
+    /// * `ConstantGlobal` / `Uninit` — no caller slot (return is not in
+    ///   any caller arena).
+    fn return_escape_slots(&self) -> BTreeSet<HiddenRegionIdx> {
+        let mut slots = BTreeSet::new();
+        match &self.return_region {
+            InternalReturnRegion::Published(RegionConstraint::FreshInCaller) => {
+                slots.insert(HiddenRegionIdx(0));
+            }
+            InternalReturnRegion::Published(RegionConstraint::AliasOf(p)) => {
+                if let Some(slot) = self.store_target_slot(*p) {
+                    slots.insert(slot);
+                }
+            }
+            InternalReturnRegion::Published(RegionConstraint::AliasOfAny(ps)) => {
+                for p in ps {
+                    if let Some(slot) = self.store_target_slot(*p) {
+                        slots.insert(slot);
+                    }
+                }
+            }
+            InternalReturnRegion::Published(RegionConstraint::ConstantGlobal)
+            | InternalReturnRegion::Uninit => {}
         }
+        slots
     }
 
     fn to_published(&self, n_params: usize) -> RegionSummary {
@@ -2590,11 +2614,20 @@ fn lub_to_region_id(
             MustOutliveMarker::Block(b) => blocks.push(*b),
             MustOutliveMarker::VirtualCaller => has_legacy_caller = true,
             MustOutliveMarker::CallerReturn => {
-                if let Some(slot) = summary.return_slot() {
-                    caller_slots.insert(slot);
+                // Issue #369: resolve through AliasOf/AliasOfAny return
+                // summaries to the hidden caller slots they alias, so a
+                // wrapper that returns `AliasOf(p)` and also stores into
+                // `p` produces a single slot, not slot-less legacy evidence.
+                let slots = summary.return_escape_slots();
+                if slots.is_empty() {
+                    // The return summary doesn't pin a hidden slot (alias
+                    // points to a non-store-target param, or return is
+                    // ConstantGlobal/Uninit). Preserve the pre-#369 slot-less
+                    // caller widening so the marker still contributes some
+                    // caller-region evidence.
+                    has_legacy_caller = true;
                 } else {
-                    // Non-FreshInCaller return — marker contributes no
-                    // hidden-slot constraint. Fall through to block/root.
+                    caller_slots.extend(slots);
                 }
             }
             MustOutliveMarker::CallerStoreTarget(p) => {
@@ -4680,6 +4713,132 @@ mod tests {
             MustOutliveMarker::CallerStoreTarget(0),
             MustOutliveMarker::CallerStoreTarget(1),
         ]);
+        assert_eq!(
+            lub_to_region_id(&markers, BlockId(0), &tree, &summary),
+            RegionId::Caller(HiddenRegionIdx(0)),
+        );
+    }
+
+    #[test]
+    fn caller_return_resolves_alias_of_to_store_target_slot() {
+        // Issue #369: when the return summary is AliasOf(p) and `p` is a
+        // recorded store-target parameter, a `CallerReturn` marker must
+        // contribute the hidden caller slot that `p`'s store target maps to —
+        // not nothing (which is what the previous `return_slot()`-only path
+        // did). The return path and the store-target path denote the same
+        // hidden arena attached to `p`.
+        let f = function(
+            0,
+            "ret_alias_of_param0",
+            vec![Ty::Ptr],
+            Ty::Ptr,
+            vec![block(0, vec![return_unit_inst(0)])],
+        );
+        let tree = BlockTree::from_function(&f);
+        let mut summary = InternalSummary::seed(1);
+        summary.return_region = InternalReturnRegion::Published(RegionConstraint::AliasOf(0));
+        summary.store_effects.insert((
+            0,
+            InternalReturnRegion::Published(RegionConstraint::FreshInCaller),
+        ));
+        let markers = marker_set(&[MustOutliveMarker::CallerReturn]);
+        // store_target_slot(0) is HiddenRegionIdx(0): return is AliasOf, not
+        // FreshInCaller, so the return-arena slot is not allocated; param 0
+        // is the only store target.
+        assert_eq!(
+            lub_to_region_id(&markers, BlockId(0), &tree, &summary),
+            RegionId::Caller(HiddenRegionIdx(0)),
+        );
+    }
+
+    #[test]
+    fn caller_return_resolves_alias_of_any_to_union_of_store_target_slots() {
+        // Issue #369: an `AliasOfAny([p, q])` return that flows into a
+        // `CallerReturn` marker must contribute both `store_target_slot(p)`
+        // and `store_target_slot(q)`. With two distinct recorded store
+        // targets the slot set has cardinality two, so the LUB picks the
+        // lowest (until AMBIGUOUS minting is enabled in PR #342).
+        let f = function(
+            0,
+            "ret_alias_of_any_two_params",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Ptr,
+            vec![block(0, vec![return_unit_inst(0)])],
+        );
+        let tree = BlockTree::from_function(&f);
+        let mut summary = InternalSummary::seed(2);
+        summary.return_region =
+            InternalReturnRegion::Published(RegionConstraint::AliasOfAny(vec![0, 1]));
+        summary.store_effects.insert((
+            0,
+            InternalReturnRegion::Published(RegionConstraint::FreshInCaller),
+        ));
+        summary.store_effects.insert((
+            1,
+            InternalReturnRegion::Published(RegionConstraint::FreshInCaller),
+        ));
+        // store_target_slot layout (return is not FreshInCaller, so no
+        // return-arena slot): slot 0 = param 0's store target,
+        // slot 1 = param 1's store target.
+        let markers = marker_set(&[MustOutliveMarker::CallerReturn]);
+        assert_eq!(
+            lub_to_region_id(&markers, BlockId(0), &tree, &summary),
+            RegionId::Caller(HiddenRegionIdx(0)),
+        );
+    }
+
+    #[test]
+    fn caller_return_and_store_target_on_same_param_collapse_to_one_slot() {
+        // Issue #369: the literal lower_function_vow shape. A fresh value
+        // accumulates two markers — `CallerStoreTarget(0)` (it is stored
+        // through param 0) and `CallerReturn` (it escapes through the
+        // function's return). The return summary is `AliasOf(0)`. Both
+        // markers must resolve to the same hidden slot (param 0's store
+        // target), so `caller_slots` has cardinality one and the LUB
+        // produces a clean slot rather than slot-less legacy evidence.
+        let f = function(
+            0,
+            "ctx_mutate_and_return_alias",
+            vec![Ty::Ptr],
+            Ty::Ptr,
+            vec![block(0, vec![return_unit_inst(0)])],
+        );
+        let tree = BlockTree::from_function(&f);
+        let mut summary = InternalSummary::seed(1);
+        summary.return_region = InternalReturnRegion::Published(RegionConstraint::AliasOf(0));
+        summary.store_effects.insert((
+            0,
+            InternalReturnRegion::Published(RegionConstraint::FreshInCaller),
+        ));
+        let markers = marker_set(&[
+            MustOutliveMarker::CallerReturn,
+            MustOutliveMarker::CallerStoreTarget(0),
+        ]);
+        assert_eq!(
+            lub_to_region_id(&markers, BlockId(0), &tree, &summary),
+            RegionId::Caller(HiddenRegionIdx(0)),
+        );
+    }
+
+    #[test]
+    fn caller_return_alias_of_non_store_target_falls_back_to_legacy_caller() {
+        // Issue #369: if the return summary is `AliasOf(p)` but `p` is not
+        // a recorded store-target parameter, `return_escape_slots()` is
+        // empty. The marker must still contribute caller-region evidence
+        // (the value does escape to the caller), so we fall back to the
+        // slot-less legacy widening — currently `Caller(HiddenRegionIdx(0))`.
+        let f = function(
+            0,
+            "ret_alias_of_non_store_target",
+            vec![Ty::Ptr],
+            Ty::Ptr,
+            vec![block(0, vec![return_unit_inst(0)])],
+        );
+        let tree = BlockTree::from_function(&f);
+        let mut summary = InternalSummary::seed(1);
+        summary.return_region = InternalReturnRegion::Published(RegionConstraint::AliasOf(0));
+        // Note: no store_effects entry for param 0.
+        let markers = marker_set(&[MustOutliveMarker::CallerReturn]);
         assert_eq!(
             lub_to_region_id(&markers, BlockId(0), &tree, &summary),
             RegionId::Caller(HiddenRegionIdx(0)),

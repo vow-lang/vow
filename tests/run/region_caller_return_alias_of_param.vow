@@ -1,0 +1,45 @@
+// TEST: stdout ""
+// Issue #369 reproducer — the lower_function_vow shape. A helper takes a
+// container by-ref, stores a fresh allocation into one of the container's
+// nested vectors, and returns an alias of the container itself. The fresh
+// allocation accumulates two markers (CallerStoreTarget(p) and CallerReturn)
+// but both denote the same hidden caller arena — the one attached to `p`.
+// Pre-#369 the LUB lost this information because `return_slot()` only fired
+// for FreshInCaller returns; with the alias-aware escape resolution the
+// marker contributes the same slot as the store target, so the resolved
+// region is a clean single-slot Caller(_).
+module CallerReturnAliasOfParam
+
+pub struct Inst {
+    op: i64,
+    args: Vec<i64>,
+}
+
+pub struct Block {
+    insts: Vec<Inst>,
+}
+
+pub struct Func {
+    blocks: Vec<Block>,
+}
+
+pub struct Ctx {
+    func: Func,
+}
+
+fn emit(c: Ctx, op: i64, args: Vec<i64>) -> Func {
+    let i: Inst = Inst { op: op, args: args };
+    let b: Block = c.func.blocks[0];
+    b.insts.push(i);
+    c.func
+}
+
+fn main() -> i32 {
+    let f: Func = Func { blocks: Vec::new() };
+    f.blocks.push(Block { insts: Vec::new() });
+    let c: Ctx = Ctx { func: f };
+    let args: Vec<i64> = Vec::new();
+    args.push(42);
+    let _g: Func = emit(c, 7, args);
+    0
+}
