@@ -389,10 +389,7 @@ fn verify_collect_and_report(
         let bv_is_unknown: bool = st == VERIFY_UNKNOWN();
         let bv_label: String = { if bv_is_unknown { String::from("unknown") } else { String::from("timeout") } };
         let bv_label_upper: String = { if bv_is_unknown { String::from("UNKNOWN") } else { String::from("TIMEOUT") } };
-        // For Timeout, leave the message empty — Rust's VerifyOutcome::Timeout
-        // arm in vow/src/main.rs returns None for verify_message, and the
-        // verify_status="timeout" key already carries the same information.
-        // For Unknown, ESBMC's own explanation is meaningful.
+        // Timeout: empty message to match Rust's None; Unknown: include ESBMC's own explanation.
         let bv_msg_initial: String = {
             if bv_is_unknown { parse_unknown_reason(vr.raw_output) }
             else { String::from("") }
