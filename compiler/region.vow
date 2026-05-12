@@ -3028,15 +3028,6 @@ fn is_caller_ambiguous(rgn: i64) -> bool {
     rgn >= 0 && region_kind(rgn) == REGION_KIND_CALLER() && region_val(rgn) == AMBIGUOUS_SLOT()
 }
 
-// Slot of the return arena: `Some(0)` iff the function returns FreshInCaller,
-// else `-1` (no slot — the marker contributes no hidden-slot constraint).
-fn slot_of_return(rsum_return_kind: i64) -> i64 {
-    if rsum_return_kind == RSUM_KIND_FRESH_IN_CALLER() {
-        return 0;
-    }
-    -1
-}
-
 // Issue #369: hidden caller-arena slots that the return value escapes
 // through. Pushes the resolved slots into `caller_slots` (deduped, kept
 // sorted by `linear_insert_i64`) and returns true iff at least one slot
