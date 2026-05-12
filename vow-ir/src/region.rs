@@ -1862,7 +1862,7 @@ fn handle_inst(
             // the inst.region populate pass tags any RegionAlloc that flows
             // into the return as Caller(0).
             if !return_is_scalar && let Some(&arg_id) = inst.args.first() {
-                add_marker(must_outlive, arg_id, MustOutliveMarker::VirtualCaller);
+                add_marker(must_outlive, arg_id, MustOutliveMarker::CallerReturn);
             }
             // The actual return-region summary contribution is computed in a
             // separate deep pass that walks Phi/Call origins with summaries
@@ -2573,13 +2573,15 @@ fn propagate_alias(
 #[allow(dead_code)] // Root + Rodata appear once the dataflow recognises Root-pin / .rodata flows.
 enum MustOutliveMarker {
     Block(BlockId),
-    /// Slot-less caller marker — retained for the Return arm during the
-    /// issue #317 migration; will be replaced by `CallerReturn` once the
-    /// Return path moves to slot-aware inference.
+    /// Slot-less caller marker — defensive fallback for the unreachable
+    /// `GetArg` whose `InstData` is not `ArgIndex` in `target_region_marker`
+    /// (see this file's match on `inst.data`). The Return arm migrated to
+    /// `CallerReturn` in #342; this variant no longer participates in
+    /// slot-aware return inference.
     VirtualCaller,
     /// Value escapes via the function's return path. Maps to slot 0 iff the
-    /// summary's `return_region == FreshInCaller`; otherwise contributes no
-    /// hidden-slot constraint.
+    /// summary's `return_region == FreshInCaller`; otherwise falls back to
+    /// legacy slot-less caller evidence for wrapper-return compatibility.
     CallerReturn,
     /// Value flows into a store-target whose container is the current
     /// function's parameter `p`. The slot index is derived at LUB time from
@@ -2657,16 +2659,20 @@ fn lub_to_region_id(
         return RegionId::Rodata;
     }
     if has_caller {
-        // Slot-aware: a single distinct slot resolves cleanly. Multiple
-        // distinct slots get the lowest deterministically — strictly
-        // better than the pre-#317 collapse-everything-to-slot-0 path.
-        // A future enhancement may detect unsafe multi-slot routings via
-        // the AMBIGUOUS sentinel + post-inference reject path.
-        if has_legacy_caller {
-            return RegionId::Caller(HiddenRegionIdx(0));
+        // Slot-aware: a single distinct hidden caller slot resolves cleanly.
+        // Legacy slot-less caller evidence cannot be safely combined with a
+        // concrete slot, and multiple concrete slots cannot share one arena;
+        // both cases mint AMBIGUOUS so the post-inference store-conflict
+        // check rejects any store that would otherwise route through one
+        // arbitrary hidden arena.
+        if has_legacy_caller && !caller_slots.is_empty() {
+            return RegionId::Caller(HiddenRegionIdx::AMBIGUOUS);
         }
-        if !caller_slots.is_empty() {
-            return RegionId::Caller(*caller_slots.iter().next().unwrap());
+        if caller_slots.len() > 1 {
+            return RegionId::Caller(HiddenRegionIdx::AMBIGUOUS);
+        }
+        if let Some(slot) = caller_slots.iter().next() {
+            return RegionId::Caller(*slot);
         }
         return RegionId::Caller(HiddenRegionIdx(0));
     }
@@ -3304,7 +3310,7 @@ fn check_store_conflict_semantic(
     call_inst: &Inst,
     inst_lookup: &BTreeMap<InstId, (BlockId, &Inst)>,
     region_map: &BTreeMap<InstId, RegionId>,
-    _summaries: &[InternalSummary],
+    summaries: &[InternalSummary],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     // Inline case: target is not parameter-rooted; the inline path handles
@@ -3316,28 +3322,39 @@ fn check_store_conflict_semantic(
     if trace_param(target_arg_id, inst_lookup).is_none() {
         return;
     }
+    if inst_lookup
+        .get(&source_arg_id)
+        .is_some_and(|(_, inst)| is_scalar_ty(inst.ty))
+    {
+        return;
+    }
+    if trace_param(source_arg_id, inst_lookup).is_some() {
+        return;
+    }
 
-    // Issue #317: slot-aware inference puts the correct
-    // `HiddenRegionIdx(N)` on every `Caller(_)` source — the
-    // post-inference check now accepts every `Caller(_)` and only rejects
-    // concrete-block sources strictly narrower than the parameter target.
-    // (The AMBIGUOUS sentinel is defined but not currently minted; a
-    // future enhancement may reintroduce a Phi-divergence reject path.)
-    let direct = region_map.get(&source_arg_id).copied();
-    match direct {
+    let source_region = region_map.get(&source_arg_id).copied();
+    let ambiguous_multi_slot = match source_region {
+        Some(RegionId::Caller(idx)) if idx.is_ambiguous() => {
+            let source_is_fresh_heap = inst_lookup
+                .get(&source_arg_id)
+                .is_some_and(|(_, inst)| is_heap_producing(inst, summaries));
+            if !source_is_fresh_heap {
+                return;
+            }
+            // Ambiguous caller evidence means the fresh heap value must
+            // satisfy more than one hidden caller arena slot. Codegen cannot
+            // route one allocation to multiple caller arenas, so reject the
+            // store.
+            true
+        }
         Some(RegionId::Caller(_) | RegionId::Root | RegionId::Rodata) => return,
         Some(RegionId::Block(_)) => {
             // Concrete block source, parameter target — strictly narrower,
             // always a conflict; drop through to emission.
+            false
         }
-        None => {
-            // Source is an aliasing wrapper (FieldGet/Load/vec-get/GetArg/Phi)
-            // with no direct region. The slot is determined at the alloc
-            // site by inference; aliasing wrappers don't override it, so
-            // we accept unconditionally here.
-            return;
-        }
-    }
+        None => return,
+    };
 
     let source_span = inst_lookup
         .get(&source_arg_id)
@@ -3348,12 +3365,29 @@ fn check_store_conflict_semantic(
         .map(|(_, i)| i.origin)
         .unwrap_or(call_inst.origin);
 
+    let (message, hint) = if ambiguous_multi_slot {
+        (
+            "value's region cannot satisfy target container's region: \
+             allocation routes to multiple distinct caller arena slots",
+            "split the allocation so each target container receives its own \
+             fresh value, or copy the value into the matching arena per \
+             destination — a single allocation cannot live in more than one \
+             hidden caller arena",
+        )
+    } else {
+        (
+            "value's region cannot satisfy target container's region: \
+             block-local allocation stored into a parameter region",
+            "hoist the allocation to a wider scope, copy the value into the \
+             outer arena, or restructure the return flow so the value \
+             escapes to the caller",
+        )
+    };
+
     diagnostics.push(Diagnostic {
         severity: Severity::Error,
         code: ErrorCode::RegionConflict,
-        message: "value's region cannot satisfy target container's region: \
-                  block-local allocation stored into a parameter region"
-            .to_string(),
+        message: message.to_string(),
         primary: SourceLocation {
             file: source_file.to_string(),
             byte_offset: source_span.start,
@@ -3372,12 +3406,7 @@ fn check_store_conflict_semantic(
             },
         ],
         blame: Blame::Callee,
-        hints: vec![
-            "hoist the allocation to a wider scope, copy the value into the \
-             outer arena, or restructure the return flow so the value \
-             escapes to the caller"
-                .to_string(),
-        ],
+        hints: vec![hint.to_string()],
     });
 }
 
@@ -4685,13 +4714,11 @@ mod tests {
     }
 
     #[test]
-    fn phi_with_distinct_target_slots_picks_lowest_slot() {
-        // Issue #317 Cycle 5: a marker set carrying two distinct
-        // `CallerStoreTarget(p)` markers resolves to two different slots.
-        // The LUB picks the lowest deterministically — strictly better
-        // than the pre-#317 collapse-everything-to-slot-0 path. The
-        // AMBIGUOUS sentinel is reserved for a future enhancement that
-        // detects unsafe multi-slot routings via a post-inference check.
+    fn phi_with_distinct_target_slots_becomes_ambiguous() {
+        // A marker set carrying two distinct `CallerStoreTarget(p)` markers
+        // resolves to two different hidden caller slots. The LUB must not
+        // pick either slot because codegen would allocate in only that arena;
+        // instead it mints AMBIGUOUS for the post-inference reject path.
         let f = function(
             0,
             "two_stores",
@@ -4715,7 +4742,7 @@ mod tests {
         ]);
         assert_eq!(
             lub_to_region_id(&markers, BlockId(0), &tree, &summary),
-            RegionId::Caller(HiddenRegionIdx(0)),
+            RegionId::Caller(HiddenRegionIdx::AMBIGUOUS),
         );
     }
 
@@ -7150,6 +7177,78 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A single fresh allocation cannot satisfy two distinct hidden caller
+    /// store-target slots. Choosing either slot would place a pointer into
+    /// the other target's container with the wrong arena lifetime, so the
+    /// allocation is marked AMBIGUOUS and the store-conflict pass rejects it.
+    #[test]
+    fn region_conflict_when_one_alloc_flows_to_two_hidden_slots() {
+        let callee_insts = vec![
+            inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(2, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(2)),
+            inst(3, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(3)),
+            inst(4, Opcode::Store, Ty::Unit, vec![0, 1], InstData::None),
+            inst(5, Opcode::Store, Ty::Unit, vec![2, 3], InstData::None),
+            inst(6, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let mut callee = function(
+            0,
+            "store_into_two",
+            vec![Ty::Ptr, Ty::Ptr, Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, callee_insts)],
+        );
+        callee.source_file = "callee.vow".to_string();
+
+        let caller_insts = vec![
+            inst(10, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+            inst(11, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+            inst(
+                12,
+                Opcode::RegionAlloc,
+                Ty::Ptr,
+                vec![],
+                InstData::AllocSize { size: 16, align: 8 },
+            ),
+            inst(
+                13,
+                Opcode::Call,
+                Ty::Unit,
+                vec![10, 12, 11, 12],
+                InstData::CallTarget(FuncId(0)),
+            ),
+            inst(14, Opcode::Return, Ty::Unit, vec![], InstData::None),
+        ];
+        let mut caller = function(
+            1,
+            "ambiguous_caller",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Unit,
+            vec![block(0, caller_insts)],
+        );
+        caller.source_file = "caller.vow".to_string();
+        let mut m = module(vec![callee, caller]);
+        infer_regions(&mut m);
+
+        assert_eq!(
+            m.functions[1].blocks[0].insts[2].region,
+            RegionId::Caller(HiddenRegionIdx::AMBIGUOUS),
+            "shared allocation must not collapse to either concrete slot"
+        );
+        let conflicts: Vec<_> = m
+            .warnings
+            .iter()
+            .filter(|d| d.code == ErrorCode::RegionConflict)
+            .collect();
+        assert_eq!(
+            conflicts.len(),
+            2,
+            "both stores of the ambiguous allocation should be rejected; warnings: {:?}",
+            m.warnings
+        );
     }
 
     /// `RegionRootEscape` positive coverage: a function with exactly one
