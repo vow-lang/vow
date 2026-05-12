@@ -2467,6 +2467,16 @@ fn value_lub_region(
     } else {
         RSUM_INTERNAL_UNINIT()
     };
+    let own_return_aux: i64 = if fi >= 0 && fi < int_auxs.len() {
+        int_auxs[fi]
+    } else {
+        0
+    };
+    let own_return_aliases: Vec<i64> = if fi >= 0 && fi < int_aliases_list.len() {
+        int_aliases_list[fi]
+    } else {
+        Vec::new()
+    };
     let own_se_targets: Vec<i64> = if fi >= 0 && fi < int_se_targets.len() {
         int_se_targets[fi]
     } else {
@@ -2474,13 +2484,14 @@ fn value_lub_region(
     };
     region_lub_from_markers(
         markers, defining_block, block_parent, block_depth,
-        own_return_kind, own_se_targets,
+        own_return_kind, own_return_aux, own_return_aliases, own_se_targets,
     )
 }
 
 fn region_lub_from_markers(
     markers: Vec<i64>, defining_block: i64, block_parent: Vec<i64>, block_depth: Vec<i64>,
-    own_return_kind: i64, own_se_targets: Vec<i64>
+    own_return_kind: i64, own_return_aux: i64, own_return_aliases: Vec<i64>,
+    own_se_targets: Vec<i64>
 ) -> i64 {
     let blocks: Vec<i64> = Vec::new();
     // Issue #317: distinct hidden caller slots accumulated from
@@ -2501,10 +2512,14 @@ fn region_lub_from_markers(
             let v: i64 = region_val(marker);
             if v == 0 {
                 // CallerReturn (or pre-#317 legacy VirtualCaller).
-                let rs: i64 = slot_of_return(own_return_kind);
-                if rs >= 0 {
-                    linear_insert_i64(caller_slots, rs);
-                } else {
+                // Issue #369: resolve through AliasOf/AliasOfAny return
+                // summaries to the hidden caller slot(s) they alias.
+                let added: bool = collect_return_escape_slots(
+                    caller_slots,
+                    own_return_kind, own_return_aux, own_return_aliases,
+                    own_se_targets
+                );
+                if !added {
                     has_legacy_caller = true;
                 }
             } else if v == AMBIGUOUS_SLOT() {
@@ -3013,13 +3028,43 @@ fn is_caller_ambiguous(rgn: i64) -> bool {
     rgn >= 0 && region_kind(rgn) == REGION_KIND_CALLER() && region_val(rgn) == AMBIGUOUS_SLOT()
 }
 
-// Slot of the return arena: `Some(0)` iff the function returns FreshInCaller,
-// else `-1` (no slot — the marker contributes no hidden-slot constraint).
-fn slot_of_return(rsum_return_kind: i64) -> i64 {
+// Issue #369: hidden caller-arena slots that the return value escapes
+// through. Pushes the resolved slots into `caller_slots` (deduped, kept
+// sorted by `linear_insert_i64`) and returns true iff at least one slot
+// was contributed. Mirrors `InternalSummary::return_escape_slots` in
+// vow-ir/src/region.rs.
+fn collect_return_escape_slots(
+    caller_slots: Vec<i64>,
+    rsum_return_kind: i64, rsum_return_aux: i64, rsum_return_aliases: Vec<i64>,
+    se_targets: Vec<i64>
+) -> bool {
     if rsum_return_kind == RSUM_KIND_FRESH_IN_CALLER() {
-        return 0;
+        linear_insert_i64(caller_slots, 0);
+        return true;
     }
-    -1
+    if rsum_return_kind == RSUM_KIND_ALIAS_OF() {
+        let s: i64 = slot_of_store_target(rsum_return_kind, se_targets, rsum_return_aux);
+        if s >= 0 {
+            linear_insert_i64(caller_slots, s);
+            return true;
+        }
+        return false;
+    }
+    if rsum_return_kind == RSUM_KIND_ALIAS_OF_ANY() {
+        let mut added: bool = false;
+        let mut i: i64 = 0;
+        while i < rsum_return_aliases.len() {
+            let p: i64 = rsum_return_aliases[i];
+            let s: i64 = slot_of_store_target(rsum_return_kind, se_targets, p);
+            if s >= 0 {
+                linear_insert_i64(caller_slots, s);
+                added = true;
+            }
+            i = i + 1;
+        }
+        return added;
+    }
+    false
 }
 
 // Slot of `target_param` in the codegen layout
