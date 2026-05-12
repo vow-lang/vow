@@ -405,6 +405,14 @@ fn region_to_arena_value(
     }
 }
 
+// Projection results (`FieldGet`, `Load`, `__vow_vec_get*`) are intentionally
+// NOT traced through to their container here: a pointer-valued field or Vec
+// element does not share its container's arena lifetime, so routing string
+// mutation into the container's arena would create a use-after-free when the
+// container outlives the string (or vice versa). Only direct hidden-caller
+// parameters (`GetArg` → `Caller`) and Phi merges over safe sources are
+// tracked. If safe projection semantics are ever added, extend this function;
+// do not re-introduce the unconditional FieldGet/Load/vec_get tracing.
 fn source_value_region(
     source: &Inst,
     inst_index: &HashMap<InstId, &Inst>,
@@ -419,17 +427,6 @@ fn source_value_region(
         && let Some(hidden_idx) = hidden_region_idx_for_store_target(current_summary, *param_idx)
     {
         return RegionId::Caller(hidden_idx);
-    }
-    if matches!(source.opcode, Opcode::FieldGet | Opcode::Load)
-        && let Some(source_id) = source.args.first()
-    {
-        return arg_region_inner(*source_id, inst_index, current_summary, phi_data, seen);
-    }
-    if let (Opcode::Call, InstData::CallExtern(sym)) = (&source.opcode, &source.data)
-        && matches!(sym.as_str(), "__vow_vec_get_val" | "__vow_vec_get")
-        && let Some(source_id) = source.args.first()
-    {
-        return arg_region_inner(*source_id, inst_index, current_summary, phi_data, seen);
     }
     if source.opcode == Opcode::Phi {
         let mut merged: Option<RegionId> = None;
@@ -4825,7 +4822,7 @@ mod tests {
     }
 
     #[test]
-    fn projected_parameter_region_string_push_byte_imports_arena_variant() {
+    fn projected_parameter_region_string_push_byte_keeps_default_variant() {
         let grow_projection = Function {
             id: FuncId(0),
             name: "grow_projection".to_string(),
@@ -4914,8 +4911,8 @@ mod tests {
             .symbols()
             .filter_map(|symbol| symbol.name().ok().map(str::to_string))
             .collect();
-        assert!(symbols.contains("__vow_string_push_byte_in_arena"));
-        assert!(!symbols.contains("__vow_string_push_byte"));
+        assert!(symbols.contains("__vow_string_push_byte"));
+        assert!(!symbols.contains("__vow_string_push_byte_in_arena"));
     }
 
     #[test]
