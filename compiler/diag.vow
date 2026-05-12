@@ -462,17 +462,26 @@ fn diag_ce_to_json(ce: VerifyCE) -> String {
 }
 
 fn diag_emit_verify_json(status: String, dctx: DiagCtx, ces: Vec<VerifyCE>) [io] {
-    diag_emit_verify_json_full(status, dctx, ces, String::from(""), String::from(""));
+    diag_emit_verify_json_full(status, dctx, ces, String::from(""), String::from(""), String::from(""), String::from(""));
 }
 
 // Extended variant: when `verify_status` is non-empty, emit the
 // `verify_status` and `verify_message` fields. Used to surface soft ESBMC
-// outcomes (timeout / unknown / error / tool_not_found).
-fn diag_emit_verify_json_full(status: String, dctx: DiagCtx, ces: Vec<VerifyCE>, verify_status: String, verify_message: String) [io] {
+// outcomes (timeout / unknown / error / tool_not_found). When status is
+// "VerifyFailed", also emit the schema-required `function` and
+// `counterexample` (legacy single-string) top-level fields.
+fn diag_emit_verify_json_full(status: String, dctx: DiagCtx, ces: Vec<VerifyCE>, verify_status: String, verify_message: String, vf_function: String, vf_counterexample: String) [io] {
     let r: String = String::from("{\"status\":\"");
     r.push_str(status);
     r.push_str(String::from("\",\"executable\":null,\"diagnostics\":"));
     r.push_str(diag_ctx_to_json(dctx));
+    if status == String::from("VerifyFailed") {
+        r.push_str(String::from(",\"function\":\""));
+        r.push_str(diag_json_escape_str(vf_function));
+        r.push_str(String::from("\",\"counterexample\":\""));
+        r.push_str(diag_json_escape_str(vf_counterexample));
+        r.push_str(String::from("\""));
+    }
     r.push_str(String::from(",\"counterexamples\":["));
     let nc: i64 = ces.len();
     let mut i: i64 = 0;
@@ -518,13 +527,15 @@ fn diag_emit_build_json(status: String, exec_path: String, dctx: DiagCtx) [io] {
 }
 
 fn diag_emit_build_verify_json(status: String, exec_path: String, dctx: DiagCtx, ces: Vec<VerifyCE>) [io] {
-    diag_emit_build_verify_json_full(status, exec_path, dctx, ces, String::from(""), String::from(""));
+    diag_emit_build_verify_json_full(status, exec_path, dctx, ces, String::from(""), String::from(""), String::from(""), String::from(""));
 }
 
 // Extended variant: when `verify_status` is non-empty, emit the
 // `verify_status` and `verify_message` fields. Used to surface soft ESBMC
-// outcomes (timeout / unknown / error / tool_not_found).
-fn diag_emit_build_verify_json_full(status: String, exec_path: String, dctx: DiagCtx, ces: Vec<VerifyCE>, verify_status: String, verify_message: String) [io] {
+// outcomes (timeout / unknown / error / tool_not_found). When status is
+// "VerifyFailed", also emit the schema-required `function` and
+// `counterexample` (legacy single-string) top-level fields.
+fn diag_emit_build_verify_json_full(status: String, exec_path: String, dctx: DiagCtx, ces: Vec<VerifyCE>, verify_status: String, verify_message: String, vf_function: String, vf_counterexample: String) [io] {
     let r: String = String::from("{\"status\":\"");
     r.push_str(status);
     r.push_str(String::from("\",\"executable\":"));
@@ -537,6 +548,13 @@ fn diag_emit_build_verify_json_full(status: String, exec_path: String, dctx: Dia
     }
     r.push_str(String::from(",\"diagnostics\":"));
     r.push_str(diag_ctx_to_json(dctx));
+    if status == String::from("VerifyFailed") {
+        r.push_str(String::from(",\"function\":\""));
+        r.push_str(diag_json_escape_str(vf_function));
+        r.push_str(String::from("\",\"counterexample\":\""));
+        r.push_str(diag_json_escape_str(vf_counterexample));
+        r.push_str(String::from("\""));
+    }
     r.push_str(String::from(",\"counterexamples\":["));
     let nc: i64 = ces.len();
     let mut i: i64 = 0;

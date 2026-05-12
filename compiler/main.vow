@@ -340,14 +340,57 @@ fn vec_i64_remove_front(v: Vec<i64>) {
     v.pop();
 }
 
-// Record the first soft-fail ESBMC outcome (status/message) into `meta`.
-// Convention: meta is `[]` until the first soft-fail, then `[status, message]`.
-// Subsequent calls are no-ops to preserve the first-observed signal.
-fn record_soft_fail(meta: Vec<String>, status: String, message: String) {
+// Record the first soft-fail ESBMC outcome (status/message/function) into `meta`.
+// Convention: meta is `[]` until the first soft-fail, then `[status, message, function]`.
+// The function name is needed to populate the schema-required top-level
+// `function` field on VerifyFailed JSON output.
+fn record_soft_fail(meta: Vec<String>, status: String, message: String, function: String) {
     if meta.len() == 0 {
         meta.push(status);
         meta.push(message);
+        meta.push(function);
     }
+}
+
+// Compute (function, counterexample) for the VerifyFailed top-level JSON fields.
+// Mirrors Rust's BuildStatus::VerifyFailed { function, description } shape so
+// schema validators see the same fields from either compiler. Returns [func, desc].
+fn vf_legacy_fields(ces: Vec<VerifyCE>, soft_meta: Vec<String>) -> Vec<String> {
+    let result: Vec<String> = Vec::new();
+    if ces.len() > 0 {
+        let ce: VerifyCE = ces[0];
+        result.push(ce.function);
+        // Mirrors Rust's CE description: "VerifyFailed: <violation>".
+        let desc: String = String::from("VerifyFailed: ");
+        desc.push_str(ce.violation);
+        result.push(desc);
+        return result;
+    }
+    if soft_meta.len() >= 3 {
+        let status: String = soft_meta[0];
+        let message: String = soft_meta[1];
+        let func: String = soft_meta[2];
+        result.push(func);
+        let desc: String = String::from("");
+        if status == String::from("timeout") {
+            desc.push_str(String::from("verification timed out"));
+        } else if status == String::from("unknown") {
+            desc.push_str(String::from("verification result unknown: "));
+            desc.push_str(message);
+        } else if status == String::from("error") {
+            desc.push_str(String::from("esbmc error: "));
+            desc.push_str(message);
+        } else if status == String::from("tool_not_found") {
+            desc.push_str(String::from("ESBMC not found"));
+        } else {
+            desc.push_str(message);
+        }
+        result.push(desc);
+        return result;
+    }
+    result.push(String::from(""));
+    result.push(String::from(""));
+    result
 }
 
 fn verify_collect_and_report(
@@ -360,7 +403,7 @@ fn verify_collect_and_report(
         // is distinct from "no vows", which the caller already filters.
         // Silently skipping would mis-report an un-verified function as proven.
         eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR (failed to start ESBMC)")));
-        record_soft_fail(soft_meta, String::from("error"), String::from("failed to start ESBMC"));
+        record_soft_fail(soft_meta, String::from("error"), String::from("failed to start ESBMC"), f.name);
         return 0;
     }
     let effective_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
@@ -410,41 +453,41 @@ fn verify_collect_and_report(
                 // the original BV outcome instead. Mirrors solver_strategy's
                 // demote-IR-FAILED rule.
                 eprintln_str(str4(String::from("  "), f.name, String::from(": "), bv_label_upper));
-                record_soft_fail(soft_meta, bv_label, bv_msg_initial);
+                record_soft_fail(soft_meta, bv_label, bv_msg_initial, f.name);
                 return 0;
             }
             if st2 == VERIFY_TIMEOUT() {
                 eprintln_str(str3(String::from("  "), f.name, String::from(": TIMEOUT (BV and IR)")));
                 // Empty verify_message — match Rust's verify_status="timeout" + None shape.
-                record_soft_fail(soft_meta, String::from("timeout"), String::from(""));
+                record_soft_fail(soft_meta, String::from("timeout"), String::from(""), f.name);
                 return 0;
             }
             if st2 == VERIFY_UNKNOWN() {
                 let reason2: String = parse_unknown_reason(vr2.raw_output);
                 eprintln_str(str3(String::from("  "), f.name, String::from(": UNKNOWN (BV and IR)")));
-                record_soft_fail(soft_meta, String::from("unknown"), reason2);
+                record_soft_fail(soft_meta, String::from("unknown"), reason2, f.name);
                 return 0;
             }
             if st2 == VERIFY_NOT_FOUND() {
                 eprintln_str(String::from("error: ESBMC not found; install ESBMC or use --no-verify"));
-                record_soft_fail(soft_meta, String::from("tool_not_found"), String::from("ESBMC not found"));
+                record_soft_fail(soft_meta, String::from("tool_not_found"), String::from("ESBMC not found"), f.name);
                 return 0;
             }
             eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR")));
-            record_soft_fail(soft_meta, String::from("error"), String::from("ESBMC error during IR fallback"));
+            record_soft_fail(soft_meta, String::from("error"), String::from("ESBMC error during IR fallback"), f.name);
             return 0;
         }
         eprintln_str(str4(String::from("  "), f.name, String::from(": "), bv_label_upper));
-        record_soft_fail(soft_meta, bv_label, bv_msg_initial);
+        record_soft_fail(soft_meta, bv_label, bv_msg_initial, f.name);
         return 0;
     }
     if st == VERIFY_NOT_FOUND() {
         eprintln_str(String::from("error: ESBMC not found; install ESBMC or use --no-verify"));
-        record_soft_fail(soft_meta, String::from("tool_not_found"), String::from("ESBMC not found"));
+        record_soft_fail(soft_meta, String::from("tool_not_found"), String::from("ESBMC not found"), f.name);
         return 0;
     }
     eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR")));
-    record_soft_fail(soft_meta, String::from("error"), String::from("unrecognized ESBMC outcome"));
+    record_soft_fail(soft_meta, String::from("error"), String::from("unrecognized ESBMC outcome"), f.name);
     0
 }
 
@@ -510,7 +553,8 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
     };
     let vstatus: String = { if soft_meta.len() >= 1 { soft_meta[0] } else { String::from("") } };
     let vmsg: String = { if soft_meta.len() >= 2 { soft_meta[1] } else { String::from("") } };
-    diag_emit_verify_json_full(status_str, dctx, ces, vstatus, vmsg);
+    let legacy: Vec<String> = vf_legacy_fields(ces, soft_meta);
+    diag_emit_verify_json_full(status_str, dctx, ces, vstatus, vmsg, legacy[0], legacy[1]);
     if all_proven == 0 {
         return 1;
     }
@@ -669,7 +713,8 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
     };
     let vstatus: String = { if soft_meta.len() >= 1 { soft_meta[0] } else { String::from("") } };
     let vmsg: String = { if soft_meta.len() >= 2 { soft_meta[1] } else { String::from("") } };
-    diag_emit_build_verify_json_full(status_str, out, dctx, ces, vstatus, vmsg);
+    let legacy: Vec<String> = vf_legacy_fields(ces, soft_meta);
+    diag_emit_build_verify_json_full(status_str, out, dctx, ces, vstatus, vmsg, legacy[0], legacy[1]);
     if all_proven == 0 {
         return 1;
     }
@@ -1074,7 +1119,8 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
             };
             let vstatus_leg: String = { if soft_meta_leg.len() >= 1 { soft_meta_leg[0] } else { String::from("") } };
             let vmsg_leg: String = { if soft_meta_leg.len() >= 2 { soft_meta_leg[1] } else { String::from("") } };
-            diag_emit_verify_json_full(status_str, dctx, ces, vstatus_leg, vmsg_leg);
+            let legacy_leg: Vec<String> = vf_legacy_fields(ces, soft_meta_leg);
+            diag_emit_verify_json_full(status_str, dctx, ces, vstatus_leg, vmsg_leg, legacy_leg[0], legacy_leg[1]);
             if all_proven == 0 {
                 return 1;
             }
