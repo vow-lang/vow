@@ -894,6 +894,13 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                         let ovr: VerifyResult = verify_collect(oh, ovf, t_eff);
                         if ovr.status == VERIFY_FAILED() {
                             verify_failed = true;
+                        } else if ovr.status == VERIFY_TIMEOUT() || ovr.status == VERIFY_UNKNOWN() {
+                            // Mirror the bounded-pool drain: retry IR before treating Timeout/Unknown as passing.
+                            // Without this, the common nfns <= t_jobs case silently accepts unverified functions.
+                            let ovr2: VerifyResult = verify_function_ir_fallback(ovf, ir_mod, t_max_k_step, false, String::from(""), t_vec_max, t_string_max, t_hashmap_max, t_btreemap_max);
+                            if ovr2.status != VERIFY_PROVEN() && ovr2.status != VERIFY_PROVEN_IR() {
+                                verify_failed = true;
+                            }
                         }
                     }
                 }
