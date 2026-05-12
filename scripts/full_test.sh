@@ -115,7 +115,16 @@ if rs != 'VerifyFailed':
 
 rc = r.get('counterexamples', [])
 sc = s.get('counterexamples', [])
-if rs == 'VerifyFailed' and ss == 'VerifyFailed':
+# A VerifyFailed with a non-empty verify_status is a 'soft' ESBMC outcome
+# (timeout / unknown / error / tool_not_found) — ESBMC produced no
+# counterexample by design, so the parity check must not require one.
+rvs = r.get('verify_status') or ''
+svs = s.get('verify_status') or ''
+soft_fail = rs == 'VerifyFailed' and ss == 'VerifyFailed' and rvs and svs
+if soft_fail:
+    if rvs != svs:
+        errors.append(f'verify_status: {rvs} vs {svs}')
+elif rs == 'VerifyFailed' and ss == 'VerifyFailed':
     if len(rc) == 0:
         errors.append('rust has no counterexamples for VerifyFailed')
     if len(sc) == 0:

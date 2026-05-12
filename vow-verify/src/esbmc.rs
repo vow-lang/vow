@@ -36,6 +36,14 @@ pub enum VerificationResult {
     Timeout,
     ToolNotFound,
     ToolError(String),
+    /// ESBMC returned `VERIFICATION UNKNOWN` — finished cleanly but could
+    /// neither prove nor falsify the property within its bound (e.g.
+    /// k-induction's forward condition could not establish the property).
+    /// Distinct from `Failed` (no real counterexample) and from `Timeout`
+    /// (no wall-clock cutoff). `reason` carries the short ESBMC explanation.
+    Unknown {
+        reason: String,
+    },
     /// Function's body contains non-modelable opcodes or effects; ESBMC not invoked. Treat as warning, not failure.
     Skipped {
         reason: String,
@@ -490,10 +498,43 @@ pub fn run_esbmc_with_max_k_step(
         VerificationResult::Proven
     } else if combined.contains("VERIFICATION FAILED") {
         VerificationResult::Failed(parse_esbmc_output(&combined))
+    } else if combined.contains("VERIFICATION UNKNOWN") {
+        VerificationResult::Unknown {
+            reason: parse_unknown_reason(&combined),
+        }
     } else if combined.to_lowercase().contains("timeout") {
         VerificationResult::Timeout
     } else {
         VerificationResult::ToolError(format!("unexpected esbmc output:\n{combined}"))
+    }
+}
+
+/// Extract the short explanation that precedes `VERIFICATION UNKNOWN` from an
+/// ESBMC log. Typical lines: `The forward condition is unable to prove the
+/// property` or `Unable to prove or falsify the program, giving up.` — we
+/// keep the most informative of these and fall back to a generic message.
+fn parse_unknown_reason(combined: &str) -> String {
+    let mut reason = String::new();
+    for line in combined.lines() {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if t == "VERIFICATION UNKNOWN" {
+            break;
+        }
+        if t.contains("unable to prove")
+            || t.contains("Unable to prove")
+            || t.contains("giving up")
+            || t.contains("inductive step")
+        {
+            reason = t.to_string();
+        }
+    }
+    if reason.is_empty() {
+        "ESBMC returned VERIFICATION UNKNOWN".to_string()
+    } else {
+        reason
     }
 }
 
@@ -848,6 +889,30 @@ VERIFICATION FAILED";
         let ce = parse_esbmc_output(output);
         assert_eq!(ce.vow_id, None);
         assert!(ce.values.is_empty());
+    }
+
+    #[test]
+    fn parse_unknown_reason_picks_forward_condition_line() {
+        let combined = "ESBMC version 8.2.0\n\
+                        Checking forward condition, k = 1\n\
+                        The forward condition is unable to prove the property\n\
+                        Unable to prove or falsify the program, giving up.\n\
+                        VERIFICATION UNKNOWN\n";
+        let reason = parse_unknown_reason(combined);
+        // Prefers the most specific 'unable to prove'/'giving up' line. Both
+        // contain trigger keywords; the last one observed before
+        // VERIFICATION UNKNOWN is kept.
+        assert!(
+            reason.contains("Unable to prove or falsify") || reason.contains("unable to prove"),
+            "reason was: {reason}"
+        );
+    }
+
+    #[test]
+    fn parse_unknown_reason_falls_back_to_generic_when_no_marker() {
+        let combined = "ESBMC version 8.2.0\nSome unrelated output\nVERIFICATION UNKNOWN\n";
+        let reason = parse_unknown_reason(combined);
+        assert_eq!(reason, "ESBMC returned VERIFICATION UNKNOWN");
     }
 
     #[test]

@@ -11,6 +11,7 @@ fn VERIFY_TIMEOUT() -> i64 vow { ensures: result >= 0 } { 2 }
 fn VERIFY_ERROR() -> i64 vow { ensures: result >= 0 } { 3 }
 fn VERIFY_NOT_FOUND() -> i64 vow { ensures: result >= 0 } { 4 }
 fn VERIFY_PROVEN_IR() -> i64 vow { ensures: result >= 0 } { 5 }
+fn VERIFY_UNKNOWN() -> i64 vow { ensures: result >= 0 } { 6 }
 
 struct VerifyResult {
     status: i64,
@@ -354,6 +355,12 @@ fn parse_verify_status(combined: String) -> i64 {
     if str_find_str(combined, String::from("VERIFICATION FAILED")) >= 0 {
         return VERIFY_FAILED();
     }
+    // ESBMC's third legitimate outcome: it finished without proving or
+    // falsifying (e.g. k-induction's forward condition couldn't establish
+    // the property). Must be checked before the generic ERROR fallback.
+    if str_find_str(combined, String::from("VERIFICATION UNKNOWN")) >= 0 {
+        return VERIFY_UNKNOWN();
+    }
     if str_find_str(combined, String::from("timeout")) >= 0 {
         return VERIFY_TIMEOUT();
     }
@@ -364,6 +371,38 @@ fn parse_verify_status(combined: String) -> i64 {
         return VERIFY_TIMEOUT();
     }
     VERIFY_ERROR()
+}
+
+// Extract a short explanation from an ESBMC `VERIFICATION UNKNOWN` log.
+// Mirrors `parse_unknown_reason` in vow-verify/src/esbmc.rs.
+fn parse_unknown_reason(combined: String) -> String {
+    let lines: Vec<String> = Vec::new();
+    split_lines(combined, lines);
+    let n: i64 = lines.len();
+    let mut reason: String = String::from("");
+    let mut i: i64 = 0;
+    while i < n {
+        let line: String = str_trim(lines[i]);
+        if line == String::from("VERIFICATION UNKNOWN") {
+            break;
+        }
+        if line.len() > 0 {
+            let has_unable: bool =
+                str_find_str(line, String::from("unable to prove")) >= 0
+                || str_find_str(line, String::from("Unable to prove")) >= 0
+                || str_find_str(line, String::from("giving up")) >= 0
+                || str_find_str(line, String::from("inductive step")) >= 0;
+            if has_unable {
+                reason = line;
+            }
+        }
+        i = i + 1;
+    }
+    if reason.len() == 0 {
+        String::from("ESBMC returned VERIFICATION UNKNOWN")
+    } else {
+        reason
+    }
 }
 
 fn parse_vow_id(output: String) -> i64 {
@@ -649,9 +688,11 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
     };
     let mut used_combined: String = combined;
 
-    // Phase D: if BV timed out under Auto encoding and the BV solver is not
-    // Bitwuzla, retry once with --z3 --ir (integer encoding).
-    if status == VERIFY_TIMEOUT() && auto_enc && bv_solver != String::from("bitwuzla") {
+    // Phase D: if BV could neither prove nor falsify (Timeout or Unknown)
+    // under Auto encoding and the BV solver is not Bitwuzla, retry once
+    // with --z3 --ir (integer encoding).
+    let bv_inconclusive: bool = status == VERIFY_TIMEOUT() || status == VERIFY_UNKNOWN();
+    if bv_inconclusive && auto_enc && bv_solver != String::from("bitwuzla") {
         let ir_solver: String = String::from("z3");
         let ir_encoding: String = String::from("ir");
         let ir_timeout: String = {
@@ -674,10 +715,13 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
         let s2: i64 = {
             if r2.exit_code == -2 { VERIFY_TIMEOUT() } else { parse_verify_status(combined2) }
         };
+        let bv_status: i64 = status;
         status = {
-            // IR-only counterexamples can be infeasible under BV (no overflow modeling), so a FAILED here is inconclusive — report the original Timeout instead.
+            // IR-only counterexamples can be infeasible under BV (no overflow modeling),
+            // so a FAILED here is inconclusive — report the original BV outcome
+            // (Timeout or Unknown) instead.
             if s2 == VERIFY_PROVEN() { VERIFY_PROVEN_IR() }
-            else if s2 == VERIFY_FAILED() { VERIFY_TIMEOUT() }
+            else if s2 == VERIFY_FAILED() { bv_status }
             else { s2 }
         };
         used_combined = combined2;

@@ -240,7 +240,7 @@ vow verify --help --human  # same legacy text (works on all subcommands)
 | `Verified`      | Compiled + all contracts proved by ESBMC. Functions whose bodies the verifier cannot model (`RegionAlloc`, `FieldSet`, `Linear*`, `Load`/`Store`, `RemF*`, effectful) are reported as a `VerificationSkipped` *Warning* in `diagnostics[]` and the build still succeeds — their contracts are documentary, runtime-checked under `--mode debug`. |
 | `Unverified`    | Compiled with `--no-verify` (ESBMC skipped)  |
 | `CompileFailed` | Parse error, type error, module load error, or link failure |
-| `VerifyFailed`  | ESBMC found a counterexample, timed out, errored, or was not found |
+| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, or the tool was not found. Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
 ### Verified Example
 
@@ -312,7 +312,7 @@ vow verify --help --human  # same legacy text (works on all subcommands)
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
 | `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
-| `verify_status`    | string              | On backend failure | `"timeout"`, `"error"`, or `"tool_not_found"` |
+| `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, or `"tool_not_found"` |
 | `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
 
 ## Contracts Output JSON
@@ -377,7 +377,7 @@ vow verify --help --human  # same legacy text (works on all subcommands)
 | `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |
 | `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
 | `failed`        | ESBMC found a counterexample violating this contract |
-| `unknown`       | Another contract in the same function failed; this one was not individually checked |
+| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
 | `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]`. |
