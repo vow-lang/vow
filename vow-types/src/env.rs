@@ -152,6 +152,38 @@ impl TypeEnv {
             },
         );
         env.define_fn(
+            "fs_open",
+            FnSig {
+                params: vec![Ty::Str],
+                return_ty: Ty::I64,
+                effects: [Effect::Read].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "fs_read_line",
+            FnSig {
+                params: vec![Ty::I64],
+                return_ty: Ty::Str,
+                effects: [Effect::Read].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "fs_status",
+            FnSig {
+                params: vec![Ty::I64],
+                return_ty: Ty::I64,
+                effects: [Effect::Read].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "fs_close",
+            FnSig {
+                params: vec![Ty::I64],
+                return_ty: Ty::I64,
+                effects: [Effect::Read].into_iter().collect(),
+            },
+        );
+        env.define_fn(
             "fs_write",
             FnSig {
                 params: vec![Ty::Str, Ty::Str],
@@ -248,6 +280,14 @@ impl TypeEnv {
             },
         );
         env.define_fn(
+            "string_matches_literal_at",
+            FnSig {
+                params: vec![Ty::Str, Ty::I64, Ty::Str],
+                return_ty: Ty::I64,
+                effects: BTreeSet::new(),
+            },
+        );
+        env.define_fn(
             "string_trim",
             FnSig {
                 params: vec![Ty::Str],
@@ -338,6 +378,30 @@ impl TypeEnv {
             FnSig {
                 params: vec![],
                 return_ty: Ty::I64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "memory_root_arena_bytes",
+            FnSig {
+                params: vec![],
+                return_ty: Ty::U64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "memory_peak_bytes",
+            FnSig {
+                params: vec![],
+                return_ty: Ty::U64,
+                effects: [Effect::IO].into_iter().collect(),
+            },
+        );
+        env.define_fn(
+            "memory_alloc_count_since_start",
+            FnSig {
+                params: vec![],
+                return_ty: Ty::U64,
                 effects: [Effect::IO].into_iter().collect(),
             },
         );
@@ -525,6 +589,8 @@ impl TypeEnv {
                     Ty::I64,
                     Ty::I64,
                     Ty::I64,
+                    Ty::I64,
+                    Ty::Applied(Box::new(Ty::Struct("Vec".to_string())), vec![Ty::I64]),
                 ],
                 return_ty: Ty::Unit,
                 effects: [Effect::IO].into_iter().collect(),
@@ -789,6 +855,15 @@ impl TypeEnv {
                         return Ok(Ty::Applied(
                             Box::new(Ty::Struct("HashMap".to_string())),
                             vec![self.resolve(k)?, self.resolve(v)?],
+                        ));
+                    }
+                    "BTreeMap" => {
+                        if args.len() != 2 {
+                            return Err("BTreeMap requires two type arguments".to_string());
+                        }
+                        return Ok(Ty::Applied(
+                            Box::new(Ty::Struct("BTreeMap".to_string())),
+                            vec![self.resolve(&args[0])?, self.resolve(&args[1])?],
                         ));
                     }
                     _ => {}

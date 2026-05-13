@@ -1,0 +1,8 @@
+// TEST: error-code RegionLiteralMutation
+module StringLiteralMutation
+
+fn main() -> i32 [io] {
+    let s: String = "a";
+    s.push_byte(33);
+    0
+}

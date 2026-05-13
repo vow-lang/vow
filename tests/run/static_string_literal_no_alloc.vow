@@ -1,0 +1,24 @@
+// TEST: stdout "ok"
+module StaticStringLiteralNoAlloc
+
+fn literal_len(s: String) -> i64 {
+    s.len()
+}
+
+fn main() -> i32 [io] {
+    let before: u64 = memory_alloc_count_since_start();
+
+    let a: i64 = literal_len("alpha");
+    let b: i64 = literal_len("beta");
+    let c: String = "gamma";
+    let c_len: i64 = c.len();
+
+    let after: u64 = memory_alloc_count_since_start();
+    if after == before && a == 5 && b == 4 && c_len == 5 {
+        print_str("ok");
+    } else {
+        print_str("bad");
+    }
+
+    0
+}

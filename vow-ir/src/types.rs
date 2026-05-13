@@ -17,6 +17,19 @@ pub struct AbstractRegionId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct HiddenRegionIdx(pub u32);
 
+impl HiddenRegionIdx {
+    /// Sentinel for slot-disagreement: a value's marker set resolves to
+    /// multiple distinct slots (e.g., a Phi merging allocs destined for
+    /// different store targets). The post-inference conflict check
+    /// converts this into a `RegionConflict` diagnostic; codegen must
+    /// never see it (`region_to_arena_value` asserts).
+    pub const AMBIGUOUS: HiddenRegionIdx = HiddenRegionIdx(u32::MAX);
+
+    pub fn is_ambiguous(self) -> bool {
+        self.0 == u32::MAX
+    }
+}
+
 /// Compile-time region tag on heap-producing instructions (spec §12.1).
 /// Distinct from [`AbstractRegionId`], which is the pre-arena effects-tracking
 /// handle. Phase 2 defaults every heap allocation to [`RegionId::Root`];
@@ -305,6 +318,13 @@ pub struct Function {
     /// Region summary (spec §4.2 / §12.4). Default is the benign all-
     /// `ConstantGlobal` summary; Phase 3 replaces it with inferred values.
     pub summary: RegionSummary,
+    /// Originating source file for spans inside this function's blocks.
+    /// Set during lowering from the per-item source path tracked by
+    /// `module_loader::merge_modules`. Region diagnostics consult this
+    /// field directly instead of receiving a single `&str` for the whole
+    /// module — required for correct file labels under multi-module
+    /// compilation (#254).
+    pub source_file: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -454,6 +474,7 @@ mod tests {
             blocks: vec![block],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let module = Module {
             name: "test_module".to_string(),
@@ -503,6 +524,7 @@ mod tests {
             blocks: vec![block],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         assert_eq!(func.blocks[0].insts[0].data, InstData::ConstI32(10));
         assert_eq!(func.blocks[0].insts[1].args, vec![InstId(0)]);

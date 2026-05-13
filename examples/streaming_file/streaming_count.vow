@@ -1,0 +1,44 @@
+module StreamingCount
+
+fn usage() -> i32 [io] {
+    eprintln_str(String::from("usage: streaming_count <path>"));
+    1
+}
+
+fn main() -> i32 [read, io] {
+    let argv: Vec<String> = args();
+    if argv.len() < 2 {
+        return usage();
+    }
+
+    let h: i64 = fs_open(argv[1]);
+    if h < 0 {
+        eprintln_str(String::from("could not open input"));
+        return 1;
+    }
+
+    let mut lines: i64 = 0;
+    let mut bytes: i64 = 0;
+    let mut line: String = fs_read_line(h);
+    while line.len() > 0 {
+        lines = lines + 1;
+        bytes = bytes + line.len();
+        line = fs_read_line(h);
+    }
+
+    if fs_status(h) != 1 {
+        fs_close(h);
+        eprintln_str(String::from("read error"));
+        return 1;
+    }
+    if fs_close(h) != 0 {
+        eprintln_str(String::from("close error"));
+        return 1;
+    }
+
+    print_i64(lines);
+    print_str(String::from("\n"));
+    print_i64(bytes);
+    print_str(String::from("\n"));
+    0
+}

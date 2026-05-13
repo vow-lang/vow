@@ -90,7 +90,10 @@ In particular:
 
 The compiler assigns each heap-producing instruction a region via a
 compiler pass (§4). The assignment determines which arena backs the
-allocation.
+allocation. Heap-producing instructions include `RegionAlloc` and
+runtime allocation externs that create fresh heap descriptors, such as
+canonical `__vow_vec_new` / `__vow_vec_new_val` calls emitted for
+`Vec::new`.
 
 ### 2.2. No explicit free
 
@@ -115,7 +118,7 @@ chunk.
 
 ### 3.1. Arena header
 
-Each arena is represented by a 48-byte header:
+Each arena is represented by a 56-byte header:
 
 ```c
 struct VowArena {
@@ -125,6 +128,7 @@ struct VowArena {
     uintptr_t chunk_end;        // one past last usable byte in current chunk
     void*     last_alloc_start; // most recent allocation, for try_extend
     uintptr_t last_alloc_size;  // size of most recent allocation
+    uintptr_t retained_bytes;   // total bytes retained by chunk chain
 };
 ```
 
@@ -159,9 +163,13 @@ The following C-callable primitives MUST be provided by `vow-runtime`:
 ```c
 void     __vow_arena_open(struct VowArena* a);
 void     __vow_arena_close(struct VowArena* a);
+void     __vow_arena_init_closed(struct VowArena* a);
 void*    __vow_arena_alloc(struct VowArena* a, uintptr_t bytes, uintptr_t align);
 int64_t  __vow_arena_try_extend(struct VowArena* a, void* ptr,
                                 uintptr_t old_size, uintptr_t new_size);
+uint64_t __vow_memory_root_arena_bytes(void);
+uint64_t __vow_memory_peak_bytes(void);
+uint64_t __vow_memory_alloc_count_since_start(void);
 ```
 
 Return-type note: `__vow_arena_try_extend` returns `int64_t` (`1`
@@ -175,22 +183,31 @@ same convention. In the C header the type is written `int64_t`
 (from `<stdint.h>`); in the Rust definition and in Vow FFI bindings
 the corresponding `i64` ABI-compatible type is used.
 
+**`__vow_arena_init_closed(a)`**: initializes `*a` to the closed
+all-zero state. The compiler emits this once when a block-arena stack
+slot is first materialized, before the first open or close can observe
+the header.
+
 **`__vow_arena_open(a)`**: initializes `*a` to an arena with one
 freshly-allocated chunk of 4 KB plus the 8-byte next-chunk link
-(4104 bytes total, per §3.2). If the underlying `malloc` fails, the
-runtime traps with a structured OOM error (consistent with the
-root-region OOM policy in §16); the trap is not recoverable from
+(4104 bytes total, per §3.2). If `a` already names an open arena,
+`__vow_arena_open(a)` is a no-op; this protects structured entries
+that reach an already-open region root. If the underlying `malloc`
+fails, the runtime traps with a structured OOM error (consistent with
+the root-region OOM policy in §16); the trap is not recoverable from
 within Vow.
 
 **`__vow_arena_close(a)`**: walks the chunk chain, calls `free` on
-each chunk, leaves `*a` in an undefined state. Callers MUST NOT
-dereference `a` after close.
+each chunk, and zeros `*a`. The zeroed state makes double-close a safe
+no-op and updates memory-query counters consistently.
 
 **`__vow_arena_alloc(a, bytes, align)`**: returns an aligned pointer
 into `a`'s current chunk. If the current chunk does not have room,
 allocates a new chunk (size per §3.2) and links it at the tail.
 Updates `cursor` and `chunk_end` to the new chunk. Also records
-`ptr` and `bytes` in `last_alloc_*`.
+`ptr` and `bytes` in `last_alloc_*`, increments the successful arena
+allocation request counter, and increases `retained_bytes` when a new
+chunk is linked.
 
 **`__vow_arena_try_extend(a, ptr, old_size, new_size)`**: returns
 `1` (success) if and only if `ptr == a->last_alloc_start` AND
@@ -211,6 +228,192 @@ arena header unchanged; the caller MUST fall back to a fresh
 If `__vow_arena_alloc`'s fallback `malloc` for a new chunk fails,
 the runtime traps with the same structured OOM error as
 `__vow_arena_open` (§16).
+
+The `__vow_memory_*` functions expose low-overhead runtime query
+builtins. They return root-region retained chunk bytes, peak live
+retained chunk bytes across all open arenas, and successful arena
+allocation request count since process start. `__vow_arena_try_extend`
+does not increment the allocation request count because it reuses the
+current chunk without issuing a fresh arena allocation.
+
+#### Vec runtime allocation API
+
+The existing root-region Vec symbols remain ABI-stable:
+
+```c
+void* __vow_vec_new(uintptr_t elem_size, uintptr_t align);
+void* __vow_vec_new_val(void);
+void  __vow_vec_push(void* vec, const void* value_ptr,
+                     uintptr_t elem_size, uintptr_t elem_align);
+void  __vow_vec_push_val(void* vec, int64_t value);
+```
+
+These are root wrappers: they open `__vow_root_arena` if needed, then
+delegate to the corresponding explicit-arena primitive with
+`&__vow_root_arena`.
+
+The explicit-arena forms are:
+
+```c
+void* __vow_vec_new_in_arena(struct VowArena* arena,
+                             uintptr_t elem_size, uintptr_t align);
+void* __vow_vec_new_val_in_arena(struct VowArena* arena);
+void  __vow_vec_push_in_arena(struct VowArena* arena, void* vec,
+                              const void* value_ptr,
+                              uintptr_t elem_size, uintptr_t elem_align);
+void  __vow_vec_push_val_in_arena(struct VowArena* arena, void* vec,
+                                  int64_t value);
+void  __vow_vec_reserve_in_arena(struct VowArena* arena, void* vec,
+                                 uintptr_t additional,
+                                 uintptr_t elem_size,
+                                 uintptr_t elem_align);
+```
+
+Every explicit-arena Vec entry traps with
+`RuntimeInvariantViolation` and `reason = "null arena"` before
+dereferencing a null arena pointer. Growth for both root and
+explicit-arena Vecs uses the shared arena grow path: first
+`__vow_arena_try_extend`, then `__vow_arena_alloc` + copy + zero-fill
+on fallback. `__vow_vec_from_raw_parts_copy_val(arena, ptr, len)`
+already has the explicit-arena shape and copies the raw slots into the
+supplied arena.
+
+#### String runtime allocation API
+
+The existing root-region String symbols remain ABI-stable:
+
+```c
+void* __vow_string_new(const char* ptr, uintptr_t len);
+void* __vow_string_from_cstr(const char* ptr);
+void* __vow_string_clone(const void* source);
+void  __vow_string_push_str(void* dest, const void* src);
+void  __vow_string_push_byte(void* string, int64_t byte);
+void* __vow_string_substr(const void* string, int64_t start, int64_t len);
+void* __vow_string_substring(const void* string, int64_t start, int64_t end);
+void* __vow_string_from_i64(int64_t value);
+void* __vow_string_split(const void* haystack, const void* separator);
+void* __vow_string_trim(const void* string);
+void* __vow_string_to_upper(const void* string);
+void* __vow_string_to_lower(const void* string);
+void* __vow_string_replace(const void* string, const void* from, const void* to);
+void* __vow_string_join(const void* vec, const void* separator);
+```
+
+These are root wrappers: they open `__vow_root_arena` if needed, then
+delegate to the corresponding explicit-arena primitive with
+`&__vow_root_arena`.
+`__vow_string_clone` deep-copies a `String` descriptor and backing bytes into
+the root arena; `String::from(s)` lowers to this wrapper. Direct string
+literals do not call a runtime wrapper: codegen points at a static
+`{ptr,len,cap=VOW_CAP_RODATA}` descriptor in `.rodata`.
+
+The explicit-arena forms are:
+
+```c
+void* __vow_string_new_in_arena(struct VowArena* arena,
+                                const char* ptr, uintptr_t len);
+void* __vow_string_from_cstr_in_arena(struct VowArena* arena,
+                                      const char* ptr);
+void* __vow_string_clone_in_arena(struct VowArena* arena,
+                                  const void* source);
+void  __vow_string_push_str_in_arena(struct VowArena* arena,
+                                     void* dest, const void* src);
+void  __vow_string_push_byte_in_arena(struct VowArena* arena,
+                                      void* string, int64_t byte);
+void* __vow_string_substr_in_arena(struct VowArena* arena,
+                                   const void* string,
+                                   int64_t start, int64_t len);
+void* __vow_string_substring_in_arena(struct VowArena* arena,
+                                      const void* string,
+                                      int64_t start, int64_t end);
+void* __vow_string_from_i64_in_arena(struct VowArena* arena,
+                                     int64_t value);
+void* __vow_string_split_in_arena(struct VowArena* arena,
+                                  const void* haystack,
+                                  const void* separator);
+void* __vow_string_trim_in_arena(struct VowArena* arena,
+                                 const void* string);
+void* __vow_string_to_upper_in_arena(struct VowArena* arena,
+                                     const void* string);
+void* __vow_string_to_lower_in_arena(struct VowArena* arena,
+                                     const void* string);
+void* __vow_string_replace_in_arena(struct VowArena* arena,
+                                    const void* string,
+                                    const void* from, const void* to);
+void* __vow_string_join_in_arena(struct VowArena* arena,
+                                 const void* vec,
+                                 const void* separator);
+```
+
+Every explicit-arena String entry traps with
+`RuntimeInvariantViolation` and `reason = "null arena"` before
+dereferencing a null arena pointer. String literals and C string
+payloads remain in `.rodata`; the arena owns the allocated String
+descriptor/header and any later growth allocation. Growth for both root
+and explicit-arena Strings uses the same arena grow path as Vec: try to
+extend in place, then allocate in the selected arena and copy on
+fallback.
+
+#### HashMap runtime allocation API
+
+The existing root-region `HashMap` symbols remain ABI-stable:
+
+```c
+void*    __vow_map_new(void);
+void     __vow_map_insert(void* map, int64_t key, int64_t val);
+int64_t  __vow_map_get(const void* map, int64_t key);
+_Bool    __vow_map_contains(const void* map, int64_t key);
+void     __vow_map_remove(void* map, int64_t key);
+uintptr_t __vow_map_len(const void* map);
+```
+
+`__vow_map_contains` predates the `__vow_arena_*` / `__vow_string_eq`
+boolean-ABI convention (§3.3, intro): the live runtime returns Rust
+`bool` and both Cranelift signature tables model it as `I8`, so it is
+declared here as `_Bool` rather than `int64_t`. C/FFI callers must read
+exactly the 1-byte boolean from the return register; the upper bits are
+undefined. This legacy ABI is preserved for compatibility with the
+pre-arena `__vow_map_*` symbols and is unrelated to the arena routing
+introduced by the `_in_arena` forms below.
+
+`__vow_map_new` and `__vow_map_insert` are root wrappers: they acquire
+the root-arena lock, ensure the root arena is open, then delegate to the
+corresponding explicit-arena primitive with `&__vow_root_arena`.
+`__vow_map_remove` is **not** a root wrapper — it performs an in-place
+linear-scan removal that never touches the arena, so the relationship
+inverts: `__vow_map_remove_in_arena` traps on a null arena and then
+delegates to `__vow_map_remove` directly. The non-allocating accessors
+(`__vow_map_get`, `__vow_map_contains`, `__vow_map_len`) read the map
+in place and never touch any arena.
+
+The explicit-arena forms are:
+
+```c
+void* __vow_map_new_in_arena(struct VowArena* arena);
+void  __vow_map_insert_in_arena(struct VowArena* arena, void* map,
+                                int64_t key, int64_t val);
+void  __vow_map_remove_in_arena(struct VowArena* arena, void* map,
+                                int64_t key);
+```
+
+Every explicit-arena HashMap entry traps with
+`RuntimeInvariantViolation` and `reason = "null arena"` before
+dereferencing a null arena pointer. The bucket array and the map
+header are both allocated in the supplied arena: a fresh `HashMap`
+allocates a 24-byte header plus an initial 8-entry × 16-byte backing.
+Growth on `insert` uses the shared arena grow path — first
+`__vow_arena_try_extend` against the current backing, then
+`__vow_arena_alloc` + memcpy on fallback — and the new bucket array
+lives in the same arena as the header. `__vow_map_remove_in_arena` is
+exposed for ABI symmetry with the other in-arena forms; the operation
+itself never allocates and the arena pointer is consumed only for the
+null-arena trap, then ignored.
+
+The current MVP runtime uses i64 keys and i64 values with an O(n)
+linear-scan backing (matching the existing root-region implementation).
+Heap-typed keys or values are not yet supported; the surface grammar
+permits them syntactically (`HashMap<K, V>`), but only `i64` × `i64`
+is wired through the runtime.
 
 ### 3.4. Determinism
 
@@ -601,22 +804,115 @@ the wrong end: it only grows and never shrinks, so it must be
 seeded at the empty set. A non-empty seed would require a shrink
 step to reach the true minimum, which is not monotone.
 
-### 4.4. Rejection, not over-approximation
+### 4.4. Rejection vs. visibility
 
-When region inference encounters a placement conflict — an
-interprocedural store-effect constraint (§4.1, step 4) that cannot
-be satisfied by the caller's concrete region assignments — the
-program MUST be rejected with `RegionConflict`. The compiler MUST
-NOT silently promote the value to the root region or to any wider
-region than `must_outlive(I)` demands.
+Region inference distinguishes two concerns:
 
-Rationale: silent root-region placement causes memory growth for the
-program lifetime with no visible signal to the agent. Structured
-rejection is the feedback signal the CEGIS workflow depends on.
+**Rejection** (`RegionConflict`, severity Error). When the
+interprocedural store-effect constraint (§4.1, step 4) cannot be
+satisfied by the caller's **inferred** region assignments — that is,
+when a value's `region(I) = LUB(must_outlive(I))` resolves to a
+concrete block strictly narrower than the target container's region
+— the program MUST be rejected with `RegionConflict`. The compiler
+MUST NOT silently promote the value to a wider region than the
+inference's must-outlive markers already demand.
+
+Operationally, the conflict check consults the inferred `region(I)`
+populated by step 3's LUB pass, NOT the IR opcode shape of the
+producing instruction. A fresh `RegionAlloc` whose must-outlive set
+includes a `CallerStoreTarget(p)` marker (added by §4.1 step 2's
+call-site propagation when the value is passed to a callee whose
+store-effect target traces back to the current function's parameter
+`p`) has `region(I) = Caller(HiddenRegionIdx(N))` after LUB, where
+`N` is the slot index that codegen's hidden-arena layout
+(§5.4) assigns to parameter `p`. Such a value satisfies any
+parameter-region target whose slot matches. Rejecting such a value
+would force programmers to refactor sound arena patterns into
+less-direct forms, with no soundness benefit.
+
+**Slot-aware inference (issue #317).** The LUB pass mints
+`Caller(HiddenRegionIdx(N))` per allocation, where `N` is computed
+from the function's published summary using the same formula codegen
+applies in `hidden_region_idx_for_store_target`:
+  * slot 0 = return arena, iff `summary.return_region == FreshInCaller`;
+  * subsequent slots = sorted, deduplicated store-effect target
+    parameters in ascending order.
+
+Allocations with markers spanning a single destination resolve to
+that destination's slot precisely; codegen routes the alloc into the
+correct hidden arena. Allocations whose marker set spans more than one
+hidden caller-arena slot (for example, the same allocation is both
+returned through `FreshInCaller` and stored into a parameter target, or
+stored into two distinct parameter targets) resolve to the sentinel
+`Caller(HiddenRegionIdx::AMBIGUOUS)`. Any subsequent parameter-rooted
+store of that directly fresh heap value MUST be rejected with
+`RegionConflict`; choosing an arbitrary slot would route at least one
+escaped pointer into the wrong arena lifetime.
+
+**Visibility** (`RegionRootEscape`, severity Note, non-blocking).
+When `region(I)` resolves through caller-region routing to a chain
+that bottoms out at the root region (§5.4: `main`'s `target_region
+= &__vow_root_arena`), the compiler MUST emit a `RegionRootEscape`
+note. Root never shrinks (§6.2); program-lifetime placement is a
+memory-cost decision the agent should be aware of. The note is
+informational — it does not fail the build.
+
+Conservative approximation is acceptable for the note: rather than
+performing full call-graph reachability from `main`, an
+implementation MAY emit the note for any heap-producing instruction
+whose inferred region is `Caller` in a function that publishes
+`FreshInCaller` or any store effect (i.e., the alloc CAN escape via
+the caller chain to root). False positives are tolerated because
+the diagnostic is non-blocking and informational.
+
+The note SHOULD NOT fire for the canonical `FreshInCaller`
+return-value pattern (`fn make_X() -> X`), where the alloc is the
+return value — that's the documented mechanism for producing values
+in a caller's arena and carries no hidden surprise. The exemption
+extends transitively to allocations installed as fields of the
+returned struct via field initializers (`Item { name:
+String::from("hi") }` from `make_item() -> Item`): those field
+allocations share the parent struct's caller-arena lifetime, and
+the parent's note (when applicable) already conveys the full
+escape information — surfacing the children adds noise without
+information. The exemption is strictly structural: it follows the
+return value through Phi arms (via Upsilon) and through the
+**currently-installed** FieldSet edges — that is, the textually-last
+FieldSet to each `(target, field_idx)` pair within each basic
+block. The exemption is gated on the FieldSet target pointer being
+itself a fresh `RegionAlloc` (not a `GetArg` parameter alias or
+other non-fresh value). The structural test is **`GetArg` vs
+`RegionAlloc` as the FieldSet target**, not `Store` vs `FieldSet`:
+parameter mutation (`target.name = ...; return target`) and callee
+store-effect routing both correctly fall outside the exemption.
+Per-block last-write dedup is what restores precision against the
+construct-then-overwrite pattern (`x.f = A; x.f = B; return x`):
+allocation `A` is dead by the end of the block — no longer
+reachable from the returned struct — so it is excluded from the
+skip-set and remains flaggable (issue #326). The dedup is
+conservative across blocks: a FieldSet in one block whose
+`(target, field_idx)` is overwritten by a FieldSet in another
+block is still treated as live, biasing toward false positives in
+keeping with the Note's non-blocking informational character.
+`Store` is also out of scope for the exemption: it represents
+arbitrary post-allocation mutation through a pointer with unknown
+aliasing, semantically distinct from constructor-time field
+initialization.
+
+Rationale: structured rejection on genuine constraint failures is
+the CEGIS feedback signal; structured visibility on root routing
+prevents silent program-lifetime growth without conflating it with
+unsoundness. Issue #314 motivated splitting these concerns: a
+shape-based rejection check (rejecting any `RegionAlloc` source
+flowing to a parameter container) was too coarse, blocking
+legitimate arena patterns. The semantic check restores the
+spec-mandated rejection rule while the note preserves the spirit
+of the original silent-root concern.
 
 Note that the block-tree LUB in step 3 always succeeds (the virtual
 caller node is the universal root); the rejection condition is
-solely the interprocedural constraint check in step 4.
+solely the interprocedural constraint check in step 4 against the
+LUB-computed region.
 
 ### 4.5. Interaction with other passes
 
@@ -660,8 +956,7 @@ before return — the compiler MUST insert a copy of that value
 into `target_region` before the return edge. Concretely:
 
 - A `.rodata` literal returned on a `FreshInCaller` path is
-  lowered as `String::from(literal)` / equivalent explicit copy
-  into `target_region`.
+  materialized with an equivalent explicit copy into `target_region`.
 - A parameter alias returned on a `FreshInCaller` path is
   lowered as a deep copy (§8.3 deep-copy discipline) into
   `target_region`.
@@ -707,6 +1002,13 @@ parameter itself (e.g., a `Vec<T>` descriptor) does not embed the
 arena header; per §3.1, block-region headers live in the caller's
 stack frame, so the caller must pass the address of the header
 the callee will allocate into.
+
+Receiver-growth effects use the same target projection even when
+no heap source is stored. For example, `String::push_byte`,
+`String::push_str`, and raw `Vec::push` on a parameter receiver
+publish a `StoreEffect` with `source = ConstantGlobal`; the source
+constraint is inert, but the target membership makes the receiver's
+arena available to growth code inside the callee.
 
 The hidden-region parameter set for a function is therefore:
 
@@ -1208,10 +1510,13 @@ function's `return_region == FreshInCaller`; subsequent indices
 enumerate the store-target hidden parameters in the stable order
 defined in §5.2. Lowering uses `HiddenRegionIdx` to select the
 correct `*VowArena` parameter in the emitted
-`__vow_arena_alloc(...)` call; functions with a single hidden
-region always use `Caller(0)`.
+`__vow_arena_alloc(...)` call or to select the explicit-arena
+runtime symbol for a routed container allocation; functions with a
+single hidden region always use `Caller(0)`.
 
-Every heap-producing `Inst` carries a `region: RegionId` field.
+Every heap-producing `Inst` carries a `region: RegionId` field. This
+includes canonical Vec creation extern calls (`__vow_vec_new`,
+`__vow_vec_new_val`) even though they remain `Opcode::Call` in IR.
 
 ### 12.2. No new opcodes for allocation placement
 
@@ -1233,6 +1538,17 @@ Note the naming neighborhood: `RegionAlloc` / `RegionFree` are
 opcodes. Phase 2 may rename `RegionAlloc` to, e.g., `HeapAlloc` if
 this neighborhood becomes confusing — the choice is a phase-2
 implementation detail and not load-bearing on the spec.
+
+Vec and String creation are intentionally not new opcodes. The lowerer
+may keep emitting canonical root-wrapper extern symbols
+(`__vow_vec_new`, `__vow_vec_new_val`, `__vow_string_new`,
+`__vow_string_from_cstr`, and related String copy constructors). After
+`infer_regions`, codegen reads the call's `region` field: `Root` keeps
+the ABI-stable wrapper symbol, while `Block(_)` and `Caller(_)` prepend
+the selected `*VowArena` and call the matching `_in_arena` symbol. Vec
+and String growth calls follow the same rule using the receiver's
+defining region: root-owned receivers keep the wrapper symbol, and
+block/caller-owned receivers route to the matching `_in_arena` symbol.
 
 ### 12.3. Block region opcodes
 
@@ -1260,6 +1576,17 @@ Two new IR opcodes mark region boundaries:
   header on the next iteration's `RegionOpen`, which is
   undefined in the runtime model. The loop body's region thus
   has the same open/close cadence as one iteration of its body.
+
+  At the IR level, every loop back-edge `P -> H` refreshes each
+  non-empty block region `Block(B)` on that loop-body path by
+  emitting `RegionClose(B)` before `P`'s terminator. The matching
+  `RegionOpen(B)` is the normal entry marker at `B`; it fires only
+  if the next trip actually re-enters the region, so a header exit
+  immediately after a back-edge cannot leave a freshly reopened body
+  arena live. `B` is selected only when it is reachable from `H`
+  through non-back-edge forward edges and can reach `P`; multiple
+  refreshed regions on the same predecessor are ordered by `BlockId`.
+  Empty loop-body regions remain elided by §3.5.
 
 Empty-region blocks do not emit these opcodes.
 

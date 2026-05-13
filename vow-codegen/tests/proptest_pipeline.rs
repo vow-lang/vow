@@ -37,7 +37,8 @@ fn parse_typecheck_and_lower(src: &str) -> bool {
         }
         string_exprs = checker.into_string_exprs();
     }
-    let _ir_module = vow_ir::lower::lower_module(&module, "<proptest>", &string_exprs);
+    let item_files: Vec<String> = vec!["<proptest>".to_string(); module.items.len()];
+    let _ir_module = vow_ir::lower::lower_module(&module, &item_files, &string_exprs);
     true
 }
 
@@ -155,8 +156,10 @@ proptest! {
             }
 
             if e1.diagnostics.is_empty() && e2.diagnostics.is_empty() {
-                let ir1 = vow_ir::lower::lower_module(&module1, "<test>", &se1);
-                let ir2 = vow_ir::lower::lower_module(&module2, "<test>", &se2);
+                let item_files1: Vec<String> = vec!["<test>".to_string(); module1.items.len()];
+                let item_files2: Vec<String> = vec!["<test>".to_string(); module2.items.len()];
+                let ir1 = vow_ir::lower::lower_module(&module1, &item_files1, &se1);
+                let ir2 = vow_ir::lower::lower_module(&module2, &item_files2, &se2);
 
                 prop_assert_eq!(
                     ir1.functions.len(),

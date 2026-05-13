@@ -960,6 +960,7 @@ fn write_function(out: Vec<i64>, f: IrFunction) {
     }
 
     write_region_summary(out, f);
+    write_string(out, f.source_file);
 }
 
 fn read_function(r: ModuleReader) -> IrFunction [panic] {
@@ -991,7 +992,10 @@ fn read_function(r: ModuleReader) -> IrFunction [panic] {
     let return_ty: i64 = disc_ty(reader_read_u8(r));
     let effects: i64 = reader_read_effects(r);
 
-    let f: IrFunction = ir_function_new(id, name, return_ty, effects);
+    // source_file is initialized empty here; the real value is read from the
+    // wire below after the region summary. ir_function_new requires the field
+    // up-front so we pass a placeholder.
+    let f: IrFunction = ir_function_new(id, name, return_ty, effects, String::from(""));
     f.params = params;
     f.param_names = param_names;
 
@@ -1032,6 +1036,7 @@ fn read_function(r: ModuleReader) -> IrFunction [panic] {
     f.rsum_return_aliases = summary.return_aliases;
     f.rsum_store_effects = summary.store_effects;
     f.rsum_param_regions = summary.param_regions;
+    f.source_file = reader_read_string(r);
     f
 }
 

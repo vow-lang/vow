@@ -32,6 +32,10 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "print_u64" => Some(("__vow_print_u64", Ty::Unit)),
         "eprintln_str" => Some(("__vow_eprintln_str", Ty::Unit)),
         "fs_read" => Some(("__vow_fs_read", Ty::Ptr)),
+        "fs_open" => Some(("__vow_fs_open", Ty::I64)),
+        "fs_read_line" => Some(("__vow_fs_read_line", Ty::Ptr)),
+        "fs_status" => Some(("__vow_fs_status", Ty::I64)),
+        "fs_close" => Some(("__vow_fs_close", Ty::I64)),
         "fs_write" => Some(("__vow_fs_write", Ty::I64)),
         "fs_exists" => Some(("__vow_fs_exists", Ty::I64)),
         "fs_mkdir" => Some(("__vow_fs_mkdir", Ty::I64)),
@@ -55,6 +59,9 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "time_unix" => Some(("__vow_time_unix", Ty::I64)),
         "time_unix_ms" => Some(("__vow_time_unix_ms", Ty::I64)),
         "num_cpus" => Some(("__vow_num_cpus", Ty::I64)),
+        "memory_root_arena_bytes" => Some(("__vow_memory_root_arena_bytes", Ty::U64)),
+        "memory_peak_bytes" => Some(("__vow_memory_peak_bytes", Ty::U64)),
+        "memory_alloc_count_since_start" => Some(("__vow_memory_alloc_count_since_start", Ty::U64)),
         "hex_encode" => Some(("__vow_hex_encode", Ty::Ptr)),
         "hex_decode" => Some(("__vow_hex_decode", Ty::Ptr)),
         "args" => Some(("__vow_args", Ty::Ptr)),
@@ -84,6 +91,23 @@ fn vow_builtin_to_runtime(name: &str) -> Option<(&'static str, Ty)> {
         "__vow_clif_link" => Some(("__vow_clif_link", Ty::I64)),
         "__vow_clif_destroy" => Some(("__vow_clif_destroy", Ty::Unit)),
         _ => None,
+    }
+}
+
+// Keep this list in sync with the builtin result tags in compiler/lower.vow.
+// pin_to_root depends on these heap tags for direct builtin call results.
+fn tag_builtin_result(ctx: &mut LowerCtx, name: &str, result: InstId) {
+    match name {
+        "fs_read" | "fs_read_line" | "stdin_read" | "stdin_read_line" | "string_substr"
+        | "string_trim" | "string_to_upper" | "string_to_lower" | "string_replace"
+        | "string_join" | "i64_to_string" | "hex_encode" | "process_get_stdout"
+        | "process_get_stderr" | "process_stdout_for" | "process_stderr_for" => {
+            ctx.inst_struct_type.insert(result, "String".to_string());
+        }
+        "args" | "fs_listdir" | "string_split" | "vec_sort" | "hex_decode" => {
+            ctx.inst_struct_type.insert(result, "Vec".to_string());
+        }
+        _ => {}
     }
 }
 
@@ -232,6 +256,7 @@ impl LowerCtx {
             blocks: vec![entry],
             local_names: HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: file.clone(),
         };
         let mut enum_variant_map = enum_variant_map;
         enum_variant_map
@@ -608,7 +633,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     Opcode::Call,
                     Ty::Ptr,
                     vec![cstr],
-                    InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    InstData::CallExtern("__vow_string_literal".to_string()),
                     span,
                 );
                 ctx.inst_struct_type.insert(vow_str, "String".to_string());
@@ -767,11 +792,44 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
             }
         }
         ExprKind::Call { callee, args } => {
-            let arg_ids: Vec<InstId> = args.iter().map(|a| lower_consumed_expr(ctx, a)).collect();
             let callee_name = match &callee.kind {
                 ExprKind::Ident(name) => name.clone(),
                 _ => todo!("non-ident callee in Call lowering"),
             };
+            if callee_name == "string_matches_literal_at" {
+                let string_id = args
+                    .first()
+                    .map(|a| lower_consumed_expr(ctx, a))
+                    .unwrap_or_else(|| {
+                        ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                    });
+                let pos_id = args
+                    .get(1)
+                    .map(|a| lower_consumed_expr(ctx, a))
+                    .unwrap_or_else(|| {
+                        ctx.emit(
+                            Opcode::ConstI64,
+                            Ty::I64,
+                            vec![],
+                            InstData::ConstI64(0),
+                            span,
+                        )
+                    });
+                if let Some((literal_ptr, literal_len)) = args
+                    .get(2)
+                    .and_then(|arg| lower_static_string_literal(ctx, arg))
+                {
+                    return ctx.emit(
+                        Opcode::Call,
+                        Ty::I64,
+                        vec![string_id, pos_id, literal_ptr, literal_len],
+                        InstData::CallExtern("__vow_string_matches_literal_at".to_string()),
+                        span,
+                    );
+                }
+                return ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span);
+            }
+            let arg_ids: Vec<InstId> = args.iter().map(|a| lower_consumed_expr(ctx, a)).collect();
             if callee_name == "pin_to_root" {
                 let Some(source_id) = arg_ids.first().copied() else {
                     return ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span);
@@ -809,6 +867,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     }
                     return result;
                 }
+                // pin_to_root relies on lowering-time String/Vec tags. Keep
+                // tag_builtin_result in sync for heap-returning builtins, or a
+                // direct pin_to_root(builtin_call()) becomes a no-op here.
                 return source_id;
             }
             let call_info = ctx.func_index.get(&callee_name).cloned();
@@ -836,13 +897,15 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 )
             } else if let Some((sym, ret_ty)) = vow_builtin_to_runtime(&callee_name) {
-                ctx.emit(
+                let result = ctx.emit(
                     Opcode::Call,
                     ret_ty,
                     arg_ids,
                     InstData::CallExtern(sym.to_string()),
                     span,
-                )
+                );
+                tag_builtin_result(ctx, &callee_name, result);
+                result
             } else {
                 ctx.emit(
                     Opcode::Call,
@@ -1863,13 +1926,18 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         ExprKind::EnumConstruct { path, fields } => {
             let enum_name = path.first().map(|s| s.as_str()).unwrap_or("");
             let variant_name = path.get(1).map(|s| s.as_str()).unwrap_or("");
-            // String::from(lit) builtin: lower_expr for Lit::String already calls
-            // __vow_string_from_cstr and returns a tagged VowVec; no second call needed.
             if enum_name == "String" && variant_name == "from" {
-                let lit_expr = fields.first().expect("String::from requires an argument");
-                let ptr_id = lower_expr(ctx, lit_expr);
-                ctx.inst_struct_type.insert(ptr_id, "String".to_string());
-                return ptr_id;
+                let source_expr = fields.first().expect("String::from requires an argument");
+                let source = lower_expr(ctx, source_expr);
+                let cloned = ctx.emit(
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![source],
+                    InstData::CallExtern("__vow_string_clone".to_string()),
+                    span,
+                );
+                ctx.inst_struct_type.insert(cloned, "String".to_string());
+                return cloned;
             }
             if enum_name == "String" && variant_name == "from_raw_parts_copy" {
                 let ptr_id = fields
@@ -1906,27 +1974,27 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                 ctx.inst_struct_type.insert(result, "String".to_string());
                 return result;
             }
-            // String::new() builtin — empty string via __vow_vec_new(1, 1)
+            // String::new() builtin — empty string via the String arena router.
             if enum_name == "String" && variant_name == "new" {
-                let size_val = ctx.emit(
+                let null_ptr = ctx.emit(
                     Opcode::ConstI64,
                     Ty::I64,
                     vec![],
-                    InstData::ConstI64(1),
+                    InstData::ConstI64(0),
                     span,
                 );
-                let align_val = ctx.emit(
+                let len_val = ctx.emit(
                     Opcode::ConstI64,
                     Ty::I64,
                     vec![],
-                    InstData::ConstI64(1),
+                    InstData::ConstI64(0),
                     span,
                 );
                 let result = ctx.emit(
                     Opcode::Call,
                     Ty::Ptr,
-                    vec![size_val, align_val],
-                    InstData::CallExtern("__vow_vec_new".to_string()),
+                    vec![null_ptr, len_val],
+                    InstData::CallExtern("__vow_string_new".to_string()),
                     span,
                 );
                 ctx.inst_struct_type.insert(result, "String".to_string());
@@ -1942,6 +2010,18 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     span,
                 );
                 ctx.inst_struct_type.insert(result, "HashMap".to_string());
+                return result;
+            }
+            // BTreeMap::new() builtin
+            if enum_name == "BTreeMap" && variant_name == "new" {
+                let result = ctx.emit(
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![],
+                    InstData::CallExtern("__vow_btreemap_new".to_string()),
+                    span,
+                );
+                ctx.inst_struct_type.insert(result, "BTreeMap".to_string());
                 return result;
             }
             // Vec::new() builtin
@@ -2430,6 +2510,68 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
                     InstData::CallExtern("__vow_map_len".to_string()),
                     span,
                 ),
+                (Some("BTreeMap"), "len") => ctx.emit(
+                    Opcode::Call,
+                    Ty::I64,
+                    vec![recv_id],
+                    InstData::CallExtern("__vow_btreemap_len".to_string()),
+                    span,
+                ),
+                (Some("BTreeMap"), "insert") => {
+                    let k_id = args
+                        .first()
+                        .map(|e| lower_consumed_expr(ctx, e))
+                        .unwrap_or_else(|| {
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                        });
+                    let v_id = args
+                        .get(1)
+                        .map(|e| lower_consumed_expr(ctx, e))
+                        .unwrap_or_else(|| {
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                        });
+                    let result = ctx.emit(
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![recv_id, k_id, v_id],
+                        InstData::CallExtern("__vow_btreemap_insert".to_string()),
+                        span,
+                    );
+                    ctx.inst_struct_type.insert(result, "Option".to_string());
+                    result
+                }
+                (Some("BTreeMap"), "get") => {
+                    let k_id = args
+                        .first()
+                        .map(|e| lower_consumed_expr(ctx, e))
+                        .unwrap_or_else(|| {
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                        });
+                    let result = ctx.emit(
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![recv_id, k_id],
+                        InstData::CallExtern("__vow_btreemap_get".to_string()),
+                        span,
+                    );
+                    ctx.inst_struct_type.insert(result, "Option".to_string());
+                    result
+                }
+                (Some("BTreeMap"), "contains") => {
+                    let k_id = args
+                        .first()
+                        .map(|e| lower_consumed_expr(ctx, e))
+                        .unwrap_or_else(|| {
+                            ctx.emit(Opcode::ConstUnit, Ty::Unit, vec![], InstData::None, span)
+                        });
+                    ctx.emit(
+                        Opcode::Call,
+                        Ty::Bool,
+                        vec![recv_id, k_id],
+                        InstData::CallExtern("__vow_btreemap_contains".to_string()),
+                        span,
+                    )
+                }
                 (Some("HashMap"), "insert") => {
                     let k_id = args
                         .first()
@@ -2700,6 +2842,34 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
         }
         _ => todo!("IR lowering not implemented for {:?}", expr.kind),
     }
+}
+
+fn lower_static_string_literal(
+    ctx: &mut LowerCtx,
+    expr: &vow_syntax::ast::Expr,
+) -> Option<(InstId, InstId)> {
+    let Lit::String(s) = (match &expr.kind {
+        ExprKind::Lit(lit) => lit,
+        _ => return None,
+    }) else {
+        return None;
+    };
+    let idx = ctx.intern_str(s);
+    let ptr = ctx.emit(
+        Opcode::ConstStr,
+        Ty::Ptr,
+        vec![],
+        InstData::ConstStr(idx),
+        expr.span,
+    );
+    let len = ctx.emit(
+        Opcode::ConstI64,
+        Ty::I64,
+        vec![],
+        InstData::ConstI64(s.len() as i64),
+        expr.span,
+    );
+    Some((ptr, len))
 }
 
 fn lower_consumed_expr(ctx: &mut LowerCtx, expr: &vow_syntax::ast::Expr) -> InstId {
@@ -3027,6 +3197,9 @@ pub(crate) fn lower_function(
             AstType::Generic { name, .. } if name == "HashMap" => {
                 ctx.inst_struct_type.insert(arg_id, "HashMap".to_string());
             }
+            AstType::Generic { name, .. } if name == "BTreeMap" => {
+                ctx.inst_struct_type.insert(arg_id, "BTreeMap".to_string());
+            }
             AstType::Generic { name, args, .. } if name == "Vec" => {
                 ctx.inst_struct_type.insert(arg_id, "Vec".to_string());
                 if let Some(AstType::Named {
@@ -3084,15 +3257,27 @@ pub(crate) fn lower_function(
     ctx.finish()
 }
 
-pub fn lower_module(module: &AstModule, file: &str, string_exprs: &StringExprSet) -> Module {
-    let fn_items: Vec<&FnDef> = module
+pub fn lower_module(
+    module: &AstModule,
+    item_files: &[String],
+    string_exprs: &StringExprSet,
+) -> Module {
+    debug_assert_eq!(
+        module.items.len(),
+        item_files.len(),
+        "item_files must be parallel to module.items"
+    );
+    // Walk module.items keeping the original index so each retained FnDef
+    // can be paired with its source-file path from `item_files`.
+    let fn_items: Vec<(&FnDef, &str)> = module
         .items
         .iter()
-        .filter_map(|item| {
+        .enumerate()
+        .filter_map(|(idx, item)| {
             if let Item::Fn(fn_def) = item
                 && !fn_def.is_declaration
             {
-                Some(fn_def)
+                Some((fn_def, item_files[idx].as_str()))
             } else {
                 None
             }
@@ -3116,7 +3301,7 @@ pub fn lower_module(module: &AstModule, file: &str, string_exprs: &StringExprSet
     let func_index: HashMap<String, FuncSigInfo> = fn_items
         .iter()
         .enumerate()
-        .map(|(idx, fn_def)| {
+        .map(|(idx, (fn_def, _))| {
             (
                 fn_def.name.clone(),
                 FuncSigInfo {
@@ -3265,10 +3450,10 @@ pub fn lower_module(module: &AstModule, file: &str, string_exprs: &StringExprSet
     let functions: Vec<Function> = fn_items
         .iter()
         .enumerate()
-        .map(|(idx, fn_def)| {
+        .map(|(idx, (fn_def, src_file))| {
             let (mut func, pool, func_warnings) = lower_function(
                 fn_def,
-                file,
+                src_file,
                 &func_index,
                 struct_field_map.clone(),
                 enum_variant_map.clone(),
@@ -3329,9 +3514,23 @@ mod tests {
         }
     }
 
+    fn string_ty() -> Type {
+        Type::Named {
+            name: "String".to_string(),
+            span: sp(),
+        }
+    }
+
     fn int_expr(v: i128) -> Expr {
         Expr {
             kind: ExprKind::Lit(Lit::Int(v)),
+            span: sp(),
+        }
+    }
+
+    fn string_expr(v: &str) -> Expr {
+        Expr {
+            kind: ExprKind::Lit(Lit::String(v.to_string())),
             span: sp(),
         }
     }
@@ -3343,9 +3542,29 @@ mod tests {
         }
     }
 
+    fn string_from_expr(arg: Expr) -> Expr {
+        Expr {
+            kind: ExprKind::EnumConstruct {
+                path: vec!["String".to_string(), "from".to_string()],
+                fields: vec![arg],
+            },
+            span: sp(),
+        }
+    }
+
     fn ident_expr(name: &str) -> Expr {
         Expr {
             kind: ExprKind::Ident(name.to_string()),
+            span: sp(),
+        }
+    }
+
+    fn call_expr(callee: &str, args: Vec<Expr>) -> Expr {
+        Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(ident_expr(callee)),
+                args,
+            },
             span: sp(),
         }
     }
@@ -3385,6 +3604,259 @@ mod tests {
             refinement: None,
             span: sp(),
         }
+    }
+
+    #[test]
+    fn debug_builtins_lower_to_runtime_symbols() {
+        let cases = [
+            ("debug_str", "__vow_debug_str", Ty::Unit),
+            ("debug_i64", "__vow_debug_i64", Ty::Unit),
+            ("debug_u64", "__vow_debug_u64", Ty::Unit),
+        ];
+        for (name, symbol, ty) in cases {
+            assert_eq!(vow_debug_builtin_to_runtime(name), Some((symbol, ty)));
+        }
+        assert_eq!(vow_debug_builtin_to_runtime("debug_missing"), None);
+    }
+
+    #[test]
+    fn builtins_lower_to_runtime_symbols_and_return_types() {
+        // Keep this table in lockstep with every arm of vow_builtin_to_runtime.
+        let cases = [
+            ("print_str", "__vow_string_print", Ty::Unit),
+            ("print_i64", "__vow_print_i64", Ty::Unit),
+            ("print_u64", "__vow_print_u64", Ty::Unit),
+            ("eprintln_str", "__vow_eprintln_str", Ty::Unit),
+            ("fs_read", "__vow_fs_read", Ty::Ptr),
+            ("fs_open", "__vow_fs_open", Ty::I64),
+            ("fs_read_line", "__vow_fs_read_line", Ty::Ptr),
+            ("fs_status", "__vow_fs_status", Ty::I64),
+            ("fs_close", "__vow_fs_close", Ty::I64),
+            ("fs_write", "__vow_fs_write", Ty::I64),
+            ("fs_exists", "__vow_fs_exists", Ty::I64),
+            ("fs_mkdir", "__vow_fs_mkdir", Ty::I64),
+            ("fs_listdir", "__vow_fs_listdir", Ty::Ptr),
+            ("fs_remove", "__vow_fs_remove", Ty::I64),
+            ("fs_remove_dir", "__vow_fs_remove_dir", Ty::I64),
+            ("fs_is_dir", "__vow_fs_is_dir", Ty::I64),
+            ("fs_rename", "__vow_fs_rename", Ty::I64),
+            ("string_substr", "__vow_string_substr", Ty::Ptr),
+            ("string_split", "__vow_string_split", Ty::Ptr),
+            ("string_starts_with", "__vow_string_starts_with", Ty::I64),
+            ("string_ends_with", "__vow_string_ends_with", Ty::I64),
+            ("string_trim", "__vow_string_trim", Ty::Ptr),
+            ("string_to_upper", "__vow_string_to_upper", Ty::Ptr),
+            ("string_to_lower", "__vow_string_to_lower", Ty::Ptr),
+            ("string_replace", "__vow_string_replace", Ty::Ptr),
+            ("string_join", "__vow_string_join", Ty::Ptr),
+            ("parse_i64", "__vow_parse_i64", Ty::I64),
+            ("i64_to_string", "__vow_string_from_i64", Ty::Ptr),
+            ("vec_sort", "__vow_vec_sort", Ty::Ptr),
+            ("time_unix", "__vow_time_unix", Ty::I64),
+            ("time_unix_ms", "__vow_time_unix_ms", Ty::I64),
+            ("num_cpus", "__vow_num_cpus", Ty::I64),
+            (
+                "memory_root_arena_bytes",
+                "__vow_memory_root_arena_bytes",
+                Ty::U64,
+            ),
+            ("memory_peak_bytes", "__vow_memory_peak_bytes", Ty::U64),
+            (
+                "memory_alloc_count_since_start",
+                "__vow_memory_alloc_count_since_start",
+                Ty::U64,
+            ),
+            ("hex_encode", "__vow_hex_encode", Ty::Ptr),
+            ("hex_decode", "__vow_hex_decode", Ty::Ptr),
+            ("args", "__vow_args", Ty::Ptr),
+            ("stdin_read", "__vow_stdin_read", Ty::Ptr),
+            ("stdin_read_line", "__vow_stdin_read_line", Ty::Ptr),
+            ("stdin_ready", "__vow_stdin_ready", Ty::Bool),
+            ("process_exit", "__vow_process_exit", Ty::Unit),
+            ("process_run", "__vow_process_run", Ty::I64),
+            ("process_get_stdout", "__vow_process_get_stdout", Ty::Ptr),
+            ("process_get_stderr", "__vow_process_get_stderr", Ty::Ptr),
+            ("process_start", "__vow_process_start", Ty::I64),
+            ("process_wait", "__vow_process_wait", Ty::I64),
+            (
+                "process_wait_timeout",
+                "__vow_process_wait_timeout",
+                Ty::I64,
+            ),
+            ("process_kill", "__vow_process_kill", Ty::I64),
+            ("process_stdout_for", "__vow_process_stdout_for", Ty::Ptr),
+            ("process_stderr_for", "__vow_process_stderr_for", Ty::Ptr),
+            ("__vow_clif_create", "__vow_clif_create", Ty::I64),
+            ("__vow_clif_add_string", "__vow_clif_add_string", Ty::Unit),
+            (
+                "__vow_clif_declare_extern",
+                "__vow_clif_declare_extern",
+                Ty::Unit,
+            ),
+            (
+                "__vow_clif_declare_function",
+                "__vow_clif_declare_function",
+                Ty::Unit,
+            ),
+            ("__vow_clif_fn_begin", "__vow_clif_fn_begin", Ty::I64),
+            ("__vow_clif_fn_block", "__vow_clif_fn_block", Ty::I64),
+            ("__vow_clif_fn_inst", "__vow_clif_fn_inst", Ty::I64),
+            ("__vow_clif_fn_vow", "__vow_clif_fn_vow", Ty::I64),
+            ("__vow_clif_fn_end", "__vow_clif_fn_end", Ty::I64),
+            ("__vow_clif_finish", "__vow_clif_finish", Ty::I64),
+            ("__vow_clif_link", "__vow_clif_link", Ty::I64),
+            ("__vow_clif_destroy", "__vow_clif_destroy", Ty::Unit),
+        ];
+        for (name, symbol, ty) in cases {
+            assert_eq!(vow_builtin_to_runtime(name), Some((symbol, ty)));
+        }
+        assert_eq!(vow_builtin_to_runtime("missing_builtin"), None);
+    }
+
+    #[test]
+    fn string_matches_literal_at_lowers_literal_without_allocation() {
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(call_expr(
+                "string_matches_literal_at",
+                vec![ident_expr("s"), ident_expr("pos"), string_expr("ab\0cd")],
+            ))),
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "matches_literal",
+            vec![make_param("s", string_ty()), make_param("pos", i64_ty())],
+            i64_ty(),
+            body,
+            vec![],
+        );
+        let (func, strings, warnings) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        assert_eq!(strings, vec!["ab\0cd".to_string()]);
+
+        let insts: Vec<&Inst> = func
+            .blocks
+            .iter()
+            .flat_map(|block| block.insts.iter())
+            .collect();
+        assert!(
+            insts.iter().any(|inst| {
+                inst.opcode == Opcode::Call
+                    && inst.data
+                        == InstData::CallExtern("__vow_string_matches_literal_at".to_string())
+            }),
+            "expected direct runtime helper call in {insts:#?}"
+        );
+        assert!(
+            !insts.iter().any(|inst| {
+                inst.opcode == Opcode::Call
+                    && inst.data == InstData::CallExtern("__vow_string_from_cstr".to_string())
+            }),
+            "literal matcher must not allocate a temporary String"
+        );
+        assert!(
+            insts.iter().any(|inst| {
+                inst.opcode == Opcode::ConstStr && inst.data == InstData::ConstStr(0)
+            }),
+            "expected static literal pointer"
+        );
+        assert!(
+            insts.iter().any(|inst| {
+                inst.opcode == Opcode::ConstI64 && inst.data == InstData::ConstI64(5)
+            }),
+            "expected byte length, including embedded NUL"
+        );
+    }
+
+    #[test]
+    fn string_literal_lowers_to_static_descriptor_call() {
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(string_expr("hello"))),
+            span: sp(),
+        };
+        let fn_def = make_fn("literal", vec![], string_ty(), body, vec![]);
+        let (func, pool, diags) = lower_function(
+            &fn_def,
+            "test.vow",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(pool, vec!["hello".to_string()]);
+        let extern_calls: Vec<&str> = func
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insts)
+            .filter_map(|inst| match &inst.data {
+                InstData::CallExtern(symbol) => Some(symbol.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            extern_calls.contains(&"__vow_string_literal"),
+            "{extern_calls:?}"
+        );
+        assert!(
+            !extern_calls.contains(&"__vow_string_from_cstr"),
+            "{extern_calls:?}"
+        );
+    }
+
+    #[test]
+    fn string_from_lowers_to_clone_of_literal() {
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(string_from_expr(string_expr("hello")))),
+            span: sp(),
+        };
+        let fn_def = make_fn("owned", vec![], string_ty(), body, vec![]);
+        let (func, _, diags) = lower_function(
+            &fn_def,
+            "test.vow",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        assert!(diags.is_empty(), "{diags:?}");
+        let extern_calls: Vec<&str> = func
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insts)
+            .filter_map(|inst| match &inst.data {
+                InstData::CallExtern(symbol) => Some(symbol.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            extern_calls,
+            vec!["__vow_string_literal", "__vow_string_clone"]
+        );
     }
 
     #[test]
@@ -3515,6 +3987,62 @@ mod tests {
     }
 
     #[test]
+    fn lower_assignment_updates_identifier_binding() {
+        let let_stmt = Stmt::Let {
+            pattern: Pat {
+                kind: PatKind::Ident {
+                    name: "x".to_string(),
+                    is_mut: true,
+                },
+                span: sp(),
+            },
+            ty: None,
+            init: Box::new(int_expr(1)),
+            span: sp(),
+        };
+        let assign_stmt = Stmt::Expr {
+            expr: Expr {
+                kind: ExprKind::Assign {
+                    lhs: Box::new(ident_expr("x")),
+                    rhs: Box::new(int_expr(2)),
+                },
+                span: sp(),
+            },
+            has_semicolon: true,
+            span: sp(),
+        };
+        let body = Block {
+            stmts: vec![let_stmt, assign_stmt],
+            trailing_expr: Some(Box::new(ident_expr("x"))),
+            span: sp(),
+        };
+        let fn_def = make_fn("assign_fn", vec![], i64_ty(), body, vec![]);
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
+        let assigned_const = all_insts
+            .iter()
+            .find(|i| i.data == InstData::ConstI64(2))
+            .expect("assignment RHS should lower to ConstI64(2)");
+        let ret = all_insts
+            .iter()
+            .find(|i| i.opcode == Opcode::Return)
+            .expect("expected Return");
+        assert_eq!(ret.args, vec![assigned_const.id]);
+    }
+
+    #[test]
     fn lower_if_else() {
         let if_expr = Expr {
             kind: ExprKind::If {
@@ -3596,6 +4124,53 @@ mod tests {
         let ret = all_insts.iter().find(|i| i.opcode == Opcode::Return);
         assert!(ret.is_some(), "expected Return instruction");
         assert_eq!(func.return_ty, Ty::Unit);
+    }
+
+    #[test]
+    fn pin_to_root_process_stdout_lowers_to_string_pin() {
+        let body = Block {
+            stmts: vec![],
+            trailing_expr: Some(Box::new(call_expr(
+                "pin_to_root",
+                vec![call_expr("process_get_stdout", vec![])],
+            ))),
+            span: sp(),
+        };
+        let fn_def = make_fn(
+            "pin_process_stdout",
+            vec![],
+            string_ty(),
+            body,
+            vec![Effect::IO],
+        );
+        let (func, _, _) = lower_function(
+            &fn_def,
+            "",
+            &HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+
+        let all_insts: Vec<_> = func.blocks.iter().flat_map(|b| b.insts.iter()).collect();
+        assert!(
+            all_insts
+                .iter()
+                .any(|inst| inst.data
+                    == InstData::CallExtern("__vow_process_get_stdout".to_string())),
+            "expected process_get_stdout extern call"
+        );
+        assert!(
+            all_insts
+                .iter()
+                .any(|inst| inst.data
+                    == InstData::CallExtern("__vow_string_pin_to_root".to_string())),
+            "direct pin_to_root(process_get_stdout()) must lower to string pin"
+        );
     }
 
     #[test]

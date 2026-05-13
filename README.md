@@ -11,13 +11,79 @@ For project design details, see [docs/vow_design.md](docs/vow_design.md).
 ```bash
 # Bootstrap (one-time)
 cargo build --all --release
-scripts/bootstrap.sh --no-verify
+scripts/bootstrap.sh --skip-cargo
+
+# Install the self-hosted toolchain to a user prefix
+scripts/install-toolchain.sh --prefix "$HOME/.local"
+export PATH="$HOME/.local/bin:$PATH"
+vowc build --no-verify examples/hello.vow -o /tmp/vow_hello
 
 # Day-to-day usage
 ulimit -v 2000000; build/vowc build examples/divide.vow              # compile + verify
 ulimit -v 2000000; build/vowc verify examples/divide.vow              # verify contracts only
 ulimit -v 2000000; build/vowc build --mode debug examples/divide.vow  # runtime vow checks
 ```
+
+## Agent Setup (Claude Code Skill)
+
+Vow ships a Claude Code skill embedded in the compiler binary. The skill is the
+canonical reference an agent needs to author and fix Vow programs: grammar, CEGIS
+workflow, contract authoring, CLI surface, error catalogue, and JSON schemas.
+
+The skill is **the** source of truth for any harness writing Vow code. Because it
+is generated from the same compiler version that builds your programs, it cannot
+drift from the toolchain you are running.
+
+### Inside Claude Code
+
+The first time you run `vowc build` (or `vowc <source.vow>`) inside a project that
+already has a `.claude/` directory, the compiler installs the skill at:
+
+```
+.claude/skills/vow-toolchain/
+```
+
+Claude Code discovers it from the `.claude/skills/` directory and uses the
+frontmatter description/`when_to_use` metadata to load it for `.vow` file work
+as well as creation and verification-debugging prompts before a `.vow` file
+exists. Auto-install is silent, runs at most once (it leaves any existing
+`SKILL.md` untouched), and is skipped entirely when `.claude/` is absent — so
+non-Claude-Code projects are never touched. Unlike explicit `--local`,
+auto-install only requires `.claude/`; it does not require the directory to be a
+git checkout.
+
+To install the skill explicitly (for a fresh checkout, or when bringing a Vow
+toolchain into a project that already has `.claude/`):
+
+```bash
+build/vowc skill install --local
+```
+
+`--local` requires the current directory to contain both `.git` and `.claude/`.
+For a machine-wide install on Linux, use:
+
+```bash
+build/vowc skill install --global
+```
+
+The installed skill is split into `SKILL.md` plus `reference/`, `examples/`, and
+`schemas/` support files. Commit the resulting `.claude/skills/vow-toolchain/`
+tree to your repository so collaborators (human and agent) get the same skill
+version on checkout.
+
+### Outside Claude Code (raw API harnesses)
+
+For any other harness — a custom agent loop, the bench runner, a one-off API call
+— pipe the self-contained bundle into the system prompt at session start:
+
+```bash
+SYSTEM_PROMPT="$(build/vowc skill print --bundle)"
+# ... feed $SYSTEM_PROMPT to your model along with the user task
+```
+
+The bundle is a single self-contained markdown document, so no further loading is
+required for raw API harnesses. Loading once per session is enough; the skill
+describes a workflow, not per-task state.
 
 ## Vericoding Benchmark Suite
 

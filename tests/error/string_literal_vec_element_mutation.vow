@@ -1,0 +1,10 @@
+// TEST: error-code RegionLiteralMutation
+module StringLiteralVecElementMutation
+
+fn main() -> i32 [io] {
+    let strings: Vec<String> = Vec::new();
+    strings.push("a");
+    let s: String = strings[0];
+    s.push_byte(33);
+    0
+}

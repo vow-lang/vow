@@ -1,0 +1,11 @@
+// TEST: stdin "alpha\nbeta\n"
+// TEST: stdout "alpha\nbeta\n"
+module StdinReadLinePinToRoot
+
+fn main() -> i32 [read, io] {
+    let first: String = pin_to_root(stdin_read_line());
+    let second: String = stdin_read_line();
+    print_str(first);
+    print_str(second);
+    0
+}

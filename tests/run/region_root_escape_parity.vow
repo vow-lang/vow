@@ -1,0 +1,31 @@
+// TEST: stdout ""
+// Issue #318 — Rust↔self-hosted RegionRootEscape note-emission parity guard.
+// Exercises a single helper whose store_effects span two distinct source
+// kinds: ConstantGlobal (extern Vec growth on `s.entries.push(extra)`) and
+// AliasOf(s) (param alias on `s.latest = pinned`). A caller routes fresh
+// inline aggregates through the helper. Both compilers must emit the same
+// number of RegionRootEscape diagnostics on this fixture; full_test.sh
+// compares total diagnostic counts at lines 110-114.
+module Issue318Parity
+
+pub struct Item {
+    name: String,
+}
+
+pub struct Sink {
+    entries: Vec<Item>,
+    latest: Item,
+}
+
+fn record(s: Sink, extra: Item, pinned: Item) {
+    s.entries.push(extra);
+    s.latest = pinned;
+}
+
+pub fn run(s: Sink) {
+    record(s, Item { name: String::from("hi") }, Item { name: String::from("hi") });
+}
+
+fn main() -> i32 {
+    0
+}

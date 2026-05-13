@@ -239,12 +239,16 @@ pub fn run_with_fallback(
     let result = run_esbmc_with_max_k_step(esbmc, c_src, max_k_step, func_name, &bv_config);
 
     match result {
-        VerificationResult::Timeout => {
+        // Both Timeout and Unknown mean "BV could neither prove nor disprove"
+        // — retry with Z3+IR. Same soundness rules apply to either fallback:
+        // an IR-only CE can be infeasible under BV, so we never return Failed
+        // from IR; we report the original BV outcome instead.
+        VerificationResult::Timeout | VerificationResult::Unknown { .. } => {
             // IR encoding only works with Z3. If the resolved BV solver was
             // Boolector or Z3, we can switch to Z3+IR. Bitwuzla cannot do IR.
             let can_ir = !matches!(bv_config.solver, Solver::Bitwuzla);
             if !can_ir {
-                return (VerificationResult::Timeout, bv_config);
+                return (result, bv_config);
             }
 
             // Reuse the same timeout policy for the IR retry: user override
@@ -261,9 +265,9 @@ pub fn run_with_fallback(
                 VerificationResult::Proven => (VerificationResult::ProvenIr, ir_config),
                 // IR returned a counterexample, but IR does not model
                 // overflow — a CE found only under IR can be infeasible
-                // under BV. Report Timeout (which is what BV actually
-                // produced) rather than an unsound definitive Failed.
-                VerificationResult::Failed(_) => (VerificationResult::Timeout, ir_config),
+                // under BV. Report the BV outcome (Timeout or Unknown)
+                // rather than an unsound definitive Failed.
+                VerificationResult::Failed(_) => (result, ir_config),
                 other => (other, ir_config),
             }
         }
@@ -308,6 +312,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         }
     }
 
@@ -610,6 +615,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         }
     }
 

@@ -1,0 +1,12 @@
+// TEST: stdout ""
+module StringLiteralVecElementClearOverwrite
+
+fn main() -> i32 [io] {
+    let strings: Vec<String> = Vec::new();
+    strings.push("a");
+    strings.clear();
+    strings.push(String::from("b"));
+    let s: String = strings[0];
+    s.push_byte(33);
+    0
+}

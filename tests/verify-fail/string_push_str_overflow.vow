@@ -1,0 +1,23 @@
+// TEST: counterexample-fn "over"
+// TEST: counterexample-blame none
+// String capacity assertion: a.len + b.len can exceed string_max (both
+// parameters are modelled nondeterministically in [0, string_max-1]), and
+// using parameters matters: String::from("a") now clones a concrete
+// length-1 literal, so two in-body literals cannot overflow string_max.
+// push_str's capacity assertion fires. The check is a raw C-level guard,
+// not a vow block, so blame is "none" (mirrors off_by_one_bounds.vow).
+module StringPushStrOverflow
+
+fn over(a: String, b: String) -> String vow {
+  ensures: result.len() >= 0
+} {
+  let mut s: String = a;
+  s.push_str(b);
+  s
+}
+
+fn main() -> i32 [io] {
+  let r: String = over(String::from("a"), String::from("b"));
+  print_i64(r.len());
+  0
+}

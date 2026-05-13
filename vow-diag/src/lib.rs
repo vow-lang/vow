@@ -44,6 +44,7 @@ pub enum ErrorCode {
     MissingDelimiter,
     // Type errors
     TypeMismatch,
+    StaticLiteralRequired,
     EffectViolation,
     LinearTypeViolation,
     NonExhaustiveMatch,
@@ -54,6 +55,8 @@ pub enum ErrorCode {
     // Method/feature errors
     UnknownMethod,
     UnsupportedFeature,
+    BTreeMapKeyTypeMustBeI64,
+    BTreeMapValueTypeMustBeI64,
     // Lowering warnings
     LoweringWarning,
     // Contract errors
@@ -65,7 +68,10 @@ pub enum ErrorCode {
     IoError,
     // Region inference (arena-per-scope, Phase 3)
     RegionConflict,
+    RegionLiteralMutation,
     RegionLinear,
+    // Note: program-lifetime root-arena placement. See arena_memory.md §4.4.
+    RegionRootEscape,
     // Emitted as a Warning when a vowed function's body cannot be modeled
     // by the verifier (e.g. uses RegionAlloc/FieldSet/Linear*/Load/Store).
     // The build still succeeds; the contract is documentary, not statically
@@ -271,6 +277,16 @@ mod tests {
         // Same contract as `region_conflict_debug_format_is_pascalcase`: the JSON
         // `error_code` for the post-region linear-obligation check is "RegionLinear".
         assert_eq!(format!("{:?}", ErrorCode::RegionLinear), "RegionLinear");
+    }
+
+    #[test]
+    fn region_root_escape_debug_format_is_pascalcase() {
+        // Same wire-format contract as RegionConflict / RegionLinear: the
+        // JSON `error_code` is the Debug format, so it must stay PascalCase.
+        assert_eq!(
+            format!("{:?}", ErrorCode::RegionRootEscape),
+            "RegionRootEscape"
+        );
     }
 
     #[test]

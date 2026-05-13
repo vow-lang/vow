@@ -10,6 +10,322 @@ fn str2(a: String, b: String) -> String {
     r
 }
 
+fn clif_find_inst(f: IrFunction, id: i64) -> IrInst {
+    let blocks: Vec<IrBlock> = f.blocks;
+    let mut bi: i64 = 0;
+    while bi < blocks.len() {
+        let insts: Vec<IrInst> = blocks[bi].insts;
+        let mut ii: i64 = 0;
+        while ii < insts.len() {
+            if insts[ii].id == id {
+                return insts[ii];
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    ir_inst_new(-1, IOP_CONST_UNIT(), ITY_UNIT(), Vec::new(), IDATA_NONE(), 0, 0, String::from(""))
+}
+
+fn clif_store_effect_advance(flat: Vec<i64>, start: i64) -> i64 {
+    if start + 1 >= flat.len() {
+        return flat.len();
+    }
+    let kind: i64 = flat[start + 1];
+    let mut i: i64 = start + 2;
+    if kind == RSUM_KIND_ALIAS_OF() {
+        i = i + 1;
+    } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
+        if i < flat.len() {
+            let raw_n: i64 = flat[i];
+            let n: i64 = {
+                if raw_n < 0 {
+                    0
+                } else {
+                    raw_n
+                }
+            };
+            i = i + 1;
+            let remaining: i64 = flat.len() - i;
+            if n > remaining {
+                return flat.len();
+            }
+            i = i + n;
+        }
+    }
+    if i > flat.len() {
+        return flat.len();
+    }
+    i
+}
+
+fn clif_i64_vec_contains(v: Vec<i64>, x: i64) -> bool {
+    let mut i: i64 = 0;
+    while i < v.len() {
+        if v[i] == x {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn clif_clone_i64_vec(src: Vec<i64>) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < src.len() {
+        out.push(src[i]);
+        i = i + 1;
+    }
+    out
+}
+
+fn clif_hidden_store_targets(flat: Vec<i64>) -> Vec<i64> {
+    let targets: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i + 1 < flat.len() {
+        let target: i64 = flat[i];
+        // Rust collects all targets then sorts/dedups; this dedups before sorting.
+        // Both paths produce the same sorted unique slot order.
+        if !clif_i64_vec_contains(targets, target) {
+            targets.push(target);
+        }
+        i = clif_store_effect_advance(flat, i);
+    }
+    let mut a: i64 = 1;
+    while a < targets.len() {
+        let mut b: i64 = a;
+        while b > 0 && targets[b] < targets[b - 1] {
+            let tmp: i64 = targets[b - 1];
+            targets[b - 1] = targets[b];
+            targets[b] = tmp;
+            b = b - 1;
+        }
+        a = a + 1;
+    }
+    targets
+}
+
+fn clif_hidden_store_target_region(f: IrFunction, target_param: i64) -> i64 {
+    let flat: Vec<i64> = f.rsum_store_effects;
+    let mut hidden_idx: i64 = 0;
+    if f.rsum_return_kind == RSUM_KIND_FRESH_IN_CALLER() {
+        hidden_idx = hidden_idx + 1;
+    }
+    let targets: Vec<i64> = clif_hidden_store_targets(flat);
+    let mut i: i64 = 0;
+    while i < targets.len() {
+        if targets[i] == target_param {
+            return region_pack(REGION_KIND_CALLER(), hidden_idx);
+        }
+        hidden_idx = hidden_idx + 1;
+        i = i + 1;
+    }
+    region_root()
+}
+
+// Projection results (IOP_FIELD_GET, IOP_LOAD, __vow_vec_get*) are intentionally
+// NOT traced through to their container here: a pointer-valued field or Vec
+// element does not share its container's arena lifetime, so routing string
+// mutation into the container's arena would create a use-after-free when the
+// container outlives the string (or vice versa). Only direct hidden-caller
+// parameters (IOP_GET_ARG with REGION_KIND_CALLER) and IOP_PHI merges over
+// safe sources are tracked. If safe projection semantics are ever added, extend
+// this function; do not re-introduce the unconditional projection tracing.
+fn clif_value_receiver_region(f: IrFunction, receiver: IrInst, seen: Vec<i64>) -> i64 {
+    if receiver.id < 0 {
+        return region_root();
+    }
+    if clif_i64_vec_contains(seen, receiver.id) {
+        return receiver.rgn;
+    }
+    let next_seen: Vec<i64> = clif_clone_i64_vec(seen);
+    next_seen.push(receiver.id);
+    if receiver.op == IOP_GET_ARG() && receiver.dk == IDATA_ARG_INDEX() {
+        let hidden: i64 = clif_hidden_store_target_region(f, receiver.dv);
+        if region_kind(hidden) == REGION_KIND_CALLER() {
+            return hidden;
+        }
+    }
+    if receiver.op == IOP_PHI() {
+        let blocks: Vec<IrBlock> = f.blocks;
+        let mut have: bool = false;
+        let mut merged: i64 = region_root();
+        let mut bi: i64 = 0;
+        while bi < blocks.len() {
+            let insts: Vec<IrInst> = blocks[bi].insts;
+            let mut ii: i64 = 0;
+            while ii < insts.len() {
+                let up: IrInst = insts[ii];
+                if up.op == IOP_UPSILON()
+                    && up.dk == IDATA_PHI_TARGET()
+                    && up.dv == receiver.id
+                    && up.args.len() > 0 {
+                    let src: IrInst = clif_find_inst(f, up.args[0]);
+                    let rgn: i64 = clif_value_receiver_region(f, src, clif_clone_i64_vec(next_seen));
+                    if !have {
+                        have = true;
+                        merged = rgn;
+                    } else if merged != rgn {
+                        // Divergent Phi arms cannot be unified safely. Fall back to the
+                        // receiver's own region, which is conservatively Root before routing.
+                        return receiver.rgn;
+                    }
+                }
+                ii = ii + 1;
+            }
+            bi = bi + 1;
+        }
+        if have {
+            return merged;
+        }
+    }
+    receiver.rgn
+}
+
+fn clif_receiver_region(f: IrFunction, inst: IrInst) -> i64 {
+    if inst.args.len() == 0 {
+        return region_root();
+    }
+    let receiver: IrInst = clif_find_inst(f, inst.args[0]);
+    clif_value_receiver_region(f, receiver, Vec::new())
+}
+
+fn clif_routed_extern_symbol(f: IrFunction, inst: IrInst) -> String {
+    let sym: String = inst.ds;
+    if sym == String::from("__vow_vec_new") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_vec_new_in_arena");
+    }
+    if sym == String::from("__vow_vec_new_val") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_vec_new_val_in_arena");
+    }
+    if sym == String::from("__vow_vec_push_val") {
+        let rr: i64 = clif_receiver_region(f, inst);
+        let rk: i64 = region_kind(rr);
+        if rk == REGION_KIND_BLOCK() || rk == REGION_KIND_CALLER() {
+            return String::from("__vow_vec_push_val_in_arena");
+        }
+        return sym;
+    }
+    if sym == String::from("__vow_vec_push") {
+        let rr2: i64 = clif_receiver_region(f, inst);
+        let rk2: i64 = region_kind(rr2);
+        if rk2 == REGION_KIND_BLOCK() || rk2 == REGION_KIND_CALLER() {
+            return String::from("__vow_vec_push_in_arena");
+        }
+        return sym;
+    }
+    if sym == String::from("__vow_string_new") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_new_in_arena");
+    }
+    if sym == String::from("__vow_string_from_cstr") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_from_cstr_in_arena");
+    }
+    if sym == String::from("__vow_string_clone") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_clone_in_arena");
+    }
+    if sym == String::from("__vow_string_substr") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_substr_in_arena");
+    }
+    if sym == String::from("__vow_string_substring") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_substring_in_arena");
+    }
+    if sym == String::from("__vow_string_from_i64") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_from_i64_in_arena");
+    }
+    if sym == String::from("__vow_string_split") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_split_in_arena");
+    }
+    if sym == String::from("__vow_string_trim") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_trim_in_arena");
+    }
+    if sym == String::from("__vow_string_to_upper") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_to_upper_in_arena");
+    }
+    if sym == String::from("__vow_string_to_lower") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_to_lower_in_arena");
+    }
+    if sym == String::from("__vow_string_replace") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_replace_in_arena");
+    }
+    if sym == String::from("__vow_string_join") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_string_join_in_arena");
+    }
+    if sym == String::from("__vow_string_push_str") {
+        let sr: i64 = clif_receiver_region(f, inst);
+        let sk: i64 = region_kind(sr);
+        if sk == REGION_KIND_BLOCK() || sk == REGION_KIND_CALLER() {
+            return String::from("__vow_string_push_str_in_arena");
+        }
+        return sym;
+    }
+    if sym == String::from("__vow_string_push_byte") {
+        let br: i64 = clif_receiver_region(f, inst);
+        let bk: i64 = region_kind(br);
+        if bk == REGION_KIND_BLOCK() || bk == REGION_KIND_CALLER() {
+            return String::from("__vow_string_push_byte_in_arena");
+        }
+        return sym;
+    }
+    if sym == String::from("__vow_map_new") {
+        if region_kind(inst.rgn) == REGION_KIND_ROOT() {
+            return sym;
+        }
+        return String::from("__vow_map_new_in_arena");
+    }
+    if sym == String::from("__vow_map_insert") {
+        let mr: i64 = clif_receiver_region(f, inst);
+        let mk: i64 = region_kind(mr);
+        if mk == REGION_KIND_BLOCK() || mk == REGION_KIND_CALLER() {
+            return String::from("__vow_map_insert_in_arena");
+        }
+        return sym;
+    }
+    sym
+}
+
 fn collect_extern_syms(m: IrModule, mode: i64) -> Vec<String> {
     let result: Vec<String> = Vec::new();
     let has_debug: bool = mode == 1 || mode == 3;
@@ -26,8 +342,8 @@ fn collect_extern_syms(m: IrModule, mode: i64) -> Vec<String> {
             while ii < insts.len() {
                 let inst: IrInst = insts[ii];
                 let skip: bool = inst.op == IOP_DEBUG_CALL() && !has_debug;
-                if inst.dk == IDATA_CALL_EXTERN() && !skip {
-                    let sym: String = inst.ds;
+                if inst.dk == IDATA_CALL_EXTERN() && !skip && inst.ds != "__vow_string_literal" {
+                    let sym: String = clif_routed_extern_symbol(f, inst);
                     if !vec_contains_str(result, sym) {
                         result.push(sym);
                     }
@@ -132,7 +448,17 @@ fn clif_emit_module(m: IrModule, output_path: String, mode: i64, trace: i64) -> 
                 0
             }
         };
-        __vow_clif_declare_function(ctx, fi, f.name, f.params, f.params.len(), f.return_ty, is_main);
+        __vow_clif_declare_function(
+            ctx,
+            fi,
+            f.name,
+            f.params,
+            f.params.len(),
+            f.return_ty,
+            is_main,
+            f.rsum_return_kind,
+            f.rsum_store_effects
+        );
         fi = fi + 1;
     }
 

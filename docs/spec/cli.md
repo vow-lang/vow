@@ -28,6 +28,7 @@ vow [OPTIONS] <source.vow>          # legacy (equivalent)
 | `--vec-max <N>` | `128`       | Max Vec capacity for verification model      |
 | `--string-max <N>` | `256`    | Max String capacity for verification model   |
 | `--hashmap-max <N>` | `64`    | Max HashMap capacity for verification model  |
+| `--btreemap-max <N>` | `64`   | Max BTreeMap capacity for verification model |
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
 
 **Compile-object cache behavior.** The on-disk compile-object cache (`$VOW_CACHE_DIR` or `~/.cache/vow/`, where each entry is a `<key>.o` artifact keyed by a content hash of all dependencies, mode, and trace settings) is automatically disabled whenever ESBMC verification is active. This guarantees the linked binary always comes from the same codegen run whose IR was verified, closing the integrity gap where a stale or attacker-supplied `.o` could be linked against freshly-verified IR. Concretely the cache only activates on `vow build --no-verify` invocations; it is bypassed on the default `vow build` path. `--no-cache` additionally disables the cache for `--no-verify` builds.
@@ -52,6 +53,7 @@ vow verify [OPTIONS] <source.vow>
 | `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
 | `--string-max <N>`| `256`       | Max String capacity for verification model |
 | `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
+| `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs |
 
 ### `vow contracts`
@@ -74,6 +76,7 @@ vow contracts [OPTIONS] <source.vow>
 | `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
 | `--string-max <N>`| `256`       | Max String capacity for verification model |
 | `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
+| `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|
 | `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |
 
 ### `vow skill`
@@ -82,13 +85,20 @@ Generate or install the Claude Code skill document for the current compiler vers
 
 ```
 vow skill              # print skill document to stdout (default: print)
-vow skill print        # same as above
-vow skill install      # install to .claude/commands/vow-toolchain.md
+vow skill print        # print concise Claude Code SKILL.md entrypoint
+vow skill print --bundle  # print self-contained bundle for raw API harnesses
+vow skill install      # prompt for local or global install target
+vow skill install --local   # install to ./.claude/skills/vow-toolchain/
+vow skill install --global  # install to $HOME/.claude/skills/vow-toolchain/ on Linux
 ```
 
-`print` writes the complete skill markdown (with YAML frontmatter) to stdout. Pipe to a file or use `install` to place it directly.
+`print` writes the concise installed `SKILL.md` entrypoint (with YAML frontmatter) to stdout. `print --bundle` writes a complete self-contained skill document to stdout for non–Claude Code harnesses that cannot load supporting files.
 
-`install` creates `.claude/commands/` in the current directory if needed and writes the skill document there. Claude Code discovers it automatically.
+`install` writes `SKILL.md` plus supporting files under `reference/`, `examples/`, and `schemas/`. Claude Code discovers the skill from the `.claude/skills/` directory and uses the frontmatter description/`when_to_use` metadata to load it for `.vow` file work as well as creation and verification-debugging prompts before a `.vow` file exists.
+
+When no scope flag is provided, `install` prompts on stderr for local (`./.claude`) or global (`$HOME/.claude`) installation. Scripts and agents should pass `--local` or `--global` explicitly. `--local` requires the current directory to contain both `.git` and `.claude/`; otherwise it exits with an error and writes nothing. `--global` installs under `$HOME/.claude/skills/vow-toolchain/` and fails if `$HOME` is unset or empty.
+
+**Auto-install on build.** The first time `vow build` (or the legacy `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow-toolchain/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Unlike explicit `--local`, auto-install only requires `.claude/`; it does not require the directory to be a git checkout. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.
 
 ### `vow test`
 
@@ -112,6 +122,7 @@ vow test [OPTIONS] [<path>]
 | `--vec-max <N>`   | `128`       | Max Vec capacity for verification model    |
 | `--string-max <N>`| `256`       | Max String capacity for verification model |
 | `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
+| `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs (with --verify) |
 
 Test discovery: files matching `test_*.vow` or `*_test.vow` in the given directory, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
@@ -167,6 +178,35 @@ vow decl [OPTIONS] <source.vow>
 |-------------------|-------------|--------------------------------------------|
 | `-o, --output`    | `<source>.vow.d` | Output declaration file path          |
 
+### `vow mutants` (self-hosted only)
+
+Run mutation testing on a Vow source tree. Implemented in the self-hosted compiler only; the Rust bootstrap compiler emits an error pointing the user to `build/vowc`. See `docs/mutants.md` for full details on output schema, mutation kinds, skip-list, and known limitations.
+
+```
+vowc mutants version
+vowc mutants list  [--root DIR] [--shard X/Y]
+vowc mutants run   [--root DIR] [--shard X/Y]
+                   [--tier1-cmd 'cmd'] [--tier2-cmd 'cmd']
+                   [--tier1-timeout-secs N] [--tier2-timeout-secs N]
+                   [--tier2-budget-secs N]
+                   [--workdir DIR] [--output-dir DIR] [--force-unlock]
+```
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--root` | `compiler` | Directory whose `*.vow` files are mutated. `test_*.vow` files are excluded. |
+| `--shard X/Y` | `0/1` | Round-robin split of the deterministic mutant ID space. Mutant `id` is selected iff `id % Y == X`. |
+| `--tier1-cmd` | `scripts/bootstrap.sh --skip-cargo` | Fast oracle. Anything but exit 0 = caught at Tier 1. |
+| `--tier2-cmd` | `scripts/full_test.sh` | Full oracle. Only run on Tier-1 survivors. |
+| `--tier1-timeout-secs` | `180` | Per-mutant Tier-1 wall-clock cap. |
+| `--tier2-timeout-secs` | `3600` | Per-mutant Tier-2 wall-clock cap. |
+| `--tier2-budget-secs` | `7200` | Per-shard total Tier-2 budget. Once exhausted, surviving Tier-1 mutants are emitted with `status:"unrun"`. |
+| `--workdir` | `/tmp/vow-mutants-<ms>` | Path of the throwaway `git worktree` used for all mutations. |
+| `--output-dir` | `mutants.out` | Directory for `mutants.json`, `outcomes.json`, status text files, `diff/`, `logs/`. |
+| `--force-unlock` | off | Remove a stale `output_dir/.lock` before starting. |
+
+Output schemas: see `docs/spec/schemas/mutants-result.schema.json`.
+
 ### `vow --help`
 
 `vow --help` is agent-first. It emits versioned JSON capability data for the tool, command set,
@@ -206,7 +246,7 @@ that path produces `Unverified` (exit 0).
 | `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
 | `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `RegionAlloc`, `FieldSet`, `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Each such function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
 | `CompileFailed` | Parse error, type error, module load error, or link failure |
-| `VerifyFailed`  | ESBMC found a counterexample, timed out, errored, or was not found |
+| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, or the tool was not found. Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
 ### Verified Example
 
@@ -278,7 +318,7 @@ that path produces `Unverified` (exit 0).
 | `function`         | string              | VerifyFailed      | Function where verification failed        |
 | `counterexample`   | string              | VerifyFailed      | Legacy description string                 |
 | `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |
-| `verify_status`    | string              | On backend failure | `"timeout"`, `"error"`, or `"tool_not_found"` |
+| `verify_status`    | string              | On backend failure | `"timeout"`, `"unknown"`, `"error"`, or `"tool_not_found"` |
 | `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |
 
 ## Contracts Output JSON
@@ -343,7 +383,7 @@ that path produces `Unverified` (exit 0).
 | `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |
 | `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |
 | `failed`        | ESBMC found a counterexample violating this contract |
-| `unknown`       | Another contract in the same function failed; this one was not individually checked |
+| `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
 | `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]`. |

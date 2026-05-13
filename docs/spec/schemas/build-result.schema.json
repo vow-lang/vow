@@ -39,7 +39,7 @@
     },
     "verify_status": {
       "type": "string",
-      "enum": ["timeout", "error", "tool_not_found"],
+      "enum": ["timeout", "unknown", "error", "tool_not_found"],
       "description": "Verification sub-status (present only when the verification backend did not produce a proof or counterexample)"
     },
     "verify_message": {

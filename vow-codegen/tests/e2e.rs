@@ -75,6 +75,7 @@ fn make_main_returns_42() -> Module {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         }],
     }
 }
@@ -169,6 +170,7 @@ fn vow_violation_exits_with_code_1_and_blames_caller() {
         }],
         local_names: std::collections::HashMap::new(),
         summary: RegionSummary::default(),
+        source_file: String::new(),
     };
 
     // main: call divide(10, 0), return 0
@@ -206,6 +208,7 @@ fn vow_violation_exits_with_code_1_and_blames_caller() {
         }],
         local_names: std::collections::HashMap::new(),
         summary: RegionSummary::default(),
+        source_file: String::new(),
     };
 
     let module = Module {
@@ -290,6 +293,7 @@ fn vow_violation_reports_variable_values() {
         }],
         local_names: std::collections::HashMap::new(),
         summary: RegionSummary::default(),
+        source_file: String::new(),
     };
 
     let main_fn = Function {
@@ -325,6 +329,7 @@ fn vow_violation_reports_variable_values() {
         }],
         local_names: std::collections::HashMap::new(),
         summary: RegionSummary::default(),
+        source_file: String::new(),
     };
 
     let module = Module {

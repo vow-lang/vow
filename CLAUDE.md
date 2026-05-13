@@ -107,7 +107,7 @@ This builds `./target/release/vow` (stage 0), then uses it to compile and verify
 The Claude Code skill document is embedded in the compiler and generated on demand:
 ```bash
 build/vowc skill print                            # print skill to stdout
-build/vowc skill install                          # install to .claude/commands/vow-toolchain.md
+build/vowc skill install                          # install to .claude/skills/vow-toolchain/SKILL.md
 ```
 
 After updating a spec file, regenerate `--help` / embedded skill and rebuild:
@@ -240,6 +240,24 @@ The `examples/` directory contains runnable `.vow` programs:
 - `hello.vow` — basic IO
 - `bisect.vow` — loop invariant
 - `countdown.vow` — while loop
+
+## Mutation Testing (`vowc mutants`)
+
+Mutation testing is integrated into the self-hosted compiler as the `vowc mutants` subcommand. It mutates `compiler/*.vow` (or any `--root` directory), runs a tiered oracle (`scripts/bootstrap.sh --skip-cargo` then `scripts/full_test.sh`), and writes structured JSON output to `mutants.out/` (`mutants.json`, `outcomes.json`, per-status `.txt` lists, plus `diff/<id>.diff` and `logs/<id>.log` per mutant). Stdout carries only a one-line summary.
+
+```bash
+build/vowc mutants list                                                # enumerate sites only
+build/vowc mutants run --shard 0/8 --tier2-budget-secs 9000            # writes ./mutants.out/
+build/vowc mutants run --shard 0/8 --output-dir my-results             # custom output directory
+```
+
+Mutation kinds: `op-flip` (binary operators), `const-flip` (`0`/`1`, `true`/`false`), `body-replace` (function bodies → default value for return type), `contract-weaken` (`requires`/`ensures`/`invariant` clauses → `true`).
+
+Skip-list: `// GENERATE:<NAME>:START`/`:END` blocks and `extern "C" { ... }` blocks are excluded. `test_*.vow` files are filtered before scanning.
+
+**Local-only.** Mutation testing is not wired into CI — a full Tier-2 sweep across `compiler/*.vow` is multi-hour wall-clock and would burn through GitHub Actions budget on every nightly. Run it on the developer machine on whatever cadence suits the project (e.g., before tagging a release, or after a substantial compiler change). To split the work, shard explicitly with `--shard 0/8` etc. and run shards sequentially over multiple sessions; the determinism guarantee means the union of `mutants.out/` across shards is well-defined.
+
+When a `missed.txt` entry appears, the actionable response is to either (a) write a test that catches the mutation, or (b) file an issue documenting why the mutation is equivalent and out of scope. See `docs/mutants.md` for the full output schema and known limitations.
 
 ## Vericoding Benchmark Suite
 

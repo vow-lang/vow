@@ -60,8 +60,10 @@ Vow is written by agents under a finite context window. These principles apply t
 | [errors.md](errors.md)                            | Error catalog: every error code with fix            |
 | [contracts.md](contracts.md)                      | Contract patterns, verification, and anti-patterns  |
 | [examples.md](examples.md)                        | 3 worked CEGIS cycles with full JSON output         |
+| [../dev/benchmarks.md](../dev/benchmarks.md)      | Developer benchmark harnesses outside the CLI spec  |
 | [schemas/build-result.schema.json](schemas/build-result.schema.json)     | Build output JSON schema            |
 | [schemas/diagnostic.schema.json](schemas/diagnostic.schema.json)         | Diagnostic JSON schema              |
 | [schemas/counterexample.schema.json](schemas/counterexample.schema.json) | Counterexample JSON schema          |
 | [schemas/vow-violation.schema.json](schemas/vow-violation.schema.json)   | Runtime violation JSON schema       |
+| [schemas/mutants-result.schema.json](schemas/mutants-result.schema.json) | `vowc mutants` run/list output schema |
 <!-- OMIT-FROM-SKILL-END -->

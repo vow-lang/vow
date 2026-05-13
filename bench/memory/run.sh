@@ -1,0 +1,348 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (( BASH_VERSINFO[0] < 4 )); then
+  echo "bench/memory/run.sh requires bash 4.0+ (mapfile/readarray); macOS /bin/bash is usually 3.2. Install a newer bash and rerun this script with it." >&2
+  exit 2
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+PROGRAM_DIR="$SCRIPT_DIR/programs"
+EXPECTED_FILE="$SCRIPT_DIR/expected.toml"
+VOW="$ROOT_DIR/target/release/vow"
+ULIMIT_KB=2000000
+CUSHION_KB=4096
+RECORD=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --record)
+      RECORD=true
+      shift
+      ;;
+    -h|--help)
+      echo "usage: bench/memory/run.sh [--record]"
+      exit 0
+      ;;
+    *)
+      echo "unknown flag: $1" >&2
+      exit 2
+      ;;
+  esac
+done
+
+BENCH_WORK_DIR="$(mktemp -d)"
+trap 'rm -rf "$BENCH_WORK_DIR"' EXIT
+
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\t'/\\t}"
+  s="${s//$'\r'/\\r}"
+  printf '%s' "$s"
+}
+
+json_number_or_null() {
+  local value="$1"
+  if [[ -n "$value" ]]; then
+    printf '%s' "$value"
+  else
+    printf 'null'
+  fi
+}
+
+bench_bound() {
+  local source="$1"
+  sed -n '1s#^// BENCH: max-rss-kb \([0-9][0-9]*\)$#\1#p' "$source"
+}
+
+expected_value() {
+  local program="$1"
+  local field="$2"
+  awk -v table="[$program]" -v field="$field" '
+    $0 == table { in_table = 1; next }
+    in_table && /^\[/ { exit }
+    in_table && $1 == field {
+      sub(/^[^=]+=[[:space:]]*/, "", $0)
+      gsub(/^"|"$/, "", $0)
+      print $0
+      exit
+    }
+  ' "$EXPECTED_FILE"
+}
+
+expected_tables() {
+  awk '/^\[[^]]+\]$/ {
+    name = $0
+    sub(/^\[/, "", name)
+    sub(/\]$/, "", name)
+    print name
+  }' "$EXPECTED_FILE"
+}
+
+check_expected_orphans() {
+  local table
+  local overall=0
+
+  while IFS= read -r table; do
+    if [[ ! -f "$PROGRAM_DIR/$table.vow" ]]; then
+      echo "expected.toml drift: table [$table] has no matching programs/$table.vow" >&2
+      overall=1
+    fi
+  done < <(expected_tables)
+
+  return "$overall"
+}
+
+check_expected_sync() {
+  local source="$1"
+  local name="$2"
+  local rel_source="programs/$(basename "$source")"
+  local bound="$3"
+  local expected_file
+  local expected_bound
+  local expected_status
+
+  expected_file="$(expected_value "$name" "file")"
+  expected_bound="$(expected_value "$name" "max_rss_kb")"
+  expected_status="$(expected_value "$name" "expected")"
+
+  if [[ -z "$expected_file" && -z "$expected_bound" && -z "$expected_status" ]]; then
+    echo "expected.toml drift: $rel_source has no [$name] table in expected.toml" >&2
+    return 1
+  fi
+  if [[ "$expected_file" != "$rel_source" ]]; then
+    echo "expected.toml drift for $name: file=$expected_file annotation=$rel_source" >&2
+    return 1
+  fi
+  if [[ "$expected_bound" != "$bound" ]]; then
+    echo "expected.toml drift for $name: max_rss_kb=$expected_bound annotation=$bound" >&2
+    return 1
+  fi
+  if [[ "$expected_status" != "pass" ]]; then
+    echo "expected.toml drift for $name: expected=$expected_status" >&2
+    return 1
+  fi
+}
+
+parse_max_rss() {
+  local time_log="$1"
+  awk -F': ' '/Maximum resident set size/ { print $2; exit }' "$time_log"
+}
+
+parse_wall_seconds() {
+  local time_log="$1"
+  local elapsed
+  elapsed="$(awk -F': ' '/Elapsed \(wall clock\)/ { print $2; exit }' "$time_log")"
+  if [[ -z "$elapsed" ]]; then
+    return 0
+  fi
+  awk -v t="$elapsed" '
+    BEGIN {
+      n = split(t, a, ":")
+      if (n == 3) {
+        printf "%.2f", (a[1] * 3600) + (a[2] * 60) + a[3]
+      } else if (n == 2) {
+        printf "%.2f", (a[1] * 60) + a[2]
+      } else {
+        printf "%.2f", t + 0
+      }
+    }
+  '
+}
+
+emit_result() {
+  local status="$1"
+  local name="$2"
+  local source="$3"
+  local binary="$4"
+  local build_exit="$5"
+  local run_exit="$6"
+  local max_rss="$7"
+  local bound="$8"
+  local wall="$9"
+  local rel_source="${source#"$ROOT_DIR/"}"
+  local label="FAIL"
+
+  if [[ "$status" == "pass" ]]; then
+    label="PASS"
+  fi
+
+  printf '%s %-26s rss=%s KiB bound=%s KiB wall=%ss status=%s\n' \
+    "$label" "$name" "${max_rss:-null}" "$bound" "${wall:-null}" "$status"
+
+  printf '{"program":"%s","source":"%s","binary":"%s","build_exit":%s,"run_exit":%s,"max_rss_kb":%s,"bound_kb":%s,"wall_seconds":%s,"status":"%s"}\n' \
+    "$(json_escape "$name")" \
+    "$(json_escape "$rel_source")" \
+    "$(json_escape "$binary")" \
+    "$(json_number_or_null "$build_exit")" \
+    "$(json_number_or_null "$run_exit")" \
+    "$(json_number_or_null "$max_rss")" \
+    "$(json_number_or_null "$bound")" \
+    "$(json_number_or_null "$wall")" \
+    "$(json_escape "$status")"
+}
+
+rewrite_annotation() {
+  local source="$1"
+  local bound="$2"
+  local tmp="$BENCH_WORK_DIR/$(basename "$source").rewrite"
+
+  awk -v bound="$bound" '
+    NR == 1 && /^\/\/ BENCH: max-rss-kb [0-9]+$/ {
+      print "// BENCH: max-rss-kb " bound
+      next
+    }
+    { print }
+  ' "$source" > "$tmp"
+  mv "$tmp" "$source"
+}
+
+rewrite_expected() {
+  local tmp="$BENCH_WORK_DIR/expected.toml"
+  local i
+
+  {
+    printf '# Generated by bench/memory/run.sh --record.\n'
+    printf '# Bounds are local characterization baselines with a %s KiB cushion.\n\n' "$CUSHION_KB"
+    for i in "${!RECORD_NAMES[@]}"; do
+      if [[ "$i" -gt 0 ]]; then
+        printf '\n'
+      fi
+      printf '[%s]\n' "${RECORD_NAMES[$i]}"
+      printf 'file = "programs/%s.vow"\n' "${RECORD_NAMES[$i]}"
+      printf 'max_rss_kb = %s\n' "${RECORD_BOUNDS[$i]}"
+      printf 'expected = "pass"\n'
+    done
+  } > "$tmp"
+  mv "$tmp" "$EXPECTED_FILE"
+}
+
+time_check="$BENCH_WORK_DIR/time-check.txt"
+if ! /usr/bin/time -v -o "$time_check" true >/dev/null 2>"$BENCH_WORK_DIR/time-check.err"; then
+  echo "error: /usr/bin/time must support -v" >&2
+  cat "$BENCH_WORK_DIR/time-check.err" >&2
+  exit 1
+fi
+if ! grep -q 'Maximum resident set size' "$time_check"; then
+  echo "error: /usr/bin/time -v output did not include maximum RSS" >&2
+  exit 1
+fi
+
+if [[ ! -x "$VOW" ]]; then
+  echo "error: target/release/vow not found; build it with: cargo build --release -p vow" >&2
+  exit 1
+fi
+
+mapfile -t PROGRAMS < <(find "$PROGRAM_DIR" -maxdepth 1 -name '*.vow' | sort)
+if [[ "${#PROGRAMS[@]}" -eq 0 ]]; then
+  echo "error: no .vow programs found in $PROGRAM_DIR" >&2
+  exit 1
+fi
+
+if [[ "$RECORD" == false && ! -f "$EXPECTED_FILE" ]]; then
+  echo "error: $EXPECTED_FILE not found" >&2
+  exit 1
+fi
+if [[ "$RECORD" == false ]]; then
+  check_expected_orphans
+fi
+
+RECORD_NAMES=()
+RECORD_SOURCES=()
+RECORD_BOUNDS=()
+OVERALL=0
+
+for source in "${PROGRAMS[@]}"; do
+  name="$(basename "$source" .vow)"
+  bound="$(bench_bound "$source")"
+  if [[ -z "$bound" ]]; then
+    echo "error: $source is missing // BENCH: max-rss-kb N" >&2
+    OVERALL=1
+    continue
+  fi
+
+  if [[ "$RECORD" == false ]]; then
+    if ! check_expected_sync "$source" "$name" "$bound"; then
+      OVERALL=1
+      continue
+    fi
+  fi
+
+  binary="$BENCH_WORK_DIR/$name"
+  build_stdout="$BENCH_WORK_DIR/$name.build.out"
+  build_stderr="$BENCH_WORK_DIR/$name.build.err"
+  run_stdout="$BENCH_WORK_DIR/$name.run.out"
+  run_stderr="$BENCH_WORK_DIR/$name.run.err"
+  time_log="$BENCH_WORK_DIR/$name.time.txt"
+
+  set +e
+  "$VOW" build --no-verify "$source" -o "$binary" >"$build_stdout" 2>"$build_stderr"
+  build_exit=$?
+  set -e
+
+  if [[ "$build_exit" -ne 0 || ! -x "$binary" ]]; then
+    emit_result "build_failed" "$name" "$source" "$binary" "$build_exit" "" "" "$bound" ""
+    if [[ -s "$build_stdout" ]]; then
+      printf '  build stdout (%s):\n' "$name" >&2
+      sed 's/^/    /' "$build_stdout" >&2
+    fi
+    if [[ -s "$build_stderr" ]]; then
+      printf '  build stderr (%s):\n' "$name" >&2
+      sed 's/^/    /' "$build_stderr" >&2
+    fi
+    OVERALL=1
+    continue
+  fi
+
+  set +e
+  ( ulimit -v "$ULIMIT_KB"; /usr/bin/time -v -o "$time_log" "$binary" >"$run_stdout" 2>"$run_stderr" )
+  run_exit=$?
+  set -e
+
+  max_rss="$(parse_max_rss "$time_log")"
+  wall="$(parse_wall_seconds "$time_log")"
+
+  if [[ "$run_exit" -ne 0 ]]; then
+    emit_result "run_failed" "$name" "$source" "$binary" "$build_exit" "$run_exit" "$max_rss" "$bound" "$wall"
+    OVERALL=1
+    continue
+  fi
+
+  if [[ -z "$max_rss" ]]; then
+    emit_result "run_failed" "$name" "$source" "$binary" "$build_exit" "$run_exit" "" "$bound" "$wall"
+    OVERALL=1
+    continue
+  fi
+
+  if [[ "$RECORD" == false && "$max_rss" -gt "$bound" ]]; then
+    emit_result "rss_exceeded" "$name" "$source" "$binary" "$build_exit" "$run_exit" "$max_rss" "$bound" "$wall"
+    OVERALL=1
+    continue
+  fi
+
+  emit_result "pass" "$name" "$source" "$binary" "$build_exit" "$run_exit" "$max_rss" "$bound" "$wall"
+
+  if [[ "$RECORD" == true ]]; then
+    RECORD_NAMES+=("$name")
+    RECORD_SOURCES+=("$source")
+    RECORD_BOUNDS+=("$((max_rss + CUSHION_KB))")
+  fi
+done
+
+if [[ "$RECORD" == true ]]; then
+  if [[ "$OVERALL" -ne 0 ]]; then
+    echo "record aborted because one or more programs failed to build or run" >&2
+  else
+    for i in "${!RECORD_SOURCES[@]}"; do
+      rewrite_annotation "${RECORD_SOURCES[$i]}" "${RECORD_BOUNDS[$i]}"
+    done
+    rewrite_expected
+    echo "recorded ${#RECORD_NAMES[@]} memory bounds with ${CUSHION_KB} KiB cushion"
+  fi
+fi
+
+exit "$OVERALL"

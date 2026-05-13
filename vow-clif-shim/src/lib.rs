@@ -97,6 +97,14 @@ fn ity_to_cranelift(ty: i64) -> Option<types::Type> {
     }
 }
 
+fn signature_return_ty(ret_ty: i64, is_main: bool) -> Option<types::Type> {
+    if is_main && ret_ty == ITY_UNIT {
+        Some(types::I32)
+    } else {
+        ity_to_cranelift(ret_ty)
+    }
+}
+
 const IOP_CONST_I32: i64 = 0;
 const IOP_CONST_I64: i64 = 1;
 const IOP_CONST_F32: i64 = 2;
@@ -195,6 +203,19 @@ const REGION_KIND_CALLER: i64 = 1;
 const REGION_KIND_ROOT: i64 = 2;
 const REGION_KIND_RODATA: i64 = 3;
 
+const RSUM_KIND_FRESH_IN_CALLER: i64 = 0;
+const RSUM_KIND_ALIAS_OF: i64 = 1;
+const RSUM_KIND_ALIAS_OF_ANY: i64 = 2;
+const RSUM_KIND_CONSTANT_GLOBAL: i64 = 3;
+
+fn region_pack(kind: i64, val: i64) -> i64 {
+    val * 4 + kind
+}
+
+fn region_root() -> i64 {
+    region_pack(REGION_KIND_ROOT, 0)
+}
+
 fn extern_uses_target_region(sym: &str) -> bool {
     matches!(
         sym,
@@ -202,11 +223,396 @@ fn extern_uses_target_region(sym: &str) -> bool {
     )
 }
 
+fn hidden_region_store_targets(flat: &[i64]) -> Vec<i64> {
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i + 1 < flat.len() {
+        let target = flat[i];
+        out.push(target);
+        i = store_effect_advance(flat, i);
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+fn store_effect_advance(flat: &[i64], start: usize) -> usize {
+    if start + 1 >= flat.len() {
+        return flat.len();
+    }
+    let kind = flat[start + 1];
+    let mut i = start + 2;
+    match kind {
+        RSUM_KIND_ALIAS_OF => i += 1,
+        RSUM_KIND_ALIAS_OF_ANY if i < flat.len() => {
+            let n = flat[i].max(0) as usize;
+            i = i.saturating_add(1).saturating_add(n);
+        }
+        RSUM_KIND_FRESH_IN_CALLER | RSUM_KIND_CONSTANT_GLOBAL => {}
+        _ => {}
+    }
+    i.min(flat.len())
+}
+
+fn hidden_region_for_store_target(
+    return_kind: i64,
+    store_effects: &[i64],
+    target_param: i64,
+) -> Option<i64> {
+    let mut hidden_idx = 0i64;
+    if return_kind == RSUM_KIND_FRESH_IN_CALLER {
+        hidden_idx += 1;
+    }
+    for target in hidden_region_store_targets(store_effects) {
+        if target == target_param {
+            return Some(region_pack(REGION_KIND_CALLER, hidden_idx));
+        }
+        hidden_idx += 1;
+    }
+    None
+}
+
+fn hidden_region_count(return_kind: i64, store_effects: &[i64], is_main: bool) -> usize {
+    if is_main {
+        return 0;
+    }
+    let mut count = 0usize;
+    if return_kind == RSUM_KIND_FRESH_IN_CALLER {
+        count += 1;
+    }
+    count + hidden_region_store_targets(store_effects).len()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn inst_region_for_value(
+    inst_id: i64,
+    inst_region_by_id: &HashMap<i64, i64>,
+    inst_data_by_id: &HashMap<i64, (i64, i64)>,
+    inst_op_by_id: &HashMap<i64, i64>,
+    upsilon_sources_by_phi: &HashMap<i64, Vec<i64>>,
+    return_kind: i64,
+    store_effects: &[i64],
+) -> i64 {
+    inst_region_for_value_inner(
+        inst_id,
+        inst_region_by_id,
+        inst_data_by_id,
+        inst_op_by_id,
+        upsilon_sources_by_phi,
+        return_kind,
+        store_effects,
+        &mut std::collections::HashSet::new(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn inst_region_for_value_inner(
+    inst_id: i64,
+    inst_region_by_id: &HashMap<i64, i64>,
+    inst_data_by_id: &HashMap<i64, (i64, i64)>,
+    inst_op_by_id: &HashMap<i64, i64>,
+    upsilon_sources_by_phi: &HashMap<i64, Vec<i64>>,
+    return_kind: i64,
+    store_effects: &[i64],
+    seen: &mut std::collections::HashSet<i64>,
+) -> i64 {
+    if !seen.insert(inst_id) {
+        return inst_region_by_id
+            .get(&inst_id)
+            .copied()
+            .unwrap_or_else(region_root);
+    }
+    if let Some(&(dk, dv)) = inst_data_by_id.get(&inst_id)
+        && dk == IDATA_ARG_INDEX
+        && let Some(rgn) = hidden_region_for_store_target(return_kind, store_effects, dv)
+    {
+        return rgn;
+    }
+    if inst_op_by_id.get(&inst_id).copied() == Some(IOP_PHI)
+        && let Some(sources) = upsilon_sources_by_phi.get(&inst_id)
+    {
+        let mut merged: Option<i64> = None;
+        for &source_id in sources {
+            let mut source_seen = seen.clone();
+            let rgn = inst_region_for_value_inner(
+                source_id,
+                inst_region_by_id,
+                inst_data_by_id,
+                inst_op_by_id,
+                upsilon_sources_by_phi,
+                return_kind,
+                store_effects,
+                &mut source_seen,
+            );
+            match merged {
+                Some(existing) if existing != rgn => {
+                    return inst_region_by_id
+                        .get(&inst_id)
+                        .copied()
+                        .unwrap_or_else(region_root);
+                }
+                Some(_) => {}
+                None => merged = Some(rgn),
+            }
+        }
+        if let Some(rgn) = merged {
+            return rgn;
+        }
+    }
+    inst_region_by_id
+        .get(&inst_id)
+        .copied()
+        .unwrap_or_else(region_root)
+}
+
+fn block_arena_value(
+    builder: &mut FunctionBuilder<'_>,
+    block_arena_slots: &mut BTreeMap<i64, StackSlot>,
+    block_id: i64,
+) -> Value {
+    let slot = block_arena_slot(builder, block_arena_slots, block_id);
+    builder.ins().stack_addr(types::I64, slot, 0)
+}
+
+fn block_arena_slot(
+    builder: &mut FunctionBuilder<'_>,
+    block_arena_slots: &mut BTreeMap<i64, StackSlot>,
+    block_id: i64,
+) -> StackSlot {
+    let (slot, created) = block_arena_slot_with_created(builder, block_arena_slots, block_id);
+    if created {
+        // The runtime writes the whole address-taken arena header; make
+        // Cranelift reserve the complete declared slot, not just the pointer.
+        let zero = builder.ins().iconst(types::I64, 0);
+        for offset in (0..VOW_ARENA_HEADER_SIZE as i32).step_by(8) {
+            builder.ins().stack_store(zero, slot, offset);
+        }
+    }
+    slot
+}
+
+fn block_arena_slot_with_created(
+    builder: &mut FunctionBuilder<'_>,
+    block_arena_slots: &mut BTreeMap<i64, StackSlot>,
+    block_id: i64,
+) -> (StackSlot, bool) {
+    if let Some(&slot) = block_arena_slots.get(&block_id) {
+        return (slot, false);
+    }
+    let slot = builder.create_sized_stack_slot(StackSlotData::new(
+        StackSlotKind::ExplicitSlot,
+        VOW_ARENA_HEADER_SIZE,
+        VOW_ARENA_HEADER_ALIGN_LOG2,
+    ));
+    block_arena_slots.insert(block_id, slot);
+    (slot, true)
+}
+
+fn arena_value_for_region(
+    builder: &mut FunctionBuilder<'_>,
+    rgn: i64,
+    hidden_region_values: &[Value],
+    block_arena_slots: &mut BTreeMap<i64, StackSlot>,
+    root_arena_gv: GlobalValue,
+) -> Option<Value> {
+    let kind = rgn & 3;
+    let payload = rgn >> 2;
+    match kind {
+        REGION_KIND_ROOT => Some(builder.ins().global_value(types::I64, root_arena_gv)),
+        REGION_KIND_BLOCK => Some(block_arena_value(builder, block_arena_slots, payload)),
+        REGION_KIND_CALLER => {
+            // Issue #317: AMBIGUOUS sentinel (val=u32::MAX) signals
+            // slot-aware inference saw a multi-slot disagreement. The
+            // post-inference store-conflict check rejects any STORE whose
+            // source has this region; codegen still has to lower the
+            // alloc itself (it may sit on a non-store path), so fall back
+            // to slot 0 as a safe placeholder.
+            let resolved = if payload == u32::MAX as i64 {
+                0
+            } else {
+                payload
+            };
+            hidden_region_values
+                .get(resolved as usize)
+                .copied()
+                .or_else(|| {
+                    eprintln!("clif_shim: missing hidden arena parameter k={payload}");
+                    None
+                })
+        }
+        REGION_KIND_RODATA => {
+            eprintln!("clif_shim: cannot allocate into REGION_KIND_RODATA");
+            None
+        }
+        _ => {
+            eprintln!("clif_shim: unknown region kind {kind}");
+            None
+        }
+    }
+}
+
+fn routed_vec_extern(sym: &str, inst_rgn: i64, receiver_rgn: i64) -> (&str, Option<i64>) {
+    match sym {
+        "__vow_vec_new" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_vec_new_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_vec_new_val" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_vec_new_val_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_vec_push_val" => {
+            let kind = receiver_rgn & 3;
+            if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
+                ("__vow_vec_push_val_in_arena", Some(receiver_rgn))
+            } else {
+                (sym, None)
+            }
+        }
+        "__vow_vec_push" => {
+            let kind = receiver_rgn & 3;
+            if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
+                ("__vow_vec_push_in_arena", Some(receiver_rgn))
+            } else {
+                (sym, None)
+            }
+        }
+        "__vow_string_new" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_new_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_from_cstr" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_from_cstr_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_clone" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_clone_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_substr" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_substr_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_substring" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_substring_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_from_i64" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_from_i64_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_split" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_split_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_trim" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_trim_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_to_upper" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_to_upper_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_to_lower" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_to_lower_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_replace" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_replace_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_join" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_string_join_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_string_push_str" => {
+            let kind = receiver_rgn & 3;
+            if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
+                ("__vow_string_push_str_in_arena", Some(receiver_rgn))
+            } else {
+                (sym, None)
+            }
+        }
+        "__vow_string_push_byte" => {
+            let kind = receiver_rgn & 3;
+            if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
+                ("__vow_string_push_byte_in_arena", Some(receiver_rgn))
+            } else {
+                (sym, None)
+            }
+        }
+        "__vow_map_new" => {
+            if (inst_rgn & 3) == REGION_KIND_ROOT {
+                (sym, None)
+            } else {
+                ("__vow_map_new_in_arena", Some(inst_rgn))
+            }
+        }
+        "__vow_map_insert" => {
+            let kind = receiver_rgn & 3;
+            if kind == REGION_KIND_BLOCK || kind == REGION_KIND_CALLER {
+                ("__vow_map_insert_in_arena", Some(receiver_rgn))
+            } else {
+                (sym, None)
+            }
+        }
+        _ => {
+            if extern_uses_target_region(sym) {
+                (sym, Some(inst_rgn))
+            } else {
+                (sym, None)
+            }
+        }
+    }
+}
+
 /// Size of `vow_runtime::VowArena` in bytes — asserted in
-/// `vow-runtime/src/lib.rs` (`assert!(size_of::<VowArena>() == 48)`).
+/// `vow-runtime/src/lib.rs` (`assert!(size_of::<VowArena>() == 56)`).
 /// Mirrors the same constant in `vow-codegen/src/cranelift_backend.rs`
 /// so a future `VowArena` resize updates both backends in lockstep.
-const VOW_ARENA_HEADER_SIZE: u32 = 48;
+const VOW_ARENA_HEADER_SIZE: u32 = 56;
 /// Log₂ of the `VowArena` header alignment (8 bytes — contains
 /// pointers). Mirrors `vow-codegen`.
 const VOW_ARENA_HEADER_ALIGN_LOG2: u8 = 3;
@@ -291,6 +697,8 @@ struct FuncDecl {
     param_tys: Vec<i64>,
     ret_ty: i64,
     is_main: bool,
+    return_kind: i64,
+    store_effects: Vec<i64>,
 }
 
 struct ModuleContext {
@@ -298,6 +706,7 @@ struct ModuleContext {
     obj_module: ObjectModule,
     builder_ctx: FunctionBuilderContext,
     string_data_ids: Vec<DataId>,
+    string_descriptor_data_ids: Vec<DataId>,
     func_decls: Vec<FuncDecl>,
     extern_func_ids: HashMap<String, CraneliftFuncId>,
     mode: i64,       // 0=release, 1=debug, 2=profile, 3=sanitize
@@ -433,6 +842,7 @@ pub extern "C" fn __vow_clif_create(mode: i64, trace_mode: i64) -> i64 {
         obj_module: ObjectModule::new(obj_builder),
         builder_ctx: FunctionBuilderContext::new(),
         string_data_ids: Vec::new(),
+        string_descriptor_data_ids: Vec::new(),
         func_decls: Vec::new(),
         extern_func_ids: HashMap::new(),
         mode,
@@ -470,6 +880,23 @@ pub unsafe extern "C" fn __vow_clif_add_string(ctx_ptr: i64, str_ptr: i64) {
         .define_data(data_id, &desc)
         .expect("define string data");
     ctx.string_data_ids.push(data_id);
+
+    let mut descriptor = vec![0u8; 24];
+    descriptor[8..16].copy_from_slice(&(s.len() as u64).to_le_bytes());
+    descriptor[16..24].copy_from_slice(&u64::MAX.to_le_bytes());
+    let mut desc = DataDescription::new();
+    desc.set_align(8);
+    desc.define(descriptor.into_boxed_slice());
+    let bytes_gv = ctx.obj_module.declare_data_in_data(data_id, &mut desc);
+    desc.write_data_addr(0, bytes_gv, 0);
+    let descriptor_id = ctx
+        .obj_module
+        .declare_anonymous_data(false, false)
+        .expect("declare string descriptor data");
+    ctx.obj_module
+        .define_data(descriptor_id, &desc)
+        .expect("define string descriptor data");
+    ctx.string_descriptor_data_ids.push(descriptor_id);
 }
 
 // ---------------------------------------------------------------------------
@@ -504,6 +931,8 @@ pub unsafe extern "C" fn __vow_clif_declare_function(
     n_params: i64,
     ret_ty: i64,
     is_main: i64,
+    return_kind: i64,
+    store_effects_ptr: i64,
 ) {
     let ctx = unsafe { &mut *(ctx_ptr as *mut ModuleContext) };
     let name = unsafe { read_vow_string(name_ptr) };
@@ -513,6 +942,11 @@ pub unsafe extern "C" fn __vow_clif_declare_function(
         &[]
     };
     let param_tys: Vec<i64> = param_slice.to_vec();
+    let store_effects = if store_effects_ptr != 0 {
+        unsafe { read_i64_slice(store_effects_ptr) }.to_vec()
+    } else {
+        Vec::new()
+    };
 
     let call_conv = ctx.isa.default_call_conv();
     let mut sig = Signature::new(call_conv);
@@ -521,7 +955,10 @@ pub unsafe extern "C" fn __vow_clif_declare_function(
             sig.params.push(AbiParam::new(cl_ty));
         }
     }
-    if let Some(cl_ty) = ity_to_cranelift(ret_ty) {
+    for _ in 0..hidden_region_count(return_kind, &store_effects, is_main != 0) {
+        sig.params.push(AbiParam::new(types::I64));
+    }
+    if let Some(cl_ty) = signature_return_ty(ret_ty, is_main != 0) {
         sig.returns.push(AbiParam::new(cl_ty));
     }
 
@@ -541,6 +978,8 @@ pub unsafe extern "C" fn __vow_clif_declare_function(
         param_tys,
         ret_ty,
         is_main: is_main != 0,
+        return_kind,
+        store_effects,
     });
 }
 
@@ -745,11 +1184,28 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
 
     // Build inst_id → block_index map
     let mut inst_block: HashMap<i64, usize> = HashMap::new();
+    let mut inst_region_by_id: HashMap<i64, i64> = HashMap::new();
+    let mut inst_data_by_id: HashMap<i64, (i64, i64)> = HashMap::new();
+    let mut inst_op_by_id: HashMap<i64, i64> = HashMap::new();
+    let mut upsilon_sources_by_phi: HashMap<i64, Vec<i64>> = HashMap::new();
     for bi in 0..nb {
         let start = block_starts[bi] as usize;
         let len = block_lengths[bi] as usize;
         for &iid in &inst_ids[start..start + len] {
             inst_block.insert(iid, bi);
+        }
+        for idx in start..start + len {
+            inst_region_by_id.insert(inst_ids[idx], inst_rgns[idx]);
+            inst_data_by_id.insert(inst_ids[idx], (inst_dks[idx], inst_dvs[idx]));
+            inst_op_by_id.insert(inst_ids[idx], inst_ops[idx]);
+            let aoff = arg_offsets[idx] as usize;
+            let alen = arg_lengths[idx] as usize;
+            if inst_ops[idx] == IOP_UPSILON && inst_dks[idx] == IDATA_PHI_TARGET && alen > 0 {
+                upsilon_sources_by_phi
+                    .entry(inst_dvs[idx])
+                    .or_default()
+                    .push(all_args[aoff]);
+            }
         }
     }
 
@@ -774,6 +1230,14 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
         .obj_module
         .declare_function("__vow_arena_close", Linkage::Import, &arena_open_close_sig)
         .expect("declare __vow_arena_close");
+    let arena_init_id = ctx
+        .obj_module
+        .declare_function(
+            "__vow_arena_init_closed",
+            Linkage::Import,
+            &arena_open_close_sig,
+        )
+        .expect("declare __vow_arena_init_closed");
 
     let root_arena_id = ctx
         .obj_module
@@ -882,7 +1346,15 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
             sig.params.push(AbiParam::new(cl_ty));
         }
     }
-    if let Some(cl_ty) = ity_to_cranelift(ret_ty) {
+    let is_main = ctx.func_decls[fi].is_main;
+    for _ in 0..hidden_region_count(
+        ctx.func_decls[fi].return_kind,
+        &ctx.func_decls[fi].store_effects,
+        is_main,
+    ) {
+        sig.params.push(AbiParam::new(types::I64));
+    }
+    if let Some(cl_ty) = signature_return_ty(ret_ty, is_main) {
         sig.returns.push(AbiParam::new(cl_ty));
     }
 
@@ -918,6 +1390,11 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
         let gv = ctx.obj_module.declare_data_in_func(data_id, builder.func);
         string_global_values.insert(idx as i64, gv);
     }
+    let mut string_descriptor_global_values: HashMap<i64, GlobalValue> = HashMap::new();
+    for (idx, &data_id) in ctx.string_descriptor_data_ids.iter().enumerate() {
+        let gv = ctx.obj_module.declare_data_in_func(data_id, builder.func);
+        string_descriptor_global_values.insert(idx as i64, gv);
+    }
 
     // Declare extern function refs
     let mut extern_func_refs: HashMap<String, FuncRef> = HashMap::new();
@@ -935,12 +1412,15 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
     let arena_close_ref = ctx
         .obj_module
         .declare_func_in_func(arena_close_id, builder.func);
+    let arena_init_ref = ctx
+        .obj_module
+        .declare_func_in_func(arena_init_id, builder.func);
     let root_arena_gv = ctx
         .obj_module
         .declare_data_in_func(root_arena_id, builder.func);
     // Per-block VowArena stack-slot map. Lazily populated on first use of
     // a given BlockId by `IOP_REGION_OPEN` / `IOP_REGION_CLOSE` /
-    // `IOP_REGION_ALLOC` with `REGION_KIND_BLOCK`. `VowArena` is 48 bytes,
+    // `IOP_REGION_ALLOC` with `REGION_KIND_BLOCK`. `VowArena` is 56 bytes,
     // 8-byte aligned (asserted in `vow-runtime/src/lib.rs`).
     //
     // BTreeMap (not HashMap) for the same reason `slot_map` below uses one
@@ -1098,6 +1578,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
 
     // Set up entry block arg values
     let mut arg_values: HashMap<i64, Value> = HashMap::new(); // arg_index → Value
+    let mut hidden_region_values: Vec<Value> = Vec::new();
     if nb > 0 {
         builder.switch_to_block(cl_blocks[0]);
         let entry_params = builder.block_params(cl_blocks[0]).to_vec();
@@ -1109,6 +1590,13 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                 }
                 cl_idx += 1;
             }
+        }
+        if !ctx.func_decls[fi].is_main && cl_idx < entry_params.len() {
+            hidden_region_values.extend(entry_params[cl_idx..].iter().copied());
+        }
+        if ctx.func_decls[fi].is_main {
+            let root_arena = builder.ins().global_value(types::I64, root_arena_gv);
+            hidden_region_values.push(root_arena);
         }
     }
 
@@ -1152,6 +1640,13 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
         }
     }
 
+    let mut block_arena_ids: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
+    for &rgn in inst_rgns.iter().take(n_insts) {
+        if (rgn & 3) == REGION_KIND_BLOCK {
+            block_arena_ids.insert(rgn >> 2);
+        }
+    }
+
     // Zero-initialize all stack slots to match C's typical behavior (GCC
     // zero-initializes locals). The self-hosted IR has uninitialized cross-block
     // refs that happen to work in C codegen due to this.
@@ -1159,6 +1654,11 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
         let zero = builder.ins().iconst(types::I64, 0);
         for &slot in slot_map.values() {
             builder.ins().stack_store(zero, slot, 0);
+        }
+        for payload in block_arena_ids {
+            let slot = block_arena_slot(&mut builder, &mut block_arena_slots, payload);
+            let arena_addr = builder.ins().stack_addr(types::I64, slot, 0);
+            builder.ins().call(arena_init_ref, &[arena_addr]);
         }
         // Emit stack_guard_init at main entry (all modes)
         if ctx.func_decls[fi].is_main {
@@ -1650,7 +2150,12 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                         builder.ins().call(se_ref, &[]);
                     }
                     if ret_ty == ITY_UNIT {
-                        builder.ins().return_(&[]);
+                        if is_main {
+                            let zero = builder.ins().iconst(types::I32, 0);
+                            builder.ins().return_(&[zero]);
+                        } else {
+                            builder.ins().return_(&[]);
+                        }
                     } else if alen > 0 {
                         let val_id = all_args[aoff];
                         if let Some(&val) = value_map.get(&val_id) {
@@ -1732,6 +2237,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
 
                 // Function calls
                 IOP_CALL => {
+                    let mut extern_target_region: Option<i64> = None;
                     let func_ref = match dk {
                         IDATA_CALL_TARGET => {
                             let target_idx = dv;
@@ -1744,10 +2250,58 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                         }
                         IDATA_CALL_EXTERN => {
                             let sym = unsafe { read_vow_string(inst_ds_ptrs[ii]) };
-                            if let Some(&fr) = extern_func_refs.get(sym) {
+                            if sym == "__vow_string_literal" {
+                                if alen == 0 {
+                                    eprintln!(
+                                        "clif_shim: __vow_string_literal missing ConstStr operand"
+                                    );
+                                    return -1;
+                                }
+                                let cstr_id = all_args[aoff];
+                                let Some(&(cstr_dk, cstr_idx)) = inst_data_by_id.get(&cstr_id)
+                                else {
+                                    eprintln!("clif_shim: __vow_string_literal operand not found");
+                                    return -1;
+                                };
+                                if cstr_dk != IDATA_CONST_STR {
+                                    eprintln!(
+                                        "clif_shim: __vow_string_literal operand is not ConstStr"
+                                    );
+                                    return -1;
+                                }
+                                let Some(&gv) = string_descriptor_global_values.get(&cstr_idx)
+                                else {
+                                    eprintln!(
+                                        "clif_shim: missing string descriptor global for literal {cstr_idx}"
+                                    );
+                                    return -1;
+                                };
+                                let ptr = builder.ins().global_value(types::I64, gv);
+                                set_val!(iid, ptr);
+                                continue;
+                            }
+                            let receiver_rgn = if alen > 0 {
+                                let receiver_id = all_args[aoff];
+                                let decl = &ctx.func_decls[fi];
+                                inst_region_for_value(
+                                    receiver_id,
+                                    &inst_region_by_id,
+                                    &inst_data_by_id,
+                                    &inst_op_by_id,
+                                    &upsilon_sources_by_phi,
+                                    decl.return_kind,
+                                    &decl.store_effects,
+                                )
+                            } else {
+                                region_root()
+                            };
+                            let (routed_sym, target_region) =
+                                routed_vec_extern(sym, inst_rgns[ii], receiver_rgn);
+                            extern_target_region = target_region;
+                            if let Some(&fr) = extern_func_refs.get(routed_sym) {
                                 fr
                             } else {
-                                eprintln!("clif_shim: unknown extern symbol: {sym}");
+                                eprintln!("clif_shim: unknown extern symbol: {routed_sym}");
                                 return -1;
                             }
                         }
@@ -1763,31 +2317,17 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                         .map(|p| p.value_type)
                         .collect();
                     let mut call_args: Vec<Value> = Vec::new();
-                    if dk == IDATA_CALL_EXTERN {
-                        let sym = unsafe { read_vow_string(inst_ds_ptrs[ii]) };
-                        if extern_uses_target_region(sym) {
-                            let rgn = inst_rgns[ii];
-                            let kind = rgn & 3;
-                            let payload = rgn >> 2;
-                            let arena = match kind {
-                                REGION_KIND_ROOT | REGION_KIND_CALLER => {
-                                    builder.ins().global_value(types::I64, root_arena_gv)
-                                }
-                                REGION_KIND_BLOCK => {
-                                    let slot =
-                                        *block_arena_slots.entry(payload).or_insert_with(|| {
-                                            builder.create_sized_stack_slot(StackSlotData::new(
-                                                StackSlotKind::ExplicitSlot,
-                                                48,
-                                                3,
-                                            ))
-                                        });
-                                    builder.ins().stack_addr(types::I64, slot, 0)
-                                }
-                                _ => builder.ins().global_value(types::I64, root_arena_gv),
-                            };
-                            call_args.push(arena);
-                        }
+                    if let Some(rgn) = extern_target_region {
+                        let Some(arena) = arena_value_for_region(
+                            &mut builder,
+                            rgn,
+                            &hidden_region_values,
+                            &mut block_arena_slots,
+                            root_arena_gv,
+                        ) else {
+                            return -1;
+                        };
+                        call_args.push(arena);
                     }
                     let hidden_arg_offset = call_args.len();
                     for i in 0..alen {
@@ -1811,6 +2351,57 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                                 v
                             };
                         call_args.push(v);
+                    }
+                    if dk == IDATA_CALL_TARGET {
+                        let target_idx = dv;
+                        if let Some(decl) = ctx.func_decls.get(target_idx as usize) {
+                            let mut push_hidden = |builder: &mut FunctionBuilder<'_>,
+                                                   call_args: &mut Vec<Value>,
+                                                   rgn: i64|
+                             -> bool {
+                                if call_args.len() >= expected_types.len() {
+                                    return true;
+                                }
+                                let Some(arena) = arena_value_for_region(
+                                    builder,
+                                    rgn,
+                                    &hidden_region_values,
+                                    &mut block_arena_slots,
+                                    root_arena_gv,
+                                ) else {
+                                    return false;
+                                };
+                                call_args.push(arena);
+                                true
+                            };
+                            if decl.return_kind == RSUM_KIND_FRESH_IN_CALLER
+                                && !push_hidden(&mut builder, &mut call_args, inst_rgns[ii])
+                            {
+                                return -1;
+                            }
+                            let store_targets = hidden_region_store_targets(&decl.store_effects);
+                            for target_param in store_targets {
+                                let arg_rgn = if target_param >= 0 && (target_param as usize) < alen
+                                {
+                                    let arg_id = all_args[aoff + target_param as usize];
+                                    let current_decl = &ctx.func_decls[fi];
+                                    inst_region_for_value(
+                                        arg_id,
+                                        &inst_region_by_id,
+                                        &inst_data_by_id,
+                                        &inst_op_by_id,
+                                        &upsilon_sources_by_phi,
+                                        current_decl.return_kind,
+                                        &current_decl.store_effects,
+                                    )
+                                } else {
+                                    region_root()
+                                };
+                                if !push_hidden(&mut builder, &mut call_args, arg_rgn) {
+                                    return -1;
+                                }
+                            }
+                        }
                     }
                     let call_inst = builder.ins().call(func_ref, &call_args);
                     let results = builder.inst_results(call_inst);
@@ -1864,57 +2455,19 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                 // Region / linear
                 IOP_REGION_ALLOC => {
                     let rgn = inst_rgns[ii];
-                    let kind = rgn & 3;
-                    let payload = rgn >> 2;
                     let (size, align) = if dk == IDATA_ALLOC_SIZE {
                         (dv, dv2)
                     } else {
                         (0, 8)
                     };
-                    let arena = match kind {
-                        REGION_KIND_ROOT => builder.ins().global_value(types::I64, root_arena_gv),
-                        REGION_KIND_BLOCK => {
-                            let slot = *block_arena_slots.entry(payload).or_insert_with(|| {
-                                builder.create_sized_stack_slot(StackSlotData::new(
-                                    StackSlotKind::ExplicitSlot,
-                                    VOW_ARENA_HEADER_SIZE,
-                                    VOW_ARENA_HEADER_ALIGN_LOG2,
-                                ))
-                            });
-                            builder.ins().stack_addr(types::I64, slot, 0)
-                        }
-                        REGION_KIND_CALLER => {
-                            // Hidden-region plumbing (spec §5.2) is not yet
-                            // wired in the shim — `__vow_clif_declare_function`
-                            // does not accept a hidden-param count, so the
-                            // self-hosted compiler cannot emit any
-                            // `Caller`-routed allocation regardless of `k`.
-                            // Reject all `k` values rather than silently
-                            // routing into the root arena. Phase 5 (#200)
-                            // extends the declare API and lifts this reject.
-                            eprintln!(
-                                "clif_shim: IOP_REGION_ALLOC with REGION_KIND_CALLER \
-                                 (k={}) is not yet wired — self-hosted compiler must \
-                                 not emit Caller-routed allocations until hidden-param \
-                                 plumbing lands",
-                                payload,
-                            );
-                            return -1;
-                        }
-                        REGION_KIND_RODATA => {
-                            eprintln!(
-                                "clif_shim: IOP_REGION_ALLOC with REGION_KIND_RODATA \
-                                 is invalid — rodata-backed values are static, not \
-                                 allocated"
-                            );
-                            return -1;
-                        }
-                        _ => {
-                            eprintln!(
-                                "clif_shim: IOP_REGION_ALLOC with unknown region kind {kind}"
-                            );
-                            return -1;
-                        }
+                    let Some(arena) = arena_value_for_region(
+                        &mut builder,
+                        rgn,
+                        &hidden_region_values,
+                        &mut block_arena_slots,
+                        root_arena_gv,
+                    ) else {
+                        return -1;
                     };
                     let size_val = builder.ins().iconst(types::I64, size);
                     let align_val = builder.ins().iconst(types::I64, align);
@@ -1946,13 +2499,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                         return -1;
                     }
                     let payload = rgn >> 2;
-                    let slot = *block_arena_slots.entry(payload).or_insert_with(|| {
-                        builder.create_sized_stack_slot(StackSlotData::new(
-                            StackSlotKind::ExplicitSlot,
-                            VOW_ARENA_HEADER_SIZE,
-                            VOW_ARENA_HEADER_ALIGN_LOG2,
-                        ))
-                    });
+                    let slot = block_arena_slot(&mut builder, &mut block_arena_slots, payload);
                     let arena_addr = builder.ins().stack_addr(types::I64, slot, 0);
                     let func_ref = if op == IOP_REGION_OPEN {
                         arena_open_ref
@@ -2081,16 +2628,20 @@ pub unsafe extern "C" fn __vow_clif_link(obj_path_ptr: i64, output_path_ptr: i64
     let obj_path = unsafe { read_vow_string(obj_path_ptr) };
     let output_path = unsafe { read_vow_string(output_path_ptr) };
 
-    let runtime_lib = find_lib("libvow_runtime.a");
+    let runtime_lib = match find_lib("libvow_runtime.a") {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "clif_shim: could not find libvow_runtime.a; build it with `cargo build --release --all` or set VOW_RUNTIME_PATH"
+            );
+            return -1;
+        }
+    };
     let shim_lib = find_lib("libvow_clif_shim.a");
 
     let mut cmd = std::process::Command::new("cc");
     cmd.arg(obj_path);
-    if let Some(ref rt) = runtime_lib {
-        cmd.arg(rt);
-    } else {
-        eprintln!("clif_shim: warning: could not find libvow_runtime.a");
-    }
+    cmd.arg(&runtime_lib);
     if let Some(ref sl) = shim_lib {
         cmd.arg(sl);
     }
@@ -2118,38 +2669,82 @@ pub unsafe extern "C" fn __vow_clif_link(obj_path_ptr: i64, output_path_ptr: i64
 // ---------------------------------------------------------------------------
 
 fn find_lib(name: &str) -> Option<String> {
-    // Check env var
     let env_key = if name.contains("runtime") {
         "VOW_RUNTIME_PATH"
     } else {
         "VOW_CLIF_SHIM_PATH"
     };
-    if let Ok(p) = std::env::var(env_key)
-        && std::path::Path::new(&p).exists()
-    {
-        return Some(p);
+    let exe = std::env::current_exe().ok();
+    find_lib_from_parts(name, std::env::var_os(env_key), exe.as_deref())
+}
+
+fn find_lib_from_parts(
+    name: &str,
+    env_value: Option<std::ffi::OsString>,
+    exe: Option<&std::path::Path>,
+) -> Option<String> {
+    let target_dir = cargo_target_dir();
+    find_lib_from_parts_with_target_dir(name, env_value, exe, &target_dir)
+}
+
+fn find_lib_from_parts_with_target_dir(
+    name: &str,
+    env_value: Option<std::ffi::OsString>,
+    exe: Option<&std::path::Path>,
+    target_dir: &std::path::Path,
+) -> Option<String> {
+    if let Some(p) = env_value {
+        let path = std::path::PathBuf::from(p);
+        if path.exists() {
+            return Some(path.to_string_lossy().into_owned());
+        }
     }
 
-    // Adjacent to current exe
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
+    if let Some(exe) = exe
+        && let Some(path) = find_installed_lib_for_exe(name, exe)
     {
+        return Some(path);
+    }
+
+    find_lib_in_cargo_target(name, target_dir)
+}
+
+fn find_installed_lib_for_exe(name: &str, exe: &std::path::Path) -> Option<String> {
+    if let Some(dir) = exe.parent() {
+        // Preserve the legacy adjacent-to-exe lookup before prefix paths so
+        // manual installs that co-locate the static libraries with vowc keep
+        // working.
         let p = dir.join(name);
         if p.exists() {
             return Some(p.to_string_lossy().into_owned());
         }
+        if let Some(prefix) = dir.parent() {
+            let p = prefix.join("lib").join("vow").join(name);
+            if p.exists() {
+                return Some(p.to_string_lossy().into_owned());
+            }
+            let p = prefix.join("lib").join(name);
+            if p.exists() {
+                return Some(p.to_string_lossy().into_owned());
+            }
+        }
     }
 
-    // Cargo target directories (for development)
-    for profile in &["release", "debug"] {
-        let p = format!(
-            "{}/../target/{}/{}",
-            env!("CARGO_MANIFEST_DIR"),
-            profile,
-            name
-        );
-        if std::path::Path::new(&p).exists() {
-            return Some(p);
+    None
+}
+
+fn cargo_target_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../target"))
+}
+
+fn find_lib_in_cargo_target(name: &str, target_dir: &std::path::Path) -> Option<String> {
+    // Development fallback only: env overrides and installed-prefix libraries
+    // are checked first, so prefer plain cargo build/test artifacts here while
+    // still accepting release bootstrap artifacts.
+    for profile in &["debug", "release"] {
+        let p = target_dir.join(profile).join(name);
+        if p.exists() {
+            return Some(p.to_string_lossy().into_owned());
         }
     }
 
@@ -2325,7 +2920,17 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_vec_new_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_vec_new_val" => {
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_vec_new_val_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_vec_from_raw_parts_copy_val" => {
@@ -2343,6 +2948,25 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_vec_push_val" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        "__vow_vec_push_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        "__vow_vec_push_val_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        "__vow_vec_reserve_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
         }
@@ -2371,7 +2995,27 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_string_new_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_string_from_cstr" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_from_cstr_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_clone" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_clone_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
@@ -2402,7 +3046,19 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I8));
         }
+        "__vow_string_matches_literal_at" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_string_push_str" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_push_str_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
         }
@@ -2415,7 +3071,17 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
         }
+        "__vow_string_push_byte_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+        }
         "__vow_string_from_i64" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_from_i64_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
@@ -2423,6 +3089,22 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
         }
         "__vow_fs_read" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_fs_open" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_fs_read_line" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_fs_status" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_fs_close" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
@@ -2466,7 +3148,21 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_string_substr_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_string_substring" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_substring_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
@@ -2481,6 +3177,12 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_string_split_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_string_starts_with" | "__vow_string_ends_with" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
@@ -2490,13 +3192,33 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_string_trim_in_arena"
+        | "__vow_string_to_upper_in_arena"
+        | "__vow_string_to_lower_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_string_replace" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_string_replace_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_string_join" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_string_join_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
@@ -2516,6 +3238,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_num_cpus" => {
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_memory_root_arena_bytes"
+        | "__vow_memory_peak_bytes"
+        | "__vow_memory_alloc_count_since_start" => {
             sig.returns.push(AbiParam::new(types::I64));
         }
         "__vow_hex_encode" => {
@@ -2583,7 +3310,17 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_map_new" => {
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "__vow_map_new_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.returns.push(AbiParam::new(types::I64));
+        }
         "__vow_map_insert" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        "__vow_map_insert_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
@@ -2602,9 +3339,37 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
         }
+        "__vow_map_remove_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+        }
         "__vow_map_len" => {
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_btreemap_new" => {
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_btreemap_len" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_btreemap_insert" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_btreemap_get" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "__vow_btreemap_contains" => {
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I8));
         }
         "__vow_unwrap_panic" => {}
         // Cranelift shim FFI (for self-hosting: the binary calls back into the shim)
@@ -2637,7 +3402,7 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64));
         }
         "__vow_clif_declare_function" => {
-            for _ in 0..7 {
+            for _ in 0..9 {
                 sig.params.push(AbiParam::new(types::I64));
             }
         }
@@ -2690,4 +3455,132 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         }
     }
     sig
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hidden_region_for_store_target_uses_sorted_target_slots() {
+        let flat = [1, RSUM_KIND_CONSTANT_GLOBAL, 0, RSUM_KIND_CONSTANT_GLOBAL];
+        assert_eq!(
+            hidden_region_for_store_target(RSUM_KIND_CONSTANT_GLOBAL, &flat, 0),
+            Some(region_pack(REGION_KIND_CALLER, 0))
+        );
+        assert_eq!(
+            hidden_region_for_store_target(RSUM_KIND_CONSTANT_GLOBAL, &flat, 1),
+            Some(region_pack(REGION_KIND_CALLER, 1))
+        );
+        assert_eq!(
+            hidden_region_for_store_target(RSUM_KIND_FRESH_IN_CALLER, &flat, 0),
+            Some(region_pack(REGION_KIND_CALLER, 1))
+        );
+        assert_eq!(
+            hidden_region_for_store_target(RSUM_KIND_FRESH_IN_CALLER, &flat, 1),
+            Some(region_pack(REGION_KIND_CALLER, 2))
+        );
+    }
+
+    #[test]
+    fn finds_lib_in_installed_lib_vow_dir() {
+        let root = tempfile::TempDir::new().unwrap();
+        let bin_dir = root.path().join("bin");
+        let lib_dir = root.path().join("lib").join("vow");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::create_dir_all(&lib_dir).unwrap();
+        let exe = bin_dir.join("vowc");
+        let lib = lib_dir.join("libvow_runtime.a");
+        std::fs::write(&exe, b"").unwrap();
+        std::fs::write(&lib, b"").unwrap();
+
+        let found = find_lib_from_parts_with_target_dir(
+            "libvow_runtime.a",
+            None,
+            Some(&exe),
+            &root.path().join("target"),
+        );
+        let expected = lib.to_string_lossy().into_owned();
+        assert_eq!(found.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn finds_lib_in_installed_lib_dir() {
+        let root = tempfile::TempDir::new().unwrap();
+        let bin_dir = root.path().join("bin");
+        let lib_dir = root.path().join("lib");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::create_dir_all(&lib_dir).unwrap();
+        let exe = bin_dir.join("vowc");
+        let lib = lib_dir.join("libvow_runtime.a");
+        std::fs::write(&exe, b"").unwrap();
+        std::fs::write(&lib, b"").unwrap();
+
+        let found = find_lib_from_parts_with_target_dir(
+            "libvow_runtime.a",
+            None,
+            Some(&exe),
+            &root.path().join("target"),
+        );
+        let expected = lib.to_string_lossy().into_owned();
+        assert_eq!(found.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn env_override_does_not_require_current_exe() {
+        let root = tempfile::TempDir::new().unwrap();
+        let lib = root.path().join("libvow_runtime.a");
+        std::fs::write(&lib, b"").unwrap();
+
+        let found =
+            find_lib_from_parts("libvow_runtime.a", Some(lib.clone().into_os_string()), None);
+        let expected = lib.to_string_lossy().into_owned();
+        assert_eq!(found.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn cargo_target_fallback_does_not_require_current_exe() {
+        let root = tempfile::TempDir::new().unwrap();
+        let debug_dir = root.path().join("debug");
+        std::fs::create_dir_all(&debug_dir).unwrap();
+        let lib = debug_dir.join("libvow_runtime.a");
+        std::fs::write(&lib, b"").unwrap();
+
+        let found =
+            find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, root.path());
+        let expected = lib.to_string_lossy().into_owned();
+        assert_eq!(found.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn cargo_target_fallback_accepts_release_when_debug_missing() {
+        let root = tempfile::TempDir::new().unwrap();
+        let release_dir = root.path().join("release");
+        std::fs::create_dir_all(&release_dir).unwrap();
+        let lib = release_dir.join("libvow_runtime.a");
+        std::fs::write(&lib, b"").unwrap();
+
+        let found =
+            find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, root.path());
+        let expected = lib.to_string_lossy().into_owned();
+        assert_eq!(found.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn cargo_target_fallback_prefers_debug_before_release() {
+        let root = tempfile::TempDir::new().unwrap();
+        let debug_dir = root.path().join("debug");
+        let release_dir = root.path().join("release");
+        std::fs::create_dir_all(&debug_dir).unwrap();
+        std::fs::create_dir_all(&release_dir).unwrap();
+        let debug_lib = debug_dir.join("libvow_runtime.a");
+        let release_lib = release_dir.join("libvow_runtime.a");
+        std::fs::write(&debug_lib, b"debug").unwrap();
+        std::fs::write(&release_lib, b"release").unwrap();
+
+        let found =
+            find_lib_from_parts_with_target_dir("libvow_runtime.a", None, None, root.path());
+        let expected = debug_lib.to_string_lossy().into_owned();
+        assert_eq!(found.as_deref(), Some(expected.as_str()));
+    }
 }

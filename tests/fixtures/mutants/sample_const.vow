@@ -1,0 +1,11 @@
+module SampleConst
+
+fn main() -> i32 [io] {
+    let zero: i64 = 0;
+    let one: i64 = 1;
+    let flag: bool = true;
+    let off: bool = false;
+    let _used: i64 = zero + one;
+    let _f: bool = flag || off;
+    0
+}

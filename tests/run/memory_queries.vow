@@ -1,0 +1,27 @@
+// TEST: stdout "ok"
+module MemoryQueries
+
+fn main() -> i32 [io] {
+    let start_root: u64 = memory_root_arena_bytes();
+    let start_peak: u64 = memory_peak_bytes();
+    let start_count: u64 = memory_alloc_count_since_start();
+
+    let v: Vec<i64> = Vec::new();
+    v.push(1);
+    v.push(2);
+
+    let end_root: u64 = memory_root_arena_bytes();
+    let end_peak: u64 = memory_peak_bytes();
+    let end_count: u64 = memory_alloc_count_since_start();
+
+    if start_root > 0u64
+        && start_peak >= start_root
+        && end_root >= start_root
+        && end_peak >= end_root
+        && end_count > start_count
+    {
+        print_str("ok");
+    }
+
+    0
+}

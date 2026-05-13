@@ -1,0 +1,12 @@
+// TEST: error-code RegionLiteralMutation
+module StringLiteralFieldMutation
+
+struct Box {
+    s: String,
+}
+
+fn main() -> i32 [io] {
+    let b: Box = Box { s: "a" };
+    b.s.push_byte(33);
+    0
+}

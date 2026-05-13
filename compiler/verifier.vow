@@ -11,6 +11,7 @@ fn VERIFY_TIMEOUT() -> i64 vow { ensures: result >= 0 } { 2 }
 fn VERIFY_ERROR() -> i64 vow { ensures: result >= 0 } { 3 }
 fn VERIFY_NOT_FOUND() -> i64 vow { ensures: result >= 0 } { 4 }
 fn VERIFY_PROVEN_IR() -> i64 vow { ensures: result >= 0 } { 5 }
+fn VERIFY_UNKNOWN() -> i64 vow { ensures: result >= 0 } { 6 }
 
 struct VerifyResult {
     status: i64,
@@ -168,40 +169,10 @@ fn emit_harness(f: IrFunction) -> String {
     out
 }
 
-fn emit_c_preamble(vec_max: i64, string_max: i64, hashmap_max: i64) -> String {
-    let out: String = String::from("");
-    out.push_str(String::from("#include <stdint.h>\n"));
-    out.push_str(String::from("#include <stdbool.h>\n"));
-    out.push_str(String::from("extern void __ESBMC_assume(_Bool);\n"));
-    out.push_str(String::from("extern void __ESBMC_assert(_Bool, const char*);\n"));
-    out.push_str(String::from("extern int __VERIFIER_nondet_int(void);\n"));
-    out.push_str(String::from("extern long __VERIFIER_nondet_long(void);\n"));
-    out.push_str(String::from("extern float __VERIFIER_nondet_float(void);\n"));
-    out.push_str(String::from("extern double __VERIFIER_nondet_double(void);\n"));
-    out.push_str(String::from("extern _Bool __VERIFIER_nondet_bool(void);\n\n"));
-    out.push_str(str3(
-        String::from("typedef struct { int64_t len; int64_t data["),
-        i64_to_str(vec_max),
-        String::from("]; } __vow_vec_t;\n")
-    ));
-    out.push_str(str3(
-        String::from("typedef struct { int64_t len; int8_t data["),
-        i64_to_str(string_max),
-        String::from("]; } __vow_string_t;\n")
-    ));
-    out.push_str(str5(
-        String::from("typedef struct { int64_t len; int64_t keys["),
-        i64_to_str(hashmap_max),
-        String::from("]; int64_t vals["),
-        i64_to_str(hashmap_max),
-        String::from("]; } __vow_hashmap_t;\n\n")
-    ));
-    out
-}
-
-fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64) -> String {
+fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> String {
     let const_fn_indices: Vec<i64> = detect_const_fns(m);
     let callee_fis: Vec<i64> = collect_modelable_callees(f, m, const_fn_indices);
+    let model_string_max: i64 = string_max_for_literals(m, string_max);
 
     let out: String = {
         if callee_fis.len() > 0 {
@@ -211,17 +182,17 @@ fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, 
                 modelable_fi_set.push(callee_fis[ci]);
                 ci = ci + 1;
             }
-            emit_c_module_with_callees(m, f.id, callee_fis, modelable_fi_set, vec_max, string_max, hashmap_max)
+            emit_c_module_with_callees(m, f.id, callee_fis, modelable_fi_set, vec_max, model_string_max, hashmap_max, btreemap_max)
         } else {
             let preamble: String = cemit_preamble_with_limits(
                 func_has_shift_op(f, IOP_SHL_I64()),
                 func_has_shift_op(f, IOP_SHR_I64()),
                 func_has_shift_op(f, IOP_SHL_U64()),
                 func_has_shift_op(f, IOP_SHR_U64()),
-                vec_max, string_max, hashmap_max
+                vec_max, model_string_max, hashmap_max, btreemap_max
             );
             let empty_modelable: Vec<i64> = Vec::new();
-            emit_c_function(preamble, f, const_fn_indices, empty_modelable, m, vec_max, string_max, hashmap_max);
+            emit_c_function(preamble, f, const_fn_indices, empty_modelable, m, vec_max, model_string_max, hashmap_max, btreemap_max);
             preamble.push_byte(10);
             preamble
         }
@@ -384,6 +355,12 @@ fn parse_verify_status(combined: String) -> i64 {
     if str_find_str(combined, String::from("VERIFICATION FAILED")) >= 0 {
         return VERIFY_FAILED();
     }
+    // ESBMC's third legitimate outcome: it finished without proving or
+    // falsifying (e.g. k-induction's forward condition couldn't establish
+    // the property). Must be checked before the generic ERROR fallback.
+    if str_find_str(combined, String::from("VERIFICATION UNKNOWN")) >= 0 {
+        return VERIFY_UNKNOWN();
+    }
     if str_find_str(combined, String::from("timeout")) >= 0 {
         return VERIFY_TIMEOUT();
     }
@@ -394,6 +371,38 @@ fn parse_verify_status(combined: String) -> i64 {
         return VERIFY_TIMEOUT();
     }
     VERIFY_ERROR()
+}
+
+// Extract a short explanation from an ESBMC `VERIFICATION UNKNOWN` log.
+// Mirrors `parse_unknown_reason` in vow-verify/src/esbmc.rs.
+fn parse_unknown_reason(combined: String) -> String {
+    let lines: Vec<String> = Vec::new();
+    split_lines(combined, lines);
+    let n: i64 = lines.len();
+    let mut reason: String = String::from("");
+    let mut i: i64 = 0;
+    while i < n {
+        let line: String = str_trim(lines[i]);
+        if line == String::from("VERIFICATION UNKNOWN") {
+            break;
+        }
+        if line.len() > 0 {
+            let has_unable: bool =
+                str_find_str(line, String::from("unable to prove")) >= 0
+                || str_find_str(line, String::from("Unable to prove")) >= 0
+                || str_find_str(line, String::from("giving up")) >= 0
+                || str_find_str(line, String::from("inductive step")) >= 0;
+            if has_unable {
+                reason = line;
+            }
+        }
+        i = i + 1;
+    }
+    if reason.len() == 0 {
+        String::from("ESBMC returned VERIFICATION UNKNOWN")
+    } else {
+        reason
+    }
 }
 
 fn parse_vow_id(output: String) -> i64 {
@@ -644,7 +653,7 @@ fn build_verify_result(f: IrFunction, status: i64, combined: String) -> VerifyRe
 }
 
 fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
-                        vec_max: i64, string_max: i64, hashmap_max: i64) -> VerifyResult [io] {
+                        vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> VerifyResult [io] {
     let vows: Vec<IrVowEntry> = f.vows;
     if vows.len() == 0 {
         return VerifyResult {
@@ -656,7 +665,7 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
             raw_output: String::from(""),
         };
     }
-    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max);
+    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max);
     let fn_name: String = f.name;
     let auto_enc: bool = is_auto_encoding(encoding);
     let bv_solver: String = resolve_auto_bv_solver(solver);
@@ -679,9 +688,11 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
     };
     let mut used_combined: String = combined;
 
-    // Phase D: if BV timed out under Auto encoding and the BV solver is not
-    // Bitwuzla, retry once with --z3 --ir (integer encoding).
-    if status == VERIFY_TIMEOUT() && auto_enc && bv_solver != String::from("bitwuzla") {
+    // Phase D: if BV could neither prove nor falsify (Timeout or Unknown)
+    // under Auto encoding and the BV solver is not Bitwuzla, retry once
+    // with --z3 --ir (integer encoding).
+    let bv_inconclusive: bool = status == VERIFY_TIMEOUT() || status == VERIFY_UNKNOWN();
+    if bv_inconclusive && auto_enc && bv_solver != String::from("bitwuzla") {
         let ir_solver: String = String::from("z3");
         let ir_encoding: String = String::from("ir");
         let ir_timeout: String = {
@@ -704,10 +715,13 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
         let s2: i64 = {
             if r2.exit_code == -2 { VERIFY_TIMEOUT() } else { parse_verify_status(combined2) }
         };
+        let bv_status: i64 = status;
         status = {
-            // IR-only counterexamples can be infeasible under BV (no overflow modeling), so a FAILED here is inconclusive — report the original Timeout instead.
+            // IR-only counterexamples can be infeasible under BV (no overflow modeling),
+            // so a FAILED here is inconclusive — report the original BV outcome
+            // (Timeout or Unknown) instead.
             if s2 == VERIFY_PROVEN() { VERIFY_PROVEN_IR() }
-            else if s2 == VERIFY_FAILED() { VERIFY_TIMEOUT() }
+            else if s2 == VERIFY_FAILED() { bv_status }
             else { s2 }
         };
         used_combined = combined2;
@@ -718,7 +732,7 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
 }
 
 fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, use_cache: bool, timeout_secs: String,
-                               vec_max: i64, string_max: i64, hashmap_max: i64) -> VerifyResult [io] {
+                               vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> VerifyResult [io] {
     let vows: Vec<IrVowEntry> = f.vows;
     if vows.len() == 0 {
         return VerifyResult {
@@ -730,7 +744,7 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
             raw_output: String::from(""),
         };
     }
-    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max);
+    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max);
     let fn_name: String = f.name;
     let ir_solver: String = String::from("z3");
     let ir_encoding: String = String::from("ir");
@@ -757,9 +771,8 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
         if r.exit_code == -2 { VERIFY_TIMEOUT() } else { parse_verify_status(combined) }
     };
     let status: i64 = {
-        // IR-only CEs can be infeasible under BV — demote FAILED to TIMEOUT (the caller only reaches us because BV already timed out).
+        // Pass raw IR status through: distinguishing callers (verify_collect_and_report) surface the original BV outcome for IR FAILED; non-distinguishing callers (run_test) treat any non-PROVEN as failure.
         if raw_status == VERIFY_PROVEN() { VERIFY_PROVEN_IR() }
-        else if raw_status == VERIFY_FAILED() { VERIFY_TIMEOUT() }
         else { raw_status }
     };
     // No on-disk caching on self-hosted: see the note above resolve_auto_bv_solver.
@@ -767,12 +780,12 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
 }
 
 fn verify_start(f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
-                vec_max: i64, string_max: i64, hashmap_max: i64) -> i64 [io] {
+                vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> i64 [io] {
     let vows: Vec<IrVowEntry> = f.vows;
     if vows.len() == 0 {
         return -1;
     }
-    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max);
+    let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max);
     // No cache lookup or write — see the note above resolve_auto_bv_solver.
     // `use_cache` stays on the signature for caller-side symmetry with the
     // Rust toolchain but has no effect.

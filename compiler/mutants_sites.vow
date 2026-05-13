@@ -1,0 +1,728 @@
+module Sites
+
+// A mutation Site, addressable by byte range in a single source file.
+// Multiple sites can target the same byte range with different replacements
+// (e.g., `+` → `-` AND `+` → `*`); each is its own Site record.
+struct Site {
+    file: String,
+    off: i64,
+    len: i64,
+    line: i64,            // 1-based source line of `off`
+    col: i64,             // 1-based source column of `off`
+    kind: String,         // "op-flip", "const-flip", "body-replace", "contract-weaken"
+    from_text: String,    // original byte content, for the label
+    replacement: String,  // bytes to splice in
+    label: String,        // human-readable summary (e.g., "+ → -")
+    clause_index: i64,    // disambiguator for sibling contract clauses; 0 otherwise
+}
+
+// Compute 1-based (line, col) of byte offset `off` in `src`.
+// Returns Vec<i64> with two entries: [line, col].
+fn line_col_at(src: String, off: i64) -> Vec<i64> {
+    let mut line: i64 = 1;
+    let mut col: i64 = 1;
+    let mut i: i64 = 0;
+    while i < off {
+        if src.byte_at(i) == 10 {
+            line = line + 1;
+            col = 1;
+        } else {
+            col = col + 1;
+        }
+        i = i + 1;
+    }
+    let r: Vec<i64> = Vec::new();
+    r.push(line);
+    r.push(col);
+    r
+}
+
+// Stable mutant name in cargo-mutants format: "file:line:col: <label>".
+// Used for caught.txt / missed.txt / log filenames.
+fn mutant_name(file: String, line: i64, col: i64, label: String) -> String {
+    let r: String = String::from("");
+    r.push_str(file);
+    r.push_byte(58);
+    r.push_str(i64_to_string(line));
+    r.push_byte(58);
+    r.push_str(i64_to_string(col));
+    r.push_str(String::from(": "));
+    r.push_str(label);
+    r
+}
+
+// Skip-range list for a file: pairs of (start_byte, end_byte_exclusive).
+// Sites whose [off, off+len) intersect any range are dropped.
+struct SkipRange {
+    start: i64,
+    end: i64,
+}
+
+// Scan a single .vow source for mutation sites of all four kinds:
+// op-flip, const-flip, body-replace, and contract-weaken. Comments,
+// string literals, and identifier runs are skipped at the byte level so
+// keywords inside strings and operators inside comments do not produce
+// sites.
+fn scan_all_sites(src: String, file_path: String) -> Vec<Site> {
+    let sites: Vec<Site> = Vec::new();
+    let n: i64 = src.len();
+    let mut i: i64 = 0;
+    let mut clause_idx: i64 = 0;
+    while i < n {
+        let b: i64 = src.byte_at(i);
+        // skip line comment
+        if b == 47 && i + 1 < n && src.byte_at(i + 1) == 47 {
+            while i < n && src.byte_at(i) != 10 {
+                i = i + 1;
+            }
+            continue;
+        }
+        // skip string literal "..."
+        if b == 34 {
+            i = i + 1;
+            while i < n && src.byte_at(i) != 34 {
+                if src.byte_at(i) == 92 && i + 1 < n {
+                    i = i + 2;
+                } else {
+                    i = i + 1;
+                }
+            }
+            i = i + 1;
+            continue;
+        }
+        // identifier/keyword runs — capture and check for true/false
+        if (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || b == 95 {
+            let start: i64 = i;
+            while i < n {
+                let c: i64 = src.byte_at(i);
+                if (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95 || (c >= 48 && c <= 57) {
+                    i = i + 1;
+                } else {
+                    break;
+                }
+            }
+            let word: String = string_substr(src, start, i - start);
+            if word == String::from("true") {
+                sites.push(make_const_site(src, file_path, start, 4, String::from("true"), String::from("false"), String::from("true → false")));
+            } else if word == String::from("false") {
+                sites.push(make_const_site(src, file_path, start, 5, String::from("false"), String::from("true"), String::from("false → true")));
+            } else if word == String::from("requires") || word == String::from("ensures") || word == String::from("invariant") {
+                let after: i64 = parse_contract_clause(src, i, file_path, sites, word, clause_idx);
+                if after > i {
+                    i = after;
+                    clause_idx = clause_idx + 1;
+                }
+            } else if word == String::from("fn") {
+                let resume: i64 = try_emit_body_replace(src, i, file_path, sites);
+                if resume > i { i = resume; }
+            } else if word == String::from("vow") {
+                // Reset clause index when we enter a new vow block.
+                let mut k: i64 = i;
+                while k < n {
+                    let c: i64 = src.byte_at(k);
+                    if c == 32 || c == 9 || c == 10 || c == 13 { k = k + 1; } else { break; }
+                }
+                if k < n && src.byte_at(k) == 123 {
+                    clause_idx = 0;
+                }
+            }
+            continue;
+        }
+        // integer literal runs — flip 0/1 only
+        if b >= 48 && b <= 57 {
+            let start: i64 = i;
+            while i < n {
+                let c: i64 = src.byte_at(i);
+                if c >= 48 && c <= 57 {
+                    i = i + 1;
+                } else {
+                    break;
+                }
+            }
+            let lit: String = string_substr(src, start, i - start);
+            if lit == String::from("0") {
+                sites.push(make_const_site(src, file_path, start, 1, String::from("0"), String::from("1"), String::from("0 → 1")));
+            } else if lit == String::from("1") {
+                sites.push(make_const_site(src, file_path, start, 1, String::from("1"), String::from("0"), String::from("1 → 0")));
+            }
+            continue;
+        }
+        // operator detection — order matters; check 2-byte sequences first
+        let next: i64 = if i + 1 < n { src.byte_at(i + 1) } else { 0 };
+        // -> (return-type arrow): skip without emitting either site
+        if b == 45 && next == 62 {
+            i = i + 2; continue;
+        }
+        // => is not in vow grammar but cheap to be defensive
+        if b == 61 && next == 62 {
+            i = i + 2; continue;
+        }
+        // ==, !=, <=, >=, &&, ||
+        if b == 61 && next == 61 {
+            sites.push(make_op_site(src, file_path, i, 2, String::from("=="), String::from("!="), String::from("== → !=")));
+            i = i + 2; continue;
+        }
+        if b == 33 && next == 61 {
+            sites.push(make_op_site(src, file_path, i, 2, String::from("!="), String::from("=="), String::from("!= → ==")));
+            i = i + 2; continue;
+        }
+        if b == 60 && next == 61 {
+            sites.push(make_op_site(src, file_path, i, 2, String::from("<="), String::from(">"), String::from("<= → >")));
+            i = i + 2; continue;
+        }
+        if b == 62 && next == 61 {
+            sites.push(make_op_site(src, file_path, i, 2, String::from(">="), String::from("<"), String::from(">= → <")));
+            i = i + 2; continue;
+        }
+        if b == 38 && next == 38 {
+            sites.push(make_op_site(src, file_path, i, 2, String::from("&&"), String::from("||"), String::from("&& → ||")));
+            i = i + 2; continue;
+        }
+        if b == 124 && next == 124 {
+            sites.push(make_op_site(src, file_path, i, 2, String::from("||"), String::from("&&"), String::from("|| → &&")));
+            i = i + 2; continue;
+        }
+        // checked-arith forms: skip without emitting (different semantics)
+        if (b == 43 || b == 45 || b == 42) && next == 33 {
+            i = i + 2; continue;
+        }
+        // 1-byte ops; skip < if followed by < or > (shift / not in vow but be safe), and =, !
+        if b == 43 {
+            sites.push(make_op_site(src, file_path, i, 1, String::from("+"), String::from("-"), String::from("+ → -")));
+            i = i + 1; continue;
+        }
+        if b == 45 {
+            // unary minus on numeric literal: heuristic — if previous non-space is operator/punct, skip
+            // For v1, emit anyway; runner should treat duplicate-replacement after revert correctly.
+            sites.push(make_op_site(src, file_path, i, 1, String::from("-"), String::from("+"), String::from("- → +")));
+            i = i + 1; continue;
+        }
+        if b == 42 {
+            sites.push(make_op_site(src, file_path, i, 1, String::from("*"), String::from("/"), String::from("* → /")));
+            i = i + 1; continue;
+        }
+        if b == 47 {
+            sites.push(make_op_site(src, file_path, i, 1, String::from("/"), String::from("*"), String::from("/ → *")));
+            i = i + 1; continue;
+        }
+        if b == 37 {
+            // % → / is a stronger semantic mutation than % → *: integer
+            // remainder vs. quotient is a much more common bug class than
+            // remainder vs. product. Same byte cost.
+            sites.push(make_op_site(src, file_path, i, 1, String::from("%"), String::from("/"), String::from("% → /")));
+            i = i + 1; continue;
+        }
+        if b == 60 {
+            sites.push(make_op_site(src, file_path, i, 1, String::from("<"), String::from(">="), String::from("< → >=")));
+            i = i + 1; continue;
+        }
+        if b == 62 {
+            sites.push(make_op_site(src, file_path, i, 1, String::from(">"), String::from("<="), String::from("> → <=")));
+            i = i + 1; continue;
+        }
+        i = i + 1;
+    }
+    sites
+}
+
+fn make_op_site(src: String, file: String, off: i64, len: i64, from_text: String, replacement: String, label: String) -> Site {
+    let lc: Vec<i64> = line_col_at(src, off);
+    Site {
+        file: file,
+        off: off,
+        len: len,
+        line: lc[0],
+        col: lc[1],
+        kind: String::from("op-flip"),
+        from_text: from_text,
+        replacement: replacement,
+        label: label,
+        clause_index: 0,
+    }
+}
+
+// Skip whitespace, returning new offset.
+fn skip_ws(src: String, i: i64) -> i64 {
+    let n: i64 = src.len();
+    let mut k: i64 = i;
+    while k < n {
+        let c: i64 = src.byte_at(k);
+        if c == 32 || c == 9 || c == 10 || c == 13 { k = k + 1; } else { break; }
+    }
+    k
+}
+
+// Identifier-byte predicates come from compiler/lexer.vow (already in scope
+// via main.vow's `use lexer`). The mutation scanner uses the same definition
+// so a token-boundary check here matches the one the parser will perform on
+// the mutated source.
+
+// Walk a brace-balanced block starting at `{` at position `start`,
+// emitting contract-weaken sites for top-level `requires`/`ensures`/
+// `invariant` clauses. Returns position past the matching `}`, or -1 on
+// imbalance. clause_index restarts at 0 for each call (one vow block).
+fn scan_vow_block_contracts(src: String, start: i64, file_path: String, sites: Vec<Site>) -> i64 {
+    let n: i64 = src.len();
+    if start >= n || src.byte_at(start) != 123 { return -1; }
+    let mut depth: i64 = 1;
+    let mut k: i64 = start + 1;
+    let mut clause_idx: i64 = 0;
+    while k < n && depth > 0 {
+        let b: i64 = src.byte_at(k);
+        if b == 47 && k + 1 < n && src.byte_at(k + 1) == 47 {
+            while k < n && src.byte_at(k) != 10 { k = k + 1; }
+        } else if b == 34 {
+            k = k + 1;
+            while k < n && src.byte_at(k) != 34 {
+                if src.byte_at(k) == 92 && k + 1 < n { k = k + 2; } else { k = k + 1; }
+            }
+            if k < n { k = k + 1; }
+        } else if b == 123 { depth = depth + 1; k = k + 1; }
+        else if b == 125 { depth = depth - 1; k = k + 1; }
+        else if depth == 1 && is_ident_start(b) {
+            let id_start: i64 = k;
+            while k < n && is_ident_cont(src.byte_at(k)) { k = k + 1; }
+            let w: String = string_substr(src, id_start, k - id_start);
+            if w == String::from("requires") || w == String::from("ensures") || w == String::from("invariant") {
+                let r: i64 = parse_contract_clause(src, k, file_path, sites, w, clause_idx);
+                if r > k { k = r; clause_idx = clause_idx + 1; }
+            }
+        } else { k = k + 1; }
+    }
+    if depth == 0 { k } else { -1 }
+}
+
+// Skip a brace-balanced block starting at `{` at position k. Returns
+// position past the matching `}`, or -1 on imbalance.
+fn skip_brace_block(src: String, start: i64) -> i64 {
+    let n: i64 = src.len();
+    if start >= n || src.byte_at(start) != 123 { return -1; }
+    let mut depth: i64 = 1;
+    let mut k: i64 = start + 1;
+    while k < n && depth > 0 {
+        let b: i64 = src.byte_at(k);
+        if b == 47 && k + 1 < n && src.byte_at(k + 1) == 47 {
+            while k < n && src.byte_at(k) != 10 { k = k + 1; }
+        } else if b == 34 {
+            k = k + 1;
+            while k < n && src.byte_at(k) != 34 {
+                if src.byte_at(k) == 92 && k + 1 < n { k = k + 2; } else { k = k + 1; }
+            }
+            if k < n { k = k + 1; }
+        } else if b == 123 { depth = depth + 1; k = k + 1; }
+        else if b == 125 { depth = depth - 1; k = k + 1; }
+        else { k = k + 1; }
+    }
+    if depth == 0 { k } else { -1 }
+}
+
+fn default_for_ty(ty: String) -> String {
+    if ty == String::from("i64") || ty == String::from("u64")
+        || ty == String::from("i32") || ty == String::from("u32")
+        || ty == String::from("i8")  || ty == String::from("u8")
+        || ty == String::from("i16") || ty == String::from("u16") {
+        return String::from(" 0 ");
+    }
+    if ty == String::from("bool") {
+        return String::from(" false ");
+    }
+    if ty == String::from("()") {
+        return String::from(" ");
+    }
+    if ty == String::from("String") {
+        return String::from(" String::from(\"\") ");
+    }
+    if string_starts_with(ty, String::from("Vec")) == 1 {
+        return String::from(" Vec::new() ");
+    }
+    String::from("")
+}
+
+// Try to emit a body-replace site for the function whose `fn` keyword ends
+// at byte i. On success, returns the offset just past the body's open `{`
+// so the scan continues into the body (other site kinds still get found).
+// Returns -1 if the function shape isn't recognized or the return type is
+// unsupported.
+fn try_emit_body_replace(src: String, i_after_kw: i64, file_path: String, sites: Vec<Site>) -> i64 {
+    let n: i64 = src.len();
+    let mut k: i64 = skip_ws(src, i_after_kw);
+    if k >= n || !is_ident_start(src.byte_at(k)) { return -1; }
+    while k < n && is_ident_cont(src.byte_at(k)) { k = k + 1; }
+    k = skip_ws(src, k);
+    if k >= n || src.byte_at(k) != 40 { return -1; }
+    // skip parameter list
+    let mut paren: i64 = 1;
+    k = k + 1;
+    while k < n && paren > 0 {
+        let b: i64 = src.byte_at(k);
+        if b == 40 { paren = paren + 1; k = k + 1; }
+        else if b == 41 { paren = paren - 1; k = k + 1; }
+        else if b == 47 && k + 1 < n && src.byte_at(k + 1) == 47 {
+            while k < n && src.byte_at(k) != 10 { k = k + 1; }
+        } else if b == 34 {
+            k = k + 1;
+            while k < n && src.byte_at(k) != 34 {
+                if src.byte_at(k) == 92 && k + 1 < n { k = k + 2; } else { k = k + 1; }
+            }
+            if k < n { k = k + 1; }
+        } else { k = k + 1; }
+    }
+    if paren != 0 { return -1; }
+    k = skip_ws(src, k);
+    let mut ret_ty: String = String::from("()");
+    if k + 1 < n && src.byte_at(k) == 45 && src.byte_at(k + 1) == 62 {
+        k = k + 2;
+        k = skip_ws(src, k);
+        let ty_start: i64 = k;
+        while k < n {
+            let b: i64 = src.byte_at(k);
+            if b == 32 || b == 9 || b == 10 || b == 13 || b == 123 || b == 91 { break; }
+            k = k + 1;
+        }
+        ret_ty = string_substr(src, ty_start, k - ty_start);
+        // detect trailing 'vow' identifier captured into return type
+        // e.g., `i64 vow {` → ty becomes `i64` here because we break on space
+        // but if it was `i64vow` it would mash. Should be fine since vow source uses spaces.
+    }
+    // Hoist the return-type check BEFORE walking the vow block. If the
+    // return type is unsupported, return -1 immediately so the caller's
+    // natural scan can emit contract-weaken sites once via
+    // parse_contract_clause. Without this early exit, scan_vow_block_contracts
+    // (called in the loop below) emits contract sites, then we fail on
+    // default_for_ty, return -1, and the caller's natural scan re-emits the
+    // same sites — producing duplicate contract mutants.
+    let replacement: String = default_for_ty(ret_ty);
+    if replacement.len() == 0 { return -1; }
+    // skip optional `vow { ... }` and effect `[ ... ]` annotations in any order
+    let mut guard: i64 = 0;
+    while k < n && guard < 6 {
+        guard = guard + 1;
+        k = skip_ws(src, k);
+        if k >= n { return -1; }
+        let b: i64 = src.byte_at(k);
+        if b == 91 {
+            k = k + 1;
+            while k < n && src.byte_at(k) != 93 { k = k + 1; }
+            if k < n { k = k + 1; }
+        } else if is_ident_start(b) {
+            let id_start: i64 = k;
+            while k < n && is_ident_cont(src.byte_at(k)) { k = k + 1; }
+            let w: String = string_substr(src, id_start, k - id_start);
+            if w == String::from("vow") {
+                k = skip_ws(src, k);
+                let after_vow: i64 = scan_vow_block_contracts(src, k, file_path, sites);
+                if after_vow > k { k = after_vow; } else { return -1; }
+            } else {
+                return -1;
+            }
+        } else if b == 123 {
+            break;
+        } else {
+            return -1;
+        }
+    }
+    if k >= n || src.byte_at(k) != 123 { return -1; }
+    let body_inside: i64 = k + 1;
+    let body_end: i64 = skip_brace_block(src, k);
+    if body_end <= body_inside { return -1; }
+    let body_close: i64 = body_end - 1;
+    let body_len: i64 = body_close - body_inside;
+    if body_len <= 0 { return -1; }
+    // `replacement` is space-padded for splicing (e.g. ` 0 ` to keep the
+    // surrounding bytes legible); trim for the human-facing label.
+    let label: String = String::from("body → ");
+    label.push_str(string_trim(replacement));
+    let lc: Vec<i64> = line_col_at(src, body_inside);
+    sites.push(Site {
+        file: file_path,
+        off: body_inside,
+        len: body_len,
+        line: lc[0],
+        col: lc[1],
+        kind: String::from("body-replace"),
+        from_text: String::from(""),
+        replacement: replacement,
+        label: label,
+        clause_index: 0,
+    });
+    body_inside
+}
+
+// Starting at byte i (just past the contract keyword), expect optional
+// whitespace, then ':', then the clause expression terminated by a top-level
+// `,` or `}`. On success, push a Site weakening the expression to `true` and
+// return the byte offset past the clause expression (where scanning should
+// resume). On failure (no colon, etc.), return -1.
+fn parse_contract_clause(src: String, i: i64, file_path: String, sites: Vec<Site>, kw: String, clause_index: i64) -> i64 {
+    let n: i64 = src.len();
+    let mut k: i64 = i;
+    while k < n {
+        let c: i64 = src.byte_at(k);
+        if c == 32 || c == 9 || c == 10 || c == 13 { k = k + 1; } else { break; }
+    }
+    if k >= n || src.byte_at(k) != 58 { return -1; }
+    k = k + 1;
+    while k < n {
+        let c: i64 = src.byte_at(k);
+        if c == 32 || c == 9 || c == 10 || c == 13 { k = k + 1; } else { break; }
+    }
+    let expr_start: i64 = k;
+    let mut paren: i64 = 0;
+    let mut bracket: i64 = 0;
+    while k < n {
+        let c: i64 = src.byte_at(k);
+        if c == 40 { paren = paren + 1; k = k + 1; }
+        else if c == 41 { paren = paren - 1; k = k + 1; }
+        else if c == 91 { bracket = bracket + 1; k = k + 1; }
+        else if c == 93 { bracket = bracket - 1; k = k + 1; }
+        else if (c == 44 || c == 125) && paren == 0 && bracket == 0 { break; }
+        else if c == 47 && k + 1 < n && src.byte_at(k + 1) == 47 {
+            while k < n && src.byte_at(k) != 10 { k = k + 1; }
+        } else if c == 34 {
+            k = k + 1;
+            while k < n && src.byte_at(k) != 34 {
+                if src.byte_at(k) == 92 && k + 1 < n { k = k + 2; } else { k = k + 1; }
+            }
+            if k < n { k = k + 1; }
+        } else {
+            k = k + 1;
+        }
+    }
+    // Trim trailing whitespace from the expression span so the replacement
+    // doesn't leave gratuitous trailing space.
+    let mut expr_end: i64 = k;
+    while expr_end > expr_start {
+        let c: i64 = src.byte_at(expr_end - 1);
+        if c == 32 || c == 9 || c == 10 || c == 13 { expr_end = expr_end - 1; } else { break; }
+    }
+    let expr_len: i64 = expr_end - expr_start;
+    if expr_len <= 0 { return -1; }
+    let original: String = string_substr(src, expr_start, expr_len);
+    let label: String = str3(kw, String::from(": "), str2(original, String::from(" → true")));
+    let lc: Vec<i64> = line_col_at(src, expr_start);
+    sites.push(Site {
+        file: file_path,
+        off: expr_start,
+        len: expr_len,
+        line: lc[0],
+        col: lc[1],
+        kind: String::from("contract-weaken"),
+        from_text: original,
+        replacement: String::from("true"),
+        label: label,
+        clause_index: clause_index,
+    });
+    k
+}
+
+// str2/str3 string concatenation helpers come from compiler/clif.vow and
+// compiler/c_emitter.vow respectively (already in scope via main.vow's
+// transitive `use` chain).
+
+fn make_const_site(src: String, file: String, off: i64, len: i64, from_text: String, replacement: String, label: String) -> Site {
+    let lc: Vec<i64> = line_col_at(src, off);
+    Site {
+        file: file,
+        off: off,
+        len: len,
+        line: lc[0],
+        col: lc[1],
+        kind: String::from("const-flip"),
+        from_text: from_text,
+        replacement: replacement,
+        label: label,
+        clause_index: 0,
+    }
+}
+
+// Compute byte ranges that should NOT yield mutation sites.
+// Currently:
+//   - GENERATE:<NAME>:START..GENERATE:<NAME>:END line pairs
+//   - extern "C" { ... } blocks (brace-balanced, comment/string aware)
+// Returns flat list of (start, end_exclusive) pairs.
+fn compute_skip_ranges(src: String) -> Vec<i64> {
+    let ranges: Vec<i64> = Vec::new();
+    add_extern_ranges(src, ranges);
+    let n: i64 = src.len();
+    let mut i: i64 = 0;
+    while i < n {
+        // line is [line_start, line_end_excl)
+        let line_start: i64 = i;
+        while i < n && src.byte_at(i) != 10 {
+            i = i + 1;
+        }
+        let line_end: i64 = i;
+        let line_len: i64 = line_end - line_start;
+        if line_len > 12 {
+            let line: String = string_substr(src, line_start, line_len);
+            if string_starts_with(line, String::from("// GENERATE:")) == 1
+                && string_ends_with(line, String::from(":START")) == 1 {
+                // Extract the NAME between `// GENERATE:` (12 chars) and
+                // `:START` (6 chars). The matching :END line must use the
+                // same NAME. Without this match, two interleaved blocks
+                // (FOO opens, BAR:END appears first) silently merge into
+                // one skip range and drop sites between them.
+                let name_len: i64 = line_len - 12 - 6;
+                let name: String = string_substr(line, 12, name_len);
+                let j: i64 = i + 1;
+                let end_close: i64 = find_generate_end(src, j, name);
+                if end_close > line_end {
+                    ranges.push(line_start);
+                    ranges.push(end_close);
+                    i = end_close;
+                }
+            }
+        }
+        if i < n { i = i + 1; }
+    }
+    ranges
+}
+
+// Append (start, end) ranges for every `extern "C" { ... }` block in src.
+// The scan is comment- and string-aware so that braces inside string
+// literals or line comments inside the block don't unbalance counting.
+fn add_extern_ranges(src: String, ranges: Vec<i64>) {
+    let n: i64 = src.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let b: i64 = src.byte_at(i);
+        // skip line comment at top level too — `extern` could be after a comment
+        if b == 47 && i + 1 < n && src.byte_at(i + 1) == 47 {
+            while i < n && src.byte_at(i) != 10 { i = i + 1; }
+            continue;
+        }
+        // skip string literals
+        if b == 34 {
+            i = i + 1;
+            while i < n && src.byte_at(i) != 34 {
+                if src.byte_at(i) == 92 && i + 1 < n { i = i + 2; } else { i = i + 1; }
+            }
+            if i < n { i = i + 1; }
+            continue;
+        }
+        // ident run
+        if (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || b == 95 {
+            let id_start: i64 = i;
+            while i < n {
+                let c: i64 = src.byte_at(i);
+                if (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95 || (c >= 48 && c <= 57) {
+                    i = i + 1;
+                } else { break; }
+            }
+            let word: String = string_substr(src, id_start, i - id_start);
+            if word == String::from("extern") {
+                // scan past whitespace + "C" + whitespace + {
+                let mut k: i64 = i;
+                while k < n {
+                    let wc: i64 = src.byte_at(k);
+                    if wc == 32 || wc == 9 || wc == 10 || wc == 13 { k = k + 1; } else { break; }
+                }
+                if k + 2 < n && src.byte_at(k) == 34 && src.byte_at(k + 1) == 67 && src.byte_at(k + 2) == 34 {
+                    k = k + 3;
+                    while k < n {
+                        let wc: i64 = src.byte_at(k);
+                        if wc == 32 || wc == 9 || wc == 10 || wc == 13 { k = k + 1; } else { break; }
+                    }
+                    if k < n && src.byte_at(k) == 123 {
+                        // brace-balance scan from k+1
+                        let mut depth: i64 = 1;
+                        let mut p: i64 = k + 1;
+                        while p < n && depth > 0 {
+                            let pb: i64 = src.byte_at(p);
+                            if pb == 47 && p + 1 < n && src.byte_at(p + 1) == 47 {
+                                while p < n && src.byte_at(p) != 10 { p = p + 1; }
+                            } else if pb == 34 {
+                                p = p + 1;
+                                while p < n && src.byte_at(p) != 34 {
+                                    if src.byte_at(p) == 92 && p + 1 < n { p = p + 2; } else { p = p + 1; }
+                                }
+                                if p < n { p = p + 1; }
+                            } else if pb == 123 {
+                                depth = depth + 1;
+                                p = p + 1;
+                            } else if pb == 125 {
+                                depth = depth - 1;
+                                p = p + 1;
+                            } else {
+                                p = p + 1;
+                            }
+                        }
+                        ranges.push(id_start);
+                        ranges.push(p);
+                        i = p;
+                        continue;
+                    }
+                }
+            }
+            continue;
+        }
+        i = i + 1;
+    }
+}
+
+// Starting at byte `start`, locate the next `// GENERATE:<name>:END`
+// line whose NAME matches the supplied `name`. Returns the byte offset
+// PAST the trailing newline of that line, or -1 if no matching marker
+// is found.
+fn find_generate_end(src: String, start: i64, name: String) -> i64 {
+    let n: i64 = src.len();
+    let expected: String = String::from("// GENERATE:");
+    expected.push_str(name);
+    expected.push_str(String::from(":END"));
+    let mut k: i64 = start;
+    while k < n {
+        let line_start: i64 = k;
+        while k < n && src.byte_at(k) != 10 {
+            k = k + 1;
+        }
+        let line_end: i64 = k;
+        if line_end - line_start == expected.len() {
+            let line: String = string_substr(src, line_start, line_end - line_start);
+            if line == expected {
+                if k < n {
+                    return k + 1;
+                } else {
+                    return k;
+                }
+            }
+        }
+        if k < n { k = k + 1; }
+    }
+    -1
+}
+
+// True if [off, off+len) intersects any (start, end) pair in ranges.
+fn is_skipped(off: i64, len: i64, ranges: Vec<i64>) -> bool {
+    let n: i64 = ranges.len();
+    let mut i: i64 = 0;
+    let site_end: i64 = off + len;
+    while i + 1 < n {
+        let r_start: i64 = ranges[i];
+        let r_end: i64 = ranges[i + 1];
+        if site_end > r_start && off < r_end {
+            return true;
+        }
+        i = i + 2;
+    }
+    false
+}
+
+// Top-level entry: enumerate all sites for one file with skip-list applied.
+fn enumerate_sites(src: String, file_path: String) -> Vec<Site> {
+    let raw: Vec<Site> = scan_all_sites(src, file_path);
+    let ranges: Vec<i64> = compute_skip_ranges(src);
+    if ranges.len() == 0 {
+        return raw;
+    }
+    let kept: Vec<Site> = Vec::new();
+    let n: i64 = raw.len();
+    let mut i: i64 = 0;
+    while i < n {
+        let s: Site = raw[i];
+        if !is_skipped(s.off, s.len, ranges) {
+            kept.push(s);
+        }
+        i = i + 1;
+    }
+    kept
+}

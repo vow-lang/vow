@@ -1,0 +1,55 @@
+// TEST: stdout "ok\n"
+module FsReadLineStatus
+
+fn fail(msg: String) -> i32 [io] {
+    print_str(msg);
+    print_str(String::from("\n"));
+    1
+}
+
+fn main() -> i32 [read, io] {
+    let missing: i64 = fs_open(String::from("tests/fixtures/fs_stream_missing.txt"));
+    if missing != -1 {
+        return fail(String::from("missing-open"));
+    }
+
+    let h: i64 = fs_open(String::from("tests/fixtures/fs_stream_lines.txt"));
+    if h < 0 {
+        return fail(String::from("open"));
+    }
+
+    let first: String = fs_read_line(h);
+    if first.len() == 0 {
+        return fail(String::from("first"));
+    }
+    if fs_status(h) != 0 {
+        return fail(String::from("active-status"));
+    }
+
+    let second: String = fs_read_line(h);
+    let third: String = fs_read_line(h);
+    if second.len() == 0 || third.len() == 0 {
+        return fail(String::from("fixture-lines"));
+    }
+
+    let eof: String = fs_read_line(h);
+    if eof.len() != 0 {
+        return fail(String::from("eof-line"));
+    }
+    if fs_status(h) != 1 {
+        return fail(String::from("eof-status"));
+    }
+
+    if fs_close(h) != 0 {
+        return fail(String::from("close"));
+    }
+    if fs_status(h) != -1 {
+        return fail(String::from("closed-status"));
+    }
+    if fs_close(h) != -1 {
+        return fail(String::from("close-again"));
+    }
+
+    print_str(String::from("ok\n"));
+    0
+}

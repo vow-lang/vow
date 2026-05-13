@@ -1,0 +1,19 @@
+// TEST: stdout "alpha\n\n"
+module FsReadLinePinToRoot
+
+fn main() -> i32 [read, io] {
+    let h: i64 = fs_open(String::from("tests/fixtures/fs_stream_lines.txt"));
+    if h < 0 {
+        return 1;
+    }
+
+    let first: String = pin_to_root(fs_read_line(h));
+    let second: String = fs_read_line(h);
+    if fs_close(h) != 0 {
+        return 1;
+    }
+
+    print_str(first);
+    print_str(second);
+    0
+}

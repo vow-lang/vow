@@ -1,0 +1,5 @@
+// TEST: error-code TypeMismatch
+// TEST: build-json x['span']['length'] > 0
+module ConstTypeMismatchBool
+
+const BAD: i64 = true;

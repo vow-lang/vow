@@ -5,7 +5,7 @@ use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use vow_ir::{FuncId, Function, Module, Ty};
+use vow_ir::{FuncId, Function, InstData, Module, Ty};
 
 use crate::solver_strategy::{SolverConfig, run_with_fallback};
 
@@ -36,6 +36,14 @@ pub enum VerificationResult {
     Timeout,
     ToolNotFound,
     ToolError(String),
+    /// ESBMC returned `VERIFICATION UNKNOWN` — finished cleanly but could
+    /// neither prove nor falsify the property within its bound (e.g.
+    /// k-induction's forward condition could not establish the property).
+    /// Distinct from `Failed` (no real counterexample) and from `Timeout`
+    /// (no wall-clock cutoff). `reason` carries the short ESBMC explanation.
+    Unknown {
+        reason: String,
+    },
     /// Function's body contains non-modelable opcodes or effects; ESBMC not invoked. Treat as warning, not failure.
     Skipped {
         reason: String,
@@ -251,12 +259,9 @@ pub fn emit_verify_c_source(
     let mut modelable_cache = HashMap::new();
     let callee_ids = collect_modelable_callees(func, module, const_fns, &mut modelable_cache);
 
-    let mut c_src = if callee_ids.is_empty() {
-        emit_c_module(&[func], const_fns, limits)
-    } else {
-        let modelable_fns: std::collections::HashSet<FuncId> = callee_ids.iter().copied().collect();
-        emit_c_module_with_callees(func, module, const_fns, &callee_ids, &modelable_fns, limits)
-    };
+    let modelable_fns: std::collections::HashSet<FuncId> = callee_ids.iter().copied().collect();
+    let mut c_src =
+        emit_c_module_with_callees(func, module, const_fns, &callee_ids, &modelable_fns, limits);
     c_src.push_str(&emit_harness(func));
     c_src
 }
@@ -319,6 +324,12 @@ fn verify_function_inner(
     const_fns: &HashMap<FuncId, ConstantValue>,
     limits: &VerifyLimits,
 ) -> VerificationResult {
+    if let Some(reason) = no_module_verification_reason(func) {
+        return VerificationResult::Skipped {
+            reason: format!("{reason}; use verify_function_with_module"),
+        };
+    }
+
     let esbmc = match find_esbmc() {
         Some(p) => p,
         None => return VerificationResult::ToolNotFound,
@@ -334,6 +345,24 @@ fn verify_function_inner(
         &func.name,
         &SolverConfig::default_config(),
     )
+}
+
+fn no_module_verification_reason(func: &Function) -> Option<&'static str> {
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if let InstData::CallExtern(name) = &inst.data
+                && name == "__vow_string_matches_literal_at"
+            {
+                return Some("string_matches_literal_at requires the module string pool");
+            }
+            if let InstData::CallExtern(name) = &inst.data
+                && name == "__vow_string_literal"
+            {
+                return Some("string literals require the module string pool");
+            }
+        }
+    }
+    None
 }
 
 pub fn run_esbmc_k_induction(
@@ -469,10 +498,43 @@ pub fn run_esbmc_with_max_k_step(
         VerificationResult::Proven
     } else if combined.contains("VERIFICATION FAILED") {
         VerificationResult::Failed(parse_esbmc_output(&combined))
+    } else if combined.contains("VERIFICATION UNKNOWN") {
+        VerificationResult::Unknown {
+            reason: parse_unknown_reason(&combined),
+        }
     } else if combined.to_lowercase().contains("timeout") {
         VerificationResult::Timeout
     } else {
         VerificationResult::ToolError(format!("unexpected esbmc output:\n{combined}"))
+    }
+}
+
+/// Extract the short explanation that precedes `VERIFICATION UNKNOWN` from an
+/// ESBMC log. Typical lines: `The forward condition is unable to prove the
+/// property` or `Unable to prove or falsify the program, giving up.` — we
+/// keep the most informative of these and fall back to a generic message.
+fn parse_unknown_reason(combined: &str) -> String {
+    let mut reason = String::new();
+    for line in combined.lines() {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if t == "VERIFICATION UNKNOWN" {
+            break;
+        }
+        if t.contains("unable to prove")
+            || t.contains("Unable to prove")
+            || t.contains("giving up")
+            || t.contains("inductive step")
+        {
+            reason = t.to_string();
+        }
+    }
+    if reason.is_empty() {
+        "ESBMC returned VERIFICATION UNKNOWN".to_string()
+    } else {
+        reason
     }
 }
 
@@ -563,6 +625,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         }
     }
 
@@ -608,7 +671,50 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         }
+    }
+
+    #[test]
+    fn emit_verify_c_source_uses_module_string_pool_without_callees() {
+        let func = Function {
+            id: FuncId(0),
+            name: "make_literal".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                    inst(
+                        1,
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![0],
+                        InstData::CallExtern("__vow_string_literal".to_string()),
+                    ),
+                    inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        let module = Module {
+            name: String::new(),
+            functions: vec![func.clone()],
+            strings: vec!["hello".to_string()],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+
+        let c = emit_verify_c_source(&func, &module, &HashMap::new(), &VerifyLimits::default());
+
+        assert!(c.contains("v1.len = 5;"), "literal len from pool: {c}");
     }
 
     #[test]
@@ -680,6 +786,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         match verify_function(&func, &VerifyLimits::default()) {
             VerificationResult::Proven | VerificationResult::ToolNotFound => {}
@@ -782,6 +889,30 @@ VERIFICATION FAILED";
         let ce = parse_esbmc_output(output);
         assert_eq!(ce.vow_id, None);
         assert!(ce.values.is_empty());
+    }
+
+    #[test]
+    fn parse_unknown_reason_picks_forward_condition_line() {
+        let combined = "ESBMC version 8.2.0\n\
+                        Checking forward condition, k = 1\n\
+                        The forward condition is unable to prove the property\n\
+                        Unable to prove or falsify the program, giving up.\n\
+                        VERIFICATION UNKNOWN\n";
+        let reason = parse_unknown_reason(combined);
+        // Prefers the most specific 'unable to prove'/'giving up' line. Both
+        // contain trigger keywords; the last one observed before
+        // VERIFICATION UNKNOWN is kept.
+        assert!(
+            reason.contains("Unable to prove or falsify") || reason.contains("unable to prove"),
+            "reason was: {reason}"
+        );
+    }
+
+    #[test]
+    fn parse_unknown_reason_falls_back_to_generic_when_no_marker() {
+        let combined = "ESBMC version 8.2.0\nSome unrelated output\nVERIFICATION UNKNOWN\n";
+        let reason = parse_unknown_reason(combined);
+        assert_eq!(reason, "ESBMC returned VERIFICATION UNKNOWN");
     }
 
     #[test]
@@ -948,6 +1079,7 @@ VERIFICATION FAILED";
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         }
     }
 
@@ -1010,6 +1142,7 @@ VERIFICATION FAILED";
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         }
     }
 
@@ -1118,6 +1251,7 @@ VERIFICATION FAILED";
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         }
     }
 
@@ -1179,6 +1313,7 @@ VERIFICATION FAILED";
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         }
     }
 
@@ -1299,6 +1434,7 @@ VERIFICATION FAILED";
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         }
     }
 
@@ -1377,6 +1513,7 @@ VERIFICATION FAILED";
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         }
     }
 
@@ -1441,6 +1578,7 @@ VERIFICATION FAILED";
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         }
     }
 
@@ -1482,6 +1620,91 @@ VERIFICATION FAILED";
         }
     }
 
+    fn literal_matcher_func() -> Function {
+        Function {
+            id: FuncId(0),
+            name: "literal_matcher".to_string(),
+            params: vec![Ty::Ptr],
+            param_names: vec!["s".to_string()],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                    inst(3, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                    inst(
+                        4,
+                        Opcode::Call,
+                        Ty::I64,
+                        vec![0, 1, 2, 3],
+                        InstData::CallExtern("__vow_string_matches_literal_at".to_string()),
+                    ),
+                    inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        }
+    }
+
+    #[test]
+    fn verify_function_without_module_skips_literal_matcher() {
+        let func = literal_matcher_func();
+        match verify_function(&func, &VerifyLimits::default()) {
+            VerificationResult::Skipped { reason } => {
+                assert!(reason.contains("string_matches_literal_at"));
+                assert!(reason.contains("module string pool"));
+            }
+            other => panic!("expected Skipped before ESBMC lookup, got {other:?}"),
+        }
+    }
+
+    fn direct_string_literal_func() -> Function {
+        Function {
+            id: FuncId(0),
+            name: "direct_string_literal".to_string(),
+            params: vec![],
+            param_names: vec![],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                    inst(
+                        1,
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![0],
+                        InstData::CallExtern("__vow_string_literal".to_string()),
+                    ),
+                    inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        }
+    }
+
+    #[test]
+    fn verify_function_without_module_skips_direct_string_literal() {
+        let func = direct_string_literal_func();
+        match verify_function(&func, &VerifyLimits::default()) {
+            VerificationResult::Skipped { reason } => {
+                assert!(reason.contains("string literals"));
+                assert!(reason.contains("module string pool"));
+            }
+            other => panic!("expected Skipped before ESBMC lookup, got {other:?}"),
+        }
+    }
+
     fn vowed_with_region_alloc() -> Function {
         // fn alloc_thing(rgn: i64) -> Ptr requires: rgn >= 0 { /* RegionAlloc */ }
         Function {
@@ -1515,6 +1738,7 @@ VERIFICATION FAILED";
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         }
     }
 

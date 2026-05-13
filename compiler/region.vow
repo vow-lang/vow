@@ -24,7 +24,10 @@ fn RSUM_INTERNAL_UNINIT() -> i64 vow { ensures: result == -1 } { -1 }
 // Public entry point. Mutates `m.functions[*].rsum_*` fields and
 // `m.functions[*].blocks[*].insts[*].rgn` for heap-producing insts.
 // Diagnostics are emitted via `dctx`.
-fn infer_regions_module(m: IrModule, dctx: DiagCtx, path: String) -> IrModule {
+// Diagnostic file labels are read from each `IrFunction.source_file` at
+// emission time, not from a single root path — required for correct labels
+// under multi-module compilation (#254).
+fn infer_regions_module(m: IrModule, dctx: DiagCtx) -> IrModule {
     let n_funcs: i64 = m.functions.len();
     if n_funcs == 0 {
         return m;
@@ -42,6 +45,7 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx, path: String) -> IrModule {
     //   int_kind[i]           : i64  -- internal return kind (-1 == Uninit, 0..3 == published)
     //   int_aux[i]            : i64  -- AliasOf single index
     //   int_aliases[i]        : Vec<i64> -- AliasOfAny indices (canonical)
+    //   int_return_rodata[i]  : bool -- return value may be literal-backed read-only storage
     //   int_se_targets[i]     : Vec<i64> -- store-effect targets, parallel with sources
     //   int_se_src_kinds[i]   : Vec<i64>
     //   int_se_src_aux[i]     : Vec<i64>
@@ -49,6 +53,7 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx, path: String) -> IrModule {
     let int_kinds: Vec<i64> = Vec::new();
     let int_auxs: Vec<i64> = Vec::new();
     let int_aliases_list: Vec<Vec<i64>> = Vec::new();
+    let int_return_rodata: Vec<bool> = Vec::new();
     let int_se_targets: Vec<Vec<i64>> = Vec::new();
     let int_se_src_kinds: Vec<Vec<i64>> = Vec::new();
     let int_se_src_aux: Vec<Vec<i64>> = Vec::new();
@@ -60,6 +65,7 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx, path: String) -> IrModule {
         int_kinds.push(RSUM_INTERNAL_UNINIT());
         int_auxs.push(0);
         int_aliases_list.push(Vec::new());
+        int_return_rodata.push(false);
         int_se_targets.push(Vec::new());
         int_se_src_kinds.push(Vec::new());
         int_se_src_aux.push(Vec::new());
@@ -71,10 +77,23 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx, path: String) -> IrModule {
     // since we'll consume them once at the end.
     let region_keys: Vec<Vec<i64>> = Vec::new();
     let region_vals: Vec<Vec<i64>> = Vec::new();
+    // Pre-rewrite Caller(_) snapshots for the `RegionRootEscape` note pass.
+    // `analyze_function` collapses internal-call results from Caller(_) to
+    // Root in `region_keys/vals` for codegen conservatism; capturing the
+    // original Caller(_) here keeps the note pass visible to issue #320's
+    // case where the rewrite would otherwise silence a real root-region
+    // placement. Mirrors the Rust pass's local `note_region_map`; the
+    // per-fn slot is reset at the top of each `analyze_function` call so
+    // only the convergence iteration's captures contribute (matching
+    // `let mut note_region_map = BTreeMap::new()` in the Rust mirror).
+    let note_region_keys: Vec<Vec<i64>> = Vec::new();
+    let note_region_vals: Vec<Vec<i64>> = Vec::new();
     let mut ri: i64 = 0;
     while ri < n_funcs {
         region_keys.push(Vec::new());
         region_vals.push(Vec::new());
+        note_region_keys.push(Vec::new());
+        note_region_vals.push(Vec::new());
         ri = ri + 1;
     }
 
@@ -85,14 +104,23 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx, path: String) -> IrModule {
     // this cache it drops to ~2s. See #252 for the BTreeMap stdlib that
     // would replace this Vec<IrInst>-indexed-by-id workaround.
     let id_to_inst_per_fn: Vec<Vec<IrInst>> = Vec::new();
+    let id_to_block_per_fn: Vec<Vec<i64>> = Vec::new();
     let phi_arms_per_fn: Vec<Vec<Vec<i64>>> = Vec::new();
+    let block_parent_per_fn: Vec<Vec<i64>> = Vec::new();
+    let block_depth_per_fn: Vec<Vec<i64>> = Vec::new();
     let mut bxi: i64 = 0;
     while bxi < n_funcs {
         let f0: IrFunction = m.functions[bxi];
         let it: Vec<IrInst> = build_id_to_inst(f0);
+        let ib: Vec<i64> = build_id_to_block(f0, it.len());
         let pa: Vec<Vec<i64>> = build_phi_arms(f0, it.len());
+        let bp: Vec<i64> = build_block_parent(f0);
+        let bd: Vec<i64> = build_block_depth(bp);
         id_to_inst_per_fn.push(it);
+        id_to_block_per_fn.push(ib);
         phi_arms_per_fn.push(pa);
+        block_parent_per_fn.push(bp);
+        block_depth_per_fn.push(bd);
         bxi = bxi + 1;
     }
 
@@ -103,17 +131,18 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx, path: String) -> IrModule {
         let scc: Vec<i64> = sccs[scc_i];
         let scc_n: i64 = scc.len();
 
-        // Loose iteration bound, mirrors vow-ir/src/region.rs:79-86:
-        // lattice height per function is |params|+2
-        // (Uninit → AliasOf → AliasOfAny → FreshInCaller); store_effects
-        // bound is |params|; total bound for the SCC is sum * 2 for monotone
-        // slack. Finite lattice; if exceeded, emit ICE diagnostic (no panic).
+        // Loose iteration bound, mirrors vow-ir/src/region.rs:
+        // lattice height per function is |params|+3
+        // (Uninit → AliasOf → AliasOfAny → FreshInCaller, plus the
+        // monotone rodata-return bit); store_effects bound is |params|.
+        // Total bound for the SCC is sum * 2 for monotone slack. Finite
+        // lattice; if exceeded, emit ICE diagnostic (no panic).
         let mut bound: i64 = 0;
         let mut bi: i64 = 0;
         while bi < scc_n {
             let fidx: i64 = scc[bi];
             let nparams: i64 = m.functions[fidx].params.len();
-            bound = bound + (nparams + 2) * 2;
+            bound = bound + (nparams + 3) * 2;
             bi = bi + 1;
         }
         if bound < 8 { bound = 8; }
@@ -128,10 +157,13 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx, path: String) -> IrModule {
                 let fidx: i64 = scc[ii];
                 let did_change: bool = analyze_function(
                     m, fidx,
-                    id_to_inst_per_fn[fidx], phi_arms_per_fn[fidx],
+                    id_to_inst_per_fn[fidx], id_to_block_per_fn[fidx], phi_arms_per_fn[fidx],
+                    block_parent_per_fn[fidx], block_depth_per_fn[fidx],
                     int_kinds, int_auxs, int_aliases_list,
+                    int_return_rodata,
                     int_se_targets, int_se_src_kinds, int_se_src_aux, int_se_src_aliases,
                     region_keys, region_vals,
+                    note_region_keys, note_region_vals,
                 );
                 if did_change {
                     changed = true;
@@ -141,10 +173,13 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx, path: String) -> IrModule {
             if !changed {
                 converged = true;
             } else if iters > bound {
+                // Internal compiler error: not tied to a specific source span,
+                // so emit with empty file path (matches the Rust pass's
+                // `internal_compiler_error` shape in vow-ir/src/region.rs).
                 let d: Diagnostic = diag_error(
                     EC_REGION_CONFLICT(),
                     String::from("internal compiler error: region inference SCC exceeded monotone iteration bound"),
-                    path, 0, 0
+                    String::from(""), 0, 0
                 );
                 diag_ctx_emit(dctx, d);
                 converged = true;
@@ -227,12 +262,33 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx, path: String) -> IrModule {
             rsum_return_aliases: int_aliases_list[fi],
             rsum_store_effects: canon_se,
             rsum_param_regions: pregs,
+            source_file: f.source_file,
         };
         m.functions[fi] = new_f;
         fi = fi + 1;
     }
 
-    check_region_store_conflicts_module(m, id_to_inst_per_fn, dctx, path);
+    check_region_store_conflicts_module(
+        m,
+        id_to_inst_per_fn,
+        id_to_block_per_fn,
+        block_parent_per_fn,
+        block_depth_per_fn,
+        phi_arms_per_fn,
+        int_return_rodata,
+        region_keys,
+        region_vals,
+        int_kinds,
+        dctx,
+    );
+
+    // Surface allocations whose inferred region routes to the root region
+    // (program-lifetime placement) as `RegionRootEscape` notes — gated by
+    // `int_kinds` so we only fire on functions that may propagate the alloc
+    // to a caller. See arena_memory.md §4.4.
+    emit_root_escape_notes_module(m, id_to_inst_per_fn, region_keys, region_vals,
+                                   note_region_keys, note_region_vals,
+                                   int_kinds, int_se_src_kinds, dctx);
 
     // Commit per-inst regions.
     let mut fi2: i64 = 0;
@@ -261,23 +317,23 @@ fn infer_regions_module(m: IrModule, dctx: DiagCtx, path: String) -> IrModule {
         fi2 = fi2 + 1;
     }
 
-    check_linear_regions_module(m, dctx, path);
+    check_linear_regions_module(m, dctx);
 
     m
 }
 
-fn check_linear_regions_module(m: IrModule, dctx: DiagCtx, path: String) {
+fn check_linear_regions_module(m: IrModule, dctx: DiagCtx) {
     let n: i64 = m.functions.len();
     let mut fi: i64 = 0;
     while fi < n {
         let f: IrFunction = m.functions[fi];
         let id_to_inst: Vec<IrInst> = build_id_to_inst(f);
-        check_linear_regions_function(f, id_to_inst, dctx, path);
+        check_linear_regions_function(f, id_to_inst, dctx);
         fi = fi + 1;
     }
 }
 
-fn check_linear_regions_function(f: IrFunction, id_to_inst: Vec<IrInst>, dctx: DiagCtx, path: String) {
+fn check_linear_regions_function(f: IrFunction, id_to_inst: Vec<IrInst>, dctx: DiagCtx) {
     let n_blocks: i64 = f.blocks.len();
     let preds: Vec<Vec<i64>> = linear_predecessors(f);
     let block_in: Vec<Vec<i64>> = Vec::new();
@@ -335,7 +391,7 @@ fn check_linear_regions_function(f: IrFunction, id_to_inst: Vec<IrInst>, dctx: D
                 if inst.args.len() > 0 {
                     linear_remove_origins(live, inst.args[0], id_to_inst);
                 }
-                linear_emit_live_errors(f, live, id_to_inst, emitted, dctx, path);
+                linear_emit_live_errors(f, live, id_to_inst, emitted, dctx);
                 live.clear();
             } else if inst.op == IOP_UNREACHABLE() {
                 live.clear();
@@ -469,7 +525,7 @@ fn linear_successors(blk: IrBlock) -> Vec<i64> {
     out
 }
 
-fn linear_emit_live_errors(f: IrFunction, live: Vec<i64>, id_to_inst: Vec<IrInst>, emitted: Vec<i64>, dctx: DiagCtx, path: String) {
+fn linear_emit_live_errors(f: IrFunction, live: Vec<i64>, id_to_inst: Vec<IrInst>, emitted: Vec<i64>, dctx: DiagCtx) {
     let mut i: i64 = 0;
     while i < live.len() {
         let id: i64 = live[i];
@@ -486,7 +542,7 @@ fn linear_emit_live_errors(f: IrFunction, live: Vec<i64>, id_to_inst: Vec<IrInst
             let msg: String = String::from("linear value `");
             msg.push_str(name);
             msg.push_str(String::from("` is not consumed before its region closes"));
-            let d: Diagnostic = diag_error(EC_REGION_LINEAR(), msg, path, inst.ostart, inst.olen);
+            let d: Diagnostic = diag_error(EC_REGION_LINEAR(), msg, f.source_file, inst.ostart, inst.olen);
             diag_add_hint(d, String::from("consume the linear value before this scope exits, or return it to transfer the obligation to the caller"));
             diag_ctx_emit(dctx, d);
         }
@@ -612,6 +668,12 @@ fn put_inst_region(keys: Vec<i64>, vals: Vec<i64>, id: i64, rgn: i64) {
 // canon_flat encodes the canonical wire shape used by `IrFunction.rsum_store_effects`,
 // matching `vow-ir/src/serialize.rs::write_region_constraint` discriminants:
 //   per effect: target_u32, constraint_kind, (aux_u32)?, (alias_count, alias_u32...)?
+//
+// Sort invariant: the produced flat array is sorted by ascending target.
+// Adjacency-dedup consumers depend on this — see
+// `unique_store_target_count` (called from `check_region_store_conflicts_module`
+// and `emit_root_escape_notes_module`). If the sort order ever changes,
+// switch those consumers to an explicit set or update them in lockstep.
 fn canonicalize_store_effects(
     targets: Vec<i64>, kinds: Vec<i64>, aux: Vec<i64>, aliases: Vec<Vec<i64>>
 ) -> Vec<i64> {
@@ -717,19 +779,284 @@ fn add_store_effect(
     aliases_list.push(clone_i64_vec(aliases));
 }
 
+// Trace alias chain (FieldGet/Load/vec-get/Phi) for ambiguous-slot check;
+// mirrors clif_value_receiver_region. Returns packed region (>=0) on a
+// heap-producer terminus (Caller sentinel triggers conservative reject)
+// or -1 on a safe terminus.
+fn underlying_caller_via_aliases(
+    id_to_inst: Vec<IrInst>,
+    region_keys: Vec<i64>, region_vals: Vec<i64>,
+    m_functions: Vec<IrFunction>,
+    source_arg_id: i64
+) -> i64 {
+    let seen: Vec<i64> = Vec::new();
+    underlying_caller_via_aliases_inner(
+        id_to_inst, region_keys, region_vals, m_functions, source_arg_id, seen)
+}
+
+fn underlying_caller_via_aliases_inner(
+    id_to_inst: Vec<IrInst>,
+    region_keys: Vec<i64>, region_vals: Vec<i64>,
+    m_functions: Vec<IrFunction>,
+    source_arg_id: i64,
+    seen: Vec<i64>
+) -> i64 {
+    let mut current: i64 = source_arg_id;
+    let mut local_seen: Vec<i64> = clone_i64_vec(seen);
+    let mut keep_going: bool = true;
+    let mut result: i64 = -1;
+    while keep_going {
+        let mut already: bool = false;
+        let mut si: i64 = 0;
+        while si < local_seen.len() {
+            if local_seen[si] == current { already = true; }
+            si = si + 1;
+        }
+        if already {
+            keep_going = false;
+        } else {
+            local_seen.push(current);
+            let direct: i64 = lookup_inst_region(region_keys, region_vals, current);
+            if direct >= 0 {
+                result = direct;
+                keep_going = false;
+            } else {
+                let inst: IrInst = lookup_inst_or_default(id_to_inst, current);
+                if inst.id < 0 {
+                    keep_going = false;
+                } else if (inst.op == IOP_FIELD_GET() || inst.op == IOP_LOAD()) && inst.args.len() > 0 {
+                    current = inst.args[0];
+                } else if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
+                    && (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
+                    && inst.args.len() > 0
+                {
+                    current = inst.args[0];
+                } else if inst.op == IOP_PHI() {
+                    // Mirror codegen's `clif_value_receiver_region` Phi
+                    // semantics for the all-arms-agree case. For divergent
+                    // arms, codegen's source_value_region falls back to
+                    // the Phi's own (default) region — but that fallback
+                    // only governs how *future re-allocations* would
+                    // route. It does NOT undo a `RegionAlloc{Caller(_)}`
+                    // that already executed in some arm at runtime.
+                    // Hidden caller slots have asymmetric lifetimes, so a
+                    // fresh Caller(0) arm can be stored into slot 1's
+                    // target whose arena outlives slot 0's. To stay sound
+                    // under `ambiguous_caller_slot`, *any* Caller(_)-
+                    // carrying arm — even mixed with safe arms — must
+                    // trigger the conservative reject. The Rust mirror in
+                    // `vow-ir/src/region.rs` carries the same widened
+                    // logic; both compilers must keep this in sync.
+                    let mut have_first: bool = false;
+                    let mut first_rgn: i64 = -1;
+                    let mut diverged: bool = false;
+                    let mut any_caller_arm: i64 = -1;
+                    let mut ki: i64 = 0;
+                    while ki < id_to_inst.len() {
+                        let up: IrInst = id_to_inst[ki];
+                        if up.id >= 0 && up.op == IOP_UPSILON() && up.dk == IDATA_PHI_TARGET()
+                            && up.dv == inst.id && up.args.len() > 0
+                        {
+                            // Each arm gets the path-to-Phi seen set as a
+                            // starting `seen`; the inner call clones it on
+                            // entry, so arms explore independently and arm
+                            // B does not inherit arm A's exploration.
+                            // Mirrors `arm_seen = seen.clone()` in Rust.
+                            let arm_rgn: i64 = underlying_caller_via_aliases_inner(
+                                id_to_inst, region_keys, region_vals, m_functions, up.args[0], local_seen);
+                            if arm_rgn >= 0 && region_kind(arm_rgn) == REGION_KIND_CALLER()
+                                && any_caller_arm < 0
+                            {
+                                any_caller_arm = arm_rgn;
+                            }
+                            if !have_first {
+                                have_first = true;
+                                first_rgn = arm_rgn;
+                            } else if first_rgn != arm_rgn {
+                                diverged = true;
+                            }
+                        }
+                        ki = ki + 1;
+                    }
+                    if diverged {
+                        result = any_caller_arm;
+                    } else if have_first {
+                        result = first_rgn;
+                    }
+                    keep_going = false;
+                } else if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
+                    // The callee returns a value derived from its parameters
+                    // (AliasOf / AliasOfAny). The marker propagation pushes
+                    // VirtualCaller markers from the call result back to the
+                    // underlying allocs via the alias edge; the call result
+                    // itself isn't heap-producing for AliasOf returns, so
+                    // `region_map` has no entry and we fall through to here.
+                    // Trace through to those arg(s) — same as FieldGet/Load
+                    // semantically. AliasOfAny: any-caller-arm wins (mirror
+                    // Phi pattern). Mirrors the CallTarget arm in
+                    // vow-ir/src/region.rs:underlying_caller_via_aliases_inner;
+                    // both compilers must keep this in sync.
+                    let callee_idx: i64 = inst.dv;
+                    if callee_idx >= 0 && callee_idx < m_functions.len() {
+                        let callee: IrFunction = m_functions[callee_idx];
+                        let rkind: i64 = callee.rsum_return_kind;
+                        if rkind == RSUM_KIND_ALIAS_OF() {
+                            let j_idx: i64 = callee.rsum_return_aux;
+                            if j_idx >= 0 && j_idx < inst.args.len() {
+                                current = inst.args[j_idx];
+                            } else {
+                                keep_going = false;
+                            }
+                        } else if rkind == RSUM_KIND_ALIAS_OF_ANY() {
+                            let aliases: Vec<i64> = callee.rsum_return_aliases;
+                            let mut any_caller: i64 = -1;
+                            let mut ai: i64 = 0;
+                            while ai < aliases.len() && any_caller < 0 {
+                                let j_idx: i64 = aliases[ai];
+                                if j_idx >= 0 && j_idx < inst.args.len() {
+                                    let arm_rgn: i64 = underlying_caller_via_aliases_inner(
+                                        id_to_inst, region_keys, region_vals, m_functions,
+                                        inst.args[j_idx], local_seen);
+                                    if arm_rgn >= 0 && region_kind(arm_rgn) == REGION_KIND_CALLER() {
+                                        any_caller = arm_rgn;
+                                    }
+                                }
+                                ai = ai + 1;
+                            }
+                            result = any_caller;
+                            keep_going = false;
+                        } else {
+                            // FreshInCaller is heap-producing → has a
+                            // region_map entry handled above. Other kinds
+                            // (ConstantGlobal / Uninit) can't carry Caller.
+                            keep_going = false;
+                        }
+                    } else {
+                        keep_going = false;
+                    }
+                } else {
+                    keep_going = false;
+                }
+            }
+        }
+    }
+    result
+}
+
+// Counts unique store-effect target indices in the pre-sorted canonical
+// flat array produced by `canonicalize_store_effects` (sort key: target,
+// then kind, then payload). Layout is `target, kind, (aux)?,
+// (alias_count, alias...)?` per effect; ALIAS_OF carries one aux,
+// ALIAS_OF_ANY carries an alias-count plus that many indices, the others
+// carry no payload.
+//
+// Adjacency dedup via `have_last`/`last` is ONLY correct because the
+// flat array is target-sorted; if the canonical layout ever changes,
+// switch to an explicit set. Rust's mirror uses BTreeSet which is
+// ordering-independent. The sort invariant is enforced by
+// `canonicalize_store_effects` (insertion sort at line ~637); both
+// `add_store_effect` (insertion-with-dedup) and `canonicalize_store_effects`
+// are the only writers to `rsum_store_effects`.
+fn unique_store_target_count(flat: Vec<i64>) -> i64 {
+    let mut count: i64 = 0;
+    let mut last: i64 = -1;
+    let mut have_last: bool = false;
+    let mut i: i64 = 0;
+    while i < flat.len() {
+        let target: i64 = flat[i];
+        i = i + 1;
+        if i >= flat.len() { break; }
+        let kind: i64 = flat[i];
+        i = i + 1;
+        if !have_last || target != last {
+            count = count + 1;
+            last = target;
+            have_last = true;
+        }
+        if kind == RSUM_KIND_ALIAS_OF() {
+            if i >= flat.len() { break; }
+            i = i + 1;
+        } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
+            if i >= flat.len() { break; }
+            let n: i64 = flat[i];
+            i = i + 1;
+            let mut a: i64 = 0;
+            while a < n && i < flat.len() {
+                i = i + 1;
+                a = a + 1;
+            }
+        }
+    }
+    count
+}
+
+// Mirrors Rust's `any_published_store` filter at vow-ir/src/region.rs:1481-1484.
+// Returns true if the parallel `int_se_src_kinds[fi]` array contains any
+// kind other than RSUM_INTERNAL_UNINIT(). This is exact (not merely
+// conservative) because the integer encoding is closed: Published kinds
+// map to {0..3} and RSUM_INTERNAL_UNINIT = -1 is the only non-Published
+// value. As long as that invariant holds, `!= UNINIT` ≡ `is Published`,
+// and `add_store_effect` is the single chokepoint that writes
+// `int_se_src_kinds`, so adding a future non-Published kind requires
+// either extending the encoding past {0..3} or adding a new sentinel —
+// both of which would force this gate's review.
+fn any_published_se_kind(kinds: Vec<i64>) -> bool {
+    let mut i: i64 = 0;
+    while i < kinds.len() {
+        if kinds[i] != RSUM_INTERNAL_UNINIT() { return true; }
+        i = i + 1;
+    }
+    false
+}
+
 fn check_region_store_conflicts_module(
-    m: IrModule, id_to_inst_per_fn: Vec<Vec<IrInst>>, dctx: DiagCtx, path: String
+    m: IrModule, id_to_inst_per_fn: Vec<Vec<IrInst>>, id_to_block_per_fn: Vec<Vec<i64>>,
+    block_parent_per_fn: Vec<Vec<i64>>, block_depth_per_fn: Vec<Vec<i64>>,
+    phi_arms_per_fn: Vec<Vec<Vec<i64>>>,
+    return_rodata: Vec<bool>,
+    region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
+    int_kinds: Vec<i64>,
+    dctx: DiagCtx
 ) {
     let mut fi: i64 = 0;
     while fi < m.functions.len() {
         let f: IrFunction = m.functions[fi];
         let id_to_inst: Vec<IrInst> = id_to_inst_per_fn[fi];
+        let id_to_block: Vec<i64> = id_to_block_per_fn[fi];
+        let block_parent: Vec<i64> = block_parent_per_fn[fi];
+        let block_depth: Vec<i64> = block_depth_per_fn[fi];
+        let phi_arms: Vec<Vec<i64>> = phi_arms_per_fn[fi];
+        let rkeys: Vec<i64> = region_keys[fi];
+        let rvals: Vec<i64> = region_vals[fi];
+        // Issue #317: slot-aware region inference now mints
+        // `Caller(AMBIGUOUS_SLOT)` whenever a value's marker set resolves
+        // to multiple distinct hidden caller slots. The conflict check
+        // rejects that sentinel and accepts every other `Caller(N)` —
+        // codegen routes via `hidden_region_idx_for_store_target` with
+        // the precise slot.
         let mut bi: i64 = 0;
         while bi < f.blocks.len() {
             let blk: IrBlock = f.blocks[bi];
             let mut ii: i64 = 0;
             while ii < blk.insts.len() {
                 let inst: IrInst = blk.insts[ii];
+                if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
+                    let growth_target_pos: i64 = extern_growth_target_pos(inst.ds);
+                    if growth_target_pos >= 0 && growth_target_pos < inst.args.len() {
+                        let target_arg: i64 = inst.args[growth_target_pos];
+                        let visiting: Vec<i64> = Vec::new();
+                        if value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m.functions, return_rodata, target_arg, visiting) {
+                            emit_region_literal_mutation(
+                                f.source_file,
+                                target_arg,
+                                inst,
+                                id_to_inst,
+                                extern_mutation_operation(inst.ds),
+                                dctx
+                            );
+                        }
+                    }
+                }
                 if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
                     let callee_idx: i64 = inst.dv;
                     if callee_idx >= 0 && callee_idx < m.functions.len() {
@@ -737,8 +1064,17 @@ fn check_region_store_conflicts_module(
                             m.functions[callee_idx].rsum_store_effects,
                             inst,
                             id_to_inst,
+                            id_to_block,
+                            block_parent,
+                            block_depth,
+                            phi_arms,
+                            rkeys,
+                            rvals,
+                            m.functions,
+                            return_rodata,
+                            int_kinds,
                             dctx,
-                            path,
+                            f.source_file,
                         );
                     }
                 }
@@ -751,23 +1087,39 @@ fn check_region_store_conflicts_module(
 }
 
 fn check_store_effects_at_call(
-    flat: Vec<i64>, call_inst: IrInst, id_to_inst: Vec<IrInst>, dctx: DiagCtx, path: String
+    flat: Vec<i64>, call_inst: IrInst, id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>,
+    block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>,
+    region_keys: Vec<i64>, region_vals: Vec<i64>,
+    m_functions: Vec<IrFunction>,
+    return_rodata: Vec<bool>,
+    int_kinds: Vec<i64>,
+    dctx: DiagCtx, source_file: String
 ) {
-    // Divergence note: the Rust path (`vow-ir/src/region.rs::handle_inst`,
-    // `Opcode::Call` arm) adds a `VirtualCaller` marker on the target arg
-    // for `RSUM_KIND_FRESH_IN_CALLER` store effects, routing the target
-    // toward `Caller(0)`. The self-hosted compiler has no `VirtualCaller`
-    // marker mechanism — targets of FreshInCaller store effects stay at
-    // their default `Root`. No diagnostic effect (region routing only),
-    // but worth promoting to true parity once hidden-caller-region
-    // plumbing for `IOP_REGION_ALLOC` lands in `vow-clif-shim`.
     let mut i: i64 = 0;
+    let checked_targets: Vec<i64> = Vec::new();
     while i < flat.len() {
         let target: i64 = flat[i];
         i = i + 1;
         if i >= flat.len() { return; }
         let kind: i64 = flat[i];
         i = i + 1;
+        if target >= 0 && target < call_inst.args.len()
+            && !region_vec_contains_i64(checked_targets, target)
+        {
+            checked_targets.push(target);
+            let visiting: Vec<i64> = Vec::new();
+            if value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata, call_inst.args[target], visiting) {
+                emit_region_literal_mutation(
+                    source_file,
+                    call_inst.args[target],
+                    call_inst,
+                    id_to_inst,
+                    String::from("mutating callee parameter"),
+                    dctx
+                );
+            }
+        }
         if kind == RSUM_KIND_ALIAS_OF() {
             if i >= flat.len() { return; }
             let source_param: i64 = flat[i];
@@ -776,11 +1128,15 @@ fn check_store_effects_at_call(
                 && source_param >= 0 && source_param < call_inst.args.len()
             {
                 check_store_conflict(
-                    path,
+                    source_file,
                     call_inst.args[target],
                     call_inst.args[source_param],
                     call_inst,
                     id_to_inst,
+                    region_keys,
+                    region_vals,
+                    m_functions,
+                    int_kinds,
                     dctx,
                 );
             }
@@ -808,17 +1164,256 @@ fn check_store_effects_at_call(
     }
 }
 
-fn check_store_conflict(
-    path: String, target_arg_id: i64, source_arg_id: i64, call_inst: IrInst,
-    id_to_inst: Vec<IrInst>, dctx: DiagCtx
+// Emit a `RegionRootEscape` Note for each heap-producing instruction whose
+// inferred region is `REGION_KIND_CALLER` in a function that publishes
+// `FreshInCaller` (return) or any store effect. Conservative
+// over-approximation — false positives are acceptable for Note severity;
+// full call-graph reachability from main is unnecessary infrastructure for
+// an informational diagnostic.
+fn emit_root_escape_notes_module(
+    m: IrModule,
+    id_to_inst_per_fn: Vec<Vec<IrInst>>,
+    region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
+    note_region_keys: Vec<Vec<i64>>, note_region_vals: Vec<Vec<i64>>,
+    int_kinds: Vec<i64>,
+    int_se_src_kinds: Vec<Vec<i64>>,
+    dctx: DiagCtx
 ) {
-    let source: DeepRet = trace_origin_shallow(id_to_inst, source_arg_id);
-    if source.kind != RSUM_KIND_FRESH_IN_CALLER() {
+    let mut fi: i64 = 0;
+    while fi < m.functions.len() {
+        let f: IrFunction = m.functions[fi];
+        let return_kind: i64 = int_kinds[fi];
+        // Mirrors Rust's `any_published_store` filter at
+        // vow-ir/src/region.rs:1481-1484: only count store_effects whose
+        // source constraint is `Published(_)` (excludes the Uninit seed).
+        // `int_se_src_kinds` already carries the discriminator, written
+        // in lockstep with `int_se_targets` via `add_store_effect`.
+        let has_publishable: bool = return_kind == RSUM_KIND_FRESH_IN_CALLER()
+            || any_published_se_kind(int_se_src_kinds[fi]);
+        if !has_publishable {
+            fi = fi + 1;
+            continue;
+        }
+        // Skip the note pass when this function would also trigger
+        // `ambiguous_caller_slot` rejection — the routed allocs already
+        // carry a hard `RegionConflict`, and the note's "no action
+        // needed if intentional" hint is misleading at a location with
+        // an actual error. Same predicate as in
+        // `check_region_store_conflicts_module`.
+        let returns_fresh: bool = return_kind == RSUM_KIND_FRESH_IN_CALLER();
+        // Precondition: `f.rsum_store_effects` must be target-sorted
+        // (see `canonicalize_store_effects`). Same dedup-correctness
+        // contract as in `check_region_store_conflicts_module`.
+        let unique_st: i64 = unique_store_target_count(f.rsum_store_effects);
+        let return_slot_n: i64 = if returns_fresh { 1 } else { 0 };
+        let total_slots: i64 = return_slot_n + unique_st;
+        if total_slots > 1 {
+            fi = fi + 1;
+            continue;
+        }
+        let rkeys: Vec<i64> = region_keys[fi];
+        let rvals: Vec<i64> = region_vals[fi];
+        let note_rkeys: Vec<i64> = note_region_keys[fi];
+        let note_rvals: Vec<i64> = note_region_vals[fi];
+        let id_to_inst: Vec<IrInst> = id_to_inst_per_fn[fi];
+        let bks: Vec<IrBlock> = f.blocks;
+        // Pre-collect returned IDs once per function so the inner skip is O(N)
+        // total instead of O(N*Returns) — was O(N²) for functions with many
+        // heap producers and at least one Return. Inner skip is
+        // `region_vec_contains_i64` (linear in `returned_ids.len()`); the
+        // Rust mirror uses `BTreeSet::contains` (logarithmic). Vow's
+        // current stdlib has no equivalent ordered-set type; the linear
+        // scan is fine for typical functions but would diverge on very
+        // large `returned_ids` — track if it ever bites.
+        let live_field_set_ids: Vec<i64> = collect_live_field_set_ids(bks);
+        let returned_ids: Vec<i64> = collect_returned_ids(bks, live_field_set_ids);
+        let mut bi: i64 = 0;
+        while bi < bks.len() {
+            let blk: IrBlock = bks[bi];
+            let mut ii: i64 = 0;
+            while ii < blk.insts.len() {
+                let inst: IrInst = blk.insts[ii];
+                // Issue #320: prefer the pre-rewrite Caller(_) snapshot when
+                // present (set by `analyze_function` for internal-call heap
+                // producers whose region was conservatively rewritten to
+                // Root). Fall back to the committed `region_keys/vals` for
+                // the canonical direct-`RegionAlloc{Caller(_)}` path.
+                let mut rgn: i64 = lookup_inst_region(note_rkeys, note_rvals, inst.id);
+                if rgn < 0 {
+                    rgn = lookup_inst_region(rkeys, rvals, inst.id);
+                }
+                if rgn >= 0 && region_kind(rgn) == REGION_KIND_CALLER() {
+                    // Skip the value being returned — that's the canonical
+                    // FreshInCaller return path, not a side-effect escape.
+                    if !region_vec_contains_i64(returned_ids, inst.id) {
+                        let span_start: i64 = root_escape_span_start(inst, id_to_inst);
+                        let span_len: i64 = root_escape_span_len(inst, id_to_inst);
+                        let d: Diagnostic = diag_new(
+                            SEV_NOTE(),
+                            EC_REGION_ROOT_ESCAPE(),
+                            String::from("allocation may live in the root region: routed via store-effect chain to a caller whose target_region ultimately resolves to root"),
+                            f.source_file,
+                            span_start,
+                            span_len,
+                            DIAG_BLAME_CALLEE()
+                        );
+                        diag_add_hint(
+                            d,
+                            String::from("if intentional (e.g. program-lifetime data), no action needed; if you want this allocation freed earlier, restructure so the value is returned rather than stored into a parameter container")
+                        );
+                        diag_ctx_emit(dctx, d);
+                    }
+                }
+                ii = ii + 1;
+            }
+            bi = bi + 1;
+        }
+        fi = fi + 1;
+    }
+}
+
+fn root_escape_span_start(inst: IrInst, id_to_inst: Vec<IrInst>) -> i64 {
+    if inst.olen > 0 {
+        return inst.ostart;
+    }
+    // Defensive fallback: if a call has no span, use the literal operand span.
+    if inst.op == IOP_CALL() && inst.args.len() > 0 {
+        let source: IrInst = lookup_inst_or_default(id_to_inst, inst.args[0]);
+        if source.id >= 0 && source.olen > 0 {
+            return source.ostart;
+        }
+    }
+    inst.ostart
+}
+
+fn root_escape_span_len(inst: IrInst, id_to_inst: Vec<IrInst>) -> i64 {
+    if inst.olen > 0 {
+        return inst.olen;
+    }
+    if inst.op == IOP_CALL() && inst.args.len() > 0 {
+        let source: IrInst = lookup_inst_or_default(id_to_inst, inst.args[0]);
+        if source.id >= 0 && source.olen > 0 {
+            return source.olen;
+        }
+    }
+    inst.olen
+}
+
+// Build the FreshInCaller return-value skip-set used by
+// `emit_root_escape_notes_module`. The FieldSet edge is gated on:
+//   1. `region_alloc_ids` — the target pointer must be a fresh
+//      `RegionAlloc` (excludes mutations into parameter containers);
+//   2. `live_field_set_ids` — within each block, only the textually-last
+//      FieldSet for each `(target, field_idx)` pair (issue #326).
+// See spec §4.4 (visibility — field-initializer exemption).
+fn collect_returned_ids(bks: Vec<IrBlock>, live_field_set_ids: Vec<i64>) -> Vec<i64> {
+    let mut out: Vec<i64> = Vec::new();
+    let mut stack: Vec<i64> = Vec::new();
+    let mut region_alloc_ids: Vec<i64> = Vec::new();
+    // Single setup pass: gather Return-arg seeds and the RegionAlloc-id
+    // gate set in the same scan over `bks`.
+    let mut bi: i64 = 0;
+    while bi < bks.len() {
+        let blk: IrBlock = bks[bi];
+        let mut ii: i64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_RETURN() && inst.args.len() > 0 {
+                stack.push(inst.args[0]);
+            }
+            if inst.op == IOP_REGION_ALLOC() {
+                region_alloc_ids.push(inst.id);
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+    while stack.len() > 0 {
+        let id: i64 = stack[stack.len() - 1];
+        stack.pop();
+        if region_vec_contains_i64(out, id) {
+            continue;
+        }
+        out.push(id);
+        let id_is_fresh_alloc: bool = region_vec_contains_i64(region_alloc_ids, id);
+        let mut sbi: i64 = 0;
+        while sbi < bks.len() {
+            let sblk: IrBlock = bks[sbi];
+            let mut sii: i64 = 0;
+            while sii < sblk.insts.len() {
+                let inst: IrInst = sblk.insts[sii];
+                if inst.op == IOP_UPSILON() && inst.dk == IDATA_PHI_TARGET()
+                    && inst.dv == id && inst.args.len() > 0
+                {
+                    stack.push(inst.args[0]);
+                }
+                if id_is_fresh_alloc && inst.op == IOP_FIELD_SET()
+                    && inst.args.len() >= 2 && inst.args[0] == id
+                    && region_vec_contains_i64(live_field_set_ids, inst.id)
+                {
+                    stack.push(inst.args[1]);
+                }
+                sii = sii + 1;
+            }
+            sbi = sbi + 1;
+        }
+    }
+    out
+}
+
+fn check_store_conflict(
+    source_file: String, target_arg_id: i64, source_arg_id: i64, call_inst: IrInst,
+    id_to_inst: Vec<IrInst>,
+    region_keys: Vec<i64>, region_vals: Vec<i64>,
+    m_functions: Vec<IrFunction>,
+    int_kinds: Vec<i64>,
+    dctx: DiagCtx
+) {
+    // Consult the inferred region for the source value, not its raw IR
+    // opcode. `value_lub_region` already widens fresh allocations through
+    // must-outlive markers added by `call_store_effects_collect_regions`,
+    // and slot-aware inference (issue #317) mints `Caller(AMBIGUOUS_SLOT)`
+    // when a marker set resolves to multiple distinct hidden slots. The
+    // conflict fires for AMBIGUOUS sources and for concrete-block sources
+    // strictly narrower than the parameter target.
+    let target_param: i64 = trace_param(id_to_inst, target_arg_id);
+    if target_param < 0 {
+        // Inline case: target is not a parameter; the inline code path handles
+        // its own region-LCA check via direct markers, no cross-call conflict.
         return;
     }
-    let target_param: i64 = trace_param_shallow(id_to_inst, target_arg_id);
-    if target_param < 0 {
+    let source_ty_inst: IrInst = lookup_inst_or_default(id_to_inst, source_arg_id);
+    if source_ty_inst.id >= 0 && is_scalar_ity(source_ty_inst.ty) {
         return;
+    }
+    if trace_param(id_to_inst, source_arg_id) >= 0 {
+        return;
+    }
+    let src_rgn: i64 = lookup_inst_region(region_keys, region_vals, source_arg_id);
+    let mut ambiguous_multi_slot: bool = false;
+    if src_rgn < 0 {
+        return;
+    } else {
+        let src_kind: i64 = region_kind(src_rgn);
+        if src_kind == REGION_KIND_CALLER() && !is_caller_ambiguous(src_rgn) {
+            return;
+        } else if src_kind == REGION_KIND_ROOT() || src_kind == REGION_KIND_RODATA() {
+            return;
+        } else if src_kind == REGION_KIND_BLOCK() {
+            // Source is a concrete block; target is a parameter (established
+            // above), so the source must outlive the caller's region — a
+            // concrete block source is strictly narrower, always a conflict.
+            // Fall through to emission.
+        } else if src_kind == REGION_KIND_CALLER() && is_caller_ambiguous(src_rgn)
+            && !is_heap_producing_for_region(source_ty_inst, int_kinds)
+        {
+            return;
+        } else {
+            // Heap-producing Caller(AMBIGUOUS) source — flag for the
+            // ambiguous-slot diagnostic phrasing below.
+            ambiguous_multi_slot = src_kind == REGION_KIND_CALLER()
+                && is_caller_ambiguous(src_rgn);
+        }
     }
 
     let source_inst: IrInst = lookup_inst_or_default(id_to_inst, source_arg_id);
@@ -832,19 +1427,609 @@ fn check_store_conflict(
     // currently models a single span + hints only; secondary spans need a
     // structural extension to `diag_new` and the JSON / human emitters.
     // Tracked alongside the other self-hosted diagnostic-infra gaps.
+    let message: String = if ambiguous_multi_slot {
+        String::from("value's region cannot satisfy target container's region: allocation routes to multiple distinct caller arena slots")
+    } else {
+        String::from("value's region cannot satisfy target container's region: block-local allocation stored into a parameter region")
+    };
+    let hint: String = if ambiguous_multi_slot {
+        String::from("split the allocation so each target container receives its own fresh value, or copy the value into the matching arena per destination — a single allocation cannot live in more than one hidden caller arena")
+    } else {
+        String::from("hoist the allocation to a wider scope, copy the value into the outer arena, or restructure the return flow so the value escapes to the caller")
+    };
     let d: Diagnostic = diag_new(
         SEV_ERROR(),
         EC_REGION_CONFLICT(),
-        String::from("value's region cannot satisfy target container's region: block-local allocation stored into a parameter region"),
-        path,
+        message,
+        source_file,
         span_start,
         span_len,
         DIAG_BLAME_CALLEE()
     );
-    diag_add_hint(
-        d,
-        String::from("hoist the allocation to a wider scope, copy the value into the outer arena, or restructure the return flow so the value escapes to the caller")
+    diag_add_hint(d, hint);
+    diag_ctx_emit(dctx, d);
+}
+
+fn extern_mutation_operation(sym: String) -> String {
+    if sym == String::from("__vow_vec_push") || sym == String::from("__vow_vec_push_in_arena") {
+        return String::from("Vec::push");
+    }
+    if sym == String::from("__vow_vec_clear") {
+        return String::from("Vec::clear");
+    }
+    if sym == String::from("__vow_vec_reserve_in_arena") {
+        return String::from("Vec::reserve");
+    }
+    if sym == String::from("__vow_string_push_str") || sym == String::from("__vow_string_push_str_in_arena") {
+        return String::from("String::push_str");
+    }
+    if sym == String::from("__vow_string_push_byte") || sym == String::from("__vow_string_push_byte_in_arena") {
+        return String::from("String::push_byte");
+    }
+    if sym == String::from("__vow_string_clear") {
+        return String::from("String::clear");
+    }
+    if sym == String::from("__vow_map_insert") || sym == String::from("__vow_map_insert_in_arena") {
+        return String::from("HashMap::insert");
+    }
+    if sym == String::from("__vow_btreemap_insert") {
+        return String::from("BTreeMap::insert");
+    }
+    String::from("container mutation")
+}
+
+fn value_may_be_rodata(
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>, m_functions: Vec<IrFunction>,
+    return_rodata: Vec<bool>, id: i64, visiting: Vec<i64>
+) -> bool {
+    if region_vec_contains_i64(visiting, id) {
+        return false;
+    }
+    let inst: IrInst = lookup_inst_or_default(id_to_inst, id);
+    if inst.id < 0 {
+        return false;
+    }
+    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
+        && inst.ds == String::from("__vow_string_literal")
+    {
+        return true;
+    }
+    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
+        && (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
+        && inst.args.len() > 0
+    {
+        visiting.push(id);
+        let result0: bool = vec_element_may_be_rodata(
+            id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions,
+            return_rodata, id, inst.args[0], visiting
+        );
+        visiting.pop();
+        return result0;
+    }
+    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
+        let callee_idx: i64 = inst.dv;
+        if callee_idx >= 0 && callee_idx < m_functions.len() {
+            if callee_idx < return_rodata.len() && return_rodata[callee_idx] {
+                return true;
+            }
+            let callee: IrFunction = m_functions[callee_idx];
+            visiting.push(id);
+            let result: bool = return_region_may_be_rodata(
+                callee.rsum_return_kind,
+                callee.rsum_return_aux,
+                callee.rsum_return_aliases,
+                inst.args,
+                id_to_inst,
+                id_to_block,
+                block_parent,
+                block_depth,
+                phi_arms,
+                m_functions,
+                return_rodata,
+                visiting
+            );
+            visiting.pop();
+            return result;
+        }
+    }
+    if inst.op == IOP_PHI() && id >= 0 && id < phi_arms.len() {
+        visiting.push(id);
+        let arms: Vec<i64> = phi_arms[id];
+        let mut ai: i64 = 0;
+        while ai < arms.len() {
+            if value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata, arms[ai], visiting) {
+                visiting.pop();
+                return true;
+            }
+            ai = ai + 1;
+        }
+        visiting.pop();
+    }
+    if inst.op == IOP_FIELD_GET() && inst.dk == IDATA_FIELD() && inst.args.len() > 0 {
+        visiting.push(id);
+        let result2: bool = stored_value_may_be_rodata(
+            id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata,
+            id, inst.args[0], true, inst.dv, visiting
+        );
+        visiting.pop();
+        return result2;
+    }
+    if inst.op == IOP_LOAD() && inst.args.len() > 0 {
+        visiting.push(id);
+        let result3: bool = stored_value_may_be_rodata(
+            id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata,
+            id, inst.args[0], false, 0, visiting
+        );
+        visiting.pop();
+        return result3;
+    }
+    false
+}
+
+fn rodata_storage_sources(
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    read_id: i64, target_id: i64, has_field: bool, field_idx: i64
+) -> Vec<i64> {
+    let read_block: i64 = lookup_inst_block(id_to_block, read_id);
+    let mut same_write: i64 = -1;
+    let mut same_source: i64 = -1;
+    let mut dom_depth: i64 = -1;
+    let mut dom_write: i64 = -1;
+    let mut dom_source: i64 = -1;
+    let cross_block_sources: Vec<i64> = Vec::new();
+    let mut wi: i64 = 0;
+    while wi < id_to_inst.len() {
+        let write_inst: IrInst = id_to_inst[wi];
+        if write_inst.id >= 0 && write_inst.id < read_id && write_inst.args.len() >= 2 {
+            let mut writes_target: bool = false;
+            if has_field {
+                if write_inst.op == IOP_FIELD_SET()
+                    && write_inst.dk == IDATA_FIELD()
+                    && write_inst.args[0] == target_id
+                    && write_inst.dv == field_idx
+                {
+                    writes_target = true;
+                }
+            } else if write_inst.op == IOP_STORE() && write_inst.args[0] == target_id {
+                writes_target = true;
+            }
+            if writes_target {
+                let write_block: i64 = lookup_inst_block(id_to_block, write_inst.id);
+                if write_block == read_block {
+                    if same_write < 0 || write_inst.id > same_write {
+                        same_write = write_inst.id;
+                        same_source = write_inst.args[1];
+                    }
+                } else if block_tree_is_ancestor(block_parent, write_block, read_block) {
+                    let write_depth: i64 = block_depth_at(block_depth, write_block);
+                    if dom_write < 0 || write_depth > dom_depth
+                        || (write_depth == dom_depth && write_inst.id > dom_write)
+                    {
+                        dom_depth = write_depth;
+                        dom_write = write_inst.id;
+                        dom_source = write_inst.args[1];
+                    }
+                } else {
+                    cross_block_sources.push(write_inst.args[1]);
+                }
+            }
+        }
+        wi = wi + 1;
+    }
+    if same_source >= 0 {
+        let out: Vec<i64> = Vec::new();
+        out.push(same_source);
+        return out;
+    }
+    if dom_source >= 0 {
+        cross_block_sources.push(dom_source);
+    }
+    cross_block_sources
+}
+
+fn rodata_vec_element_sources(
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    read_id: i64, target_id: i64
+) -> Vec<i64> {
+    let read_block: i64 = lookup_inst_block(id_to_block, read_id);
+    let mut clear_cutoff: i64 = -1;
+    let mut clear_depth: i64 = -1;
+    let mut ci: i64 = 0;
+    while ci < id_to_inst.len() {
+        let clear_inst: IrInst = id_to_inst[ci];
+        if clear_inst.id >= 0 && clear_inst.id < read_id
+            && clear_inst.op == IOP_CALL()
+            && clear_inst.dk == IDATA_CALL_EXTERN()
+            && clear_inst.ds == String::from("__vow_vec_clear")
+            && clear_inst.args.len() > 0
+            && clear_inst.args[0] == target_id
+        {
+            let clear_block: i64 = lookup_inst_block(id_to_block, clear_inst.id);
+            if block_tree_is_ancestor(block_parent, clear_block, read_block) {
+                let depth: i64 = block_depth_at(block_depth, clear_block);
+                if clear_cutoff < 0 || depth > clear_depth || (depth == clear_depth && clear_inst.id > clear_cutoff) {
+                    clear_depth = depth;
+                    clear_cutoff = clear_inst.id;
+                }
+            }
+        }
+        ci = ci + 1;
+    }
+    // Without index equality/range reasoning, any earlier element write to
+    // this vector may be the value read by __vow_vec_get_val.
+    let sources: Vec<i64> = Vec::new();
+    let mut wi: i64 = 0;
+    while wi < id_to_inst.len() {
+        let write_inst: IrInst = id_to_inst[wi];
+        if write_inst.id >= 0 && write_inst.id < read_id && write_inst.id > clear_cutoff
+            && write_inst.op == IOP_CALL()
+            && write_inst.dk == IDATA_CALL_EXTERN()
+        {
+            if write_inst.ds == String::from("__vow_vec_push_val")
+                && write_inst.args.len() >= 2
+                && write_inst.args[0] == target_id
+            {
+                sources.push(write_inst.args[1]);
+            } else if write_inst.ds == String::from("__vow_vec_push_val_in_arena")
+                && write_inst.args.len() >= 3
+                && write_inst.args[1] == target_id
+            {
+                sources.push(write_inst.args[2]);
+            } else if write_inst.ds == String::from("__vow_vec_set_val")
+                && write_inst.args.len() >= 3
+                && write_inst.args[0] == target_id
+            {
+                sources.push(write_inst.args[2]);
+            }
+        }
+        wi = wi + 1;
+    }
+    sources
+}
+
+fn vec_element_may_be_rodata(
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>, m_functions: Vec<IrFunction>,
+    return_rodata: Vec<bool>, read_id: i64, target_id: i64, visiting: Vec<i64>
+) -> bool {
+    let sources: Vec<i64> = rodata_vec_element_sources(
+        id_to_inst, id_to_block, block_parent, block_depth, read_id, target_id
     );
+    let mut si: i64 = 0;
+    while si < sources.len() {
+        if value_may_be_rodata(
+            id_to_inst,
+            id_to_block,
+            block_parent,
+            block_depth,
+            phi_arms,
+            m_functions,
+            return_rodata,
+            sources[si],
+            visiting
+        ) {
+            return true;
+        }
+        si = si + 1;
+    }
+    false
+}
+
+fn stored_value_may_be_rodata(
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>,
+    m_functions: Vec<IrFunction>, return_rodata: Vec<bool>,
+    read_id: i64, target_id: i64, has_field: bool, field_idx: i64, visiting: Vec<i64>
+) -> bool {
+    let sources: Vec<i64> = rodata_storage_sources(id_to_inst, id_to_block, block_parent, block_depth, read_id, target_id, has_field, field_idx);
+    let mut si: i64 = 0;
+    while si < sources.len() {
+        if value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata, sources[si], visiting) {
+            return true;
+        }
+        si = si + 1;
+    }
+    false
+}
+
+fn return_region_may_be_rodata(
+    kind: i64, aux: i64, aliases: Vec<i64>, args: Vec<i64>,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>, m_functions: Vec<IrFunction>,
+    return_rodata: Vec<bool>, visiting: Vec<i64>
+) -> bool {
+    if kind == RSUM_KIND_ALIAS_OF() {
+        if aux >= 0 && aux < args.len() {
+            return value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata, args[aux], visiting);
+        }
+        return false;
+    }
+    if kind == RSUM_KIND_ALIAS_OF_ANY() {
+        let mut ai: i64 = 0;
+        while ai < aliases.len() {
+            let arg_idx: i64 = aliases[ai];
+            if arg_idx >= 0 && arg_idx < args.len()
+                && value_may_be_rodata(id_to_inst, id_to_block, block_parent, block_depth, phi_arms, m_functions, return_rodata, args[arg_idx], visiting)
+            {
+                return true;
+            }
+            ai = ai + 1;
+        }
+    }
+    false
+}
+
+// Mirrors the post-fixpoint rodata walk while SCC summaries still live in
+// parallel arrays; keep changes in sync with value_may_be_rodata above.
+fn value_may_be_rodata_internal(
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>,
+    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
+    return_rodata: Vec<bool>, id: i64, visiting: Vec<i64>
+) -> bool {
+    if region_vec_contains_i64(visiting, id) {
+        return false;
+    }
+    let inst: IrInst = lookup_inst_or_default(id_to_inst, id);
+    if inst.id < 0 {
+        return false;
+    }
+    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
+        && inst.ds == String::from("__vow_string_literal")
+    {
+        return true;
+    }
+    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
+        && (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
+        && inst.args.len() > 0
+    {
+        visiting.push(id);
+        let result0: bool = vec_element_may_be_rodata_internal(
+            id_to_inst, id_to_block, block_parent, block_depth, phi_arms, int_kinds,
+            int_auxs, int_aliases_list, return_rodata, id, inst.args[0], visiting
+        );
+        visiting.pop();
+        return result0;
+    }
+    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
+        let callee_idx: i64 = inst.dv;
+        if callee_idx >= 0 && callee_idx < int_kinds.len() {
+            if callee_idx < return_rodata.len() && return_rodata[callee_idx] {
+                return true;
+            }
+            visiting.push(id);
+            let result: bool = return_region_may_be_rodata_internal(
+                int_kinds[callee_idx],
+                int_auxs[callee_idx],
+                int_aliases_list[callee_idx],
+                inst.args,
+                id_to_inst,
+                id_to_block,
+                block_parent,
+                block_depth,
+                phi_arms,
+                int_kinds,
+                int_auxs,
+                int_aliases_list,
+                return_rodata,
+                visiting
+            );
+            visiting.pop();
+            return result;
+        }
+    }
+    if inst.op == IOP_PHI() && id >= 0 && id < phi_arms.len() {
+        visiting.push(id);
+        let arms: Vec<i64> = phi_arms[id];
+        let mut ai: i64 = 0;
+        while ai < arms.len() {
+            if value_may_be_rodata_internal(
+                id_to_inst,
+                id_to_block,
+                block_parent,
+                block_depth,
+                phi_arms,
+                int_kinds,
+                int_auxs,
+                int_aliases_list,
+                return_rodata,
+                arms[ai],
+                visiting
+            ) {
+                visiting.pop();
+                return true;
+            }
+            ai = ai + 1;
+        }
+        visiting.pop();
+    }
+    if inst.op == IOP_FIELD_GET() && inst.dk == IDATA_FIELD() && inst.args.len() > 0 {
+        visiting.push(id);
+        let result2: bool = stored_value_may_be_rodata_internal(
+            id_to_inst,
+            id_to_block,
+            block_parent,
+            block_depth,
+            phi_arms,
+            int_kinds,
+            int_auxs,
+            int_aliases_list,
+            return_rodata,
+            id,
+            inst.args[0],
+            true,
+            inst.dv,
+            visiting
+        );
+        visiting.pop();
+        return result2;
+    }
+    if inst.op == IOP_LOAD() && inst.args.len() > 0 {
+        visiting.push(id);
+        let result3: bool = stored_value_may_be_rodata_internal(
+            id_to_inst,
+            id_to_block,
+            block_parent,
+            block_depth,
+            phi_arms,
+            int_kinds,
+            int_auxs,
+            int_aliases_list,
+            return_rodata,
+            id,
+            inst.args[0],
+            false,
+            0,
+            visiting
+        );
+        visiting.pop();
+        return result3;
+    }
+    false
+}
+
+fn vec_element_may_be_rodata_internal(
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>,
+    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
+    return_rodata: Vec<bool>, read_id: i64, target_id: i64, visiting: Vec<i64>
+) -> bool {
+    let sources: Vec<i64> = rodata_vec_element_sources(
+        id_to_inst, id_to_block, block_parent, block_depth, read_id, target_id
+    );
+    let mut si: i64 = 0;
+    while si < sources.len() {
+        if value_may_be_rodata_internal(
+            id_to_inst,
+            id_to_block,
+            block_parent,
+            block_depth,
+            phi_arms,
+            int_kinds,
+            int_auxs,
+            int_aliases_list,
+            return_rodata,
+            sources[si],
+            visiting
+        ) {
+            return true;
+        }
+        si = si + 1;
+    }
+    false
+}
+
+fn stored_value_may_be_rodata_internal(
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>,
+    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
+    return_rodata: Vec<bool>, read_id: i64, target_id: i64, has_field: bool, field_idx: i64,
+    visiting: Vec<i64>
+) -> bool {
+    let sources: Vec<i64> = rodata_storage_sources(id_to_inst, id_to_block, block_parent, block_depth, read_id, target_id, has_field, field_idx);
+    let mut si: i64 = 0;
+    while si < sources.len() {
+        if value_may_be_rodata_internal(
+            id_to_inst,
+            id_to_block,
+            block_parent,
+            block_depth,
+            phi_arms,
+            int_kinds,
+            int_auxs,
+            int_aliases_list,
+            return_rodata,
+            sources[si],
+            visiting
+        ) {
+            return true;
+        }
+        si = si + 1;
+    }
+    false
+}
+
+fn return_region_may_be_rodata_internal(
+    kind: i64, aux: i64, aliases: Vec<i64>, args: Vec<i64>,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    phi_arms: Vec<Vec<i64>>,
+    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
+    return_rodata: Vec<bool>, visiting: Vec<i64>
+) -> bool {
+    if kind == RSUM_KIND_ALIAS_OF() {
+        if aux >= 0 && aux < args.len() {
+            return value_may_be_rodata_internal(
+                id_to_inst,
+                id_to_block,
+                block_parent,
+                block_depth,
+                phi_arms,
+                int_kinds,
+                int_auxs,
+                int_aliases_list,
+                return_rodata,
+                args[aux],
+                visiting
+            );
+        }
+        return false;
+    }
+    if kind == RSUM_KIND_ALIAS_OF_ANY() {
+        let mut ai: i64 = 0;
+        while ai < aliases.len() {
+            let arg_idx: i64 = aliases[ai];
+            if arg_idx >= 0 && arg_idx < args.len()
+                && value_may_be_rodata_internal(
+                    id_to_inst,
+                    id_to_block,
+                    block_parent,
+                    block_depth,
+                    phi_arms,
+                    int_kinds,
+                    int_auxs,
+                    int_aliases_list,
+                    return_rodata,
+                    args[arg_idx],
+                    visiting
+                )
+            {
+                return true;
+            }
+            ai = ai + 1;
+        }
+    }
+    false
+}
+
+fn emit_region_literal_mutation(
+    source_file: String, target_arg_id: i64, call_inst: IrInst, id_to_inst: Vec<IrInst>,
+    operation: String, dctx: DiagCtx
+) {
+    let target_inst: IrInst = lookup_inst_or_default(id_to_inst, target_arg_id);
+    let span_start: i64 = if target_inst.id >= 0 && target_inst.olen > 0 {
+        target_inst.ostart
+    } else {
+        call_inst.ostart
+    };
+    let span_len: i64 = if target_inst.id >= 0 && target_inst.olen > 0 {
+        target_inst.olen
+    } else {
+        call_inst.olen
+    };
+    let msg: String = String::from("literal-backed value cannot be mutated by ");
+    msg.push_str(operation);
+    msg.push_str("; make an explicit mutable copy first");
+    let d: Diagnostic = diag_new(
+        SEV_ERROR(),
+        EC_REGION_LITERAL_MUTATION(),
+        msg,
+        source_file,
+        span_start,
+        span_len,
+        DIAG_BLAME_CALLER()
+    );
+    diag_add_hint(d, String::from("make an explicit mutable copy with `String::from(value)` before passing to a mutating operation"));
     diag_ctx_emit(dctx, d);
 }
 
@@ -853,12 +2038,25 @@ fn check_store_conflict(
 // Returns true if the function's internal summary changed.
 fn analyze_function(
     m: IrModule, fidx: i64,
-    id_to_inst: Vec<IrInst>, phi_arms: Vec<Vec<i64>>,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, phi_arms: Vec<Vec<i64>>,
+    block_parent: Vec<i64>, block_depth: Vec<i64>,
     int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
+    int_return_rodata: Vec<bool>,
     int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>,
     int_se_src_aux: Vec<Vec<i64>>, int_se_src_aliases: Vec<Vec<Vec<i64>>>,
     region_keys: Vec<Vec<i64>>, region_vals: Vec<Vec<i64>>,
+    note_region_keys: Vec<Vec<i64>>, note_region_vals: Vec<Vec<i64>>,
 ) -> bool {
+    // Reset this function's note-region snapshot before populating it again
+    // so only the convergence iteration's captures contribute. Without this,
+    // an earlier iteration's Caller(_) entry could persist past a final-
+    // iteration LUB that resolves directly to Root (bypassing the rewrite
+    // gate) and cause self-hosted to emit notes the Rust mirror's per-call-
+    // fresh `note_region_map` would not. Mirrors the Rust pass's
+    // `let mut note_region_map = BTreeMap::new()` at the top of
+    // `analyze_function` (vow-ir/src/region.rs:1427).
+    note_region_keys[fidx].clear();
+    note_region_vals[fidx].clear();
     let f: IrFunction = m.functions[fidx];
     let bks: Vec<IrBlock> = f.blocks;
     let n_bks: i64 = bks.len();
@@ -866,6 +2064,7 @@ fn analyze_function(
     let prev_kind: i64 = int_kinds[fidx];
     let prev_aux: i64 = int_auxs[fidx];
     let prev_aliases: Vec<i64> = int_aliases_list[fidx];
+    let prev_return_rodata: bool = int_return_rodata[fidx];
     let prev_se_targets: Vec<i64> = clone_i64_vec(int_se_targets[fidx]);
     let prev_se_src_kinds: Vec<i64> = clone_i64_vec(int_se_src_kinds[fidx]);
     let prev_se_src_aux: Vec<i64> = clone_i64_vec(int_se_src_aux[fidx]);
@@ -876,6 +2075,7 @@ fn analyze_function(
     let mut acc_kind: i64 = RSUM_INTERNAL_UNINIT();
     let mut acc_aux: i64 = 0;
     let mut acc_aliases: Vec<i64> = Vec::new();
+    let mut acc_return_rodata: bool = false;
 
     let mut bi: i64 = 0;
     while bi < n_bks {
@@ -891,6 +2091,24 @@ fn analyze_function(
                 } else {
                     deep_origin(id_to_inst, phi_arms, inst, int_kinds, int_auxs, int_aliases_list)
                 };
+                if !is_scalar_ity(f.return_ty) && inst.args.len() > 0 {
+                    let visiting: Vec<i64> = Vec::new();
+                    if value_may_be_rodata_internal(
+                        id_to_inst,
+                        id_to_block,
+                        block_parent,
+                        block_depth,
+                        phi_arms,
+                        int_kinds,
+                        int_auxs,
+                        int_aliases_list,
+                        int_return_rodata,
+                        inst.args[0],
+                        visiting
+                    ) {
+                        acc_return_rodata = true;
+                    }
+                }
                 let ret_kind: i64 = ret_dr.kind;
                 let ret_aux: i64 = ret_dr.aux;
                 let ret_aliases: Vec<i64> = ret_dr.aliases;
@@ -902,69 +2120,124 @@ fn analyze_function(
             if (inst.op == IOP_STORE() || inst.op == IOP_FIELD_SET()) && inst.args.len() >= 2 {
                 let target_id: i64 = inst.args[0];
                 let source_id: i64 = inst.args[1];
-                let target_param: i64 = trace_param_shallow(id_to_inst, target_id);
+                let target_param: i64 = trace_param(id_to_inst, target_id);
                 if target_param >= 0 {
-                    let source: DeepRet = trace_origin_shallow(id_to_inst, source_id);
-                    add_store_effect(
+                    add_store_effect_source_constraints(
+                        id_to_inst,
+                        source_id,
+                        target_param,
+                        int_kinds,
                         int_se_targets[fidx],
                         int_se_src_kinds[fidx],
                         int_se_src_aux[fidx],
                         int_se_src_aliases[fidx],
-                        target_param,
-                        source.kind,
-                        source.aux,
-                        source.aliases,
                     );
                 }
+            }
+            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
+                let mut edge_idx: i64 = 0;
+                let edge_count: i64 = extern_store_edge_count(inst.ds);
+                while edge_idx < edge_count {
+                    let target_pos: i64 = extern_store_target_pos(inst.ds, edge_idx);
+                    let source_pos: i64 = extern_store_source_pos(inst.ds, edge_idx);
+                    if target_pos >= 0 && target_pos < inst.args.len()
+                        && source_pos >= 0 && source_pos < inst.args.len()
+                    {
+                        let target_id2: i64 = inst.args[target_pos];
+                        let source_id2: i64 = inst.args[source_pos];
+                        let target_param2: i64 = trace_param(id_to_inst, target_id2);
+                        if target_param2 >= 0 {
+                            add_store_effect_source_constraints(
+                                id_to_inst,
+                                source_id2,
+                                target_param2,
+                                int_kinds,
+                                int_se_targets[fidx],
+                                int_se_src_kinds[fidx],
+                                int_se_src_aux[fidx],
+                                int_se_src_aliases[fidx],
+                            );
+                        }
+                    }
+                    edge_idx = edge_idx + 1;
+                }
+                let growth_target_pos: i64 = extern_growth_target_pos(inst.ds);
+                if growth_target_pos >= 0 && growth_target_pos < inst.args.len() {
+                    let growth_target_param: i64 = trace_param(id_to_inst, inst.args[growth_target_pos]);
+                    if growth_target_param >= 0 {
+                        add_store_effect(
+                            int_se_targets[fidx],
+                            int_se_src_kinds[fidx],
+                            int_se_src_aux[fidx],
+                            int_se_src_aliases[fidx],
+                            growth_target_param,
+                            RSUM_KIND_CONSTANT_GLOBAL(),
+                            0,
+                            Vec::new(),
+                        );
+                    }
+                }
+            }
+            if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
+                publish_transitive_store_effects(
+                    inst,
+                    id_to_inst,
+                    int_kinds,
+                    int_se_targets,
+                    int_se_src_kinds,
+                    int_se_src_aux,
+                    int_se_src_aliases,
+                    int_se_targets[fidx],
+                    int_se_src_kinds[fidx],
+                    int_se_src_aux[fidx],
+                    int_se_src_aliases[fidx],
+                );
             }
             ii = ii + 1;
         }
         bi = bi + 1;
     }
 
-    // Tag local heap-producing instructions with block regions when all direct
-    // uses stay in the defining block. The self-hosted Phase 9 subset routes
-    // three cases through `REGION_KIND_BLOCK`: `IOP_REGION_ALLOC`, FreshInCaller
-    // extern wrappers, and `IOP_CALL` + `IDATA_CALL_TARGET` whose callee
-    // summary is `FRESH_IN_CALLER`. The block-region tag uses
-    // `REGION_KIND_BLOCK`, not `REGION_KIND_CALLER`, so the shim's pending
-    // hidden-caller-region work is irrelevant here.
+    // 2. Tag heap-producing instructions with the Block / Caller / Root LUB
+    // of their use markers. This mirrors the Rust pass's marker model without
+    // materializing a must_outlive set for every value: for each heap producer,
+    // gather direct-use markers plus Phi/call return-alias users, then compute
+    // the cached block-tree LCA when only block markers remain.
     let mut rbi: i64 = 0;
     while rbi < n_bks {
         let rb: IrBlock = bks[rbi];
         let mut rii: i64 = 0;
         while rii < rb.insts.len() {
             let rinst: IrInst = rb.insts[rii];
-            if is_heap_producing_for_block_region(rinst, int_kinds)
-                && value_used_only_in_block(f, rinst.id, rb.id)
-            {
-                put_inst_region(
-                    region_keys[fidx],
-                    region_vals[fidx],
-                    rinst.id,
-                    region_pack(REGION_KIND_BLOCK(), rb.id)
+            if is_heap_producing_for_region(rinst, int_kinds) {
+                let mut rgn: i64 = value_lub_region(
+                    f, rinst.id, rb.id, fidx, id_to_inst, id_to_block,
+                    block_parent, block_depth,
+                    is_scalar_ity(f.return_ty),
+                    int_kinds, int_auxs, int_aliases_list,
+                    int_se_targets, int_se_src_kinds, int_se_src_aux,
                 );
+                // Issue #320: capture the pre-rewrite Caller(_) so the note
+                // pass can still surface internal-call heap producers routed
+                // through a hidden caller slot. The rewrite below collapses
+                // them to Root for codegen conservatism, which would otherwise
+                // silence the diagnostic. Mirrors the nested structure at
+                // vow-ir/src/region.rs:1437-1455.
+                if rinst.op == IOP_CALL() && rinst.dk != IDATA_CALL_EXTERN() {
+                    let rk: i64 = region_kind(rgn);
+                    if rk == REGION_KIND_CALLER() {
+                        put_inst_region(note_region_keys[fidx], note_region_vals[fidx], rinst.id, rgn);
+                    }
+                    if rk == REGION_KIND_BLOCK() || rk == REGION_KIND_CALLER() {
+                        rgn = region_root();
+                    }
+                }
+                put_inst_region(region_keys[fidx], region_vals[fidx], rinst.id, rgn);
             }
             rii = rii + 1;
         }
         rbi = rbi + 1;
     }
-
-    // Escaping RegionAlloc instructions still deliberately stay Root.
-    //
-    // Phase 9 status: the self-hosted Cranelift shim can lower block regions,
-    // but `IOP_REGION_ALLOC` still has no hidden-caller-region plumbing.
-    // Emitting `region_caller0()` here would break self-hosted codegen for any
-    // program with an escaping allocation. We therefore leave escaping
-    // allocations at their Phase-2 default (Root). The summary itself is still
-    // set to FreshInCaller where appropriate so the metadata remains correct
-    // for downstream consumers; only the per-inst region tag is degraded for
-    // codegen compatibility.
-    //
-    // Rust codegen accepts Caller(0) via `cranelift_backend.rs` + Phase 4's
-    // hidden-arena projection, so the Rust pass emits `Caller(0)` on escaping
-    // allocs. This is the remaining intentional divergence between the two
-    // compilers until the self-hosted shim catches up.
 
     let new_kind: i64 = acc_kind;
     let new_aux: i64 = acc_aux;
@@ -973,9 +2246,11 @@ fn analyze_function(
     int_kinds[fidx] = new_kind;
     int_auxs[fidx] = new_aux;
     int_aliases_list[fidx] = new_aliases;
+    int_return_rodata[fidx] = acc_return_rodata;
 
     // Return whether the summary changed.
     if new_kind != prev_kind { return true; }
+    if acc_return_rodata != prev_return_rodata { return true; }
     if new_kind == RSUM_KIND_ALIAS_OF() && new_aux != prev_aux { return true; }
     if new_kind == RSUM_KIND_ALIAS_OF_ANY() {
         if new_aliases.len() != prev_aliases.len() { return true; }
@@ -992,11 +2267,11 @@ fn analyze_function(
     false
 }
 
-fn is_heap_producing_for_block_region(inst: IrInst, int_kinds: Vec<i64>) -> bool {
+fn is_heap_producing_for_region(inst: IrInst, int_kinds: Vec<i64>) -> bool {
     if inst.op == IOP_REGION_ALLOC() {
         return true;
     }
-    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && extern_fresh_in_caller(inst.ds) {
+    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && heap_producing_extern(inst.ds) {
         return true;
     }
     if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET()
@@ -1008,18 +2283,325 @@ fn is_heap_producing_for_block_region(inst: IrInst, int_kinds: Vec<i64>) -> bool
     false
 }
 
-// TODO(scalability, follow-up to #204): this is O(blocks × insts × args)
-// per call, and `analyze_function` invokes it once per heap-producing
-// inst. Rough total per function: O(h × n) where h = heap producers,
-// n = total insts. The Rust pass achieves the same effect in O(n) by
-// folding all uses into a `must_outlive` map in a single forward sweep
-// (`collect_regular_use_markers` at vow-ir/src/region.rs:909-926) and
-// then reading per-id markers in O(markers) per producer. That refactor
-// is structural — it would change the analyze_function signature and
-// touch the bootstrap fixed point — and is intentionally deferred so
-// this PR stays scoped to Phase 9 routing. See CLAUDE.md "Scalability is
-// a requirement" for the long-term direction.
-fn value_used_only_in_block(f: IrFunction, id: i64, defining_block: i64) -> bool {
+fn add_store_effect_source_constraints(
+    id_to_inst: Vec<IrInst>, source_id: i64, target_param: i64,
+    int_kinds: Vec<i64>,
+    targets: Vec<i64>, kinds: Vec<i64>, auxs: Vec<i64>, aliases_list: Vec<Vec<i64>>
+) {
+    let source: DeepRet = trace_origin_shallow(id_to_inst, source_id);
+    add_store_effect(
+        targets,
+        kinds,
+        auxs,
+        aliases_list,
+        target_param,
+        source.kind,
+        source.aux,
+        source.aliases,
+    );
+    publish_embedded_param_aliases(
+        id_to_inst,
+        source_id,
+        target_param,
+        targets,
+        kinds,
+        auxs,
+        aliases_list,
+    );
+
+    let source_inst: IrInst = lookup_inst_or_default(id_to_inst, source_id);
+    if source_inst.op != IOP_CALL() || source_inst.dk != IDATA_CALL_TARGET() {
+        return;
+    }
+    let callee_idx: i64 = source_inst.dv;
+    if callee_idx < 0 || callee_idx >= int_kinds.len() {
+        return;
+    }
+    if int_kinds[callee_idx] != RSUM_KIND_FRESH_IN_CALLER() {
+        return;
+    }
+    let mut ai: i64 = 0;
+    while ai < source_inst.args.len() {
+        let param_idx: i64 = trace_param(id_to_inst, source_inst.args[ai]);
+        if param_idx >= 0 {
+            add_store_effect(
+                targets,
+                kinds,
+                auxs,
+                aliases_list,
+                target_param,
+                RSUM_KIND_ALIAS_OF(),
+                param_idx,
+                source_inst.args,
+            );
+        }
+        ai = ai + 1;
+    }
+}
+
+fn publish_embedded_param_aliases(
+    id_to_inst: Vec<IrInst>, aggregate_id: i64, target_param: i64,
+    targets: Vec<i64>, kinds: Vec<i64>, auxs: Vec<i64>, aliases_list: Vec<Vec<i64>>
+) {
+    let mut i: i64 = 0;
+    while i < id_to_inst.len() {
+        let inst: IrInst = id_to_inst[i];
+        if (inst.op == IOP_STORE() || inst.op == IOP_FIELD_SET())
+            && inst.args.len() >= 2 && inst.args[0] == aggregate_id
+        {
+            let param_idx: i64 = trace_param(id_to_inst, inst.args[1]);
+            if param_idx >= 0 {
+                add_store_effect(
+                    targets,
+                    kinds,
+                    auxs,
+                    aliases_list,
+                    target_param,
+                    RSUM_KIND_ALIAS_OF(),
+                    param_idx,
+                    inst.args,
+                );
+            }
+        }
+        i = i + 1;
+    }
+}
+
+fn publish_transitive_store_effects(
+    call_inst: IrInst, id_to_inst: Vec<IrInst>, int_kinds: Vec<i64>,
+    all_targets: Vec<Vec<i64>>, all_kinds: Vec<Vec<i64>>,
+    all_auxs: Vec<Vec<i64>>, all_aliases: Vec<Vec<Vec<i64>>>,
+    targets: Vec<i64>, kinds: Vec<i64>, auxs: Vec<i64>, aliases_list: Vec<Vec<i64>>
+) {
+    let callee_idx: i64 = call_inst.dv;
+    if callee_idx < 0 || callee_idx >= all_targets.len() {
+        return;
+    }
+    let callee_targets: Vec<i64> = all_targets[callee_idx];
+    let callee_kinds: Vec<i64> = all_kinds[callee_idx];
+    let callee_auxs: Vec<i64> = all_auxs[callee_idx];
+    let callee_aliases: Vec<Vec<i64>> = all_aliases[callee_idx];
+    let mut i: i64 = 0;
+    while i < callee_targets.len() && i < callee_kinds.len() && i < callee_auxs.len() {
+        let target_pos: i64 = callee_targets[i];
+        if target_pos >= 0 && target_pos < call_inst.args.len() {
+            let current_target_param: i64 = trace_param(id_to_inst, call_inst.args[target_pos]);
+            if current_target_param >= 0 {
+                let kind: i64 = callee_kinds[i];
+                if kind == RSUM_KIND_ALIAS_OF() {
+                    let source_pos: i64 = callee_auxs[i];
+                    if source_pos >= 0 && source_pos < call_inst.args.len() {
+                        add_store_effect_source_constraints(
+                            id_to_inst,
+                            call_inst.args[source_pos],
+                            current_target_param,
+                            int_kinds,
+                            targets,
+                            kinds,
+                            auxs,
+                            aliases_list,
+                        );
+                    }
+                } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
+                    let als: Vec<i64> = if i < callee_aliases.len() { callee_aliases[i] } else { call_inst.args };
+                    let mut ai: i64 = 0;
+                    while ai < als.len() {
+                        let source_pos2: i64 = als[ai];
+                        if source_pos2 >= 0 && source_pos2 < call_inst.args.len() {
+                            add_store_effect_source_constraints(
+                                id_to_inst,
+                                call_inst.args[source_pos2],
+                                current_target_param,
+                                int_kinds,
+                                targets,
+                                kinds,
+                                auxs,
+                                aliases_list,
+                            );
+                        }
+                        ai = ai + 1;
+                    }
+                } else {
+                    let empty_aliases: Vec<i64> = if i < callee_aliases.len() { callee_aliases[i] } else { call_inst.args };
+                    add_store_effect(
+                        targets,
+                        kinds,
+                        auxs,
+                        aliases_list,
+                        current_target_param,
+                        kind,
+                        callee_auxs[i],
+                        empty_aliases,
+                    );
+                }
+            }
+        }
+        i = i + 1;
+    }
+}
+
+fn lookup_inst_block(id_to_block: Vec<i64>, id: i64) -> i64 {
+    if id >= 0 && id < id_to_block.len() {
+        return id_to_block[id];
+    }
+    -1
+}
+
+fn value_lub_region(
+    f: IrFunction, id: i64, defining_block: i64, fi: i64,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>,
+    block_parent: Vec<i64>, block_depth: Vec<i64>,
+    return_is_scalar: bool,
+    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
+    int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>
+) -> i64 {
+    let work: Vec<i64> = Vec::new();
+    let seen: Vec<i64> = Vec::new();
+    let markers: Vec<i64> = Vec::new();
+    linear_insert_i64(markers, region_pack(REGION_KIND_BLOCK(), defining_block));
+    work.push(id);
+    while work.len() > 0 {
+        let cur: i64 = work[work.len() - 1];
+        work.pop();
+        if region_vec_contains_i64(seen, cur) {
+            continue;
+        }
+        seen.push(cur);
+        direct_markers_collect_regions(
+            f,
+            cur,
+            id_to_inst,
+            id_to_block,
+            markers,
+            return_is_scalar,
+            int_kinds,
+            int_auxs,
+            int_aliases_list,
+            int_se_targets,
+            int_se_src_kinds,
+            int_se_src_aux,
+            work,
+            seen
+        );
+    }
+    let own_return_kind: i64 = if fi >= 0 && fi < int_kinds.len() {
+        int_kinds[fi]
+    } else {
+        RSUM_INTERNAL_UNINIT()
+    };
+    let own_return_aux: i64 = if fi >= 0 && fi < int_auxs.len() {
+        int_auxs[fi]
+    } else {
+        0
+    };
+    let own_return_aliases: Vec<i64> = if fi >= 0 && fi < int_aliases_list.len() {
+        int_aliases_list[fi]
+    } else {
+        Vec::new()
+    };
+    let own_se_targets: Vec<i64> = if fi >= 0 && fi < int_se_targets.len() {
+        int_se_targets[fi]
+    } else {
+        Vec::new()
+    };
+    region_lub_from_markers(
+        markers, defining_block, block_parent, block_depth,
+        own_return_kind, own_return_aux, own_return_aliases, own_se_targets,
+    )
+}
+
+fn region_lub_from_markers(
+    markers: Vec<i64>, defining_block: i64, block_parent: Vec<i64>, block_depth: Vec<i64>,
+    own_return_kind: i64, own_return_aux: i64, own_return_aliases: Vec<i64>,
+    own_se_targets: Vec<i64>
+) -> i64 {
+    let blocks: Vec<i64> = Vec::new();
+    // Issue #317: distinct hidden caller slots accumulated from
+    // `CallerReturn` (val=0) and `CallerStoreTarget(p)` (val=p+1) markers.
+    // A single accumulated slot mints `Caller(slot)`; multiple distinct
+    // slots mint `Caller(AMBIGUOUS)` so the post-inference store-conflict
+    // check rejects.
+    let caller_slots: Vec<i64> = Vec::new();
+    let mut has_legacy_caller: bool = false;
+    let mut has_root: bool = false;
+    let mut i: i64 = 0;
+    while i < markers.len() {
+        let marker: i64 = markers[i];
+        let kind: i64 = region_kind(marker);
+        if kind == REGION_KIND_ROOT() {
+            has_root = true;
+        } else if kind == REGION_KIND_CALLER() {
+            let v: i64 = region_val(marker);
+            if v == 0 {
+                // CallerReturn (or pre-#317 legacy VirtualCaller).
+                // Issue #369: resolve through AliasOf/AliasOfAny return
+                // summaries to the hidden caller slot(s) they alias.
+                let added: bool = collect_return_escape_slots(
+                    caller_slots,
+                    own_return_kind, own_return_aux, own_return_aliases,
+                    own_se_targets
+                );
+                if !added {
+                    has_legacy_caller = true;
+                }
+            } else if v == AMBIGUOUS_SLOT() {
+                // Defensive: AMBIGUOUS should never appear as a marker —
+                // treat as legacy caller fallback.
+                has_legacy_caller = true;
+            } else {
+                // CallerStoreTarget(p) where p = v - 1.
+                let p: i64 = v - 1;
+                let s: i64 = slot_of_store_target(own_return_kind, own_se_targets, p);
+                if s >= 0 {
+                    linear_insert_i64(caller_slots, s);
+                } else {
+                    has_legacy_caller = true;
+                }
+            }
+        } else if kind == REGION_KIND_BLOCK() {
+            linear_insert_i64(blocks, region_val(marker));
+        }
+        i = i + 1;
+    }
+    if has_root {
+        return region_root();
+    }
+    let has_caller: bool = has_legacy_caller || caller_slots.len() > 0;
+    if has_caller {
+        // Slot-aware: exactly one concrete hidden slot resolves cleanly.
+        // Legacy slot-less caller evidence mixed with concrete slots, or
+        // multiple distinct concrete slots, cannot be routed through one
+        // allocation arena; mint AMBIGUOUS so the post-inference conflict
+        // check rejects stores of the value.
+        if has_legacy_caller && caller_slots.len() > 0 {
+            return region_caller_ambiguous();
+        }
+        if caller_slots.len() > 1 {
+            return region_caller_ambiguous();
+        }
+        if caller_slots.len() == 1 {
+            return region_pack(REGION_KIND_CALLER(), caller_slots[0]);
+        }
+        return region_caller0();
+    }
+    linear_insert_i64(blocks, defining_block);
+    sort_i64_vec_inplace(blocks);
+    let lca: i64 = block_tree_lca_all(block_parent, block_depth, blocks);
+    if lca >= 0 {
+        return region_pack(REGION_KIND_BLOCK(), lca);
+    }
+    region_caller0()
+}
+
+fn direct_markers_collect_regions(
+    f: IrFunction, id: i64,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>,
+    markers: Vec<i64>,
+    return_is_scalar: bool,
+    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
+    int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>,
+    work: Vec<i64>, seen: Vec<i64>
+) {
     let bks: Vec<IrBlock> = f.blocks;
     let mut bi: i64 = 0;
     while bi < bks.len() {
@@ -1030,16 +2612,250 @@ fn value_used_only_in_block(f: IrFunction, id: i64, defining_block: i64) -> bool
             let mut ai: i64 = 0;
             while ai < inst.args.len() {
                 if inst.args[ai] == id {
-                    if blk.id != defining_block {
+                    // Every argument use contributes the use-block marker.
+                    linear_insert_i64(markers, region_pack(REGION_KIND_BLOCK(), blk.id));
+                    if inst.op == IOP_RETURN() && !return_is_scalar {
+                        linear_insert_i64(markers, region_caller0());
+                    }
+                    if (inst.op == IOP_STORE() || inst.op == IOP_FIELD_SET()) && ai == 1 {
+                        let target_marker: i64 = target_marker_region(
+                            id_to_inst,
+                            id_to_block,
+                            inst.args[0],
+                            int_kinds
+                        );
+                        linear_insert_i64(markers, target_marker);
+                        push_region_work(work, seen, inst.args[0]);
+                    }
+                    if inst.op == IOP_UPSILON() && ai == 0 && inst.dk == IDATA_PHI_TARGET() {
+                        let phi_block: i64 = lookup_inst_block(id_to_block, inst.dv);
+                        if phi_block >= 0 {
+                            linear_insert_i64(markers, region_pack(REGION_KIND_BLOCK(), phi_block));
+                            push_region_work(work, seen, inst.dv);
+                        } else {
+                            linear_insert_i64(markers, region_root());
+                        }
+                    }
+                    if inst.op == IOP_FIELD_GET() && ai == 0 {
+                        push_region_work(work, seen, inst.id);
+                    }
+                    if inst.op == IOP_LOAD() && ai == 0 && !is_scalar_ity(inst.ty) {
+                        push_region_work(work, seen, inst.id);
+                    }
+                    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
+                        let callee_idx: i64 = inst.dv;
+                        call_store_effects_collect_regions(
+                            inst,
+                            ai,
+                            id_to_inst,
+                            id_to_block,
+                            int_kinds,
+                            markers,
+                            int_se_targets,
+                            int_se_src_kinds,
+                            int_se_src_aux,
+                            work,
+                            seen
+                        );
+                        if callee_idx >= 0 && callee_idx < int_kinds.len()
+                            && int_kinds[callee_idx] == RSUM_KIND_FRESH_IN_CALLER()
+                        {
+                            // Fresh aggregate results may embed heap descriptors
+                            // passed as constructor arguments. Let later widening
+                            // of the call result flow back to this argument.
+                            push_region_work(work, seen, inst.id);
+                        }
+                        if callee_return_aliases_arg(
+                            callee_idx,
+                            ai,
+                            int_kinds,
+                            int_auxs,
+                            int_aliases_list
+                        ) {
+                            push_region_work(work, seen, inst.id);
+                        }
+                    }
+                    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
+                        let target_pos2: i64 = extern_store_target_for_source(inst.ds, ai);
+                        if target_pos2 >= 0 && target_pos2 < inst.args.len() {
+                            let target_marker2: i64 = if trace_param(id_to_inst, inst.args[target_pos2]) >= 0 {
+                                region_root()
+                            } else {
+                                target_marker_region(
+                                    id_to_inst,
+                                    id_to_block,
+                                    inst.args[target_pos2],
+                                    int_kinds
+                                )
+                            };
+                            linear_insert_i64(markers, target_marker2);
+                            push_region_work(work, seen, inst.args[target_pos2]);
+                        }
+                        if (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
+                            && ai == 0
+                        {
+                            push_region_work(work, seen, inst.id);
+                        }
+                    }
+                }
+                ai = ai + 1;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+}
+
+fn value_lub_concrete_block(
+    f: IrFunction, id: i64, defining_block: i64,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>,
+    block_parent: Vec<i64>, block_depth: Vec<i64>,
+    return_is_scalar: bool,
+    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
+    int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>
+) -> i64 {
+    let work: Vec<i64> = Vec::new();
+    let seen: Vec<i64> = Vec::new();
+    let markers: Vec<i64> = Vec::new();
+    linear_insert_i64(markers, defining_block);
+    work.push(id);
+    while work.len() > 0 {
+        let cur: i64 = work[work.len() - 1];
+        work.pop();
+        if region_vec_contains_i64(seen, cur) {
+            continue;
+        }
+        seen.push(cur);
+        if !direct_markers_collect_concrete_blocks(
+            f,
+            cur,
+            id_to_inst,
+            id_to_block,
+            markers,
+            return_is_scalar,
+            int_kinds,
+            int_auxs,
+            int_aliases_list,
+            int_se_targets,
+            int_se_src_kinds,
+            int_se_src_aux,
+            work,
+            seen
+        ) {
+            return -1;
+        }
+    }
+    sort_i64_vec_inplace(markers);
+    block_tree_lca_all(block_parent, block_depth, markers)
+}
+
+fn direct_markers_collect_concrete_blocks(
+    f: IrFunction, id: i64,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>,
+    markers: Vec<i64>,
+    return_is_scalar: bool,
+    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>,
+    int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>,
+    work: Vec<i64>, seen: Vec<i64>
+) -> bool {
+    let bks: Vec<IrBlock> = f.blocks;
+    let mut bi: i64 = 0;
+    while bi < bks.len() {
+        let blk: IrBlock = bks[bi];
+        let mut ii: i64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            let mut ai: i64 = 0;
+            while ai < inst.args.len() {
+                if inst.args[ai] == id {
+                    // Every argument use contributes the use-block marker.
+                    linear_insert_i64(markers, blk.id);
+                    if inst.op == IOP_RETURN() && !return_is_scalar {
                         return false;
                     }
-                    if inst.op == IOP_RETURN()
-                        || inst.op == IOP_UPSILON()
-                        || inst.op == IOP_CALL()
-                        || inst.op == IOP_STORE()
-                        || inst.op == IOP_FIELD_SET()
-                    {
-                        return false;
+                    if (inst.op == IOP_STORE() || inst.op == IOP_FIELD_SET()) && ai == 1 {
+                        let target_block: i64 = target_marker_concrete_block(
+                            id_to_inst,
+                            id_to_block,
+                            inst.args[0],
+                            int_kinds
+                        );
+                        if target_block < 0 {
+                            return false;
+                        }
+                        linear_insert_i64(markers, target_block);
+                        // Stored values must follow later widening of their
+                        // target container. The target-marker check above
+                        // handles the target's origin; the work item catches
+                        // use-derived widening such as returning the target.
+                        push_region_work(work, seen, inst.args[0]);
+                    }
+                    if inst.op == IOP_UPSILON() && ai == 0 && inst.dk == IDATA_PHI_TARGET() {
+                        let phi_block: i64 = lookup_inst_block(id_to_block, inst.dv);
+                        if phi_block < 0 {
+                            return false;
+                        }
+                        linear_insert_i64(markers, phi_block);
+                        push_region_work(work, seen, inst.dv);
+                    }
+                    if inst.op == IOP_FIELD_GET() && ai == 0 {
+                        push_region_work(work, seen, inst.id);
+                    }
+                    if inst.op == IOP_LOAD() && ai == 0 && !is_scalar_ity(inst.ty) {
+                        push_region_work(work, seen, inst.id);
+                    }
+                    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_TARGET() {
+                        let callee_idx: i64 = inst.dv;
+                        if !call_store_effects_collect_concrete_blocks(
+                            inst,
+                            ai,
+                            id_to_inst,
+                            id_to_block,
+                            int_kinds,
+                            markers,
+                            int_se_targets,
+                            int_se_src_kinds,
+                            int_se_src_aux,
+                            work,
+                            seen
+                        ) {
+                            return false;
+                        }
+                        if callee_idx >= 0 && callee_idx < int_kinds.len()
+                            && int_kinds[callee_idx] == RSUM_KIND_FRESH_IN_CALLER()
+                        {
+                            push_region_work(work, seen, inst.id);
+                        }
+                        if callee_return_aliases_arg(
+                            callee_idx,
+                            ai,
+                            int_kinds,
+                            int_auxs,
+                            int_aliases_list
+                        ) {
+                            push_region_work(work, seen, inst.id);
+                        }
+                    }
+                    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() {
+                        let target_pos2: i64 = extern_store_target_for_source(inst.ds, ai);
+                        if target_pos2 >= 0 && target_pos2 < inst.args.len() {
+                            let target_block2: i64 = target_marker_concrete_block(
+                                id_to_inst,
+                                id_to_block,
+                                inst.args[target_pos2],
+                                int_kinds
+                            );
+                            if target_block2 < 0 {
+                                return false;
+                            }
+                            linear_insert_i64(markers, target_block2);
+                            push_region_work(work, seen, inst.args[target_pos2]);
+                        }
+                        if (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
+                            && ai == 0
+                        {
+                            push_region_work(work, seen, inst.id);
+                        }
                     }
                 }
                 ai = ai + 1;
@@ -1051,13 +2867,271 @@ fn value_used_only_in_block(f: IrFunction, id: i64, defining_block: i64) -> bool
     true
 }
 
-// Currently unused (intentional scaffolding). Becomes live once the
-// `vow-clif-shim` learns hidden-caller-region routing for `IOP_REGION_ALLOC`.
-// Until then, escaping allocations stay at the Phase-2 default (Root) — see
-// the comment in `analyze_function` where these would otherwise be wired.
+fn push_region_work(work: Vec<i64>, seen: Vec<i64>, id: i64) {
+    if id < 0 {
+        return;
+    }
+    if region_vec_contains_i64(seen, id) {
+        return;
+    }
+    if region_vec_contains_i64(work, id) {
+        return;
+    }
+    work.push(id);
+}
+
+fn target_marker_concrete_block(
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, target_id: i64,
+    int_kinds: Vec<i64>
+) -> i64 {
+    let inst: IrInst = lookup_inst_or_default(id_to_inst, target_id);
+    if inst.id < 0 {
+        return -1;
+    }
+    if inst.op == IOP_GET_ARG() {
+        return -1;
+    }
+    if is_heap_producing_for_region(inst, int_kinds) {
+        return lookup_inst_block(id_to_block, target_id);
+    }
+    -1
+}
+
+fn target_marker_region(
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, target_id: i64,
+    int_kinds: Vec<i64>
+) -> i64 {
+    let inst: IrInst = lookup_inst_or_default(id_to_inst, target_id);
+    if inst.id < 0 {
+        return region_root();
+    }
+    if inst.op == IOP_GET_ARG() {
+        // Issue #317: encode the destination parameter index in the marker
+        // so `region_lub_from_markers` can mint the correct
+        // `Caller(HiddenRegionIdx(N))` per allocation.
+        if inst.dk == IDATA_ARG_INDEX() && inst.dv >= 0 && inst.dv < 4294967294 {
+            return marker_caller_store(inst.dv);
+        }
+        return region_caller0();
+    }
+    if is_heap_producing_for_region(inst, int_kinds) {
+        let blk: i64 = lookup_inst_block(id_to_block, target_id);
+        if blk >= 0 {
+            return region_pack(REGION_KIND_BLOCK(), blk);
+        }
+    }
+    region_root()
+}
+
+fn call_store_effects_collect_regions(
+    call_inst: IrInst, source_arg_pos: i64,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, int_kinds: Vec<i64>,
+    markers: Vec<i64>,
+    int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>,
+    work: Vec<i64>, seen: Vec<i64>
+) {
+    let callee_idx: i64 = call_inst.dv;
+    if callee_idx < 0 || callee_idx >= int_se_targets.len() {
+        return;
+    }
+    let targets: Vec<i64> = int_se_targets[callee_idx];
+    let kinds: Vec<i64> = int_se_src_kinds[callee_idx];
+    let auxs: Vec<i64> = int_se_src_aux[callee_idx];
+    let mut i: i64 = 0;
+    while i < targets.len() && i < kinds.len() && i < auxs.len() {
+        if kinds[i] == RSUM_KIND_ALIAS_OF() && auxs[i] == source_arg_pos {
+            let target_param: i64 = targets[i];
+            if target_param >= 0 && target_param < call_inst.args.len() {
+                let target_marker: i64 = target_marker_region(
+                    id_to_inst,
+                    id_to_block,
+                    call_inst.args[target_param],
+                    int_kinds
+                );
+                linear_insert_i64(markers, target_marker);
+                push_region_work(work, seen, call_inst.args[target_param]);
+            }
+        } else if kinds[i] == RSUM_KIND_ALIAS_OF_ANY() {
+            linear_insert_i64(markers, region_root());
+        }
+        i = i + 1;
+    }
+}
+
+fn call_store_effects_collect_concrete_blocks(
+    call_inst: IrInst, source_arg_pos: i64,
+    id_to_inst: Vec<IrInst>, id_to_block: Vec<i64>, int_kinds: Vec<i64>,
+    markers: Vec<i64>,
+    int_se_targets: Vec<Vec<i64>>, int_se_src_kinds: Vec<Vec<i64>>, int_se_src_aux: Vec<Vec<i64>>,
+    work: Vec<i64>, seen: Vec<i64>
+) -> bool {
+    let callee_idx: i64 = call_inst.dv;
+    if callee_idx < 0 || callee_idx >= int_se_targets.len() {
+        return true;
+    }
+    let targets: Vec<i64> = int_se_targets[callee_idx];
+    let kinds: Vec<i64> = int_se_src_kinds[callee_idx];
+    let auxs: Vec<i64> = int_se_src_aux[callee_idx];
+    let mut i: i64 = 0;
+    while i < targets.len() && i < kinds.len() && i < auxs.len() {
+        if kinds[i] == RSUM_KIND_ALIAS_OF() && auxs[i] == source_arg_pos {
+            let target_param: i64 = targets[i];
+            if target_param >= 0 && target_param < call_inst.args.len() {
+                let target_block: i64 = target_marker_concrete_block(
+                    id_to_inst,
+                    id_to_block,
+                    call_inst.args[target_param],
+                    int_kinds
+                );
+                if target_block < 0 {
+                    return false;
+                }
+                linear_insert_i64(markers, target_block);
+                push_region_work(work, seen, call_inst.args[target_param]);
+            }
+        } else if kinds[i] == RSUM_KIND_ALIAS_OF_ANY() {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+fn callee_return_aliases_arg(
+    callee_idx: i64, arg_pos: i64,
+    int_kinds: Vec<i64>, int_auxs: Vec<i64>, int_aliases_list: Vec<Vec<i64>>
+) -> bool {
+    if callee_idx < 0 || callee_idx >= int_kinds.len() {
+        return false;
+    }
+    if int_kinds[callee_idx] == RSUM_KIND_ALIAS_OF() {
+        return int_auxs[callee_idx] == arg_pos;
+    }
+    if int_kinds[callee_idx] == RSUM_KIND_ALIAS_OF_ANY() {
+        let aliases: Vec<i64> = int_aliases_list[callee_idx];
+        return region_vec_contains_i64(aliases, arg_pos);
+    }
+    false
+}
+
 fn region_caller0() -> i64 {
     // RegionId::Caller(HiddenRegionIdx(0)) packed: kind=CALLER, val=0.
     region_pack(REGION_KIND_CALLER(), 0)
+}
+
+// ---------------------------------------------------------------------------
+// Issue #317: slot-aware caller markers
+// ---------------------------------------------------------------------------
+//
+// Markers (in must_outlive sets) are i64 values from `region_pack`. To carry
+// the destination parameter index without changing `region_pack`'s 2-bit
+// kind packing, the marker encoding for kind=CALLER reuses the val field:
+//
+//   val == 0                       → CallerReturn (Return path) OR legacy
+//                                    `region_caller0()` from pre-#317 code.
+//                                    `region_lub_from_markers` consults the
+//                                    function's return type to decide the
+//                                    slot (slot 0 iff FreshInCaller).
+//   val == p + 1 (1 ≤ val ≤ 2^32-2) → CallerStoreTarget(p): the value flows
+//                                    into the current function's parameter
+//                                    `p` as a store target.
+//   val == 4294967295 (u32::MAX)   → final-region AMBIGUOUS sentinel
+//                                    (must NEVER appear as a marker; only
+//                                    minted by `region_lub_from_markers`
+//                                    when distinct slots disagree).
+//
+// Final regions stored on `inst.region` use kind=CALLER + val=slot for
+// concrete slots (small numbers), or val=AMBIGUOUS_SLOT for the sentinel.
+
+fn AMBIGUOUS_SLOT() -> i64 vow {
+    ensures: result == 4294967295,
+    ensures: result >= 0
+} { 4294967295 }
+
+fn marker_caller_store(p: i64) -> i64 vow {
+    requires: p >= 0,
+    requires: p < 4294967294,
+    ensures: result >= 0
+} {
+    region_pack(REGION_KIND_CALLER(), p + 1)
+}
+
+fn region_caller_ambiguous() -> i64 vow {
+    ensures: result >= 0
+} {
+    region_pack(REGION_KIND_CALLER(), AMBIGUOUS_SLOT())
+}
+
+fn is_caller_ambiguous(rgn: i64) -> bool {
+    rgn >= 0 && region_kind(rgn) == REGION_KIND_CALLER() && region_val(rgn) == AMBIGUOUS_SLOT()
+}
+
+// Issue #369: hidden caller-arena slots that the return value escapes
+// through. Pushes the resolved slots into `caller_slots` (deduped, kept
+// sorted by `linear_insert_i64`) and returns true iff at least one slot
+// was contributed. Mirrors `InternalSummary::return_escape_slots` in
+// vow-ir/src/region.rs.
+fn collect_return_escape_slots(
+    caller_slots: Vec<i64>,
+    rsum_return_kind: i64, rsum_return_aux: i64, rsum_return_aliases: Vec<i64>,
+    se_targets: Vec<i64>
+) -> bool {
+    if rsum_return_kind == RSUM_KIND_FRESH_IN_CALLER() {
+        linear_insert_i64(caller_slots, 0);
+        return true;
+    }
+    if rsum_return_kind == RSUM_KIND_ALIAS_OF() {
+        let s: i64 = slot_of_store_target(rsum_return_kind, se_targets, rsum_return_aux);
+        if s >= 0 {
+            linear_insert_i64(caller_slots, s);
+            return true;
+        }
+        return false;
+    }
+    if rsum_return_kind == RSUM_KIND_ALIAS_OF_ANY() {
+        let mut added: bool = false;
+        let mut i: i64 = 0;
+        while i < rsum_return_aliases.len() {
+            let p: i64 = rsum_return_aliases[i];
+            let s: i64 = slot_of_store_target(rsum_return_kind, se_targets, p);
+            if s >= 0 {
+                linear_insert_i64(caller_slots, s);
+                added = true;
+            }
+            i = i + 1;
+        }
+        return added;
+    }
+    false
+}
+
+// Slot of `target_param` in the codegen layout
+// `[return_arena (iff FreshInCaller), sorted-unique-store-targets...]`.
+// Mirrors `hidden_region_idx_for_store_target` in vow-codegen so inference
+// and codegen agree on slot numbering. Returns -1 if `target_param` is not
+// a recorded store target. The internal `int_se_targets` array is in
+// insertion order (not sorted), so we sort+dedup a snapshot before walking
+// to match codegen's `targets.sort_unstable(); targets.dedup()` step.
+fn slot_of_store_target(rsum_return_kind: i64, se_targets: Vec<i64>, target_param: i64) -> i64 {
+    let sorted: Vec<i64> = clone_i64_vec(se_targets);
+    sort_i64_vec_inplace(sorted);
+    let mut idx: i64 = if rsum_return_kind == RSUM_KIND_FRESH_IN_CALLER() { 1 } else { 0 };
+    let mut last: i64 = -1;
+    let mut have_last: bool = false;
+    let mut i: i64 = 0;
+    while i < sorted.len() {
+        let t: i64 = sorted[i];
+        if !have_last || t != last {
+            if t == target_param {
+                return idx;
+            }
+            idx = idx + 1;
+            last = t;
+            have_last = true;
+        }
+        i = i + 1;
+    }
+    -1
 }
 
 fn is_scalar_ity(ty: i64) -> bool {
@@ -1082,8 +3156,853 @@ fn is_scalar_ity(ty: i64) -> bool {
 //
 // `id_to_inst[id]` is the inst with `inst.id == id`, or a sentinel
 // (`inst.id < 0`) when no such inst exists in the function.
+// `id_to_block[id]` is the block containing that inst, or -1 for no inst.
 // `phi_arms[id]` is the list of upsilon-arm value ids targeting the
 // phi with `phi.id == id`; empty for non-phi ids.
+// `block_parent[block_id]` is the parent in the DFS-forward dominator
+// block tree, -1 for a virtual-caller child root, and -2 for a
+// missing/nonexistent block id. Back-edges are removed while collecting the
+// forward graph; joins are then parented by their real common dominator
+// instead of whichever branch DFS happened to visit first.
+// `block_depth[block_id]` is the concrete depth from that virtual caller
+// child root, or -1 for missing ids.
+fn build_block_parent(f: IrFunction) -> Vec<i64> {
+    let parent: Vec<i64> = Vec::new();
+    let max_id: i64 = max_block_id(f);
+    let mut i: i64 = 0;
+    while i <= max_id {
+        parent.push(-2);
+        i = i + 1;
+    }
+    if f.blocks.len() == 0 {
+        return parent;
+    }
+
+    let forward: Vec<Vec<i64>> = Vec::new();
+    let component: Vec<i64> = Vec::new();
+    let mut fi: i64 = 0;
+    while fi <= max_id {
+        forward.push(Vec::new());
+        component.push(-1);
+        fi = fi + 1;
+    }
+    let visited: Vec<i64> = Vec::new();
+    let on_stack: Vec<i64> = Vec::new();
+    let roots: Vec<i64> = Vec::new();
+
+    block_tree_visit_root(f, f.blocks[0].id, roots.len(), parent, component, forward, visited, on_stack);
+    roots.push(f.blocks[0].id);
+
+    let mut bi: i64 = 0;
+    while bi < f.blocks.len() {
+        let id: i64 = f.blocks[bi].id;
+        if !region_vec_contains_i64(visited, id) {
+            block_tree_visit_root(f, id, roots.len(), parent, component, forward, visited, on_stack);
+            roots.push(id);
+        }
+        bi = bi + 1;
+    }
+    block_tree_dominance_parent(parent, forward, component, roots);
+    parent
+}
+
+fn max_block_id(f: IrFunction) -> i64 {
+    let mut max_id: i64 = -1;
+    let mut i: i64 = 0;
+    while i < f.blocks.len() {
+        let id: i64 = f.blocks[i].id;
+        if id > max_id {
+            max_id = id;
+        }
+        i = i + 1;
+    }
+    max_id
+}
+
+fn block_tree_visit_root(
+    f: IrFunction, root: i64, comp: i64,
+    parent: Vec<i64>, component: Vec<i64>, forward: Vec<Vec<i64>>,
+    visited: Vec<i64>, on_stack: Vec<i64>
+) {
+    let ids: Vec<i64> = Vec::new();
+    let kinds: Vec<i64> = Vec::new();
+    ids.push(root);
+    kinds.push(0);
+    if root >= 0 && root < parent.len() {
+        parent[root] = -1;
+    }
+
+    while ids.len() > 0 {
+        let top: i64 = ids.len() - 1;
+        let id: i64 = ids[top];
+        let kind: i64 = kinds[top];
+        ids.pop();
+        kinds.pop();
+
+        if kind == 1 {
+            linear_remove_i64(on_stack, id);
+            continue;
+        }
+        if region_vec_contains_i64(visited, id) {
+            continue;
+        }
+        if !block_id_exists(f, id) {
+            continue;
+        }
+
+        visited.push(id);
+        linear_insert_i64(on_stack, id);
+        if id >= 0 && id < component.len() {
+            component[id] = comp;
+        }
+
+        ids.push(id);
+        kinds.push(1);
+
+        let succs: Vec<i64> = block_successors_by_id(f, id);
+        sort_i64_vec_inplace(succs);
+        let mut si: i64 = succs.len();
+        while si > 0 {
+            si = si - 1;
+            let succ: i64 = succs[si];
+            if !block_id_exists(f, succ) {
+                continue;
+            }
+            if region_vec_contains_i64(on_stack, succ) {
+                continue;
+            }
+            if succ >= 0 && succ < component.len() && component[succ] >= 0 && component[succ] != comp {
+                continue;
+            }
+            if id >= 0 && id < forward.len() {
+                linear_insert_i64(forward[id], succ);
+            }
+            if succ >= 0 && succ < parent.len() && parent[succ] == -2 {
+                parent[succ] = id;
+            }
+            if !region_vec_contains_i64(visited, succ) {
+                ids.push(succ);
+                kinds.push(0);
+            }
+        }
+    }
+}
+
+fn block_tree_dominance_parent(
+    parent: Vec<i64>, forward: Vec<Vec<i64>>, component: Vec<i64>, roots: Vec<i64>
+) {
+    let mut ri: i64 = 0;
+    while ri < roots.len() {
+        let root: i64 = roots[ri];
+        if root >= 0 && root < parent.len() {
+            parent[root] = -1;
+        }
+        ri = ri + 1;
+    }
+
+    let bound: i64 = forward.len() * forward.len() + 1;
+    let mut iter: i64 = 0;
+    let mut changed: bool = true;
+    while changed && iter < bound {
+        changed = false;
+        iter = iter + 1;
+        let mut pred: i64 = 0;
+        while pred < forward.len() {
+            let succs: Vec<i64> = forward[pred];
+            let mut si: i64 = 0;
+            while si < succs.len() {
+                let succ: i64 = succs[si];
+                if succ >= 0 && succ < parent.len()
+                    && pred >= 0 && pred < component.len()
+                    && succ < component.len()
+                    && component[pred] == component[succ]
+                    && parent[succ] != -1
+                {
+                    let old_parent: i64 = parent[succ];
+                    let next_parent: i64 = if old_parent == -2 {
+                        pred
+                    } else {
+                        block_tree_parent_lca(parent, old_parent, pred)
+                    };
+                    if next_parent != old_parent {
+                        parent[succ] = next_parent;
+                        changed = true;
+                    }
+                }
+                si = si + 1;
+            }
+            pred = pred + 1;
+        }
+    }
+}
+
+fn block_tree_parent_lca(parent: Vec<i64>, left0: i64, right0: i64) -> i64 {
+    let mut left: i64 = left0;
+    let mut right: i64 = right0;
+    let mut left_depth: i64 = block_parent_depth(parent, left);
+    let mut right_depth: i64 = block_parent_depth(parent, right);
+    if left_depth < 0 || right_depth < 0 {
+        return -1;
+    }
+
+    while left_depth > right_depth {
+        left = block_parent_at(parent, left);
+        left_depth = left_depth - 1;
+    }
+    while right_depth > left_depth {
+        right = block_parent_at(parent, right);
+        right_depth = right_depth - 1;
+    }
+    while left != right {
+        left = block_parent_at(parent, left);
+        right = block_parent_at(parent, right);
+        if left < 0 || right < 0 {
+            return -1;
+        }
+    }
+    left
+}
+
+fn block_parent_depth(parent: Vec<i64>, id: i64) -> i64 {
+    let seen: Vec<i64> = Vec::new();
+    let mut cur: i64 = id;
+    let mut depth: i64 = 0;
+    while cur >= 0 && cur < parent.len() {
+        if region_vec_contains_i64(seen, cur) {
+            return -1;
+        }
+        seen.push(cur);
+        let p: i64 = parent[cur];
+        if p == -1 {
+            return depth;
+        }
+        if p < 0 || p >= parent.len() {
+            return -1;
+        }
+        cur = p;
+        depth = depth + 1;
+    }
+    -1
+}
+
+fn block_id_exists(f: IrFunction, id: i64) -> bool {
+    let mut i: i64 = 0;
+    while i < f.blocks.len() {
+        if f.blocks[i].id == id {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn block_successors_by_id(f: IrFunction, id: i64) -> Vec<i64> {
+    let mut i: i64 = 0;
+    while i < f.blocks.len() {
+        let blk: IrBlock = f.blocks[i];
+        if blk.id == id {
+            return linear_successors(blk);
+        }
+        i = i + 1;
+    }
+    Vec::new()
+}
+
+fn build_block_depth(parent: Vec<i64>) -> Vec<i64> {
+    let depth: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < parent.len() {
+        depth.push(-1);
+        i = i + 1;
+    }
+    let mut j: i64 = 0;
+    while j < parent.len() {
+        if parent[j] != -2 {
+            depth[j] = block_depth_for(parent, j);
+        }
+        j = j + 1;
+    }
+    depth
+}
+
+fn block_depth_for(parent: Vec<i64>, id: i64) -> i64 {
+    let seen: Vec<i64> = Vec::new();
+    let mut cur: i64 = id;
+    let mut depth: i64 = 0;
+    while cur >= 0 && cur < parent.len() {
+        if region_vec_contains_i64(seen, cur) {
+            return -1;
+        }
+        seen.push(cur);
+        let p: i64 = parent[cur];
+        if p == -1 {
+            return depth;
+        }
+        if p < 0 || p >= parent.len() {
+            return -1;
+        }
+        cur = p;
+        depth = depth + 1;
+    }
+    -1
+}
+
+fn block_tree_lca_all(parent: Vec<i64>, depth: Vec<i64>, blocks: Vec<i64>) -> i64 {
+    if blocks.len() == 0 {
+        return -1;
+    }
+    let mut acc: i64 = blocks[0];
+    let mut i: i64 = 1;
+    while i < blocks.len() {
+        acc = block_tree_lca(parent, depth, acc, blocks[i]);
+        if acc < 0 {
+            return -1;
+        }
+        i = i + 1;
+    }
+    acc
+}
+
+fn block_tree_lca(parent: Vec<i64>, depth: Vec<i64>, left0: i64, right0: i64) -> i64 {
+    let mut left: i64 = left0;
+    let mut right: i64 = right0;
+    let mut left_depth: i64 = block_depth_at(depth, left);
+    let mut right_depth: i64 = block_depth_at(depth, right);
+    if left_depth < 0 || right_depth < 0 {
+        return -1;
+    }
+
+    while left_depth > right_depth {
+        left = block_parent_at(parent, left);
+        if left < 0 {
+            return -1;
+        }
+        left_depth = left_depth - 1;
+    }
+    while right_depth > left_depth {
+        right = block_parent_at(parent, right);
+        if right < 0 {
+            return -1;
+        }
+        right_depth = right_depth - 1;
+    }
+
+    while left != right {
+        left = block_parent_at(parent, left);
+        right = block_parent_at(parent, right);
+        if left < 0 || right < 0 {
+            return -1;
+        }
+    }
+    left
+}
+
+fn block_tree_is_ancestor(parent: Vec<i64>, ancestor: i64, block: i64) -> bool {
+    let mut cur: i64 = block;
+    while cur >= 0 {
+        if cur == ancestor {
+            return true;
+        }
+        cur = block_parent_at(parent, cur);
+    }
+    false
+}
+
+fn close_regions_for_edge(
+    pred: i64, succ: i64, has_succ: bool, block_regions: Vec<i64>,
+    block_parent: Vec<i64>, block_depth: Vec<i64>, refresh_regions: Vec<i64>
+) -> Vec<i64> {
+    let close_regions: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < block_regions.len() {
+        let region_block: i64 = block_regions[i];
+        if block_tree_is_ancestor(block_parent, region_block, pred) {
+            let exits_region: bool = !has_succ || !block_tree_is_ancestor(block_parent, region_block, succ);
+            if exits_region && !region_vec_contains_i64(refresh_regions, region_block) {
+                linear_insert_i64(close_regions, region_block);
+            }
+        }
+        i = i + 1;
+    }
+    sort_block_regions_by_depth(close_regions, block_depth);
+    close_regions
+}
+
+fn sort_block_regions_by_depth(regions: Vec<i64>, depth: Vec<i64>) {
+    let n: i64 = regions.len();
+    let mut i: i64 = 1;
+    while i < n {
+        let mut j: i64 = i;
+        while j > 0 {
+            let left: i64 = regions[j - 1];
+            let right: i64 = regions[j];
+            let left_depth: i64 = block_depth_at(depth, left);
+            let right_depth: i64 = block_depth_at(depth, right);
+            if left_depth > right_depth || (left_depth == right_depth && left > right) {
+                j = 0;
+            } else {
+                regions[j - 1] = right;
+                regions[j] = left;
+                j = j - 1;
+            }
+        }
+        i = i + 1;
+    }
+}
+
+fn block_parent_at(parent: Vec<i64>, id: i64) -> i64 {
+    if id >= 0 && id < parent.len() {
+        return parent[id];
+    }
+    -2
+}
+
+fn block_depth_at(depth: Vec<i64>, id: i64) -> i64 {
+    if id >= 0 && id < depth.len() {
+        return depth[id];
+    }
+    -1
+}
+
+struct BackEdges {
+    preds: Vec<i64>,
+    headers: Vec<i64>,
+}
+
+fn back_edges_new() -> BackEdges {
+    BackEdges {
+        preds: Vec::new(),
+        headers: Vec::new(),
+    }
+}
+
+fn back_edges_contains(edges: BackEdges, pred: i64, header: i64) -> bool {
+    let mut i: i64 = 0;
+    while i < edges.preds.len() {
+        if edges.preds[i] == pred && edges.headers[i] == header {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn back_edges_push_unique(edges: BackEdges, pred: i64, header: i64) {
+    if !back_edges_contains(edges, pred, header) {
+        edges.preds.push(pred);
+        edges.headers.push(header);
+    }
+}
+
+fn sort_back_edges(edges: BackEdges) {
+    let n: i64 = edges.preds.len();
+    let mut i: i64 = 1;
+    while i < n {
+        let mut j: i64 = i;
+        while j > 0 {
+            let lp: i64 = edges.preds[j - 1];
+            let lh: i64 = edges.headers[j - 1];
+            let rp: i64 = edges.preds[j];
+            let rh: i64 = edges.headers[j];
+            if lp < rp || (lp == rp && lh <= rh) {
+                j = 0;
+            } else {
+                edges.preds[j - 1] = rp;
+                edges.headers[j - 1] = rh;
+                edges.preds[j] = lp;
+                edges.headers[j] = lh;
+                j = j - 1;
+            }
+        }
+        i = i + 1;
+    }
+}
+
+fn detect_loop_back_edges(f: IrFunction) -> BackEdges {
+    let edges: BackEdges = back_edges_new();
+    let starts: Vec<i64> = Vec::new();
+    if f.blocks.len() > 0 {
+        starts.push(f.blocks[0].id);
+    }
+    let rest: Vec<i64> = Vec::new();
+    let mut bi: i64 = 0;
+    while bi < f.blocks.len() {
+        let id: i64 = f.blocks[bi].id;
+        if !region_vec_contains_i64(starts, id) {
+            rest.push(id);
+        }
+        bi = bi + 1;
+    }
+    sort_i64_vec_inplace(rest);
+    let mut ri: i64 = 0;
+    while ri < rest.len() {
+        starts.push(rest[ri]);
+        ri = ri + 1;
+    }
+
+    let visited: Vec<i64> = Vec::new();
+    let on_stack: Vec<i64> = Vec::new();
+    let mut si: i64 = 0;
+    while si < starts.len() {
+        let start: i64 = starts[si];
+        if region_vec_contains_i64(visited, start) {
+            si = si + 1;
+            continue;
+        }
+        let ids: Vec<i64> = Vec::new();
+        let kinds: Vec<i64> = Vec::new();
+        ids.push(start);
+        kinds.push(0);
+        while ids.len() > 0 {
+            let top: i64 = ids.len() - 1;
+            let id2: i64 = ids[top];
+            let kind: i64 = kinds[top];
+            ids.pop();
+            kinds.pop();
+
+            if kind == 1 {
+                linear_remove_i64(on_stack, id2);
+                continue;
+            }
+            if region_vec_contains_i64(visited, id2) {
+                continue;
+            }
+            if !block_id_exists(f, id2) {
+                continue;
+            }
+
+            visited.push(id2);
+            linear_insert_i64(on_stack, id2);
+            ids.push(id2);
+            kinds.push(1);
+
+            let succs: Vec<i64> = block_successors_by_id(f, id2);
+            sort_i64_vec_inplace(succs);
+            let mut succ_i: i64 = succs.len();
+            while succ_i > 0 {
+                succ_i = succ_i - 1;
+                let succ: i64 = succs[succ_i];
+                if !block_id_exists(f, succ) {
+                    continue;
+                }
+                if region_vec_contains_i64(on_stack, succ) {
+                    back_edges_push_unique(edges, id2, succ);
+                    continue;
+                }
+                if !region_vec_contains_i64(visited, succ) {
+                    ids.push(succ);
+                    kinds.push(0);
+                }
+            }
+        }
+        si = si + 1;
+    }
+    sort_back_edges(edges);
+    edges
+}
+
+fn forward_graph_without_back_edges(f: IrFunction, edges: BackEdges) -> Vec<Vec<i64>> {
+    let graph: Vec<Vec<i64>> = Vec::new();
+    let max_id: i64 = max_block_id(f);
+    let mut i: i64 = 0;
+    while i <= max_id {
+        graph.push(Vec::new());
+        i = i + 1;
+    }
+    let mut bi: i64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        if blk.id >= 0 && blk.id < graph.len() {
+            let succs: Vec<i64> = linear_successors(blk);
+            sort_i64_vec_inplace(succs);
+            let mut si: i64 = 0;
+            while si < succs.len() {
+                let succ: i64 = succs[si];
+                if succ >= 0 && succ < graph.len() && !back_edges_contains(edges, blk.id, succ) {
+                    linear_insert_i64(graph[blk.id], succ);
+                }
+                si = si + 1;
+            }
+        }
+        bi = bi + 1;
+    }
+    graph
+}
+
+fn reverse_graph(graph: Vec<Vec<i64>>) -> Vec<Vec<i64>> {
+    let rev: Vec<Vec<i64>> = Vec::new();
+    let mut i: i64 = 0;
+    while i < graph.len() {
+        rev.push(Vec::new());
+        i = i + 1;
+    }
+    let mut pred: i64 = 0;
+    while pred < graph.len() {
+        let succs: Vec<i64> = graph[pred];
+        let mut si: i64 = 0;
+        while si < succs.len() {
+            let succ: i64 = succs[si];
+            if succ >= 0 && succ < rev.len() {
+                linear_insert_i64(rev[succ], pred);
+            }
+            si = si + 1;
+        }
+        pred = pred + 1;
+    }
+    rev
+}
+
+fn reachable_from_blocks(starts: Vec<i64>, graph: Vec<Vec<i64>>) -> Vec<i64> {
+    let reachable: Vec<i64> = Vec::new();
+    let stack: Vec<i64> = Vec::new();
+    let mut si: i64 = 0;
+    while si < starts.len() {
+        stack.push(starts[si]);
+        si = si + 1;
+    }
+    sort_i64_vec_inplace(stack);
+    while stack.len() > 0 {
+        let block: i64 = stack[stack.len() - 1];
+        stack.pop();
+        if region_vec_contains_i64(reachable, block) {
+            continue;
+        }
+        reachable.push(block);
+        if block >= 0 && block < graph.len() {
+            let succs: Vec<i64> = graph[block];
+            let mut gi: i64 = succs.len();
+            while gi > 0 {
+                gi = gi - 1;
+                let succ: i64 = succs[gi];
+                if !region_vec_contains_i64(reachable, succ) {
+                    stack.push(succ);
+                }
+            }
+        }
+    }
+    sort_i64_vec_inplace(reachable);
+    reachable
+}
+
+fn refresh_regions_for_edge(
+    pred: i64, succ: i64, block_regions: Vec<i64>, edges: BackEdges,
+    forward: Vec<Vec<i64>>, reverse: Vec<Vec<i64>>
+) -> Vec<i64> {
+    let refresh: Vec<i64> = Vec::new();
+    let mut ei: i64 = 0;
+    while ei < edges.preds.len() {
+        if edges.preds[ei] == pred && edges.headers[ei] == succ {
+            let header: i64 = edges.headers[ei];
+            let header_succs: Vec<i64> = Vec::new();
+            header_succs.push(header);
+            if header >= 0 && header < forward.len() {
+                let src: Vec<i64> = forward[header];
+                let mut si: i64 = 0;
+                while si < src.len() {
+                    header_succs.push(src[si]);
+                    si = si + 1;
+                }
+            }
+            let reachable_from_header: Vec<i64> = reachable_from_blocks(header_succs, forward);
+            let pred_start: Vec<i64> = Vec::new();
+            pred_start.push(pred);
+            let reaches_pred: Vec<i64> = reachable_from_blocks(pred_start, reverse);
+            let mut ri: i64 = 0;
+            while ri < block_regions.len() {
+                let region_block: i64 = block_regions[ri];
+                if region_vec_contains_i64(reachable_from_header, region_block)
+                    && region_vec_contains_i64(reaches_pred, region_block)
+                {
+                    linear_insert_i64(refresh, region_block);
+                }
+                ri = ri + 1;
+            }
+        }
+        ei = ei + 1;
+    }
+    sort_i64_vec_inplace(refresh);
+    refresh
+}
+
+fn remove_regions(regions: Vec<i64>, remove: Vec<i64>) -> Vec<i64> {
+    let kept: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < regions.len() {
+        if !region_vec_contains_i64(remove, regions[i]) {
+            kept.push(regions[i]);
+        }
+        i = i + 1;
+    }
+    kept
+}
+
+fn region_marker_inst(id: i64, op: i64, region_block: i64) -> IrInst {
+    let mut marker: IrInst = ir_inst_new(
+        id, op, ITY_UNIT(), Vec::new(), 0, 0, 0, String::from("")
+    );
+    marker = ir_inst_set_region(marker, region_pack(REGION_KIND_BLOCK(), region_block));
+    marker
+}
+
+fn append_region_markers(
+    insts: Vec<IrInst>, next_id: i64, close_regions: Vec<i64>, refresh_regions: Vec<i64>
+) -> i64 {
+    let mut id: i64 = next_id;
+    let mut ci: i64 = 0;
+    while ci < close_regions.len() {
+        insts.push(region_marker_inst(id, IOP_REGION_CLOSE(), close_regions[ci]));
+        id = id + 1;
+        ci = ci + 1;
+    }
+    let mut ri: i64 = 0;
+    while ri < refresh_regions.len() {
+        insts.push(region_marker_inst(id, IOP_REGION_CLOSE(), refresh_regions[ri]));
+        id = id + 1;
+        ri = ri + 1;
+    }
+    id
+}
+
+fn build_phi_home_blocks(f: IrFunction) -> Vec<i64> {
+    let mut max_id: i64 = -1;
+    let mut bi: i64 = 0;
+    while bi < f.blocks.len() {
+        let blk: IrBlock = f.blocks[bi];
+        let mut ii: i64 = 0;
+        while ii < blk.insts.len() {
+            if blk.insts[ii].id > max_id {
+                max_id = blk.insts[ii].id;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
+    }
+
+    let homes: Vec<i64> = Vec::new();
+    let mut hi: i64 = 0;
+    while hi <= max_id {
+        homes.push(-1);
+        hi = hi + 1;
+    }
+
+    bi = 0;
+    while bi < f.blocks.len() {
+        let blk2: IrBlock = f.blocks[bi];
+        let mut ii2: i64 = 0;
+        while ii2 < blk2.insts.len() {
+            let inst: IrInst = blk2.insts[ii2];
+            if inst.op == IOP_PHI() && inst.id >= 0 && inst.id < homes.len() {
+                homes[inst.id] = blk2.id;
+            }
+            ii2 = ii2 + 1;
+        }
+        bi = bi + 1;
+    }
+    homes
+}
+
+fn upsilon_targets_block(inst: IrInst, target: i64, phi_home: Vec<i64>) -> bool {
+    if inst.op != IOP_UPSILON() || inst.dk != IDATA_PHI_TARGET() {
+        return false;
+    }
+    let phi_id: i64 = inst.dv;
+    if phi_id < 0 || phi_id >= phi_home.len() {
+        return false;
+    }
+    phi_home[phi_id] == target
+}
+
+fn collect_edge_upsilons_for_target(
+    insts: Vec<IrInst>, target: i64, phi_home: Vec<i64>
+) -> Vec<IrInst> {
+    let result: Vec<IrInst> = Vec::new();
+    let mut i: i64 = 0;
+    while i < insts.len() {
+        let inst: IrInst = insts[i];
+        if upsilon_targets_block(inst, target, phi_home) {
+            result.push(inst);
+        }
+        i = i + 1;
+    }
+    result
+}
+
+fn append_moved_upsilon_ids(moved_ids: Vec<i64>, upsilons: Vec<IrInst>) {
+    let mut i: i64 = 0;
+    while i < upsilons.len() {
+        linear_insert_i64(moved_ids, upsilons[i].id);
+        i = i + 1;
+    }
+}
+
+fn filter_out_moved_upsilons(insts: Vec<IrInst>, moved_ids: Vec<i64>) -> Vec<IrInst> {
+    let kept: Vec<IrInst> = Vec::new();
+    let mut i: i64 = 0;
+    while i < insts.len() {
+        let inst: IrInst = insts[i];
+        if !region_vec_contains_i64(moved_ids, inst.id) {
+            kept.push(inst);
+        }
+        i = i + 1;
+    }
+    kept
+}
+
+struct EdgeSplitBlock {
+    block: IrBlock,
+    next_id: i64,
+}
+
+fn build_edge_split_block(
+    block_id: i64, next_id: i64, close_regions: Vec<i64>, refresh_regions: Vec<i64>,
+    edge_upsilons: Vec<IrInst>, target: i64
+) -> EdgeSplitBlock {
+    let blk: IrBlock = ir_block_new(block_id);
+    let mut id: i64 = append_region_markers(blk.insts, next_id, close_regions, refresh_regions);
+    let mut ui: i64 = 0;
+    while ui < edge_upsilons.len() {
+        let src: IrInst = edge_upsilons[ui];
+        let copied: IrInst = IrInst {
+            id: id,
+            op: src.op,
+            ty: src.ty,
+            args: src.args,
+            dk: src.dk,
+            dv: src.dv,
+            dv2: src.dv2,
+            ds: src.ds,
+            ostart: src.ostart,
+            olen: src.olen,
+            rgn: src.rgn,
+        };
+        id = id + 1;
+        blk.insts.push(copied);
+        ui = ui + 1;
+    }
+    let jump_inst: IrInst = ir_inst_new(
+        id, IOP_JUMP(), ITY_UNIT(), Vec::new(), IDATA_JUMP_TARGET(), target, 0, String::from("")
+    );
+    id = id + 1;
+    blk.insts.push(jump_inst);
+    EdgeSplitBlock { block: blk, next_id: id }
+}
+
+fn branch_inst_with_targets(inst: IrInst, then_block: i64, else_block: i64) -> IrInst {
+    IrInst {
+        id: inst.id,
+        op: inst.op,
+        ty: inst.ty,
+        args: inst.args,
+        dk: inst.dk,
+        dv: then_block,
+        dv2: else_block,
+        ds: inst.ds,
+        ostart: inst.ostart,
+        olen: inst.olen,
+        rgn: inst.rgn,
+    }
+}
+
 fn build_id_to_inst(f: IrFunction) -> Vec<IrInst> {
     let bks: Vec<IrBlock> = f.blocks;
     let mut max_id: i64 = -1;
@@ -1117,6 +4036,30 @@ fn build_id_to_inst(f: IrFunction) -> Vec<IrInst> {
             ii = ii + 1;
         }
         bi2 = bi2 + 1;
+    }
+    tbl
+}
+
+fn build_id_to_block(f: IrFunction, n_ids: i64) -> Vec<i64> {
+    let tbl: Vec<i64> = Vec::new();
+    let mut i: i64 = 0;
+    while i < n_ids {
+        tbl.push(-1);
+        i = i + 1;
+    }
+    let bks: Vec<IrBlock> = f.blocks;
+    let mut bi: i64 = 0;
+    while bi < bks.len() {
+        let blk: IrBlock = bks[bi];
+        let mut ii: i64 = 0;
+        while ii < blk.insts.len() {
+            let inst: IrInst = blk.insts[ii];
+            if inst.id >= 0 && inst.id < n_ids {
+                tbl[inst.id] = blk.id;
+            }
+            ii = ii + 1;
+        }
+        bi = bi + 1;
     }
     tbl
 }
@@ -1173,6 +4116,116 @@ fn extern_fresh_in_caller(sym: String) -> bool {
         || sym == String::from("__vow_vec_from_raw_parts_copy_val")
 }
 
+fn vec_creation_extern(sym: String) -> bool {
+    sym == String::from("__vow_vec_new")
+        || sym == String::from("__vow_vec_new_val")
+}
+
+fn string_creation_extern(sym: String) -> bool {
+    sym == String::from("__vow_string_new")
+        || sym == String::from("__vow_string_new_in_arena")
+        || sym == String::from("__vow_string_from_cstr")
+        || sym == String::from("__vow_string_from_cstr_in_arena")
+        || sym == String::from("__vow_string_clone")
+        || sym == String::from("__vow_string_clone_in_arena")
+        || sym == String::from("__vow_string_substr")
+        || sym == String::from("__vow_string_substr_in_arena")
+        || sym == String::from("__vow_string_substring")
+        || sym == String::from("__vow_string_substring_in_arena")
+        || sym == String::from("__vow_string_from_i64")
+        || sym == String::from("__vow_string_from_i64_in_arena")
+        || sym == String::from("__vow_string_split")
+        || sym == String::from("__vow_string_split_in_arena")
+        || sym == String::from("__vow_string_trim")
+        || sym == String::from("__vow_string_trim_in_arena")
+        || sym == String::from("__vow_string_to_upper")
+        || sym == String::from("__vow_string_to_upper_in_arena")
+        || sym == String::from("__vow_string_to_lower")
+        || sym == String::from("__vow_string_to_lower_in_arena")
+        || sym == String::from("__vow_string_replace")
+        || sym == String::from("__vow_string_replace_in_arena")
+        || sym == String::from("__vow_string_join")
+        || sym == String::from("__vow_string_join_in_arena")
+}
+
+fn map_creation_extern(sym: String) -> bool {
+    sym == String::from("__vow_map_new")
+        || sym == String::from("__vow_map_new_in_arena")
+}
+
+fn heap_producing_extern(sym: String) -> bool {
+    extern_fresh_in_caller(sym)
+        || vec_creation_extern(sym)
+        || string_creation_extern(sym)
+        || map_creation_extern(sym)
+}
+
+fn extern_store_edge_count(sym: String) -> i64 {
+    if sym == String::from("__vow_vec_push_val") { return 1; }
+    if sym == String::from("__vow_vec_push_val_in_arena") { return 1; }
+    if sym == String::from("__vow_vec_set_val") { return 1; }
+    if sym == String::from("__vow_map_insert") { return 2; }
+    if sym == String::from("__vow_map_insert_in_arena") { return 2; }
+    if sym == String::from("__vow_btreemap_insert") { return 2; }
+    0
+}
+
+fn extern_store_target_pos(sym: String, edge_idx: i64) -> i64 {
+    if edge_idx < 0 || edge_idx >= extern_store_edge_count(sym) {
+        return -1;
+    }
+    if sym == String::from("__vow_vec_push_val_in_arena") && edge_idx == 0 { return 1; }
+    if sym == String::from("__vow_map_insert_in_arena") { return 1; }
+    0
+}
+
+fn extern_store_source_pos(sym: String, edge_idx: i64) -> i64 {
+    if sym == String::from("__vow_vec_push_val") && edge_idx == 0 { return 1; }
+    if sym == String::from("__vow_vec_push_val_in_arena") && edge_idx == 0 { return 2; }
+    if sym == String::from("__vow_vec_set_val") && edge_idx == 0 { return 2; }
+    if (sym == String::from("__vow_map_insert") || sym == String::from("__vow_btreemap_insert"))
+        && edge_idx == 0
+    {
+        return 1;
+    }
+    if (sym == String::from("__vow_map_insert") || sym == String::from("__vow_btreemap_insert"))
+        && edge_idx == 1
+    {
+        return 2;
+    }
+    if sym == String::from("__vow_map_insert_in_arena") && edge_idx == 0 { return 2; }
+    if sym == String::from("__vow_map_insert_in_arena") && edge_idx == 1 { return 3; }
+    -1
+}
+
+fn extern_growth_target_pos(sym: String) -> i64 {
+    if sym == String::from("__vow_vec_push") { return 0; }
+    if sym == String::from("__vow_vec_clear") { return 0; }
+    if sym == String::from("__vow_vec_push_in_arena") { return 1; }
+    if sym == String::from("__vow_vec_reserve_in_arena") { return 1; }
+    if sym == String::from("__vow_string_push_str") { return 0; }
+    if sym == String::from("__vow_string_push_str_in_arena") { return 1; }
+    if sym == String::from("__vow_string_push_byte") { return 0; }
+    if sym == String::from("__vow_string_clear") { return 0; }
+    if sym == String::from("__vow_string_push_byte_in_arena") { return 1; }
+    if sym == String::from("__vow_map_insert") { return 0; }
+    if sym == String::from("__vow_map_insert_in_arena") { return 1; }
+    if sym == String::from("__vow_btreemap_insert") { return 0; }
+    -1
+}
+
+fn extern_store_target_for_source(sym: String, source_pos: i64) -> i64 {
+    let mut i: i64 = 0;
+    let n: i64 = extern_store_edge_count(sym);
+    while i < n {
+        if extern_store_source_pos(sym, i) == source_pos {
+            return extern_store_target_pos(sym, i);
+        }
+        i = i + 1;
+    }
+    -1
+}
+
 fn deep_ret_uninit() -> DeepRet {
     DeepRet { kind: RSUM_INTERNAL_UNINIT(), aux: 0, aliases: Vec::new() }
 }
@@ -1185,6 +4238,14 @@ fn lookup_inst_or_default(id_to_inst: Vec<IrInst>, id: i64) -> IrInst {
 }
 
 fn trace_origin_shallow(id_to_inst: Vec<IrInst>, id: i64) -> DeepRet {
+    let visiting: Vec<i64> = Vec::new();
+    trace_origin_shallow_inner(id_to_inst, id, visiting)
+}
+
+fn trace_origin_shallow_inner(id_to_inst: Vec<IrInst>, id: i64, visiting: Vec<i64>) -> DeepRet {
+    if region_vec_contains_i64(visiting, id) {
+        return deep_ret_const_global();
+    }
     let inst: IrInst = lookup_inst_or_default(id_to_inst, id);
     if inst.id < 0 {
         return deep_ret_const_global();
@@ -1195,16 +4256,52 @@ fn trace_origin_shallow(id_to_inst: Vec<IrInst>, id: i64) -> DeepRet {
     if inst.op == IOP_REGION_ALLOC() {
         return DeepRet { kind: RSUM_KIND_FRESH_IN_CALLER(), aux: 0, aliases: Vec::new() };
     }
+    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN() && heap_producing_extern(inst.ds) {
+        return DeepRet { kind: RSUM_KIND_FRESH_IN_CALLER(), aux: 0, aliases: Vec::new() };
+    }
+    if inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
+        && (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
+        && inst.args.len() > 0
+    {
+        visiting.push(id);
+        let r: DeepRet = trace_origin_shallow_inner(id_to_inst, inst.args[0], visiting);
+        visiting.pop();
+        return r;
+    }
     if is_const_op(inst.op) {
         return deep_ret_const_global();
     }
     deep_ret_const_global()
 }
 
-fn trace_param_shallow(id_to_inst: Vec<IrInst>, id: i64) -> i64 {
+fn trace_param(id_to_inst: Vec<IrInst>, id: i64) -> i64 {
+    // Mirrors Rust trace_param: walk through field/load and Vec get wrappers back to GetArg.
+    let visiting: Vec<i64> = Vec::new();
+    trace_param_inner(id_to_inst, id, visiting)
+}
+
+fn trace_param_inner(id_to_inst: Vec<IrInst>, id: i64, visiting: Vec<i64>) -> i64 {
+    if region_vec_contains_i64(visiting, id) {
+        return -1;
+    }
     let inst: IrInst = lookup_inst_or_default(id_to_inst, id);
     if inst.id >= 0 && inst.op == IOP_GET_ARG() {
         return inst.dv;
+    }
+    if inst.id >= 0 && (inst.op == IOP_FIELD_GET() || inst.op == IOP_LOAD()) && inst.args.len() > 0 {
+        visiting.push(id);
+        let r: i64 = trace_param_inner(id_to_inst, inst.args[0], visiting);
+        visiting.pop();
+        return r;
+    }
+    if inst.id >= 0 && inst.op == IOP_CALL() && inst.dk == IDATA_CALL_EXTERN()
+        && (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
+        && inst.args.len() > 0
+    {
+        visiting.push(id);
+        let r2: i64 = trace_param_inner(id_to_inst, inst.args[0], visiting);
+        visiting.pop();
+        return r2;
     }
     -1
 }
@@ -1246,8 +4343,17 @@ fn deep_origin_inner(
         return deep_ret_const_global();
     }
     if inst.op == IOP_CALL() {
-        if inst.dk == IDATA_CALL_EXTERN() && extern_fresh_in_caller(inst.ds) {
+        if inst.dk == IDATA_CALL_EXTERN() && heap_producing_extern(inst.ds) {
             return DeepRet { kind: RSUM_KIND_FRESH_IN_CALLER(), aux: 0, aliases: Vec::new() };
+        }
+        if inst.dk == IDATA_CALL_EXTERN()
+            && (inst.ds == String::from("__vow_vec_get_val") || inst.ds == String::from("__vow_vec_get"))
+            && inst.args.len() > 0
+        {
+            visiting.push(id);
+            let vr: DeepRet = deep_origin_inner(id_to_inst, phi_arms, inst.args[0], int_kinds, int_auxs, int_aliases_list, visiting);
+            visiting.pop();
+            return vr;
         }
         if inst.dk == IDATA_CALL_TARGET() {
             let callee_idx: i64 = inst.dv;
@@ -1328,6 +4434,12 @@ fn deep_origin_inner(
         }
         visiting.pop();
         return DeepRet { kind: acc_kind, aux: acc_aux, aliases: acc_aliases };
+    }
+    if (inst.op == IOP_FIELD_GET() || inst.op == IOP_LOAD()) && inst.args.len() > 0 {
+        visiting.push(id);
+        let r3: DeepRet = deep_origin_inner(id_to_inst, phi_arms, inst.args[0], int_kinds, int_auxs, int_aliases_list, visiting);
+        visiting.pop();
+        return r3;
     }
     deep_ret_const_global()
 }
@@ -1717,9 +4829,9 @@ fn tarjan_sccs(cg: Vec<Vec<i64>>, n: i64) -> Vec<Vec<i64>> {
 // `REGION_KIND_BLOCK` heap-producing instruction with `IOP_REGION_OPEN` /
 // `IOP_REGION_CLOSE` markers per spec §3.5 criterion 1.
 //
-// Phase 9 status: this is live for safe local block regions. It intentionally
-// does not retag `IOP_REGION_ALLOC` by itself; inference decides which values
-// are safe to place in a block region, and this pass only materializes markers.
+// This intentionally does not retag `IOP_REGION_ALLOC` by itself; inference
+// decides which values are safe to place in a block region, and this pass only
+// materializes markers.
 // ---------------------------------------------------------------------------
 
 fn insert_region_markers_module(m: IrModule) -> IrModule {
@@ -1771,84 +4883,231 @@ fn insert_region_markers_module(m: IrModule) -> IrModule {
         }
         let mut next_id: i64 = max_id + 1;
 
-        // Pass 1: collect blocks that contain a Block-tagged heap producer.
+        // Pass 1: collect concrete block regions named by heap producers.
         let block_regions: Vec<i64> = Vec::new();
         let mut bi3: i64 = 0;
         while bi3 < f.blocks.len() {
             let blk2: IrBlock = f.blocks[bi3];
             let mut ii3: i64 = 0;
-            let mut found: bool = false;
             while ii3 < blk2.insts.len() {
                 let inst3: IrInst = blk2.insts[ii3];
                 if region_kind(inst3.rgn) == REGION_KIND_BLOCK() {
-                    found = true;
+                    let rb: i64 = region_val(inst3.rgn);
+                    linear_insert_i64(block_regions, rb);
                 }
                 ii3 = ii3 + 1;
-            }
-            if found {
-                block_regions.push(blk2.id);
             }
             bi3 = bi3 + 1;
         }
 
-        // Pass 2: insert RegionOpen at start of marked blocks and
-        // RegionClose just before the terminator.
+        let block_parent: Vec<i64> = build_block_parent(f);
+        let block_depth: Vec<i64> = build_block_depth(block_parent);
+        let back_edges: BackEdges = detect_loop_back_edges(f);
+        let forward_no_backedges: Vec<Vec<i64>> = forward_graph_without_back_edges(f, back_edges);
+        let reverse_no_backedges: Vec<Vec<i64>> = reverse_graph(forward_no_backedges);
+        let phi_home: Vec<i64> = build_phi_home_blocks(f);
+
+        let mut next_block_id: i64 = max_block_id(f) + 1;
+        let extra_blocks: Vec<IrBlock> = Vec::new();
+
+        // Pass 2: insert RegionOpen at each region root, and materialize
+        // close/refresh markers on the exact control-flow edge that needs
+        // them. Branches with mixed exit/backedge successors split only the
+        // marked edges so exit paths do not reopen a region they are leaving.
         let mut bi4: i64 = 0;
         while bi4 < f.blocks.len() {
             let blk3: IrBlock = f.blocks[bi4];
-            if region_vec_contains_i64(block_regions, blk3.id) {
-                let block_rgn: i64 = region_pack(REGION_KIND_BLOCK(), blk3.id);
+            let opens_here: bool = region_vec_contains_i64(block_regions, blk3.id);
 
-                let mut open_inst: IrInst = ir_inst_new(
-                    next_id, IOP_REGION_OPEN(), ITY_UNIT(),
-                    Vec::new(), 0, 0, 0, String::from(""),
-                );
-                open_inst = ir_inst_set_region(open_inst, block_rgn);
-                next_id = next_id + 1;
-
-                let mut close_inst: IrInst = ir_inst_new(
-                    next_id, IOP_REGION_CLOSE(), ITY_UNIT(),
-                    Vec::new(), 0, 0, 0, String::from(""),
-                );
-                close_inst = ir_inst_set_region(close_inst, block_rgn);
-                next_id = next_id + 1;
-
-                // Find terminator position. The block always has one terminal
-                // inst at the tail; defensive scan covers a missing terminator.
-                let mut term_pos: i64 = blk3.insts.len();
-                let mut k: i64 = 0;
-                while k < blk3.insts.len() {
-                    if iop_is_terminal(blk3.insts[k].op) {
-                        term_pos = k;
-                        k = blk3.insts.len();
-                    } else {
-                        k = k + 1;
-                    }
+            let mut term_pos: i64 = blk3.insts.len();
+            let mut k: i64 = 0;
+            while k < blk3.insts.len() {
+                if iop_is_terminal(blk3.insts[k].op) {
+                    term_pos = k;
+                    k = blk3.insts.len();
+                } else {
+                    k = k + 1;
                 }
-
-                // Splice: insert close before terminator first (so the open
-                // insertion at index 0 doesn't shift term_pos).
-                let mut new_insts: Vec<IrInst> = Vec::new();
+            }
+            let mut new_insts: Vec<IrInst> = Vec::new();
+            let mut block_changed: bool = opens_here;
+            let moved_upsilon_ids: Vec<i64> = Vec::new();
+            if opens_here {
+                let mut open_inst: IrInst = region_marker_inst(next_id, IOP_REGION_OPEN(), blk3.id);
+                next_id = next_id + 1;
                 new_insts.push(open_inst);
-                let mut copy_i: i64 = 0;
-                while copy_i < blk3.insts.len() {
-                    if copy_i == term_pos {
-                        new_insts.push(close_inst);
+            }
+
+            let mut copy_i: i64 = 0;
+            while copy_i < blk3.insts.len() {
+                if copy_i == term_pos {
+                    let term: IrInst = blk3.insts[copy_i];
+                    if term.op == IOP_BRANCH() && term.dk == IDATA_BRANCH_TARGETS() {
+                        let then_refresh: Vec<i64> = refresh_regions_for_edge(
+                            blk3.id, term.dv, block_regions, back_edges, forward_no_backedges, reverse_no_backedges
+                        );
+                        let then_close: Vec<i64> = close_regions_for_edge(
+                            blk3.id, term.dv, true, block_regions, block_parent, block_depth, then_refresh
+                        );
+                        let else_refresh: Vec<i64> = refresh_regions_for_edge(
+                            blk3.id, term.dv2, block_regions, back_edges, forward_no_backedges, reverse_no_backedges
+                        );
+                        let else_close: Vec<i64> = close_regions_for_edge(
+                            blk3.id, term.dv2, true, block_regions, block_parent, block_depth, else_refresh
+                        );
+                        let then_upsilons: Vec<IrInst> = collect_edge_upsilons_for_target(
+                            blk3.insts, term.dv, phi_home
+                        );
+                        let else_upsilons: Vec<IrInst> = collect_edge_upsilons_for_target(
+                            blk3.insts, term.dv2, phi_home
+                        );
+                        let mut then_target: i64 = term.dv;
+                        let mut else_target: i64 = term.dv2;
+                        if then_close.len() > 0 || then_refresh.len() > 0 {
+                            let split: EdgeSplitBlock = build_edge_split_block(
+                                next_block_id, next_id, then_close, then_refresh, then_upsilons, term.dv
+                            );
+                            next_block_id = next_block_id + 1;
+                            next_id = split.next_id;
+                            then_target = split.block.id;
+                            extra_blocks.push(split.block);
+                            append_moved_upsilon_ids(moved_upsilon_ids, then_upsilons);
+                            block_changed = true;
+                        }
+                        if else_close.len() > 0 || else_refresh.len() > 0 {
+                            let split2: EdgeSplitBlock = build_edge_split_block(
+                                next_block_id, next_id, else_close, else_refresh, else_upsilons, term.dv2
+                            );
+                            next_block_id = next_block_id + 1;
+                            next_id = split2.next_id;
+                            else_target = split2.block.id;
+                            extra_blocks.push(split2.block);
+                            append_moved_upsilon_ids(moved_upsilon_ids, else_upsilons);
+                            block_changed = true;
+                        }
+                        if moved_upsilon_ids.len() > 0 {
+                            new_insts = filter_out_moved_upsilons(new_insts, moved_upsilon_ids);
+                        }
+                        new_insts.push(branch_inst_with_targets(term, then_target, else_target));
+                    } else if term.op == IOP_JUMP() && term.dk == IDATA_JUMP_TARGET() {
+                        let jump_refresh: Vec<i64> = refresh_regions_for_edge(
+                            blk3.id, term.dv, block_regions, back_edges, forward_no_backedges, reverse_no_backedges
+                        );
+                        let jump_close: Vec<i64> = close_regions_for_edge(
+                            blk3.id, term.dv, true, block_regions, block_parent, block_depth, jump_refresh
+                        );
+                        if jump_close.len() > 0 || jump_refresh.len() > 0 {
+                            block_changed = true;
+                        }
+                        next_id = append_region_markers(new_insts, next_id, jump_close, jump_refresh);
+                        new_insts.push(term);
+                    } else {
+                        let no_refresh: Vec<i64> = Vec::new();
+                        let no_succ_close: Vec<i64> = close_regions_for_edge(
+                            blk3.id, 0, false, block_regions, block_parent, block_depth, no_refresh
+                        );
+                        let no_succ_refresh: Vec<i64> = Vec::new();
+                        if no_succ_close.len() > 0 {
+                            block_changed = true;
+                        }
+                        next_id = append_region_markers(new_insts, next_id, no_succ_close, no_succ_refresh);
+                        new_insts.push(term);
                     }
-                    new_insts.push(blk3.insts[copy_i]);
-                    copy_i = copy_i + 1;
+                } else {
+                    let copied_inst: IrInst = blk3.insts[copy_i];
+                    if !region_vec_contains_i64(moved_upsilon_ids, copied_inst.id) {
+                        new_insts.push(copied_inst);
+                    }
                 }
-                if term_pos == blk3.insts.len() {
-                    new_insts.push(close_inst);
+                copy_i = copy_i + 1;
+            }
+            if term_pos == blk3.insts.len() {
+                let no_refresh2: Vec<i64> = Vec::new();
+                let no_succ_close2: Vec<i64> = close_regions_for_edge(
+                    blk3.id, 0, false, block_regions, block_parent, block_depth, no_refresh2
+                );
+                let no_succ_refresh2: Vec<i64> = Vec::new();
+                if no_succ_close2.len() > 0 {
+                    block_changed = true;
                 }
+                next_id = append_region_markers(new_insts, next_id, no_succ_close2, no_succ_refresh2);
+            }
+            if block_changed {
                 blk3.insts = new_insts;
                 f.blocks[bi4] = blk3;
             }
             bi4 = bi4 + 1;
         }
 
+        let mut ebi: i64 = 0;
+        while ebi < extra_blocks.len() {
+            f.blocks.push(extra_blocks[ebi]);
+            ebi = ebi + 1;
+        }
+
         m.functions[fi] = f;
         fi = fi + 1;
     }
     m
+}
+
+// Linear scan over parallel `(target, field_idx)` arrays. Returns true iff
+// the pair `(t, f)` already appears at some matching index. Used by
+// `collect_live_field_set_ids` to dedup FieldSets keyed on
+// `(target_inst_id, field_idx)` per block.
+fn pair_seen(targets: Vec<i64>, fidxs: Vec<i64>, t: i64, f: i64) -> bool {
+    let n: i64 = targets.len();
+    let mut i: i64 = 0;
+    while i < n {
+        if targets[i] == t && fidxs[i] == f { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// Per-block last-write set keyed on `(target_inst_id, field_idx)` over
+// FieldSet instructions, used by `collect_returned_ids` to gate the
+// FieldSet skip-set edge. Within each block, only the textually-last
+// FieldSet for each `(target, field_idx)` pair survives — earlier writes
+// are dead by the end of the block, so their RHS allocations no longer
+// inherit the returned struct's caller-region routing and must remain
+// flaggable by `RegionRootEscape` (issue #326). Cross-block FieldSets
+// remain conservatively independent: a write in one block whose pair is
+// overwritten by a write in another block is still treated as live.
+//
+// Implementation: per block, walk insts in REVERSE order and keep the
+// FIRST FieldSet seen for each `(target, field_idx)` pair. Reverse-walk
+// + first-seen-wins is equivalent to forward-walk + last-write-wins for
+// the same key. The result Vec is sorted ascending so iteration order in
+// callers (`region_vec_contains_i64` membership checks) is independent
+// of block-walk order, mirroring the codebase's BTreeMap precedent on
+// the Rust side.
+fn collect_live_field_set_ids(bks: Vec<IrBlock>) -> Vec<i64> {
+    let out: Vec<i64> = Vec::new();
+    let mut bi: i64 = 0;
+    while bi < bks.len() {
+        let blk: IrBlock = bks[bi];
+        let seen_targets: Vec<i64> = Vec::new();
+        let seen_fidxs: Vec<i64> = Vec::new();
+        let mut ii: i64 = blk.insts.len() - 1;
+        while ii >= 0 {
+            let inst: IrInst = blk.insts[ii];
+            if inst.op == IOP_FIELD_SET()
+                && inst.args.len() >= 2
+                && inst.dk == IDATA_FIELD()
+            {
+                let tgt: i64 = inst.args[0];
+                let fidx: i64 = inst.dv;
+                if !pair_seen(seen_targets, seen_fidxs, tgt, fidx) {
+                    seen_targets.push(tgt);
+                    seen_fidxs.push(fidx);
+                    out.push(inst.id);
+                }
+            }
+            ii = ii - 1;
+        }
+        bi = bi + 1;
+    }
+    sort_i64_vec_inplace(out);
+    out
 }

@@ -1,0 +1,24 @@
+// BENCH: max-rss-kb 6984
+module AllocLoopMap
+
+fn fill_map() -> i64 {
+    let m: HashMap<i64, i64> = HashMap::new();
+    let mut i: i64 = 0;
+    while i < 16 {
+        m.insert(i, i * 100);
+        i = i + 1;
+    }
+    m.len() + m.get(0) + m.get(15)
+}
+
+fn main() -> i32 [io] {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 70000 {
+        total = total + fill_map();
+        i = i + 1;
+    }
+    print_i64(total);
+    print_str("\n");
+    0
+}

@@ -57,6 +57,7 @@ pub struct VerifyLimits {
     pub vec_max: usize,
     pub string_max: usize,
     pub hashmap_max: usize,
+    pub btreemap_max: usize,
 }
 
 impl Default for VerifyLimits {
@@ -66,6 +67,7 @@ impl Default for VerifyLimits {
             vec_max: 128,
             string_max: 256,
             hashmap_max: 64,
+            btreemap_max: 64,
         }
     }
 }
@@ -91,6 +93,108 @@ fn ir_ty_to_c(ty: Ty) -> &'static str {
 // Typed variable analysis (Vec, String, HashMap)
 // ---------------------------------------------------------------------------
 
+fn is_vec_model_creator(name: &str) -> bool {
+    matches!(
+        name,
+        "__vow_vec_new"
+            | "__vow_vec_new_val"
+            | "__vow_vec_new_in_arena"
+            | "__vow_vec_new_val_in_arena"
+            | "__vow_vec_from_raw_parts_copy_val"
+            | "__vow_vec_pin_to_root_val"
+    )
+}
+
+fn is_string_fresh_helper(name: &str) -> bool {
+    matches!(
+        name,
+        "__vow_string_trim"
+            | "__vow_string_trim_in_arena"
+            | "__vow_string_to_upper"
+            | "__vow_string_to_upper_in_arena"
+            | "__vow_string_to_lower"
+            | "__vow_string_to_lower_in_arena"
+    )
+}
+
+fn is_string_model_creator(name: &str) -> bool {
+    is_string_fresh_helper(name)
+        || matches!(
+            name,
+            "__vow_string_new"
+                | "__vow_string_new_in_arena"
+                | "__vow_string_literal"
+                | "__vow_string_from_cstr"
+                | "__vow_string_from_cstr_in_arena"
+                | "__vow_string_clone"
+                | "__vow_string_clone_in_arena"
+                | "__vow_string_from_raw_parts_copy"
+                | "__vow_string_pin_to_root"
+                | "__vow_string_substr"
+                | "__vow_string_substr_in_arena"
+                | "__vow_string_substring"
+                | "__vow_string_substring_in_arena"
+                | "__vow_string_from_i64"
+                | "__vow_string_from_i64_in_arena"
+        )
+}
+
+fn vec_model_receiver_arg(name: &str) -> Option<usize> {
+    match name {
+        "__vow_vec_push_val" | "__vow_vec_get_val" | "__vow_vec_len" | "__vow_vec_pop"
+        | "__vow_vec_set_val" => Some(0),
+        "__vow_vec_push_in_arena"
+        | "__vow_vec_push_val_in_arena"
+        | "__vow_vec_reserve_in_arena" => Some(1),
+        _ => None,
+    }
+}
+
+fn string_model_receiver_arg(name: &str) -> Option<usize> {
+    match name {
+        "__vow_string_push_str_in_arena"
+        | "__vow_string_push_byte_in_arena"
+        | "__vow_string_substr_in_arena"
+        | "__vow_string_substring_in_arena" => Some(1),
+        "__vow_string_push_str"
+        | "__vow_string_push_byte"
+        | "__vow_string_substr"
+        | "__vow_string_substring"
+        | "__vow_string_clone"
+        | "__vow_string_pin_to_root"
+        | "__vow_string_len"
+        | "__vow_string_clear"
+        | "__vow_string_byte_at"
+        | "__vow_string_eq"
+        | "__vow_string_contains"
+        | "__vow_string_matches_literal_at"
+        | "__vow_string_print" => Some(0),
+        "__vow_string_clone_in_arena" => Some(1),
+        _ => None,
+    }
+}
+
+fn string_model_extra_arg(name: &str) -> Option<usize> {
+    match name {
+        "__vow_string_push_str_in_arena" => Some(2),
+        "__vow_string_push_str" | "__vow_string_eq" | "__vow_string_contains" => Some(1),
+        _ => None,
+    }
+}
+
+fn is_map_model_creator(name: &str) -> bool {
+    matches!(name, "__vow_map_new" | "__vow_map_new_in_arena")
+}
+
+fn map_model_receiver_arg(name: &str) -> Option<usize> {
+    match name {
+        "__vow_map_insert_in_arena" | "__vow_map_remove_in_arena" => Some(1),
+        "__vow_map_insert" | "__vow_map_remove" | "__vow_map_get" | "__vow_map_contains"
+        | "__vow_map_len" => Some(0),
+        _ => None,
+    }
+}
+
 fn collect_typed_vars(func: &Function, creator: &str, prefix: &str) -> HashSet<u32> {
     let mut vars = HashSet::new();
 
@@ -99,16 +203,34 @@ fn collect_typed_vars(func: &Function, creator: &str, prefix: &str) -> HashSet<u
             if inst.opcode == Opcode::Call
                 && let InstData::CallExtern(ref name) = inst.data
             {
-                let is_alt_creator = (prefix == "__vow_vec_"
-                    && (name == "__vow_vec_from_raw_parts_copy_val"
-                        || name == "__vow_vec_pin_to_root_val"))
-                    || (prefix == "__vow_string_"
-                        && (name == "__vow_string_from_raw_parts_copy"
-                            || name == "__vow_string_pin_to_root"));
-                if name == creator || is_alt_creator {
+                let is_alt_creator = (prefix == "__vow_vec_" && is_vec_model_creator(name))
+                    || (prefix == "__vow_string_" && is_string_model_creator(name))
+                    || (prefix == "__vow_map_" && is_map_model_creator(name));
+                let is_creator = name == creator || is_alt_creator;
+                if is_creator {
                     vars.insert(inst.id.0);
-                } else if name.starts_with(prefix) && !inst.args.is_empty() {
-                    vars.insert(inst.args[0].0);
+                }
+                if name.starts_with(prefix) {
+                    let receiver_arg = if prefix == "__vow_vec_" {
+                        vec_model_receiver_arg(name)
+                    } else if prefix == "__vow_string_" {
+                        string_model_receiver_arg(name)
+                    } else if prefix == "__vow_map_" {
+                        map_model_receiver_arg(name)
+                    } else {
+                        Some(0)
+                    };
+                    if let Some(arg_idx) = receiver_arg
+                        && let Some(arg) = inst.args.get(arg_idx)
+                    {
+                        vars.insert(arg.0);
+                    }
+                    if prefix == "__vow_string_"
+                        && let Some(arg_idx) = string_model_extra_arg(name)
+                        && let Some(arg) = inst.args.get(arg_idx)
+                    {
+                        vars.insert(arg.0);
+                    }
                 }
             }
         }
@@ -146,7 +268,10 @@ fn collect_option_vars(func: &Function) -> HashSet<u32> {
         for inst in &block.insts {
             if inst.opcode == Opcode::Call
                 && let InstData::CallExtern(ref name) = inst.data
-                && (name == "__vow_string_parse_i64_opt" || name == "__vow_string_parse_u64_opt")
+                && (name == "__vow_string_parse_i64_opt"
+                    || name == "__vow_string_parse_u64_opt"
+                    || name == "__vow_btreemap_insert"
+                    || name == "__vow_btreemap_get")
             {
                 vars.insert(inst.id.0);
             }
@@ -183,35 +308,68 @@ fn collect_option_vars(func: &Function) -> HashSet<u32> {
 // ---------------------------------------------------------------------------
 
 fn is_known_builtin(name: &str) -> bool {
+    if is_string_fresh_helper(name) {
+        return true;
+    }
+
     matches!(
         name,
         "__vow_vec_new"
+            | "__vow_vec_new_val"
+            | "__vow_vec_new_in_arena"
+            | "__vow_vec_new_val_in_arena"
             | "__vow_vec_push_val"
+            | "__vow_vec_push_in_arena"
+            | "__vow_vec_push_val_in_arena"
+            | "__vow_vec_reserve_in_arena"
             | "__vow_vec_get_val"
             | "__vow_vec_from_raw_parts_copy_val"
             | "__vow_vec_pin_to_root_val"
             | "__vow_vec_len"
             | "__vow_vec_pop"
             | "__vow_vec_set_val"
+            | "__vow_string_new"
+            | "__vow_string_new_in_arena"
+            | "__vow_string_literal"
             | "__vow_string_from_cstr"
+            | "__vow_string_from_cstr_in_arena"
+            | "__vow_string_clone"
+            | "__vow_string_clone_in_arena"
             | "__vow_string_from_raw_parts_copy"
             | "__vow_string_pin_to_root"
             | "__vow_string_len"
             | "__vow_string_push_str"
+            | "__vow_string_push_str_in_arena"
             | "__vow_string_push_byte"
+            | "__vow_string_push_byte_in_arena"
+            | "__vow_string_clear"
             | "__vow_string_byte_at"
             | "__vow_string_eq"
             | "__vow_string_contains"
+            | "__vow_string_matches_literal_at"
+            | "__vow_string_substr"
+            | "__vow_string_substr_in_arena"
             | "__vow_string_substring"
+            | "__vow_string_substring_in_arena"
+            | "__vow_string_from_i64"
+            | "__vow_string_from_i64_in_arena"
             | "__vow_string_parse_i64_opt"
             | "__vow_string_parse_u64_opt"
             | "__vow_string_print"
             | "__vow_map_new"
+            | "__vow_map_new_in_arena"
             | "__vow_map_len"
             | "__vow_map_insert"
+            | "__vow_map_insert_in_arena"
             | "__vow_map_get"
             | "__vow_map_contains"
             | "__vow_map_remove"
+            | "__vow_map_remove_in_arena"
+            | "__vow_btreemap_new"
+            | "__vow_btreemap_len"
+            | "__vow_btreemap_insert"
+            | "__vow_btreemap_get"
+            | "__vow_btreemap_contains"
     )
 }
 
@@ -242,8 +400,9 @@ pub fn is_modelable(
     }
 
     let vec_vars = collect_typed_vars(func, "__vow_vec_new", "__vow_vec_");
-    let string_vars = collect_typed_vars(func, "__vow_string_from_cstr", "__vow_string_");
+    let string_vars = collect_typed_vars(func, "__vow_string_new", "__vow_string_");
     let hashmap_vars = collect_typed_vars(func, "__vow_map_new", "__vow_map_");
+    let btreemap_vars = collect_typed_vars(func, "__vow_btreemap_new", "__vow_btreemap_");
     let option_vars = collect_option_vars(func);
 
     for block in &func.blocks {
@@ -350,7 +509,9 @@ pub fn is_modelable(
                 | Opcode::Return
                 | Opcode::Unreachable
                 | Opcode::Phi
-                | Opcode::Upsilon => true,
+                | Opcode::Upsilon
+                | Opcode::RegionOpen
+                | Opcode::RegionClose => true,
 
                 Opcode::Call => match &inst.data {
                     InstData::CallExtern(name) => is_known_builtin(name),
@@ -368,6 +529,7 @@ pub fn is_modelable(
                     vec_vars.contains(&iid)
                         || string_vars.contains(&iid)
                         || hashmap_vars.contains(&iid)
+                        || btreemap_vars.contains(&iid)
                         || option_vars.contains(&inst.args.first().map_or(u32::MAX, |a| a.0))
                 }
 
@@ -376,8 +538,6 @@ pub fn is_modelable(
                 | Opcode::Load
                 | Opcode::Store
                 | Opcode::RegionAlloc
-                | Opcode::RegionOpen
-                | Opcode::RegionClose
                 | Opcode::LinearConsume
                 | Opcode::LinearBorrow
                 | Opcode::FieldSet => false,
@@ -440,8 +600,6 @@ fn first_unsupported_opcode(
                 | Opcode::Load
                 | Opcode::Store
                 | Opcode::RegionAlloc
-                | Opcode::RegionOpen
-                | Opcode::RegionClose
                 | Opcode::LinearConsume
                 | Opcode::LinearBorrow
                 | Opcode::FieldSet => return Some(format!("{:?}", inst.opcode)),
@@ -533,9 +691,13 @@ fn emit_inst(
     vec_vars: &HashSet<u32>,
     string_vars: &HashSet<u32>,
     hashmap_vars: &HashSet<u32>,
+    btreemap_vars: &HashSet<u32>,
     option_vars: &HashSet<u32>,
     const_fns: &HashMap<FuncId, ConstantValue>,
     modelable_fns: &HashSet<FuncId>,
+    const_str_indices: &HashMap<u32, u32>,
+    eq_pairs: &[(u32, u32)],
+    inst_by_id: &HashMap<u32, &Inst>,
     module: &Module,
     limits: &VerifyLimits,
 ) {
@@ -768,6 +930,7 @@ fn emit_inst(
                 if vec_vars.contains(&val_id.0)
                     || string_vars.contains(&val_id.0)
                     || hashmap_vars.contains(&val_id.0)
+                    || btreemap_vars.contains(&val_id.0)
                     || option_vars.contains(&val_id.0)
                 {
                     out.push_str("  return 0; /* modelled type return */\n");
@@ -795,7 +958,10 @@ fn emit_inst(
         Opcode::Call if matches!(&inst.data, InstData::CallExtern(n) if n.starts_with("__vow_vec_")) => {
             if let InstData::CallExtern(ref name) = inst.data {
                 match name.as_str() {
-                    "__vow_vec_new" => {
+                    "__vow_vec_new"
+                    | "__vow_vec_new_val"
+                    | "__vow_vec_new_in_arena"
+                    | "__vow_vec_new_val_in_arena" => {
                         out.push_str(&format!("  v{id}.len = 0;\n"));
                     }
                     "__vow_vec_from_raw_parts_copy_val" => {
@@ -809,15 +975,29 @@ fn emit_inst(
                         let source = inst.args[0].0;
                         out.push_str(&format!("  v{id} = v{source};\n"));
                     }
-                    "__vow_vec_push_val" => {
-                        let vec = inst.args[0].0;
-                        let val = inst.args[1].0;
+                    "__vow_vec_push_val" | "__vow_vec_push_val_in_arena" => {
+                        let (vec_arg, val_arg) = if name == "__vow_vec_push_val_in_arena" {
+                            (1, 2)
+                        } else {
+                            (0, 1)
+                        };
+                        let vec = inst.args[vec_arg].0;
+                        let val = inst.args[val_arg].0;
                         let vec_max = limits.vec_max;
                         out.push_str(&format!(
                             "  __ESBMC_assert(v{vec}.len < {vec_max}, \"vec capacity\");\n\
                              \x20 v{vec}.data[v{vec}.len] = v{val};\n  v{vec}.len++;\n",
                         ));
                     }
+                    "__vow_vec_push_in_arena" => {
+                        let vec = inst.args[1].0;
+                        let vec_max = limits.vec_max;
+                        out.push_str(&format!(
+                            "  __ESBMC_assert(v{vec}.len < {vec_max}, \"vec capacity\");\n\
+                             \x20 v{vec}.data[v{vec}.len] = __VERIFIER_nondet_long();\n  v{vec}.len++;\n",
+                        ));
+                    }
+                    "__vow_vec_reserve_in_arena" => {}
                     "__vow_vec_get_val" => {
                         let vec = inst.args[0].0;
                         let idx = inst.args[1].0;
@@ -854,12 +1034,35 @@ fn emit_inst(
         Opcode::Call if matches!(&inst.data, InstData::CallExtern(n) if n.starts_with("__vow_string_")) => {
             if let InstData::CallExtern(ref name) = inst.data {
                 match name.as_str() {
-                    "__vow_string_from_cstr" => {
+                    "__vow_string_new" | "__vow_string_new_in_arena" => {
+                        let len_arg = if name == "__vow_string_new_in_arena" {
+                            2
+                        } else {
+                            1
+                        };
+                        let len = inst.args[len_arg].0;
                         let string_max = limits.string_max;
                         out.push_str(&format!(
-                            "  v{id}.len = __VERIFIER_nondet_long();\n\
-                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < {string_max});\n",
+                            "  __ESBMC_assume(v{len} >= 0 && v{len} < {string_max});\n  v{id}.len = v{len};\n"
                         ));
+                    }
+                    "__vow_string_from_cstr" | "__vow_string_from_cstr_in_arena" => {
+                        emit_nondet_string_len(id, limits.string_max, out);
+                    }
+                    "__vow_string_literal" => {
+                        let literal = inst
+                            .args
+                            .first()
+                            .and_then(|arg| const_str_indices.get(&arg.0))
+                            .and_then(|idx| module.strings.get(*idx as usize));
+                        if let Some(literal) = literal {
+                            out.push_str(&format!("  v{id}.len = {};\n", literal.len()));
+                            for (idx, byte) in literal.as_bytes().iter().enumerate() {
+                                out.push_str(&format!("  v{id}.data[{idx}] = (int8_t){byte};\n"));
+                            }
+                        } else {
+                            emit_nondet_string_len(id, limits.string_max, out);
+                        }
                     }
                     "__vow_string_from_raw_parts_copy" => {
                         let len = inst.args[1].0;
@@ -868,27 +1071,61 @@ fn emit_inst(
                             "  __ESBMC_assume(v{len} >= 0 && v{len} < {string_max});\n  v{id}.len = v{len};\n"
                         ));
                     }
-                    "__vow_string_pin_to_root" => {
-                        let source = inst.args[0].0;
+                    "__vow_string_clone"
+                    | "__vow_string_clone_in_arena"
+                    | "__vow_string_pin_to_root" => {
+                        let source_arg = if name == "__vow_string_clone_in_arena" {
+                            1
+                        } else {
+                            0
+                        };
+                        let source = inst.args[source_arg].0;
                         out.push_str(&format!("  v{id} = v{source};\n"));
                     }
                     "__vow_string_len" => {
                         let s = inst.args[0].0;
                         out.push_str(&format!("  v{id} = v{s}.len;\n"));
                     }
-                    "__vow_string_push_str" => {
-                        let dest = inst.args[0].0;
-                        let src = inst.args[1].0;
-                        out.push_str(&format!("  v{dest}.len += v{src}.len;\n"));
+                    "__vow_string_from_i64" | "__vow_string_from_i64_in_arena" => {
+                        emit_nondet_string_len(id, limits.string_max, out);
                     }
-                    "__vow_string_push_byte" => {
-                        let s = inst.args[0].0;
-                        let byte = inst.args[1].0;
+                    name if is_string_fresh_helper(name) => {
+                        emit_nondet_string_len(id, limits.string_max, out);
+                    }
+                    "__vow_string_push_str" | "__vow_string_push_str_in_arena" => {
+                        let (dest_arg, src_arg) = if name == "__vow_string_push_str_in_arena" {
+                            (1, 2)
+                        } else {
+                            (0, 1)
+                        };
+                        let dest = inst.args[dest_arg].0;
+                        let src = inst.args[src_arg].0;
+                        let string_max = limits.string_max;
+                        out.push_str(&format!(
+                            "  __ESBMC_assert(v{dest}.len + v{src}.len <= {string_max}, \"string capacity\");\n\
+                             \x20 v{dest}.len += v{src}.len;\n",
+                        ));
+                        emit_string_eq_invalidate(dest, eq_pairs, out);
+                    }
+                    "__vow_string_push_byte" | "__vow_string_push_byte_in_arena" => {
+                        let (s_arg, byte_arg) = if name == "__vow_string_push_byte_in_arena" {
+                            (1, 2)
+                        } else {
+                            (0, 1)
+                        };
+                        let s = inst.args[s_arg].0;
+                        let byte = inst.args[byte_arg].0;
                         let string_max = limits.string_max;
                         out.push_str(&format!(
                             "  __ESBMC_assert(v{s}.len < {string_max}, \"string capacity\");\n\
                              \x20 v{s}.data[v{s}.len] = (int8_t)v{byte};\n  v{s}.len++;\n",
                         ));
+                        emit_string_eq_invalidate(s, eq_pairs, out);
+                    }
+                    "__vow_string_clear" => {
+                        let s = inst.args[0].0;
+                        out.push_str(&format!("  v{s}.len = 0;\n"));
+                        emit_string_eq_invalidate(s, eq_pairs, out);
                     }
                     "__vow_string_byte_at" => {
                         let s = inst.args[0].0;
@@ -926,20 +1163,89 @@ fn emit_inst(
                              \x20     }}\n\
                              \x20     if (__match) {{ v{id} = 1; break; }}\n\
                              \x20   }}\n\
-                             \x20 }}\n"
+                            \x20 }}\n"
                         ));
                     }
-                    "__vow_string_substring" => {
+                    "__vow_string_matches_literal_at" => {
                         let s = inst.args[0].0;
-                        let start = inst.args[1].0;
-                        let end = inst.args[2].0;
+                        let pos = inst.args[1].0;
+                        let literal_ptr = inst.args[2].0;
+                        let literal = inst_by_id.get(&literal_ptr).and_then(|literal_inst| {
+                            if let InstData::ConstStr(idx) = &literal_inst.data {
+                                module.strings.get(*idx as usize)
+                            } else {
+                                None
+                            }
+                        });
+                        if let Some(literal) = literal {
+                            let bytes = literal.as_bytes();
+                            let len = bytes.len();
+                            out.push_str(&format!("  v{id} = 0;\n"));
+                            out.push_str(&format!(
+                                "  if (v{pos} >= 0 && v{pos} <= v{s}.len && {len}LL <= v{s}.len - v{pos}) {{\n"
+                            ));
+                            if bytes.is_empty() {
+                                out.push_str(&format!("    v{id} = 1;\n"));
+                            } else {
+                                out.push_str("    _Bool __match = 1;\n");
+                                for (idx, byte) in bytes.iter().enumerate() {
+                                    out.push_str(&format!(
+                                        "    if ((unsigned char)v{s}.data[v{pos} + {idx}] != {byte}) {{ __match = 0; }}\n"
+                                    ));
+                                }
+                                out.push_str(&format!("    v{id} = __match ? 1 : 0;\n"));
+                            }
+                            out.push_str("  }\n");
+                        } else {
+                            emit_unmodelled(inst, out);
+                        }
+                    }
+                    "__vow_string_substr" | "__vow_string_substr_in_arena" => {
+                        let (s_arg, start_arg, len_arg) = if name == "__vow_string_substr_in_arena"
+                        {
+                            (1, 2, 3)
+                        } else {
+                            (0, 1, 2)
+                        };
+                        let s = inst.args[s_arg].0;
+                        let start = inst.args[start_arg].0;
+                        let len = inst.args[len_arg].0;
                         let string_max = limits.string_max;
                         out.push_str(&format!(
-                            "  __ESBMC_assert(v{start} >= 0 && v{start} <= v{s}.len, \"substring start\");\n\
-                             \x20 __ESBMC_assert(v{end} >= v{start} && v{end} <= v{s}.len, \"substring end\");\n\
-                             \x20 v{id}.len = v{end} - v{start};\n\
+                            "  int64_t __substr_start_{id} = v{start};\n\
+                             \x20 if (__substr_start_{id} < 0) {{ __substr_start_{id} = 0; }}\n\
+                             \x20 if (__substr_start_{id} > v{s}.len) {{ __substr_start_{id} = v{s}.len; }}\n\
+                             \x20 int64_t __substr_len_{id} = v{len};\n\
+                             \x20 if (__substr_len_{id} < 0) {{ __substr_len_{id} = 0; }}\n\
+                             \x20 int64_t __substr_max_len_{id} = v{s}.len - __substr_start_{id};\n\
+                             \x20 if (__substr_len_{id} > __substr_max_len_{id}) {{ __substr_len_{id} = __substr_max_len_{id}; }}\n\
+                             \x20 v{id}.len = __substr_len_{id};\n\
                              \x20 for (int64_t __i = 0; __i < v{id}.len && __i < {string_max}; __i++) {{\n\
-                             \x20   v{id}.data[__i] = v{s}.data[v{start} + __i];\n\
+                             \x20   v{id}.data[__i] = v{s}.data[__substr_start_{id} + __i];\n\
+                             \x20 }}\n",
+                        ));
+                    }
+                    "__vow_string_substring" | "__vow_string_substring_in_arena" => {
+                        let (s_arg, start_arg, end_arg) =
+                            if name == "__vow_string_substring_in_arena" {
+                                (1, 2, 3)
+                            } else {
+                                (0, 1, 2)
+                            };
+                        let s = inst.args[s_arg].0;
+                        let start = inst.args[start_arg].0;
+                        let end = inst.args[end_arg].0;
+                        let string_max = limits.string_max;
+                        out.push_str(&format!(
+                            "  int64_t __substring_start_{id} = v{start};\n\
+                             \x20 if (__substring_start_{id} < 0) {{ __substring_start_{id} = 0; }}\n\
+                             \x20 if (__substring_start_{id} > v{s}.len) {{ __substring_start_{id} = v{s}.len; }}\n\
+                             \x20 int64_t __substring_end_{id} = v{end};\n\
+                             \x20 if (__substring_end_{id} < __substring_start_{id}) {{ __substring_end_{id} = __substring_start_{id}; }}\n\
+                             \x20 if (__substring_end_{id} > v{s}.len) {{ __substring_end_{id} = v{s}.len; }}\n\
+                             \x20 v{id}.len = __substring_end_{id} - __substring_start_{id};\n\
+                             \x20 for (int64_t __i = 0; __i < v{id}.len && __i < {string_max}; __i++) {{\n\
+                             \x20   v{id}.data[__i] = v{s}.data[__substring_start_{id} + __i];\n\
                              \x20 }}\n",
                         ));
                     }
@@ -961,20 +1267,35 @@ fn emit_inst(
         }
 
         // HashMap operations — modeled as abstract struct with len + keys/vals arrays
-        Opcode::Call if matches!(&inst.data, InstData::CallExtern(n) if n.starts_with("__vow_map_")) => {
+        Opcode::Call if matches!(&inst.data, InstData::CallExtern(n) if n.starts_with("__vow_map_")) =>
+        {
             if let InstData::CallExtern(ref name) = inst.data {
+                // _in_arena variants share their bodies with the root forms;
+                // they accept an extra leading arena pointer that the verifier
+                // C model ignores (arenas are opaque).
+                let arena_offset = if matches!(
+                    name.as_str(),
+                    "__vow_map_new_in_arena"
+                        | "__vow_map_insert_in_arena"
+                        | "__vow_map_remove_in_arena"
+                ) {
+                    1
+                } else {
+                    0
+                };
+                let arg = |i: usize| inst.args[arena_offset + i].0;
                 match name.as_str() {
-                    "__vow_map_new" => {
+                    "__vow_map_new" | "__vow_map_new_in_arena" => {
                         out.push_str(&format!("  v{id}.len = 0;\n"));
                     }
                     "__vow_map_len" => {
-                        let m = inst.args[0].0;
+                        let m = arg(0);
                         out.push_str(&format!("  v{id} = v{m}.len;\n"));
                     }
-                    "__vow_map_insert" => {
-                        let m = inst.args[0].0;
-                        let k = inst.args[1].0;
-                        let v = inst.args[2].0;
+                    "__vow_map_insert" | "__vow_map_insert_in_arena" => {
+                        let m = arg(0);
+                        let k = arg(1);
+                        let v = arg(2);
                         let hashmap_max = limits.hashmap_max;
                         out.push_str(&format!(
                             "  {{\n\
@@ -990,8 +1311,8 @@ fn emit_inst(
                         ));
                     }
                     "__vow_map_get" => {
-                        let m = inst.args[0].0;
-                        let k = inst.args[1].0;
+                        let m = arg(0);
+                        let k = arg(1);
                         out.push_str(&format!(
                             "  v{id} = 0;\n\
                              \x20 for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
@@ -1000,8 +1321,8 @@ fn emit_inst(
                         ));
                     }
                     "__vow_map_contains" => {
-                        let m = inst.args[0].0;
-                        let k = inst.args[1].0;
+                        let m = arg(0);
+                        let k = arg(1);
                         out.push_str(&format!(
                             "  v{id} = 0;\n\
                              \x20 for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
@@ -1009,9 +1330,9 @@ fn emit_inst(
                              \x20 }}\n"
                         ));
                     }
-                    "__vow_map_remove" => {
-                        let m = inst.args[0].0;
-                        let k = inst.args[1].0;
+                    "__vow_map_remove" | "__vow_map_remove_in_arena" => {
+                        let m = arg(0);
+                        let k = arg(1);
                         out.push_str(&format!(
                             "  for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
                              \x20   if (v{m}.keys[__i] == v{k}) {{\n\
@@ -1020,6 +1341,77 @@ fn emit_inst(
                              \x20     v{m}.len--;\n\
                              \x20     break;\n\
                              \x20   }}\n\
+                             \x20 }}\n"
+                        ));
+                    }
+                    _ => {
+                        emit_unmodelled(inst, out);
+                    }
+                }
+            }
+        }
+
+        // BTreeMap ops — linear-scan C model (sorted early-exit, cheaper to unwind than binary search); insert/get return Option.
+        Opcode::Call if matches!(&inst.data, InstData::CallExtern(n) if n.starts_with("__vow_btreemap_")) =>
+        {
+            if let InstData::CallExtern(ref name) = inst.data {
+                match name.as_str() {
+                    "__vow_btreemap_new" => {
+                        out.push_str(&format!("  v{id}.len = 0;\n"));
+                    }
+                    "__vow_btreemap_len" => {
+                        let m = inst.args[0].0;
+                        out.push_str(&format!("  v{id} = v{m}.len;\n"));
+                    }
+                    "__vow_btreemap_insert" => {
+                        let m = inst.args[0].0;
+                        let k = inst.args[1].0;
+                        let v = inst.args[2].0;
+                        let btreemap_max = limits.btreemap_max;
+                        // Sorted-insert: replace value if key found (return Some(prev)), else shift+insert (return None).
+                        out.push_str(&format!(
+                            "  v{id}.tag = 0; v{id}.payload = 0;\n\
+                             \x20 {{\n\
+                             \x20   _Bool __found = 0;\n\
+                             \x20   int64_t __pos = v{m}.len;\n\
+                             \x20   for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
+                             \x20     if (v{m}.keys[__i] == v{k}) {{\n\
+                             \x20       v{id}.tag = 1; v{id}.payload = v{m}.vals[__i];\n\
+                             \x20       v{m}.vals[__i] = v{v};\n\
+                             \x20       __found = 1; break;\n\
+                             \x20     }}\n\
+                             \x20     if (v{m}.keys[__i] > v{k}) {{ __pos = __i; break; }}\n\
+                             \x20   }}\n\
+                             \x20   if (!__found) {{\n\
+                             \x20     __ESBMC_assert(v{m}.len < {btreemap_max}, \"btreemap capacity\");\n\
+                             \x20     for (int64_t __j = v{m}.len; __j > __pos; __j--) {{\n\
+                             \x20       v{m}.keys[__j] = v{m}.keys[__j - 1];\n\
+                             \x20       v{m}.vals[__j] = v{m}.vals[__j - 1];\n\
+                             \x20     }}\n\
+                             \x20     v{m}.keys[__pos] = v{k}; v{m}.vals[__pos] = v{v}; v{m}.len++;\n\
+                             \x20   }}\n\
+                             \x20 }}\n"
+                        ));
+                    }
+                    "__vow_btreemap_get" => {
+                        let m = inst.args[0].0;
+                        let k = inst.args[1].0;
+                        out.push_str(&format!(
+                            "  v{id}.tag = 0; v{id}.payload = 0;\n\
+                             \x20 for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
+                             \x20   if (v{m}.keys[__i] == v{k}) {{ v{id}.tag = 1; v{id}.payload = v{m}.vals[__i]; break; }}\n\
+                             \x20   if (v{m}.keys[__i] > v{k}) {{ break; }}\n\
+                             \x20 }}\n"
+                        ));
+                    }
+                    "__vow_btreemap_contains" => {
+                        let m = inst.args[0].0;
+                        let k = inst.args[1].0;
+                        out.push_str(&format!(
+                            "  v{id} = 0;\n\
+                             \x20 for (int64_t __i = 0; __i < v{m}.len; __i++) {{\n\
+                             \x20   if (v{m}.keys[__i] == v{k}) {{ v{id} = 1; break; }}\n\
+                             \x20   if (v{m}.keys[__i] > v{k}) {{ break; }}\n\
                              \x20 }}\n"
                         ));
                     }
@@ -1072,13 +1464,15 @@ fn emit_inst(
             }
         }
 
+        Opcode::RegionOpen | Opcode::RegionClose => {
+            out.push_str("  /* verifier no-op: region scope marker */\n");
+        }
+
         // Other calls, memory, region/linear/field ops — not yet supported for verification
         Opcode::Call
         | Opcode::Load
         | Opcode::Store
         | Opcode::RegionAlloc
-        | Opcode::RegionOpen
-        | Opcode::RegionClose
         | Opcode::LinearConsume
         | Opcode::LinearBorrow
         | Opcode::FieldSet => {
@@ -1102,6 +1496,15 @@ fn emit_inst(
                 out.push_str(&format!(
                     "  /* FieldGet -> hashmap */ v{id}.len = __VERIFIER_nondet_long();\n\
                      \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {hashmap_max});\n"
+                ));
+            } else if btreemap_vars.contains(&id) {
+                let btreemap_max = limits.btreemap_max;
+                // Sorted-keys assume: get/contains/insert C model requires ascending-key state.
+                out.push_str(&format!(
+                    "  /* FieldGet -> btreemap */ v{id}.len = __VERIFIER_nondet_long();\n\
+                     \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {btreemap_max});\n\
+                     \x20 for (int64_t __si = 0; __si + 1 < v{id}.len; __si++)\n\
+                     \x20   __ESBMC_assume(v{id}.keys[__si] < v{id}.keys[__si + 1]);\n"
                 ));
             } else if let Some(&src_id) = inst.args.first() {
                 if option_vars.contains(&src_id.0) {
@@ -1142,6 +1545,53 @@ fn emit_unmodelled(inst: &Inst, out: &mut String) {
             c_nondet_suffix(inst.ty)
         ));
     }
+}
+
+/// Collect every unordered (lo, hi) operand pair appearing as arguments to
+/// `__vow_string_eq`, in IR-traversal order with linear deduplication. The
+/// caller emits one shared `_Bool __str_eq_<lo>_<hi>` per pair, and re-samples
+/// it whenever a modeled mutation touches `lo` or `hi`.
+fn compute_string_eq_pairs(func: &Function) -> Vec<(u32, u32)> {
+    let mut eq_pairs: Vec<(u32, u32)> = Vec::new();
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if inst.opcode == Opcode::Call
+                && let InstData::CallExtern(ref name) = inst.data
+                && name == "__vow_string_eq"
+                && inst.args.len() == 2
+            {
+                let a = inst.args[0].0;
+                let b = inst.args[1].0;
+                if a != b {
+                    let pair = (a.min(b), a.max(b));
+                    if !eq_pairs.contains(&pair) {
+                        eq_pairs.push(pair);
+                    }
+                }
+            }
+        }
+    }
+    eq_pairs
+}
+
+/// Emit `__str_eq_<lo>_<hi> = __VERIFIER_nondet_bool();` for every cached pair
+/// involving `operand`. Called immediately after each modeled string mutation
+/// so the verifier cannot prove a stale equality across a mutation.
+fn emit_string_eq_invalidate(operand: u32, eq_pairs: &[(u32, u32)], out: &mut String) {
+    for &(lo, hi) in eq_pairs {
+        if lo == operand || hi == operand {
+            out.push_str(&format!(
+                "  __str_eq_{lo}_{hi} = __VERIFIER_nondet_bool();\n"
+            ));
+        }
+    }
+}
+
+fn emit_nondet_string_len(id: u32, string_max: usize, out: &mut String) {
+    out.push_str(&format!(
+        "  v{id}.len = __VERIFIER_nondet_long();\n\
+         \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len < {string_max});\n",
+    ));
 }
 
 /// Sentinel `vow_id` reported when ESBMC fails on an
@@ -1219,9 +1669,18 @@ pub fn emit_c_function_full(
 ) -> String {
     let mut out = String::new();
     let vec_vars = collect_typed_vars(func, "__vow_vec_new", "__vow_vec_");
-    let string_vars = collect_typed_vars(func, "__vow_string_from_cstr", "__vow_string_");
+    let string_vars = collect_typed_vars(func, "__vow_string_new", "__vow_string_");
     let hashmap_vars = collect_typed_vars(func, "__vow_map_new", "__vow_map_");
+    let btreemap_vars = collect_typed_vars(func, "__vow_btreemap_new", "__vow_btreemap_");
     let option_vars = collect_option_vars(func);
+    let mut const_str_indices: HashMap<u32, u32> = HashMap::new();
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if let InstData::ConstStr(idx) = inst.data {
+                const_str_indices.insert(inst.id.0, idx);
+            }
+        }
+    }
 
     // Return type (use int64_t for Ptr since structs are opaque in verification)
     let ret_c = match func.return_ty {
@@ -1289,8 +1748,15 @@ pub fn emit_c_function_full(
                             "  __vow_hashmap_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
                              \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {hashmap_max});\n"
                         ));
-                    } else if option_vars.contains(&id) {
-                        out.push_str(&format!("  __vow_option_t v{};\n  v{}.tag = 0;\n", id, id));
+                    } else if btreemap_vars.contains(&id) {
+                        let btreemap_max = limits.btreemap_max;
+                        // Sorted-keys assume: get/contains/insert C model requires ascending-key state.
+                        out.push_str(&format!(
+                            "  __vow_btreemap_t v{id};\n  v{id}.len = __VERIFIER_nondet_long();\n\
+                             \x20 __ESBMC_assume(v{id}.len >= 0 && v{id}.len <= {btreemap_max});\n\
+                             \x20 for (int64_t __si = 0; __si + 1 < v{id}.len; __si++)\n\
+                             \x20   __ESBMC_assume(v{id}.keys[__si] < v{id}.keys[__si + 1]);\n"
+                        ));
                     } else {
                         let c_ty = match inst.ty {
                             Ty::Ptr | Ty::LinearPtr => "int64_t",
@@ -1330,6 +1796,8 @@ pub fn emit_c_function_full(
                 out.push_str(&format!("  __vow_string_t v{};\n", id));
             } else if hashmap_vars.contains(&id) {
                 out.push_str(&format!("  __vow_hashmap_t v{};\n", id));
+            } else if btreemap_vars.contains(&id) {
+                out.push_str(&format!("  __vow_btreemap_t v{};\n", id));
             } else if option_vars.contains(&id) {
                 out.push_str(&format!("  __vow_option_t v{};\n", id));
             } else {
@@ -1359,7 +1827,20 @@ pub fn emit_c_function_full(
         }
         ups_sources.sort();
         for src in ups_sources {
-            out.push_str(&format!("  int64_t __ups_{};\n", src));
+            // Upsilon temps must share the source's struct type; struct-to-int64 assignment corrupts the payload.
+            if option_vars.contains(&src) {
+                out.push_str(&format!("  __vow_option_t __ups_{};\n", src));
+            } else if vec_vars.contains(&src) {
+                out.push_str(&format!("  __vow_vec_t __ups_{};\n", src));
+            } else if string_vars.contains(&src) {
+                out.push_str(&format!("  __vow_string_t __ups_{};\n", src));
+            } else if hashmap_vars.contains(&src) {
+                out.push_str(&format!("  __vow_hashmap_t __ups_{};\n", src));
+            } else if btreemap_vars.contains(&src) {
+                out.push_str(&format!("  __vow_btreemap_t __ups_{};\n", src));
+            } else {
+                out.push_str(&format!("  int64_t __ups_{};\n", src));
+            }
         }
     }
 
@@ -1367,32 +1848,18 @@ pub fn emit_c_function_full(
     // __VERIFIER_nondet_bool() on every call would let ESBMC pick different
     // values for the same (a,b) pair, breaking determinism (e.g. body proves
     // `a.eq(b)` then `ensures: a.eq(b)` fails). Declare one shared bool per
-    // unordered pair (min, max) and reuse it at every call site.
-    {
-        let mut eq_pairs: Vec<(u32, u32)> = Vec::new();
-        for block in &func.blocks {
-            for inst in &block.insts {
-                if inst.opcode == Opcode::Call
-                    && let InstData::CallExtern(ref name) = inst.data
-                    && name == "__vow_string_eq"
-                    && inst.args.len() == 2
-                {
-                    let a = inst.args[0].0;
-                    let b = inst.args[1].0;
-                    if a != b {
-                        let pair = (a.min(b), a.max(b));
-                        if !eq_pairs.contains(&pair) {
-                            eq_pairs.push(pair);
-                        }
-                    }
-                }
-            }
-        }
-        eq_pairs.sort();
-        for (lo, hi) in eq_pairs {
-            out.push_str(&format!(
-                "  _Bool __str_eq_{lo}_{hi} = __VERIFIER_nondet_bool();\n"
-            ));
+    // unordered pair (min, max) and reuse it at every call site, then
+    // re-sample after each modeled mutation on either operand.
+    let eq_pairs = compute_string_eq_pairs(func);
+    for &(lo, hi) in &eq_pairs {
+        out.push_str(&format!(
+            "  _Bool __str_eq_{lo}_{hi} = __VERIFIER_nondet_bool();\n"
+        ));
+    }
+    let mut inst_by_id: HashMap<u32, &Inst> = HashMap::new();
+    for block in &func.blocks {
+        for inst in &block.insts {
+            inst_by_id.insert(inst.id.0, inst);
         }
     }
 
@@ -1440,9 +1907,13 @@ pub fn emit_c_function_full(
                 &vec_vars,
                 &string_vars,
                 &hashmap_vars,
+                &btreemap_vars,
                 &option_vars,
                 const_fns,
                 modelable_fns,
+                &const_str_indices,
+                &eq_pairs,
+                &inst_by_id,
                 module,
                 limits,
             );
@@ -1463,9 +1934,13 @@ pub fn emit_c_function_full(
                 &vec_vars,
                 &string_vars,
                 &hashmap_vars,
+                &btreemap_vars,
                 &option_vars,
                 const_fns,
                 modelable_fns,
+                &const_str_indices,
+                &eq_pairs,
+                &inst_by_id,
                 module,
                 limits,
             );
@@ -1516,6 +1991,7 @@ fn emit_c_preamble(out: &mut String, shifts: &ShiftNeeds, limits: &VerifyLimits)
     let vec_max = limits.vec_max;
     let string_max = limits.string_max;
     let hashmap_max = limits.hashmap_max;
+    let btreemap_max = limits.btreemap_max;
     out.push_str(&format!(
         "typedef struct {{ int64_t len; int64_t data[{vec_max}]; }} __vow_vec_t;\n",
     ));
@@ -1524,6 +2000,9 @@ fn emit_c_preamble(out: &mut String, shifts: &ShiftNeeds, limits: &VerifyLimits)
     ));
     out.push_str(&format!(
         "typedef struct {{ int64_t len; int64_t keys[{hashmap_max}]; int64_t vals[{hashmap_max}]; }} __vow_hashmap_t;\n",
+    ));
+    out.push_str(&format!(
+        "typedef struct {{ int64_t len; int64_t keys[{btreemap_max}]; int64_t vals[{btreemap_max}]; }} __vow_btreemap_t;\n",
     ));
     out.push_str("typedef struct { int64_t tag; int64_t payload; } __vow_option_t;\n");
     if shifts.shl_i64 {
@@ -1562,6 +2041,14 @@ fn emit_c_preamble(out: &mut String, shifts: &ShiftNeeds, limits: &VerifyLimits)
     if shifts.shl_i64 || shifts.shr_i64 || shifts.shl_u64 || shifts.shr_u64 {
         out.push('\n');
     }
+}
+
+fn limits_with_literal_string_capacity(module: &Module, limits: &VerifyLimits) -> VerifyLimits {
+    let mut effective = *limits;
+    if let Some(max_literal_len) = module.strings.iter().map(|s| s.len()).max() {
+        effective.string_max = effective.string_max.max(max_literal_len);
+    }
+    effective
 }
 
 fn emit_forward_declaration(func: &Function, out: &mut String) {
@@ -1617,6 +2104,7 @@ pub fn emit_c_module_with_callees(
     limits: &VerifyLimits,
 ) -> String {
     let mut out = String::new();
+    let effective_limits = limits_with_literal_string_capacity(module, limits);
 
     // Collect all functions (target + callees) for shift scanning
     let mut all_funcs: Vec<&Function> = vec![target];
@@ -1626,7 +2114,7 @@ pub fn emit_c_module_with_callees(
         }
     }
     let shifts = scan_shift_needs(&all_funcs);
-    emit_c_preamble(&mut out, &shifts, limits);
+    emit_c_preamble(&mut out, &shifts, &effective_limits);
 
     // Forward declarations for all callees
     for fid in callee_ids {
@@ -1646,7 +2134,7 @@ pub fn emit_c_module_with_callees(
                 const_fns,
                 modelable_fns,
                 module,
-                limits,
+                &effective_limits,
             ));
             out.push('\n');
         }
@@ -1658,7 +2146,7 @@ pub fn emit_c_module_with_callees(
         const_fns,
         modelable_fns,
         module,
-        limits,
+        &effective_limits,
     ));
     out.push('\n');
     out
@@ -1728,6 +2216,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let nondet_reserved = Function {
             id: FuncId(1),
@@ -1746,6 +2235,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let assume_reserved = Function {
             id: FuncId(2),
@@ -1764,6 +2254,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let safe = Function {
             id: FuncId(3),
@@ -1782,6 +2273,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let module = Module {
             name: "test".to_string(),
@@ -1824,11 +2316,73 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("int64_t add("), "signature: {c}");
         assert!(c.contains("v2 = v0 + v1"), "add: {c}");
         assert!(c.contains("return v2"), "return: {c}");
+    }
+
+    #[test]
+    fn emit_string_matches_literal_at_uses_static_bytes() {
+        let func = Function {
+            id: FuncId(0),
+            name: "matches_literal".to_string(),
+            params: vec![Ty::Ptr, Ty::I64],
+            param_names: vec![],
+            return_ty: Ty::I64,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::GetArg, Ty::I64, vec![], InstData::ArgIndex(1)),
+                    inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                    inst(3, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(3)),
+                    inst(
+                        4,
+                        Opcode::Call,
+                        Ty::I64,
+                        vec![0, 1, 2, 3],
+                        InstData::CallExtern("__vow_string_matches_literal_at".to_string()),
+                    ),
+                    inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        let module = Module {
+            name: "test".to_string(),
+            functions: vec![func.clone()],
+            strings: vec!["a\0b".to_string()],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+
+        let c = emit_c_function_full(
+            &func,
+            &HashMap::new(),
+            &HashSet::new(),
+            &module,
+            &VerifyLimits::default(),
+        );
+
+        assert!(
+            c.contains("v4 = 0;") && !c.contains("v4 = __VERIFIER_nondet_long"),
+            "literal helper should be modeled deterministically: {c}"
+        );
+        assert!(c.contains("3LL <= v0.len - v1"), "byte length guard: {c}");
+        assert!(
+            c.contains("(unsigned char)v0.data[v1 + 0] != 97")
+                && c.contains("(unsigned char)v0.data[v1 + 1] != 0")
+                && c.contains("(unsigned char)v0.data[v1 + 2] != 98"),
+            "literal bytes should be embedded as constants: {c}"
+        );
     }
 
     #[test]
@@ -1876,6 +2430,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("__ESBMC_assume(v3)"), "requires: {c}");
@@ -1921,6 +2476,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         }
     }
 
@@ -2295,6 +2851,7 @@ mod tests {
             ],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -2492,6 +3049,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("__ESBMC_assert(v0"), "ensures: {c}");
@@ -2584,6 +3142,123 @@ mod tests {
         );
         assert!(c.contains("v2.data[v2.len] = v3;"), "push store: {c}");
         assert!(c.contains("v2.len++;"), "push increment: {c}");
+    }
+
+    #[test]
+    fn emit_explicit_arena_vec_push_val() {
+        use vow_ir::InstId;
+        let func = make_func(
+            "push_one_in_arena",
+            vec![],
+            Ty::Ptr,
+            vec![
+                inst(
+                    0,
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    vec![],
+                    InstData::ConstI64(1000),
+                ),
+                inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0), InstId(1), InstId(2)],
+                    data: InstData::CallExtern("__vow_vec_new_in_arena".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(42)),
+                Inst {
+                    id: InstId(5),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(0), InstId(3), InstId(4)],
+                    data: InstData::CallExtern("__vow_vec_push_val_in_arena".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(6, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(c.contains("__vow_vec_t v3;"), "arena vec decl: {c}");
+        assert!(
+            !c.contains("__vow_vec_t v0;"),
+            "arena pointer must not be tracked as vec: {c}"
+        );
+        assert!(c.contains("v3.len = 0;"), "arena vec init: {c}");
+        assert!(
+            c.contains("v3.data[v3.len] = v4;"),
+            "arena push value store: {c}"
+        );
+        assert!(c.contains("v3.len++;"), "arena push increment: {c}");
+        assert!(
+            !c.contains("not modelled"),
+            "arena vec calls should be modelled: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_explicit_arena_vec_reserve_and_generic_push() {
+        use vow_ir::InstId;
+        let func = make_func(
+            "reserve_and_push_in_arena",
+            vec![],
+            Ty::Ptr,
+            vec![
+                inst(
+                    0,
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    vec![],
+                    InstData::ConstI64(1000),
+                ),
+                inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0)],
+                    data: InstData::CallExtern("__vow_vec_new_val_in_arena".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(4, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                Inst {
+                    id: InstId(5),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(0), InstId(3), InstId(4), InstId(1), InstId(2)],
+                    data: InstData::CallExtern("__vow_vec_reserve_in_arena".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(6),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(0), InstId(3), InstId(4), InstId(1), InstId(2)],
+                    data: InstData::CallExtern("__vow_vec_push_in_arena".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(7, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            c.contains("v3.data[v3.len] = __VERIFIER_nondet_long();"),
+            "generic arena push should over-approximate element value: {c}"
+        );
+        assert!(c.contains("v3.len++;"), "generic arena push increment: {c}");
+        assert!(
+            !c.contains("not modelled"),
+            "reserve/generic arena push should be modelled: {c}"
+        );
     }
 
     #[test]
@@ -2788,6 +3463,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("__vow_vec_t v0;"), "phi uses vec type: {c}");
@@ -2874,6 +3550,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&str_func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -2916,6 +3593,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&vec_func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -2951,6 +3629,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&map_func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -2959,6 +3638,377 @@ mod tests {
         );
         assert!(!c.contains("v0.keys = "), "no keys assignment: {c}");
         assert!(!c.contains("v0.vals = "), "no vals assignment: {c}");
+    }
+
+    #[test]
+    fn emit_string_substring_marks_parameter_receiver_as_string() {
+        use vow_ir::InstId;
+        let func = Function {
+            id: FuncId(0),
+            name: "slice_param".to_string(),
+            params: vec![Ty::Ptr],
+            param_names: vec!["s".to_string()],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                    Inst {
+                        id: InstId(3),
+                        opcode: Opcode::Call,
+                        ty: Ty::Ptr,
+                        args: vec![InstId(0), InstId(1), InstId(2)],
+                        data: InstData::CallExtern("__vow_string_substring".to_string()),
+                        origin: sp(),
+                        region: RegionId::Root,
+                    },
+                    inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            c.contains("__vow_string_t v0;"),
+            "substring source receiver must be emitted as a String model value: {c}"
+        );
+        assert!(
+            !c.contains("int64_t v0;"),
+            "substring source receiver must not be emitted as scalar int64_t: {c}"
+        );
+        assert!(
+            c.contains("v3.len = __substring_end_3 - __substring_start_3"),
+            "substring result model should still be emitted: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_string_substr_in_arena_marks_shifted_receiver_as_string() {
+        use vow_ir::InstId;
+        let func = Function {
+            id: FuncId(0),
+            name: "arena_slice_param".to_string(),
+            params: vec![Ty::Ptr],
+            param_names: vec!["s".to_string()],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(3, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(1)),
+                    Inst {
+                        id: InstId(4),
+                        opcode: Opcode::Call,
+                        ty: Ty::Ptr,
+                        args: vec![InstId(0), InstId(1), InstId(2), InstId(3)],
+                        data: InstData::CallExtern("__vow_string_substr_in_arena".to_string()),
+                        origin: sp(),
+                        region: RegionId::Root,
+                    },
+                    inst(5, Opcode::Return, Ty::Unit, vec![4], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            c.contains("__vow_string_t v1;"),
+            "arena substr source receiver must be emitted as a String model value: {c}"
+        );
+        assert!(
+            !c.contains("int64_t v1;"),
+            "arena substr source receiver must not be emitted as scalar int64_t: {c}"
+        );
+        assert!(
+            c.contains("v4.len = __substr_len_4"),
+            "substr result model should still be emitted: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_string_substr_models_runtime_clamping() {
+        use vow_ir::InstId;
+        let func = Function {
+            id: FuncId(0),
+            name: "substr_clamp".to_string(),
+            params: vec![Ty::Ptr],
+            param_names: vec!["s".to_string()],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(-1)),
+                    inst(
+                        2,
+                        Opcode::ConstI64,
+                        Ty::I64,
+                        vec![],
+                        InstData::ConstI64(999),
+                    ),
+                    Inst {
+                        id: InstId(3),
+                        opcode: Opcode::Call,
+                        ty: Ty::Ptr,
+                        args: vec![InstId(0), InstId(1), InstId(2)],
+                        data: InstData::CallExtern("__vow_string_substr".to_string()),
+                        origin: sp(),
+                        region: RegionId::Root,
+                    },
+                    inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            !c.contains("\"substr start\"") && !c.contains("\"substr len\""),
+            "substr model should not assert inputs the runtime clamps: {c}"
+        );
+        assert!(
+            c.contains("__substr_start_3") && c.contains("__substr_len_3"),
+            "substr model should introduce clamped start/len temporaries: {c}"
+        );
+        assert!(
+            c.contains("v3.data[__i] = v0.data[__substr_start_3 + __i];"),
+            "substr copy should index with the clamped start: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_string_substring_models_runtime_clamping() {
+        use vow_ir::InstId;
+        let func = Function {
+            id: FuncId(0),
+            name: "substring_clamp".to_string(),
+            params: vec![Ty::Ptr],
+            param_names: vec!["s".to_string()],
+            return_ty: Ty::Ptr,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(-5)),
+                    inst(
+                        2,
+                        Opcode::ConstI64,
+                        Ty::I64,
+                        vec![],
+                        InstData::ConstI64(999),
+                    ),
+                    Inst {
+                        id: InstId(3),
+                        opcode: Opcode::Call,
+                        ty: Ty::Ptr,
+                        args: vec![InstId(0), InstId(1), InstId(2)],
+                        data: InstData::CallExtern("__vow_string_substring".to_string()),
+                        origin: sp(),
+                        region: RegionId::Root,
+                    },
+                    inst(4, Opcode::Return, Ty::Unit, vec![3], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary::default(),
+            source_file: String::new(),
+        };
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(
+            !c.contains("\"substring start\"") && !c.contains("\"substring end\""),
+            "substring model should not assert inputs the runtime clamps: {c}"
+        );
+        assert!(
+            c.contains("__substring_start_3") && c.contains("__substring_end_3"),
+            "substring model should introduce clamped start/end temporaries: {c}"
+        );
+        assert!(
+            c.contains("v3.data[__i] = v0.data[__substring_start_3 + __i];"),
+            "substring copy should index with the clamped start: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_non_expanding_string_helpers_are_modelable() {
+        use vow_ir::InstId;
+
+        let cases = [
+            ("__vow_string_trim", 1),
+            ("__vow_string_trim_in_arena", 2),
+            ("__vow_string_to_upper", 1),
+            ("__vow_string_to_upper_in_arena", 2),
+            ("__vow_string_to_lower", 1),
+            ("__vow_string_to_lower_in_arena", 2),
+        ];
+
+        for (idx, (name, argc)) in cases.iter().enumerate() {
+            let call_id = 20 + idx as u32;
+            let args: Vec<InstId> = (0..*argc).map(|i| InstId(i as u32)).collect();
+            let mut insts = Vec::new();
+            for i in 0..*argc {
+                insts.push(inst(
+                    i as u32,
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    vec![],
+                    InstData::ConstI64(0),
+                ));
+            }
+            insts.push(Inst {
+                id: InstId(call_id),
+                opcode: Opcode::Call,
+                ty: Ty::Ptr,
+                args,
+                data: InstData::CallExtern((*name).to_string()),
+                origin: sp(),
+                region: RegionId::Root,
+            });
+            insts.push(inst(
+                call_id + 1,
+                Opcode::Return,
+                Ty::Unit,
+                vec![call_id],
+                InstData::None,
+            ));
+
+            let func = Function {
+                id: FuncId(idx as u32),
+                name: format!("helper_{idx}"),
+                params: vec![],
+                param_names: vec![],
+                return_ty: Ty::Ptr,
+                effects: vec![],
+                vows: vec![],
+                blocks: vec![BasicBlock {
+                    id: BlockId(0),
+                    insts,
+                }],
+                local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
+                source_file: String::new(),
+            };
+            let module = Module {
+                name: "test".to_string(),
+                functions: vec![func.clone()],
+                strings: vec![],
+                struct_layouts: vec![],
+                enum_layouts: vec![],
+                warnings: vec![],
+            };
+            assert_eq!(
+                non_modelable_reason(&func, &module, &HashMap::new()),
+                None,
+                "{name} should be modelable"
+            );
+
+            let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+            assert!(
+                !c.contains("unsupported opcode in verifier model"),
+                "{name} should not fall through to unsupported: {c}"
+            );
+            assert!(
+                c.contains(&format!("__vow_string_t v{call_id};")),
+                "{name} result should use the String model: {c}"
+            );
+            assert!(
+                c.contains(&format!(
+                    "__ESBMC_assume(v{call_id}.len >= 0 && v{call_id}.len < 256)"
+                )),
+                "{name} result length should be bounded by string_max: {c}"
+            );
+        }
+    }
+
+    #[test]
+    fn emit_expanding_string_helpers_are_not_modelable() {
+        use vow_ir::InstId;
+
+        let cases = [
+            ("__vow_string_replace", 3),
+            ("__vow_string_replace_in_arena", 4),
+            ("__vow_string_join", 2),
+            ("__vow_string_join_in_arena", 3),
+            ("__vow_string_split", 2),
+            ("__vow_string_split_in_arena", 3),
+        ];
+
+        for (idx, (name, argc)) in cases.iter().enumerate() {
+            let call_id = 40 + idx as u32;
+            let args: Vec<InstId> = (0..*argc).map(|i| InstId(i as u32)).collect();
+            let mut insts = Vec::new();
+            for i in 0..*argc {
+                insts.push(inst(
+                    i as u32,
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    vec![],
+                    InstData::ConstI64(0),
+                ));
+            }
+            insts.push(Inst {
+                id: InstId(call_id),
+                opcode: Opcode::Call,
+                ty: Ty::Ptr,
+                args,
+                data: InstData::CallExtern((*name).to_string()),
+                origin: sp(),
+                region: RegionId::Root,
+            });
+            insts.push(inst(
+                call_id + 1,
+                Opcode::Return,
+                Ty::Unit,
+                vec![call_id],
+                InstData::None,
+            ));
+
+            let func = Function {
+                id: FuncId(idx as u32),
+                name: format!("expanding_helper_{idx}"),
+                params: vec![],
+                param_names: vec![],
+                return_ty: Ty::Ptr,
+                effects: vec![],
+                vows: vec![],
+                blocks: vec![BasicBlock {
+                    id: BlockId(0),
+                    insts,
+                }],
+                local_names: std::collections::HashMap::new(),
+                summary: RegionSummary::default(),
+                source_file: String::new(),
+            };
+            let module = Module {
+                name: "test".to_string(),
+                functions: vec![func.clone()],
+                strings: vec![],
+                struct_layouts: vec![],
+                enum_layouts: vec![],
+                warnings: vec![],
+            };
+            let reason = non_modelable_reason(&func, &module, &HashMap::new());
+            assert!(
+                matches!(reason.as_deref(), Some(text) if text.contains(name)),
+                "{name} should stay non-modelable until its expanding length semantics are modeled; reason: {reason:?}"
+            );
+        }
     }
 
     #[test]
@@ -3000,6 +4050,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&str_func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -3047,6 +4098,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&vec_func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -3094,6 +4146,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&map_func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -3181,6 +4234,184 @@ mod tests {
         assert!(
             c.contains("return 0; /* modelled type return */"),
             "string return: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_string_literal_uses_pool_length() {
+        let func = make_func(
+            "make_literal",
+            vec![],
+            Ty::Ptr,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                inst(
+                    1,
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![0],
+                    InstData::CallExtern("__vow_string_literal".to_string()),
+                ),
+                inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+            ],
+        );
+        let module = Module {
+            name: String::new(),
+            functions: vec![func.clone()],
+            strings: vec!["hello".to_string()],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        let c = emit_c_function_full(
+            &func,
+            &HashMap::new(),
+            &HashSet::new(),
+            &module,
+            &VerifyLimits::default(),
+        );
+        assert!(c.contains("__vow_string_t v1;"), "string struct decl: {c}");
+        assert!(c.contains("v1.len = 5;"), "literal len from pool: {c}");
+        assert!(
+            c.contains("v1.data[0] = (int8_t)104;"),
+            "literal byte h from pool: {c}"
+        );
+        assert!(
+            c.contains("v1.data[4] = (int8_t)111;"),
+            "literal byte o from pool: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_c_module_grows_string_model_for_literal_bytes() {
+        let func = make_func(
+            "make_literal",
+            vec![],
+            Ty::Ptr,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                inst(
+                    1,
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![0],
+                    InstData::CallExtern("__vow_string_literal".to_string()),
+                ),
+                inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+            ],
+        );
+        let module = Module {
+            name: String::new(),
+            functions: vec![func.clone()],
+            strings: vec!["hello".to_string()],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        let limits = VerifyLimits {
+            string_max: 4,
+            ..VerifyLimits::default()
+        };
+        let c = emit_c_module_with_callees(
+            &func,
+            &module,
+            &HashMap::new(),
+            &[],
+            &HashSet::new(),
+            &limits,
+        );
+        assert!(
+            c.contains("typedef struct { int64_t len; int8_t data[5]; } __vow_string_t;"),
+            "literal bytes must fit in the string model: {c}"
+        );
+        assert!(
+            c.contains("v1.data[4] = (int8_t)111;"),
+            "last literal byte should be emitted without exceeding the model: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_string_clone_copies_source_model() {
+        let func = make_func(
+            "clone_literal",
+            vec![],
+            Ty::Ptr,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                inst(
+                    1,
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![0],
+                    InstData::CallExtern("__vow_string_literal".to_string()),
+                ),
+                inst(
+                    2,
+                    Opcode::Call,
+                    Ty::Ptr,
+                    vec![1],
+                    InstData::CallExtern("__vow_string_clone".to_string()),
+                ),
+                inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+            ],
+        );
+        let module = Module {
+            name: String::new(),
+            functions: vec![func.clone()],
+            strings: vec!["hello".to_string()],
+            struct_layouts: vec![],
+            enum_layouts: vec![],
+            warnings: vec![],
+        };
+        let c = emit_c_function_full(
+            &func,
+            &HashMap::new(),
+            &HashSet::new(),
+            &module,
+            &VerifyLimits::default(),
+        );
+        assert!(c.contains("__vow_string_t v2;"), "clone decl: {c}");
+        assert!(c.contains("v2 = v1;"), "clone preserves source model: {c}");
+    }
+
+    #[test]
+    fn emit_string_push_str_models_source_param_as_string() {
+        let func = make_func(
+            "append_param",
+            vec![Ty::Ptr, Ty::Ptr],
+            Ty::Ptr,
+            vec![
+                inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+                inst(
+                    2,
+                    Opcode::Call,
+                    Ty::Unit,
+                    vec![0, 1],
+                    InstData::CallExtern("__vow_string_push_str".to_string()),
+                ),
+                inst(3, Opcode::Return, Ty::Unit, vec![0], InstData::None),
+            ],
+        );
+        let c = emit_c_function_full(
+            &func,
+            &HashMap::new(),
+            &HashSet::new(),
+            &Module {
+                name: String::new(),
+                functions: vec![func.clone()],
+                strings: vec![],
+                struct_layouts: vec![],
+                enum_layouts: vec![],
+                warnings: vec![],
+            },
+            &VerifyLimits::default(),
+        );
+        assert!(c.contains("__vow_string_t v0;"), "dest param model: {c}");
+        assert!(c.contains("__vow_string_t v1;"), "source param model: {c}");
+        assert!(
+            !c.contains("int64_t v1 = p1;"),
+            "source param must not be scalar: {c}"
         );
     }
 
@@ -3302,7 +4533,75 @@ mod tests {
             ],
         );
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
-        assert!(c.contains("v1.len += v3.len;"), "push_str: {c}");
+        assert!(
+            c.contains("string capacity"),
+            "push_str must have capacity assertion: {c}"
+        );
+        assert!(
+            c.contains("v1.len + v3.len <= 256"),
+            "push_str capacity expression: {c}"
+        );
+        assert!(c.contains("v1.len += v3.len;"), "push_str mutation: {c}");
+    }
+
+    #[test]
+    fn emit_explicit_arena_string_from_cstr_and_push_str() {
+        use vow_ir::InstId;
+        let func = make_func(
+            "cat_in_arena",
+            vec![],
+            Ty::Ptr,
+            vec![
+                inst(
+                    0,
+                    Opcode::ConstI64,
+                    Ty::I64,
+                    vec![],
+                    InstData::ConstI64(1000),
+                ),
+                inst(1, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                Inst {
+                    id: InstId(2),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0), InstId(1)],
+                    data: InstData::CallExtern("__vow_string_from_cstr_in_arena".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(3, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
+                Inst {
+                    id: InstId(4),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0), InstId(3)],
+                    data: InstData::CallExtern("__vow_string_from_cstr_in_arena".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(5),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(0), InstId(2), InstId(4)],
+                    data: InstData::CallExtern("__vow_string_push_str_in_arena".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(6, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        assert!(c.contains("__vow_string_t v2;"), "dest string decl: {c}");
+        assert!(c.contains("__vow_string_t v4;"), "src string decl: {c}");
+        assert!(
+            !c.contains("__vow_string_t v0;"),
+            "arena pointer must not be tracked as a string: {c}"
+        );
+        assert!(
+            c.contains("v2.len += v4.len;"),
+            "arena push_str must use shifted dest/src args: {c}"
+        );
     }
 
     #[test]
@@ -3473,6 +4772,347 @@ mod tests {
     }
 
     #[test]
+    fn emit_string_eq_invalidates_on_push_byte() {
+        // After `__vow_string_push_byte(a, ...)` mutates `a`, every cached
+        // pair touching `a` must be re-sampled with __VERIFIER_nondet_bool().
+        // The cache itself stays — the pair is still shared by call sites
+        // before and after the mutation — but its value can change.
+        use vow_ir::InstId;
+        let func = make_func(
+            "push_then_compare",
+            vec![],
+            Ty::Bool,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                Inst {
+                    id: InstId(1),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(2)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(4),
+                    opcode: Opcode::Call,
+                    ty: Ty::Bool,
+                    args: vec![InstId(1), InstId(3)],
+                    data: InstData::CallExtern("__vow_string_eq".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(5, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(65)),
+                Inst {
+                    id: InstId(6),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(1), InstId(5)],
+                    data: InstData::CallExtern("__vow_string_push_byte".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(7),
+                    opcode: Opcode::Call,
+                    ty: Ty::Bool,
+                    args: vec![InstId(1), InstId(3)],
+                    data: InstData::CallExtern("__vow_string_eq".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(8, Opcode::Return, Ty::Unit, vec![7], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        // Exactly one shared declaration for the (1, 3) pair.
+        let decls = c
+            .matches("_Bool __str_eq_1_3 = __VERIFIER_nondet_bool();")
+            .count();
+        assert_eq!(decls, 1, "expected exactly one shared decl: {c}");
+        // Both reads share the cached name.
+        assert!(
+            c.contains("v4 = (v1.len == v3.len) ? __str_eq_1_3 : 0"),
+            "first eq call must use cached nondet: {c}"
+        );
+        assert!(
+            c.contains("v7 = (v1.len == v3.len) ? __str_eq_1_3 : 0"),
+            "second eq call must reuse cached nondet: {c}"
+        );
+        // Re-sample line follows the mutation (`v1.len++;`) and precedes the
+        // second read.
+        let resample = "__str_eq_1_3 = __VERIFIER_nondet_bool();";
+        let len_inc_pos = c.find("v1.len++;").expect("push_byte must emit len++");
+        let resample_pos = c[len_inc_pos..]
+            .find(resample)
+            .map(|p| p + len_inc_pos)
+            .unwrap_or_else(|| panic!("re-sample must follow v1.len++: {c}"));
+        let second_read_pos = c
+            .find("v7 = (v1.len == v3.len)")
+            .expect("second read must exist");
+        assert!(
+            resample_pos < second_read_pos,
+            "re-sample must precede second read: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_string_eq_invalidates_on_push_str() {
+        // `__vow_string_push_str(dest, src)` mutates dest's len; src is
+        // read-only. Cached pairs touching dest must be re-sampled; pairs
+        // not touching dest must not.
+        use vow_ir::InstId;
+        let func = make_func(
+            "push_str_then_compare",
+            vec![],
+            Ty::Bool,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                Inst {
+                    id: InstId(1),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(2)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(4),
+                    opcode: Opcode::Call,
+                    ty: Ty::Bool,
+                    args: vec![InstId(1), InstId(3)],
+                    data: InstData::CallExtern("__vow_string_eq".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(5),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(1), InstId(3)],
+                    data: InstData::CallExtern("__vow_string_push_str".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(6),
+                    opcode: Opcode::Call,
+                    ty: Ty::Bool,
+                    args: vec![InstId(1), InstId(3)],
+                    data: InstData::CallExtern("__vow_string_eq".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(7, Opcode::Return, Ty::Unit, vec![6], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        // Cache shared across both reads.
+        let decls = c
+            .matches("_Bool __str_eq_1_3 = __VERIFIER_nondet_bool();")
+            .count();
+        assert_eq!(decls, 1, "expected exactly one shared decl: {c}");
+        // Re-sample line follows v1.len += v3.len; (the push_str body) and
+        // precedes the second read.
+        let push_pos = c
+            .find("v1.len += v3.len;")
+            .expect("push_str must emit `dest.len += src.len;`");
+        let resample = "__str_eq_1_3 = __VERIFIER_nondet_bool();";
+        let resample_pos = c[push_pos..]
+            .find(resample)
+            .map(|p| p + push_pos)
+            .unwrap_or_else(|| panic!("re-sample must follow push_str body: {c}"));
+        let second_read_pos = c
+            .find("v6 = (v1.len == v3.len)")
+            .expect("second read must exist");
+        assert!(
+            resample_pos < second_read_pos,
+            "re-sample must precede second read: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_string_clear_emits_len_zero_and_invalidates() {
+        // `__vow_string_clear` was previously elided as unmodelled, which
+        // both lost the `len = 0` post-condition and skipped cache
+        // invalidation. The new model must emit both.
+        use vow_ir::InstId;
+        let func = make_func(
+            "clear_then_compare",
+            vec![],
+            Ty::Bool,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                Inst {
+                    id: InstId(1),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(2)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(4),
+                    opcode: Opcode::Call,
+                    ty: Ty::Bool,
+                    args: vec![InstId(1), InstId(3)],
+                    data: InstData::CallExtern("__vow_string_eq".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(5),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(1)],
+                    data: InstData::CallExtern("__vow_string_clear".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(6),
+                    opcode: Opcode::Call,
+                    ty: Ty::Bool,
+                    args: vec![InstId(1), InstId(3)],
+                    data: InstData::CallExtern("__vow_string_eq".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(7, Opcode::Return, Ty::Unit, vec![6], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        // Clear must NOT fall through to the unmodelled handler.
+        assert!(
+            !c.contains("/* opcode Call not modelled */"),
+            "clear must be modeled, not unmodelled: {c}"
+        );
+        // The new model emits `len = 0`.
+        let zero_pos = c
+            .find("v1.len = 0;")
+            .unwrap_or_else(|| panic!("clear must emit `v1.len = 0;`: {c}"));
+        // Re-sample for the (1, 3) pair follows the clear and precedes the
+        // second read.
+        let resample = "__str_eq_1_3 = __VERIFIER_nondet_bool();";
+        let resample_pos = c[zero_pos..]
+            .find(resample)
+            .map(|p| p + zero_pos)
+            .unwrap_or_else(|| panic!("re-sample must follow clear: {c}"));
+        let second_read_pos = c
+            .find("v6 = (v1.len == v3.len)")
+            .expect("second read must exist");
+        assert!(
+            resample_pos < second_read_pos,
+            "re-sample must precede second read: {c}"
+        );
+    }
+
+    #[test]
+    fn emit_string_eq_no_invalidation_for_unrelated_operand() {
+        // The cache key is the (lo, hi) operand pair. A mutation on a string
+        // that is NOT in any cached pair must emit no re-sample.
+        use vow_ir::InstId;
+        let func = make_func(
+            "mutate_unrelated",
+            vec![],
+            Ty::Bool,
+            vec![
+                inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                Inst {
+                    id: InstId(1),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(0)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
+                Inst {
+                    id: InstId(3),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(2)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(4, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(2)),
+                Inst {
+                    id: InstId(5),
+                    opcode: Opcode::Call,
+                    ty: Ty::Ptr,
+                    args: vec![InstId(4)],
+                    data: InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                Inst {
+                    id: InstId(6),
+                    opcode: Opcode::Call,
+                    ty: Ty::Bool,
+                    args: vec![InstId(1), InstId(3)],
+                    data: InstData::CallExtern("__vow_string_eq".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(7, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(65)),
+                Inst {
+                    id: InstId(8),
+                    opcode: Opcode::Call,
+                    ty: Ty::Unit,
+                    args: vec![InstId(5), InstId(7)],
+                    data: InstData::CallExtern("__vow_string_push_byte".to_string()),
+                    origin: sp(),
+                    region: RegionId::Root,
+                },
+                inst(9, Opcode::Return, Ty::Unit, vec![6], InstData::None),
+            ],
+        );
+        let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
+        // Cached pair is (1, 3); the push_byte is on operand 5.
+        // Cache decl is the only place __str_eq_1_3 is assigned; no re-sample.
+        let assignments = c.matches("__str_eq_1_3").count();
+        // Two occurrences expected: the decl line and the read at v6.
+        assert_eq!(
+            assignments, 2,
+            "no re-sample for unrelated operand (decl + 1 read = 2): {c}"
+        );
+    }
+
+    #[test]
     fn emit_string_contains() {
         use vow_ir::InstId;
         let func = make_func(
@@ -3567,6 +5207,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -3872,6 +5513,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(
@@ -3944,6 +5586,7 @@ mod tests {
             ],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let c = emit_c_function(&func, &HashMap::new(), &VerifyLimits::default());
         assert!(c.contains("int __blk_0 = 0;"), "blk_0 decl: {c}");
@@ -3980,6 +5623,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         }
     }
 
@@ -4029,6 +5673,7 @@ mod tests {
             ],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let module = Module {
             name: "test".to_string(),
@@ -4069,6 +5714,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let module = Module {
             name: "test".to_string(),
@@ -4111,8 +5757,12 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
+            &HashSet::new(),
             &const_fns,
             &HashSet::new(),
+            &HashMap::new(),
+            &[],
+            &HashMap::new(),
             &empty_module,
             &VerifyLimits::default(),
         );
@@ -4146,8 +5796,12 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
+            &HashSet::new(),
             &HashMap::new(),
             &HashSet::new(),
+            &HashMap::new(),
+            &[],
+            &HashMap::new(),
             &empty_module,
             &VerifyLimits::default(),
         );

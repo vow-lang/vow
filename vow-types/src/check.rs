@@ -211,7 +211,10 @@ impl<'e> Checker<'e> {
                         .iter()
                         .map(|f| {
                             let ty = match self.env.resolve(&f.ty) {
-                                Ok(ty) => ty,
+                                Ok(ty) => {
+                                    self.check_btreemap_key_in_ty(&ty, f.span);
+                                    ty
+                                }
                                 Err(msg) => {
                                     self.emit_error(ErrorCode::TypeMismatch, msg, f.span);
                                     Ty::Unit
@@ -239,7 +242,10 @@ impl<'e> Checker<'e> {
                                     let resolved: Vec<Ty> = types
                                         .iter()
                                         .map(|t| match self.env.resolve(t) {
-                                            Ok(ty) => ty,
+                                            Ok(ty) => {
+                                                self.check_btreemap_key_in_ty(&ty, t.span());
+                                                ty
+                                            }
                                             Err(msg) => {
                                                 self.emit_error(
                                                     ErrorCode::TypeMismatch,
@@ -257,7 +263,10 @@ impl<'e> Checker<'e> {
                                         .iter()
                                         .map(|f| {
                                             let ty = match self.env.resolve(&f.ty) {
-                                                Ok(ty) => ty,
+                                                Ok(ty) => {
+                                                    self.check_btreemap_key_in_ty(&ty, f.span);
+                                                    ty
+                                                }
                                                 Err(msg) => {
                                                     self.emit_error(
                                                         ErrorCode::TypeMismatch,
@@ -282,7 +291,10 @@ impl<'e> Checker<'e> {
                     self.env.define_enum(&e.name, EnumInfo { variants });
                 }
                 Item::TypeAlias(a) => match self.env.resolve(&a.ty) {
-                    Ok(ty) => self.env.define_alias(&a.name, ty),
+                    Ok(ty) => {
+                        self.check_btreemap_key_in_ty(&ty, a.ty.span());
+                        self.env.define_alias(&a.name, ty);
+                    }
                     Err(msg) => self.emit_error(ErrorCode::TypeMismatch, msg, a.ty.span()),
                 },
                 _ => {}
@@ -293,7 +305,10 @@ impl<'e> Checker<'e> {
         for item in &module.items {
             if let Item::Const(c) = item {
                 let ty = match self.env.resolve(&c.ty) {
-                    Ok(ty) => ty,
+                    Ok(ty) => {
+                        self.check_btreemap_key_in_ty(&ty, c.ty.span());
+                        ty
+                    }
                     Err(msg) => {
                         self.emit_error(ErrorCode::TypeMismatch, msg, c.ty.span());
                         continue;
@@ -369,7 +384,10 @@ impl<'e> Checker<'e> {
                         .params
                         .iter()
                         .map(|p| match self.env.resolve(&p.ty) {
-                            Ok(ty) => ty,
+                            Ok(ty) => {
+                                self.check_btreemap_key_in_ty(&ty, p.span);
+                                ty
+                            }
                             Err(msg) => {
                                 self.emit_error(ErrorCode::TypeMismatch, msg, p.span);
                                 Ty::Unit
@@ -377,7 +395,10 @@ impl<'e> Checker<'e> {
                         })
                         .collect();
                     let return_ty = match self.env.resolve(&fn_def.return_ty) {
-                        Ok(ty) => ty,
+                        Ok(ty) => {
+                            self.check_btreemap_key_in_ty(&ty, fn_def.return_ty.span());
+                            ty
+                        }
                         Err(msg) => {
                             self.emit_error(ErrorCode::TypeMismatch, msg, fn_def.return_ty.span());
                             Ty::Unit
@@ -404,12 +425,17 @@ impl<'e> Checker<'e> {
                         );
                     }
                     for f in &block.fns {
-                        let params = f
+                        let params: Vec<Ty> = f
                             .params
                             .iter()
-                            .map(|p| self.env.resolve(&p.ty).unwrap_or(Ty::Unit))
+                            .map(|p| {
+                                let ty = self.env.resolve(&p.ty).unwrap_or(Ty::Unit);
+                                self.check_btreemap_key_in_ty(&ty, p.span);
+                                ty
+                            })
                             .collect();
                         let return_ty = self.env.resolve(&f.return_ty).unwrap_or(Ty::Unit);
+                        self.check_btreemap_key_in_ty(&return_ty, f.return_ty.span());
                         let effects: BTreeSet<Effect> = f.effects.iter().cloned().collect();
                         self.env.define_fn(
                             &f.name,
@@ -582,6 +608,7 @@ impl<'e> Checker<'e> {
                 let binding_ty = if let Some(ann) = ty {
                     match self.env.resolve(ann) {
                         Ok(ann_ty) => {
+                            self.check_btreemap_key_in_ty(&ann_ty, ann.span());
                             let coercible = init_ty == Ty::Never
                                 || ann_ty == init_ty
                                 || (init_ty == Ty::I32 && ann_ty.is_integer());
@@ -820,6 +847,49 @@ impl<'e> Checker<'e> {
                     }
                     return arg_ty;
                 }
+                if name == "string_matches_literal_at" {
+                    let expected = [Ty::Str, Ty::I64, Ty::Str];
+                    if args.len() != expected.len() {
+                        self.emit_error_with_hints(
+                            ErrorCode::TypeMismatch,
+                            format!(
+                                "function `string_matches_literal_at` expects 3 arguments but got {}",
+                                args.len()
+                            ),
+                            expr.span,
+                            vec!["expected signature: (String, i64, string literal)".to_string()],
+                        );
+                    }
+                    for (arg, expected_ty) in args.iter().zip(expected.iter()) {
+                        let arg_ty = self.check_expr(arg);
+                        let coercible = arg_ty == Ty::I32
+                            && expected_ty.is_integer()
+                            && *expected_ty != Ty::I32;
+                        if arg_ty != *expected_ty && arg_ty != Ty::Never && !coercible {
+                            self.emit_error_with_hints(
+                                ErrorCode::TypeMismatch,
+                                format!(
+                                    "argument has type `{arg_ty}` but function expects `{expected_ty}`"
+                                ),
+                                arg.span,
+                                vec![format!("parameter expects `{expected_ty}`, got `{arg_ty}`")],
+                            );
+                        }
+                    }
+                    if let Some(literal_arg) = args.get(2)
+                        && !matches!(literal_arg.kind, ExprKind::Lit(Lit::String(_)))
+                    {
+                        self.emit_error_with_hints(
+                            ErrorCode::StaticLiteralRequired,
+                            "string_matches_literal_at requires a string literal as its third argument",
+                            literal_arg.span,
+                            vec![
+                                "pass the literal directly so the compiler can lower it without allocating a String".to_string(),
+                            ],
+                        );
+                    }
+                    return Ty::I64;
+                }
                 let (param_tys, return_ty) = match self.env.lookup_fn(name) {
                     Some(sig) => (sig.params.clone(), sig.return_ty.clone()),
                     None => {
@@ -892,6 +962,9 @@ impl<'e> Checker<'e> {
                 let is_hashmap = matches!(&recv_ty,
                     Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Struct(n) if n == "HashMap")
                 );
+                let is_btreemap = matches!(&recv_ty,
+                    Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Struct(n) if n == "BTreeMap")
+                );
                 let (known_methods, result_ty): (&[&str], Option<Ty>) = if is_str {
                     let methods: &[&str] = &[
                         "len",
@@ -933,6 +1006,37 @@ impl<'e> Checker<'e> {
                         "get" => Some(Ty::I64),
                         "contains_key" => Some(Ty::Bool),
                         "remove" => Some(Ty::Unit),
+                        _ => None,
+                    };
+                    (methods, ty)
+                } else if is_btreemap {
+                    let methods: &[&str] = &["len", "insert", "get", "contains"];
+                    if let Ty::Applied(_, args) = &recv_ty
+                        && let Some(key_ty) = args.first()
+                        && !matches!(key_ty, Ty::I64 | Ty::Never)
+                    {
+                        self.emit_error(
+                            ErrorCode::BTreeMapKeyTypeMustBeI64,
+                            format!("BTreeMap key type must be i64; found '{key_ty}'"),
+                            expr.span,
+                        );
+                    }
+                    let value_ty = if let Ty::Applied(_, args) = &recv_ty {
+                        args.get(1).cloned().unwrap_or(Ty::I64)
+                    } else {
+                        Ty::I64
+                    };
+                    let ty = match method.as_str() {
+                        "len" => Some(Ty::I64),
+                        "insert" => Some(Ty::Applied(
+                            Box::new(Ty::Enum("Option".to_string())),
+                            vec![value_ty.clone()],
+                        )),
+                        "get" => Some(Ty::Applied(
+                            Box::new(Ty::Enum("Option".to_string())),
+                            vec![value_ty],
+                        )),
+                        "contains" => Some(Ty::Bool),
                         _ => None,
                     };
                     (methods, ty)
@@ -980,6 +1084,8 @@ impl<'e> Checker<'e> {
                             "String".to_string()
                         } else if is_hashmap {
                             "HashMap".to_string()
+                        } else if is_btreemap {
+                            "BTreeMap".to_string()
                         } else if is_vec {
                             "Vec".to_string()
                         } else if matches!(&recv_ty, Ty::Applied(base, _) if matches!(base.as_ref(), Ty::Enum(n) if n == "Option"))
@@ -1464,8 +1570,29 @@ impl<'e> Checker<'e> {
                 // Handle compiler-known builtins: Option, Result, Vec, String, HashMap
                 match (enum_name, variant_name) {
                     ("String", "from") => {
-                        if let Some(arg) = fields.first() {
-                            self.check_expr(arg);
+                        if fields.len() != 1 {
+                            self.emit_error_with_hints(
+                                ErrorCode::TypeMismatch,
+                                format!("String::from expects 1 argument but got {}", fields.len()),
+                                expr.span,
+                                vec!["expected signature: (s: String) -> String".to_string()],
+                            );
+                            for field in fields {
+                                self.check_expr(field);
+                            }
+                            return Ty::Str;
+                        }
+                        let arg = &fields[0];
+                        let arg_ty = self.check_expr(arg);
+                        if arg_ty != Ty::Str && arg_ty != Ty::Never {
+                            self.emit_error_with_hints(
+                                ErrorCode::TypeMismatch,
+                                format!(
+                                    "String::from argument has type `{arg_ty}` but expects `String`"
+                                ),
+                                arg.span,
+                                vec!["expected signature: (s: String) -> String".to_string()],
+                            );
                         }
                         return Ty::Str;
                     }
@@ -1506,6 +1633,9 @@ impl<'e> Checker<'e> {
                         return Ty::Str;
                     }
                     ("HashMap", "new") => {
+                        return Ty::Never;
+                    }
+                    ("BTreeMap", "new") => {
                         return Ty::Never;
                     }
                     ("Option", "None") => {
@@ -1786,6 +1916,52 @@ impl<'e> Checker<'e> {
             PatKind::Lit(_) => {}
         }
     }
+
+    // K violations use BTreeMapKeyTypeMustBeI64; V violations use
+    // BTreeMapValueTypeMustBeI64. Called from the major type-resolution sites
+    // (Stmt::Let annotations, function param / return / field / alias / const
+    // types) so the error fires at type formation rather than only at
+    // method-call sites.
+    fn check_btreemap_key_in_ty(&mut self, ty: &Ty, span: vow_syntax::span::Span) {
+        if let Ty::Applied(base, args) = ty
+            && matches!(base.as_ref(), Ty::Struct(n) if n == "BTreeMap")
+        {
+            if let Some(key_ty) = args.first()
+                && !matches!(key_ty, Ty::I64 | Ty::Never)
+            {
+                self.emit_error(
+                    ErrorCode::BTreeMapKeyTypeMustBeI64,
+                    format!("BTreeMap key type must be i64; found '{key_ty}'"),
+                    span,
+                );
+            }
+            if let Some(val_ty) = args.get(1)
+                && !matches!(val_ty, Ty::I64 | Ty::Never)
+            {
+                self.emit_error(
+                    ErrorCode::BTreeMapValueTypeMustBeI64,
+                    format!("BTreeMap value type must be i64 in Phase 1; found '{val_ty}'"),
+                    span,
+                );
+            }
+        }
+        // Recurse through composite types so nested maps (e.g. Vec<BTreeMap<bool, i64>>)
+        // are also caught.
+        match ty {
+            Ty::Applied(_, args) => {
+                for a in args {
+                    self.check_btreemap_key_in_ty(a, span);
+                }
+            }
+            Ty::Tuple(tys) => {
+                for t in tys {
+                    self.check_btreemap_key_in_ty(t, span);
+                }
+            }
+            Ty::Reference(inner) => self.check_btreemap_key_in_ty(inner, span),
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1978,6 +2154,10 @@ mod tests {
         }
     }
 
+    #[allow(
+        dead_code,
+        reason = "kept alongside dummy_span helpers for future test fixtures"
+    )]
     fn make_param(name: &str, ty_name: &str) -> Param {
         Param {
             name: name.to_string(),
@@ -1996,6 +2176,10 @@ mod tests {
 
     fn bool_lit() -> Expr {
         make_expr(ExprKind::Lit(Lit::Bool(true)))
+    }
+
+    fn string_lit(value: &str) -> Expr {
+        make_expr(ExprKind::Lit(Lit::String(value.to_string())))
     }
 
     fn float_lit() -> Expr {
@@ -3017,6 +3201,46 @@ mod tests {
             )
         );
         assert!(!checker.has_errors());
+    }
+
+    #[test]
+    fn enum_construct_string_from_accepts_string() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let ty = checker.check_expr(&make_expr(ExprKind::EnumConstruct {
+            path: vec!["String".to_string(), "from".to_string()],
+            fields: vec![string_lit("hello")],
+        }));
+        assert_eq!(ty, Ty::Str);
+        assert!(!checker.has_errors());
+    }
+
+    #[test]
+    fn enum_construct_string_from_rejects_non_string() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let ty = checker.check_expr(&make_expr(ExprKind::EnumConstruct {
+            path: vec!["String".to_string(), "from".to_string()],
+            fields: vec![int_lit()],
+        }));
+        assert_eq!(ty, Ty::Str);
+        assert!(checker.has_errors());
+        assert_eq!(emitter.0[0].code, ErrorCode::TypeMismatch);
+        assert!(emitter.0[0].message.contains("String::from"));
+    }
+
+    #[test]
+    fn enum_construct_string_from_requires_one_argument() {
+        let mut emitter = TestEmitter(vec![]);
+        let mut checker = new_checker(&mut emitter);
+        let ty = checker.check_expr(&make_expr(ExprKind::EnumConstruct {
+            path: vec!["String".to_string(), "from".to_string()],
+            fields: vec![],
+        }));
+        assert_eq!(ty, Ty::Str);
+        assert!(checker.has_errors());
+        assert_eq!(emitter.0[0].code, ErrorCode::TypeMismatch);
+        assert!(emitter.0[0].message.contains("String::from"));
     }
 
     // --- Let binding annotation coercion ---

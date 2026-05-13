@@ -74,6 +74,35 @@ fn resolve_ast_ty(e: CheckEnv, m: Module, ast_tid: i64) -> i64 [io] {
         if name == String::from("Vec") {
             return ts_make_applied(e.ts, ts_make_enum(e.ts, name), arg_tids);
         }
+        if name == String::from("HashMap") || name == String::from("BTreeMap") {
+            // Mirrors Rust env.rs: BTreeMap requires exactly two type arguments,
+            // and K/V are restricted to i64 (Phase 1).
+            if name == String::from("BTreeMap") {
+                if arg_tids.len() != 2 {
+                    env_emit_error_code(e, EC_TYPE_MISMATCH(),
+                        String::from("BTreeMap requires two type arguments"),
+                        type_span(a, ast_tid));
+                } else {
+                    let bkey_tid: i64 = arg_tids[0];
+                    let bkey_tag: i64 = ty_tag(e.ts, bkey_tid);
+                    if bkey_tag != CTY_I64() && bkey_tag != CTY_NEVER() {
+                        let kerr_msg: String = String::from("BTreeMap key type must be i64; found '");
+                        kerr_msg.push_str(ty_tag_name(bkey_tag));
+                        kerr_msg.push_str(String::from("'"));
+                        env_emit_error_code(e, EC_BTREEMAP_KEY_TYPE_MUST_BE_I64(), kerr_msg, type_span(a, ast_tid));
+                    }
+                    let bval_tid: i64 = arg_tids[1];
+                    let bval_tag: i64 = ty_tag(e.ts, bval_tid);
+                    if bval_tag != CTY_I64() && bval_tag != CTY_NEVER() {
+                        let verr_msg: String = String::from("BTreeMap value type must be i64 in Phase 1; found '");
+                        verr_msg.push_str(ty_tag_name(bval_tag));
+                        verr_msg.push_str(String::from("'"));
+                        env_emit_error_code(e, EC_BTREEMAP_VALUE_TYPE_MUST_BE_I64(), verr_msg, type_span(a, ast_tid));
+                    }
+                }
+            }
+            return ts_make_applied(e.ts, ts_make_struct(e.ts, name), arg_tids);
+        }
         let sidx: i64 = env_lookup_struct(e, name);
         if sidx != -1 {
             return ts_make_applied(e.ts, ts_make_struct(e.ts, name), arg_tids);
@@ -224,12 +253,12 @@ fn register_const(e: CheckEnv, m: Module, cid: i64) [io] {
     let val: i64 = {
         if val_tag == EXPR_LIT_INT() {
             if resolved_tid != CTY_I64() && resolved_tid != CTY_I32() {
-                env_emit_error(e, String::from("const has integer value but non-integer type"), expr_span(a, val_eid));
+                env_emit_error(e, String::from("const has integer value but non-integer type"), cdef_span(a, cid));
             }
             expr_a(a, val_eid)
         } else if val_tag == EXPR_LIT_BOOL() {
             if resolved_tid != CTY_BOOL() {
-                env_emit_error(e, String::from("const has bool value but non-bool type"), expr_span(a, val_eid));
+                env_emit_error(e, String::from("const has bool value but non-bool type"), cdef_span(a, cid));
             }
             expr_a(a, val_eid)
         } else if val_tag == EXPR_UNOP() {
@@ -239,7 +268,7 @@ fn register_const(e: CheckEnv, m: Module, cid: i64) [io] {
                 0
             } else {
                 if resolved_tid != CTY_I64() && resolved_tid != CTY_I32() {
-                    env_emit_error(e, String::from("const has negated value but non-integer type"), expr_span(a, val_eid));
+                    env_emit_error(e, String::from("const has negated value but non-integer type"), cdef_span(a, cid));
                 }
                 let inner_eid: i64 = expr_b(a, val_eid);
                 let inner_tag: i64 = expr_tag(a, inner_eid);
@@ -743,6 +772,36 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 }
                 return arg_tid;
             }
+            if name == String::from("string_matches_literal_at") {
+                if n_args != 3 {
+                    env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
+                    return CTY_NEVER();
+                }
+                let s_eid: i64 = list_get(a, args_lid, 0);
+                let pos_eid: i64 = list_get(a, args_lid, 1);
+                let literal_eid: i64 = list_get(a, args_lid, 2);
+                let s_tid: i64 = check_expr(e, m, s_eid);
+                let pos_tid: i64 = check_expr(e, m, pos_eid);
+                let literal_tid: i64 = check_expr(e, m, literal_eid);
+                if !is_coercible(e.ts, s_tid, CTY_STR()) {
+                    env_emit_error(e, String::from("argument has wrong type for string_matches_literal_at"), expr_span(a, s_eid));
+                }
+                if !is_coercible(e.ts, pos_tid, CTY_I64()) {
+                    env_emit_error(e, String::from("argument has wrong type for string_matches_literal_at"), expr_span(a, pos_eid));
+                }
+                if !is_coercible(e.ts, literal_tid, CTY_STR()) {
+                    env_emit_error(e, String::from("argument has wrong type for string_matches_literal_at"), expr_span(a, literal_eid));
+                }
+                if expr_tag(a, literal_eid) != EXPR_LIT_STR() {
+                    env_emit_error_code(
+                        e,
+                        EC_STATIC_LITERAL_REQUIRED(),
+                        String::from("string_matches_literal_at requires a string literal as its third argument"),
+                        expr_span(a, literal_eid)
+                    );
+                }
+                return CTY_I64();
+            }
             let fidx: i64 = env_lookup_fn(e, name);
             if fidx == -1 {
                 let msg: String = String::from("undefined function `");
@@ -860,6 +919,45 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                     herr_msg.push_str(mname);
                     herr_msg.push_str(String::from("' on type 'HashMap'"));
                     env_emit_error_code(e, EC_UNKNOWN_METHOD(), herr_msg, expr_span(a, eid));
+                    return CTY_UNIT();
+                }
+                if base_name == String::from("BTreeMap") {
+                    let bargs_lid: i64 = ty_b(e.ts, recv_tid);
+                    let bkey_tid: i64 = if ts_arg_len(e.ts, bargs_lid) > 0 {
+                        ts_arg_get(e.ts, bargs_lid, 0)
+                    } else {
+                        CTY_I64()
+                    };
+                    let bval_tid: i64 = if ts_arg_len(e.ts, bargs_lid) > 1 {
+                        ts_arg_get(e.ts, bargs_lid, 1)
+                    } else {
+                        CTY_I64()
+                    };
+                    let bkey_tag: i64 = ty_tag(e.ts, bkey_tid);
+                    if bkey_tag != CTY_I64() && bkey_tag != CTY_NEVER() {
+                        let kerr_msg: String = String::from("BTreeMap key type must be i64; found '");
+                        kerr_msg.push_str(ty_tag_name(bkey_tag));
+                        kerr_msg.push_str(String::from("'"));
+                        env_emit_error_code(e, EC_BTREEMAP_KEY_TYPE_MUST_BE_I64(), kerr_msg, expr_span(a, eid));
+                    }
+                    if mname == String::from("len") { return CTY_I64(); }
+                    if mname == String::from("contains") { return CTY_BOOL(); }
+                    if mname == String::from("insert") {
+                        let opt_base: i64 = ts_make_enum(e.ts, String::from("Option"));
+                        let opt_args: Vec<i64> = Vec::new();
+                        opt_args.push(bval_tid);
+                        return ts_make_applied(e.ts, opt_base, opt_args);
+                    }
+                    if mname == String::from("get") {
+                        let opt_base: i64 = ts_make_enum(e.ts, String::from("Option"));
+                        let opt_args: Vec<i64> = Vec::new();
+                        opt_args.push(bval_tid);
+                        return ts_make_applied(e.ts, opt_base, opt_args);
+                    }
+                    let bterr_msg: String = String::from("unknown method '");
+                    bterr_msg.push_str(mname);
+                    bterr_msg.push_str(String::from("' on type 'BTreeMap'"));
+                    env_emit_error_code(e, EC_UNKNOWN_METHOD(), bterr_msg, expr_span(a, eid));
                     return CTY_UNIT();
                 }
             }
@@ -1177,9 +1275,13 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
         let first_name: String = arena_str(a, first_sid);
         let n_args: i64 = list_len(a, args_lid);
         let mut i: i64 = 0;
+        let mut first_arg_tid: i64 = CTY_UNKNOWN();
         while i < n_args {
             let arg_eid: i64 = list_get(a, args_lid, i);
-            let _arg_tid: i64 = check_expr(e, m, arg_eid);
+            let arg_tid: i64 = check_expr(e, m, arg_eid);
+            if i == 0 {
+                first_arg_tid = arg_tid;
+            }
             i = i + 1;
         }
         if first_name == String::from("Option") {
@@ -1207,6 +1309,16 @@ fn check_expr_inner(e: CheckEnv, m: Module, eid: i64) -> i64 [io] {
                 if second_name == String::from("from_raw_parts_copy") {
                     if n_args != 2 {
                         env_emit_error(e, String::from("wrong argument count"), expr_span(a, eid));
+                    }
+                    return CTY_STR();
+                }
+                if second_name == String::from("from") {
+                    if n_args != 1 {
+                        env_emit_error(e, String::from("String::from expects one String argument"), expr_span(a, eid));
+                        return CTY_STR();
+                    }
+                    if first_arg_tid != CTY_STR() && first_arg_tid != CTY_NEVER() {
+                        env_emit_error(e, String::from("String::from argument must be String"), expr_span(a, eid));
                     }
                     return CTY_STR();
                 }

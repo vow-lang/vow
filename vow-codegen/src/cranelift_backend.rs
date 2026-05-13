@@ -11,10 +11,10 @@ use cranelift_module::{
     DataDescription, DataId, FuncId as CraneliftFuncId, Linkage, Module as CraneliftModule,
 };
 use cranelift_object::{ObjectBuilder, ObjectModule};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use vow_ir::{
-    BlockId, FuncId as IrFuncId, Function as IrFunction, Inst, InstData, InstId,
+    BlockId, FuncId as IrFuncId, Function as IrFunction, HiddenRegionIdx, Inst, InstData, InstId,
     Module as IrModule, Opcode, RegionConstraint, RegionId, RegionSummary, Ty as IrTy,
 };
 
@@ -169,6 +169,14 @@ fn ir_ty_to_cranelift(ty: IrTy) -> Option<types::Type> {
     }
 }
 
+fn signature_return_ty(ir_func: &IrFunction) -> Option<types::Type> {
+    if ir_func.name == "main" && ir_func.return_ty == IrTy::Unit {
+        Some(types::I32)
+    } else {
+        ir_ty_to_cranelift(ir_func.return_ty)
+    }
+}
+
 fn build_signature(ir_func: &IrFunction, call_conv: cranelift_codegen::isa::CallConv) -> Signature {
     let mut sig = Signature::new(call_conv);
     for &param_ty in &ir_func.params {
@@ -179,13 +187,15 @@ fn build_signature(ir_func: &IrFunction, call_conv: cranelift_codegen::isa::Call
     for _ in 0..hidden_region_param_count(ir_func) {
         sig.params.push(AbiParam::new(types::I64));
     }
-    if let Some(cl_ty) = ir_ty_to_cranelift(ir_func.return_ty) {
+    if let Some(cl_ty) = signature_return_ty(ir_func) {
         sig.returns.push(AbiParam::new(cl_ty));
     }
     sig
 }
 
 fn hidden_region_store_targets(ir_func: &IrFunction) -> Vec<u32> {
+    // Keep this slot order in sync with compiler/clif.vow's clif_hidden_store_targets.
+    // The self-hosted path dedups before sorting; both paths must return sorted unique targets.
     let mut targets: Vec<u32> = ir_func
         .summary
         .store_effects
@@ -206,6 +216,30 @@ fn hidden_region_param_count(ir_func: &IrFunction) -> usize {
         count += 1;
     }
     count + hidden_region_store_targets(ir_func).len()
+}
+
+fn hidden_region_idx_for_store_target(
+    summary: &RegionSummary,
+    target_param: u32,
+) -> Option<HiddenRegionIdx> {
+    let mut idx = 0u32;
+    if summary.return_region == RegionConstraint::FreshInCaller {
+        idx += 1;
+    }
+    let mut targets: Vec<u32> = summary
+        .store_effects
+        .iter()
+        .map(|effect| effect.target)
+        .collect();
+    targets.sort_unstable();
+    targets.dedup();
+    for target in targets {
+        if target == target_param {
+            return Some(HiddenRegionIdx(idx));
+        }
+        idx += 1;
+    }
+    None
 }
 
 fn coerce_return_value(builder: &mut FunctionBuilder<'_>, val: Value, return_ty: IrTy) -> Value {
@@ -250,6 +284,7 @@ struct LowerCtx<'a> {
     trace: TraceMode,
     current_ir_block: BlockId,
     string_global_values: &'a HashMap<u32, GlobalValue>,
+    string_descriptor_global_values: &'a HashMap<u32, GlobalValue>,
     extern_func_refs: &'a HashMap<String, FuncRef>,
     vow_desc_global_values: &'a HashMap<u32, GlobalValue>,
     vow_file_global_values: &'a HashMap<u32, GlobalValue>,
@@ -268,8 +303,8 @@ struct LowerCtx<'a> {
 }
 
 /// Size of `vow_runtime::VowArena` in bytes — asserted in
-/// `vow-runtime/src/lib.rs` (`assert!(size_of::<VowArena>() == 48)`).
-const VOW_ARENA_HEADER_SIZE: u32 = 48;
+/// `vow-runtime/src/lib.rs` (`assert!(size_of::<VowArena>() == 56)`).
+const VOW_ARENA_HEADER_SIZE: u32 = 56;
 /// Alignment for the `VowArena` header (contains pointers).
 const VOW_ARENA_HEADER_ALIGN_LOG2: u8 = 3;
 
@@ -281,13 +316,45 @@ fn block_arena_slot(
     slots: &mut BTreeMap<BlockId, StackSlot>,
     block_id: BlockId,
 ) -> StackSlot {
-    *slots.entry(block_id).or_insert_with(|| {
-        builder.create_sized_stack_slot(StackSlotData::new(
-            StackSlotKind::ExplicitSlot,
-            VOW_ARENA_HEADER_SIZE,
-            VOW_ARENA_HEADER_ALIGN_LOG2,
-        ))
-    })
+    let (slot, created) = block_arena_slot_with_created(builder, slots, block_id);
+    if created {
+        // The runtime writes the whole address-taken arena header; make
+        // Cranelift reserve the complete declared slot, not just the pointer.
+        let zero = builder.ins().iconst(types::I64, 0);
+        for offset in (0..VOW_ARENA_HEADER_SIZE as i32).step_by(8) {
+            builder.ins().stack_store(zero, slot, offset);
+        }
+    }
+    slot
+}
+
+fn block_arena_slot_with_created(
+    builder: &mut FunctionBuilder,
+    slots: &mut BTreeMap<BlockId, StackSlot>,
+    block_id: BlockId,
+) -> (StackSlot, bool) {
+    if let Some(&slot) = slots.get(&block_id) {
+        return (slot, false);
+    }
+    let slot = builder.create_sized_stack_slot(StackSlotData::new(
+        StackSlotKind::ExplicitSlot,
+        VOW_ARENA_HEADER_SIZE,
+        VOW_ARENA_HEADER_ALIGN_LOG2,
+    ));
+    slots.insert(block_id, slot);
+    (slot, true)
+}
+
+fn collect_block_arena_ids(func: &IrFunction) -> BTreeSet<BlockId> {
+    let mut ids = BTreeSet::new();
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if let RegionId::Block(block_id) = inst.region {
+                ids.insert(block_id);
+            }
+        }
+    }
+    ids
 }
 
 /// Materialise the Cranelift `Value` (`*VowArena`) representing `region` in
@@ -306,7 +373,21 @@ fn region_to_arena_value(
     match region {
         RegionId::Root => Ok(builder.ins().global_value(types::I64, root_arena_gv)),
         RegionId::Caller(idx) => {
-            let Some(&arena) = hidden_region_values.get(idx.0 as usize) else {
+            // Issue #317: AMBIGUOUS is the slot-aware-inference sentinel
+            // for "this value's marker set resolves to multiple distinct
+            // slots". The post-inference store-conflict check rejects
+            // any store whose source has this region — that's the
+            // soundness gate. Codegen still has to lower the alloc itself
+            // (which may sit on an unrelated path that never reaches a
+            // store), so fall back to slot 0 as a safe placeholder. If
+            // the value is actually used at a store, the build has
+            // already been rejected.
+            let resolved_idx = if idx.is_ambiguous() {
+                0
+            } else {
+                idx.0 as usize
+            };
+            let Some(&arena) = hidden_region_values.get(resolved_idx) else {
                 return Err(CodegenError::UnsupportedOpcode(format!(
                     "missing hidden arena parameter {:?}",
                     idx
@@ -321,6 +402,211 @@ fn region_to_arena_value(
         RegionId::Rodata => Err(CodegenError::UnsupportedOpcode(
             "cannot derive arena pointer for Rodata region".to_string(),
         )),
+    }
+}
+
+// Projection results (`FieldGet`, `Load`, `__vow_vec_get*`) are intentionally
+// NOT traced through to their container here: a pointer-valued field or Vec
+// element does not share its container's arena lifetime, so routing string
+// mutation into the container's arena would create a use-after-free when the
+// container outlives the string (or vice versa). Only direct hidden-caller
+// parameters (`GetArg` → `Caller`) and Phi merges over safe sources are
+// tracked. If safe projection semantics are ever added, extend this function;
+// do not re-introduce the unconditional FieldGet/Load/vec_get tracing.
+fn source_value_region(
+    source: &Inst,
+    inst_index: &HashMap<InstId, &Inst>,
+    current_summary: &RegionSummary,
+    phi_data: &PhiUpsilonData,
+    seen: &mut BTreeSet<InstId>,
+) -> RegionId {
+    if !seen.insert(source.id) {
+        return source.region;
+    }
+    if let (Opcode::GetArg, InstData::ArgIndex(param_idx)) = (&source.opcode, &source.data)
+        && let Some(hidden_idx) = hidden_region_idx_for_store_target(current_summary, *param_idx)
+    {
+        return RegionId::Caller(hidden_idx);
+    }
+    if source.opcode == Opcode::Phi {
+        let mut merged: Option<RegionId> = None;
+        for upsilons in phi_data.block_upsilons.values() {
+            for &(phi_id, val_id) in upsilons {
+                if phi_id != source.id {
+                    continue;
+                }
+                let mut arm_seen = seen.clone();
+                let arm_region =
+                    arg_region_inner(val_id, inst_index, current_summary, phi_data, &mut arm_seen);
+                match merged {
+                    Some(existing) if existing != arm_region => return source.region,
+                    Some(_) => {}
+                    None => merged = Some(arm_region),
+                }
+            }
+        }
+        if let Some(region) = merged {
+            return region;
+        }
+    }
+    source.region
+}
+
+fn arg_region_inner(
+    arg_id: InstId,
+    inst_index: &HashMap<InstId, &Inst>,
+    current_summary: &RegionSummary,
+    phi_data: &PhiUpsilonData,
+    seen: &mut BTreeSet<InstId>,
+) -> RegionId {
+    inst_index
+        .get(&arg_id)
+        .map(|src| source_value_region(src, inst_index, current_summary, phi_data, seen))
+        .unwrap_or(RegionId::Root)
+}
+
+fn arg_region(
+    arg_id: InstId,
+    inst_index: &HashMap<InstId, &Inst>,
+    current_summary: &RegionSummary,
+    phi_data: &PhiUpsilonData,
+) -> RegionId {
+    let mut seen = BTreeSet::new();
+    arg_region_inner(arg_id, inst_index, current_summary, phi_data, &mut seen)
+}
+
+fn first_arg_region(
+    inst: &Inst,
+    inst_index: &HashMap<InstId, &Inst>,
+    current_summary: &RegionSummary,
+    phi_data: &PhiUpsilonData,
+) -> RegionId {
+    inst.args
+        .first()
+        .map(|arg_id| arg_region(*arg_id, inst_index, current_summary, phi_data))
+        .unwrap_or(RegionId::Root)
+}
+
+fn routed_vec_extern<'a>(
+    sym: &'a str,
+    inst: &Inst,
+    inst_index: &HashMap<InstId, &Inst>,
+    current_summary: &RegionSummary,
+    phi_data: &PhiUpsilonData,
+) -> (&'a str, Option<RegionId>) {
+    match sym {
+        "__vow_vec_new" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_vec_new_in_arena", Some(region)),
+        },
+        "__vow_vec_new_val" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_vec_new_val_in_arena", Some(region)),
+        },
+        "__vow_vec_push_val" => {
+            let region = first_arg_region(inst, inst_index, current_summary, phi_data);
+            match region {
+                RegionId::Block(_) | RegionId::Caller(_) => {
+                    ("__vow_vec_push_val_in_arena", Some(region))
+                }
+                _ => (sym, None),
+            }
+        }
+        "__vow_vec_push" => {
+            let region = first_arg_region(inst, inst_index, current_summary, phi_data);
+            match region {
+                RegionId::Block(_) | RegionId::Caller(_) => {
+                    ("__vow_vec_push_in_arena", Some(region))
+                }
+                _ => (sym, None),
+            }
+        }
+        "__vow_string_new" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_string_new_in_arena", Some(region)),
+        },
+        "__vow_string_from_cstr" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_string_from_cstr_in_arena", Some(region)),
+        },
+        "__vow_string_clone" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_string_clone_in_arena", Some(region)),
+        },
+        "__vow_string_substr" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_string_substr_in_arena", Some(region)),
+        },
+        "__vow_string_substring" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_string_substring_in_arena", Some(region)),
+        },
+        "__vow_string_from_i64" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_string_from_i64_in_arena", Some(region)),
+        },
+        "__vow_string_split" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_string_split_in_arena", Some(region)),
+        },
+        "__vow_string_trim" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_string_trim_in_arena", Some(region)),
+        },
+        "__vow_string_to_upper" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_string_to_upper_in_arena", Some(region)),
+        },
+        "__vow_string_to_lower" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_string_to_lower_in_arena", Some(region)),
+        },
+        "__vow_string_replace" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_string_replace_in_arena", Some(region)),
+        },
+        "__vow_string_join" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_string_join_in_arena", Some(region)),
+        },
+        "__vow_string_push_str" => {
+            let region = first_arg_region(inst, inst_index, current_summary, phi_data);
+            match region {
+                RegionId::Block(_) | RegionId::Caller(_) => {
+                    ("__vow_string_push_str_in_arena", Some(region))
+                }
+                _ => (sym, None),
+            }
+        }
+        "__vow_string_push_byte" => {
+            let region = first_arg_region(inst, inst_index, current_summary, phi_data);
+            match region {
+                RegionId::Block(_) | RegionId::Caller(_) => {
+                    ("__vow_string_push_byte_in_arena", Some(region))
+                }
+                _ => (sym, None),
+            }
+        }
+        "__vow_map_new" => match inst.region {
+            RegionId::Root => (sym, None),
+            region => ("__vow_map_new_in_arena", Some(region)),
+        },
+        "__vow_map_insert" => {
+            let region = first_arg_region(inst, inst_index, current_summary, phi_data);
+            match region {
+                RegionId::Block(_) | RegionId::Caller(_) => {
+                    ("__vow_map_insert_in_arena", Some(region))
+                }
+                _ => (sym, None),
+            }
+        }
+        _ => {
+            if extern_uses_target_region(sym) {
+                (sym, Some(inst.region))
+            } else {
+                (sym, None)
+            }
+        }
     }
 }
 
@@ -366,29 +652,44 @@ fn build_inst_index(func: &IrFunction) -> HashMap<InstId, &Inst> {
     index
 }
 
+fn is_string_literal_descriptor_call(inst: &Inst, inst_index: &HashMap<InstId, &Inst>) -> bool {
+    if !matches!(
+        &inst.data,
+        InstData::CallExtern(sym) if sym == "__vow_string_literal"
+    ) {
+        return false;
+    }
+    let Some(cstr_id) = inst.args.first() else {
+        return false;
+    };
+    inst_index
+        .get(cstr_id)
+        .is_some_and(|arg| arg.opcode == Opcode::ConstStr)
+}
+
 /// Decide whether a `FreshInCaller` function's return value needs to be
 /// deep-copied into `target_region` to satisfy the §5.1 representation
 /// promise.
 ///
 /// Walks the value's source transitively through `Phi` (via `Upsilon`
 /// arms). Returns true iff at least one reachable leaf is a
-/// `__vow_string_from_cstr(literal)` call AND every reachable leaf is
+/// `__vow_string_literal(literal)` call AND every reachable leaf is
 /// the same shape (a known-safe `VowString` / `Vec<u8>` descriptor
 /// producer).
 ///
-/// **Why `__vow_string_from_cstr`, not `ConstStr` directly.**
+/// **Why `__vow_string_literal`, not `ConstStr` directly.**
 /// `ConstStr` lowers to a pointer to a NUL-terminated byte blob in a
 /// `.rodata` data section — it is *not* a `VowVec` descriptor.
 /// `__vow_string_clone_into_arena` reads `(ptr, len, cap)` from its
 /// source and copies `len` bytes; firing it on a raw `ConstStr` would
 /// reinterpret arbitrary literal bytes as `{ptr, len, cap}` and corrupt
 /// memory. The Vow lowerer wraps every `String` literal in
-/// `Call __vow_string_from_cstr(ConstStr)` (`vow-ir/src/lower/mod.rs`
-/// `Lit::String`), and that Call's *result* is the actual `VowVec`
-/// descriptor — that's the shape we recognise here.
+/// `Call __vow_string_literal(ConstStr)` (`vow-ir/src/lower/mod.rs`
+/// `Lit::String`), and codegen turns that synthetic call into a static
+/// `VowVec` descriptor — that's the shape we recognise here.
 ///
 /// **Why the all-leaves rule still applies.** A Phi mixing a
-/// `__vow_string_from_cstr` arm with any other leaf shape (a
+/// `__vow_string_literal` arm with any other leaf shape (a
 /// `RegionAlloc`, a `GetArg` of a heap-typed param, a generic call,
 /// …) cannot be safely cloned via the `VowString`-typed primitive: at
 /// runtime the Phi-selected value might not have descriptor layout.
@@ -416,12 +717,7 @@ fn return_source_needs_materialization(
             return false;
         };
         match src.opcode {
-            Opcode::Call
-                if matches!(
-                    &src.data,
-                    InstData::CallExtern(sym) if sym == "__vow_string_from_cstr"
-                ) =>
-            {
+            Opcode::Call if is_string_literal_descriptor_call(src, inst_index) => {
                 saw_safe_leaf = true;
             }
             Opcode::Phi => {
@@ -440,7 +736,7 @@ fn return_source_needs_materialization(
                 // standalone helper) to bring this to O(k_arms) per Phi.
                 // For Phase 4 this scan rarely fires (materialisation
                 // requires a `FreshInCaller` summary AND a
-                // `__vow_string_from_cstr` leaf, which only String-literal
+                // `__vow_string_literal` leaf, which only String-literal
                 // returns produce).
                 for block in &func.blocks {
                     for inst in &block.insts {
@@ -888,7 +1184,12 @@ fn lower_inst(
                 builder.ins().call(se_ref, &[]);
             }
             if ctx.return_ty == IrTy::Unit {
-                builder.ins().return_(&[]);
+                if ctx.ir_func.name == "main" {
+                    let zero = builder.ins().iconst(types::I32, 0);
+                    builder.ins().return_(&[zero]);
+                } else {
+                    builder.ins().return_(&[]);
+                }
             } else if let Some(&val_id) = inst.args.first() {
                 if let Some(&val) = ctx.value_map.get(&val_id) {
                     // Phase 4 / S5 return materialization (spec §5.1).
@@ -1048,7 +1349,38 @@ fn lower_inst(
         // Function calls
         // ------------------------------------------------------------------
         Opcode::Call => {
+            if let InstData::CallExtern(sym) = &inst.data
+                && sym == "__vow_string_literal"
+            {
+                let cstr_id = inst.args.first().ok_or_else(|| {
+                    CodegenError::UnsupportedOpcode(
+                        "__vow_string_literal missing ConstStr operand".to_string(),
+                    )
+                })?;
+                let cstr_inst = *ctx.inst_index.get(cstr_id).ok_or_else(|| {
+                    CodegenError::UnsupportedOpcode(format!(
+                        "__vow_string_literal operand {:?} not found",
+                        cstr_id
+                    ))
+                })?;
+                let InstData::ConstStr(idx) = cstr_inst.data else {
+                    return Err(CodegenError::UnsupportedOpcode(format!(
+                        "__vow_string_literal operand {:?} is not ConstStr",
+                        cstr_id
+                    )));
+                };
+                let Some(&gv) = ctx.string_descriptor_global_values.get(&idx) else {
+                    return Err(CodegenError::UnsupportedOpcode(format!(
+                        "missing string descriptor global for literal {idx}"
+                    )));
+                };
+                let ptr = builder.ins().global_value(types::I64, gv);
+                ctx.value_map.insert(inst.id, ptr);
+                return Ok(());
+            }
+
             let mut internal_call = false;
+            let mut external_target_region = None;
             let func_ref = match &inst.data {
                 InstData::CallTarget(f) => {
                     internal_call = true;
@@ -1061,9 +1393,17 @@ fn lower_inst(
                     fr
                 }
                 InstData::CallExtern(sym) => {
-                    let Some(&fr) = ctx.extern_func_refs.get(sym.as_str()) else {
+                    let (routed_sym, target_region) = routed_vec_extern(
+                        sym,
+                        inst,
+                        ctx.inst_index,
+                        &ctx.ir_func.summary,
+                        ctx.phi_data,
+                    );
+                    external_target_region = target_region;
+                    let Some(&fr) = ctx.extern_func_refs.get(routed_sym) else {
                         return Err(CodegenError::UnsupportedOpcode(format!(
-                            "unknown extern symbol: {sym}"
+                            "unknown extern symbol: {routed_sym}"
                         )));
                     };
                     fr
@@ -1080,10 +1420,6 @@ fn lower_inst(
                 .iter()
                 .map(|p| p.value_type)
                 .collect();
-            let external_target_region = match &inst.data {
-                InstData::CallExtern(sym) if extern_uses_target_region(sym) => Some(inst.region),
-                _ => None,
-            };
             let mut call_args: Vec<Value> = Vec::new();
             if let Some(region) = external_target_region {
                 let arena = region_to_arena_value(
@@ -1190,8 +1526,9 @@ fn lower_inst(
                     let arg_region = inst
                         .args
                         .get(target_idx as usize)
-                        .and_then(|arg_id| ctx.inst_index.get(arg_id))
-                        .map(|src_inst| src_inst.region)
+                        .map(|arg_id| {
+                            arg_region(*arg_id, ctx.inst_index, &ctx.ir_func.summary, ctx.phi_data)
+                        })
                         .unwrap_or(RegionId::Root);
                     push_hidden(builder, &mut call_args, arg_region)?;
                 }
@@ -1251,12 +1588,12 @@ fn lower_inst(
             };
             let slot = block_arena_slot(builder, ctx.block_arena_slots, block_id);
             let arena_addr = builder.ins().stack_addr(types::I64, slot, 0);
-            let func_ref = if inst.opcode == Opcode::RegionOpen {
-                ctx.arena_open_ref
+
+            if inst.opcode == Opcode::RegionOpen {
+                builder.ins().call(ctx.arena_open_ref, &[arena_addr]);
             } else {
-                ctx.arena_close_ref
-            };
-            builder.ins().call(func_ref, &[arena_addr]);
+                builder.ins().call(ctx.arena_close_ref, &[arena_addr]);
+            }
             let unit = builder.ins().iconst(types::I32, 0);
             ctx.value_map.insert(inst.id, unit);
         }
@@ -1499,6 +1836,7 @@ struct RuntimeIds {
     vow_violation_id: Option<CraneliftFuncId>,
     overflow_id: Option<CraneliftFuncId>,
     arena_alloc_id: CraneliftFuncId,
+    arena_init_id: CraneliftFuncId,
     arena_open_id: CraneliftFuncId,
     arena_close_id: CraneliftFuncId,
     string_clone_id: Option<CraneliftFuncId>,
@@ -1526,6 +1864,7 @@ fn compile_ir_function(
     ir_to_cl: &[(IrFuncId, CraneliftFuncId)],
     runtime: &RuntimeIds,
     string_data_ids: &[DataId],
+    string_descriptor_data_ids: &[DataId],
     extern_func_ids: &HashMap<String, CraneliftFuncId>,
     func_summaries: &HashMap<IrFuncId, RegionSummary>,
 ) -> Result<(), CodegenError> {
@@ -1566,6 +1905,7 @@ fn compile_ir_function(
         vow_violation_id.map(|id| obj_module.declare_func_in_func(id, builder.func));
     let overflow_ref = overflow_id.map(|id| obj_module.declare_func_in_func(id, builder.func));
     let arena_alloc_ref = obj_module.declare_func_in_func(runtime.arena_alloc_id, builder.func);
+    let arena_init_ref = obj_module.declare_func_in_func(runtime.arena_init_id, builder.func);
     let arena_open_ref = obj_module.declare_func_in_func(runtime.arena_open_id, builder.func);
     let arena_close_ref = obj_module.declare_func_in_func(runtime.arena_close_id, builder.func);
     let string_clone_ref = runtime
@@ -1584,6 +1924,11 @@ fn compile_ir_function(
     for (idx, &data_id) in string_data_ids.iter().enumerate() {
         let gv = obj_module.declare_data_in_func(data_id, builder.func);
         string_global_values.insert(idx as u32, gv);
+    }
+    let mut string_descriptor_global_values: HashMap<u32, GlobalValue> = HashMap::new();
+    for (idx, &data_id) in string_descriptor_data_ids.iter().enumerate() {
+        let gv = obj_module.declare_data_in_func(data_id, builder.func);
+        string_descriptor_global_values.insert(idx as u32, gv);
     }
 
     // Build InstId → IrTy map for all instructions
@@ -1711,6 +2056,8 @@ fn compile_ir_function(
         }
         hidden_region_values.extend(entry_params[cl_idx..].iter().copied());
         if ir_func.name == "main" {
+            let root_arena = builder.ins().global_value(types::I64, root_arena_gv);
+            hidden_region_values.push(root_arena);
             let runtime_start_ref =
                 obj_module.declare_func_in_func(runtime.runtime_start_id, builder.func);
             builder.ins().call(runtime_start_ref, &[]);
@@ -1747,6 +2094,11 @@ fn compile_ir_function(
 
     let mut value_map: HashMap<InstId, Value> = HashMap::new();
     let mut block_arena_slots: BTreeMap<BlockId, StackSlot> = BTreeMap::new();
+    for block_id in collect_block_arena_ids(ir_func) {
+        let slot = block_arena_slot(&mut builder, &mut block_arena_slots, block_id);
+        let arena_addr = builder.ins().stack_addr(types::I64, slot, 0);
+        builder.ins().call(arena_init_ref, &[arena_addr]);
+    }
 
     // Emit each block
     let mut first_block = true;
@@ -1787,6 +2139,7 @@ fn compile_ir_function(
             trace,
             current_ir_block: ir_block.id,
             string_global_values: &string_global_values,
+            string_descriptor_global_values: &string_descriptor_global_values,
             extern_func_refs: &extern_func_refs,
             vow_desc_global_values: &vow_desc_global_values,
             vow_file_global_values: &vow_file_global_values,
@@ -1826,6 +2179,19 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // elem_align
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec
         }
+        "__vow_vec_new_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // elem_size
+            sig.params.push(AbiParam::new(types::I64)); // elem_align
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec
+        }
+        "__vow_vec_new_val" => {
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<i64>
+        }
+        "__vow_vec_new_val_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<i64>
+        }
         "__vow_vec_from_raw_parts_copy_val" => {
             sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // raw i64 ptr
@@ -1843,6 +2209,25 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_vec_push_val" => {
             sig.params.push(AbiParam::new(types::I64)); // vec ptr
             sig.params.push(AbiParam::new(types::I64)); // value (i64)
+        }
+        "__vow_vec_push_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // vec ptr
+            sig.params.push(AbiParam::new(types::I64)); // value ptr
+            sig.params.push(AbiParam::new(types::I64)); // elem_size
+            sig.params.push(AbiParam::new(types::I64)); // elem_align
+        }
+        "__vow_vec_push_val_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // vec ptr
+            sig.params.push(AbiParam::new(types::I64)); // value (i64)
+        }
+        "__vow_vec_reserve_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // vec ptr
+            sig.params.push(AbiParam::new(types::I64)); // additional
+            sig.params.push(AbiParam::new(types::I64)); // elem_size
+            sig.params.push(AbiParam::new(types::I64)); // elem_align
         }
         "__vow_vec_get_val" => {
             sig.params.push(AbiParam::new(types::I64)); // vec ptr
@@ -1870,9 +2255,29 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // len
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
+        "__vow_string_new_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // ptr
+            sig.params.push(AbiParam::new(types::I64)); // len
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
         "__vow_string_from_cstr" => {
             sig.params.push(AbiParam::new(types::I64)); // C-string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_string_from_cstr_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // C-string ptr
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_string_clone" => {
+            sig.params.push(AbiParam::new(types::I64)); // source string ptr
+            sig.returns.push(AbiParam::new(types::I64)); // copied *VowVec<u8>
+        }
+        "__vow_string_clone_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // source string ptr
+            sig.returns.push(AbiParam::new(types::I64)); // copied *VowVec<u8>
         }
         "__vow_string_pin_to_root" => {
             sig.params.push(AbiParam::new(types::I64)); // source string ptr
@@ -1901,7 +2306,19 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // needle ptr
             sig.returns.push(AbiParam::new(types::I8)); // bool
         }
+        "__vow_string_matches_literal_at" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.params.push(AbiParam::new(types::I64)); // offset
+            sig.params.push(AbiParam::new(types::I64)); // literal bytes ptr
+            sig.params.push(AbiParam::new(types::I64)); // literal byte len
+            sig.returns.push(AbiParam::new(types::I64)); // 1 if matched, else 0
+        }
         "__vow_string_push_str" => {
+            sig.params.push(AbiParam::new(types::I64)); // dest ptr
+            sig.params.push(AbiParam::new(types::I64)); // src ptr
+        }
+        "__vow_string_push_str_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // dest ptr
             sig.params.push(AbiParam::new(types::I64)); // src ptr
         }
@@ -1914,7 +2331,17 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.params.push(AbiParam::new(types::I64)); // byte value
         }
+        "__vow_string_push_byte_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.params.push(AbiParam::new(types::I64)); // byte value
+        }
         "__vow_string_from_i64" => {
+            sig.params.push(AbiParam::new(types::I64)); // value
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_string_from_i64_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // value
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
@@ -1925,6 +2352,22 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_fs_read" => {
             sig.params.push(AbiParam::new(types::I64)); // path C-string
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8> or null
+        }
+        "__vow_fs_open" => {
+            sig.params.push(AbiParam::new(types::I64)); // path *VowVec<u8>
+            sig.returns.push(AbiParam::new(types::I64)); // positive handle or -1
+        }
+        "__vow_fs_read_line" => {
+            sig.params.push(AbiParam::new(types::I64)); // file handle
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_fs_status" => {
+            sig.params.push(AbiParam::new(types::I64)); // file handle
+            sig.returns.push(AbiParam::new(types::I64)); // 0=active, 1=EOF, -1=err
+        }
+        "__vow_fs_close" => {
+            sig.params.push(AbiParam::new(types::I64)); // file handle
+            sig.returns.push(AbiParam::new(types::I64)); // 0=ok, -1=err
         }
         "__vow_fs_write" => {
             sig.params.push(AbiParam::new(types::I64)); // path C-string
@@ -1966,7 +2409,21 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // len
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
+        "__vow_string_substr_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.params.push(AbiParam::new(types::I64)); // start
+            sig.params.push(AbiParam::new(types::I64)); // len
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
         "__vow_string_substring" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.params.push(AbiParam::new(types::I64)); // start
+            sig.params.push(AbiParam::new(types::I64)); // end (exclusive)
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_string_substring_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.params.push(AbiParam::new(types::I64)); // start
             sig.params.push(AbiParam::new(types::I64)); // end (exclusive)
@@ -1977,6 +2434,12 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.returns.push(AbiParam::new(types::I64)); // *Option enum (16 bytes: tag+payload)
         }
         "__vow_string_split" => {
+            sig.params.push(AbiParam::new(types::I64)); // haystack ptr
+            sig.params.push(AbiParam::new(types::I64)); // separator ptr
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<String>
+        }
+        "__vow_string_split_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // haystack ptr
             sig.params.push(AbiParam::new(types::I64)); // separator ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<String>
@@ -1995,11 +2458,26 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
+        "__vow_string_trim_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
         "__vow_string_to_upper" => {
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
+        "__vow_string_to_upper_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
         "__vow_string_to_lower" => {
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_string_to_lower_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // string ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
@@ -2009,7 +2487,20 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // to ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
         }
+        "__vow_string_replace_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // string ptr
+            sig.params.push(AbiParam::new(types::I64)); // from ptr
+            sig.params.push(AbiParam::new(types::I64)); // to ptr
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
         "__vow_string_join" => {
+            sig.params.push(AbiParam::new(types::I64)); // vec ptr
+            sig.params.push(AbiParam::new(types::I64)); // separator ptr
+            sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
+        }
+        "__vow_string_join_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // vec ptr
             sig.params.push(AbiParam::new(types::I64)); // separator ptr
             sig.returns.push(AbiParam::new(types::I64)); // *VowVec<u8>
@@ -2030,6 +2521,11 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         }
         "__vow_num_cpus" => {
             sig.returns.push(AbiParam::new(types::I64)); // available CPU count
+        }
+        "__vow_memory_root_arena_bytes"
+        | "__vow_memory_peak_bytes"
+        | "__vow_memory_alloc_count_since_start" => {
+            sig.returns.push(AbiParam::new(types::I64)); // u64 counter
         }
         "__vow_hex_encode" => {
             sig.params.push(AbiParam::new(types::I64)); // vec ptr
@@ -2097,7 +2593,17 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
         "__vow_map_new" => {
             sig.returns.push(AbiParam::new(types::I64)); // *VowMap
         }
+        "__vow_map_new_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.returns.push(AbiParam::new(types::I64)); // *VowMap
+        }
         "__vow_map_insert" => {
+            sig.params.push(AbiParam::new(types::I64)); // map ptr
+            sig.params.push(AbiParam::new(types::I64)); // key
+            sig.params.push(AbiParam::new(types::I64)); // value
+        }
+        "__vow_map_insert_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
             sig.params.push(AbiParam::new(types::I64)); // map ptr
             sig.params.push(AbiParam::new(types::I64)); // key
             sig.params.push(AbiParam::new(types::I64)); // value
@@ -2116,9 +2622,38 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // map ptr
             sig.params.push(AbiParam::new(types::I64)); // key
         }
+        "__vow_map_remove_in_arena" => {
+            sig.params.push(AbiParam::new(types::I64)); // target arena
+            sig.params.push(AbiParam::new(types::I64)); // map ptr
+            sig.params.push(AbiParam::new(types::I64)); // key
+        }
         "__vow_map_len" => {
             sig.params.push(AbiParam::new(types::I64)); // map ptr
             sig.returns.push(AbiParam::new(types::I64)); // len
+        }
+        // BTreeMap runtime — sorted parallel-Vec backing
+        "__vow_btreemap_new" => {
+            sig.returns.push(AbiParam::new(types::I64)); // *VowBTreeMap
+        }
+        "__vow_btreemap_len" => {
+            sig.params.push(AbiParam::new(types::I64)); // map ptr
+            sig.returns.push(AbiParam::new(types::I64)); // len
+        }
+        "__vow_btreemap_insert" => {
+            sig.params.push(AbiParam::new(types::I64)); // map ptr
+            sig.params.push(AbiParam::new(types::I64)); // key
+            sig.params.push(AbiParam::new(types::I64)); // value
+            sig.returns.push(AbiParam::new(types::I64)); // *VowOption (prev)
+        }
+        "__vow_btreemap_get" => {
+            sig.params.push(AbiParam::new(types::I64)); // map ptr
+            sig.params.push(AbiParam::new(types::I64)); // key
+            sig.returns.push(AbiParam::new(types::I64)); // *VowOption
+        }
+        "__vow_btreemap_contains" => {
+            sig.params.push(AbiParam::new(types::I64)); // map ptr
+            sig.params.push(AbiParam::new(types::I64)); // key
+            sig.returns.push(AbiParam::new(types::I8)); // bool
         }
         // Cranelift shim FFI (used by self-hosted compiler)
         "__vow_clif_create" => {
@@ -2142,6 +2677,8 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // n_params
             sig.params.push(AbiParam::new(types::I64)); // ret_ty
             sig.params.push(AbiParam::new(types::I64)); // is_main
+            sig.params.push(AbiParam::new(types::I64)); // return summary kind
+            sig.params.push(AbiParam::new(types::I64)); // store_effects Vec
         }
         // Incremental per-function FFI (replaces the batched
         // __vow_clif_compile_function). Signatures must match
@@ -2238,6 +2775,7 @@ impl Backend for CraneliftBackend {
 
         // Create data sections for string constants
         let mut string_data_ids: Vec<DataId> = Vec::new();
+        let mut string_descriptor_data_ids: Vec<DataId> = Vec::new();
         for s in &module.strings {
             let mut bytes = s.as_bytes().to_vec();
             bytes.push(0); // null terminate
@@ -2250,18 +2788,41 @@ impl Backend for CraneliftBackend {
                 .define_data(data_id, &desc)
                 .map_err(|e| CodegenError::FunctionDefine(e.to_string()))?;
             string_data_ids.push(data_id);
+
+            let mut descriptor = vec![0u8; 24];
+            descriptor[8..16].copy_from_slice(&(s.len() as u64).to_le_bytes());
+            descriptor[16..24].copy_from_slice(&u64::MAX.to_le_bytes());
+            let mut desc = DataDescription::new();
+            desc.set_align(8);
+            desc.define(descriptor.into_boxed_slice());
+            let bytes_gv = obj_module.declare_data_in_data(data_id, &mut desc);
+            desc.write_data_addr(0, bytes_gv, 0);
+            let descriptor_id = obj_module
+                .declare_anonymous_data(false, false)
+                .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+            obj_module
+                .define_data(descriptor_id, &desc)
+                .map_err(|e| CodegenError::FunctionDefine(e.to_string()))?;
+            string_descriptor_data_ids.push(descriptor_id);
         }
 
         // Scan all functions for CallExtern symbols and declare them as imports
         let mut extern_syms = HashSet::new();
         for func in &module.functions {
+            let inst_index = build_inst_index(func);
+            let phi_data = build_phi_upsilon_data(func);
             for block in &func.blocks {
                 for inst in &block.insts {
                     if let InstData::CallExtern(sym) = &inst.data {
+                        if sym == "__vow_string_literal" {
+                            continue;
+                        }
                         if inst.opcode == Opcode::DebugCall && !mode.has_debug_checks() {
                             continue;
                         }
-                        extern_syms.insert(sym.clone());
+                        let (routed_sym, _) =
+                            routed_vec_extern(sym, inst, &inst_index, &func.summary, &phi_data);
+                        extern_syms.insert(routed_sym.to_string());
                     }
                 }
             }
@@ -2307,6 +2868,13 @@ impl Backend for CraneliftBackend {
             .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
         let arena_close_id = obj_module
             .declare_function("__vow_arena_close", Linkage::Import, &arena_open_close_sig)
+            .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
+        let arena_init_id = obj_module
+            .declare_function(
+                "__vow_arena_init_closed",
+                Linkage::Import,
+                &arena_open_close_sig,
+            )
             .map_err(|e| CodegenError::FunctionDeclare(e.to_string()))?;
 
         // `__vow_string_clone_into_arena` is only imported when some function
@@ -2480,6 +3048,7 @@ impl Backend for CraneliftBackend {
                     vow_violation_id,
                     overflow_id,
                     arena_alloc_id,
+                    arena_init_id,
                     arena_open_id,
                     arena_close_id,
                     string_clone_id,
@@ -2496,6 +3065,7 @@ impl Backend for CraneliftBackend {
                     stack_exit_id,
                 },
                 &string_data_ids,
+                &string_descriptor_data_ids,
                 &extern_func_ids,
                 &func_summaries,
             )?;
@@ -2576,6 +3146,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -2607,6 +3178,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -2645,6 +3217,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -2748,6 +3321,7 @@ mod tests {
                 ],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let _ = VowId(0); // suppress unused import
@@ -2790,6 +3364,7 @@ mod tests {
             blocks: vec![],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
         let sig = build_signature(&ir_func, CallConv::SystemV);
         assert_eq!(sig.params.len(), 2);
@@ -2822,6 +3397,7 @@ mod tests {
                     source: RegionConstraint::FreshInCaller,
                 }],
             },
+            source_file: String::new(),
         };
 
         let sig = build_signature(&ir_func, CallConv::SystemV);
@@ -2857,6 +3433,7 @@ mod tests {
                     source: RegionConstraint::FreshInCaller,
                 }],
             },
+            source_file: String::new(),
         };
 
         let sig = build_signature(&ir_func, CallConv::SystemV);
@@ -2871,7 +3448,7 @@ mod tests {
 
     #[test]
     fn cranelift_backend_default_impl() {
-        let _ = CraneliftBackend::default();
+        let _ = CraneliftBackend {};
     }
 
     /// Regression for the Codex review on PR #230: `build_signature`
@@ -2915,6 +3492,7 @@ mod tests {
                     source: RegionConstraint::FreshInCaller,
                 }],
             },
+            source_file: String::new(),
         };
 
         let helper = Function {
@@ -2940,6 +3518,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
 
         let module = make_module("test", vec![main_fn, helper]);
@@ -2973,6 +3552,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         }
     }
 
@@ -3017,7 +3597,7 @@ mod tests {
                         Opcode::ConstF64,
                         Ty::F64,
                         vec![],
-                        InstData::ConstF64(2.718f64),
+                        InstData::ConstF64(std::f64::consts::E),
                     ),
                     inst(1, Opcode::Return, Ty::Unit, vec![0], InstData::None),
                 ],
@@ -3187,6 +3767,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3251,6 +3832,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3286,6 +3868,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3319,6 +3902,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3352,6 +3936,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3409,6 +3994,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3444,6 +4030,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3476,6 +4063,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3510,6 +4098,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3542,6 +4131,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3614,6 +4204,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3662,6 +4253,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3710,6 +4302,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3760,6 +4353,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -3822,6 +4416,675 @@ mod tests {
         let result =
             CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn block_region_vec_new_imports_arena_variant() {
+        let mut vec_new = inst(
+            2,
+            Opcode::Call,
+            Ty::Ptr,
+            vec![0, 1],
+            InstData::CallExtern("__vow_vec_new".to_string()),
+        );
+        vec_new.region = RegionId::Block(BlockId(0));
+        let module = make_module(
+            "test",
+            vec![simple_fn(
+                0,
+                "f",
+                vec![],
+                Ty::Ptr,
+                vec![
+                    inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                    vec_new,
+                    inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                ],
+            )],
+        );
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(symbols.contains("__vow_vec_new_in_arena"));
+        assert!(!symbols.contains("__vow_vec_new"));
+    }
+
+    #[test]
+    fn root_region_vec_new_keeps_wrapper_symbol() {
+        let module = make_module(
+            "test",
+            vec![simple_fn(
+                0,
+                "f",
+                vec![],
+                Ty::Ptr,
+                vec![
+                    inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                    inst(
+                        2,
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![0, 1],
+                        InstData::CallExtern("__vow_vec_new".to_string()),
+                    ),
+                    inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                ],
+            )],
+        );
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(symbols.contains("__vow_vec_new"));
+        assert!(!symbols.contains("__vow_vec_new_in_arena"));
+    }
+
+    #[test]
+    fn block_region_string_from_cstr_imports_arena_variant() {
+        let mut string_new = inst(
+            1,
+            Opcode::Call,
+            Ty::Ptr,
+            vec![0],
+            InstData::CallExtern("__vow_string_from_cstr".to_string()),
+        );
+        string_new.region = RegionId::Block(BlockId(0));
+        let module = make_module(
+            "test",
+            vec![simple_fn(
+                0,
+                "f",
+                vec![],
+                Ty::I64,
+                vec![
+                    inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                    string_new,
+                    inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                ],
+            )],
+        );
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(symbols.contains("__vow_string_from_cstr_in_arena"));
+        assert!(!symbols.contains("__vow_string_from_cstr"));
+    }
+
+    #[test]
+    fn block_region_string_clone_imports_arena_variant() {
+        let mut string_clone = inst(
+            1,
+            Opcode::Call,
+            Ty::Ptr,
+            vec![0],
+            InstData::CallExtern("__vow_string_clone".to_string()),
+        );
+        string_clone.region = RegionId::Block(BlockId(0));
+        let module = make_module(
+            "test",
+            vec![simple_fn(
+                0,
+                "f",
+                vec![Ty::Ptr],
+                Ty::I64,
+                vec![
+                    inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    string_clone,
+                    inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                ],
+            )],
+        );
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(symbols.contains("__vow_string_clone_in_arena"));
+        assert!(!symbols.contains("__vow_string_clone"));
+    }
+
+    #[test]
+    fn static_string_literal_codegen_uses_rodata_descriptor_not_runtime_import() {
+        let mut module = make_module(
+            "test",
+            vec![simple_fn(
+                0,
+                "literal",
+                vec![],
+                Ty::Ptr,
+                vec![
+                    inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                    inst(
+                        1,
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![0],
+                        InstData::CallExtern("__vow_string_literal".to_string()),
+                    ),
+                    inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
+                ],
+            )],
+        );
+        module.strings.push("hello".to_string());
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(!symbols.contains("__vow_string_literal"));
+        assert!(!symbols.contains("__vow_string_from_cstr"));
+        assert!(
+            bytes
+                .windows(std::mem::size_of::<usize>())
+                .any(|window| window == usize::MAX.to_le_bytes()),
+            "static String descriptor should encode VOW_CAP_RODATA"
+        );
+    }
+
+    #[test]
+    fn block_region_fresh_string_helpers_import_arena_variants() {
+        let cases = [
+            ("__vow_string_split", "__vow_string_split_in_arena", 2),
+            ("__vow_string_trim", "__vow_string_trim_in_arena", 1),
+            ("__vow_string_to_upper", "__vow_string_to_upper_in_arena", 1),
+            ("__vow_string_to_lower", "__vow_string_to_lower_in_arena", 1),
+            ("__vow_string_replace", "__vow_string_replace_in_arena", 3),
+            ("__vow_string_join", "__vow_string_join_in_arena", 2),
+        ];
+
+        let mut insts = vec![
+            inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+            inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+        ];
+        for (idx, (sym, _, arity)) in cases.iter().enumerate() {
+            let mut call = inst(
+                10 + idx as u32,
+                Opcode::Call,
+                Ty::Ptr,
+                (0..*arity).collect(),
+                InstData::CallExtern((*sym).to_string()),
+            );
+            call.region = RegionId::Block(BlockId(0));
+            insts.push(call);
+        }
+        insts.push(inst(90, Opcode::Return, Ty::Unit, vec![], InstData::None));
+
+        let module = make_module("test", vec![simple_fn(0, "f", vec![], Ty::Unit, insts)]);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+
+        for (root, routed, _) in cases {
+            assert!(symbols.contains(routed), "{routed} should be imported");
+            assert!(!symbols.contains(root), "{root} should not be imported");
+        }
+    }
+
+    #[test]
+    fn root_region_string_from_cstr_keeps_wrapper_symbol() {
+        let module = make_module(
+            "test",
+            vec![simple_fn(
+                0,
+                "f",
+                vec![],
+                Ty::I64,
+                vec![
+                    inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                    inst(
+                        1,
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![0],
+                        InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                    ),
+                    inst(2, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(3, Opcode::Return, Ty::Unit, vec![2], InstData::None),
+                ],
+            )],
+        );
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(symbols.contains("__vow_string_from_cstr"));
+        assert!(!symbols.contains("__vow_string_from_cstr_in_arena"));
+    }
+
+    #[test]
+    fn block_region_string_push_str_imports_arena_variant() {
+        let mut dest = inst(
+            1,
+            Opcode::Call,
+            Ty::Ptr,
+            vec![0],
+            InstData::CallExtern("__vow_string_from_cstr".to_string()),
+        );
+        dest.region = RegionId::Block(BlockId(0));
+        let mut src = inst(
+            3,
+            Opcode::Call,
+            Ty::Ptr,
+            vec![2],
+            InstData::CallExtern("__vow_string_from_cstr".to_string()),
+        );
+        src.region = RegionId::Block(BlockId(0));
+        let module = make_module(
+            "test",
+            vec![simple_fn(
+                0,
+                "f",
+                vec![],
+                Ty::I64,
+                vec![
+                    inst(0, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(0)),
+                    dest,
+                    inst(2, Opcode::ConstStr, Ty::Ptr, vec![], InstData::ConstStr(1)),
+                    src,
+                    inst(
+                        4,
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![1, 3],
+                        InstData::CallExtern("__vow_string_push_str".to_string()),
+                    ),
+                    inst(5, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(6, Opcode::Return, Ty::Unit, vec![5], InstData::None),
+                ],
+            )],
+        );
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(symbols.contains("__vow_string_push_str_in_arena"));
+        assert!(!symbols.contains("__vow_string_push_str"));
+    }
+
+    #[test]
+    fn parameter_region_string_push_byte_imports_arena_variant() {
+        let grow_param = Function {
+            id: FuncId(0),
+            name: "grow_param".to_string(),
+            params: vec![Ty::Ptr],
+            param_names: vec!["s".to_string()],
+            return_ty: Ty::Unit,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    inst(
+                        1,
+                        Opcode::ConstI64,
+                        Ty::I64,
+                        vec![],
+                        InstData::ConstI64(120),
+                    ),
+                    inst(
+                        2,
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![0, 1],
+                        InstData::CallExtern("__vow_string_push_byte".to_string()),
+                    ),
+                    inst(3, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary {
+                param_regions: vec![],
+                return_region: RegionConstraint::ConstantGlobal,
+                store_effects: vec![StoreEffect {
+                    target: 0,
+                    source: RegionConstraint::ConstantGlobal,
+                }],
+            },
+            source_file: String::new(),
+        };
+        let module = make_module("test", vec![grow_param]);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(symbols.contains("__vow_string_push_byte_in_arena"));
+        assert!(!symbols.contains("__vow_string_push_byte"));
+    }
+
+    #[test]
+    fn projected_parameter_region_string_push_byte_keeps_default_variant() {
+        let grow_projection = Function {
+            id: FuncId(0),
+            name: "grow_projection".to_string(),
+            params: vec![Ty::Ptr, Ty::Ptr],
+            param_names: vec!["strings".to_string(), "holder".to_string()],
+            return_ty: Ty::Unit,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![BasicBlock {
+                id: BlockId(0),
+                insts: vec![
+                    inst(0, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(0)),
+                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(0)),
+                    inst(
+                        2,
+                        Opcode::Call,
+                        Ty::Ptr,
+                        vec![0, 1],
+                        InstData::CallExtern("__vow_vec_get_val".to_string()),
+                    ),
+                    inst(3, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+                    inst(
+                        4,
+                        Opcode::FieldGet,
+                        Ty::Ptr,
+                        vec![3],
+                        InstData::FieldIndex(0),
+                    ),
+                    inst(
+                        5,
+                        Opcode::ConstI64,
+                        Ty::I64,
+                        vec![],
+                        InstData::ConstI64(120),
+                    ),
+                    inst(
+                        6,
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![2, 5],
+                        InstData::CallExtern("__vow_string_push_byte".to_string()),
+                    ),
+                    inst(
+                        7,
+                        Opcode::ConstI64,
+                        Ty::I64,
+                        vec![],
+                        InstData::ConstI64(121),
+                    ),
+                    inst(
+                        8,
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![4, 7],
+                        InstData::CallExtern("__vow_string_push_byte".to_string()),
+                    ),
+                    inst(9, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                ],
+            }],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary {
+                param_regions: vec![],
+                return_region: RegionConstraint::ConstantGlobal,
+                store_effects: vec![
+                    StoreEffect {
+                        target: 0,
+                        source: RegionConstraint::ConstantGlobal,
+                    },
+                    StoreEffect {
+                        target: 1,
+                        source: RegionConstraint::ConstantGlobal,
+                    },
+                ],
+            },
+            source_file: String::new(),
+        };
+        let module = make_module("test", vec![grow_projection]);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(symbols.contains("__vow_string_push_byte"));
+        assert!(!symbols.contains("__vow_string_push_byte_in_arena"));
+    }
+
+    #[test]
+    fn phi_parameter_region_string_push_byte_imports_arena_variant() {
+        let phi_id = InstId(8);
+        let grow_phi = Function {
+            id: FuncId(0),
+            name: "grow_phi".to_string(),
+            params: vec![Ty::Bool, Ty::Ptr],
+            param_names: vec!["cond".to_string(), "s".to_string()],
+            return_ty: Ty::Unit,
+            effects: vec![],
+            vows: vec![],
+            blocks: vec![
+                BasicBlock {
+                    id: BlockId(0),
+                    insts: vec![
+                        inst(0, Opcode::GetArg, Ty::Bool, vec![], InstData::ArgIndex(0)),
+                        inst(1, Opcode::GetArg, Ty::Ptr, vec![], InstData::ArgIndex(1)),
+                        inst(
+                            2,
+                            Opcode::Branch,
+                            Ty::Unit,
+                            vec![0],
+                            InstData::BranchTargets {
+                                then_block: BlockId(1),
+                                else_block: BlockId(2),
+                            },
+                        ),
+                    ],
+                },
+                BasicBlock {
+                    id: BlockId(1),
+                    insts: vec![
+                        inst(
+                            3,
+                            Opcode::Upsilon,
+                            Ty::Unit,
+                            vec![1],
+                            InstData::PhiTarget(phi_id),
+                        ),
+                        inst(
+                            4,
+                            Opcode::Jump,
+                            Ty::Unit,
+                            vec![],
+                            InstData::JumpTarget(BlockId(3)),
+                        ),
+                    ],
+                },
+                BasicBlock {
+                    id: BlockId(2),
+                    insts: vec![
+                        inst(
+                            5,
+                            Opcode::Upsilon,
+                            Ty::Unit,
+                            vec![1],
+                            InstData::PhiTarget(phi_id),
+                        ),
+                        inst(
+                            6,
+                            Opcode::Jump,
+                            Ty::Unit,
+                            vec![],
+                            InstData::JumpTarget(BlockId(3)),
+                        ),
+                    ],
+                },
+                BasicBlock {
+                    id: BlockId(3),
+                    insts: vec![
+                        Inst {
+                            id: phi_id,
+                            opcode: Opcode::Phi,
+                            ty: Ty::Ptr,
+                            args: vec![],
+                            data: InstData::None,
+                            origin: sp(),
+                            region: RegionId::Root,
+                        },
+                        inst(
+                            9,
+                            Opcode::ConstI64,
+                            Ty::I64,
+                            vec![],
+                            InstData::ConstI64(120),
+                        ),
+                        inst(
+                            10,
+                            Opcode::Call,
+                            Ty::Unit,
+                            vec![8, 9],
+                            InstData::CallExtern("__vow_string_push_byte".to_string()),
+                        ),
+                        inst(11, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                    ],
+                },
+            ],
+            local_names: std::collections::HashMap::new(),
+            summary: RegionSummary {
+                param_regions: vec![],
+                return_region: RegionConstraint::ConstantGlobal,
+                store_effects: vec![StoreEffect {
+                    target: 1,
+                    source: RegionConstraint::ConstantGlobal,
+                }],
+            },
+            source_file: String::new(),
+        };
+        let module = make_module("test", vec![grow_phi]);
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(symbols.contains("__vow_string_push_byte_in_arena"));
+        assert!(!symbols.contains("__vow_string_push_byte"));
+    }
+
+    #[test]
+    fn block_region_vec_push_val_imports_arena_variant() {
+        let mut vec_new = inst(
+            2,
+            Opcode::Call,
+            Ty::Ptr,
+            vec![0, 1],
+            InstData::CallExtern("__vow_vec_new".to_string()),
+        );
+        vec_new.region = RegionId::Block(BlockId(0));
+        let module = make_module(
+            "test",
+            vec![simple_fn(
+                0,
+                "f",
+                vec![],
+                Ty::Unit,
+                vec![
+                    inst(0, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                    inst(1, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(8)),
+                    vec_new,
+                    inst(3, Opcode::ConstI64, Ty::I64, vec![], InstData::ConstI64(42)),
+                    inst(
+                        4,
+                        Opcode::Call,
+                        Ty::Unit,
+                        vec![2, 3],
+                        InstData::CallExtern("__vow_vec_push_val".to_string()),
+                    ),
+                    inst(5, Opcode::Return, Ty::Unit, vec![], InstData::None),
+                ],
+            )],
+        );
+        let result =
+            CraneliftBackend::new().compile_module(&module, BuildMode::Debug, TraceMode::Off);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let bytes = result.unwrap().bytes;
+        use object::{Object, ObjectSymbol};
+        let object = object::File::parse(bytes.as_slice()).expect("compiled object should parse");
+        let symbols: HashSet<String> = object
+            .symbols()
+            .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+            .collect();
+        assert!(symbols.contains("__vow_vec_push_val_in_arena"));
+        assert!(!symbols.contains("__vow_vec_push_val"));
     }
 
     #[test]
@@ -4130,7 +5393,7 @@ mod tests {
                         Opcode::ConstF64,
                         Ty::F64,
                         vec![],
-                        InstData::ConstF64(2.718f64),
+                        InstData::ConstF64(std::f64::consts::E),
                     ),
                     inst(
                         2,
@@ -4446,6 +5709,7 @@ mod tests {
                     }],
                     local_names: std::collections::HashMap::new(),
                     summary: RegionSummary::default(),
+                    source_file: String::new(),
                 },
                 Function {
                     id: FuncId(1),
@@ -4471,6 +5735,7 @@ mod tests {
                     }],
                     local_names: std::collections::HashMap::new(),
                     summary: RegionSummary::default(),
+                    source_file: String::new(),
                 },
             ],
         );
@@ -4568,10 +5833,11 @@ mod tests {
                 return_region: RegionConstraint::FreshInCaller,
                 store_effects: vec![],
             },
+            source_file: String::new(),
         }
     }
 
-    /// Build a `__vow_string_from_cstr(ConstStr)` arm — the actual shape
+    /// Build a `__vow_string_literal(ConstStr)` arm — the actual shape
     /// the Vow lowerer produces for a String literal (see
     /// `vow-ir/src/lower/mod.rs` `Lit::String`). The Call's result is a
     /// `VowVec` descriptor and is the only kind of leaf the
@@ -4589,7 +5855,7 @@ mod tests {
             Opcode::Call,
             Ty::Ptr,
             vec![base_id],
-            InstData::CallExtern("__vow_string_from_cstr".to_string()),
+            InstData::CallExtern("__vow_string_literal".to_string()),
         );
         vec![cstr, call]
     }
@@ -4604,7 +5870,7 @@ mod tests {
     }
 
     /// Acceptance test 2 from issue #198 (safe variant): a Phi whose
-    /// arms are both `__vow_string_from_cstr(literal)` — the actual
+    /// arms are both `__vow_string_literal(literal)` — the actual
     /// lowered shape of a Vow String literal — produces `VowVec`
     /// descriptors on every path. Materialising via
     /// `__vow_string_clone_into_arena` is sound; the clone runtime is
@@ -4619,7 +5885,7 @@ mod tests {
         assert!(result.is_ok(), "{:?}", result.err());
         assert!(
             module_imports_string_clone(&result.unwrap().bytes),
-            "Phi with all `__vow_string_from_cstr` arms must materialise"
+            "Phi with all `__vow_string_literal` arms must materialise"
         );
     }
 
@@ -4663,7 +5929,7 @@ mod tests {
 
     /// Defense-in-depth (codex P1 from PR #230 round-3 review): a Phi
     /// arm that is a *raw* `ConstStr` (not wrapped in
-    /// `__vow_string_from_cstr`) is a c-string pointer, not a `VowVec`
+    /// `__vow_string_literal`) is a c-string pointer, not a `VowVec`
     /// descriptor. Treating it as clone-safe would corrupt memory.
     /// The well-formed Vow lowerer never produces this shape — every
     /// String literal is wrapped in the `from_cstr` Call — but the
@@ -4695,7 +5961,7 @@ mod tests {
     fn fresh_in_caller_string_literal_return_materialises_via_clone() {
         // Phase 4 / S5: a `FreshInCaller` function whose return path is the
         // lowered shape of a Vow String literal —
-        // `Call __vow_string_from_cstr(ConstStr)` — produces a `VowVec`
+        // `Call __vow_string_literal(ConstStr)` — produces a `VowVec`
         // descriptor that must be cloned into `target_region` to satisfy
         // §5.1. The produced object must import
         // `__vow_string_clone_into_arena`.
@@ -4718,7 +5984,7 @@ mod tests {
                             Opcode::Call,
                             Ty::Ptr,
                             vec![0],
-                            InstData::CallExtern("__vow_string_from_cstr".to_string()),
+                            InstData::CallExtern("__vow_string_literal".to_string()),
                         ),
                         inst(2, Opcode::Return, Ty::Unit, vec![1], InstData::None),
                     ],
@@ -4729,6 +5995,7 @@ mod tests {
                     return_region: RegionConstraint::FreshInCaller,
                     store_effects: vec![],
                 },
+                source_file: String::new(),
             }],
         );
         module.strings.push("hello".to_string());
@@ -4777,6 +6044,7 @@ mod tests {
                     return_region: RegionConstraint::FreshInCaller,
                     store_effects: vec![],
                 },
+                source_file: String::new(),
             }],
         );
         let result =
@@ -4849,6 +6117,7 @@ mod tests {
                 return_region: RegionConstraint::FreshInCaller,
                 store_effects: vec![],
             },
+            source_file: String::new(),
         };
 
         let mut caller_open = inst(0, Opcode::RegionOpen, Ty::Unit, vec![], InstData::None);
@@ -4883,6 +6152,7 @@ mod tests {
             }],
             local_names: std::collections::HashMap::new(),
             summary: RegionSummary::default(),
+            source_file: String::new(),
         };
 
         let module = make_module("test", vec![callee, caller]);
@@ -4978,6 +6248,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =
@@ -5013,6 +6284,7 @@ mod tests {
                 }],
                 local_names: std::collections::HashMap::new(),
                 summary: RegionSummary::default(),
+                source_file: String::new(),
             }],
         );
         let result =

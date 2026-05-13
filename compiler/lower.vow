@@ -57,7 +57,10 @@ struct ScopeSnap {
 }
 
 fn lctx_new(name: String, return_ty: i64, effects: i64, arena: AstArena, str_eids: Vec<i64>) -> LowerCtx {
-    let f: IrFunction = ir_function_new(0, name, return_ty, effects);
+    // Placeholder source_file; the per-function value is stamped onto
+    // `ctx.func.source_file` inside `lower_function_vow` (compiler/lower.vow)
+    // from `ctx.file`, which `lower_module_vow` updates for each FnDef.
+    let f: IrFunction = ir_function_new(0, name, return_ty, effects, String::from(""));
     let entry: IrBlock = ir_block_new(0);
     f.blocks.push(entry);
     LowerCtx {
@@ -607,6 +610,10 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("print_u64") { return String::from("__vow_print_u64"); }
     if name == String::from("eprintln_str") { return String::from("__vow_eprintln_str"); }
     if name == String::from("fs_read") { return String::from("__vow_fs_read"); }
+    if name == String::from("fs_open") { return String::from("__vow_fs_open"); }
+    if name == String::from("fs_read_line") { return String::from("__vow_fs_read_line"); }
+    if name == String::from("fs_status") { return String::from("__vow_fs_status"); }
+    if name == String::from("fs_close") { return String::from("__vow_fs_close"); }
     if name == String::from("fs_write") { return String::from("__vow_fs_write"); }
     if name == String::from("fs_exists") { return String::from("__vow_fs_exists"); }
     if name == String::from("fs_mkdir") { return String::from("__vow_fs_mkdir"); }
@@ -630,6 +637,9 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("time_unix") { return String::from("__vow_time_unix"); }
     if name == String::from("time_unix_ms") { return String::from("__vow_time_unix_ms"); }
     if name == String::from("num_cpus") { return String::from("__vow_num_cpus"); }
+    if name == String::from("memory_root_arena_bytes") { return String::from("__vow_memory_root_arena_bytes"); }
+    if name == String::from("memory_peak_bytes") { return String::from("__vow_memory_peak_bytes"); }
+    if name == String::from("memory_alloc_count_since_start") { return String::from("__vow_memory_alloc_count_since_start"); }
     if name == String::from("hex_encode") { return String::from("__vow_hex_encode"); }
     if name == String::from("hex_decode") { return String::from("__vow_hex_decode"); }
     if name == String::from("args") { return String::from("__vow_args"); }
@@ -662,6 +672,10 @@ fn builtin_ret_ty(name: String) -> i64 {
     if name == String::from("print_u64") { return ITY_UNIT(); }
     if name == String::from("eprintln_str") { return ITY_UNIT(); }
     if name == String::from("fs_read") { return ITY_PTR(); }
+    if name == String::from("fs_open") { return ITY_I64(); }
+    if name == String::from("fs_read_line") { return ITY_PTR(); }
+    if name == String::from("fs_status") { return ITY_I64(); }
+    if name == String::from("fs_close") { return ITY_I64(); }
     if name == String::from("fs_write") { return ITY_I64(); }
     if name == String::from("fs_exists") { return ITY_I64(); }
     if name == String::from("fs_mkdir") { return ITY_I64(); }
@@ -685,6 +699,9 @@ fn builtin_ret_ty(name: String) -> i64 {
     if name == String::from("time_unix") { return ITY_I64(); }
     if name == String::from("time_unix_ms") { return ITY_I64(); }
     if name == String::from("num_cpus") { return ITY_I64(); }
+    if name == String::from("memory_root_arena_bytes") { return ITY_U64(); }
+    if name == String::from("memory_peak_bytes") { return ITY_U64(); }
+    if name == String::from("memory_alloc_count_since_start") { return ITY_U64(); }
     if name == String::from("hex_encode") { return ITY_PTR(); }
     if name == String::from("hex_decode") { return ITY_PTR(); }
     if name == String::from("args") { return ITY_PTR(); }
@@ -841,7 +858,11 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         let str_id: i64 = lctx_emit(ctx, IOP_CONST_STR(), ITY_PTR(), args, IDATA_CONST_STR(), pool_idx, 0, String::from(""));
         let call_args: Vec<i64> = Vec::new();
         call_args.push(str_id);
-        let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_from_cstr"));
+        let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_literal"));
+        // Anchor this Call to the literal span: the IOP_CONST_STR above is
+        // not the site that produces the VowVec descriptor, so the call needs
+        // call-anchored diagnostics.
+        lctx_set_inst_span(ctx, result, expr_span(a, eid));
         lctx_tag(ctx, result, String::from("String"));
         return result;
     }
@@ -1022,8 +1043,38 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                     }
                     return result;
                 }
+                // pin_to_root relies on lowering-time String/Vec tags. Keep builtin result
+                // tags in sync with the Rust lowerer, or pin_to_root(expr) becomes a no-op here.
                 return source_id;
             }
+        }
+        if fn_name == String::from("string_matches_literal_at") {
+            let nargs: i64 = list_len(a, args_lid);
+            if nargs >= 3 {
+                let string_eid: i64 = list_get(a, args_lid, 0);
+                let pos_eid: i64 = list_get(a, args_lid, 1);
+                let literal_eid: i64 = list_get(a, args_lid, 2);
+                if expr_tag(a, literal_eid) == EXPR_LIT_STR() {
+                    let string_id: i64 = lower_consumed_expr(ctx, string_eid);
+                    let pos_id: i64 = lower_consumed_expr(ctx, pos_eid);
+                    let sid: i64 = expr_a(a, literal_eid);
+                    let lit: String = arena_str(a, sid);
+                    let lit_len: i64 = lit.len();
+                    let pool_idx: i64 = lctx_intern_str(ctx, lit);
+                    let no_args: Vec<i64> = Vec::new();
+                    let literal_ptr: i64 = lctx_emit(ctx, IOP_CONST_STR(), ITY_PTR(), no_args, IDATA_CONST_STR(), pool_idx, 0, String::from(""));
+                    let len_args: Vec<i64> = Vec::new();
+                    let literal_len: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), len_args, IDATA_CONST_I64(), lit_len, 0, String::from(""));
+                    let call_args: Vec<i64> = Vec::new();
+                    call_args.push(string_id);
+                    call_args.push(pos_id);
+                    call_args.push(literal_ptr);
+                    call_args.push(literal_len);
+                    return lctx_emit(ctx, IOP_CALL(), ITY_I64(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_matches_literal_at"));
+                }
+            }
+            let unit_args: Vec<i64> = Vec::new();
+            return lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), unit_args, IDATA_NONE(), 0, 0, String::from(""));
         }
         let debug_ext: String = debug_builtin_to_extern(fn_name);
         if debug_ext != String::from("") {
@@ -1052,7 +1103,8 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 ai = ai + 1;
             }
             let result: i64 = lctx_emit(ctx, IOP_CALL(), ret_ty, call_args, IDATA_CALL_EXTERN(), 0, 0, ext);
-            if fn_name == String::from("fs_read") || fn_name == String::from("stdin_read") || fn_name == String::from("stdin_read_line") {
+            // Keep these builtin result tags in sync with tag_builtin_result in the Rust lowerer.
+            if fn_name == String::from("fs_read") || fn_name == String::from("fs_read_line") || fn_name == String::from("stdin_read") || fn_name == String::from("stdin_read_line") {
                 lctx_tag(ctx, result, String::from("String"));
             }
             if fn_name == String::from("args") {
@@ -1068,6 +1120,9 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 lctx_tag(ctx, result, String::from("Vec"));
             }
             if fn_name == String::from("hex_encode") {
+                lctx_tag(ctx, result, String::from("String"));
+            }
+            if fn_name == String::from("process_get_stdout") || fn_name == String::from("process_get_stderr") || fn_name == String::from("process_stdout_for") || fn_name == String::from("process_stderr_for") {
                 lctx_tag(ctx, result, String::from("String"));
             }
             if fn_name == String::from("vec_sort") || fn_name == String::from("hex_decode") {
@@ -1946,9 +2001,12 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let nargs: i64 = list_len(a, fields_lid);
             if nargs > 0 {
                 let arg_eid: i64 = list_get(a, fields_lid, 0);
-                let ptr_id: i64 = lower_expr(ctx, arg_eid);
-                lctx_tag(ctx, ptr_id, String::from("String"));
-                return ptr_id;
+                let source_id: i64 = lower_expr(ctx, arg_eid);
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(source_id);
+                let clone_id: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_clone"));
+                lctx_tag(ctx, clone_id, String::from("String"));
+                return clone_id;
             }
         }
 
@@ -1975,14 +2033,14 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
         }
 
         if enum_name == String::from("String") && variant_name == String::from("new") {
-            let size_args: Vec<i64> = Vec::new();
-            let size_val: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), size_args, IDATA_CONST_I64(), 1, 0, String::from(""));
-            let align_args: Vec<i64> = Vec::new();
-            let align_val: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), align_args, IDATA_CONST_I64(), 1, 0, String::from(""));
+            let ptr_args: Vec<i64> = Vec::new();
+            let ptr_val: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), ptr_args, IDATA_CONST_I64(), 0, 0, String::from(""));
+            let len_args: Vec<i64> = Vec::new();
+            let len_val: i64 = lctx_emit(ctx, IOP_CONST_I64(), ITY_I64(), len_args, IDATA_CONST_I64(), 0, 0, String::from(""));
             let call_args: Vec<i64> = Vec::new();
-            call_args.push(size_val);
-            call_args.push(align_val);
-            let str_result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_vec_new"));
+            call_args.push(ptr_val);
+            call_args.push(len_val);
+            let str_result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_string_new"));
             lctx_tag(ctx, str_result, String::from("String"));
             return str_result;
         }
@@ -1991,6 +2049,13 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
             let call_args: Vec<i64> = Vec::new();
             let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_map_new"));
             lctx_tag(ctx, result, String::from("HashMap"));
+            return result;
+        }
+
+        if enum_name == String::from("BTreeMap") && variant_name == String::from("new") {
+            let call_args: Vec<i64> = Vec::new();
+            let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_btreemap_new"));
+            lctx_tag(ctx, result, String::from("BTreeMap"));
             return result;
         }
 
@@ -2258,6 +2323,80 @@ fn lower_expr(ctx: LowerCtx, eid: i64) -> i64 {
                 call_args.push(recv_id);
                 call_args.push(k_id);
                 return lctx_emit(ctx, IOP_CALL(), ITY_UNIT(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_map_remove"));
+            }
+        }
+
+        if recv_tag_str == String::from("BTreeMap") {
+            if method_name == String::from("len") {
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(recv_id);
+                return lctx_emit(ctx, IOP_CALL(), ITY_I64(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_btreemap_len"));
+            }
+            // Guard list_get against missing arguments. The type checker is
+            // responsible for catching arity errors but doesn't yet, so a
+            // malformed `m.insert(1)` (only one arg) would otherwise reach
+            // this code and trigger a list-out-of-bounds. Fall back to
+            // ConstUnit which produces a downstream type error rather than a
+            // crash. Mirrors the Vec.push pattern in the same file.
+            let nargs: i64 = list_len(a, args_lid);
+            if method_name == String::from("insert") {
+                let k_id: i64 = {
+                    if nargs > 0 {
+                        let ae: i64 = list_get(a, args_lid, 0);
+                        lower_consumed_expr(ctx, ae)
+                    } else {
+                        let u_args: Vec<i64> = Vec::new();
+                        lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
+                    }
+                };
+                let v_id: i64 = {
+                    if nargs > 1 {
+                        let ae: i64 = list_get(a, args_lid, 1);
+                        lower_consumed_expr(ctx, ae)
+                    } else {
+                        let u_args: Vec<i64> = Vec::new();
+                        lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
+                    }
+                };
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(recv_id);
+                call_args.push(k_id);
+                call_args.push(v_id);
+                let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_btreemap_insert"));
+                lctx_tag(ctx, result, String::from("Option"));
+                return result;
+            }
+            if method_name == String::from("get") {
+                let k_id: i64 = {
+                    if nargs > 0 {
+                        let ae: i64 = list_get(a, args_lid, 0);
+                        lower_consumed_expr(ctx, ae)
+                    } else {
+                        let u_args: Vec<i64> = Vec::new();
+                        lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
+                    }
+                };
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(recv_id);
+                call_args.push(k_id);
+                let result: i64 = lctx_emit(ctx, IOP_CALL(), ITY_PTR(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_btreemap_get"));
+                lctx_tag(ctx, result, String::from("Option"));
+                return result;
+            }
+            if method_name == String::from("contains") {
+                let k_id: i64 = {
+                    if nargs > 0 {
+                        let ae: i64 = list_get(a, args_lid, 0);
+                        lower_consumed_expr(ctx, ae)
+                    } else {
+                        let u_args: Vec<i64> = Vec::new();
+                        lctx_emit(ctx, IOP_CONST_UNIT(), ITY_UNIT(), u_args, IDATA_NONE(), 0, 0, String::from(""))
+                    }
+                };
+                let call_args: Vec<i64> = Vec::new();
+                call_args.push(recv_id);
+                call_args.push(k_id);
+                return lctx_emit(ctx, IOP_CALL(), ITY_BOOL(), call_args, IDATA_CALL_EXTERN(), 0, 0, String::from("__vow_btreemap_contains"));
             }
         }
 
@@ -3136,7 +3275,9 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     let params_lid: i64 = fn_params_lid(a, fid);
 
     let ir_ret: i64 = lctx_lower_ast_ty(ctx, ret_tid);
-    let func: IrFunction = ir_function_new(0, name, ir_ret, eff);
+    // ctx.file is updated per FnDef by lower_module_vow before invoking
+    // lower_function_vow, so each function gets its originating source path.
+    let func: IrFunction = ir_function_new(0, name, ir_ret, eff, ctx.file);
     let entry: IrBlock = ir_block_new(0);
     func.blocks.push(entry);
 
@@ -3188,6 +3329,8 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
                 let tn: String = arena_str(a, tn_sid);
                 if tn == String::from("HashMap") {
                     lctx_tag(ctx, arg_id, String::from("HashMap"));
+                } else if tn == String::from("BTreeMap") {
+                    lctx_tag(ctx, arg_id, String::from("BTreeMap"));
                 } else if tn == String::from("Vec") {
                     lctx_tag(ctx, arg_id, String::from("Vec"));
                     let pargs_lid: i64 = type_b(a, ptid);
@@ -3256,7 +3399,7 @@ fn lower_function_vow(ctx: LowerCtx, fid: i64) -> IrFunction {
     ctx.func
 }
 
-fn lower_module_vow(m: Module, str_eids: Vec<i64>, file_path: String) -> IrModule {
+fn lower_module_vow(m: Module, str_eids: Vec<i64>, item_files: Vec<String>) -> IrModule {
     let a: AstArena = m.arena;
     let mod_name_sid: i64 = m.name_sid;
     let mod_name: String = arena_str(a, mod_name_sid);
@@ -3473,7 +3616,8 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>, file_path: String) -> IrModul
     }
 
     let ctx: LowerCtx = lctx_new(String::from(""), ITY_UNIT(), 0, a, str_eids);
-    ctx.file = file_path;
+    // ctx.file is updated per FnDef inside the lowering loop below so each
+    // IrFunction gets the originating source path from `item_files`.
     ctx.func_names = func_names;
     ctx.func_ret_tys = func_ret_tys;
     ctx.func_ret_tags = func_ret_tags;
@@ -3498,6 +3642,9 @@ fn lower_module_vow(m: Module, str_eids: Vec<i64>, file_path: String) -> IrModul
         let ik: i64 = item_kind(item);
         let iid: i64 = item_id(item);
         if ik == ITEM_FN() {
+            // Stamp the per-item source path onto ctx.file; lower_function_vow
+            // forwards it into the constructed IrFunction's source_file field.
+            ctx.file = item_files[ii2];
             let ir_func: IrFunction = lower_function_vow(ctx, iid);
             ir_func.id = func_idx;
 

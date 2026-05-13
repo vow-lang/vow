@@ -115,7 +115,17 @@ if rs != 'VerifyFailed':
 
 rc = r.get('counterexamples', [])
 sc = s.get('counterexamples', [])
-if rs == 'VerifyFailed' and ss == 'VerifyFailed':
+# A VerifyFailed with a non-empty verify_status is a 'soft' ESBMC outcome
+# (timeout / unknown / error / tool_not_found) — ESBMC produced no
+# counterexample by design, so the parity check must not require one.
+rvs = r.get('verify_status') or ''
+svs = s.get('verify_status') or ''
+soft_fail = rs == 'VerifyFailed' and ss == 'VerifyFailed' and rvs and svs
+if soft_fail:
+    if rvs != svs:
+        errors.append(f'verify_status: {rvs} vs {svs}')
+    # verify_message is not compared — ESBMC-output text varies across runs and would cause brittle parity failures.
+elif rs == 'VerifyFailed' and ss == 'VerifyFailed':
     if len(rc) == 0:
         errors.append('rust has no counterexamples for VerifyFailed')
     if len(sc) == 0:
@@ -154,7 +164,7 @@ else:
 }
 
 compare_runtime() {
-    local label="$1" rust_bin="$2" self_bin="$3"
+    local label="$1" rust_bin="$2" self_bin="$3" stdin_file="${4:-}"
 
     if [ ! -x "$rust_bin" ] || [ ! -x "$self_bin" ]; then
         skip "$label" "binary not found"
@@ -162,8 +172,13 @@ compare_runtime() {
     fi
 
     local rust_out="" self_out="" rust_exit=0 self_exit=0
-    rust_out=$("$rust_bin" </dev/null 2>/dev/null) || rust_exit=$?
-    self_out=$(run_self_bin "$self_bin" </dev/null 2>/dev/null) || self_exit=$?
+    if [ -n "$stdin_file" ]; then
+        rust_out=$("$rust_bin" < "$stdin_file" 2>/dev/null) || rust_exit=$?
+        self_out=$(run_self_bin "$self_bin" < "$stdin_file" 2>/dev/null) || self_exit=$?
+    else
+        rust_out=$("$rust_bin" </dev/null 2>/dev/null) || rust_exit=$?
+        self_out=$(run_self_bin "$self_bin" </dev/null 2>/dev/null) || self_exit=$?
+    fi
 
     local errors=()
     if [ "$rust_exit" != "$self_exit" ]; then
@@ -177,6 +192,24 @@ compare_runtime() {
         pass "$label"
     else
         fail "$label" "$(IFS='; '; echo "${errors[*]}")"
+    fi
+}
+
+run_stdout_with_optional_stdin() {
+    local bin="$1" stdin_file="${2:-}"
+    if [ -n "$stdin_file" ]; then
+        "$bin" < "$stdin_file" 2>/dev/null
+    else
+        "$bin" </dev/null 2>/dev/null
+    fi
+}
+
+run_discard_with_optional_stdin() {
+    local bin="$1" stdin_file="${2:-}"
+    if [ -n "$stdin_file" ]; then
+        "$bin" < "$stdin_file" >/dev/null 2>/dev/null
+    else
+        "$bin" </dev/null >/dev/null 2>/dev/null
     fi
 }
 
@@ -235,6 +268,65 @@ cargo build --all --release 2>&1 | tail -1
 echo -e "${BOLD}Building self-hosted compiler...${RESET}"
 $RUST --no-verify compiler/main.vow -o "$TMPDIR/vowc_self" >/dev/null 2>/dev/null
 SELF="$TMPDIR/vowc_self"
+
+# ─── Section 0b: Concrete block-region parity ──────────────────────
+
+section_begin "Section 0b: Concrete Block-Region Parity"
+rust_ir="$TMPDIR/compiler_rust.ir"
+self_ir="$TMPDIR/compiler_self.ir"
+rust_ir_err="$TMPDIR/compiler_rust_ir.err"
+self_ir_err="$TMPDIR/compiler_self_ir.err"
+if "$RUST" build --no-verify --dump-ir compiler/main.vow >"$rust_ir" 2>"$rust_ir_err" \
+    && run_self build --no-verify --dump-ir compiler/main.vow >"$self_ir" 2>"$self_ir_err"; then
+    if python3 - "$rust_ir" "$self_ir" <<'PY'
+import re
+import sys
+
+inst_re = re.compile(r'%([0-9]+) = RegionAlloc.*<region=block_([0-9]+)>')
+
+def collect(path):
+    out = {}
+    func = None
+    with open(path, encoding='utf-8') as fh:
+        for line in fh:
+            if line.startswith('fn '):
+                func = line[3:].split('(', 1)[0].strip()
+                continue
+            match = inst_re.search(line)
+            if match and func is not None:
+                out[(func, int(match.group(1)))] = int(match.group(2))
+    return out
+
+rust = collect(sys.argv[1])
+self_hosted = collect(sys.argv[2])
+if rust == self_hosted:
+    print(f'OK ({len(rust)} concrete block placements)')
+    sys.exit(0)
+
+missing = sorted(set(rust) - set(self_hosted))
+extra = sorted(set(self_hosted) - set(rust))
+mismatched = sorted(k for k in set(rust) & set(self_hosted) if rust[k] != self_hosted[k])
+parts = []
+if missing:
+    parts.append('missing in self: ' + ', '.join(f'{f}%{i}->block_{rust[(f, i)]}' for f, i in missing[:8]))
+if extra:
+    parts.append('extra in self: ' + ', '.join(f'{f}%{i}->block_{self_hosted[(f, i)]}' for f, i in extra[:8]))
+if mismatched:
+    parts.append('mismatch: ' + ', '.join(
+        f'{f}%{i}: rust block_{rust[(f, i)]} vs self block_{self_hosted[(f, i)]}'
+        for f, i in mismatched[:8]
+    ))
+print('; '.join(parts))
+sys.exit(1)
+PY
+    then
+        pass "compiler/concrete-block-region-parity"
+    else
+        fail "compiler/concrete-block-region-parity" "concrete block placements differ"
+    fi
+else
+    fail "compiler/concrete-block-region-parity" "failed to dump compiler IR"
+fi
 
 # ─── Section 1: Build --no-verify ─────────────────────────────────
 
@@ -339,13 +431,27 @@ for vow_file in tests/run/*.vow; do
         continue
     fi
 
+    test_stdin=$(sed -n 's|^// TEST: stdin "\(.*\)"$|\1|p' "$vow_file" | head -1)
+    test_stdin_file=$(sed -n 's|^// TEST: stdin-file \(.*\)$|\1|p' "$vow_file" | head -1)
+    stdin_path=""
+    if [ -n "$test_stdin_file" ]; then
+        stdin_path="$(dirname "$vow_file")/$test_stdin_file"
+        if [ ! -f "$stdin_path" ]; then
+            fail "${name}/test-run" "stdin fixture not found: $stdin_path"
+            continue
+        fi
+    elif [ -n "$test_stdin" ]; then
+        stdin_path="$TMPDIR/stdin_${name}.txt"
+        printf '%b' "$test_stdin" > "$stdin_path"
+    fi
+
     # Compare runtime output between compilers
-    compare_runtime "${name}/test-run" "$TMPDIR/test_rust_${name}" "$TMPDIR/test_self_${name}"
+    compare_runtime "${name}/test-run" "$TMPDIR/test_rust_${name}" "$TMPDIR/test_self_${name}" "$stdin_path"
 
     # Validate against // TEST: stdout directive if present
     expected=$(sed -n 's|^// TEST: stdout "\(.*\)"$|\1|p' "$vow_file" | head -1)
     if [ -n "$expected" ]; then
-        actual=$("$TMPDIR/test_rust_${name}" </dev/null 2>/dev/null) || true
+        actual=$(run_stdout_with_optional_stdin "$TMPDIR/test_rust_${name}" "$stdin_path") || true
         # Interpret \n escapes in expected string
         expected_decoded=$(printf '%b' "$expected")
         if [ "$actual" = "$expected_decoded" ]; then
@@ -359,7 +465,7 @@ for vow_file in tests/run/*.vow; do
     expected_exit=$(sed -n 's|^// TEST: exit \([0-9]*\)$|\1|p' "$vow_file" | head -1)
     if [ -n "$expected_exit" ]; then
         actual_exit=0
-        "$TMPDIR/test_rust_${name}" </dev/null >/dev/null 2>/dev/null || actual_exit=$?
+        run_discard_with_optional_stdin "$TMPDIR/test_rust_${name}" "$stdin_path" || actual_exit=$?
         if [ "$actual_exit" = "$expected_exit" ]; then
             pass "${name}/test-exit"
         else
@@ -740,6 +846,20 @@ if command -v esbmc >/dev/null 2>&1; then
     fi
 else
     skip "arena/esbmc" "esbmc not on PATH"
+fi
+echo ""
+
+# ─── Section 12: vowc mutants Smoke Test ────────────────────────────
+
+section_begin "Section 12: vowc mutants Smoke Test"
+if [ -f tests/mutants/tests.sh ]; then
+    if (ulimit -v 2000000; VOWC_BIN="$SELF" bash tests/mutants/tests.sh) >"$TMPDIR/vowc-mutants-tests.log" 2>&1; then
+        pass "vowc-mutants/tests"
+    else
+        fail "vowc-mutants/tests" "$(tail -10 "$TMPDIR/vowc-mutants-tests.log")"
+    fi
+else
+    skip "vowc-mutants" "tests/mutants/tests.sh not present"
 fi
 echo ""
 

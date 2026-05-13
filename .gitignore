@@ -16,3 +16,12 @@ workflow/results/
 __pycache__/
 
 .claude/settings.local.json
+
+# Auto-installed by `vowc build`; regenerates from compiler source, so
+# tracking a snapshot would drift relative to the binary. Downstream
+# projects (per README) commit their own copy; vow-lang/vow does not.
+/.claude/skills/vow-toolchain/
+
+# vow-mutants outputs
+mutants.out
+mutants-shard-*/

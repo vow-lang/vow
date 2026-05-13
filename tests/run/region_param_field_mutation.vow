@@ -1,0 +1,31 @@
+// TEST: stdout ""
+// Issue #319 regression — the FieldSet skip-set extension must NOT
+// suppress notes for FieldSets into a parameter (caller-owned) container.
+// `fill` mutates `target.name` with a fresh String allocation and then
+// returns `target`. The `String::from("hi")` is a genuine store-effect
+// escape into a caller-owned container — exactly what RegionRootEscape
+// exists to flag — and must keep firing the note.
+//
+// The diagnostic-count assertion (>=1 RegionRootEscape note) lives in
+// `vow/tests/region_summary_equivalence.rs` (`rust_*` and `self_hosted_*`
+// param_field_mutation tests). The `// TEST: stdout ""` annotation here
+// only validates that the program compiles and runs cleanly under the
+// run-suite shell harness; it does NOT guard the negative diagnostic
+// case. If the self-hosted parity tests skip (no `build/vowc`), the
+// self-hosted half of this guarantee is unchecked.
+module Repro
+
+pub struct Box {
+    name: String,
+}
+
+fn fill(target: Box) -> Box {
+    target.name = String::from("hi");
+    target
+}
+
+fn main() -> i32 {
+    let b: Box = Box { name: String::from("init") };
+    let b2: Box = fill(b);
+    0
+}

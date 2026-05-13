@@ -51,7 +51,7 @@
           },
           "status": {
             "type": "string",
-            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified"],
+            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
             "description": "Verification status"
           }
         },
@@ -60,7 +60,7 @@
     },
     "summary": {
       "type": "object",
-      "required": ["total", "proven", "failed", "unknown", "timeout", "error", "not_verified"],
+      "required": ["total", "proven", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
       "properties": {
         "total": { "type": "integer" },
         "proven": { "type": "integer" },
@@ -68,7 +68,8 @@
         "unknown": { "type": "integer" },
         "timeout": { "type": "integer" },
         "error": { "type": "integer" },
-        "not_verified": { "type": "integer" }
+        "not_verified": { "type": "integer" },
+        "skipped": { "type": "integer" }
       },
       "additionalProperties": false
     }

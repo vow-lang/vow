@@ -317,6 +317,7 @@ mod tests {
             params,
             param_names: vec![],
             return_ty,
+            source_file: String::new(),
             effects,
             vows: vec![],
             blocks,

@@ -70,6 +70,21 @@ fn f() -> i32 {
 
 **Fix:** Change the expression or the declared type to match.
 
+### StaticLiteralRequired
+
+**Phase:** Type Checker
+**Meaning:** A compiler intrinsic requires a string literal operand so it can be lowered without allocation.
+
+```vow
+fn f(s: String, key: String) -> i64 {
+    string_matches_literal_at(s, 0, key)
+}
+```
+
+**Output:** `string_matches_literal_at requires a string literal as its third argument`
+
+**Fix:** Pass a literal directly, for example `string_matches_literal_at(s, 0, "name")`.
+
 ### EffectViolation
 
 **Phase:** Type Checker
@@ -162,6 +177,37 @@ trait Foo {
 
 **Fix:** Remove the unsupported construct. Vow does not support traits or impl blocks.
 
+### BTreeMapKeyTypeMustBeI64
+
+**Phase:** Type Checker
+**Meaning:** A `BTreeMap<K, V>` was instantiated with `K` not equal to `i64`. Phase 1 of the BTreeMap stdlib only supports `i64` keys; the runtime helpers and ESBMC C model are hard-coded to i64.
+
+```vow
+fn f() -> () {
+    let m: BTreeMap<bool, i64> = BTreeMap::new();
+    m.insert(true, 1);
+}
+```
+
+**Output:** `BTreeMap key type must be i64; found 'bool'`
+
+**Fix:** Use `BTreeMap<i64, V>`. If you need string or struct keys, hash or intern them to `i64` at the call site and keep a side-table for the originals.
+
+### BTreeMapValueTypeMustBeI64
+
+**Phase:** Type Checker
+**Meaning:** A `BTreeMap<K, V>` was instantiated with `V` not equal to `i64`. Phase 1 only supports `i64` values; the runtime helpers and ESBMC C model are hard-coded to i64 values. Widening V to struct payloads is a planned follow-up to the BTreeMap stdlib work.
+
+```vow
+fn f() -> () {
+    let n: BTreeMap<i64, String> = BTreeMap::new();
+}
+```
+
+**Output:** `BTreeMap value type must be i64 in Phase 1; found 'String'`
+
+**Fix:** Use `BTreeMap<i64, i64>`. For richer values, store an integer index/handle and keep the actual values in a separate `Vec<V>`.
+
 ### MissingContract
 
 **Phase:** Type Checker
@@ -225,16 +271,21 @@ fn add(a: i64, b: i64) -> i64 vow {
 ### RegionConflict
 
 **Phase:** Region Inference (arena-per-scope, Phase 3)
-**Meaning:** A heap-typed value's required lifetime cannot be satisfied by the regions the surrounding code provides. This fires when an interprocedural store-effect constraint is unsatisfiable — for example, a value allocated in an inner block is stored into a container that outlives that block.
+**Meaning:** A heap-typed value's required lifetime cannot be satisfied by the regions the surrounding code provides. This fires when an interprocedural store-effect constraint is unsatisfiable against the **inferred** region — that is, the value's `region(I) = LUB(must_outlive(I))` resolves to a concrete block strictly narrower than the target container's region.
 
-> **Coverage note (as of Phase 5):** the alloc→param-via-callee shape is
-> detected and emits this code with `Blame: Callee` and a hint pointing
-> at the three resolution strategies (copy into outer arena, hoist the
-> allocation, or restructure the data flow). Cross-parameter cases that
-> require a published store-effect, Phi-of-mixed-origins, and the full
-> block-tree LUB stay deferred to Phase 9 (issue #204). The spec shape
-> below is stable; the residual cases above silently promote to a
-> conservative `Root` region today rather than emitting a diagnostic.
+> **Coverage note (as of issue #314):** the check is now semantic, consulting
+> the inferred region populated by §4.1 step 3's LUB pass rather than the
+> raw IR opcode. A fresh allocation routed through a callee's store-effect
+> chain into a parameter container has its inferred region widened to
+> `Caller(HiddenRegionIdx(N))` by §4.1 step 2's must-outlive marker
+> propagation, where `N` is the precise slot index implied by the
+> destination (issue #317 slot-aware inference). Such single-slot routings
+> satisfy the constraint and are accepted. Allocations whose caller-region
+> markers require more than one hidden caller-arena slot resolve to
+> `Caller(HiddenRegionIdx::AMBIGUOUS)` and are rejected when the directly
+> fresh heap value is stored into a parameter-rooted target; allocations
+> whose inferred region is a strictly narrower block also fire
+> `RegionConflict`.
 
 ```vow
 fn store_into(out: Vec<String>, prefix: String) [io] {
@@ -244,7 +295,28 @@ fn store_into(out: Vec<String>, prefix: String) [io] {
 }
 ```
 
-**Fix:** Move the allocation to a wider scope, or copy the value into the target region (e.g., `String::from(s)` into the outer arena). The compiler does NOT silently promote values to the root region — see `docs/design/arena_memory.md` §4.4.
+**Fix:** Move the allocation to a wider scope, or copy the value into the target region (e.g., `String::from(s)` into the outer arena). For routings that compile cleanly but you'd like to know about (root-region placement), see `RegionRootEscape` below. See `docs/design/arena_memory.md` §4.4 for the full rejection vs. visibility distinction.
+
+### RegionRootEscape
+
+**Phase:** Region Inference (arena-per-scope, Phase 3)
+**Severity:** Note (informational — does not fail the build)
+**Meaning:** A heap allocation's inferred region is `Caller`, and the surrounding function publishes a `FreshInCaller` return summary or store effect — so the allocation may flow up the caller chain to `main` and ultimately land in the root region (`__vow_root_arena`, never freed). This is a memory-cost decision the compiler surfaces visibly per `docs/design/arena_memory.md` §4.4: silent root-region placement caused growth-with-no-signal in earlier compiler versions, and the note restores that signal without conflating it with unsoundness (`RegionConflict`).
+
+The note is conservative — it fires for any `Caller`-region allocation in a function that could route to a caller, even if the actual concrete chain in this program doesn't reach `main`. False positives are tolerated because the diagnostic is non-blocking.
+
+```json
+{
+  "error_code": "RegionRootEscape",
+  "severity": "note",
+  "message": "allocation may live in the root region: routed via store-effect chain to a caller whose target_region ultimately resolves to root",
+  "hints": [
+    "if intentional (e.g. program-lifetime data), no action needed; if you want this allocation freed earlier, restructure so the value is returned rather than stored into a parameter container"
+  ]
+}
+```
+
+**Fix:** Often none — if the program is short-lived (a checker, a CLI tool) or the values are genuinely program-lifetime, the note is informational. To free the allocation earlier, restructure so the value is **returned** from the constructing function rather than stored into a parameter container; the canonical `FreshInCaller` return path (`fn make_X() -> X`) does not trigger the note for the returned value or any allocation installed as a field of the returned struct (e.g. `Item { name: String::from("hi") }`). The exemption applies only to the *currently-installed* field initializers — a field overwritten before the return (`x.f = A; x.f = B; return x`) does not suppress the dead allocation `A`, which fires the note as expected (per-block last-write dedup, issue #326).
 
 ### VerificationSkipped
 
@@ -316,7 +388,7 @@ The `blame` field indicates who is at fault:
 
 ### RegionLiteralMutation
 
-**When:** A `Vec`, `String`, or `HashMap` mutation is attempted on a literal-backed container — one whose descriptor carries the `VOW_CAP_RODATA` sentinel (backing lives in `.rodata` or was pinned to the root region). See `docs/design/arena_memory.md` §6.1, §7.3.
+**When:** A `Vec`, `String`, or `HashMap` mutation is attempted on a literal-backed container — one whose descriptor carries the `VOW_CAP_RODATA` sentinel (backing lives in `.rodata` or was pinned to the root region). Calls that statically trace a mutating target to a literal are rejected during compilation with this code; a runtime fallback emits the JSON shape below if an unchecked mutation reaches a `VOW_CAP_RODATA` descriptor. See `docs/design/arena_memory.md` §6.1, §7.3.
 
 ```json
 {"error":"RegionLiteralMutation","operation":"String::push_str","origin":"rodata"}
@@ -325,14 +397,14 @@ The `blame` field indicates who is at fault:
 A plain-text hint follows on the next line (not a JSON field). The hint text is dispatched on the operation's type prefix:
 
 ```
-hint: use String::from(literal) to obtain a mutable copy       # for String::* operations
-hint: use Vec::from(literal) to obtain a mutable copy          # for Vec::*    operations
+hint: make an explicit mutable copy with String::from(value) before mutating  # for String::* operations
+hint: construct a mutable Vec and copy entries before mutating                # for Vec::*    operations
 hint: construct a mutable HashMap and copy entries before mutating  # for HashMap::* operations
 ```
 
 The `operation` field identifies the source-level method that trapped (e.g., `Vec::push`, `Vec::pop`, `HashMap::insert`, `String::clear`). The `origin` field identifies the storage class of the immutable backing; today only `rodata` is emitted.
 
-**Fix:** Obtain an explicit mutable copy before mutation: `String::from(literal)`, `Vec::from(literal)`, etc.
+**Fix:** Obtain an explicit mutable copy before mutation: `String::from(value)`, or construct a fresh mutable container and copy the entries you need before mutating.
 
 ### StackOverflow
 
