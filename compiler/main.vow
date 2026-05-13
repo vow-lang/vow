@@ -242,7 +242,7 @@ fn skip_if_non_modelable(f: IrFunction, ir_mod: IrModule, const_fn_indices: Vec<
     true
 }
 
-fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
+fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
                    vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64) -> i64 [io] {
     let mut all_proven: i64 = 1;
     // Bounded pool: ≤ jobs ESBMC processes in flight, FIFO drain. See #175.
@@ -260,7 +260,7 @@ fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec
                 let oldest_f: IrFunction = fns[oldest_fi];
                 vec_i64_remove_front(in_flight_h);
                 vec_i64_remove_front(in_flight_fi);
-                let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
                 if proven == 0 {
                     all_proven = 0;
                 }
@@ -284,7 +284,7 @@ fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec
         let oldest_f: IrFunction = fns[oldest_fi];
         vec_i64_remove_front(in_flight_h);
         vec_i64_remove_front(in_flight_fi);
-        let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+        let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
         if proven == 0 {
             all_proven = 0;
         }
@@ -340,8 +340,55 @@ fn vec_i64_remove_front(v: Vec<i64>) {
     v.pop();
 }
 
+// Record the first soft-fail ESBMC outcome (status/message/function) into `meta`.
+// Convention: meta is `[]` until the first soft-fail, then `[status, message, function]`.
+// The function name is needed to populate the schema-required top-level
+// `function` field on VerifyFailed JSON output.
+fn record_soft_fail(meta: Vec<String>, status: String, message: String, function: String) {
+    if meta.len() == 0 {
+        meta.push(status);
+        meta.push(message);
+        meta.push(function);
+    }
+}
+
+// Compute (function, counterexample) for the VerifyFailed top-level JSON fields.
+// Precondition: status is VerifyFailed (i.e. ces non-empty OR soft_meta has 3 entries).
+// Mirrors Rust's BuildStatus::VerifyFailed { function, description } shape.
+fn vf_legacy_fields(ces: Vec<VerifyCE>, soft_meta: Vec<String>) -> Vec<String> {
+    let result: Vec<String> = Vec::new();
+    if ces.len() > 0 {
+        let ce: VerifyCE = ces[0];
+        result.push(ce.function);
+        let desc: String = String::from("VerifyFailed: ");
+        desc.push_str(ce.violation);
+        result.push(desc);
+        return result;
+    }
+    let status: String = soft_meta[0];
+    let message: String = soft_meta[1];
+    let func: String = soft_meta[2];
+    result.push(func);
+    let desc: String = String::from("");
+    if status == String::from("timeout") {
+        desc.push_str(String::from("verification timed out"));
+    } else if status == String::from("unknown") {
+        desc.push_str(String::from("verification result unknown: "));
+        desc.push_str(message);
+    } else if status == String::from("error") {
+        desc.push_str(String::from("esbmc error: "));
+        desc.push_str(message);
+    } else if status == String::from("tool_not_found") {
+        desc.push_str(String::from("ESBMC not found"));
+    } else {
+        desc.push_str(message);
+    }
+    result.push(desc);
+    result
+}
+
 fn verify_collect_and_report(
-    h: i64, f: IrFunction, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>,
+    h: i64, f: IrFunction, ir_mod: IrModule, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>,
     max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
     vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64,
 ) -> i64 [io] {
@@ -350,6 +397,7 @@ fn verify_collect_and_report(
         // is distinct from "no vows", which the caller already filters.
         // Silently skipping would mis-report an un-verified function as proven.
         eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR (failed to start ESBMC)")));
+        record_soft_fail(soft_meta, String::from("error"), String::from("failed to start ESBMC"), f.name);
         return 0;
     }
     let effective_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
@@ -371,12 +419,22 @@ fn verify_collect_and_report(
         ces.push(build_ce_from_result(f, vr, path));
         return 0;
     }
-    if st == VERIFY_TIMEOUT() {
-        // BV timed out; retry with IR before failing (Phase D fallback).
+    if st == VERIFY_TIMEOUT() || st == VERIFY_UNKNOWN() {
+        // BV could neither prove nor falsify (Timeout or Unknown); retry
+        // with IR before failing (Phase D fallback). Mirrors the
+        // run_with_fallback logic in vow-verify/src/solver_strategy.rs.
+        let bv_is_unknown: bool = st == VERIFY_UNKNOWN();
+        let bv_label: String = { if bv_is_unknown { String::from("unknown") } else { String::from("timeout") } };
+        let bv_label_upper: String = { if bv_is_unknown { String::from("UNKNOWN") } else { String::from("TIMEOUT") } };
+        // Timeout: empty message to match Rust's None; Unknown: include ESBMC's own explanation.
+        let bv_msg_initial: String = {
+            if bv_is_unknown { parse_unknown_reason(vr.raw_output) }
+            else { String::from("") }
+        };
         let bv_solver: String = resolve_auto_bv_solver(solver);
         let auto_enc: bool = is_auto_encoding(encoding);
         if auto_enc && bv_solver != String::from("bitwuzla") {
-            eprintln_str(str3(String::from("  "), f.name, String::from(": BV timeout, retrying with --z3 --ir...")));
+            eprintln_str(str3(String::from("  "), f.name, String::from(": BV inconclusive, retrying with --z3 --ir...")));
             let vr2: VerifyResult = verify_function_ir_fallback(f, ir_mod, max_k_step, use_cache, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
             let st2: i64 = vr2.status;
             if st2 == VERIFY_PROVEN_IR() {
@@ -384,30 +442,46 @@ fn verify_collect_and_report(
                 return 1;
             }
             if st2 == VERIFY_FAILED() {
-                eprintln_str(str3(String::from("  "), f.name, String::from(": FAILED")));
-                emit_ce_vars(vr2);
-                ces.push(build_ce_from_result(f, vr2, path));
+                // IR-only counterexamples can be infeasible under BV (no
+                // overflow modeling), so a FAILED here is unsound — surface
+                // the original BV outcome instead. Mirrors solver_strategy's
+                // demote-IR-FAILED rule.
+                eprintln_str(str4(String::from("  "), f.name, String::from(": "), bv_label_upper));
+                record_soft_fail(soft_meta, bv_label, bv_msg_initial, f.name);
                 return 0;
             }
             if st2 == VERIFY_TIMEOUT() {
                 eprintln_str(str3(String::from("  "), f.name, String::from(": TIMEOUT (BV and IR)")));
+                // Empty verify_message — match Rust's verify_status="timeout" + None shape.
+                record_soft_fail(soft_meta, String::from("timeout"), String::from(""), f.name);
+                return 0;
+            }
+            if st2 == VERIFY_UNKNOWN() {
+                let reason2: String = parse_unknown_reason(vr2.raw_output);
+                eprintln_str(str3(String::from("  "), f.name, String::from(": UNKNOWN (BV and IR)")));
+                record_soft_fail(soft_meta, String::from("unknown"), reason2, f.name);
                 return 0;
             }
             if st2 == VERIFY_NOT_FOUND() {
                 eprintln_str(String::from("error: ESBMC not found; install ESBMC or use --no-verify"));
+                record_soft_fail(soft_meta, String::from("tool_not_found"), String::from("ESBMC not found"), f.name);
                 return 0;
             }
             eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR")));
+            record_soft_fail(soft_meta, String::from("error"), String::from("ESBMC error during IR fallback"), f.name);
             return 0;
         }
-        eprintln_str(str3(String::from("  "), f.name, String::from(": TIMEOUT")));
+        eprintln_str(str4(String::from("  "), f.name, String::from(": "), bv_label_upper));
+        record_soft_fail(soft_meta, bv_label, bv_msg_initial, f.name);
         return 0;
     }
     if st == VERIFY_NOT_FOUND() {
         eprintln_str(String::from("error: ESBMC not found; install ESBMC or use --no-verify"));
+        record_soft_fail(soft_meta, String::from("tool_not_found"), String::from("ESBMC not found"), f.name);
         return 0;
     }
     eprintln_str(str3(String::from("  "), f.name, String::from(": ERROR")));
+    record_soft_fail(soft_meta, String::from("error"), String::from("unrecognized ESBMC outcome"), f.name);
     0
 }
 
@@ -461,8 +535,9 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
     emit_ir_warnings(ir_mod, dctx);
     let fns: Vec<IrFunction> = ir_mod.functions;
     let ces: Vec<VerifyCE> = Vec::new();
+    let soft_meta: Vec<String> = Vec::new();
     let const_fn_indices: Vec<i64> = detect_const_fns(ir_mod);
-    let all_proven: i64 = run_verify_loop(fns, ir_mod, const_fn_indices, dctx, path, ces, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs);
+    let all_proven: i64 = run_verify_loop(fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs);
     let status_str: String = {
         if all_proven == 1 {
             String::from("Verified")
@@ -470,7 +545,16 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
             String::from("VerifyFailed")
         }
     };
-    diag_emit_verify_json(status_str, dctx, ces);
+    let vstatus: String = { if soft_meta.len() >= 1 { soft_meta[0] } else { String::from("") } };
+    let vmsg: String = { if soft_meta.len() >= 2 { soft_meta[1] } else { String::from("") } };
+    let mut vf_func: String = String::from("");
+    let mut vf_ce: String = String::from("");
+    if status_str == String::from("VerifyFailed") {
+        let legacy: Vec<String> = vf_legacy_fields(ces, soft_meta);
+        vf_func = legacy[0];
+        vf_ce = legacy[1];
+    }
+    diag_emit_verify_json_full(status_str, dctx, ces, vstatus, vmsg, vf_func, vf_ce);
     if all_proven == 0 {
         return 1;
     }
@@ -556,6 +640,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
     let jobs: i64 = resolve_verify_jobs(argv);
     let fns: Vec<IrFunction> = ir_mod.functions;
     let ces: Vec<VerifyCE> = Vec::new();
+    let soft_meta: Vec<String> = Vec::new();
     let mut all_proven: i64 = 1;
     // Bounded pool: ≤ jobs ESBMC processes in flight, FIFO drain. See #175.
     let in_flight_h: Vec<i64> = Vec::new();
@@ -574,7 +659,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
                     let oldest_f: IrFunction = fns[oldest_fi];
                     vec_i64_remove_front(in_flight_h);
                     vec_i64_remove_front(in_flight_fi);
-                    let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                    let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
                     if proven == 0 {
                         all_proven = 0;
                     }
@@ -614,7 +699,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         let oldest_f: IrFunction = fns[oldest_fi];
         vec_i64_remove_front(in_flight_h);
         vec_i64_remove_front(in_flight_fi);
-        let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+        let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
         if proven == 0 {
             all_proven = 0;
         }
@@ -626,7 +711,16 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
             String::from("VerifyFailed")
         }
     };
-    diag_emit_build_verify_json(status_str, out, dctx, ces);
+    let vstatus: String = { if soft_meta.len() >= 1 { soft_meta[0] } else { String::from("") } };
+    let vmsg: String = { if soft_meta.len() >= 2 { soft_meta[1] } else { String::from("") } };
+    let mut vf_func: String = String::from("");
+    let mut vf_ce: String = String::from("");
+    if status_str == String::from("VerifyFailed") {
+        let legacy: Vec<String> = vf_legacy_fields(ces, soft_meta);
+        vf_func = legacy[0];
+        vf_ce = legacy[1];
+    }
+    diag_emit_build_verify_json_full(status_str, out, dctx, ces, vstatus, vmsg, vf_func, vf_ce);
     if all_proven == 0 {
         return 1;
     }
@@ -817,8 +911,8 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                                 let ovr: VerifyResult = verify_collect(oh, ovf, t_eff);
                                 if ovr.status == VERIFY_FAILED() {
                                     verify_failed = true;
-                                } else if ovr.status == VERIFY_TIMEOUT() {
-                                    // BV timed out; retry with IR before failing.
+                                } else if ovr.status == VERIFY_TIMEOUT() || ovr.status == VERIFY_UNKNOWN() {
+                                    // BV could neither prove nor falsify; retry with IR before failing.
                                     let ovr2: VerifyResult = verify_function_ir_fallback(ovf, ir_mod, t_max_k_step, false, String::from(""), t_vec_max, t_string_max, t_hashmap_max, t_btreemap_max);
                                     if ovr2.status != VERIFY_PROVEN() && ovr2.status != VERIFY_PROVEN_IR() {
                                         verify_failed = true;
@@ -848,6 +942,13 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
                         let ovr: VerifyResult = verify_collect(oh, ovf, t_eff);
                         if ovr.status == VERIFY_FAILED() {
                             verify_failed = true;
+                        } else if ovr.status == VERIFY_TIMEOUT() || ovr.status == VERIFY_UNKNOWN() {
+                            // Mirror the bounded-pool drain: retry IR before treating Timeout/Unknown as passing.
+                            // Without this, the common nfns <= t_jobs case silently accepts unverified functions.
+                            let ovr2: VerifyResult = verify_function_ir_fallback(ovf, ir_mod, t_max_k_step, false, String::from(""), t_vec_max, t_string_max, t_hashmap_max, t_btreemap_max);
+                            if ovr2.status != VERIFY_PROVEN() && ovr2.status != VERIFY_PROVEN_IR() {
+                                verify_failed = true;
+                            }
                         }
                     }
                 }
@@ -1010,10 +1111,11 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
             emit_ir_warnings(ir_mod, dctx);
             let fns: Vec<IrFunction> = ir_mod.functions;
             let ces: Vec<VerifyCE> = Vec::new();
+            let soft_meta_leg: Vec<String> = Vec::new();
             let use_cache_leg: bool = !has_flag(argv, "--no-cache");
             let jobs_leg: i64 = resolve_verify_jobs(argv);
             let const_fn_indices_leg: Vec<i64> = detect_const_fns(ir_mod);
-            let all_proven: i64 = run_verify_loop(fns, ir_mod, const_fn_indices_leg, dctx, path, ces, max_k_step, use_cache_leg, String::from(""), String::from(""), String::from(""), vec_max_leg, string_max_leg, hashmap_max_leg, btreemap_max_leg, jobs_leg);
+            let all_proven: i64 = run_verify_loop(fns, ir_mod, const_fn_indices_leg, dctx, path, ces, soft_meta_leg, max_k_step, use_cache_leg, String::from(""), String::from(""), String::from(""), vec_max_leg, string_max_leg, hashmap_max_leg, btreemap_max_leg, jobs_leg);
             let status_str: String = {
                 if all_proven == 1 {
                     String::from("Verified")
@@ -1021,7 +1123,16 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
                     String::from("VerifyFailed")
                 }
             };
-            diag_emit_verify_json(status_str, dctx, ces);
+            let vstatus_leg: String = { if soft_meta_leg.len() >= 1 { soft_meta_leg[0] } else { String::from("") } };
+            let vmsg_leg: String = { if soft_meta_leg.len() >= 2 { soft_meta_leg[1] } else { String::from("") } };
+            let mut vf_func_leg: String = String::from("");
+            let mut vf_ce_leg: String = String::from("");
+            if status_str == String::from("VerifyFailed") {
+                let legacy_leg: Vec<String> = vf_legacy_fields(ces, soft_meta_leg);
+                vf_func_leg = legacy_leg[0];
+                vf_ce_leg = legacy_leg[1];
+            }
+            diag_emit_verify_json_full(status_str, dctx, ces, vstatus_leg, vmsg_leg, vf_func_leg, vf_ce_leg);
             if all_proven == 0 {
                 return 1;
             }
@@ -3391,7 +3502,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `Verified`      | Compiled + all contracts proved by ESBMC. Functions whose bodies the verifier cannot model (`RegionAlloc`, `FieldSet`, `Linear*`, `Load`/`Store`, `RemF*`, effectful) are reported as a `VerificationSkipped` *Warning* in `diagnostics[]` and the build still succeeds -- their contracts are documentary, runtime-checked under `--mode debug`. |\n"));
     r.push_str(String::from("| `Unverified`    | Compiled with `--no-verify` (ESBMC skipped)  |\n"));
     r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, or link failure |\n"));
-    r.push_str(String::from("| `VerifyFailed`  | ESBMC found a counterexample, timed out, errored, or was not found |\n"));
+    r.push_str(String::from("| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: \"unknown\"`), tool error, or the tool was not found. Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Verified Example\n"));
     r.push_str(String::from("\n"));
@@ -3463,7 +3574,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `function`         | string              | VerifyFailed      | Function where verification failed        |\n"));
     r.push_str(String::from("| `counterexample`   | string              | VerifyFailed      | Legacy description string                 |\n"));
     r.push_str(String::from("| `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |\n"));
-    r.push_str(String::from("| `verify_status`    | string              | On backend failure | `\"timeout\"`, `\"error\"`, or `\"tool_not_found\"` |\n"));
+    r.push_str(String::from("| `verify_status`    | string              | On backend failure | `\"timeout\"`, `\"unknown\"`, `\"error\"`, or `\"tool_not_found\"` |\n"));
     r.push_str(String::from("| `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Contracts Output JSON\n"));
@@ -3528,7 +3639,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |\n"));
     r.push_str(String::from("| `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |\n"));
     r.push_str(String::from("| `failed`        | ESBMC found a counterexample violating this contract |\n"));
-    r.push_str(String::from("| `unknown`       | Another contract in the same function failed; this one was not individually checked |\n"));
+    r.push_str(String::from("| `unknown`       | ESBMC could not conclude for this contract -- either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |\n"));
     r.push_str(String::from("| `timeout`       | ESBMC timed out on the containing function (BV and -- when applicable -- IR fallback both timed out) |\n"));
     r.push_str(String::from("| `error`         | ESBMC error or tool not found                        |\n"));
     r.push_str(String::from("| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]`. |\n"));
@@ -4946,7 +5057,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"verify_status\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
-    r.push_str(String::from("      \"enum\": [\"timeout\", \"error\", \"tool_not_found\"],\n"));
+    r.push_str(String::from("      \"enum\": [\"timeout\", \"unknown\", \"error\", \"tool_not_found\"],\n"));
     r.push_str(String::from("      \"description\": \"Verification sub-status (present only when the verification backend did not produce a proof or counterexample)\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"verify_message\": {\n"));
@@ -6505,7 +6616,7 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("| `Verified`      | Compiled + all contracts proved by ESBMC. Functions whose bodies the verifier cannot model (`RegionAlloc`, `FieldSet`, `Linear*`, `Load`/`Store`, `RemF*`, effectful) are reported as a `VerificationSkipped` *Warning* in `diagnostics[]` and the build still succeeds -- their contracts are documentary, runtime-checked under `--mode debug`. |\n"));
     r.push_str(String::from("| `Unverified`    | Compiled with `--no-verify` (ESBMC skipped)  |\n"));
     r.push_str(String::from("| `CompileFailed` | Parse error, type error, module load error, or link failure |\n"));
-    r.push_str(String::from("| `VerifyFailed`  | ESBMC found a counterexample, timed out, errored, or was not found |\n"));
+    r.push_str(String::from("| `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: \"unknown\"`), tool error, or the tool was not found. Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### Verified Example\n"));
     r.push_str(String::from("\n"));
@@ -6577,7 +6688,7 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("| `function`         | string              | VerifyFailed      | Function where verification failed        |\n"));
     r.push_str(String::from("| `counterexample`   | string              | VerifyFailed      | Legacy description string                 |\n"));
     r.push_str(String::from("| `counterexamples`  | array               | Always            | Structured counterexamples (see schema)   |\n"));
-    r.push_str(String::from("| `verify_status`    | string              | On backend failure | `\"timeout\"`, `\"error\"`, or `\"tool_not_found\"` |\n"));
+    r.push_str(String::from("| `verify_status`    | string              | On backend failure | `\"timeout\"`, `\"unknown\"`, `\"error\"`, or `\"tool_not_found\"` |\n"));
     r.push_str(String::from("| `verify_message`   | string              | On backend failure | ESBMC/backend error detail                |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("## Contracts Output JSON\n"));
@@ -6642,7 +6753,7 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("| `proven`        | ESBMC proved this contract holds for all inputs (bit-vector encoding, overflow modeled) |\n"));
     r.push_str(String::from("| `proven-ir`     | ESBMC proved this contract under integer-arithmetic encoding after BV timed out; overflow is not modeled by IR, but the BV caller preconditions still guard against it |\n"));
     r.push_str(String::from("| `failed`        | ESBMC found a counterexample violating this contract |\n"));
-    r.push_str(String::from("| `unknown`       | Another contract in the same function failed; this one was not individually checked |\n"));
+    r.push_str(String::from("| `unknown`       | ESBMC could not conclude for this contract -- either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |\n"));
     r.push_str(String::from("| `timeout`       | ESBMC timed out on the containing function (BV and -- when applicable -- IR fallback both timed out) |\n"));
     r.push_str(String::from("| `error`         | ESBMC error or tool not found                        |\n"));
     r.push_str(String::from("| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]`. |\n"));
@@ -8059,7 +8170,7 @@ fn skill_support_content_5() -> String {
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"verify_status\": {\n"));
     r.push_str(String::from("      \"type\": \"string\",\n"));
-    r.push_str(String::from("      \"enum\": [\"timeout\", \"error\", \"tool_not_found\"],\n"));
+    r.push_str(String::from("      \"enum\": [\"timeout\", \"unknown\", \"error\", \"tool_not_found\"],\n"));
     r.push_str(String::from("      \"description\": \"Verification sub-status (present only when the verification backend did not produce a proof or counterexample)\"\n"));
     r.push_str(String::from("    },\n"));
     r.push_str(String::from("    \"verify_message\": {\n"));
@@ -8822,6 +8933,8 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
                                 }
                             } else if st == VERIFY_TIMEOUT() {
                                 e_statuses[ei] = String::from("timeout");
+                            } else if st == VERIFY_UNKNOWN() {
+                                e_statuses[ei] = String::from("unknown");
                             } else {
                                 e_statuses[ei] = String::from("error");
                             }
