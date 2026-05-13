@@ -1,0 +1,73 @@
+module Builders
+
+use ir
+
+// Test-only IR construction helpers. Mirror the `inst()`/`block()`/`function()`/
+// `module()` helpers used by region tests in vow-ir/src/region.rs. Lives in
+// compiler/tests/ so it is not pulled into the main self-hosted compiler build.
+
+fn mk_inst(id: i64, op: i64, ty: i64, args: Vec<i64>) -> IrInst {
+    ir_inst_new(id, op, ty, args, IDATA_NONE(), 0, 0, String::from(""))
+}
+
+fn mk_inst_arg(id: i64, ty: i64, arg_index: i64) -> IrInst {
+    ir_inst_new(id, IOP_GET_ARG(), ty, Vec::new(), IDATA_ARG_INDEX(), arg_index, 0, String::from(""))
+}
+
+fn mk_inst_const_i64(id: i64, value: i64) -> IrInst {
+    ir_inst_new(id, IOP_CONST_I64(), ITY_I64(), Vec::new(), IDATA_CONST_I64(), value, 0, String::from(""))
+}
+
+fn mk_inst_call_extern(id: i64, ty: i64, args: Vec<i64>, name: String) -> IrInst {
+    ir_inst_new(id, IOP_CALL(), ty, args, IDATA_CALL_EXTERN(), 0, 0, name)
+}
+
+fn mk_inst_call_target(id: i64, ty: i64, args: Vec<i64>, target_func_id: i64) -> IrInst {
+    ir_inst_new(id, IOP_CALL(), ty, args, IDATA_CALL_TARGET(), target_func_id, 0, String::from(""))
+}
+
+fn mk_inst_return(id: i64, value_id: i64) -> IrInst {
+    let args: Vec<i64> = Vec::new();
+    args.push(value_id);
+    ir_inst_new(id, IOP_RETURN(), ITY_UNIT(), args, IDATA_NONE(), 0, 0, String::from(""))
+}
+
+fn mk_block(id: i64, insts: Vec<IrInst>) -> IrBlock {
+    let b: IrBlock = ir_block_new(id);
+    let mut i: i64 = 0;
+    while i < insts.len() {
+        b.insts.push(insts[i]);
+        i = i + 1;
+    }
+    b
+}
+
+fn mk_function(id: i64, name: String, params: Vec<i64>, return_ty: i64, blocks: Vec<IrBlock>) -> IrFunction {
+    let f: IrFunction = ir_function_new(id, name, return_ty, 0, String::from("test.vow"));
+    let mut pi: i64 = 0;
+    while pi < params.len() {
+        f.params.push(params[pi]);
+        // `p{i}` matches the Rust test helper naming so diagnostics that
+        // surface param names line up across the two compilers.
+        let pname: String = String::from("p");
+        pname.push_str(i64_to_string(pi));
+        f.param_names.push(pname);
+        pi = pi + 1;
+    }
+    let mut bi: i64 = 0;
+    while bi < blocks.len() {
+        f.blocks.push(blocks[bi]);
+        bi = bi + 1;
+    }
+    f
+}
+
+fn mk_module(funcs: Vec<IrFunction>) -> IrModule {
+    let m: IrModule = ir_module_new(String::from("Test"));
+    let mut i: i64 = 0;
+    while i < funcs.len() {
+        m.functions.push(funcs[i]);
+        i = i + 1;
+    }
+    m
+}
