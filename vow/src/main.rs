@@ -4219,6 +4219,12 @@ fn run_skill_install() {
 pub enum BuildStatus {
     Verified,
     Unverified,
+    /// Verification ran but at least one vowed function could not be modelled
+    /// by ESBMC; the contract was not statically proved. The skipped functions
+    /// appear as `VerificationSkipped` Warning diagnostics in `diagnostics[]`.
+    /// Distinct from `Unverified` (which means ESBMC was not invoked at all,
+    /// e.g. `--no-verify`); `Skipped` is fail-closed and yields exit code 1.
+    Skipped,
     CompileFailed {
         message: String,
     },
@@ -4280,7 +4286,14 @@ pub struct CeCallSite {
 }
 
 enum VerifyOutcome {
+    /// Verification was not run at all (e.g. `--no-verify`, or the verify
+    /// thread short-circuited without inspecting any function). Maps to
+    /// `BuildStatus::Unverified` (exit 0).
     Skipped,
+    /// Verification ran but at least one vowed function could not be modelled
+    /// (non-modelable opcode), so its contract was not statically proved.
+    /// Maps to `BuildStatus::Skipped` (exit 1).
+    SkippedNonModelable,
     Proven,
     Failed {
         function: String,
@@ -4580,6 +4593,7 @@ impl BuildOutput {
         let status = match &self.status {
             BuildStatus::Verified => "Verified",
             BuildStatus::Unverified => "Unverified",
+            BuildStatus::Skipped => "Skipped",
             BuildStatus::CompileFailed { .. } => "CompileFailed",
             BuildStatus::VerifyFailed { .. } => "VerifyFailed",
         }
@@ -5130,7 +5144,7 @@ fn run_verification_sync(
         if skipped.is_empty() {
             return (VerifyOutcome::Proven, skipped);
         }
-        return (VerifyOutcome::Skipped, skipped);
+        return (VerifyOutcome::SkippedNonModelable, skipped);
     }
 
     // Stop after first halt-class outcome (Failed/Error/Timeout/ToolNotFound);
@@ -5194,22 +5208,18 @@ fn run_verification_sync(
     });
 
     let halts = halts.into_inner().expect("verify halts mutex poisoned");
-    let outcome = halts
-        .into_iter()
-        .flatten()
-        .next()
-        .unwrap_or_else(|| {
-            if skipped_acc
-                .lock()
-                .expect("verify skipped mutex poisoned")
-                .iter()
-                .any(Option::is_some)
-            {
-                VerifyOutcome::Skipped
-            } else {
-                VerifyOutcome::Proven
-            }
-        });
+    let outcome = halts.into_iter().flatten().next().unwrap_or_else(|| {
+        if skipped_acc
+            .lock()
+            .expect("verify skipped mutex poisoned")
+            .iter()
+            .any(Option::is_some)
+        {
+            VerifyOutcome::SkippedNonModelable
+        } else {
+            VerifyOutcome::Proven
+        }
+    });
     let skipped: Vec<SkippedFunction> = skipped_acc
         .into_inner()
         .expect("verify skipped mutex poisoned")
@@ -5359,6 +5369,7 @@ fn verify_outcome_to_output_with_skipped(
             Some(message),
         ),
         VerifyOutcome::Skipped => (BuildStatus::Unverified, vec![], None, None),
+        VerifyOutcome::SkippedNonModelable => (BuildStatus::Skipped, vec![], None, None),
         VerifyOutcome::Proven => (BuildStatus::Verified, vec![], None, None),
         VerifyOutcome::ToolNotFound => {
             diagnostics.push(Diagnostic {
@@ -6065,7 +6076,7 @@ fn run_build_command(
     }
     if matches!(
         &result.status,
-        BuildStatus::CompileFailed { .. } | BuildStatus::VerifyFailed { .. } | BuildStatus::Unverified
+        BuildStatus::CompileFailed { .. } | BuildStatus::VerifyFailed { .. } | BuildStatus::Skipped
     ) {
         std::process::exit(1);
     }
@@ -6117,7 +6128,7 @@ fn run_verify_command(
     result.emit_json();
     if matches!(
         &result.status,
-        BuildStatus::CompileFailed { .. } | BuildStatus::VerifyFailed { .. }
+        BuildStatus::CompileFailed { .. } | BuildStatus::VerifyFailed { .. } | BuildStatus::Skipped
     ) {
         std::process::exit(1);
     }
@@ -8583,6 +8594,9 @@ fn main() -> i32 {
             BuildStatus::Unverified => {
                 eprintln!("SKIP: verification not run (esbmc not found)");
             }
+            BuildStatus::Skipped => {
+                eprintln!("SKIP: verification skipped (non-modelable function)");
+            }
             BuildStatus::CompileFailed { message } => {
                 let msg_lo = message.to_lowercase();
                 if msg_lo.contains("link")
@@ -8801,7 +8815,7 @@ fn main() -> i32 {
         let result =
             run_verify_only_inner(&source, true, &limits, 1, &SolverConfig::default_config());
         match &result.status {
-            BuildStatus::Verified => {
+            BuildStatus::Skipped => {
                 assert!(
                     result
                         .diagnostics
@@ -8820,7 +8834,7 @@ fn main() -> i32 {
             BuildStatus::CompileFailed { message } => {
                 panic!("unexpected compile failure: {message}");
             }
-            other => panic!("expected Verified for non-modelable vowed fn, got {other:?}"),
+            other => panic!("expected Skipped for non-modelable vowed fn, got {other:?}"),
         }
     }
 

@@ -182,10 +182,15 @@ vow verify --help --human  # same legacy text (works on all subcommands)
 
 ## Exit Codes
 
-| Code | Meaning                              |
-|------|--------------------------------------|
-| `0`  | Success (Verified or Unverified)     |
-| `1`  | Failure (CompileFailed or VerifyFailed) |
+| Code | Meaning                                                                            |
+|------|------------------------------------------------------------------------------------|
+| `0`  | Success (`Verified` or `Unverified`)                                               |
+| `1`  | Failure (`CompileFailed`, `VerifyFailed`, or `Skipped`)                            |
+
+`vow build` and `vow verify` both fail closed on `Skipped`: if ESBMC was asked to verify a vowed
+function but the verifier could not model the function body, the contract was not statically
+proved, so the run exits non-zero. Use `--no-verify` if you genuinely want to skip verification —
+that path produces `Unverified` (exit 0).
 
 ## Build Output JSON
 
@@ -197,8 +202,9 @@ vow verify --help --human  # same legacy text (works on all subcommands)
 
 | Status          | Meaning                                     |
 |-----------------|---------------------------------------------|
-| `Verified`      | Compiled + all contracts proved by ESBMC. Functions whose bodies the verifier cannot model (`RegionAlloc`, `FieldSet`, `Linear*`, `Load`/`Store`, `RemF*`, effectful) are reported as a `VerificationSkipped` *Warning* in `diagnostics[]` and the build still succeeds — their contracts are documentary, runtime-checked under `--mode debug`. |
-| `Unverified`    | Compiled with `--no-verify` (ESBMC skipped)  |
+| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. |
+| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
+| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `RegionAlloc`, `FieldSet`, `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Each such function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
 | `CompileFailed` | Parse error, type error, module load error, or link failure |
 | `VerifyFailed`  | ESBMC found a counterexample, timed out, errored, or was not found |
 

@@ -234,9 +234,15 @@ fn skip_if_non_modelable(f: IrFunction, ir_mod: IrModule, const_fn_indices: Vec<
     true
 }
 
+// Verification outcome codes returned by `run_verify_loop`:
+//   0 = Verified         (every vowed function statically proved)
+//   1 = VerifyFailed     (≥1 real failure: counterexample / timeout / error)
+//   2 = Skipped          (≥1 non-modelable function, no real failures)
+// Both 1 and 2 fail closed (exit 1); 0 succeeds.
 fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
                    vec_max: i64, string_max: i64, hashmap_max: i64, jobs: i64) -> i64 [io] {
     let mut all_proven: i64 = 1;
+    let mut any_skipped: i64 = 0;
     // Bounded pool: ≤ jobs ESBMC processes in flight, FIFO drain. See #175.
     let in_flight_h: Vec<i64> = Vec::new();
     let in_flight_fi: Vec<i64> = Vec::new();
@@ -259,8 +265,8 @@ fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec
             }
             if all_proven == 1 {
                 if skip_if_non_modelable(f, ir_mod, const_fn_indices, dctx) {
-                    // Fail closed: a skipped contract is not statically proved.
-                    all_proven = 0;
+                    // Fail closed: a non-modelable function is not statically proved.
+                    any_skipped = 1;
                 } else {
                     eprintln_str(str3(String::from("Verifying "), f.name, String::from("...")));
                     let h: i64 = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max);
@@ -282,7 +288,9 @@ fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec
             all_proven = 0;
         }
     }
-    all_proven
+    if all_proven == 0 { 1 }
+    else if any_skipped == 1 { 2 }
+    else { 0 }
 }
 
 fn emit_ir_warnings(ir_mod: IrModule, dctx: DiagCtx) [io] {
@@ -453,16 +461,14 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
     let fns: Vec<IrFunction> = ir_mod.functions;
     let ces: Vec<VerifyCE> = Vec::new();
     let const_fn_indices: Vec<i64> = detect_const_fns(ir_mod);
-    let all_proven: i64 = run_verify_loop(fns, ir_mod, const_fn_indices, dctx, path, ces, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, jobs);
+    let outcome: i64 = run_verify_loop(fns, ir_mod, const_fn_indices, dctx, path, ces, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, jobs);
     let status_str: String = {
-        if all_proven == 1 {
-            String::from("Verified")
-        } else {
-            String::from("VerifyFailed")
-        }
+        if outcome == 0 { String::from("Verified") }
+        else if outcome == 2 { String::from("Skipped") }
+        else { String::from("VerifyFailed") }
     };
     diag_emit_verify_json(status_str, dctx, ces);
-    if all_proven == 0 {
+    if outcome != 0 {
         return 1;
     }
     0
@@ -540,6 +546,7 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
     let fns: Vec<IrFunction> = ir_mod.functions;
     let ces: Vec<VerifyCE> = Vec::new();
     let mut all_proven: i64 = 1;
+    let mut any_skipped: i64 = 0;
     // Bounded pool: ≤ jobs ESBMC processes in flight, FIFO drain. See #175.
     let in_flight_h: Vec<i64> = Vec::new();
     let in_flight_fi: Vec<i64> = Vec::new();
@@ -564,8 +571,8 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
                 }
                 if all_proven == 1 {
                     if skip_if_non_modelable(f, ir_mod, const_fn_indices, dctx) {
-                        // Fail closed: a skipped contract is not statically proved.
-                        all_proven = 0;
+                        // Fail closed: a non-modelable function is not statically proved.
+                        any_skipped = 1;
                     } else {
                         eprintln_str(str3(String::from("Starting verification of "), f.name, String::from("...")));
                         let h: i64 = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max);
@@ -605,14 +612,12 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
         }
     }
     let status_str: String = {
-        if all_proven == 1 {
-            String::from("Verified")
-        } else {
-            String::from("VerifyFailed")
-        }
+        if all_proven == 0 { String::from("VerifyFailed") }
+        else if any_skipped == 1 { String::from("Skipped") }
+        else { String::from("Verified") }
     };
     diag_emit_build_verify_json(status_str, out, dctx, ces);
-    if all_proven == 0 {
+    if all_proven == 0 || any_skipped == 1 {
         return 1;
     }
     0
@@ -995,16 +1000,14 @@ fn run_legacy(argv: Vec<String>) -> i32 [io] {
             let use_cache_leg: bool = !has_flag(argv, String::from("--no-cache"));
             let jobs_leg: i64 = resolve_verify_jobs(argv);
             let const_fn_indices_leg: Vec<i64> = detect_const_fns(ir_mod);
-            let all_proven: i64 = run_verify_loop(fns, ir_mod, const_fn_indices_leg, dctx, path, ces, max_k_step, use_cache_leg, String::from(""), String::from(""), String::from(""), vec_max_leg, string_max_leg, hashmap_max_leg, jobs_leg);
+            let outcome: i64 = run_verify_loop(fns, ir_mod, const_fn_indices_leg, dctx, path, ces, max_k_step, use_cache_leg, String::from(""), String::from(""), String::from(""), vec_max_leg, string_max_leg, hashmap_max_leg, jobs_leg);
             let status_str: String = {
-                if all_proven == 1 {
-                    String::from("Verified")
-                } else {
-                    String::from("VerifyFailed")
-                }
+                if outcome == 0 { String::from("Verified") }
+                else if outcome == 2 { String::from("Skipped") }
+                else { String::from("VerifyFailed") }
             };
             diag_emit_verify_json(status_str, dctx, ces);
-            if all_proven == 0 {
+            if outcome != 0 {
                 return 1;
             }
         } else if emit_c {
