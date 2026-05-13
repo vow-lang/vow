@@ -1,0 +1,207 @@
+module TestRegion
+
+use ir
+use diag
+use region
+use tests.builders
+
+// Per-function unit tests for `compiler/region.vow:infer_regions_module`.
+// Mirror selected public-API tests from `vow-ir/src/region.rs`. Each test
+// returns 0 on pass and a non-zero error code on failure. `main` runs them
+// in order and exits with the first non-zero code; the harness reports the
+// exit code in its JSON output. Check helpers return `i64` (not `i32`) to
+// dodge a latent Cranelift codegen bug where `if call_returning_i32 == lit
+// { i32_lit } else { i32_lit }` fails IR verification — irrelevant to the
+// behaviour under test and easier to work around than fix here.
+
+// Scan the flat store_effects encoding for an entry matching
+// (target, AliasOf(aux)). Mirrors the cursor logic in
+// `check_store_effects_at_call`. The encoding is variable-length: each
+// effect starts with target, then constraint_kind; if AliasOf, an aux
+// value follows; if AliasOfAny, a count + aux list follows.
+fn has_alias_of_effect(flat: Vec<i64>, target: i64, aux: i64) -> bool {
+    let mut i: i64 = 0;
+    while i < flat.len() {
+        let t: i64 = flat[i];
+        i = i + 1;
+        if i >= flat.len() { return false; }
+        let kind: i64 = flat[i];
+        i = i + 1;
+        if kind == RSUM_KIND_ALIAS_OF() {
+            if i >= flat.len() { return false; }
+            let a: i64 = flat[i];
+            i = i + 1;
+            if t == target && a == aux {
+                return true;
+            }
+        } else if kind == RSUM_KIND_ALIAS_OF_ANY() {
+            if i >= flat.len() { return false; }
+            let n: i64 = flat[i];
+            i = i + 1;
+            let mut ai: i64 = 0;
+            while ai < n && i < flat.len() {
+                i = i + 1;
+                ai = ai + 1;
+            }
+        }
+    }
+    false
+}
+
+// Mirrors `returning_element_from_fresh_string_split_lifts_split_to_caller_region`
+// (vow-ir/src/region.rs:6388). A function returning a Vec element reached via
+// `__vow_vec_get_val` from a fresh `__vow_string_split` result must lift the
+// split allocation to caller region and publish `FreshInCaller`.
+fn check_split_element_lifts_to_caller() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_arg(1, ITY_PTR(), 1));
+    let split_args: Vec<i64> = Vec::new();
+    split_args.push(0);
+    split_args.push(1);
+    insts.push(mk_inst_call_extern(2, ITY_PTR(), split_args, String::from("__vow_string_split")));
+    insts.push(mk_inst_const_i64(3, 0));
+    let get_args: Vec<i64> = Vec::new();
+    get_args.push(2);
+    get_args.push(3);
+    insts.push(mk_inst_call_extern(4, ITY_I64(), get_args, String::from("__vow_vec_get_val")));
+    insts.push(mk_inst_return(5, 4));
+
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_PTR());
+    params.push(ITY_PTR());
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(mk_function(0, String::from("first_split_part"), params, ITY_PTR(), blocks));
+
+    let m: IrModule = mk_module(funcs);
+    let dctx: DiagCtx = diag_ctx_new();
+    let result: IrModule = infer_regions_module(m, dctx);
+
+    let expected_region: i64 = region_pack(REGION_KIND_CALLER(), 0);
+    let got_region: i64 = result.functions[0].blocks[0].insts[2].rgn;
+    if got_region != expected_region {
+        return 1;
+    }
+    if result.functions[0].rsum_return_kind != RSUM_KIND_FRESH_IN_CALLER() {
+        return 2;
+    }
+    0
+}
+
+// Mirrors `string_substring_return_allocates_in_caller_region`
+// (vow-ir/src/region.rs:6432). A returned `__vow_string_substring` result
+// must be caller-region allocated; the summary must publish `FreshInCaller`.
+fn check_substring_returns_in_caller_region() -> i64 {
+    let insts: Vec<IrInst> = Vec::new();
+    insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    insts.push(mk_inst_const_i64(1, 0));
+    insts.push(mk_inst_const_i64(2, 1));
+    let sub_args: Vec<i64> = Vec::new();
+    sub_args.push(0);
+    sub_args.push(1);
+    sub_args.push(2);
+    insts.push(mk_inst_call_extern(3, ITY_PTR(), sub_args, String::from("__vow_string_substring")));
+    insts.push(mk_inst_return(4, 3));
+
+    let blocks: Vec<IrBlock> = Vec::new();
+    blocks.push(mk_block(0, insts));
+    let params: Vec<i64> = Vec::new();
+    params.push(ITY_PTR());
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(mk_function(0, String::from("slice_string"), params, ITY_PTR(), blocks));
+
+    let m: IrModule = mk_module(funcs);
+    let dctx: DiagCtx = diag_ctx_new();
+    let result: IrModule = infer_regions_module(m, dctx);
+
+    let expected_region: i64 = region_pack(REGION_KIND_CALLER(), 0);
+    let got_region: i64 = result.functions[0].blocks[0].insts[3].rgn;
+    if got_region != expected_region {
+        return 3;
+    }
+    if result.functions[0].rsum_return_kind != RSUM_KIND_FRESH_IN_CALLER() {
+        return 4;
+    }
+    0
+}
+
+// Mirrors `internal_call_republishes_callee_store_effect_for_parameter_target`
+// (vow-ir/src/region.rs:6469). A wrapper that forwards its parameters to an
+// internal callee (which pushes arg1 into arg0 via `__vow_vec_push_val`)
+// must republish the callee's store effect — emitting `AliasOf(1)` source
+// for target 0 in the wrapper's own summary.
+fn check_wrapper_republishes_callee_store_effect() -> i64 {
+    let callee_insts: Vec<IrInst> = Vec::new();
+    callee_insts.push(mk_inst_arg(0, ITY_PTR(), 0));
+    callee_insts.push(mk_inst_arg(1, ITY_PTR(), 1));
+    let push_args: Vec<i64> = Vec::new();
+    push_args.push(0);
+    push_args.push(1);
+    callee_insts.push(mk_inst_call_extern(2, ITY_UNIT(), push_args, String::from("__vow_vec_push_val")));
+    let ret_args: Vec<i64> = Vec::new();
+    callee_insts.push(ir_inst_new(3, IOP_RETURN(), ITY_UNIT(), ret_args, IDATA_NONE(), 0, 0, String::from("")));
+
+    let callee_blocks: Vec<IrBlock> = Vec::new();
+    callee_blocks.push(mk_block(0, callee_insts));
+    let callee_params: Vec<i64> = Vec::new();
+    callee_params.push(ITY_PTR());
+    callee_params.push(ITY_PTR());
+    let callee: IrFunction = mk_function(0, String::from("push_arg"), callee_params, ITY_UNIT(), callee_blocks);
+
+    let wrapper_insts: Vec<IrInst> = Vec::new();
+    wrapper_insts.push(mk_inst_arg(10, ITY_PTR(), 0));
+    wrapper_insts.push(mk_inst_arg(11, ITY_PTR(), 1));
+    let call_args: Vec<i64> = Vec::new();
+    call_args.push(10);
+    call_args.push(11);
+    wrapper_insts.push(mk_inst_call_target(12, ITY_UNIT(), call_args, 0));
+    let wret_args: Vec<i64> = Vec::new();
+    wrapper_insts.push(ir_inst_new(13, IOP_RETURN(), ITY_UNIT(), wret_args, IDATA_NONE(), 0, 0, String::from("")));
+
+    let wrapper_blocks: Vec<IrBlock> = Vec::new();
+    wrapper_blocks.push(mk_block(0, wrapper_insts));
+    let wrapper_params: Vec<i64> = Vec::new();
+    wrapper_params.push(ITY_PTR());
+    wrapper_params.push(ITY_PTR());
+    let wrapper: IrFunction = mk_function(1, String::from("wrapper"), wrapper_params, ITY_UNIT(), wrapper_blocks);
+
+    let funcs: Vec<IrFunction> = Vec::new();
+    funcs.push(callee);
+    funcs.push(wrapper);
+
+    let m: IrModule = mk_module(funcs);
+    let dctx: DiagCtx = diag_ctx_new();
+    let result: IrModule = infer_regions_module(m, dctx);
+
+    let flat: Vec<i64> = result.functions[1].rsum_store_effects;
+    if !has_alias_of_effect(flat, 0, 1) {
+        return 5;
+    }
+    0
+}
+
+// Map an i64 check result onto an i32 exit code without a direct cast
+// (Vow only allows i64 <-> u64 casts). Each `check_*` uses a unique small
+// integer per assertion (1-2 for split, 3-4 for substring, 5 for wrapper),
+// so the exit code identifies both which check and which assertion failed.
+fn i64_result_to_i32(r: i64) -> i32 {
+    if r == 1 { return 1; }
+    if r == 2 { return 2; }
+    if r == 3 { return 3; }
+    if r == 4 { return 4; }
+    if r == 5 { return 5; }
+    if r != 0 { return 99; }
+    0
+}
+
+fn main() -> i32 {
+    let r1: i64 = check_split_element_lifts_to_caller();
+    if r1 != 0 { return i64_result_to_i32(r1); }
+    let r2: i64 = check_substring_returns_in_caller_region();
+    if r2 != 0 { return i64_result_to_i32(r2); }
+    let r3: i64 = check_wrapper_republishes_callee_store_effect();
+    if r3 != 0 { return i64_result_to_i32(r3); }
+    0
+}
