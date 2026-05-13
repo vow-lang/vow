@@ -1,0 +1,47 @@
+// TEST: stdout "ok"
+// Regression for issue #391. A Vec that grows past the oversized threshold
+// and then truncates in a hot loop must release the abandoned oversized
+// chunks rather than retaining every prior reallocation peak. With the fix
+// `memory_peak_bytes()` tracks the single largest intra-cycle backing plus
+// the in-flight copy of the next doubling; without it, every prior
+// doubling's chunk stays live and the peak grows with the cumulative
+// envelope of all cycles.
+//
+// Empirical numbers on this workload (64-bit linux host):
+//   WITHOUT the fix: ~67 MB (cumulative doubling-orphan pyramid)
+//   WITH    the fix: ~50 MB (live + in-flight copy only)
+// The 60 MB threshold sits between the two so the test catches regressions
+// without flaking on small allocator-overhead drift.
+module VecOversizedReleaseOnGrow
+
+fn fill(v: Vec<i64>, n: i64) {
+    let mut i: i64 = 0;
+    while i < n {
+        v.push(i);
+        i = i + 1;
+    }
+}
+
+fn main() -> i32 [io] {
+    let v: Vec<i64> = Vec::new();
+    fill(v, 100000i64);
+
+    let mut cycle: i64 = 0;
+    while cycle < 8 {
+        let extra: i64 = 500000i64 + cycle * 500000i64;
+        fill(v, extra);
+        v.truncate(100000);
+        cycle = cycle + 1;
+    }
+
+    let peak_bytes: u64 = memory_peak_bytes();
+    let limit_bytes: u64 = 60u64 * 1024u64 * 1024u64;
+    if peak_bytes < limit_bytes {
+        print_str("ok");
+    } else {
+        print_str("peak=");
+        print_u64(peak_bytes);
+    }
+
+    0
+}

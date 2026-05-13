@@ -34,7 +34,11 @@ struct VowArena {
     uintptr_t retained_bytes;
 };
 
-#define CHUNK_LINK_BYTES    8
+/* Chunk header layout: [next: 8][total: 8]. The `total` word at offset 8 lets
+ * arena_try_free_oversized_chunk identify and release abandoned oversized
+ * chunks during growth (issue #391). */
+#define CHUNK_LINK_BYTES    16
+#define CHUNK_TOTAL_OFFSET  8
 #define CHUNK_PAYLOAD       4096
 #define OVERSIZED_THRESHOLD 2048
 
@@ -65,8 +69,13 @@ static void* alloc_chunk(uintptr_t total) {
          * on any real host. */
         __ESBMC_assume((uintptr_t)base + total <= ((uintptr_t)1 << 62));
         *(void**)base = NULL;  /* next-chunk link */
+        *(uintptr_t*)((char*)base + CHUNK_TOTAL_OFFSET) = total;
     }
     return base;
+}
+
+static uintptr_t chunk_total(void* base) {
+    return *(uintptr_t*)((char*)base + CHUNK_TOTAL_OFFSET);
 }
 
 static uintptr_t chunk_usable_start(void* base, uintptr_t align) {
@@ -154,6 +163,38 @@ int64_t __vow_arena_try_extend(struct VowArena* a, void* ptr,
     return 1;
 }
 
+/* Issue #391: release the chunk containing `ptr` if it is oversized and
+ * non-tail. Mirrors arena_try_free_oversized_chunk in vow-runtime/src/lib.rs.
+ * Used by arena_grow_backing after a growth that moved a Vec/String/HashMap
+ * backing into a freshly allocated chunk. */
+static int arena_try_free_oversized_chunk(struct VowArena* a, const void* ptr) {
+    if (ptr == NULL) return 0;
+    void* prev = NULL;
+    void* chunk = a->first_chunk;
+    while (chunk != NULL) {
+        uintptr_t total = chunk_total(chunk);
+        uintptr_t base = (uintptr_t)chunk;
+        uintptr_t payload_start = base + CHUNK_LINK_BYTES;
+        uintptr_t limit = base + total;
+        if ((uintptr_t)ptr >= payload_start && (uintptr_t)ptr < limit) {
+            if (total <= normal_total()) return 0;
+            if (chunk == a->current_chunk) return 0;
+            void* next = *(void**)chunk;
+            if (prev == NULL) {
+                a->first_chunk = next;
+            } else {
+                *(void**)prev = next;
+            }
+            a->retained_bytes -= total;
+            free(chunk);
+            return 1;
+        }
+        prev = chunk;
+        chunk = *(void**)chunk;
+    }
+    return 0;
+}
+
 int main(void) {
     struct VowArena a;
     __vow_arena_init_closed(&a);
@@ -223,6 +264,24 @@ int main(void) {
             assert(a.last_alloc_start == saved_start);
             assert(a.cursor == saved_cursor);
         }
+    }
+
+    /* Directed scenario for issue #391: drop an oversized non-tail chunk and
+     * confirm the chain still terminates and close frees the remainder. */
+    void* big = __vow_arena_alloc(&a, 4096, 8);  /* oversized chunk */
+    void* big_chunk = a.current_chunk;
+    void* tail_marker = __vow_arena_alloc(&a, 8, 8); /* forces a new chunk */
+    (void)tail_marker;
+    assert(a.current_chunk != big_chunk);
+    uintptr_t bytes_before = a.retained_bytes;
+    int freed = arena_try_free_oversized_chunk(&a, big);
+    assert(freed == 1);
+    assert(a.retained_bytes < bytes_before);
+    /* Walking the chain must not encounter the freed chunk. */
+    void* walk = a.first_chunk;
+    while (walk != NULL) {
+        assert(walk != big_chunk);
+        walk = *(void**)walk;
     }
 
     __vow_arena_close(&a);

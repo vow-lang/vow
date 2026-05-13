@@ -643,7 +643,11 @@ pub struct VowArena {
 const _: () = assert!(core::mem::size_of::<VowArena>() == 56);
 
 const CHUNK_PAYLOAD: usize = 4096;
-const CHUNK_LINK_BYTES: usize = 8;
+// Chunk header layout: [next: 8 bytes][total: 8 bytes]. The `total` field lets
+// the chunk-chain walk in `arena_try_free_oversized_chunk` distinguish normal
+// from oversized chunks (issue #391) without an external side table.
+const CHUNK_LINK_BYTES: usize = 16;
+const CHUNK_TOTAL_OFFSET: usize = 8;
 const OVERSIZED_THRESHOLD: usize = 2048;
 
 const fn normal_chunk_total() -> usize {
@@ -721,14 +725,23 @@ fn memory_note_alloc_request() {
     });
 }
 
-// libc::malloc a chunk of `total` bytes and zero the next-chunk link word at
-// offset 0. Returns the base pointer or null on OOM; caller decides trap site.
+// libc::malloc a chunk of `total` bytes, zero the next-chunk link word at
+// offset 0, and store `total` at offset 8 so the chain walker can identify
+// oversized chunks for early release (issue #391). Returns the base pointer or
+// null on OOM; caller decides trap site.
 unsafe fn alloc_chunk(total: usize) -> *mut u8 {
     let base = unsafe { libc::malloc(total) } as *mut u8;
     if !base.is_null() {
         unsafe { *(base as *mut *mut u8) = core::ptr::null_mut() };
+        unsafe { *(base.add(CHUNK_TOTAL_OFFSET) as *mut usize) = total };
     }
     base
+}
+
+// Read the total-size word written by `alloc_chunk`. Lives at offset 8 inside
+// every chunk header.
+unsafe fn chunk_total(base: *const u8) -> usize {
+    unsafe { *(base.add(CHUNK_TOTAL_OFFSET) as *const usize) }
 }
 
 // Align a raw address up to `align` (power of two).
@@ -737,7 +750,8 @@ fn align_up(addr: usize, align: usize) -> usize {
 }
 
 // First usable address within a chunk for allocations of the given alignment.
-// Usable space begins at offset 8 (after the next-chunk link word).
+// Usable space begins at offset 16 (after the next-link word and the total-size
+// word — see CHUNK_LINK_BYTES).
 unsafe fn chunk_usable_start(base: *mut u8, align: usize) -> usize {
     align_up(base as usize + CHUNK_LINK_BYTES, align)
 }
@@ -890,6 +904,58 @@ pub unsafe extern "C" fn __vow_arena_try_extend(
     1
 }
 
+// Walk the arena's chunk chain for the chunk that contains `ptr`. If that
+// chunk is oversized (`total > normal_chunk_total()`) and is not the current
+// (tail) chunk, unlink it from the chain and libc::free it; decrement the
+// arena's retained bytes and the global memory counters.
+//
+// Used by `arena_grow_backing` after a growth that allocated into a new
+// chunk: the prior backing is now unreachable, and if it was the sole
+// allocation in its (oversized) chunk we can return that memory to libc
+// immediately rather than waiting for arena close. This fixes issue #391
+// (long-lived Vec/String/HashMap grow-then-truncate accumulating committed
+// pages). Normal-chunk backings cannot be freed early because the chunk
+// is shared with other allocations.
+unsafe fn arena_try_free_oversized_chunk(a: *mut VowArena, ptr: *const u8) -> bool {
+    if ptr.is_null() {
+        return false;
+    }
+    let arena = unsafe { &mut *a };
+    let mut prev: *mut u8 = core::ptr::null_mut();
+    let mut chunk = arena.first_chunk;
+    while !chunk.is_null() {
+        let total = unsafe { chunk_total(chunk) };
+        let chunk_base = chunk as usize;
+        let payload_start = chunk_base + CHUNK_LINK_BYTES;
+        let chunk_limit = chunk_base + total;
+        if (ptr as usize) >= payload_start && (ptr as usize) < chunk_limit {
+            // Normal chunks may carry other live allocations; refuse to free.
+            if total <= normal_chunk_total() {
+                return false;
+            }
+            // The grow path appends a new chunk before reaching here, so the
+            // abandoned chunk is always non-tail. Refuse if that invariant
+            // breaks rather than corrupt `cursor`/`chunk_end`.
+            if chunk == arena.current_chunk {
+                return false;
+            }
+            let next = unsafe { *(chunk as *mut *mut u8) };
+            if prev.is_null() {
+                arena.first_chunk = next;
+            } else {
+                unsafe { *(prev as *mut *mut u8) = next };
+            }
+            arena.retained_bytes = arena.retained_bytes.saturating_sub(total);
+            memory_note_arena_release(a, total);
+            unsafe { libc::free(chunk as *mut libc::c_void) };
+            return true;
+        }
+        prev = chunk;
+        chunk = unsafe { *(chunk as *mut *mut u8) };
+    }
+    false
+}
+
 // Root region header lives in .bss. Initialized by __vow_runtime_start before
 // main; never reclaimed (spec §6.2). Not yet wired to main (Phase 4).
 #[unsafe(no_mangle)]
@@ -935,6 +1001,13 @@ unsafe fn root_arena_alloc_zeroed(bytes: usize, align: usize) -> *mut u8 {
 /// is the most recent allocation in the chunk and the new size still fits,
 /// growth is O(1) with no copy and no orphaned backing. Otherwise fall back
 /// to a fresh allocation + memcpy of the prefix.
+///
+/// When fallback runs and the old backing was the sole allocation in an
+/// oversized chunk (>2048 bytes — see `__vow_arena_alloc`), the abandoned
+/// chunk is returned to libc rather than retained until arena close. This
+/// is the fix for issue #391: long-running programs that grow-then-truncate
+/// a Vec/String/HashMap in a hot loop no longer accumulate committed pages
+/// from prior reallocation peaks.
 unsafe fn arena_grow_backing(
     arena: *mut VowArena,
     ptr: *mut u8,
@@ -950,6 +1023,9 @@ unsafe fn arena_grow_backing(
     let new_ptr = unsafe { __vow_arena_alloc(arena, new_size, align) };
     if old_size > 0 {
         unsafe { std::ptr::copy_nonoverlapping(ptr, new_ptr, old_size) };
+        // Old backing is unreachable from here on. Release its chunk if
+        // it was the sole resident of an oversized chunk.
+        unsafe { arena_try_free_oversized_chunk(arena, ptr) };
     }
     unsafe { std::ptr::write_bytes(new_ptr.add(old_size), 0, new_size - old_size) };
     new_ptr
@@ -3532,6 +3608,92 @@ mod tests {
         );
         let expected_total = oversized_chunk_total(4096, 8);
         assert_eq!(a.chunk_end, a.current_chunk as usize + expected_total);
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn arena_growth_releases_oversized_chunk_for_abandoned_backing() {
+        // Regression for issue #391: when a Vec/String/HashMap backing grows
+        // out of an oversized chunk into a new oversized chunk, the abandoned
+        // chunk must be returned to libc immediately rather than retained
+        // until arena close.
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+
+        // Bump the cursor inside the first (normal) chunk so the next alloc
+        // forces an oversized chunk.
+        let _prefix = unsafe { __vow_arena_alloc(&mut a, 64, 8) };
+        let initial_retained = a.retained_bytes;
+
+        let big1 = 4096usize;
+        let p1 = unsafe { __vow_arena_alloc(&mut a, big1, 8) };
+        assert!(!p1.is_null());
+        let after_first_oversized = a.retained_bytes;
+        assert!(after_first_oversized > initial_retained);
+
+        // Grow it: arena_grow_backing must free the first oversized chunk
+        // and only the new (larger) oversized chunk remains for this backing.
+        let big2 = 8192usize;
+        let p2 = unsafe { arena_grow_backing(&mut a, p1, big1, big2, 8) };
+        assert!(!p2.is_null());
+        assert_ne!(p2, p1, "growth must move the backing to a fresh chunk");
+
+        // Walk the chunk chain — the chunk that contained `p1` must be gone.
+        let mut found_old = false;
+        let mut chunk = a.first_chunk;
+        while !chunk.is_null() {
+            let total = unsafe { chunk_total(chunk) };
+            let base = chunk as usize;
+            if (p1 as usize) >= base + CHUNK_LINK_BYTES && (p1 as usize) < base + total {
+                found_old = true;
+                break;
+            }
+            chunk = unsafe { *(chunk as *mut *mut u8) };
+        }
+        assert!(
+            !found_old,
+            "abandoned oversized chunk must be unlinked from the chain"
+        );
+
+        // Retained bytes should reflect only the chunks still in the chain.
+        let mut walked = 0usize;
+        let mut chunk = a.first_chunk;
+        while !chunk.is_null() {
+            walked += unsafe { chunk_total(chunk) };
+            chunk = unsafe { *(chunk as *mut *mut u8) };
+        }
+        assert_eq!(
+            a.retained_bytes, walked,
+            "retained_bytes must match the live chunk chain"
+        );
+
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn arena_growth_keeps_normal_chunk_for_small_backing() {
+        // Inverse of the above: a small backing lives in a normal chunk shared
+        // with other allocations and must NOT be freed when it grows. The
+        // chunk still holds the prefix allocation, so freeing it would corrupt
+        // memory.
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+
+        let prefix = unsafe { __vow_arena_alloc(&mut a, 64, 8) };
+        let p_small = unsafe { __vow_arena_alloc(&mut a, 64, 8) };
+        let head_before = a.first_chunk;
+
+        // Trigger growth via arena_grow_backing — even though it stays small,
+        // the abandoned region must not unlink the shared chunk.
+        let _p_grown = unsafe { arena_grow_backing(&mut a, p_small, 64, 128, 8) };
+
+        assert_eq!(
+            a.first_chunk, head_before,
+            "small abandoned backing must not unlink its (shared) normal chunk"
+        );
+        // The prefix allocation must still be readable.
+        let _byte = unsafe { *prefix };
+
         unsafe { __vow_arena_close(&mut a) };
     }
 
