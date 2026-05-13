@@ -7921,11 +7921,7 @@ fn maybe_auto_install_skill(cwd: &Path) {
 pub enum BuildStatus {
     Verified,
     Unverified,
-    /// Verification ran but at least one vowed function could not be modelled
-    /// by ESBMC; the contract was not statically proved. The skipped functions
-    /// appear as `VerificationSkipped` Warning diagnostics in `diagnostics[]`.
-    /// Distinct from `Unverified` (which means ESBMC was not invoked at all,
-    /// e.g. `--no-verify`); `Skipped` is fail-closed and yields exit code 1.
+    /// ESBMC ran but ≥1 vowed function non-modelable; fail closed, exit 1.
     Skipped,
     CompileFailed {
         message: String,
@@ -7988,13 +7984,9 @@ pub struct CeCallSite {
 }
 
 enum VerifyOutcome {
-    /// Verification was not run at all (e.g. `--no-verify`, or the verify
-    /// thread short-circuited without inspecting any function). Maps to
-    /// `BuildStatus::Unverified` (exit 0).
+    /// ESBMC not invoked (`--no-verify`); maps to `BuildStatus::Unverified` (exit 0).
     Skipped,
-    /// Verification ran but at least one vowed function could not be modelled
-    /// (non-modelable opcode), so its contract was not statically proved.
-    /// Maps to `BuildStatus::Skipped` (exit 1).
+    /// ESBMC ran but ≥1 vowed function non-modelable; maps to `BuildStatus::Skipped` (exit 1).
     SkippedNonModelable,
     Proven,
     Failed {

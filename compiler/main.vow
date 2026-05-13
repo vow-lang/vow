@@ -242,11 +242,7 @@ fn skip_if_non_modelable(f: IrFunction, ir_mod: IrModule, const_fn_indices: Vec<
     true
 }
 
-// Verification outcome codes returned by `run_verify_loop`:
-//   0 = Verified         (every vowed function statically proved)
-//   1 = VerifyFailed     (≥1 real failure: counterexample / timeout / error)
-//   2 = Skipped          (≥1 non-modelable function, no real failures)
-// Both 1 and 2 fail closed (exit 1); 0 succeeds.
+// Returns 0=Verified, 1=VerifyFailed, 2=Skipped (both 1 and 2 exit 1).
 fn run_verify_loop(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
                    vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64) -> i64 [io] {
     let mut all_proven: i64 = 1;
