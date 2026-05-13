@@ -4030,13 +4030,18 @@ mod tests {
         let mut a = empty_arena_header();
         unsafe { __vow_arena_open(&mut a) };
 
-        // Build a String whose backing is large enough to land in an
-        // oversized chunk (>2048 bytes for a u8 backing).
-        let payload = vec![b'a'; 3000];
+        // Build a String whose backing is large enough that the chunk
+        // total exceeds even the size-only classifier's old threshold:
+        // 5000 bytes → oversized_chunk_total = 5016 > normal_chunk_total
+        // = 4112. This ensures the old chunk is freed regardless of
+        // which classifier (path-flag or size-based) is in place, so the
+        // test still exercises the self-append UAF guard if a future
+        // change touches either piece.
+        let payload = vec![b'a'; 5000];
         let s = unsafe {
             __vow_string_new_in_arena(&mut a, payload.as_ptr() as *const i8, payload.len())
         };
-        // Sanity: the backing is in an oversized chunk.
+        // Sanity: the backing is in a path-oversized chunk.
         let header_before = unsafe { &*(s as *const VowVec) };
         assert!(header_before.cap > 2048, "test setup: must be oversized");
 
@@ -4047,11 +4052,11 @@ mod tests {
         unsafe { __vow_string_push_str_in_arena(&mut a, s, s as *const u8) };
 
         let header_after = unsafe { &*(s as *const VowVec) };
-        assert_eq!(header_after.len, 6000, "len doubles on self-append");
+        assert_eq!(header_after.len, 10000, "len doubles on self-append");
         let bytes = unsafe { std::slice::from_raw_parts(header_after.ptr, header_after.len) };
         assert!(
             bytes.iter().all(|&b| b == b'a'),
-            "all 6000 bytes must be 'a' — any other value indicates UAF read"
+            "all 10000 bytes must be 'a' — any other value indicates UAF read"
         );
 
         unsafe { __vow_arena_close(&mut a) };
