@@ -4703,7 +4703,9 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
 
 fn skill_support_files() -> &'static [(&'static str, &'static str)] {
     &[
-        (r#"reference/grammar.md"#, r#"# Vow Grammar Reference
+        (
+            r#"reference/grammar.md"#,
+            r#"# Vow Grammar Reference
 
 Complete grammar for the Vow programming language. Vow source files use the `.vow` extension.
 
@@ -5558,8 +5560,11 @@ if stdin_ready() {
 ## Canonical Form
 
 The canonical printer normalizes source: `parse → print → parse` is idempotent. Effects are sorted alphabetically, indentation uses 4 spaces, trailing expressions omit semicolons.
-"#),
-        (r#"reference/cli.md"#, r#"# Vow CLI Reference
+"#,
+        ),
+        (
+            r#"reference/cli.md"#,
+            r#"# Vow CLI Reference
 
 ## Commands
 
@@ -6060,8 +6065,11 @@ Parse JSON from stdout
 ```
 
 Always check stderr for human-readable diagnostics alongside the JSON on stdout.
-"#),
-        (r#"reference/contracts.md"#, r#"# Contract Authoring and Verification
+"#,
+        ),
+        (
+            r#"reference/contracts.md"#,
+            r#"# Contract Authoring and Verification
 
 Vow uses ESBMC (bounded model checker) for static contract verification. This document covers contract patterns, verification behavior, and common pitfalls.
 
@@ -6396,8 +6404,11 @@ extern "C" vow {
 ```
 
 The contract applies to all functions declared in the block. ESBMC uses `requires` as assumptions and `ensures` as assertions when verifying callers of extern functions.
-"#),
-        (r#"reference/errors.md"#, r#"# Vow Error Catalog
+"#,
+        ),
+        (
+            r#"reference/errors.md"#,
+            r#"# Vow Error Catalog
 
 Every Vow error has a machine-readable `error_code` in the JSON output. This document lists all error codes, their phase, meaning, an example trigger, and how to fix them.
 
@@ -6843,8 +6854,11 @@ The `operation` field is `arena_open` for the initial chunk allocation or `arena
 **Meaning:** The IR lowerer could not resolve a struct type tag or field name, defaulting to index 0. This usually indicates a missing type annotation on a `let` binding, causing the compiler to lose track of which struct type a pointer refers to.
 
 **Fix:** Add an explicit type annotation: `let x: MyStruct = ...;` so the compiler can track struct type tags through the IR.
-"#),
-        (r#"examples/examples.md"#, r#"# Worked Examples
+"#,
+        ),
+        (
+            r#"examples/examples.md"#,
+            r#"# Worked Examples
 
 Verification workflow examples. The first three demonstrate Counterexample-Guided Inductive Synthesis (CEGIS) cycles: write spec, build, read JSON, diagnose, fix, verify. The fourth shows break-with-value in loop expressions. The fifth shows an EOF-safe interactive command loop using `stdin_read_line()`. The sixth shows bounded-memory streaming file input.
 
@@ -7304,8 +7318,11 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
 ### Why BTreeMap and not HashMap
 
 `HashMap.insert` returns `()` and its iteration order is unspecified. For maps whose iteration is observable in the output binary, the byte-identical bootstrap requirement (`stage1 == stage2` sha256) demands deterministic order. `BTreeMap` provides it; `HashMap` does not.
-"#),
-        (r#"schemas/build-result.schema.json"#, r#"{
+"#,
+        ),
+        (
+            r#"schemas/build-result.schema.json"#,
+            r#"{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vow-lang.dev/schemas/build-result.schema.json",
   "title": "BuildResult",
@@ -7366,8 +7383,11 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
   ],
   "additionalProperties": false
 }
-"#),
-        (r#"schemas/contracts-result.schema.json"#, r#"{
+"#,
+        ),
+        (
+            r#"schemas/contracts-result.schema.json"#,
+            r#"{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vow-lang.dev/schemas/contracts-result.schema.json",
   "title": "ContractsResult",
@@ -7445,8 +7465,11 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
   },
   "additionalProperties": false
 }
-"#),
-        (r#"schemas/counterexample.schema.json"#, r#"{
+"#,
+        ),
+        (
+            r#"schemas/counterexample.schema.json"#,
+            r#"{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vow-lang.dev/schemas/counterexample.schema.json",
   "title": "Counterexample",
@@ -7491,8 +7514,11 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
   },
   "additionalProperties": false
 }
-"#),
-        (r#"schemas/diagnostic.schema.json"#, r#"{
+"#,
+        ),
+        (
+            r#"schemas/diagnostic.schema.json"#,
+            r#"{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vow-lang.dev/schemas/diagnostic.schema.json",
   "title": "Diagnostic",
@@ -7550,8 +7576,11 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
   },
   "additionalProperties": false
 }
-"#),
-        (r#"schemas/mutants-result.schema.json"#, r##"{
+"#,
+        ),
+        (
+            r#"schemas/mutants-result.schema.json"#,
+            r##"{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vow-lang.org/schemas/mutants-result.schema.json",
   "title": "MutantsOutput",
@@ -7629,8 +7658,11 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     }
   }
 }
-"##),
-        (r#"schemas/test-result.schema.json"#, r##"{
+"##,
+        ),
+        (
+            r#"schemas/test-result.schema.json"#,
+            r##"{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vow-lang.dev/schemas/test-result.schema.json",
   "title": "TestResult",
@@ -7711,8 +7743,11 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
     }
   }
 }
-"##),
-        (r#"schemas/vow-violation.schema.json"#, r#"{
+"##,
+        ),
+        (
+            r#"schemas/vow-violation.schema.json"#,
+            r#"{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://vow-lang.dev/schemas/vow-violation.schema.json",
   "title": "VowViolation",
@@ -7758,7 +7793,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
   },
   "additionalProperties": false
 }
-"#)
+"#,
+        ),
     ]
 }
 // GENERATE:SKILL_FULL:END
@@ -13606,7 +13642,11 @@ fn main() -> i32 {
         // Symlink to a directory — its contents must not be recursed into.
         let external_dir = external.path().join("nested");
         std::fs::create_dir(&external_dir).unwrap();
-        std::fs::write(external_dir.join("test_inside_symlink.vow"), "module Inside").unwrap();
+        std::fs::write(
+            external_dir.join("test_inside_symlink.vow"),
+            "module Inside",
+        )
+        .unwrap();
         let symlinked_dir = dir.path().join("subdir_symlink");
         std::os::unix::fs::symlink(&external_dir, &symlinked_dir).unwrap();
 
