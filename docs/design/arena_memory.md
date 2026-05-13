@@ -138,19 +138,38 @@ The root region (§6) is the exception: its header lives in `.bss`.
 
 ### 3.2. Chunk layout
 
-Chunks are allocated via libc `malloc`. Each chunk is 4096 bytes plus
-one pointer (8 bytes) for the next-chunk link, stored at the **start**
-of each chunk; usable allocation space begins at byte offset 8 within
-the chunk, giving 4096 usable bytes per normal chunk. Allocations
-larger than 2048 bytes (half-chunk threshold) are placed in a
-custom-sized chunk whose total size is
-`8 + bytes + (align - 1)`, where `align` is the requested alignment
+Chunks are allocated via libc `malloc`. Each chunk carries a 16-byte
+header at offset 0: an 8-byte next-chunk link followed by an 8-byte
+total chunk size. Usable allocation space begins at byte offset 16
+within the chunk, giving 4096 usable bytes per normal chunk (total
+size 4112). Allocations larger than 2048 bytes (half-chunk threshold)
+are placed in a custom-sized chunk whose total size is
+`16 + bytes + (align - 1)`, where `align` is the requested alignment
 of the oversized allocation. The `align - 1` slack covers worst-case
-alignment padding after the 8-byte link and guarantees the
+alignment padding after the 16-byte header and guarantees the
 allocation fits regardless of alignment; without it, high-alignment
 requests (e.g., 16-byte-aligned SIMD backings) would exceed the
 chunk's usable range and trigger repeated fallback allocation or
 out-of-bounds arithmetic.
+
+The total-size word carries an additional bit (CHUNK_OVERSIZED_FLAG)
+that records *which allocation path* produced the chunk — not just
+its size. The chain walker in §7.1 consults this flag, not a
+size-derived predicate, because a path-oversized chunk can have a
+`total` below, equal to, or above `normal_chunk_total()`: for
+example, a 3000-byte single-resident string backing has total 3016
+< 4112, yet is still single-resident and reclaimable.
+
+**Single-resident invariant for oversized chunks.** After an oversized
+allocation, the arena's `cursor` is parked at `chunk_end` of the new
+chunk. This intentionally wastes the chunk's alignment-padding tail
+(up to `align - 1` bytes for the alignment-driven path) so no
+subsequent allocation can land in the slack via the fast path. The
+invariant — *each oversized chunk holds exactly one allocation* — is
+the precondition that lets §7.1 free the entire chunk when its
+backing is abandoned without dangling pointers into a still-live
+allocation in the same chunk. Normal chunks continue to use the
+bump cursor and may hold many allocations.
 
 Chunks form a singly-linked list rooted at `first_chunk`. The
 `current_chunk` always points to the tail. The next-chunk pointer of
@@ -1136,11 +1155,25 @@ point into `.rodata` (compile-time-known) or into the root region
 (runtime-computed). The distinction is transparent to callers; both
 are valid for arbitrary lifetimes.
 
-### 6.3. Root region never shrinks
+### 6.3. Root-region lifetime guarantees
 
-The root region's chunks are not reclaimed during program execution.
-Memory allocated there lives until process exit. Routing a value
-into the root region is a one-way operation.
+Routing a value into the root region is a one-way operation:
+every value visible to Vow source code that lives in root remains
+live for the entire process lifetime. The root region's chunk
+chain is never freed by an `__vow_arena_close` call.
+
+There is one exception that is invisible to Vow source code:
+container growth in any arena (§7.1) reclaims the dedicated
+oversized chunk of an abandoned backing, including in the root
+region. This shrinks the root arena's total resident bytes but
+does not affect any live Vow value — the abandoned backing is
+unreachable from Vow by construction (the descriptor's `ptr`
+points at the new buffer).
+
+C code that retains a raw pointer into a root-region container's
+backing across calls MUST not let the container grow between
+those calls, or MUST re-fetch the pointer after any operation
+that may grow it. §7.4 documents the FFI shape.
 
 Accidental root-region placement is prevented by §4.4: region
 inference rejects rather than over-approximates to root. Explicit
@@ -1152,21 +1185,45 @@ root placement (`pin_to_root`) is a visible source operation.
 
 `Vec<T>`, `HashMap<K, V>`, and `String` grow by allocating a new
 larger backing in the same arena as the current backing and copying.
-The old backing is not freed. It remains allocated in the arena
-until the arena closes.
 
-At peak, a container that has doubled through `N` growths holds
-`O(N)` bytes of orphaned backings. The total is bounded by
-**twice the current live capacity** at any point in time — the
-same asymptotic bound as classical doubling `realloc` — but the
-steady-state footprint is different: `realloc` frees each old
-buffer after the copy, so it settles back to 1× live capacity,
-whereas the arena model keeps every orphaned backing allocated
-until the arena closes, so the region's resident set stays
-near 2× live capacity until that point. This is an intentional
-trade: no per-growth `free` call, no dangling-pointer risk for
-FFI holders of the old backing (§7.4), at the cost of peak
-memory held by the region for the block's lifetime.
+The old backing is reclaimed in two ways:
+
+1. **Oversized abandoned backings are returned to libc immediately.**
+   The old backing is always the sole resident of its oversized
+   chunk (>2048 bytes): §3.2 seals the cursor at `chunk_end` of every
+   oversized chunk at allocation time, so the fast path cannot place
+   a subsequent allocation in the alignment-slack tail. The runtime
+   walks the chunk chain after the growth's `memcpy`, finds the chunk
+   containing the abandoned backing, confirms `total >
+   normal_chunk_total()`, unlinks it, and calls `free` on it. This
+   bounds the steady-state footprint of a grow-then-shrink loop to
+   ~1× the current live capacity for the oversized portion of the
+   backing.
+2. **Normal-chunk abandoned backings are retained until arena close.**
+   Normal chunks are shared with other allocations and cannot be
+   reclaimed mid-arena; the abandoned bytes remain orphaned in the
+   chunk's interior until the arena's chunk chain is freed.
+
+For the typical pattern — a container that has doubled through `N`
+growths past the oversized threshold — peak resident bytes are
+bounded by ~2× current live capacity at the moment of the copy
+(the old backing plus the new one) and settle back to ~1× after
+each growth's chunk free. This restores the classical `realloc`
+asymptotic footprint for large containers while preserving the
+arena's bump-allocation cost model for small ones.
+
+The chunk-free path is not a user-visible free operation: the
+`Vec`/`String`/`HashMap` value itself is unchanged, and no Vow
+source-level free/drop is introduced. §2.2's prohibition on
+explicit free continues to apply.
+
+FFI holders of the old backing pointer would still observe a
+freed pointer after the chunk is returned to libc; §7.4 documents
+the FFI shape that prevents this — wrappers that hand a pointer
+to C must keep the underlying value alive across the call, and
+Vow's region inference prevents a container from being grown
+while a foreign pointer to its old backing is on a live FFI
+boundary.
 
 ### 7.2. Zero-copy extension
 
@@ -1190,11 +1247,25 @@ in practice. Agents wanting a mutable copy must explicitly copy via
 ### 7.4. FFI visibility of orphaned backings
 
 When a container's backing is shared across an FFI boundary (§8) and
-the container grows, the C side retains a valid pointer to the old
-backing until the arena closes. This is strictly safer than the
-analogous `realloc` behavior (which would have freed the backing).
-Documented as a positive consequence, not a requirement on the
-caller.
+the container grows, the C side's view of the old backing depends on
+where the backing lived:
+
+- **Normal-chunk backings** remain valid until the arena closes. The
+  containing chunk is shared with other allocations and cannot be
+  released mid-arena, so the old bytes stay readable.
+- **Oversized-chunk backings** are returned to libc as soon as the
+  growth's `memcpy` completes (§7.1). A C-side pointer captured
+  before the growth is dangling from that moment forward.
+
+The default Vow → C convention is call-scoped sharing (§8.2): the C
+side reads/writes the pointer for the duration of the call and does
+not retain. Under that convention chunk release is harmless — no
+growth happens during the call. C code that retains the pointer
+across calls MUST treat container growth on the Vow side as
+invalidating the pointer and re-fetch from the value's descriptor
+after any operation that may grow the backing; pinning the value
+into the root region stabilizes the descriptor's *identity* but
+does not pin the underlying buffer address across growth (§6.3).
 
 ## 8. FFI boundary
 
