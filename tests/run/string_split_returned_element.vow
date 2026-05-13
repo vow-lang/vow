@@ -1,0 +1,17 @@
+// TEST: stdout "a=AA b=CCCC\n"
+module StringSplitReturnedElement
+
+fn first_part(s: String) -> String {
+    let parts: Vec<String> = string_split(s, String::from(","));
+    parts[0]
+}
+
+fn main() [io] {
+    let a: String = first_part(String::from("AA,BB"));
+    let b: String = first_part(String::from("CCCC,DDDD"));
+    print_str(String::from("a="));
+    print_str(a);
+    print_str(String::from(" b="));
+    print_str(b);
+    print_str(String::from("\n"));
+}
