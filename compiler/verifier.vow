@@ -688,11 +688,10 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
     };
     let mut used_combined: String = combined;
 
-    // Phase D: if BV could neither prove nor falsify (Timeout or Unknown)
-    // under Auto encoding and the BV solver is not Bitwuzla, retry once
-    // with --z3 --ir (integer encoding).
-    let bv_inconclusive: bool = status == VERIFY_TIMEOUT() || status == VERIFY_UNKNOWN();
-    if bv_inconclusive && auto_enc && bv_solver != String::from("bitwuzla") {
+    // Phase D: if BV times out under Auto encoding and the BV solver is not
+    // Bitwuzla, retry once with --z3 --ir (integer encoding). UNKNOWN is an
+    // explicit inconclusive ESBMC result; do not let an IR proof hide it.
+    if status == VERIFY_TIMEOUT() && auto_enc && bv_solver != String::from("bitwuzla") {
         let ir_solver: String = String::from("z3");
         let ir_encoding: String = String::from("ir");
         let ir_timeout: String = {
@@ -718,8 +717,7 @@ fn verify_function_full(f: IrFunction, m: IrModule, max_k_step: String, use_cach
         let bv_status: i64 = status;
         status = {
             // IR-only counterexamples can be infeasible under BV (no overflow modeling),
-            // so a FAILED here is inconclusive — report the original BV outcome
-            // (Timeout or Unknown) instead.
+            // so a FAILED here is inconclusive — report the original timeout instead.
             if s2 == VERIFY_PROVEN() { VERIFY_PROVEN_IR() }
             else if s2 == VERIFY_FAILED() { bv_status }
             else { s2 }

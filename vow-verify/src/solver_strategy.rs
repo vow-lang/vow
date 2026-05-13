@@ -239,11 +239,11 @@ pub fn run_with_fallback(
     let result = run_esbmc_with_max_k_step(esbmc, c_src, max_k_step, func_name, &bv_config);
 
     match result {
-        // Both Timeout and Unknown mean "BV could neither prove nor disprove"
-        // — retry with Z3+IR. Same soundness rules apply to either fallback:
-        // an IR-only CE can be infeasible under BV, so we never return Failed
-        // from IR; we report the original BV outcome instead.
-        VerificationResult::Timeout | VerificationResult::Unknown { .. } => {
+        // Timeout means BV could neither prove nor disprove within the time
+        // budget, so auto mode may retry with Z3+IR. UNKNOWN is different:
+        // ESBMC reached an inconclusive verification result, and proving the
+        // weaker IR abstraction must not hide that BV outcome.
+        VerificationResult::Timeout => {
             // IR encoding only works with Z3. If the resolved BV solver was
             // Boolector or Z3, we can switch to Z3+IR. Bitwuzla cannot do IR.
             let can_ir = !matches!(bv_config.solver, Solver::Bitwuzla);
@@ -265,8 +265,8 @@ pub fn run_with_fallback(
                 VerificationResult::Proven => (VerificationResult::ProvenIr, ir_config),
                 // IR returned a counterexample, but IR does not model
                 // overflow — a CE found only under IR can be infeasible
-                // under BV. Report the BV outcome (Timeout or Unknown)
-                // rather than an unsound definitive Failed.
+                // under BV. Report the original timeout rather than an
+                // unsound definitive Failed.
                 VerificationResult::Failed(_) => (result, ir_config),
                 other => (other, ir_config),
             }
@@ -717,6 +717,54 @@ mod tests {
             }
             other => panic!("unexpected result: {other:?}"),
         }
+    }
+
+    /// UNKNOWN is an explicit ESBMC outcome, not a wall-clock timeout.
+    /// Auto fallback must not let a weaker IR proof upgrade it to ProvenIr.
+    ///
+    /// Unix-only: the fake-esbmc is a `#!/bin/sh` script that cannot be
+    /// launched directly on Windows even with the chmod skipped.
+    #[cfg(unix)]
+    #[test]
+    fn fallback_auto_bv_unknown_does_not_retry_ir() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let esbmc = dir.path().join("fake-esbmc");
+        std::fs::write(
+            &esbmc,
+            r#"#!/bin/sh
+for arg in "$@"; do
+    if [ "$arg" = "--ir" ]; then
+        echo "VERIFICATION SUCCESSFUL"
+        exit 0
+    fi
+done
+echo "Unable to prove or falsify the program, giving up."
+echo "VERIFICATION UNKNOWN"
+"#,
+        )
+        .expect("write fake esbmc");
+        let mut perms = std::fs::metadata(&esbmc).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&esbmc, perms).expect("chmod fake esbmc");
+
+        let cfg = SolverConfig {
+            solver: Solver::Auto,
+            encoding: Encoding::Auto,
+            timeout_secs: Some(5),
+        };
+        let (result, resolved) =
+            run_with_fallback(&esbmc, "int main(void) { return 0; }", 5, "main", &cfg);
+
+        match result {
+            VerificationResult::Unknown { reason } => {
+                assert!(reason.contains("Unable to prove or falsify"));
+            }
+            other => panic!("UNKNOWN must not be upgraded by IR fallback: {other:?}"),
+        }
+        assert_eq!(resolved.solver, Solver::Boolector);
+        assert_eq!(resolved.encoding, Encoding::Bv);
     }
 
     /// Phase D: when BV times out under Auto encoding (non-Bitwuzla solver),
