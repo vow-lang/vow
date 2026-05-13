@@ -929,6 +929,13 @@ pub unsafe extern "C" fn __vow_arena_try_extend(
 // (long-lived Vec/String/HashMap grow-then-truncate accumulating committed
 // pages). Normal-chunk backings cannot be freed early because the chunk
 // is shared with other allocations.
+//
+// Cost: O(chunks-before-match) chunk-chain scan from `first_chunk`. The
+// upper bound is the number of *retained* normal chunks plus any unfreed
+// oversized chunks ahead of the match; prior oversized chunks released on
+// earlier growths are no longer in the chain, so the typical grow-then-
+// truncate loop that motivated this fix stays effectively O(1) per growth
+// — the cost is dominated by normal-chunk count, not by growth count.
 unsafe fn arena_try_free_oversized_chunk(a: *mut VowArena, ptr: *const u8) -> bool {
     if ptr.is_null() {
         return false;
@@ -1682,14 +1689,36 @@ pub unsafe extern "C" fn __vow_string_push_str_in_arena(
     if vd0.cap == VOW_CAP_RODATA {
         region_literal_mutation_trap("String::push_str");
     }
-    let vs = unsafe { &*(src as *const VowVec) };
-    if vs.len == 0 {
+    // Snapshot source length and detect self-append BEFORE the reserve. The
+    // reserve may grow `dest` into a new chunk and `arena_grow_backing` may
+    // libc::free the abandoned chunk (PR #392 fix for issue #391). If `src`
+    // aliases `dest`, a captured `&*src` reference would dangle on the
+    // post-reserve read. Use the post-reserve `dest` descriptor's `ptr` as
+    // the read source in the self-append case — `arena_grow_backing` copies
+    // the old contents into the new backing before freeing, so the source
+    // bytes are present at the new pointer.
+    let src_is_dest = std::ptr::eq(src as *const VowVec, dest as *const VowVec);
+    let src_len = unsafe { (*(src as *const VowVec)).len };
+    if src_len == 0 {
         return;
     }
-    unsafe { __vow_vec_reserve_in_arena(arena, dest, vs.len, 1, 1) };
+    let src_ptr_before_reserve = if src_is_dest {
+        core::ptr::null()
+    } else {
+        unsafe { (*(src as *const VowVec)).ptr as *const u8 }
+    };
+    unsafe { __vow_vec_reserve_in_arena(arena, dest, src_len, 1, 1) };
     let vd = unsafe { &mut *(dest as *mut VowVec) };
-    unsafe { std::ptr::copy_nonoverlapping(vs.ptr, vd.ptr.add(vd.len), vs.len) };
-    vd.len += vs.len;
+    let src_ptr = if src_is_dest {
+        // Self-append: the reserve copied the original bytes into `vd.ptr`;
+        // the captured pointer (if any) into the old backing may now point
+        // at freed memory.
+        vd.ptr as *const u8
+    } else {
+        src_ptr_before_reserve
+    };
+    unsafe { std::ptr::copy_nonoverlapping(src_ptr, vd.ptr.add(vd.len), src_len) };
+    vd.len += src_len;
 }
 
 #[unsafe(no_mangle)]
@@ -3910,6 +3939,45 @@ mod tests {
         let digits_bytes =
             unsafe { std::slice::from_raw_parts(digits_header.ptr, digits_header.len) };
         assert_eq!(digits_bytes, b"-42");
+
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn string_push_str_self_append_oversized_no_uaf() {
+        // Regression for the self-append UAF scenario flagged on PR #392:
+        // `__vow_string_push_str_in_arena` used to capture `vs.ptr` from
+        // the source descriptor before `__vow_vec_reserve_in_arena`. If
+        // `src == dest` and the reserve grew the backing out of an
+        // oversized chunk, `arena_grow_backing`'s chunk-free helper would
+        // libc::free the old chunk, leaving the captured `vs.ptr`
+        // dangling for the subsequent copy_nonoverlapping.
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+
+        // Build a String whose backing is large enough to land in an
+        // oversized chunk (>2048 bytes for a u8 backing).
+        let payload = vec![b'a'; 3000];
+        let s = unsafe {
+            __vow_string_new_in_arena(&mut a, payload.as_ptr() as *const i8, payload.len())
+        };
+        // Sanity: the backing is in an oversized chunk.
+        let header_before = unsafe { &*(s as *const VowVec) };
+        assert!(header_before.cap > 2048, "test setup: must be oversized");
+
+        // Self-append: src == dest. With the fix, the post-reserve copy
+        // reads from the new backing's prefix (where the old contents
+        // were copied by `arena_grow_backing`) rather than from the
+        // freed old chunk.
+        unsafe { __vow_string_push_str_in_arena(&mut a, s, s as *const u8) };
+
+        let header_after = unsafe { &*(s as *const VowVec) };
+        assert_eq!(header_after.len, 6000, "len doubles on self-append");
+        let bytes = unsafe { std::slice::from_raw_parts(header_after.ptr, header_after.len) };
+        assert!(
+            bytes.iter().all(|&b| b == b'a'),
+            "all 6000 bytes must be 'a' — any other value indicates UAF read"
+        );
 
         unsafe { __vow_arena_close(&mut a) };
     }

@@ -188,6 +188,10 @@ static int arena_try_free_oversized_chunk(struct VowArena* a, const void* ptr) {
             } else {
                 *(void**)prev = next;
             }
+            /* Plain unsigned subtraction by design (asymmetric with the Rust
+             * mirror's `saturating_sub`): if the `retained_bytes >= total`
+             * invariant is ever violated, ESBMC sees the resulting underflow
+             * as an arithmetic anomaly rather than a silently-clamped zero. */
             a->retained_bytes -= total;
             free(chunk);
             return 1;
