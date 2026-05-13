@@ -660,6 +660,14 @@ const CHUNK_TOTAL_OFFSET: usize = 8;
 // `16 + bytes + (align - 1)` which still fits below 2^62 in practice
 // (any real malloc result is far below 2^48).
 const CHUNK_OVERSIZED_FLAG: usize = 1usize << 62;
+// Make the 64-bit requirement explicit. On a 32-bit target `1usize << 62`
+// would be a compile-time shift overflow; the assert turns a cryptic
+// constant-eval error into a clear diagnostic. The runtime is already
+// implicitly 64-bit elsewhere (e.g. `size_of::<VowArena>() == 56`).
+const _: () = assert!(
+    usize::BITS == 64,
+    "vow-runtime requires a 64-bit target (CHUNK_OVERSIZED_FLAG uses bit 62)"
+);
 const OVERSIZED_THRESHOLD: usize = 2048;
 
 const fn normal_chunk_total() -> usize {
@@ -992,6 +1000,10 @@ unsafe fn arena_try_free_oversized_chunk(a: *mut VowArena, ptr: *const u8) -> bo
             } else {
                 unsafe { *(prev as *mut *mut u8) = next };
             }
+            // Saturating by design: a violated `retained_bytes >= total`
+            // invariant must not panic in production. The C ESBMC mirror in
+            // `vow-runtime/verify/arena.c` uses plain unsigned subtraction
+            // at the same site so any such underflow stays verifier-visible.
             arena.retained_bytes = arena.retained_bytes.saturating_sub(total);
             memory_note_arena_release(a, total);
             unsafe { libc::free(chunk as *mut libc::c_void) };
@@ -1072,7 +1084,15 @@ unsafe fn arena_grow_backing(
         unsafe { std::ptr::copy_nonoverlapping(ptr, new_ptr, old_size) };
         // Old backing is unreachable from here on. Release its chunk if
         // it was the sole resident of an oversized chunk.
-        unsafe { arena_try_free_oversized_chunk(arena, ptr) };
+        //
+        // Mirror `__vow_arena_alloc`'s path predicate as a cheap fast-skip:
+        // an allocation of `old_size` at `align` is in an oversized chunk
+        // iff this predicate was true at the time it was placed. When
+        // it's false the chain walker would only discover `chunk_is_oversized
+        // == false` and bail out, so we skip the O(N) walk entirely.
+        if old_size > OVERSIZED_THRESHOLD || old_size + (align - 1) > CHUNK_PAYLOAD {
+            unsafe { arena_try_free_oversized_chunk(arena, ptr) };
+        }
     }
     unsafe { std::ptr::write_bytes(new_ptr.add(old_size), 0, new_size - old_size) };
     new_ptr
