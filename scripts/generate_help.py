@@ -454,7 +454,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
             "build_result": {
                 "schema_ref": "schemas/build-result.schema.json",
                 "emitted_by": ["build", "verify"],
-                "status_values": ["Verified", "Unverified", "CompileFailed", "VerifyFailed"],
+                "status_values": ["Verified", "Unverified", "Skipped", "CompileFailed", "VerifyFailed"],
                 "legacy_fields": ["counterexample"],
             },
             "contracts_result": {
@@ -477,7 +477,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
             },
         },
         "output_json": {
-            "status": "Verified | Unverified | CompileFailed | VerifyFailed",
+            "status": "Verified | Unverified | Skipped | CompileFailed | VerifyFailed",
             "executable": "path to compiled binary, or null",
             "diagnostics": "[array of {error_code, message, severity, span: {file, offset, length}}]",
             "message": "error detail (CompileFailed)",
@@ -497,7 +497,7 @@ def build_help_json(grammar: str, cli: str, _contracts: str) -> dict:
         },
         "exit_codes": {
             "0": "success (Verified or Unverified)",
-            "1": "failure (CompileFailed or VerifyFailed)",
+            "1": "failure (CompileFailed, VerifyFailed, or Skipped)",
         },
         "language": {
             "module": "module <Name>",
@@ -662,7 +662,7 @@ def build_help_human(data: dict) -> str:
     lines.append("")
 
     lines.append("OUTPUT (JSON on stdout)")
-    lines.append("  status      : Verified | Unverified | CompileFailed | VerifyFailed")
+    lines.append("  status      : Verified | Unverified | Skipped | CompileFailed | VerifyFailed")
     lines.append("  executable  : path to compiled binary, or null")
     lines.append("  diagnostics : array of {error_code, message, severity, span: {file, offset, length}}")
     lines.append("  message     : error detail (CompileFailed)")
@@ -672,7 +672,7 @@ def build_help_human(data: dict) -> str:
 
     lines.append("EXIT CODES")
     lines.append("  0  success (Verified or Unverified)")
-    lines.append("  1  failure (CompileFailed or VerifyFailed)")
+    lines.append("  1  failure (CompileFailed, VerifyFailed, or Skipped)")
     lines.append("")
 
     lines.append("LANGUAGE SUMMARY")

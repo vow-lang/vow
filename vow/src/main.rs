@@ -1005,6 +1005,7 @@ fn skill_json() -> String {
       "status_values": [
         "Verified",
         "Unverified",
+        "Skipped",
         "CompileFailed",
         "VerifyFailed"
       ],
@@ -1034,7 +1035,7 @@ fn skill_json() -> String {
     }
   },
   "output_json": {
-    "status": "Verified | Unverified | CompileFailed | VerifyFailed",
+    "status": "Verified | Unverified | Skipped | CompileFailed | VerifyFailed",
     "executable": "path to compiled binary, or null",
     "diagnostics": "[array of {error_code, message, severity, span: {file, offset, length}}]",
     "message": "error detail (CompileFailed)",
@@ -1054,7 +1055,7 @@ fn skill_json() -> String {
   },
   "exit_codes": {
     "0": "success (Verified or Unverified)",
-    "1": "failure (CompileFailed or VerifyFailed)"
+    "1": "failure (CompileFailed, VerifyFailed, or Skipped)"
   },
   "language": {
     "module": "module <Name>",
@@ -1410,7 +1411,7 @@ GLOBAL OPTIONS
   --help --human        Emit legacy text help
 
 OUTPUT (JSON on stdout)
-  status      : Verified | Unverified | CompileFailed | VerifyFailed
+  status      : Verified | Unverified | Skipped | CompileFailed | VerifyFailed
   executable  : path to compiled binary, or null
   diagnostics : array of {error_code, message, severity, span: {file, offset, length}}
   message     : error detail (CompileFailed)
@@ -1419,7 +1420,7 @@ OUTPUT (JSON on stdout)
 
 EXIT CODES
   0  success (Verified or Unverified)
-  1  failure (CompileFailed or VerifyFailed)
+  1  failure (CompileFailed, VerifyFailed, or Skipped)
 
 LANGUAGE SUMMARY
   module Hello
@@ -2665,10 +2666,15 @@ vow verify --help --human  # same legacy text (works on all subcommands)
 
 ## Exit Codes
 
-| Code | Meaning                              |
-|------|--------------------------------------|
-| `0`  | Success (Verified or Unverified)     |
-| `1`  | Failure (CompileFailed or VerifyFailed) |
+| Code | Meaning                                                                            |
+|------|------------------------------------------------------------------------------------|
+| `0`  | Success (`Verified` or `Unverified`)                                               |
+| `1`  | Failure (`CompileFailed`, `VerifyFailed`, or `Skipped`)                            |
+
+`vow build` and `vow verify` both fail closed on `Skipped`: if ESBMC was asked to verify a vowed
+function but the verifier could not model the function body, the contract was not statically
+proved, so the run exits non-zero. Use `--no-verify` if you genuinely want to skip verification —
+that path produces `Unverified` (exit 0).
 
 ## Build Output JSON
 
@@ -2680,8 +2686,9 @@ vow verify --help --human  # same legacy text (works on all subcommands)
 
 | Status          | Meaning                                     |
 |-----------------|---------------------------------------------|
-| `Verified`      | Compiled + all contracts proved by ESBMC. Functions whose bodies the verifier cannot model (`RegionAlloc`, `FieldSet`, `Linear*`, `Load`/`Store`, `RemF*`, effectful) are reported as a `VerificationSkipped` *Warning* in `diagnostics[]` and the build still succeeds — their contracts are documentary, runtime-checked under `--mode debug`. |
-| `Unverified`    | Compiled with `--no-verify` (ESBMC skipped)  |
+| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. |
+| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
+| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `RegionAlloc`, `FieldSet`, `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Each such function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
 | `CompileFailed` | Parse error, type error, module load error, or link failure |
 | `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, or the tool was not found. Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
@@ -2823,7 +2830,7 @@ vow verify --help --human  # same legacy text (works on all subcommands)
 | `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
-| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]`. |
+| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
 
 ## Trace Output (stderr, --debug-trace)
 
@@ -4207,8 +4214,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
   "properties": {
     "status": {
       "type": "string",
-      "enum": ["Verified", "Unverified", "CompileFailed", "VerifyFailed"],
-      "description": "Build outcome"
+      "enum": ["Verified", "Unverified", "Skipped", "CompileFailed", "VerifyFailed"],
+      "description": "Build outcome. `Skipped` means ESBMC was invoked but at least one vowed function could not be modelled; the build fails closed with exit 1 (distinct from `Unverified`, which means ESBMC was not invoked, e.g. `--no-verify`/`--dump-ir`, exit 0)."
     },
     "executable": {
       "type": ["string", "null"],
@@ -5765,10 +5772,15 @@ vow verify --help --human  # same legacy text (works on all subcommands)
 
 ## Exit Codes
 
-| Code | Meaning                              |
-|------|--------------------------------------|
-| `0`  | Success (Verified or Unverified)     |
-| `1`  | Failure (CompileFailed or VerifyFailed) |
+| Code | Meaning                                                                            |
+|------|------------------------------------------------------------------------------------|
+| `0`  | Success (`Verified` or `Unverified`)                                               |
+| `1`  | Failure (`CompileFailed`, `VerifyFailed`, or `Skipped`)                            |
+
+`vow build` and `vow verify` both fail closed on `Skipped`: if ESBMC was asked to verify a vowed
+function but the verifier could not model the function body, the contract was not statically
+proved, so the run exits non-zero. Use `--no-verify` if you genuinely want to skip verification —
+that path produces `Unverified` (exit 0).
 
 ## Build Output JSON
 
@@ -5780,8 +5792,9 @@ vow verify --help --human  # same legacy text (works on all subcommands)
 
 | Status          | Meaning                                     |
 |-----------------|---------------------------------------------|
-| `Verified`      | Compiled + all contracts proved by ESBMC. Functions whose bodies the verifier cannot model (`RegionAlloc`, `FieldSet`, `Linear*`, `Load`/`Store`, `RemF*`, effectful) are reported as a `VerificationSkipped` *Warning* in `diagnostics[]` and the build still succeeds — their contracts are documentary, runtime-checked under `--mode debug`. |
-| `Unverified`    | Compiled with `--no-verify` (ESBMC skipped)  |
+| `Verified`      | Compiled + every vowed function's contract was statically proved by ESBMC. |
+| `Unverified`    | Compiled but ESBMC was not invoked (e.g. `--no-verify`, `--dump-ir`). Exit 0. |
+| `Skipped`       | ESBMC was invoked but at least one vowed function could not be modelled (e.g. body uses `RegionAlloc`, `FieldSet`, `Linear*`, `Load`/`Store`, `RemF*`, or has effects). Each such function appears as a `VerificationSkipped` *Warning* in `diagnostics[]`. Their contracts are runtime-checked under `--mode debug` but were not statically proved; the run fails closed with exit 1. |
 | `CompileFailed` | Parse error, type error, module load error, or link failure |
 | `VerifyFailed`  | ESBMC produced a non-Verified outcome: a counterexample, timeout, `VERIFICATION UNKNOWN` (`verify_status: "unknown"`), tool error, or the tool was not found. Inspect `counterexamples[]` (definitive failures) and `verify_status`/`verify_message` (soft failures) to distinguish. |
 
@@ -5923,7 +5936,7 @@ vow verify --help --human  # same legacy text (works on all subcommands)
 | `unknown`       | ESBMC could not conclude for this contract — either `VERIFICATION UNKNOWN` was reported for the containing function (k-induction's forward condition unable to prove or falsify), or another contract in the same function failed and this one was not individually checked |
 | `timeout`       | ESBMC timed out on the containing function (BV and — when applicable — IR fallback both timed out) |
 | `error`         | ESBMC error or tool not found                        |
-| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]`. |
+| `skipped`       | The containing function's body uses opcodes the verifier cannot model (e.g. `RegionAlloc` from struct construction). Contract is documentary; runtime checks still apply under `--mode debug`. Surfaces as a `VerificationSkipped` Warning in the build JSON's `diagnostics[]` and lifts the overall build/verify status to `Skipped` (fail-closed, exit 1) — use `--no-verify` if you want a non-failing path that does not invoke ESBMC at all. |
 
 ## Trace Output (stderr, --debug-trace)
 
@@ -6663,9 +6676,13 @@ fn add(a: i64, b: i64) -> i64 vow {
 > chain into a parameter container has its inferred region widened to
 > `Caller(HiddenRegionIdx(N))` by §4.1 step 2's must-outlive marker
 > propagation, where `N` is the precise slot index implied by the
-> destination (issue #317 slot-aware inference). Such routings satisfy
-> the constraint and are accepted; only allocations whose inferred region
-> is a strictly narrower block fire `RegionConflict`.
+> destination (issue #317 slot-aware inference). Such single-slot routings
+> satisfy the constraint and are accepted. Allocations whose caller-region
+> markers require more than one hidden caller-arena slot resolve to
+> `Caller(HiddenRegionIdx::AMBIGUOUS)` and are rejected when the directly
+> fresh heap value is stored into a parameter-rooted target; allocations
+> whose inferred region is a strictly narrower block also fire
+> `RegionConflict`.
 
 ```vow
 fn store_into(out: Vec<String>, prefix: String) [io] {
@@ -7302,8 +7319,8 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
   "properties": {
     "status": {
       "type": "string",
-      "enum": ["Verified", "Unverified", "CompileFailed", "VerifyFailed"],
-      "description": "Build outcome"
+      "enum": ["Verified", "Unverified", "Skipped", "CompileFailed", "VerifyFailed"],
+      "description": "Build outcome. `Skipped` means ESBMC was invoked but at least one vowed function could not be modelled; the build fails closed with exit 1 (distinct from `Unverified`, which means ESBMC was not invoked, e.g. `--no-verify`/`--dump-ir`, exit 0)."
     },
     "executable": {
       "type": ["string", "null"],
@@ -9594,7 +9611,7 @@ fn run_test_command(
                 });
                 continue;
             }
-            BuildStatus::VerifyFailed { .. } => {
+            BuildStatus::VerifyFailed { .. } | BuildStatus::Skipped => {
                 entries.push(TestEntry {
                     file: file_str,
                     name,
