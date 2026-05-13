@@ -12553,11 +12553,10 @@ fn main() -> i32 {
             BuildStatus::Unverified => {
                 eprintln!("SKIP: verification not run (esbmc not found)");
             }
-            // Soft skip here (not panic): this fixture has no non-modelable function,
-            // so Skipped means an upstream env quirk, not a regression. Production
-            // fail-closed lives in run_test_command and run_build_command.
+            // Skipped: this fixture is a pure-arithmetic function with no struct
+            // construction, so hitting this arm means something changed upstream.
             BuildStatus::Skipped => {
-                eprintln!("SKIP: verification skipped (non-modelable function)");
+                panic!("unexpected Skipped status for requires_span fixture — investigate");
             }
             BuildStatus::CompileFailed { message } => {
                 let msg_lo = message.to_lowercase();
