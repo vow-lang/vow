@@ -8,8 +8,8 @@
   "properties": {
     "status": {
       "type": "string",
-      "enum": ["Verified", "Unverified", "CompileFailed", "VerifyFailed"],
-      "description": "Build outcome"
+      "enum": ["Verified", "Unverified", "Skipped", "CompileFailed", "VerifyFailed"],
+      "description": "Build outcome. `Skipped` means ESBMC was invoked but at least one vowed function could not be modelled; the build fails closed with exit 1 (distinct from `Unverified`, which means ESBMC was not invoked, e.g. `--no-verify`/`--dump-ir`, exit 0)."
     },
     "executable": {
       "type": ["string", "null"],
