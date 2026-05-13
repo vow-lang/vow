@@ -843,7 +843,8 @@ pub unsafe extern "C" fn __vow_arena_alloc(
     // threshold or (b) worst-case alignment padding could push past a normal
     // chunk's payload. (b) is inert today (all callers use align <= 8) but
     // keeps the `cursor <= chunk_end` invariant under any alignment.
-    let total = if bytes > OVERSIZED_THRESHOLD || bytes + (align - 1) > CHUNK_PAYLOAD {
+    let oversized = bytes > OVERSIZED_THRESHOLD || bytes + (align - 1) > CHUNK_PAYLOAD;
+    let total = if oversized {
         oversized_chunk_total(bytes, align)
     } else {
         normal_chunk_total()
@@ -856,8 +857,20 @@ pub unsafe extern "C" fn __vow_arena_alloc(
     unsafe { *(arena.current_chunk as *mut *mut u8) = new_base };
     arena.current_chunk = new_base;
     let start = unsafe { chunk_usable_start(new_base, align) };
-    arena.cursor = start + bytes;
-    arena.chunk_end = new_base as usize + total;
+    let chunk_end = new_base as usize + total;
+    // Seal oversized chunks: leave no room for a subsequent allocation to
+    // land in the alignment-slack tail. `arena_try_free_oversized_chunk`
+    // (the issue #391 fix) classifies a chunk as oversized by `total >
+    // normal_chunk_total()` and frees the entire chunk when the original
+    // backing is abandoned; the helper has no metadata to distinguish a
+    // sole-resident oversized chunk from one that subsequently absorbed
+    // smaller allocations via its slack. Sealing the cursor to `chunk_end`
+    // makes the single-resident invariant hold by construction at the
+    // cost of `total - (start + bytes)` bytes of waste, bounded by
+    // `(align - 1)` for the alignment-driven path. Normal chunks continue
+    // to use the bump cursor as before.
+    arena.cursor = if oversized { chunk_end } else { start + bytes };
+    arena.chunk_end = chunk_end;
     arena.last_alloc_start = start as *mut u8;
     arena.last_alloc_size = bytes;
     arena.retained_bytes = arena.retained_bytes.saturating_add(total);
@@ -4177,6 +4190,60 @@ mod tests {
         assert_eq!(p as usize % 4096, 0, "pointer must be 4096-aligned");
         assert!(a.cursor <= a.chunk_end, "cursor must not exceed chunk_end");
         assert!((p as usize) + 9 <= a.chunk_end);
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn arena_oversized_chunks_are_sealed_against_slack_reuse() {
+        // Regression for the dangling-pointer scenario identified on PR #392:
+        // an oversized allocation with significant alignment slack must NOT
+        // host a subsequent smaller allocation in its tail. Otherwise
+        // `arena_try_free_oversized_chunk` would later release the chunk
+        // (classified oversized by `total > normal_chunk_total()`) while the
+        // smaller allocation is still live, dangling its pointer.
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+
+        // Force the oversized path for the 9-byte/4096-align allocation.
+        // A 4096-byte/8-align prior alloc takes the oversized path itself
+        // (>2048) and seals the arena cursor at its own chunk_end, so the
+        // fast path inside the follow-up `alloc(9, 4096)` cannot satisfy
+        // the request from any normal-chunk slack and the new-chunk branch
+        // runs.
+        let _filler = unsafe { __vow_arena_alloc(&mut a, 4096, 8) };
+        // Sanity: the filler's chunk is itself sealed.
+        assert_eq!(
+            a.cursor, a.chunk_end,
+            "the filler alloc must seal its own oversized chunk"
+        );
+
+        // Oversized via alignment slack: 9 bytes @ align 4096. With the seal,
+        // ~4095 bytes of slack between `start + bytes` and `chunk_end` are
+        // intentionally wasted to keep the chunk single-resident.
+        let big_align_ptr = unsafe { __vow_arena_alloc(&mut a, 9, 4096) };
+        let oversized_chunk = a.current_chunk;
+        let oversized_chunk_end = a.chunk_end;
+        assert_eq!(
+            a.cursor, oversized_chunk_end,
+            "oversized chunk must be sealed (cursor == chunk_end)"
+        );
+
+        // A modest follow-up allocation that would have fit in the slack
+        // must now spill into a new chunk.
+        let small = unsafe { __vow_arena_alloc(&mut a, 64, 8) };
+        assert!(!small.is_null());
+        assert_ne!(
+            a.current_chunk, oversized_chunk,
+            "subsequent allocation must take a new chunk, not the oversized slack"
+        );
+        // And the new chunk must not overlap the oversized payload.
+        let small_addr = small as usize;
+        let big_addr = big_align_ptr as usize;
+        assert!(
+            small_addr < big_addr || small_addr >= oversized_chunk_end,
+            "subsequent allocation must live outside the oversized chunk"
+        );
+
         unsafe { __vow_arena_close(&mut a) };
     }
 

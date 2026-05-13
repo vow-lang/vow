@@ -135,16 +135,19 @@ void* __vow_arena_alloc(struct VowArena* a, uintptr_t bytes, uintptr_t align) {
         a->last_alloc_size = bytes;
         return (void*)aligned;
     }
-    uintptr_t total = (bytes > OVERSIZED_THRESHOLD || bytes + (align - 1) > CHUNK_PAYLOAD)
-        ? oversized_total(bytes, align)
-        : normal_total();
+    int oversized = (bytes > OVERSIZED_THRESHOLD || bytes + (align - 1) > CHUNK_PAYLOAD);
+    uintptr_t total = oversized ? oversized_total(bytes, align) : normal_total();
     void* new_base = alloc_chunk(total);
     __ESBMC_assume(new_base != NULL);
     *(void**)a->current_chunk = new_base;
     a->current_chunk = new_base;
     uintptr_t start = chunk_usable_start(new_base, align);
-    a->cursor = start + bytes;
-    a->chunk_end = (uintptr_t)new_base + total;
+    uintptr_t chunk_end_addr = (uintptr_t)new_base + total;
+    /* Seal oversized chunks so subsequent allocations cannot land in the
+     * alignment-slack tail; arena_try_free_oversized_chunk relies on the
+     * resulting single-resident invariant. See lib.rs:__vow_arena_alloc. */
+    a->cursor = oversized ? chunk_end_addr : (start + bytes);
+    a->chunk_end = chunk_end_addr;
     a->last_alloc_start = (void*)start;
     a->last_alloc_size = bytes;
     a->retained_bytes += total;

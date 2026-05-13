@@ -157,6 +157,17 @@ normal vs. oversized without an external side table; this is the
 mechanism §7.1 uses to release the dedicated chunk of an abandoned
 oversized backing.
 
+**Single-resident invariant for oversized chunks.** After an oversized
+allocation, the arena's `cursor` is parked at `chunk_end` of the new
+chunk. This intentionally wastes the chunk's alignment-padding tail
+(up to `align - 1` bytes for the alignment-driven path) so no
+subsequent allocation can land in the slack via the fast path. The
+invariant — *each oversized chunk holds exactly one allocation* — is
+the precondition that lets §7.1 free the entire chunk when its
+backing is abandoned without dangling pointers into a still-live
+allocation in the same chunk. Normal chunks continue to use the
+bump cursor and may hold many allocations.
+
 Chunks form a singly-linked list rooted at `first_chunk`. The
 `current_chunk` always points to the tail. The next-chunk pointer of
 the tail is `NULL`.
@@ -1175,12 +1186,16 @@ larger backing in the same arena as the current backing and copying.
 The old backing is reclaimed in two ways:
 
 1. **Oversized abandoned backings are returned to libc immediately.**
-   When the old backing was the sole resident of an oversized chunk
-   (>2048 bytes — see §3.2), the runtime walks the chunk chain after
-   the growth's `memcpy`, unlinks the dedicated chunk, and calls
-   `free` on it. This bounds the steady-state footprint of a
-   grow-then-shrink loop to ~1× the current live capacity for the
-   oversized portion of the backing.
+   The old backing is always the sole resident of its oversized
+   chunk (>2048 bytes): §3.2 seals the cursor at `chunk_end` of every
+   oversized chunk at allocation time, so the fast path cannot place
+   a subsequent allocation in the alignment-slack tail. The runtime
+   walks the chunk chain after the growth's `memcpy`, finds the chunk
+   containing the abandoned backing, confirms `total >
+   normal_chunk_total()`, unlinks it, and calls `free` on it. This
+   bounds the steady-state footprint of a grow-then-shrink loop to
+   ~1× the current live capacity for the oversized portion of the
+   backing.
 2. **Normal-chunk abandoned backings are retained until arena close.**
    Normal chunks are shared with other allocations and cannot be
    reclaimed mid-arena; the abandoned bytes remain orphaned in the
