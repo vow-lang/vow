@@ -1085,11 +1085,16 @@ unsafe fn arena_grow_backing(
         // Old backing is unreachable from here on. Release its chunk if
         // it was the sole resident of an oversized chunk.
         //
-        // Mirror `__vow_arena_alloc`'s path predicate as a cheap fast-skip:
-        // an allocation of `old_size` at `align` is in an oversized chunk
-        // iff this predicate was true at the time it was placed. When
-        // it's false the chain walker would only discover `chunk_is_oversized
-        // == false` and bail out, so we skip the O(N) walk entirely.
+        // Cheap fast-skip: if this predicate is false, the backing was
+        // necessarily placed in a normal chunk by __vow_arena_alloc (the
+        // oversized new-chunk path requires it to be true). Calling
+        // arena_try_free_oversized_chunk when false would only walk the
+        // chain to find chunk_is_oversized == false and bail, so we skip
+        // the O(N) walk. When the predicate is true the backing *may* be
+        // in an oversized chunk (it could also have been placed via the
+        // fast path into a shared normal chunk if room was available);
+        // the chain walker's `chunk_is_oversized` check is the
+        // authoritative answer.
         if old_size > OVERSIZED_THRESHOLD || old_size + (align - 1) > CHUNK_PAYLOAD {
             unsafe { arena_try_free_oversized_chunk(arena, ptr) };
         }

@@ -283,8 +283,13 @@ int main(void) {
     }
 
     /* Directed scenario for issue #391: drop an oversized non-tail chunk and
-     * confirm the chain still terminates and close frees the remainder. */
-    void* big = __vow_arena_alloc(&a, 4096, 8);  /* oversized chunk */
+     * confirm the chain still terminates and close frees the remainder. The
+     * 4097-byte request unambiguously takes the oversized path because
+     * `bytes + (align - 1) = 4104 > CHUNK_PAYLOAD = 4096`, so it cannot
+     * fit in the fresh arena's initial normal chunk via the fast path
+     * (the Rust mirror uses a 64-byte warmup alloc instead; this works
+     * regardless of where libc::malloc places the initial chunk). */
+    void* big = __vow_arena_alloc(&a, 4097, 8);  /* path-oversized chunk */
     void* big_chunk = a.current_chunk;
     void* tail_marker = __vow_arena_alloc(&a, 8, 8); /* forces a new chunk */
     (void)tail_marker;
