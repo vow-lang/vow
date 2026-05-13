@@ -2382,6 +2382,35 @@ pub unsafe extern "C" fn __vow_fs_is_dir(path_ptr: *const u8) -> i64 {
     }
 }
 
+// Symlink predicate. Uses `symlink_metadata` (lstat-equivalent) so that
+// a symlink itself returns 1 even when its target is a regular file or
+// directory — matches Rust's `DirEntry::file_type()` behaviour, which
+// returns the symlink type without following. Returns 0 on any error
+// (broken symlink, missing path, permission denied).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __vow_fs_is_symlink(path_ptr: *const u8) -> i64 {
+    if path_ptr.is_null() {
+        return 0;
+    }
+    sanitize_on_read(path_ptr as usize, 0);
+    let v = unsafe { &*(path_ptr as *const VowVec) };
+    let bytes = unsafe { std::slice::from_raw_parts(v.ptr, v.len) };
+    let path = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    match std::fs::symlink_metadata(path) {
+        Ok(md) => {
+            if md.file_type().is_symlink() {
+                1
+            } else {
+                0
+            }
+        }
+        Err(_) => 0,
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_fs_rename(old_ptr: *const u8, new_ptr: *const u8) -> i64 {
     if old_ptr.is_null() || new_ptr.is_null() {

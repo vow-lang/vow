@@ -240,6 +240,14 @@ impl TypeEnv {
             },
         );
         env.define_fn(
+            "fs_is_symlink",
+            FnSig {
+                params: vec![Ty::Str],
+                return_ty: Ty::I64,
+                effects: [Effect::Read].into_iter().collect(),
+            },
+        );
+        env.define_fn(
             "fs_rename",
             FnSig {
                 params: vec![Ty::Str, Ty::Str],

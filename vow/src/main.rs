@@ -24,7 +24,9 @@ use vow_verify::{
 };
 
 use cache::{CachedFailure, VerifyCache};
-use frontend::{FrontendBundle, FrontendError, FrontendGoal, prepare_frontend};
+use frontend::{
+    FrontendBundle, FrontendError, FrontendGoal, prepare_frontend, prepare_frontend_with_root,
+};
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -235,6 +237,11 @@ struct TestArgs {
     /// Only run tests whose name contains this substring
     #[arg(long)]
     filter: Option<String>,
+    /// Resolve `use` declarations against this directory instead of each
+    /// test file's parent. Use when running a single test file that lives
+    /// in a subdirectory: `vow test compiler/tests/test_x.vow --module-root compiler`.
+    #[arg(long)]
+    module_root: Option<PathBuf>,
     /// Build mode (debug enables runtime vow checks)
     #[arg(long, value_enum, default_value = "debug")]
     mode: ModeArg,
@@ -709,11 +716,19 @@ fn skill_json() -> String {
         },
         {
           "form": "--filter <pat>",
-          "description": "Only run tests whose name contains pat (default: (none))",
+          "description": "Only run tests whose file stem contains pat (default: (none))",
           "long": "--filter",
           "value_name": "pat",
           "value_kind": "string",
           "default": "(none)"
+        },
+        {
+          "form": "--module-root <path>",
+          "description": "Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. (default: (auto))",
+          "long": "--module-root",
+          "value_name": "path",
+          "value_kind": "string",
+          "default": "(auto)"
         },
         {
           "form": "--mode <debug|release>",
@@ -966,7 +981,8 @@ fn skill_json() -> String {
   },
   "test_options": {
     "--verify": "Run ESBMC verification on test files",
-    "--filter <pat>": "Only run tests whose name contains pat (default: (none))",
+    "--filter <pat>": "Only run tests whose file stem contains pat (default: (none))",
+    "--module-root <path>": "Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. (default: (auto))",
     "--mode <debug|release>": "Build mode; debug inserts runtime vow checks (default: (default))",
     "--timeout <ms>": "Per-test execution timeout in milliseconds (default: 30000)",
     "--max-k-step <N>": "ESBMC incremental BMC max iterations (with --verify)",
@@ -1119,6 +1135,7 @@ fn skill_json() -> String {
       "fs_remove": "fn(path: String) -> i64 [io]",
       "fs_remove_dir": "fn(path: String) -> i64 [io]",
       "fs_is_dir": "fn(path: String) -> i64 [read]",
+      "fs_is_symlink": "fn(path: String) -> i64 [read]",
       "fs_rename": "fn(old: String, new: String) -> i64 [io]",
       "string_substr": "fn(s: String, start: i64, len: i64) -> String []",
       "string_split": "fn(s: String, delim: String) -> Vec<String> []",
@@ -1381,7 +1398,8 @@ VERIFY OPTIONS
 
 TEST OPTIONS
   --verify                Run ESBMC verification on test files
-  --filter <pat>          Only run tests whose name contains pat (default: (none))
+  --filter <pat>          Only run tests whose file stem contains pat (default: (none))
+  --module-root <path>    Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. (default: (auto))
   --mode <debug|release>  Build mode; debug inserts runtime vow checks (default: (default))
   --timeout <ms>          Per-test execution timeout in milliseconds (default: 30000)
   --max-k-step <N>        ESBMC incremental BMC max iterations (with --verify)
@@ -1449,7 +1467,7 @@ LANGUAGE SUMMARY
 TYPES     : i32  i64  u8  u64  f32  f64  bool  ()  !  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>  BTreeMap<K, V>
 EFFECTS   : io  read  write  panic  unsafe
 BUILTINS  : pin_to_root: fn(value: String) -> String and fn<T>(value: Vec<T>) -> Vec<T> for flat scalar T []   print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [io]
-            print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: i64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   parse_i64: fn(s: String) -> i64 []   i64_to_string: fn(v: i64) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
+            print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_is_symlink: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: i64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   parse_i64: fn(s: String) -> i64 []   i64_to_string: fn(v: i64) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]
 METHODS   : Vec: Vec::new/Vec::from_raw_parts_copy/push/pop/len/clear/truncate/v[i]/v[i] = val   String: String::from/String::new/String::from_raw_parts_copy/len/byte_at/push_byte/push_str/clear/contains/eq/substring/parse_i64/parse_u64
             HashMap: HashMap::new/insert/get/contains_key/remove/len   BTreeMap: BTreeMap::new/insert/get/contains/len   Option: unwrap
 OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! & ?
@@ -2304,6 +2322,7 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 | `fs_remove`      | `fn(path: String) -> i64`                  | `[io]`     |
 | `fs_remove_dir`  | `fn(path: String) -> i64`                  | `[io]`     |
 | `fs_is_dir`      | `fn(path: String) -> i64`                  | `[read]`   |
+| `fs_is_symlink`  | `fn(path: String) -> i64`                  | `[read]`   |
 | `fs_rename`      | `fn(old: String, new: String) -> i64`      | `[io]`     |
 
 #### String Operations
@@ -2391,7 +2410,7 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 
 **Streaming file input:** `fs_open(path)` opens a file for incremental reading and returns a positive handle, or `-1` on path/open error. `fs_read_line(handle)` reads one line from the current cursor and returns it as a String, including the trailing newline when present. It returns `""` at EOF, for an invalid handle, or after a read error. A blank line is returned as `"\n"`, so newline-delimited callers can distinguish a real blank line from EOF by content. After `fs_read_line(handle)` returns `""`, call `fs_status(handle)` to distinguish EOF from error: `0` means the handle is open with no EOF/error state, `1` means EOF, and `-1` means invalid handle or read error. `fs_status(handle)` reports the result of the most recent `fs_read_line(handle)` call on that open handle; read it immediately after a `""` return because later reads may update it. `fs_close(handle)` releases the handle and returns `0` on success or `-1` for an invalid/already-closed handle. Long-running programs must close handles they no longer need. All streaming handle operations use the `[read]` effect, including `fs_close`, because closing a read handle releases read-stream state and does not mutate filesystem contents. The current runtime stores streaming handles in one process-global table, and `fs_read_line` holds that table lock while it reads the next line. This keeps the API simple for single-stream file processing, but it is not intended for latency-sensitive concurrent reads from multiple slow handles.
 
-**Filesystem return values:** `fs_write`, `fs_mkdir`, `fs_remove`, `fs_remove_dir`, and `fs_rename` return `i64`: 0 on success, non-zero on failure. `fs_open`, `fs_status`, and `fs_close` use the streaming status codes above. `fs_exists` and `fs_is_dir` are predicates: they return 1 for true, 0 for false. Errors (null pointer, invalid UTF-8) also return 0, so callers cannot distinguish "false" from "error".
+**Filesystem return values:** `fs_write`, `fs_mkdir`, `fs_remove`, `fs_remove_dir`, and `fs_rename` return `i64`: 0 on success, non-zero on failure. `fs_open`, `fs_status`, and `fs_close` use the streaming status codes above. `fs_exists`, `fs_is_dir`, and `fs_is_symlink` are predicates: they return 1 for true, 0 for false. Errors (null pointer, invalid UTF-8) also return 0, so callers cannot distinguish "false" from "error". `fs_is_symlink` uses `lstat`-equivalent semantics: a symlink reports 1 even when its target is a regular file or directory.
 
 **`string_starts_with` / `string_ends_with` / `string_matches_literal_at` return values:** Return `i64`: 1 if true, 0 if false.
 
@@ -2558,7 +2577,8 @@ vow test [OPTIONS] [<path>]
 |-------------------|-------------|--------------------------------------------|
 | `<path>`          | `.`         | Directory to scan or single `.vow` file    |
 | `--verify`        | (off)       | Run ESBMC verification on test files       |
-| `--filter <pat>`  | (none)      | Only run tests whose name contains pat     |
+| `--filter <pat>`  | (none)      | Only run tests whose file stem contains pat |
+| `--module-root <path>` | (auto)  | Resolve `use` declarations against `<path>`. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. |
 | `--mode debug`    | (default)   | Insert runtime vow checks                 |
 | `--mode release`  | `debug`     | Omit all vow checks for performance       |
 | `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
@@ -2569,7 +2589,9 @@ vow test [OPTIONS] [<path>]
 | `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs (with --verify) |
 
-Test discovery: files matching `test_*.vow` or `*_test.vow` in the given directory, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
+Test discovery: files matching `test_*.vow` or `*_test.vow` under the given directory **and its subdirectories**, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
+
+**Module resolution for directory scans.** When `<path>` is a directory, every discovered test resolves its `use` declarations against `<path>` rather than the test file's own parent directory. This lets internal-unit tests live in a subdirectory like `compiler/tests/test_region.vow` and still `use region;` to import the module under test (which lives at `compiler/region.vow`). Single-file invocations (`vow test path/to/test_foo.vow`) keep the default behaviour of resolving `use` against the file's parent directory.
 
 **Test Output JSON:**
 
@@ -5409,6 +5431,7 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 | `fs_remove`      | `fn(path: String) -> i64`                  | `[io]`     |
 | `fs_remove_dir`  | `fn(path: String) -> i64`                  | `[io]`     |
 | `fs_is_dir`      | `fn(path: String) -> i64`                  | `[read]`   |
+| `fs_is_symlink`  | `fn(path: String) -> i64`                  | `[read]`   |
 | `fs_rename`      | `fn(old: String, new: String) -> i64`      | `[io]`     |
 
 #### String Operations
@@ -5496,7 +5519,7 @@ For pointer-containing C payloads, a wrapper must be written per type: call the 
 
 **Streaming file input:** `fs_open(path)` opens a file for incremental reading and returns a positive handle, or `-1` on path/open error. `fs_read_line(handle)` reads one line from the current cursor and returns it as a String, including the trailing newline when present. It returns `""` at EOF, for an invalid handle, or after a read error. A blank line is returned as `"\n"`, so newline-delimited callers can distinguish a real blank line from EOF by content. After `fs_read_line(handle)` returns `""`, call `fs_status(handle)` to distinguish EOF from error: `0` means the handle is open with no EOF/error state, `1` means EOF, and `-1` means invalid handle or read error. `fs_status(handle)` reports the result of the most recent `fs_read_line(handle)` call on that open handle; read it immediately after a `""` return because later reads may update it. `fs_close(handle)` releases the handle and returns `0` on success or `-1` for an invalid/already-closed handle. Long-running programs must close handles they no longer need. All streaming handle operations use the `[read]` effect, including `fs_close`, because closing a read handle releases read-stream state and does not mutate filesystem contents. The current runtime stores streaming handles in one process-global table, and `fs_read_line` holds that table lock while it reads the next line. This keeps the API simple for single-stream file processing, but it is not intended for latency-sensitive concurrent reads from multiple slow handles.
 
-**Filesystem return values:** `fs_write`, `fs_mkdir`, `fs_remove`, `fs_remove_dir`, and `fs_rename` return `i64`: 0 on success, non-zero on failure. `fs_open`, `fs_status`, and `fs_close` use the streaming status codes above. `fs_exists` and `fs_is_dir` are predicates: they return 1 for true, 0 for false. Errors (null pointer, invalid UTF-8) also return 0, so callers cannot distinguish "false" from "error".
+**Filesystem return values:** `fs_write`, `fs_mkdir`, `fs_remove`, `fs_remove_dir`, and `fs_rename` return `i64`: 0 on success, non-zero on failure. `fs_open`, `fs_status`, and `fs_close` use the streaming status codes above. `fs_exists`, `fs_is_dir`, and `fs_is_symlink` are predicates: they return 1 for true, 0 for false. Errors (null pointer, invalid UTF-8) also return 0, so callers cannot distinguish "false" from "error". `fs_is_symlink` uses `lstat`-equivalent semantics: a symlink reports 1 even when its target is a regular file or directory.
 
 **`string_starts_with` / `string_ends_with` / `string_matches_literal_at` return values:** Return `i64`: 1 if true, 0 if false.
 
@@ -5664,7 +5687,8 @@ vow test [OPTIONS] [<path>]
 |-------------------|-------------|--------------------------------------------|
 | `<path>`          | `.`         | Directory to scan or single `.vow` file    |
 | `--verify`        | (off)       | Run ESBMC verification on test files       |
-| `--filter <pat>`  | (none)      | Only run tests whose name contains pat     |
+| `--filter <pat>`  | (none)      | Only run tests whose file stem contains pat |
+| `--module-root <path>` | (auto)  | Resolve `use` declarations against `<path>`. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. |
 | `--mode debug`    | (default)   | Insert runtime vow checks                 |
 | `--mode release`  | `debug`     | Omit all vow checks for performance       |
 | `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
@@ -5675,7 +5699,9 @@ vow test [OPTIONS] [<path>]
 | `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs (with --verify) |
 
-Test discovery: files matching `test_*.vow` or `*_test.vow` in the given directory, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
+Test discovery: files matching `test_*.vow` or `*_test.vow` under the given directory **and its subdirectories**, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
+
+**Module resolution for directory scans.** When `<path>` is a directory, every discovered test resolves its `use` declarations against `<path>` rather than the test file's own parent directory. This lets internal-unit tests live in a subdirectory like `compiler/tests/test_region.vow` and still `use region;` to import the module under test (which lives at `compiler/region.vow`). Single-file invocations (`vow test path/to/test_foo.vow`) keep the default behaviour of resolving `use` against the file's parent directory.
 
 **Test Output JSON:**
 
@@ -8669,7 +8695,17 @@ fn frontend_error_to_output(error: FrontendError) -> BuildOutput {
 }
 
 fn compile_frontend(source: &Path) -> Result<FrontendBundle, Box<BuildOutput>> {
-    match prepare_frontend(source, FrontendGoal::LoweredIr) {
+    compile_frontend_with_root(source, None)
+}
+
+/// Same as `compile_frontend`, but resolves `use` declarations against
+/// `module_root` rather than the entry file's parent directory. Used by
+/// `vowc test` so tests in `compiler/tests/` can `use` sibling compiler modules.
+fn compile_frontend_with_root(
+    source: &Path,
+    module_root: Option<&Path>,
+) -> Result<FrontendBundle, Box<BuildOutput>> {
+    match prepare_frontend_with_root(source, module_root, FrontendGoal::LoweredIr) {
         Ok(bundle) => {
             emit_frontend_diagnostics(bundle.diagnostics());
             Ok(bundle)
@@ -9430,24 +9466,32 @@ fn discover_test_files(path: &Path) -> Vec<PathBuf> {
     if path.is_file() {
         return vec![path.to_path_buf()];
     }
-    let mut files: Vec<PathBuf> = match std::fs::read_dir(path) {
-        Ok(entries) => entries
-            .flatten()
-            .filter_map(|e| {
-                let name = e.file_name().to_string_lossy().into_owned();
-                if name.ends_with(".vow")
-                    && (name.starts_with("test_") || name.ends_with("_test.vow"))
-                {
-                    Some(e.path())
-                } else {
-                    None
-                }
-            })
-            .collect(),
-        Err(_) => vec![],
-    };
+    let mut files: Vec<PathBuf> = Vec::new();
+    collect_test_files(path, &mut files);
     files.sort();
     files
+}
+
+fn collect_test_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let entry_path = entry.path();
+        let file_type = match entry.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if file_type.is_dir() {
+            collect_test_files(&entry_path, out);
+        } else if file_type.is_file() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.ends_with(".vow") && (name.starts_with("test_") || name.ends_with("_test.vow"))
+            {
+                out.push(entry_path);
+            }
+        }
+    }
 }
 
 fn count_contract_density(ir_module: &vow_ir::Module) -> ContractDensity {
@@ -9476,6 +9520,7 @@ fn run_test_command(
     path: &Path,
     verify: bool,
     filter: Option<&str>,
+    module_root_override: Option<&Path>,
     mode: BuildMode,
     timeout_ms: u64,
     limits: &VerifyLimits,
@@ -9522,6 +9567,21 @@ fn run_test_command(
 
     let _ = std::fs::create_dir_all("build");
 
+    // Resolve module root precedence:
+    //   1. explicit --module-root <path> wins (covers single-file invocation
+    //      against a tests/ subdir, e.g. `vow test compiler/tests/test_x.vow
+    //      --module-root compiler`),
+    //   2. otherwise, when the scan path is a directory, use the scan path,
+    //   3. otherwise (single-file scan with no override), fall back to the
+    //      entry file's parent dir (None).
+    let module_root: Option<&Path> = if let Some(override_path) = module_root_override {
+        Some(override_path)
+    } else if path.is_dir() {
+        Some(path)
+    } else {
+        None
+    };
+
     for test_file in &test_files {
         let start = std::time::Instant::now();
         let file_str = test_file.to_string_lossy().to_string();
@@ -9531,7 +9591,7 @@ fn run_test_command(
             .unwrap_or_default();
 
         // Compile frontend once — extract density before codegen
-        let frontend = match compile_frontend(test_file) {
+        let frontend = match compile_frontend_with_root(test_file, module_root) {
             Ok(f) => f,
             Err(output) => {
                 let diagnostics: Vec<DiagnosticJson> = output
@@ -10219,6 +10279,7 @@ fn main() {
                 &path,
                 t.verify,
                 t.filter.as_deref(),
+                t.module_root.as_deref(),
                 mode,
                 t.timeout,
                 &limits,
@@ -13577,6 +13638,55 @@ fn main() -> i32 {
         let alpha = write_source(&dir, "test_alpha.vow", "module Alpha");
         let files = discover_test_files(dir.path());
         assert_eq!(files, vec![beta, alpha]);
+    }
+
+    #[test]
+    fn discover_test_files_recurses_into_subdirectories() {
+        let dir = TempDir::new().unwrap();
+        let top = write_source(&dir, "test_top.vow", "module Top");
+        let nested_dir = dir.path().join("tests");
+        std::fs::create_dir(&nested_dir).unwrap();
+        let nested = nested_dir.join("test_nested.vow");
+        std::fs::write(&nested, "module Nested").unwrap();
+        // Non-test files in the subdir must be skipped, like at top level.
+        std::fs::write(nested_dir.join("helper.vow"), "module Helper").unwrap();
+
+        let files = discover_test_files(dir.path());
+        // Lexicographic sort on the full path: "test_top.vow" < "tests/test_nested.vow"
+        // because '_' (0x5F) sorts before 's' (0x73). Tests rely on stable ordering,
+        // so anchor the expected sequence to the observed lexicographic rule.
+        assert_eq!(files, vec![top, nested]);
+    }
+
+    #[test]
+    fn discover_test_files_skips_symlinks() {
+        // DirEntry::file_type() does not follow symlinks, so both symlinked
+        // files and symlinked dirs are silently skipped. The self-hosted side
+        // matches via __vow_fs_is_symlink. Verify the Rust behaviour stays
+        // pinned so the two compilers can't drift.
+        let dir = TempDir::new().unwrap();
+        let real_test = write_source(&dir, "test_real.vow", "module Real");
+
+        // Symlink to a regular .vow file outside the scan tree — must be skipped.
+        let external = TempDir::new().unwrap();
+        let external_target = external.path().join("test_external.vow");
+        std::fs::write(&external_target, "module External").unwrap();
+        let symlinked_file = dir.path().join("test_symlink.vow");
+        std::os::unix::fs::symlink(&external_target, &symlinked_file).unwrap();
+
+        // Symlink to a directory — its contents must not be recursed into.
+        let external_dir = external.path().join("nested");
+        std::fs::create_dir(&external_dir).unwrap();
+        std::fs::write(
+            external_dir.join("test_inside_symlink.vow"),
+            "module Inside",
+        )
+        .unwrap();
+        let symlinked_dir = dir.path().join("subdir_symlink");
+        std::os::unix::fs::symlink(&external_dir, &symlinked_dir).unwrap();
+
+        let files = discover_test_files(dir.path());
+        assert_eq!(files, vec![real_test]);
     }
 
     #[test]

@@ -107,13 +107,25 @@ fn load_frontend_deps(root_dir: String, m: Module, arena: AstArena, all_items: V
 }
 
 fn frontend_prepare_path(path: String) -> FrontendPrep [io] {
+    frontend_prepare_path_with_root(path, String::from(""))
+}
+
+// Same as `frontend_prepare_path`, but resolves `use` declarations against
+// `module_root` instead of the entry file's parent directory. An empty
+// `module_root` keeps the default behaviour. `vowc test` passes the test
+// scan path here so a test at `compiler/tests/test_region.vow` can
+// `use region;` and resolve against `compiler/region.vow`.
+fn frontend_prepare_path_with_root(path: String, module_root: String) -> FrontendPrep [io] {
     let dctx: DiagCtx = diag_ctx_new();
     let src: String = fs_read(path);
     diag_ctx_add_source(dctx, path, src);
     let tokens: Vec<Token> = lex(src);
     let arena: AstArena = arena_new();
     let m: Module = parse_module_into(tokens, arena, dctx, path);
-    let root_dir: String = frontend_dir_path(path);
+    let root_dir: String = {
+        if module_root.len() > 0 { module_root }
+        else { frontend_dir_path(path) }
+    };
     let all_items: Vec<i64> = Vec::new();
     // item_files is parallel to all_items: each entry is the source path of
     // the corresponding item. Used by lower_module_vow to set IrFunction
@@ -155,7 +167,14 @@ fn frontend_prepare_path(path: String) -> FrontendPrep [io] {
 }
 
 fn frontend_lower_path(path: String) -> LoweredFrontend [io] {
-    let prep: FrontendPrep = frontend_prepare_path(path);
+    frontend_lower_path_with_root(path, String::from(""))
+}
+
+// Same as `frontend_lower_path`, but resolves `use` declarations against
+// `module_root` instead of the entry file's parent directory. Empty
+// `module_root` falls back to the default. See `frontend_prepare_path_with_root`.
+fn frontend_lower_path_with_root(path: String, module_root: String) -> LoweredFrontend [io] {
+    let prep: FrontendPrep = frontend_prepare_path_with_root(path, module_root);
     let checked: CheckedFrontend = prep.checked;
     // Snapshot the diags-Vec length before region inference. Counting
     // *new* errors after inference (rather than recounting the whole

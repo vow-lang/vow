@@ -9,8 +9,21 @@ pub(crate) struct ModuleGraph {
     pub modules: Vec<(PathBuf, Module)>,
 }
 
-pub(crate) fn load_modules(root: &Path, root_ast: &Module) -> Result<ModuleGraph, Vec<Diagnostic>> {
-    let root_dir = root.parent().unwrap_or(root);
+/// Load the module graph for `root`, optionally overriding the directory used
+/// to resolve `use` declarations.
+///
+/// When `module_root` is `None`, `use` paths resolve relative to `root.parent()`
+/// — the default for `vow build`/`verify`. When `Some`, the supplied directory
+/// is used as the resolution base for the root file *and* every transitively
+/// loaded dependency. `vowc test` uses this so a test at
+/// `compiler/tests/test_region.vow` can `use region;` and resolve against
+/// `compiler/region.vow` rather than the non-existent `compiler/tests/region.vow`.
+pub(crate) fn load_modules_with_root(
+    root: &Path,
+    module_root: Option<&Path>,
+    root_ast: &Module,
+) -> Result<ModuleGraph, Vec<Diagnostic>> {
+    let root_dir = module_root.unwrap_or_else(|| root.parent().unwrap_or(root));
     let mut modules: Vec<(PathBuf, Module)> = Vec::new();
     let mut visited: HashSet<PathBuf> = HashSet::new();
     let mut errors: Vec<Diagnostic> = Vec::new();

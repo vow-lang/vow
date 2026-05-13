@@ -114,7 +114,8 @@ vow test [OPTIONS] [<path>]
 |-------------------|-------------|--------------------------------------------|
 | `<path>`          | `.`         | Directory to scan or single `.vow` file    |
 | `--verify`        | (off)       | Run ESBMC verification on test files       |
-| `--filter <pat>`  | (none)      | Only run tests whose name contains pat     |
+| `--filter <pat>`  | (none)      | Only run tests whose file stem contains pat |
+| `--module-root <path>` | (auto)  | Resolve `use` declarations against `<path>`. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. |
 | `--mode debug`    | (default)   | Insert runtime vow checks                 |
 | `--mode release`  | `debug`     | Omit all vow checks for performance       |
 | `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |
@@ -125,7 +126,9 @@ vow test [OPTIONS] [<path>]
 | `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|
 | `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs (with --verify) |
 
-Test discovery: files matching `test_*.vow` or `*_test.vow` in the given directory, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
+Test discovery: files matching `test_*.vow` or `*_test.vow` under the given directory **and its subdirectories**, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.
+
+**Module resolution for directory scans.** When `<path>` is a directory, every discovered test resolves its `use` declarations against `<path>` rather than the test file's own parent directory. This lets internal-unit tests live in a subdirectory like `compiler/tests/test_region.vow` and still `use region;` to import the module under test (which lives at `compiler/region.vow`). Single-file invocations (`vow test path/to/test_foo.vow`) keep the default behaviour of resolving `use` against the file's parent directory.
 
 **Test Output JSON:**
 
