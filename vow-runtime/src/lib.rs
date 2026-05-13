@@ -776,56 +776,6 @@ unsafe fn ensure_root_arena_locked() {
     }
 }
 
-unsafe fn root_arena_alloc(bytes: usize, align: usize) -> *mut u8 {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    unsafe { __vow_arena_alloc(&raw mut __vow_root_arena, bytes, align) }
-}
-
-unsafe fn root_arena_alloc_zeroed(bytes: usize, align: usize) -> *mut u8 {
-    let ptr = unsafe { root_arena_alloc(bytes, align) };
-    unsafe { std::ptr::write_bytes(ptr, 0, bytes) };
-    ptr
-}
-
-/// Grow a backing buffer that lives in `__vow_root_arena`. Implements the
-/// spec §7.2 zero-copy fast path: try `__vow_arena_try_extend` first; if
-/// the backing is the most recent allocation in the chunk and the new
-/// size still fits, growth is O(1) with no copy and no orphaned backing.
-/// Otherwise fall back to a fresh allocation + memcpy of the prefix.
-///
-/// Phase 4 / S6 status: this fast path is wired for **root-arena-backed**
-/// containers — the only kind today, since `__vow_vec_new` /
-/// `__vow_string_new` / `__vow_map_new` all allocate from
-/// `__vow_root_arena`. Threading a per-container arena pointer through
-/// the descriptor (so block-arena-backed `Vec`/`String`/`HashMap` also
-/// benefit from try_extend) is a much larger API change deferred to
-/// Phase 9 (performance), per `docs/design/arena_memory.md` §15.
-unsafe fn root_arena_grow_backing(
-    ptr: *mut u8,
-    old_size: usize,
-    new_size: usize,
-    align: usize,
-) -> *mut u8 {
-    let _guard = ROOT_ARENA_LOCK.lock().unwrap();
-    unsafe { ensure_root_arena_locked() };
-    if old_size > 0
-        && unsafe {
-            __vow_arena_try_extend(&raw mut __vow_root_arena, ptr, old_size, new_size) != 0
-        }
-    {
-        unsafe { std::ptr::write_bytes(ptr.add(old_size), 0, new_size - old_size) };
-        return ptr;
-    }
-
-    let new_ptr = unsafe { __vow_arena_alloc(&raw mut __vow_root_arena, new_size, align) };
-    if old_size > 0 {
-        unsafe { std::ptr::copy_nonoverlapping(ptr, new_ptr, old_size) };
-    }
-    unsafe { std::ptr::write_bytes(new_ptr.add(old_size), 0, new_size - old_size) };
-    new_ptr
-}
-
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __vow_runtime_start() {
     unsafe { ensure_root_arena() };
