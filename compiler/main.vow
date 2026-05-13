@@ -44,7 +44,7 @@ fn get_source_path(argv: Vec<String>) -> String {
         if first_byte != 45 {
             if i > 1 {
                 let prev: String = argv[i - 1];
-                if prev == "-o" || prev == "--mode" || prev == "--max-k-step" || prev == "--debug-trace" || prev == "--filter" || prev == "--timeout" || prev == "--solver" || prev == "--encoding" || prev == "--vec-max" || prev == "--string-max" || prev == "--hashmap-max" || prev == "--btreemap-max" || prev == "--verify-jobs" {
+                if prev == "-o" || prev == "--mode" || prev == "--max-k-step" || prev == "--debug-trace" || prev == "--filter" || prev == "--timeout" || prev == "--solver" || prev == "--encoding" || prev == "--vec-max" || prev == "--string-max" || prev == "--hashmap-max" || prev == "--btreemap-max" || prev == "--verify-jobs" || prev == "--module-root" {
                     i = i - 1;
                 } else {
                     return a;
@@ -67,7 +67,7 @@ fn get_source_path_sub(argv: Vec<String>) -> String {
         if first_byte != 45 {
             if i > 2 {
                 let prev: String = argv[i - 1];
-                if prev == "-o" || prev == "--mode" || prev == "--max-k-step" || prev == "--debug-trace" || prev == "--filter" || prev == "--timeout" || prev == "--solver" || prev == "--encoding" || prev == "--vec-max" || prev == "--string-max" || prev == "--hashmap-max" || prev == "--btreemap-max" || prev == "--verify-jobs" {
+                if prev == "-o" || prev == "--mode" || prev == "--max-k-step" || prev == "--debug-trace" || prev == "--filter" || prev == "--timeout" || prev == "--solver" || prev == "--encoding" || prev == "--vec-max" || prev == "--string-max" || prev == "--hashmap-max" || prev == "--btreemap-max" || prev == "--verify-jobs" || prev == "--module-root" {
                     i = i - 1;
                 } else {
                     return a;
@@ -727,6 +727,51 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
     0
 }
 
+// Return the bare filename (everything after the last `/`) with the `.vow`
+// extension stripped. Used by --filter so that matching is over the test's
+// stem name (e.g. `region`) instead of the full path, matching how the Rust
+// side's `f.file_stem()` works.
+fn file_stem_from_path(p: String) -> String {
+    let parts: Vec<String> = string_split(p, String::from("/"));
+    if parts.len() == 0 {
+        return strip_vow_ext(p);
+    }
+    strip_vow_ext(parts[parts.len() - 1])
+}
+
+// Lexicographic less-than over String (byte-wise). Mirrors Rust's `String: Ord`
+// for ASCII-clean paths, which is all we use this for (test-file discovery).
+// Used in lieu of a generic vec_str_sort utility we'd otherwise add to ir.vow
+// just for this caller.
+fn string_lt_lex(a: String, b: String) -> bool {
+    let na: i64 = a.len();
+    let nb: i64 = b.len();
+    let mut i: i64 = 0;
+    while i < na && i < nb {
+        let ca: i64 = a.byte_at(i);
+        let cb: i64 = b.byte_at(i);
+        if ca < cb { return true; }
+        if ca > cb { return false; }
+        i = i + 1;
+    }
+    na < nb
+}
+
+fn sort_str_vec_inplace(xs: Vec<String>) {
+    let n: i64 = xs.len();
+    let mut i: i64 = 1;
+    while i < n {
+        let cur: String = xs[i];
+        let mut j: i64 = i;
+        while j > 0 && string_lt_lex(cur, xs[j - 1]) {
+            xs[j] = xs[j - 1];
+            j = j - 1;
+        }
+        xs[j] = cur;
+        i = i + 1;
+    }
+}
+
 fn is_test_file(name: String) -> bool {
     if string_ends_with(name, String::from(".vow")) == 0 {
         return false;
@@ -742,6 +787,62 @@ fn is_test_file(name: String) -> bool {
         }
     }
     false
+}
+
+// Strip one trailing '/' if present. Mirrors PathBuf::join semantics so that
+// `compiler/` + `tests` produces `compiler/tests`, not `compiler//tests`.
+fn path_join(dir: String, entry: String) -> String {
+    let n: i64 = dir.len();
+    if n > 0 && dir.byte_at(n - 1) == 47 {
+        let trimmed: String = string_substr(dir, 0, n - 1);
+        return str3(trimmed, String::from("/"), entry);
+    }
+    str3(dir, String::from("/"), entry)
+}
+
+// Walk `root` recursively, collecting every regular file whose name matches
+// `is_test_file`. Mirrors `discover_test_files` in vow/src/main.rs so the two
+// compilers agree on which files `vowc test compiler/` will exercise.
+//
+// Iterative worklist (not recursion) — fs depth is small in practice but the
+// Vow self-hosted compiler has no tail-call optimization, so iteration keeps
+// the work bounded regardless of tree shape.
+fn discover_test_files_recursive(root: String) -> Vec<String> [io] {
+    let out: Vec<String> = Vec::new();
+    if fs_is_dir(root) != 1 {
+        out.push(root);
+        return out;
+    }
+    let stack: Vec<String> = Vec::new();
+    stack.push(root);
+    while stack.len() > 0 {
+        let dir: String = stack[stack.len() - 1];
+        stack.pop();
+        let entries: Vec<String> = fs_listdir(dir);
+        let mut ei: i64 = 0;
+        while ei < entries.len() {
+            let entry: String = entries[ei];
+            let full: String = path_join(dir, entry);
+            // Skip symlinks (both file and directory targets) to match the
+            // Rust side, which uses DirEntry::file_type() — lstat semantics,
+            // so a symlink does not register as is_dir() or is_file().
+            // Skipping here also avoids infinite recursion on symlink cycles.
+            if fs_is_symlink(full) == 1 {
+                ei = ei + 1;
+                continue;
+            }
+            if fs_is_dir(full) == 1 {
+                stack.push(full);
+            } else if is_test_file(entry) {
+                out.push(full);
+            }
+            ei = ei + 1;
+        }
+    }
+    // Sort lexicographically so output ordering is deterministic across
+    // directory iteration order, matching the Rust side's `files.sort()`.
+    sort_str_vec_inplace(out);
+    out
 }
 
 fn test_json_escape(s: String) -> String {
@@ -811,28 +912,40 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
         return 1;
     }
 
-    // Discover test files
+    // Discover test files. Recurses into subdirectories so a test in
+    // `compiler/tests/test_region.vow` is picked up when the user invokes
+    // `vowc test compiler/`. Mirrors `discover_test_files` in vow/src/main.rs.
+    let all_files: Vec<String> = discover_test_files_recursive(path);
     let test_files: Vec<String> = Vec::new();
-    if fs_is_dir(path) == 1 {
-        let entries: Vec<String> = fs_listdir(path);
-        let mut ei: i64 = 0;
-        while ei < entries.len() {
-            let entry: String = entries[ei];
-            if is_test_file(entry) {
-                if filter.len() == 0 || entry.contains(filter) {
-                    let full: String = str3(path, String::from("/"), entry);
-                    test_files.push(full);
-                }
-            }
-            ei = ei + 1;
+    let mut di: i64 = 0;
+    while di < all_files.len() {
+        let candidate: String = all_files[di];
+        // Match --filter against the file stem (e.g. `test_region`), not the
+        // full path. Mirrors `f.file_stem()` filtering on the Rust side, so
+        // directory components like `tests` don't spuriously match.
+        let stem: String = file_stem_from_path(candidate);
+        if filter.len() == 0 || stem.contains(filter) {
+            test_files.push(candidate);
         }
-    } else {
-        if filter.len() == 0 || path.contains(filter) {
-            test_files.push(path);
-        }
+        di = di + 1;
     }
 
     fs_mkdir("build");
+
+    // Resolve module root precedence:
+    //   1. explicit --module-root <path> wins (covers single-file invocation
+    //      against a tests/ subdir, e.g. `vowc test compiler/tests/test_x.vow
+    //      --module-root compiler`),
+    //   2. otherwise, when the scan path is a directory, use the scan path,
+    //   3. otherwise (single-file scan with no override), fall back to the
+    //      entry file's parent dir (empty string == default).
+    // Mirrors the Rust side in vow/src/main.rs:run_test_command.
+    let module_root_flag: String = get_flag_arg(argv, "--module-root");
+    let module_root: String = {
+        if module_root_flag.len() > 0 { module_root_flag }
+        else if fs_is_dir(path) == 1 { path }
+        else { String::from("") }
+    };
 
     let entries_json: Vec<String> = Vec::new();
     let mut passed: i64 = 0;
@@ -855,7 +968,7 @@ fn run_test(argv: Vec<String>) -> i32 [io] {
         let start_time: i64 = time_unix_ms();
 
         // Compile
-        let fr: LoweredFrontend = frontend_lower_path(test_path);
+        let fr: LoweredFrontend = frontend_lower_path_with_root(test_path, module_root);
         let checked: CheckedFrontend = fr.checked;
         if checked.n_errors > 0 {
             let duration: i64 = time_unix_ms() - start_time;
@@ -1528,11 +1641,19 @@ fn skill_json() -> String {
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
     r.push_str(String::from("          \"form\": \"--filter <pat>\",\n"));
-    r.push_str(String::from("          \"description\": \"Only run tests whose name contains pat (default: (none))\",\n"));
+    r.push_str(String::from("          \"description\": \"Only run tests whose file stem contains pat (default: (none))\",\n"));
     r.push_str(String::from("          \"long\": \"--filter\",\n"));
     r.push_str(String::from("          \"value_name\": \"pat\",\n"));
     r.push_str(String::from("          \"value_kind\": \"string\",\n"));
     r.push_str(String::from("          \"default\": \"(none)\"\n"));
+    r.push_str(String::from("        },\n"));
+    r.push_str(String::from("        {\n"));
+    r.push_str(String::from("          \"form\": \"--module-root <path>\",\n"));
+    r.push_str(String::from("          \"description\": \"Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. (default: (auto))\",\n"));
+    r.push_str(String::from("          \"long\": \"--module-root\",\n"));
+    r.push_str(String::from("          \"value_name\": \"path\",\n"));
+    r.push_str(String::from("          \"value_kind\": \"string\",\n"));
+    r.push_str(String::from("          \"default\": \"(auto)\"\n"));
     r.push_str(String::from("        },\n"));
     r.push_str(String::from("        {\n"));
     r.push_str(String::from("          \"form\": \"--mode <debug|release>\",\n"));
@@ -1785,7 +1906,8 @@ fn skill_json() -> String {
     r.push_str(String::from("  },\n"));
     r.push_str(String::from("  \"test_options\": {\n"));
     r.push_str(String::from("    \"--verify\": \"Run ESBMC verification on test files\",\n"));
-    r.push_str(String::from("    \"--filter <pat>\": \"Only run tests whose name contains pat (default: (none))\",\n"));
+    r.push_str(String::from("    \"--filter <pat>\": \"Only run tests whose file stem contains pat (default: (none))\",\n"));
+    r.push_str(String::from("    \"--module-root <path>\": \"Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. (default: (auto))\",\n"));
     r.push_str(String::from("    \"--mode <debug|release>\": \"Build mode; debug inserts runtime vow checks (default: (default))\",\n"));
     r.push_str(String::from("    \"--timeout <ms>\": \"Per-test execution timeout in milliseconds (default: 30000)\",\n"));
     r.push_str(String::from("    \"--max-k-step <N>\": \"ESBMC incremental BMC max iterations (with --verify)\",\n"));
@@ -1937,6 +2059,7 @@ fn skill_json() -> String {
     r.push_str(String::from("      \"fs_remove\": \"fn(path: String) -> i64 [io]\",\n"));
     r.push_str(String::from("      \"fs_remove_dir\": \"fn(path: String) -> i64 [io]\",\n"));
     r.push_str(String::from("      \"fs_is_dir\": \"fn(path: String) -> i64 [read]\",\n"));
+    r.push_str(String::from("      \"fs_is_symlink\": \"fn(path: String) -> i64 [read]\",\n"));
     r.push_str(String::from("      \"fs_rename\": \"fn(old: String, new: String) -> i64 [io]\",\n"));
     r.push_str(String::from("      \"string_substr\": \"fn(s: String, start: i64, len: i64) -> String []\",\n"));
     r.push_str(String::from("      \"string_split\": \"fn(s: String, delim: String) -> Vec<String> []\",\n"));
@@ -2199,7 +2322,8 @@ fn skill_human() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("TEST OPTIONS\n"));
     r.push_str(String::from("  --verify                Run ESBMC verification on test files\n"));
-    r.push_str(String::from("  --filter <pat>          Only run tests whose name contains pat (default: (none))\n"));
+    r.push_str(String::from("  --filter <pat>          Only run tests whose file stem contains pat (default: (none))\n"));
+    r.push_str(String::from("  --module-root <path>    Resolve use declarations against <path>. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. (default: (auto))\n"));
     r.push_str(String::from("  --mode <debug|release>  Build mode; debug inserts runtime vow checks (default: (default))\n"));
     r.push_str(String::from("  --timeout <ms>          Per-test execution timeout in milliseconds (default: 30000)\n"));
     r.push_str(String::from("  --max-k-step <N>        ESBMC incremental BMC max iterations (with --verify)\n"));
@@ -2267,7 +2391,7 @@ fn skill_human() -> String {
     r.push_str(String::from("TYPES     : i32  i64  u8  u64  f32  f64  bool  ()  !  Vec<T>  Option<T>  Result<T, E>  String  HashMap<K, V>  BTreeMap<K, V>\n"));
     r.push_str(String::from("EFFECTS   : io  read  write  panic  unsafe\n"));
     r.push_str(String::from("BUILTINS  : pin_to_root: fn(value: String) -> String and fn<T>(value: Vec<T>) -> Vec<T> for flat scalar T []   print_str: fn(s: String) -> () [io]   print_i64: fn(v: i64) -> () [io]\n"));
-    r.push_str(String::from("            print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: i64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   parse_i64: fn(s: String) -> i64 []   i64_to_string: fn(v: i64) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]\n"));
+    r.push_str(String::from("            print_u64: fn(v: u64) -> () [io]   eprintln_str: fn(s: String) -> () [io]   debug_str: fn(s: String) -> () []   debug_i64: fn(v: i64) -> () []   debug_u64: fn(v: u64) -> () []   fs_read: fn(path: String) -> String [read]   fs_open: fn(path: String) -> i64 [read]   fs_read_line: fn(handle: i64) -> String [read]   fs_status: fn(handle: i64) -> i64 [read]   fs_close: fn(handle: i64) -> i64 [read]   fs_write: fn(path: String, data: String) -> i64 [write]   fs_exists: fn(path: String) -> i64 [read]   fs_mkdir: fn(path: String) -> i64 [io]   fs_listdir: fn(path: String) -> Vec<String> [read]   fs_remove: fn(path: String) -> i64 [io]   fs_remove_dir: fn(path: String) -> i64 [io]   fs_is_dir: fn(path: String) -> i64 [read]   fs_is_symlink: fn(path: String) -> i64 [read]   fs_rename: fn(old: String, new: String) -> i64 [io]   string_substr: fn(s: String, start: i64, len: i64) -> String []   string_split: fn(s: String, delim: String) -> Vec<String> []   string_starts_with: fn(s: String, prefix: String) -> i64 []   string_ends_with: fn(s: String, suffix: String) -> i64 []   string_matches_literal_at: fn(s: String, pos: i64, literal: String literal) -> i64 []   string_trim: fn(s: String) -> String []   string_to_upper: fn(s: String) -> String []   string_to_lower: fn(s: String) -> String []   string_replace: fn(s: String, from: String, to: String) -> String []   string_join: fn(parts: Vec<String>, sep: String) -> String []   parse_i64: fn(s: String) -> i64 []   i64_to_string: fn(v: i64) -> String []   vec_sort: fn(v: Vec<i64>) -> Vec<i64> []   time_unix: fn() -> i64 [io]   time_unix_ms: fn() -> i64 [io]   num_cpus: fn() -> i64 [io]   memory_root_arena_bytes: fn() -> u64 [io]   memory_peak_bytes: fn() -> u64 [io]   memory_alloc_count_since_start: fn() -> u64 [io]   hex_encode: fn(data: Vec<u8>) -> String []   hex_decode: fn(s: String) -> Vec<u8> []   args: fn() -> Vec<String> [read]   stdin_read: fn() -> String [read]   stdin_read_line: fn() -> String [read]   stdin_ready: fn() -> bool [read]   process_exit: fn(code: i64) -> ! [io]   process_run: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_get_stdout: fn() -> String [io]   process_get_stderr: fn() -> String [io]   process_start: fn(cmd: String, args: Vec<String>) -> i64 [io]   process_wait: fn(pid: i64) -> i64 [io]   process_wait_timeout: fn(pid: i64, timeout_ms: i64) -> i64 [io]   process_kill: fn(pid: i64) -> i64 [io]   process_stdout_for: fn(pid: i64) -> String [io]   process_stderr_for: fn(pid: i64) -> String [io]\n"));
     r.push_str(String::from("METHODS   : Vec: Vec::new/Vec::from_raw_parts_copy/push/pop/len/clear/truncate/v[i]/v[i] = val   String: String::from/String::new/String::from_raw_parts_copy/len/byte_at/push_byte/push_str/clear/contains/eq/substring/parse_i64/parse_u64\n"));
     r.push_str(String::from("            HashMap: HashMap::new/insert/get/contains_key/remove/len   BTreeMap: BTreeMap::new/insert/get/contains/len   Option: unwrap\n"));
     r.push_str(String::from("OPERATORS : + - * / %   +! -! *! /! %! (checked)   == != < <= > >=   && || !   & | ^ << >> (bitwise, integer-only)   unary - ! & ?\n"));
@@ -3122,6 +3246,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `fs_remove`      | `fn(path: String) -> i64`                  | `[io]`     |\n"));
     r.push_str(String::from("| `fs_remove_dir`  | `fn(path: String) -> i64`                  | `[io]`     |\n"));
     r.push_str(String::from("| `fs_is_dir`      | `fn(path: String) -> i64`                  | `[read]`   |\n"));
+    r.push_str(String::from("| `fs_is_symlink`  | `fn(path: String) -> i64`                  | `[read]`   |\n"));
     r.push_str(String::from("| `fs_rename`      | `fn(old: String, new: String) -> i64`      | `[io]`     |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("#### String Operations\n"));
@@ -3209,7 +3334,7 @@ fn skill_bundle() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Streaming file input:** `fs_open(path)` opens a file for incremental reading and returns a positive handle, or `-1` on path/open error. `fs_read_line(handle)` reads one line from the current cursor and returns it as a String, including the trailing newline when present. It returns `\"\"` at EOF, for an invalid handle, or after a read error. A blank line is returned as `\"\\n\"`, so newline-delimited callers can distinguish a real blank line from EOF by content. After `fs_read_line(handle)` returns `\"\"`, call `fs_status(handle)` to distinguish EOF from error: `0` means the handle is open with no EOF/error state, `1` means EOF, and `-1` means invalid handle or read error. `fs_status(handle)` reports the result of the most recent `fs_read_line(handle)` call on that open handle; read it immediately after a `\"\"` return because later reads may update it. `fs_close(handle)` releases the handle and returns `0` on success or `-1` for an invalid/already-closed handle. Long-running programs must close handles they no longer need. All streaming handle operations use the `[read]` effect, including `fs_close`, because closing a read handle releases read-stream state and does not mutate filesystem contents. The current runtime stores streaming handles in one process-global table, and `fs_read_line` holds that table lock while it reads the next line. This keeps the API simple for single-stream file processing, but it is not intended for latency-sensitive concurrent reads from multiple slow handles.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Filesystem return values:** `fs_write`, `fs_mkdir`, `fs_remove`, `fs_remove_dir`, and `fs_rename` return `i64`: 0 on success, non-zero on failure. `fs_open`, `fs_status`, and `fs_close` use the streaming status codes above. `fs_exists` and `fs_is_dir` are predicates: they return 1 for true, 0 for false. Errors (null pointer, invalid UTF-8) also return 0, so callers cannot distinguish \"false\" from \"error\".\n"));
+    r.push_str(String::from("**Filesystem return values:** `fs_write`, `fs_mkdir`, `fs_remove`, `fs_remove_dir`, and `fs_rename` return `i64`: 0 on success, non-zero on failure. `fs_open`, `fs_status`, and `fs_close` use the streaming status codes above. `fs_exists`, `fs_is_dir`, and `fs_is_symlink` are predicates: they return 1 for true, 0 for false. Errors (null pointer, invalid UTF-8) also return 0, so callers cannot distinguish \"false\" from \"error\". `fs_is_symlink` uses `lstat`-equivalent semantics: a symlink reports 1 even when its target is a regular file or directory.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**`string_starts_with` / `string_ends_with` / `string_matches_literal_at` return values:** Return `i64`: 1 if true, 0 if false.\n"));
     r.push_str(String::from("\n"));
@@ -3376,7 +3501,8 @@ fn skill_bundle() -> String {
     r.push_str(String::from("|-------------------|-------------|--------------------------------------------|\n"));
     r.push_str(String::from("| `<path>`          | `.`         | Directory to scan or single `.vow` file    |\n"));
     r.push_str(String::from("| `--verify`        | (off)       | Run ESBMC verification on test files       |\n"));
-    r.push_str(String::from("| `--filter <pat>`  | (none)      | Only run tests whose name contains pat     |\n"));
+    r.push_str(String::from("| `--filter <pat>`  | (none)      | Only run tests whose file stem contains pat |\n"));
+    r.push_str(String::from("| `--module-root <path>` | (auto)  | Resolve `use` declarations against `<path>`. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. |\n"));
     r.push_str(String::from("| `--mode debug`    | (default)   | Insert runtime vow checks                 |\n"));
     r.push_str(String::from("| `--mode release`  | `debug`     | Omit all vow checks for performance       |\n"));
     r.push_str(String::from("| `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |\n"));
@@ -3387,7 +3513,9 @@ fn skill_bundle() -> String {
     r.push_str(String::from("| `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|\n"));
     r.push_str(String::from("| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs (with --verify) |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Test discovery: files matching `test_*.vow` or `*_test.vow` in the given directory, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.\n"));
+    r.push_str(String::from("Test discovery: files matching `test_*.vow` or `*_test.vow` under the given directory **and its subdirectories**, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Module resolution for directory scans.** When `<path>` is a directory, every discovered test resolves its `use` declarations against `<path>` rather than the test file's own parent directory. This lets internal-unit tests live in a subdirectory like `compiler/tests/test_region.vow` and still `use region;` to import the module under test (which lives at `compiler/region.vow`). Single-file invocations (`vow test path/to/test_foo.vow`) keep the default behaviour of resolving `use` against the file's parent directory.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Test Output JSON:**\n"));
     r.push_str(String::from("\n"));
@@ -6234,6 +6362,7 @@ fn skill_support_content_0() -> String {
     r.push_str(String::from("| `fs_remove`      | `fn(path: String) -> i64`                  | `[io]`     |\n"));
     r.push_str(String::from("| `fs_remove_dir`  | `fn(path: String) -> i64`                  | `[io]`     |\n"));
     r.push_str(String::from("| `fs_is_dir`      | `fn(path: String) -> i64`                  | `[read]`   |\n"));
+    r.push_str(String::from("| `fs_is_symlink`  | `fn(path: String) -> i64`                  | `[read]`   |\n"));
     r.push_str(String::from("| `fs_rename`      | `fn(old: String, new: String) -> i64`      | `[io]`     |\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("#### String Operations\n"));
@@ -6321,7 +6450,7 @@ fn skill_support_content_0() -> String {
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Streaming file input:** `fs_open(path)` opens a file for incremental reading and returns a positive handle, or `-1` on path/open error. `fs_read_line(handle)` reads one line from the current cursor and returns it as a String, including the trailing newline when present. It returns `\"\"` at EOF, for an invalid handle, or after a read error. A blank line is returned as `\"\\n\"`, so newline-delimited callers can distinguish a real blank line from EOF by content. After `fs_read_line(handle)` returns `\"\"`, call `fs_status(handle)` to distinguish EOF from error: `0` means the handle is open with no EOF/error state, `1` means EOF, and `-1` means invalid handle or read error. `fs_status(handle)` reports the result of the most recent `fs_read_line(handle)` call on that open handle; read it immediately after a `\"\"` return because later reads may update it. `fs_close(handle)` releases the handle and returns `0` on success or `-1` for an invalid/already-closed handle. Long-running programs must close handles they no longer need. All streaming handle operations use the `[read]` effect, including `fs_close`, because closing a read handle releases read-stream state and does not mutate filesystem contents. The current runtime stores streaming handles in one process-global table, and `fs_read_line` holds that table lock while it reads the next line. This keeps the API simple for single-stream file processing, but it is not intended for latency-sensitive concurrent reads from multiple slow handles.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Filesystem return values:** `fs_write`, `fs_mkdir`, `fs_remove`, `fs_remove_dir`, and `fs_rename` return `i64`: 0 on success, non-zero on failure. `fs_open`, `fs_status`, and `fs_close` use the streaming status codes above. `fs_exists` and `fs_is_dir` are predicates: they return 1 for true, 0 for false. Errors (null pointer, invalid UTF-8) also return 0, so callers cannot distinguish \"false\" from \"error\".\n"));
+    r.push_str(String::from("**Filesystem return values:** `fs_write`, `fs_mkdir`, `fs_remove`, `fs_remove_dir`, and `fs_rename` return `i64`: 0 on success, non-zero on failure. `fs_open`, `fs_status`, and `fs_close` use the streaming status codes above. `fs_exists`, `fs_is_dir`, and `fs_is_symlink` are predicates: they return 1 for true, 0 for false. Errors (null pointer, invalid UTF-8) also return 0, so callers cannot distinguish \"false\" from \"error\". `fs_is_symlink` uses `lstat`-equivalent semantics: a symlink reports 1 even when its target is a regular file or directory.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**`string_starts_with` / `string_ends_with` / `string_matches_literal_at` return values:** Return `i64`: 1 if true, 0 if false.\n"));
     r.push_str(String::from("\n"));
@@ -6490,7 +6619,8 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("|-------------------|-------------|--------------------------------------------|\n"));
     r.push_str(String::from("| `<path>`          | `.`         | Directory to scan or single `.vow` file    |\n"));
     r.push_str(String::from("| `--verify`        | (off)       | Run ESBMC verification on test files       |\n"));
-    r.push_str(String::from("| `--filter <pat>`  | (none)      | Only run tests whose name contains pat     |\n"));
+    r.push_str(String::from("| `--filter <pat>`  | (none)      | Only run tests whose file stem contains pat |\n"));
+    r.push_str(String::from("| `--module-root <path>` | (auto)  | Resolve `use` declarations against `<path>`. Defaults to the scan path when it's a directory, otherwise the entry file's parent directory. |\n"));
     r.push_str(String::from("| `--mode debug`    | (default)   | Insert runtime vow checks                 |\n"));
     r.push_str(String::from("| `--mode release`  | `debug`     | Omit all vow checks for performance       |\n"));
     r.push_str(String::from("| `--timeout <ms>`  | `30000`     | Per-test execution timeout in milliseconds |\n"));
@@ -6501,7 +6631,9 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("| `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|\n"));
     r.push_str(String::from("| `--verify-jobs <N>` | `num_cpus/2` | Max concurrent ESBMC verification jobs (with --verify) |\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("Test discovery: files matching `test_*.vow` or `*_test.vow` in the given directory, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.\n"));
+    r.push_str(String::from("Test discovery: files matching `test_*.vow` or `*_test.vow` under the given directory **and its subdirectories**, sorted alphabetically. Each test must contain `main() -> i32` returning 0 on success.\n"));
+    r.push_str(String::from("\n"));
+    r.push_str(String::from("**Module resolution for directory scans.** When `<path>` is a directory, every discovered test resolves its `use` declarations against `<path>` rather than the test file's own parent directory. This lets internal-unit tests live in a subdirectory like `compiler/tests/test_region.vow` and still `use region;` to import the module under test (which lives at `compiler/region.vow`). Single-file invocations (`vow test path/to/test_foo.vow`) keep the default behaviour of resolving `use` against the file's parent directory.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("**Test Output JSON:**\n"));
     r.push_str(String::from("\n"));
@@ -7498,9 +7630,13 @@ fn skill_support_content_3() -> String {
     r.push_str(String::from("> chain into a parameter container has its inferred region widened to\n"));
     r.push_str(String::from("> `Caller(HiddenRegionIdx(N))` by §4.1 step 2's must-outlive marker\n"));
     r.push_str(String::from("> propagation, where `N` is the precise slot index implied by the\n"));
-    r.push_str(String::from("> destination (issue #317 slot-aware inference). Such routings satisfy\n"));
-    r.push_str(String::from("> the constraint and are accepted; only allocations whose inferred region\n"));
-    r.push_str(String::from("> is a strictly narrower block fire `RegionConflict`.\n"));
+    r.push_str(String::from("> destination (issue #317 slot-aware inference). Such single-slot routings\n"));
+    r.push_str(String::from("> satisfy the constraint and are accepted. Allocations whose caller-region\n"));
+    r.push_str(String::from("> markers require more than one hidden caller-arena slot resolve to\n"));
+    r.push_str(String::from("> `Caller(HiddenRegionIdx::AMBIGUOUS)` and are rejected when the directly\n"));
+    r.push_str(String::from("> fresh heap value is stored into a parameter-rooted target; allocations\n"));
+    r.push_str(String::from("> whose inferred region is a strictly narrower block also fire\n"));
+    r.push_str(String::from("> `RegionConflict`.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("```vow\n"));
     r.push_str(String::from("fn store_into(out: Vec<String>, prefix: String) [io] {\n"));

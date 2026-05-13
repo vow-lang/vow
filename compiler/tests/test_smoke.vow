@@ -1,0 +1,31 @@
+module TestSmoke
+
+use diag
+use ir
+
+// Smoke test for the `compiler/tests/` unit-test layout. Demonstrates that
+// (a) `vowc test compiler/` recurses into `compiler/tests/`, and
+// (b) a test file in `compiler/tests/` can `use` sibling compiler modules
+//     by resolving against the scan path (`compiler/`), not its own
+//     parent directory.
+//
+// Returns 0 on success; any other value indicates failure (the harness
+// reports the exit code in JSON output).
+fn main() -> i32 {
+    // diag: enum-like helpers should be defined and return their documented values.
+    if SEV_ERROR() != 0 { return 1; }
+    if SEV_WARNING() != 1 { return 2; }
+    if DIAG_BLAME_CALLER() != 0 { return 3; }
+    if DIAG_BLAME_CALLEE() != 1 { return 4; }
+
+    // ir: build a trivial IrModule and check that the constructor preserves
+    // the name and starts with empty function/string/layout vectors.
+    let m: IrModule = ir_module_new(String::from("Smoke"));
+    if m.name != String::from("Smoke") { return 5; }
+    if m.functions.len() != 0 { return 6; }
+    if m.strings.len() != 0 { return 7; }
+    if m.struct_layouts.len() != 0 { return 8; }
+    if m.enum_layouts.len() != 0 { return 9; }
+
+    0
+}

@@ -116,6 +116,19 @@ pub(crate) fn prepare_frontend(
     source: &Path,
     goal: FrontendGoal,
 ) -> Result<FrontendBundle, FrontendError> {
+    prepare_frontend_with_root(source, None, goal)
+}
+
+/// Same as `prepare_frontend`, but resolves `use` declarations against
+/// `module_root` instead of the entry file's parent directory.
+///
+/// Used by `vowc test` so a test at `compiler/tests/test_region.vow` can
+/// `use region;` and resolve against `compiler/region.vow`.
+pub(crate) fn prepare_frontend_with_root(
+    source: &Path,
+    module_root: Option<&Path>,
+    goal: FrontendGoal,
+) -> Result<FrontendBundle, FrontendError> {
     let src = std::fs::read_to_string(source).map_err(|e| FrontendError::Io(e.to_string()))?;
     let file_str = source.to_string_lossy();
 
@@ -130,7 +143,7 @@ pub(crate) fn prepare_frontend(
         });
     }
 
-    let graph = match module_loader::load_modules(source, &root_ast) {
+    let graph = match module_loader::load_modules_with_root(source, module_root, &root_ast) {
         Ok(graph) => graph,
         Err(diags) => {
             diagnostics.extend(diags);
@@ -270,6 +283,42 @@ mod tests {
                 .paths()
                 .iter()
                 .any(|path| path.ends_with("main.vow"))
+        );
+    }
+
+    #[test]
+    fn module_root_override_resolves_use_against_sibling_directory() {
+        // Mirrors the `vowc test compiler/` use case: a test file in a
+        // subdirectory imports a module that lives one level up. Default
+        // resolution (entry parent) would fail; module_root override should
+        // succeed.
+        let dir = TempDir::new().unwrap();
+        write_vow(&dir, "lib.vow", "module Lib\nfn helper() -> i64 { 0 }");
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir(&tests_dir).unwrap();
+        let test_path = tests_dir.join("test_lib.vow");
+        std::fs::write(
+            &test_path,
+            "module TestLib\nuse lib\nfn main() -> i64 { helper() }",
+        )
+        .unwrap();
+
+        // Without override: should fail to find `lib` in tests/.
+        let default = prepare_frontend(&test_path, FrontendGoal::MergedAst).unwrap_err();
+        assert_eq!(default.failure_message(), "module load error");
+
+        // With override: resolves against `dir.path()` and finds lib.vow.
+        let bundle =
+            prepare_frontend_with_root(&test_path, Some(dir.path()), FrontendGoal::MergedAst)
+                .unwrap();
+        assert_eq!(bundle.module().name, "TestLib");
+        assert_eq!(bundle.dependencies().paths().len(), 2);
+        assert!(
+            bundle
+                .dependencies()
+                .paths()
+                .iter()
+                .any(|p| p.ends_with("lib.vow"))
         );
     }
 

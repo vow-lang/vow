@@ -621,6 +621,7 @@ fn builtin_to_extern(name: String) -> String {
     if name == String::from("fs_remove") { return String::from("__vow_fs_remove"); }
     if name == String::from("fs_remove_dir") { return String::from("__vow_fs_remove_dir"); }
     if name == String::from("fs_is_dir") { return String::from("__vow_fs_is_dir"); }
+    if name == String::from("fs_is_symlink") { return String::from("__vow_fs_is_symlink"); }
     if name == String::from("fs_rename") { return String::from("__vow_fs_rename"); }
     if name == String::from("string_substr") { return String::from("__vow_string_substr"); }
     if name == String::from("string_split") { return String::from("__vow_string_split"); }
@@ -683,6 +684,7 @@ fn builtin_ret_ty(name: String) -> i64 {
     if name == String::from("fs_remove") { return ITY_I64(); }
     if name == String::from("fs_remove_dir") { return ITY_I64(); }
     if name == String::from("fs_is_dir") { return ITY_I64(); }
+    if name == String::from("fs_is_symlink") { return ITY_I64(); }
     if name == String::from("fs_rename") { return ITY_I64(); }
     if name == String::from("string_substr") { return ITY_PTR(); }
     if name == String::from("string_split") { return ITY_PTR(); }

@@ -2398,6 +2398,10 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
             sig.params.push(AbiParam::new(types::I64)); // path *VowVec<u8>
             sig.returns.push(AbiParam::new(types::I64)); // 1=dir, 0=not
         }
+        "__vow_fs_is_symlink" => {
+            sig.params.push(AbiParam::new(types::I64)); // path *VowVec<u8>
+            sig.returns.push(AbiParam::new(types::I64)); // 1=symlink, 0=not
+        }
         "__vow_fs_rename" => {
             sig.params.push(AbiParam::new(types::I64)); // old path *VowVec<u8>
             sig.params.push(AbiParam::new(types::I64)); // new path *VowVec<u8>
