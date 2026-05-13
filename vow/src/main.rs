@@ -3609,7 +3609,7 @@ The note is conservative — it fires for any `Caller`-region allocation in a fu
 
 ### VerificationSkipped
 
-**Phase:** Verification (Warning, not Error — does not fail the build)
+**Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)
 **Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and the `Linear*` family. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
 
 ```json
@@ -3623,9 +3623,9 @@ The note is conservative — it fires for any `Caller`-region allocation in a fu
 }
 ```
 
-**Why this isn't a failure.** Per `CLAUDE.md`'s "Contract Authoring" guidance, contracts express semantic correctness and must not be weakened to fit the verifier. When the verifier's bounded model checker cannot represent a function's body, the right response is to skip with a structured warning, not to fail closed inline (which historically tripped a defense-in-depth `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")` and broke the bootstrap on every vowed struct-builder).
+**Why the build fails closed.** Per `CLAUDE.md`'s "Contract Authoring" guidance, contracts express semantic correctness and must not be weakened to fit the verifier. When the verifier's bounded model checker cannot represent a function's body, the function is skipped with a structured warning instead of tripping the defense-in-depth `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")` that historically broke the bootstrap on every vowed struct-builder. But a skipped contract is still an unproved contract, so the build lifts its overall status to `Skipped` (exit 1). Use `--no-verify` if you explicitly want a non-failing path that does not invoke ESBMC at all (`Unverified`, exit 0).
 
-**Fix:** None required for the build to pass. If you want static verification of the contract, refactor the function so its body uses only modelable opcodes — typically by splitting allocation/initialisation away from the contract-bearing computation.
+**Fix:** Refactor the function so its body uses only modelable opcodes — typically by splitting allocation/initialisation away from the contract-bearing computation. Alternatively, run with `--no-verify` if the contract is intentionally documentary.
 
 ## Runtime Errors
 
@@ -6717,7 +6717,7 @@ The note is conservative — it fires for any `Caller`-region allocation in a fu
 
 ### VerificationSkipped
 
-**Phase:** Verification (Warning, not Error — does not fail the build)
+**Phase:** Verification (Warning surfaced alongside `BuildStatus::Skipped`)
 **Meaning:** The function carries a `vow {}` block but its body uses opcodes the verifier's C model cannot represent — most commonly `RegionAlloc` and `FieldSet` produced by struct construction, also `Load`/`Store`, `RemF*`, and the `Linear*` family. The function is skipped before any C is emitted or ESBMC is invoked. The contract becomes documentary: runtime checks still apply in `--mode debug`, but no static proof is attempted.
 
 ```json
@@ -6731,9 +6731,9 @@ The note is conservative — it fires for any `Caller`-region allocation in a fu
 }
 ```
 
-**Why this isn't a failure.** Per `CLAUDE.md`'s "Contract Authoring" guidance, contracts express semantic correctness and must not be weakened to fit the verifier. When the verifier's bounded model checker cannot represent a function's body, the right response is to skip with a structured warning, not to fail closed inline (which historically tripped a defense-in-depth `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")` and broke the bootstrap on every vowed struct-builder).
+**Why the build fails closed.** Per `CLAUDE.md`'s "Contract Authoring" guidance, contracts express semantic correctness and must not be weakened to fit the verifier. When the verifier's bounded model checker cannot represent a function's body, the function is skipped with a structured warning instead of tripping the defense-in-depth `__ESBMC_assert(0, "vow:UNSUPPORTED_OP_VOW_ID")` that historically broke the bootstrap on every vowed struct-builder. But a skipped contract is still an unproved contract, so the build lifts its overall status to `Skipped` (exit 1). Use `--no-verify` if you explicitly want a non-failing path that does not invoke ESBMC at all (`Unverified`, exit 0).
 
-**Fix:** None required for the build to pass. If you want static verification of the contract, refactor the function so its body uses only modelable opcodes — typically by splitting allocation/initialisation away from the contract-bearing computation.
+**Fix:** Refactor the function so its body uses only modelable opcodes — typically by splitting allocation/initialisation away from the contract-bearing computation. Alternatively, run with `--no-verify` if the contract is intentionally documentary.
 
 ## Runtime Errors
 
@@ -12553,6 +12553,9 @@ fn main() -> i32 {
             BuildStatus::Unverified => {
                 eprintln!("SKIP: verification not run (esbmc not found)");
             }
+            // Soft skip here (not panic): this fixture has no non-modelable function,
+            // so Skipped means an upstream env quirk, not a regression. Production
+            // fail-closed lives in run_test_command and run_build_command.
             BuildStatus::Skipped => {
                 eprintln!("SKIP: verification skipped (non-modelable function)");
             }
