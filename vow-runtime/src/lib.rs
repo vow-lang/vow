@@ -881,15 +881,17 @@ pub unsafe extern "C" fn __vow_arena_alloc(
     let chunk_end = new_base as usize + total;
     // Seal oversized chunks: leave no room for a subsequent allocation to
     // land in the alignment-slack tail. `arena_try_free_oversized_chunk`
-    // (the issue #391 fix) classifies a chunk as oversized by `total >
-    // normal_chunk_total()` and frees the entire chunk when the original
-    // backing is abandoned; the helper has no metadata to distinguish a
-    // sole-resident oversized chunk from one that subsequently absorbed
-    // smaller allocations via its slack. Sealing the cursor to `chunk_end`
-    // makes the single-resident invariant hold by construction at the
-    // cost of `total - (start + bytes)` bytes of waste, bounded by
-    // `(align - 1)` for the alignment-driven path. Normal chunks continue
-    // to use the bump cursor as before.
+    // identifies a chunk as reclaimable via `chunk_is_oversized()` (the
+    // path flag recorded in this chunk's header at allocation time) and
+    // frees it when the original backing is abandoned. The path flag alone
+    // cannot guarantee single residency — without sealing, a later fast-
+    // path allocation could land in the alignment-slack tail (up to
+    // `align - 1` bytes between `start + bytes` and `chunk_end`) and the
+    // subsequent free would dangle it. Sealing the cursor to `chunk_end`
+    // enforces the single-resident invariant by construction at the cost
+    // of `total - (start + bytes)` bytes of waste, bounded by `(align - 1)`
+    // for the alignment-driven path. Normal chunks continue to use the
+    // bump cursor as before.
     arena.cursor = if oversized { chunk_end } else { start + bytes };
     arena.chunk_end = chunk_end;
     arena.last_alloc_start = start as *mut u8;
@@ -939,9 +941,9 @@ pub unsafe extern "C" fn __vow_arena_try_extend(
 }
 
 // Walk the arena's chunk chain for the chunk that contains `ptr`. If that
-// chunk is oversized (`total > normal_chunk_total()`) and is not the current
-// (tail) chunk, unlink it from the chain and libc::free it; decrement the
-// arena's retained bytes and the global memory counters.
+// chunk was allocated via the oversized path (`chunk_is_oversized()`) and
+// is not the current (tail) chunk, unlink it from the chain and libc::free
+// it; decrement the arena's retained bytes and the global memory counters.
 //
 // Used by `arena_grow_backing` after a growth that allocated into a new
 // chunk: the prior backing is now unreachable, and if it was the sole
@@ -3739,12 +3741,11 @@ mod tests {
 
     #[test]
     fn arena_growth_releases_mid_size_oversized_chunk() {
-        // Regression for Thread 7 on PR #392: oversized-path allocations
-        // whose `total` is ≤ normal_chunk_total() (e.g. a 3000-byte
-        // single-resident string backing has total 3016 < 4112) used to
-        // be retained because the helper's classifier was `total >
-        // normal_chunk_total()`. With the path-flag fix the helper
-        // consults the recorded allocation-path bit and frees the chunk.
+        // Edge case for issue #391: oversized-path allocations whose `total`
+        // is ≤ `normal_chunk_total()` (e.g. a 3000-byte single-resident
+        // string backing has total 3016 < 4112) are still single-resident
+        // and reclaimable. A size-only classifier would skip them; the
+        // path-flag classifier (`chunk_is_oversized`) correctly frees them.
         let mut a = empty_arena_header();
         unsafe { __vow_arena_open(&mut a) };
 
