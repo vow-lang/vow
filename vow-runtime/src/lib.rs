@@ -2138,6 +2138,10 @@ pub unsafe extern "C" fn __vow_vec_free_val(v: *mut u8) {
     if v.is_null() {
         return;
     }
+    // Mark the shadow entry freed before deallocating so a later use of
+    // the stale pointer is diagnosed by sanitize mode (UseAfterFree) rather
+    // than dereferencing freed memory inside __vow_vec_push_val and friends.
+    sanitize_on_free(v as usize);
     let vec = unsafe { &mut *(v as *mut VowVec) };
     if vec.cap != 0 && vec.cap != VOW_CAP_RODATA {
         unsafe { __vow_free(vec.ptr, vec.cap * 8, 8) };
@@ -2207,6 +2211,17 @@ fn sanitize_on_vec_new(vec_addr: usize) {
             freed: false,
         },
     );
+}
+
+fn sanitize_on_free(vec_addr: usize) {
+    if !sanitize_is_enabled() {
+        return;
+    }
+    let mut table = SHADOW_TABLE.lock().unwrap();
+    let map = shadow_table_get_or_init(&mut table);
+    if let Some(shadow) = map.get_mut(&vec_addr) {
+        shadow.freed = true;
+    }
 }
 
 fn sanitize_on_push(vec_addr: usize) {
@@ -2574,6 +2589,26 @@ mod tests {
         let v4 = __vow_vec_new_val();
         unsafe { __vow_vec_push_val(v4, 42) };
         unsafe { __vow_vec_free_val(v4) };
+
+        // -- __vow_vec_free_val marks shadow entry freed --
+        // Capture the address before the free; the shadow entry must
+        // outlive the deallocation so a later use of the stale pointer
+        // can be diagnosed as UseAfterFree.
+        let v5 = __vow_vec_new_val();
+        unsafe { __vow_vec_push_val(v5, 7) };
+        let v5_addr = v5 as usize;
+        unsafe { __vow_vec_free_val(v5) };
+        {
+            let table = SHADOW_TABLE.lock().unwrap();
+            let shadow = table
+                .as_ref()
+                .and_then(|m| m.get(&v5_addr))
+                .expect("freed Vec must remain in SHADOW_TABLE");
+            assert!(
+                shadow.freed,
+                "sanitize_on_free should mark shadow entry as freed"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
