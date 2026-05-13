@@ -721,8 +721,14 @@ mod tests {
 
     /// UNKNOWN is an explicit ESBMC outcome, not a wall-clock timeout.
     /// Auto fallback must not let a weaker IR proof upgrade it to ProvenIr.
+    ///
+    /// Unix-only: the fake-esbmc is a `#!/bin/sh` script that cannot be
+    /// launched directly on Windows even with the chmod skipped.
+    #[cfg(unix)]
     #[test]
     fn fallback_auto_bv_unknown_does_not_retry_ir() {
+        use std::os::unix::fs::PermissionsExt;
+
         let dir = tempfile::tempdir().expect("tempdir");
         let esbmc = dir.path().join("fake-esbmc");
         std::fs::write(
@@ -739,13 +745,9 @@ echo "VERIFICATION UNKNOWN"
 "#,
         )
         .expect("write fake esbmc");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&esbmc).expect("metadata").permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(&esbmc, perms).expect("chmod fake esbmc");
-        }
+        let mut perms = std::fs::metadata(&esbmc).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&esbmc, perms).expect("chmod fake esbmc");
 
         let cfg = SolverConfig {
             solver: Solver::Auto,
