@@ -3694,11 +3694,21 @@ mod tests {
 
         let prefix = unsafe { __vow_arena_alloc(&mut a, 64, 8) };
         let p_small = unsafe { __vow_arena_alloc(&mut a, 64, 8) };
+        // Interpose an allocation so `last_alloc_start != p_small` — without
+        // this, `arena_grow_backing` would take `__vow_arena_try_extend`'s
+        // in-place fast path and `arena_try_free_oversized_chunk` would never
+        // run, making the test vacuous for the stated invariant.
+        let _interpose = unsafe { __vow_arena_alloc(&mut a, 8, 8) };
         let head_before = a.first_chunk;
 
-        // Trigger growth via arena_grow_backing — even though it stays small,
-        // the abandoned region must not unlink the shared chunk.
-        let _p_grown = unsafe { arena_grow_backing(&mut a, p_small, 64, 128, 8) };
+        // Trigger growth via arena_grow_backing — try_extend now fails
+        // (last_alloc_start is `_interpose`), so the fallback path runs and
+        // calls arena_try_free_oversized_chunk on the abandoned backing.
+        let p_grown = unsafe { arena_grow_backing(&mut a, p_small, 64, 128, 8) };
+        assert_ne!(
+            p_grown, p_small,
+            "growth must take the copy+free fallback path (try_extend should have been skipped)"
+        );
 
         assert_eq!(
             a.first_chunk, head_before,
