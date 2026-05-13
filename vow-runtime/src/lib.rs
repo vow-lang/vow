@@ -643,11 +643,23 @@ pub struct VowArena {
 const _: () = assert!(core::mem::size_of::<VowArena>() == 56);
 
 const CHUNK_PAYLOAD: usize = 4096;
-// Chunk header layout: [next: 8 bytes][total: 8 bytes]. The `total` field lets
-// the chunk-chain walk in `arena_try_free_oversized_chunk` distinguish normal
-// from oversized chunks (issue #391) without an external side table.
+// Chunk header layout: [next: 8 bytes][total | oversized-flag: 8 bytes].
+// The `total` word at offset 8 records the chunk's libc::malloc size and
+// also carries a high bit (CHUNK_OVERSIZED_FLAG) that records whether the
+// chunk was allocated via __vow_arena_alloc's oversized path. The
+// allocation-path flag — not the size — is what
+// `arena_try_free_oversized_chunk` uses to classify chunks (issue #391):
+// path-oversized chunks can have totals below, equal to, or above
+// `normal_chunk_total()` (e.g. a 3000-byte single-resident string backing
+// has total 3016 < 4112), so a size-only predicate would miss real
+// oversized chunks in the 2049–4096 byte range.
 const CHUNK_LINK_BYTES: usize = 16;
 const CHUNK_TOTAL_OFFSET: usize = 8;
+// Bit 62 (not 63) is safe because the __vow_arena_alloc overflow guard
+// keeps `bytes + align <= isize::MAX`; the largest possible `total` is
+// `16 + bytes + (align - 1)` which still fits below 2^62 in practice
+// (any real malloc result is far below 2^48).
+const CHUNK_OVERSIZED_FLAG: usize = 1usize << 62;
 const OVERSIZED_THRESHOLD: usize = 2048;
 
 const fn normal_chunk_total() -> usize {
@@ -726,22 +738,31 @@ fn memory_note_alloc_request() {
 }
 
 // libc::malloc a chunk of `total` bytes, zero the next-chunk link word at
-// offset 0, and store `total` at offset 8 so the chain walker can identify
-// oversized chunks for early release (issue #391). Returns the base pointer or
-// null on OOM; caller decides trap site.
-unsafe fn alloc_chunk(total: usize) -> *mut u8 {
+// offset 0, and store `total` (OR-ed with CHUNK_OVERSIZED_FLAG if the
+// allocation took the oversized path) at offset 8. Returns the base pointer
+// or null on OOM; caller decides trap site.
+unsafe fn alloc_chunk(total: usize, oversized: bool) -> *mut u8 {
     let base = unsafe { libc::malloc(total) } as *mut u8;
     if !base.is_null() {
         unsafe { *(base as *mut *mut u8) = core::ptr::null_mut() };
-        unsafe { *(base.add(CHUNK_TOTAL_OFFSET) as *mut usize) = total };
+        let flag = if oversized { CHUNK_OVERSIZED_FLAG } else { 0 };
+        unsafe { *(base.add(CHUNK_TOTAL_OFFSET) as *mut usize) = total | flag };
     }
     base
 }
 
-// Read the total-size word written by `alloc_chunk`. Lives at offset 8 inside
-// every chunk header.
+// Read the total-size word written by `alloc_chunk`, masking off the
+// oversized-flag bit.
 unsafe fn chunk_total(base: *const u8) -> usize {
-    unsafe { *(base.add(CHUNK_TOTAL_OFFSET) as *const usize) }
+    unsafe { *(base.add(CHUNK_TOTAL_OFFSET) as *const usize) & !CHUNK_OVERSIZED_FLAG }
+}
+
+// True iff the chunk was allocated via __vow_arena_alloc's oversized path,
+// regardless of its `total` size. This is the predicate
+// `arena_try_free_oversized_chunk` consults to decide whether a chunk is
+// single-resident and safe to free.
+unsafe fn chunk_is_oversized(base: *const u8) -> bool {
+    unsafe { *(base.add(CHUNK_TOTAL_OFFSET) as *const usize) & CHUNK_OVERSIZED_FLAG != 0 }
 }
 
 // Align a raw address up to `align` (power of two).
@@ -776,7 +797,7 @@ pub unsafe extern "C" fn __vow_arena_open(a: *mut VowArena) {
     }
 
     let total = normal_chunk_total();
-    let base = unsafe { alloc_chunk(total) };
+    let base = unsafe { alloc_chunk(total, false) };
     if base.is_null() {
         oom_trap("arena_open");
     }
@@ -849,7 +870,7 @@ pub unsafe extern "C" fn __vow_arena_alloc(
     } else {
         normal_chunk_total()
     };
-    let new_base = unsafe { alloc_chunk(total) };
+    let new_base = unsafe { alloc_chunk(total, oversized) };
     if new_base.is_null() {
         oom_trap("arena_alloc");
     }
@@ -950,7 +971,11 @@ unsafe fn arena_try_free_oversized_chunk(a: *mut VowArena, ptr: *const u8) -> bo
         let chunk_limit = chunk_base + total;
         if (ptr as usize) >= payload_start && (ptr as usize) < chunk_limit {
             // Normal chunks may carry other live allocations; refuse to free.
-            if total <= normal_chunk_total() {
+            // The path-oversized predicate (recorded at allocation time) is
+            // the correct test — not `total > normal_chunk_total()`, which
+            // would miss path-oversized chunks whose total is ≤ 4112 (e.g.
+            // a 3000-byte single-resident string backing with total 3016).
+            if !unsafe { chunk_is_oversized(chunk) } {
                 return false;
             }
             // The grow path appends a new chunk before reaching here, so the
@@ -3708,6 +3733,56 @@ mod tests {
             a.retained_bytes, walked,
             "retained_bytes must match the live chunk chain"
         );
+
+        unsafe { __vow_arena_close(&mut a) };
+    }
+
+    #[test]
+    fn arena_growth_releases_mid_size_oversized_chunk() {
+        // Regression for Thread 7 on PR #392: oversized-path allocations
+        // whose `total` is ≤ normal_chunk_total() (e.g. a 3000-byte
+        // single-resident string backing has total 3016 < 4112) used to
+        // be retained because the helper's classifier was `total >
+        // normal_chunk_total()`. With the path-flag fix the helper
+        // consults the recorded allocation-path bit and frees the chunk.
+        let mut a = empty_arena_header();
+        unsafe { __vow_arena_open(&mut a) };
+
+        // Push the first chunk's cursor past `chunk_end - 3000` so the
+        // 3000-byte alloc cannot fit there and must take the new-chunk
+        // (oversized) path.
+        let _filler = unsafe { __vow_arena_alloc(&mut a, 2000, 1) };
+
+        // Allocate a path-oversized 3000-byte buffer (bytes > 2048,
+        // align=1). total = 16 + 3000 + 0 = 3016, well under 4112.
+        let small_oversized = 3000usize;
+        let p1 = unsafe { __vow_arena_alloc(&mut a, small_oversized, 1) };
+        let oversized_chunk = a.current_chunk;
+        let oversized_total = unsafe { chunk_total(oversized_chunk) };
+        assert!(
+            oversized_total <= normal_chunk_total(),
+            "test setup: chunk total must sit in the historical classifier gap"
+        );
+        assert!(
+            unsafe { chunk_is_oversized(oversized_chunk) },
+            "alloc must record the oversized-path flag in the chunk header"
+        );
+
+        // Grow it. arena_grow_backing allocates a new chunk and must free
+        // the abandoned mid-size oversized chunk via the path-flag check.
+        let larger = 6000usize;
+        let p2 = unsafe { arena_grow_backing(&mut a, p1, small_oversized, larger, 1) };
+        assert_ne!(p2, p1, "growth must move to a fresh chunk");
+
+        // The old oversized chunk must be gone from the chain.
+        let mut chunk = a.first_chunk;
+        while !chunk.is_null() {
+            assert_ne!(
+                chunk, oversized_chunk,
+                "mid-size oversized chunk must be unlinked despite total ≤ normal_chunk_total()"
+            );
+            chunk = unsafe { *(chunk as *mut *mut u8) };
+        }
 
         unsafe { __vow_arena_close(&mut a) };
     }

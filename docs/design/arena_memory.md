@@ -152,10 +152,13 @@ requests (e.g., 16-byte-aligned SIMD backings) would exceed the
 chunk's usable range and trigger repeated fallback allocation or
 out-of-bounds arithmetic.
 
-The total-size word lets the chunk-chain walker classify a chunk as
-normal vs. oversized without an external side table; this is the
-mechanism §7.1 uses to release the dedicated chunk of an abandoned
-oversized backing.
+The total-size word carries an additional bit (CHUNK_OVERSIZED_FLAG)
+that records *which allocation path* produced the chunk — not just
+its size. The chain walker in §7.1 consults this flag, not a
+size-derived predicate, because a path-oversized chunk can have a
+`total` below, equal to, or above `normal_chunk_total()`: for
+example, a 3000-byte single-resident string backing has total 3016
+< 4112, yet is still single-resident and reclaimable.
 
 **Single-resident invariant for oversized chunks.** After an oversized
 allocation, the arena's `cursor` is parked at `chunk_end` of the new
