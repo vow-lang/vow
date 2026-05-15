@@ -113,6 +113,11 @@ fn min_right_idx(i: i64) -> i64 vow {
     2 * i + 2
 }
 
+// The min_left_idx/min_right_idx overflow guard (i <= 2^62 - 2) is
+// discharged in practice by n <= data.len(), which ESBMC bounds via
+// --vec-max (default 128). The loop invariant only carries i < n; the
+// stronger formal chain is not stated because it would require a
+// verifier-driven cap on the heap size itself.
 fn min_sift_down(data: Vec<i64>, n: i64, start: i64) vow {
     requires: n >= 0,
     requires: n <= data.len(),
@@ -165,23 +170,18 @@ pub fn is_min_heap(h: MinHeap) -> bool vow {
 } {
     let d: Vec<i64> = h.data;
     let n: i64 = h.size;
-    if n <= 1 {
-        true
-    } else {
-        let mut i: i64 = 1;
-        let mut ok: bool = true;
-        while i < n vow {
-            invariant: i >= 1,
-            invariant: i <= n
-        } {
-            let p: i64 = (i - 1) / 2;
-            if d[p] > d[i] {
-                ok = false;
-            }
-            i = i + 1;
+    let mut i: i64 = 1;
+    while i < n vow {
+        invariant: i >= 1,
+        invariant: i <= n
+    } {
+        let p: i64 = (i - 1) / 2;
+        if d[p] > d[i] {
+            return false;
         }
-        ok
+        i = i + 1;
     }
+    true
 }
 
 pub fn min_heap_pop(h: MinHeap) -> MinHeap vow {
