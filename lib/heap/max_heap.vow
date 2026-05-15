@@ -90,7 +90,8 @@ pub fn max_heap_push(h: MaxHeap, val: i64) -> MaxHeap vow {
 
 pub fn max_heap_peek(h: MaxHeap) -> i64 vow {
     requires: h.size > 0,
-    requires: h.size == h.data.len()
+    requires: h.size == h.data.len(),
+    ensures: result == h.data[0]
 } {
     h.data[0]
 }
@@ -156,7 +157,9 @@ pub fn max_heap_clear(h: MaxHeap) -> MaxHeap vow {
 // property (every parent >= its children). Unverified — Vow contracts cannot
 // express the universal quantifier. Use from tests/assertions to catch
 // sift bugs that don't surface as wrong pop order.
-pub fn is_max_heap(h: MaxHeap) -> bool {
+pub fn is_max_heap(h: MaxHeap) -> bool vow {
+    requires: h.size == h.data.len()
+} {
     let d: Vec<i64> = h.data;
     let n: i64 = h.size;
     if n <= 1 {

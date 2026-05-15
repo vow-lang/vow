@@ -90,7 +90,8 @@ pub fn min_heap_push(h: MinHeap, val: i64) -> MinHeap vow {
 
 pub fn min_heap_peek(h: MinHeap) -> i64 vow {
     requires: h.size > 0,
-    requires: h.size == h.data.len()
+    requires: h.size == h.data.len(),
+    ensures: result == h.data[0]
 } {
     h.data[0]
 }
@@ -156,7 +157,9 @@ pub fn min_heap_clear(h: MinHeap) -> MinHeap vow {
 // property (every parent <= its children). Unverified — Vow contracts cannot
 // express the universal quantifier. Use from tests/assertions to catch
 // sift bugs that don't surface as wrong pop order.
-pub fn is_min_heap(h: MinHeap) -> bool {
+pub fn is_min_heap(h: MinHeap) -> bool vow {
+    requires: h.size == h.data.len()
+} {
     let d: Vec<i64> = h.data;
     let n: i64 = h.size;
     if n <= 1 {
