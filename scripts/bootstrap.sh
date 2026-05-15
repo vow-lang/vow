@@ -10,6 +10,7 @@ cd "$(dirname "$0")/.."
 mkdir -p build
 
 SKIP_CARGO=false
+STAGE3_NO_VERIFY=false
 VMEM_LIMIT_KB="${VOW_BOOTSTRAP_VMEM_KB:-0}"
 if ! [[ "$VMEM_LIMIT_KB" =~ ^[0-9]+$ ]]; then
     echo "Error: VOW_BOOTSTRAP_VMEM_KB must be a non-negative integer (got: '$VMEM_LIMIT_KB')" >&2
@@ -17,7 +18,7 @@ if ! [[ "$VMEM_LIMIT_KB" =~ ^[0-9]+$ ]]; then
 fi
 
 usage() {
-    echo "Usage: $0 [--skip-cargo] [--help|-h]"
+    echo "Usage: $0 [--skip-cargo] [--stage3-no-verify] [--help|-h]"
     echo ""
     echo "Bootstrap the self-hosted Vow compiler and verify the fixed point."
     echo ""
@@ -29,8 +30,11 @@ usage() {
     echo "  Verify: sha256(vowc2) == sha256(vowc3)"
     echo ""
     echo "Options:"
-    echo "  --skip-cargo  Skip Stage 0 if Rust binary already built"
-    echo "  -h, --help    Show this help"
+    echo "  --skip-cargo         Skip Stage 0 if Rust binary already built"
+    echo "  --stage3-no-verify   Skip ESBMC verification on Stage 3 only (Stages 1-2"
+    echo "                       still verify). Verification does not change codegen,"
+    echo "                       so the SHA-256 fixed-point check remains meaningful."
+    echo "  -h, --help           Show this help"
     echo ""
     echo "Environment:"
     echo "  VOW_BOOTSTRAP_VMEM_KB  Optional per-stage virtual-memory cap in KB for"
@@ -61,11 +65,17 @@ run_stage_cmd() {
 
 for arg in "$@"; do
     case "$arg" in
-        --skip-cargo) SKIP_CARGO=true ;;
-        -h|--help)    usage ;;
-        *)            echo "Unknown flag: $arg"; usage ;;
+        --skip-cargo)        SKIP_CARGO=true ;;
+        --stage3-no-verify)  STAGE3_NO_VERIFY=true ;;
+        -h|--help)           usage ;;
+        *)                   echo "Unknown flag: $arg"; usage ;;
     esac
 done
+
+stage3_build_flags="--verify-jobs 1"
+if [ "$STAGE3_NO_VERIFY" = true ]; then
+    stage3_build_flags="--no-verify"
+fi
 
 # ─── Stage 0: Build Rust compiler ────────────────────────────────────
 
@@ -111,7 +121,7 @@ printf "  done in %ds\n" $((t1 - t0))
 
 printf "${BOLD}Stage 3:${RESET} build/vowc2 -> build/vowc3\n"
 t0=$(date +%s)
-if ! run_stage_cmd "build/vowc2 build --verify-jobs 1 compiler/main.vow -o build/vowc3"; then
+if ! run_stage_cmd "build/vowc2 build $stage3_build_flags compiler/main.vow -o build/vowc3"; then
     printf "  ${RED}FAILED${RESET}\n"
     if [ "$VMEM_LIMIT_KB" -gt 0 ]; then
         printf "  Hint: rerun with a higher VOW_BOOTSTRAP_VMEM_KB or unset it for no cap.\n"
