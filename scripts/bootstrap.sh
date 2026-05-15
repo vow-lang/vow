@@ -69,11 +69,18 @@ run_verify_logged() {
         if bash -c "$cmd" >"$log" 2>&1; then
             exit 0
         fi
+        # `head -1` is safe: in the compact JSON, the top-level "status"
+        # is emitted first; per-function VerificationSkipped diagnostics use
+        # "error_code", not "status", so they cannot displace the top match.
         local status
         status=$(grep -aoE '"status":"[A-Za-z]+"' "$log" | head -1 \
                  | sed -E 's/.*"status":"(.*)"/\1/')
         if [ "$status" = "Skipped" ]; then
             printf "  note: overall Skipped — verifier cannot model these vowed functions (#397):\n" >&2
+            # `[^}]*` between "error_code" and "message" assumes the
+            # intervening diagnostic fields (severity, span, etc.) contain
+            # no `}` characters. Current schema matches; revisit if a
+            # nested object is ever added between those two fields.
             grep -aoE '"VerificationSkipped"[^}]*"message":"[^"]+"' "$log" \
               | sed -E 's/.*"message":"([^"]+)".*/    - \1/' \
               | sort -u >&2
