@@ -201,12 +201,26 @@ fn emit_c_for_verify(f: IrFunction, m: IrModule, vec_max: i64, string_max: i64, 
     out
 }
 
-fn esbmc_path() -> String {
-    String::from("/home/pmatos/installs/esbmc-20260226/bin/esbmc")
+// Locate ESBMC by shelling out to `command -v`. The runtime has no getenv
+// builtin, so we cannot inspect PATH directly; `sh -c` does the lookup for us.
+// Returns the empty string when ESBMC is not on PATH; callers treat that as
+// "not found" via esbmc_exists.
+fn esbmc_path() -> String [io] {
+    let pargs: Vec<String> = Vec::new();
+    pargs.push(String::from("-c"));
+    pargs.push(String::from("command -v esbmc"));
+    let rc: i64 = process_run(String::from("sh"), pargs);
+    if rc != 0 {
+        return String::from("");
+    }
+    string_trim(process_get_stdout())
 }
 
 fn esbmc_exists() -> bool [io] {
-    fs_exists(esbmc_path()) != 0
+    // `command -v esbmc` exits non-zero when nothing is found, so a non-empty
+    // resolved path already proves the binary is on PATH — no need for a
+    // follow-up fs_exists check.
+    esbmc_path().len() > 0
 }
 
 fn verify_tmp_dir() -> String {

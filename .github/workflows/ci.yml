@@ -76,3 +76,38 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: pmatos/vow-lang
           files: lcov.info
+
+  bootstrap:
+    # Runs scripts/bootstrap.sh end-to-end so a bootstrap regression
+    # (failing Stage 1/2 verification, or a broken SHA-256 fixed point)
+    # blocks PRs. Stage 3 skips ESBMC to roughly halve wall time;
+    # verification does not affect codegen, so the fixed-point check
+    # remains meaningful.
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache ESBMC
+        id: cache-esbmc
+        uses: actions/cache@v5
+        with:
+          path: ~/esbmc
+          key: esbmc-${{ env.ESBMC_VERSION }}-${{ env.ESBMC_SHA256 }}-ubuntu-24.04
+      - name: Install ESBMC
+        if: steps.cache-esbmc.outputs.cache-hit != 'true'
+        env:
+          ESBMC_ZIP: release-ubuntu-24.04--b.RelWithDebInfo.-e.OFF.zip
+        run: |
+          ESBMC_URL="https://github.com/esbmc/esbmc/releases/download/v$ESBMC_VERSION/$ESBMC_ZIP"
+
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            -o "/tmp/$ESBMC_ZIP" "$ESBMC_URL"
+
+          echo "$ESBMC_SHA256  /tmp/$ESBMC_ZIP" | sha256sum --check --strict -
+
+          unzip -q "/tmp/$ESBMC_ZIP" -d ~/esbmc
+          rm "/tmp/$ESBMC_ZIP"
+      - run: echo "$HOME/esbmc/bin" >> "$GITHUB_PATH"
+      - name: Bootstrap (Stages 1-2 verify, Stage 3 fixed-point check)
+        run: scripts/bootstrap.sh --stage3-no-verify

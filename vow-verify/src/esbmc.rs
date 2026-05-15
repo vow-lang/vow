@@ -55,10 +55,6 @@ pub enum VerificationResult {
 // ---------------------------------------------------------------------------
 
 pub fn find_esbmc() -> Option<PathBuf> {
-    let known = PathBuf::from("/home/pmatos/installs/esbmc-20260226/bin/esbmc");
-    if known.exists() {
-        return Some(known);
-    }
     which("esbmc")
 }
 
@@ -569,6 +565,17 @@ mod tests {
 
     fn sp() -> Span {
         Span::new(0, 0)
+    }
+
+    // find_esbmc must agree with a fresh PATH lookup, with no machine-specific
+    // shortcuts that could shadow it. A hardcoded fallback to one developer's
+    // install path silently shipped to main once (commit ee14b5c1) and stuck
+    // around for months; this test exists so that the next time someone is
+    // tempted, CI catches it.
+    #[test]
+    fn find_esbmc_agrees_with_path_lookup() {
+        let from_path = which("esbmc");
+        assert_eq!(find_esbmc(), from_path);
     }
 
     fn inst(id: u32, op: Opcode, ty: Ty, args: Vec<u32>, data: InstData) -> Inst {
