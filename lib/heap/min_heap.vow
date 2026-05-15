@@ -1,0 +1,202 @@
+module MinHeap
+
+// MinHeap over i64.
+//
+// Vow contracts cannot express the universal heap-order property
+// "forall i, data[parent(i)] <= data[i]" — Vow has no forall quantifier.
+// We carry the property through three mechanisms:
+//   1. Per-function loop invariants on the sift helpers, proving each
+//      sift step stays in bounds (index safety only; heap order cannot
+//      be expressed in Vow contracts — see points 2 and 3 below).
+//   2. A runtime predicate is_min_heap() for caller-side assertions.
+//   3. The size-shadow invariant `h.size == h.data.len()`, present on
+//      every public mutator as a precondition and a postcondition, so
+//      ESBMC can prove indexed reads against h.data are in bounds.
+
+struct MinHeap {
+    data: Vec<i64>,
+    size: i64,
+}
+
+pub fn min_heap_new() -> MinHeap vow {
+    ensures: result.size == 0,
+    ensures: result.data.len() == 0
+} {
+    let v: Vec<i64> = Vec::new();
+    MinHeap { data: v, size: 0 }
+}
+
+pub fn min_heap_len(h: MinHeap) -> i64 vow {
+    ensures: result == h.size
+} {
+    h.size
+}
+
+pub fn min_heap_is_empty(h: MinHeap) -> bool vow {
+    ensures: result == (h.size == 0)
+} {
+    h.size == 0
+}
+
+fn min_parent_idx(i: i64) -> i64 vow {
+    requires: i > 0,
+    ensures: result >= 0,
+    ensures: result < i
+} {
+    (i - 1) / 2
+}
+
+fn min_swap(data: Vec<i64>, i: i64, j: i64) vow {
+    requires: i >= 0,
+    requires: j >= 0,
+    requires: i < data.len(),
+    requires: j < data.len()
+} {
+    let tmp: i64 = data[i];
+    data[i] = data[j];
+    data[j] = tmp;
+}
+
+fn min_sift_up(data: Vec<i64>, start: i64) vow {
+    requires: start >= 0,
+    requires: start < data.len()
+} {
+    let mut i: i64 = start;
+    let mut done: bool = false;
+    while !done && i > 0 vow {
+        invariant: i >= 0,
+        invariant: i < data.len()
+    } {
+        let p: i64 = min_parent_idx(i);
+        if data[i] < data[p] {
+            min_swap(data, i, p);
+            i = p;
+        } else {
+            done = true;
+        }
+    }
+}
+
+pub fn min_heap_push(h: MinHeap, val: i64) -> MinHeap vow {
+    requires: h.size == h.data.len(),
+    requires: h.size < 9223372036854775807,
+    ensures: result.size == h.size + 1,
+    ensures: result.size == result.data.len()
+} {
+    let d: Vec<i64> = h.data;
+    d.push(val);
+    min_sift_up(d, h.size);
+    MinHeap { data: d, size: h.size + 1 }
+}
+
+pub fn min_heap_peek(h: MinHeap) -> i64 vow {
+    requires: h.size > 0,
+    requires: h.size == h.data.len(),
+    ensures: result == h.data[0]
+} {
+    h.data[0]
+}
+
+fn min_left_idx(i: i64) -> i64 vow {
+    requires: i >= 0,
+    requires: i <= 4611686018427387902,
+    ensures: result > i
+} {
+    2 * i + 1
+}
+
+fn min_right_idx(i: i64) -> i64 vow {
+    requires: i >= 0,
+    requires: i <= 4611686018427387902,
+    ensures: result > i
+} {
+    2 * i + 2
+}
+
+// The min_left_idx/min_right_idx overflow guard (i <= 2^62 - 2) is
+// discharged in practice by n <= data.len(), which ESBMC bounds via
+// --vec-max (default 128). The loop invariant only carries i < n; the
+// stronger formal chain is not stated because it would require a
+// verifier-driven cap on the heap size itself.
+fn min_sift_down(data: Vec<i64>, n: i64, start: i64) vow {
+    requires: n >= 0,
+    requires: n <= data.len(),
+    requires: start >= 0,
+    requires: start < n
+} {
+    let mut i: i64 = start;
+    let mut done: bool = false;
+    while !done && min_left_idx(i) < n vow {
+        invariant: i >= 0,
+        invariant: i < n,
+        invariant: n <= data.len()
+    } {
+        let l: i64 = min_left_idx(i);
+        let r: i64 = min_right_idx(i);
+        let mut smallest: i64 = i;
+        if data[l] < data[smallest] {
+            smallest = l;
+        }
+        if r < n {
+            if data[r] < data[smallest] {
+                smallest = r;
+            }
+        }
+        if smallest == i {
+            done = true;
+        } else {
+            min_swap(data, i, smallest);
+            i = smallest;
+        }
+    }
+}
+
+pub fn min_heap_clear(h: MinHeap) -> MinHeap vow {
+    requires: h.size == h.data.len(),
+    ensures: result.size == 0,
+    ensures: result.data.len() == 0
+} {
+    let d: Vec<i64> = h.data;
+    d.clear();
+    MinHeap { data: d, size: 0 }
+}
+
+// Runtime predicate: returns true iff data[0..size] satisfies the min-heap
+// property (every parent <= its children). Unverified — Vow contracts cannot
+// express the universal quantifier. Use from tests/assertions to catch
+// sift bugs that don't surface as wrong pop order.
+pub fn is_min_heap(h: MinHeap) -> bool vow {
+    requires: h.size == h.data.len()
+} {
+    let d: Vec<i64> = h.data;
+    let n: i64 = h.size;
+    let mut i: i64 = 1;
+    while i < n vow {
+        invariant: i >= 1,
+        invariant: i <= n
+    } {
+        let p: i64 = (i - 1) / 2;
+        if d[p] > d[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+pub fn min_heap_pop(h: MinHeap) -> MinHeap vow {
+    requires: h.size > 0,
+    requires: h.size == h.data.len(),
+    ensures: result.size == h.size - 1,
+    ensures: result.size == result.data.len()
+} {
+    let d: Vec<i64> = h.data;
+    let n: i64 = h.size;
+    let last: i64 = d[n - 1];
+    d[0] = last;
+    d.pop();
+    if n > 1 {
+        min_sift_down(d, n - 1, 0);
+    }
+    MinHeap { data: d, size: n - 1 }
+}

@@ -1,0 +1,77 @@
+module Main
+use min_heap
+use max_heap
+
+fn main() -> i32 [io] {
+    let h0: MinHeap = min_heap_new();
+    let h1: MinHeap = min_heap_push(h0, 5);
+    let h2: MinHeap = min_heap_push(h1, 3);
+    let h3: MinHeap = min_heap_push(h2, 8);
+    let h4: MinHeap = min_heap_push(h3, 1);
+    let h5: MinHeap = min_heap_push(h4, 9);
+    let h6: MinHeap = min_heap_push(h5, 4);
+
+    // Heap property holds after all pushes.
+    let valid: bool = is_min_heap(h6);
+    if valid { print_i64(1); } else { print_i64(0); }
+    print_str(String::from(" "));
+
+    // Drain in ascending order: 1 3 4 5 8 9
+    let mut h: MinHeap = h6;
+    while !min_heap_is_empty(h) {
+        print_i64(min_heap_peek(h));
+        print_str(String::from(" "));
+        h = min_heap_pop(h);
+    }
+
+    // Clear test: push, clear, assert empty.
+    let h7: MinHeap = min_heap_push(min_heap_new(), 42);
+    let h8: MinHeap = min_heap_clear(h7);
+    let cleared: bool = min_heap_is_empty(h8);
+    if cleared { print_i64(1); } else { print_i64(0); }    // 1
+    print_str(String::from(" "));
+    print_i64(min_heap_len(h8));                            // 0
+    print_str(String::from(" "));
+
+    // Mixed push/pop: exercises sift_up and sift_down interleaving.
+    let mut m: MinHeap = min_heap_new();
+    m = min_heap_push(m, 7);
+    m = min_heap_push(m, 2);
+    print_i64(min_heap_peek(m)); m = min_heap_pop(m);       // 2
+    print_str(String::from(" "));
+    m = min_heap_push(m, 5);
+    m = min_heap_push(m, 1);
+    m = min_heap_push(m, 9);
+    print_i64(min_heap_peek(m)); m = min_heap_pop(m);       // 1
+    print_str(String::from(" "));
+    print_i64(min_heap_peek(m)); m = min_heap_pop(m);       // 5
+    print_str(String::from(" "));
+    m = min_heap_push(m, 3);
+    // Drain remaining: expect 3 7 9
+    while !min_heap_is_empty(m) {
+        print_i64(min_heap_peek(m));
+        print_str(String::from(" "));
+        m = min_heap_pop(m);
+    }
+    print_str(String::from("\n"));
+
+    // ─── MaxHeap: drain 5,3,8,1,9,4 in descending order: 9 8 5 4 3 1
+    let x0: MaxHeap = max_heap_new();
+    let x1: MaxHeap = max_heap_push(x0, 5);
+    let x2: MaxHeap = max_heap_push(x1, 3);
+    let x3: MaxHeap = max_heap_push(x2, 8);
+    let x4: MaxHeap = max_heap_push(x3, 1);
+    let x5: MaxHeap = max_heap_push(x4, 9);
+    let x6: MaxHeap = max_heap_push(x5, 4);
+    let mxvalid: bool = is_max_heap(x6);
+    if mxvalid { print_i64(1); } else { print_i64(0); }     // 1
+    print_str(String::from(" "));
+    let mut x: MaxHeap = x6;
+    while !max_heap_is_empty(x) {
+        print_i64(max_heap_peek(x));
+        print_str(String::from(" "));
+        x = max_heap_pop(x);
+    }
+    print_str(String::from("\n"));
+    0
+}
