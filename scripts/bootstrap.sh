@@ -81,9 +81,17 @@ run_verify_logged() {
             # intervening diagnostic fields (severity, span, etc.) contain
             # no `}` characters. Current schema matches; revisit if a
             # nested object is ever added between those two fields.
+            #
+            # `|| printf …` is load-bearing: with `set -euo pipefail` (top
+            # of script), grep exits 1 on no-match, the whole pipeline
+            # exits 1, and the subshell would otherwise abort before the
+            # `exit 0` below — silently turning a tolerated Skipped into a
+            # bootstrap failure. The fallback also gives the user a hint to
+            # consult the raw log on extractor breakage.
             grep -aoE '"VerificationSkipped"[^}]*"message":"[^"]+"' "$log" \
               | sed -E 's/.*"message":"([^"]+)".*/    - \1/' \
-              | sort -u >&2
+              | sort -u >&2 \
+              || printf "    (could not extract function names — see full log above)\n" >&2
             exit 0
         fi
         cat "$log"
