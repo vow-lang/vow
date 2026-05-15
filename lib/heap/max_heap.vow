@@ -79,6 +79,7 @@ fn max_sift_up(data: Vec<i64>, start: i64) vow {
 
 pub fn max_heap_push(h: MaxHeap, val: i64) -> MaxHeap vow {
     requires: h.size == h.data.len(),
+    requires: h.size < 9223372036854775807,
     ensures: result.size == h.size + 1,
     ensures: result.size == result.data.len()
 } {
@@ -98,6 +99,7 @@ pub fn max_heap_peek(h: MaxHeap) -> i64 vow {
 
 fn max_left_idx(i: i64) -> i64 vow {
     requires: i >= 0,
+    requires: i <= 4611686018427387902,
     ensures: result > i
 } {
     2 * i + 1
@@ -105,6 +107,7 @@ fn max_left_idx(i: i64) -> i64 vow {
 
 fn max_right_idx(i: i64) -> i64 vow {
     requires: i >= 0,
+    requires: i <= 4611686018427387902,
     ensures: result > i
 } {
     2 * i + 2
