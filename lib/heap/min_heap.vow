@@ -6,7 +6,8 @@ module MinHeap
 // "forall i, data[parent(i)] <= data[i]" — Vow has no forall quantifier.
 // We carry the property through three mechanisms:
 //   1. Per-function loop invariants on the sift helpers, proving each
-//      operation locally preserves the property.
+//      sift step stays in bounds (index safety only; heap order cannot
+//      be expressed in Vow contracts — see points 2 and 3 below).
 //   2. A runtime predicate is_min_heap() for caller-side assertions.
 //   3. The size-shadow invariant `h.size == h.data.len()`, present on
 //      every public mutator as a precondition and a postcondition, so
