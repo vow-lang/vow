@@ -55,12 +55,49 @@ run_logged() {
     )
 }
 
+# Like run_logged but accepts `vow build`'s `Skipped` overall status as success.
+# Skipped happens when a vowed function's body uses an opcode the verifier
+# cannot model (currently RegionAlloc, see #397). ESBMC still runs over every
+# modelable function; only the unverifiable-by-design ones are skipped. The
+# script surfaces a one-line note per skipped function so the warning is not
+# silently buried.
+run_verify_logged() {
+    local cmd="$1"
+    (
+        log=$(mktemp)
+        trap 'rm -f "$log"' EXIT INT TERM HUP
+        if bash -c "$cmd" >"$log" 2>&1; then
+            exit 0
+        fi
+        local status
+        status=$(grep -aoE '"status":"[A-Za-z]+"' "$log" | head -1 \
+                 | sed -E 's/.*"status":"(.*)"/\1/')
+        if [ "$status" = "Skipped" ]; then
+            printf "  note: overall Skipped — verifier cannot model these vowed functions (#397):\n" >&2
+            grep -aoE '"VerificationSkipped"[^}]*"message":"[^"]+"' "$log" \
+              | sed -E 's/.*"message":"([^"]+)".*/    - \1/' \
+              | sort -u >&2
+            exit 0
+        fi
+        cat "$log"
+        exit 1
+    )
+}
+
 run_stage_cmd() {
     local cmd="$1"
     if [ "$VMEM_LIMIT_KB" -gt 0 ]; then
         cmd="ulimit -v $VMEM_LIMIT_KB && $cmd"
     fi
     run_logged "$cmd"
+}
+
+run_verify_stage_cmd() {
+    local cmd="$1"
+    if [ "$VMEM_LIMIT_KB" -gt 0 ]; then
+        cmd="ulimit -v $VMEM_LIMIT_KB && $cmd"
+    fi
+    run_verify_logged "$cmd"
 }
 
 for arg in "$@"; do
@@ -96,7 +133,7 @@ fi
 # codegen + one ESBMC instead of codegen + N-fold ESBMC fan-out. See #175.
 printf "${BOLD}Stage 1:${RESET} Rust compiler -> build/vowc\n"
 t0=$(date +%s)
-if ! run_logged "./target/release/vow build --verify-jobs 1 compiler/main.vow -o build/vowc"; then
+if ! run_verify_logged "./target/release/vow build --verify-jobs 1 compiler/main.vow -o build/vowc"; then
     printf "  ${RED}FAILED${RESET}\n"
     exit 1
 fi
@@ -107,7 +144,7 @@ printf "  done in %ds\n" $((t1 - t0))
 
 printf "${BOLD}Stage 2:${RESET} build/vowc -> build/vowc2\n"
 t0=$(date +%s)
-if ! run_stage_cmd "build/vowc build --verify-jobs 1 compiler/main.vow -o build/vowc2"; then
+if ! run_verify_stage_cmd "build/vowc build --verify-jobs 1 compiler/main.vow -o build/vowc2"; then
     printf "  ${RED}FAILED${RESET}\n"
     if [ "$VMEM_LIMIT_KB" -gt 0 ]; then
         printf "  Hint: rerun with a higher VOW_BOOTSTRAP_VMEM_KB or unset it for no cap.\n"
