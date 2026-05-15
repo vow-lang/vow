@@ -158,7 +158,7 @@ printf "  done in %ds\n" $((t1 - t0))
 
 printf "${BOLD}Stage 3:${RESET} build/vowc2 -> build/vowc3\n"
 t0=$(date +%s)
-if ! run_stage_cmd "build/vowc2 build $stage3_build_flags compiler/main.vow -o build/vowc3"; then
+if ! run_verify_stage_cmd "build/vowc2 build $stage3_build_flags compiler/main.vow -o build/vowc3"; then
     printf "  ${RED}FAILED${RESET}\n"
     if [ "$VMEM_LIMIT_KB" -gt 0 ]; then
         printf "  Hint: rerun with a higher VOW_BOOTSTRAP_VMEM_KB or unset it for no cap.\n"
