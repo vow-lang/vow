@@ -217,11 +217,10 @@ fn esbmc_path() -> String [io] {
 }
 
 fn esbmc_exists() -> bool [io] {
-    let p: String = esbmc_path();
-    if p.len() == 0 {
-        return false;
-    }
-    fs_exists(p) != 0
+    // `command -v esbmc` exits non-zero when nothing is found, so a non-empty
+    // resolved path already proves the binary is on PATH — no need for a
+    // follow-up fs_exists check.
+    esbmc_path().len() > 0
 }
 
 fn verify_tmp_dir() -> String {
