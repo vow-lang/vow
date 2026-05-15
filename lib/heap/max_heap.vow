@@ -142,6 +142,7 @@ fn max_sift_down(data: Vec<i64>, n: i64, start: i64) vow {
 }
 
 pub fn max_heap_clear(h: MaxHeap) -> MaxHeap vow {
+    requires: h.size == h.data.len(),
     ensures: result.size == 0,
     ensures: result.data.len() == 0
 } {
