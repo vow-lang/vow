@@ -44,12 +44,27 @@ impl FrontendBundle {
         &self.module
     }
 
+    #[cfg(test)]
     pub(crate) fn dependencies(&self) -> &DependencyManifest {
         &self.deps
     }
 
     pub(crate) fn ir(&self) -> Option<&Arc<vow_ir::Module>> {
         self.ir.as_ref()
+    }
+
+    // Consume the bundle, dropping the AST `Module` field, and return only
+    // the parts the build pipeline still needs after lowering. Lets callers
+    // free the largest leftover frontend allocation right after IR
+    // extraction instead of carrying it through codegen + verify. See #178.
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        Vec<Diagnostic>,
+        Option<Arc<vow_ir::Module>>,
+        DependencyManifest,
+    ) {
+        (self.diagnostics, self.ir, self.deps)
     }
 }
 
@@ -253,13 +268,11 @@ mod tests {
         assert_eq!(bundle.module().items.len(), 2);
         assert!(bundle.ir().is_none());
         assert_eq!(bundle.dependencies().paths().len(), 2);
-        assert!(
-            bundle
-                .dependencies()
-                .paths()
-                .iter()
-                .any(|path| path.ends_with("lib.vow"))
-        );
+        assert!(bundle
+            .dependencies()
+            .paths()
+            .iter()
+            .any(|path| path.ends_with("lib.vow")));
     }
 
     #[test]
@@ -277,13 +290,11 @@ mod tests {
         assert!(bundle.diagnostics().is_empty());
         assert!(bundle.ir().is_some());
         assert_eq!(bundle.dependencies().paths().len(), 2);
-        assert!(
-            bundle
-                .dependencies()
-                .paths()
-                .iter()
-                .any(|path| path.ends_with("main.vow"))
-        );
+        assert!(bundle
+            .dependencies()
+            .paths()
+            .iter()
+            .any(|path| path.ends_with("main.vow")));
     }
 
     #[test]
@@ -313,13 +324,11 @@ mod tests {
                 .unwrap();
         assert_eq!(bundle.module().name, "TestLib");
         assert_eq!(bundle.dependencies().paths().len(), 2);
-        assert!(
-            bundle
-                .dependencies()
-                .paths()
-                .iter()
-                .any(|p| p.ends_with("lib.vow"))
-        );
+        assert!(bundle
+            .dependencies()
+            .paths()
+            .iter()
+            .any(|p| p.ends_with("lib.vow")));
     }
 
     #[test]
@@ -334,12 +343,10 @@ mod tests {
         let error = prepare_frontend(&root, FrontendGoal::MergedAst).unwrap_err();
 
         assert_eq!(error.failure_message(), "module load error");
-        assert!(
-            error
-                .diagnostics()
-                .iter()
-                .any(|diag| diag.message.contains("cannot load module `missing`"))
-        );
+        assert!(error
+            .diagnostics()
+            .iter()
+            .any(|diag| diag.message.contains("cannot load module `missing`")));
     }
 
     #[test]
