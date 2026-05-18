@@ -1,0 +1,21 @@
+workflow:
+  name: vow_plan_tdd_pr
+  initial: build_pr
+
+  use:
+    build_pr:
+      template: builtin:plan-tdd-pr
+      with:
+        planner: claude
+        implementer: claude
+        plan_prompt: prompts/plan.md
+        impl_prompt: prompts/impl.md
+      exits:
+        success: done
+        blocked: failed
+
+  states:
+    done:
+      terminal: success
+    failed:
+      terminal: blocked
