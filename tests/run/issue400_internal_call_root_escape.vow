@@ -3,10 +3,10 @@
 // Regression for issue #400 (small Vec/String backings leak into root region).
 //
 // Pattern: a helper `build_vec` returns a small `Vec<i64>`; an immediate
-// caller `build_and_sum` consumes the result locally and discards it. By
+// caller `consume` calls it locally and discards the result. By
 // spec §4.1, the call result's `must_outlive` set contains only the
 // caller block (no return, no store), so its inferred region should be
-// `Block(_)` — placing the backing in `build_and_sum`'s block arena,
+// `Block(_)` — placing the backing in `consume`'s block arena,
 // which closes at function exit and frees every chunk it owns.
 //
 // Today the region pass infers `Block(_)` correctly, but then
