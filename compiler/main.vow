@@ -623,8 +623,8 @@ fn build_verify_phase(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: 
 // Returns the post-drain `all_proven` flag (0 if any in-flight job failed,
 // otherwise the input value).
 //
-// A no-op when `in_flight_h` is empty (e.g. `--no-verify` path that never
-// reached `build_verify_phase`); callers may invoke it unconditionally.
+// A no-op when `in_flight_h` is empty; callers may invoke it unconditionally
+// without a do_verify guard if desired.
 fn build_drain_verify_phase(in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, fns: Vec<IrFunction>, ir_mod: IrModule, ces: Vec<VerifyCE>, soft_meta: Vec<String>, path: String, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, all_proven_in: i64) -> i64 [io] {
     let mut all_proven: i64 = all_proven_in;
     while in_flight_h.len() > 0 {
