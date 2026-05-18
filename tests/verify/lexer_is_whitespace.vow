@@ -1,0 +1,13 @@
+module LexerIsWhitespaceVerify
+
+fn is_whitespace(b: i64) -> bool vow {
+    requires: b >= 0,
+    requires: b <= 255,
+    ensures: result == (b == 32 || b == 9 || b == 10 || b == 13)
+} {
+    b == 32 || b == 9 || b == 10 || b == 13
+}
+
+fn main() -> i32 [io] {
+    if is_whitespace(32) { 0 } else { 1 }
+}
