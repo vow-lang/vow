@@ -44,12 +44,27 @@ impl FrontendBundle {
         &self.module
     }
 
+    #[cfg(test)]
     pub(crate) fn dependencies(&self) -> &DependencyManifest {
         &self.deps
     }
 
     pub(crate) fn ir(&self) -> Option<&Arc<vow_ir::Module>> {
         self.ir.as_ref()
+    }
+
+    // Consume the bundle, dropping the AST `Module` field, and return only
+    // the parts the build pipeline still needs after lowering. Lets callers
+    // free the largest leftover frontend allocation right after IR
+    // extraction instead of carrying it through codegen + verify. See #178.
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        Vec<Diagnostic>,
+        Option<Arc<vow_ir::Module>>,
+        DependencyManifest,
+    ) {
+        (self.diagnostics, self.ir, self.deps)
     }
 }
 

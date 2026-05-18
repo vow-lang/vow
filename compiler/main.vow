@@ -564,6 +564,103 @@ fn run_verify(argv: Vec<String>) -> i32 [io] {
     0
 }
 
+// Spawn-with-FIFO-drain phase of `run_build`. Mirrors `run_verify_loop` but
+// leaves the final drain to `build_drain_verify_phase` so the orchestrator can
+// run codegen in parallel with in-flight ESBMC processes.
+//
+// State threading (Vow Vecs share heap backing across by-value copies, so
+// pushes/removes visible to the caller — see compiler/frontend.vow:202-204):
+//   - `in_flight_h`, `in_flight_fi`: caller-allocated FIFO queues. This phase
+//     pushes new handles and pre-drains when the pool is full. Remaining
+//     entries are drained by `build_drain_verify_phase` after codegen.
+//   - `ces`, `soft_meta`: counterexample + soft-fail accumulators threaded
+//     through to `verify_collect_and_report`.
+// Returns `[all_proven, any_skipped]`.
+fn build_verify_phase(fns: Vec<IrFunction>, ir_mod: IrModule, const_fn_indices: Vec<i64>, dctx: DiagCtx, path: String, ces: Vec<VerifyCE>, soft_meta: Vec<String>, in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
+                     vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, jobs: i64) -> Vec<i64> [io] {
+    let mut all_proven: i64 = 1;
+    let mut any_skipped: i64 = 0;
+    let mut fi: i64 = 0;
+    while fi < fns.len() {
+        let f: IrFunction = fns[fi];
+        let vows: Vec<IrVowEntry> = f.vows;
+        // Stop launching new ESBMC jobs once any in-flight verification has failed.
+        if vows.len() > 0 && all_proven == 1 {
+            while in_flight_h.len() >= jobs {
+                let oldest_h: i64 = in_flight_h[0];
+                let oldest_fi: i64 = in_flight_fi[0];
+                let oldest_f: IrFunction = fns[oldest_fi];
+                vec_i64_remove_front(in_flight_h);
+                vec_i64_remove_front(in_flight_fi);
+                let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                if proven == 0 {
+                    all_proven = 0;
+                }
+            }
+            if all_proven == 1 {
+                if skip_if_non_modelable(f, ir_mod, const_fn_indices, dctx) {
+                    // Fail closed: a non-modelable function is not statically proved.
+                    any_skipped = 1;
+                } else {
+                    eprintln_str(str3(String::from("Starting verification of "), f.name, String::from("...")));
+                    let h: i64 = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+                    in_flight_h.push(h);
+                    in_flight_fi.push(fi);
+                }
+            }
+        }
+        fi = fi + 1;
+    }
+    let result: Vec<i64> = Vec::new();
+    result.push(all_proven);
+    result.push(any_skipped);
+    result
+}
+
+// Post-codegen FIFO drain phase of `run_build`. Collects results from
+// every ESBMC process still in flight after `build_verify_phase` returned
+// and codegen completed. Mutates `ces` / `soft_meta` via shared Vec backings.
+// Returns the post-drain `all_proven` flag (0 if any in-flight job failed,
+// otherwise the input value).
+//
+// A no-op when `in_flight_h` is empty; callers may invoke it unconditionally
+// without a do_verify guard if desired.
+fn build_drain_verify_phase(in_flight_h: Vec<i64>, in_flight_fi: Vec<i64>, fns: Vec<IrFunction>, ir_mod: IrModule, ces: Vec<VerifyCE>, soft_meta: Vec<String>, path: String, max_k_step: String, use_cache: bool, solver: String, encoding: String, timeout_secs: String, vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64, all_proven_in: i64) -> i64 [io] {
+    let mut all_proven: i64 = all_proven_in;
+    while in_flight_h.len() > 0 {
+        let oldest_h: i64 = in_flight_h[0];
+        let oldest_fi: i64 = in_flight_fi[0];
+        let oldest_f: IrFunction = fns[oldest_fi];
+        vec_i64_remove_front(in_flight_h);
+        vec_i64_remove_front(in_flight_fi);
+        let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
+        if proven == 0 {
+            all_proven = 0;
+        }
+    }
+    all_proven
+}
+
+// Codegen phase: emits the native object via Cranelift FFI and links it.
+// Returns 0 on success. On failure (`clif_emit_module` returns -1 = compile,
+// -2 = link), the helper emits the `CompileFailed` JSON itself and returns 1;
+// the orchestrator propagates that as the process exit code. Behavior matches
+// the inline branches the original `run_build` carried.
+fn build_codegen_phase(ir_mod: IrModule, out: String, mode: i64, trace: i64, dctx: DiagCtx) -> i64 [io] {
+    let result: i64 = clif_emit_module(ir_mod, out, mode, trace);
+    if result == -1 {
+        eprintln_str(String::from("compilation failed"));
+        diag_emit_build_verify_json(String::from("CompileFailed"), String::from(""), dctx, Vec::new());
+        return 1;
+    }
+    if result == -2 {
+        eprintln_str(String::from("link failed"));
+        diag_emit_build_verify_json(String::from("CompileFailed"), String::from(""), dctx, Vec::new());
+        return 1;
+    }
+    0
+}
+
 fn run_build(argv: Vec<String>) -> i32 [io] {
     let path: String = frontend_path_from_argv(argv, true);
     let fr: LoweredFrontend = frontend_lower_path(path);
@@ -651,64 +748,17 @@ fn run_build(argv: Vec<String>) -> i32 [io] {
     let in_flight_fi: Vec<i64> = Vec::new();
     let const_fn_indices: Vec<i64> = detect_const_fns(ir_mod);
     if do_verify {
-        let mut fi: i64 = 0;
-        while fi < fns.len() {
-            let f: IrFunction = fns[fi];
-            let vows: Vec<IrVowEntry> = f.vows;
-            // Stop launching new ESBMC jobs once any in-flight verification has failed.
-            if vows.len() > 0 && all_proven == 1 {
-                while in_flight_h.len() >= jobs {
-                    let oldest_h: i64 = in_flight_h[0];
-                    let oldest_fi: i64 = in_flight_fi[0];
-                    let oldest_f: IrFunction = fns[oldest_fi];
-                    vec_i64_remove_front(in_flight_h);
-                    vec_i64_remove_front(in_flight_fi);
-                    let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
-                    if proven == 0 {
-                        all_proven = 0;
-                    }
-                }
-                if all_proven == 1 {
-                    if skip_if_non_modelable(f, ir_mod, const_fn_indices, dctx) {
-                        // Fail closed: a non-modelable function is not statically proved.
-                        any_skipped = 1;
-                    } else {
-                        eprintln_str(str3(String::from("Starting verification of "), f.name, String::from("...")));
-                        let h: i64 = verify_start(f, ir_mod, max_k_step, fi, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
-                        in_flight_h.push(h);
-                        in_flight_fi.push(fi);
-                    }
-                }
-            }
-            fi = fi + 1;
-        }
+        let phase_result: Vec<i64> = build_verify_phase(fns, ir_mod, const_fn_indices, dctx, path, ces, soft_meta, in_flight_h, in_flight_fi, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, jobs);
+        if phase_result[0] == 0 { all_proven = 0; }
+        if phase_result[1] == 1 { any_skipped = 1; }
     }
-    let result: i64 = clif_emit_module(ir_mod, out, mode, trace);
-    if result == -1 {
-        eprintln_str(String::from("compilation failed"));
-        diag_emit_build_verify_json(String::from("CompileFailed"), String::from(""), dctx, Vec::new());
-        return 1;
-    }
-    if result == -2 {
-        eprintln_str(String::from("link failed"));
-        diag_emit_build_verify_json(String::from("CompileFailed"), String::from(""), dctx, Vec::new());
-        return 1;
-    }
+    let codegen_status: i64 = build_codegen_phase(ir_mod, out, mode, trace, dctx);
+    if codegen_status != 0 { return 1; }
     if !do_verify {
         diag_emit_build_verify_json(String::from("Unverified"), out, dctx, Vec::new());
         return 0;
     }
-    while in_flight_h.len() > 0 {
-        let oldest_h: i64 = in_flight_h[0];
-        let oldest_fi: i64 = in_flight_fi[0];
-        let oldest_f: IrFunction = fns[oldest_fi];
-        vec_i64_remove_front(in_flight_h);
-        vec_i64_remove_front(in_flight_fi);
-        let proven: i64 = verify_collect_and_report(oldest_h, oldest_f, ir_mod, path, ces, soft_meta, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max);
-        if proven == 0 {
-            all_proven = 0;
-        }
-    }
+    all_proven = build_drain_verify_phase(in_flight_h, in_flight_fi, fns, ir_mod, ces, soft_meta, path, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max, string_max, hashmap_max, btreemap_max, all_proven);
     let status_str: String = {
         if all_proven == 0 { String::from("VerifyFailed") }
         else if any_skipped == 1 { String::from("Skipped") }
