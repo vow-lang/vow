@@ -28,6 +28,11 @@ struct EsbmcRun {
     combined: String,
 }
 
+struct EsbmcStart {
+    handle: i64,
+    tmp_path: String,
+}
+
 fn str_contains_byte(s: String, b: i64) -> bool {
     let n: i64 = s.len();
     let mut i: i64 = 0;
@@ -251,6 +256,34 @@ fn verify_tmp_path() -> String [io] {
     path
 }
 
+fn verify_tmp_dir_for_path(tmp_path: String) -> String {
+    let suffix: String = String::from("/esbmc.c");
+    let n: i64 = tmp_path.len();
+    let sn: i64 = suffix.len();
+    if n <= sn {
+        return String::from("");
+    }
+    let mut i: i64 = 0;
+    while i < sn {
+        if tmp_path.byte_at(n - sn + i) != suffix.byte_at(i) {
+            return String::from("");
+        }
+        i = i + 1;
+    }
+    str_substring(tmp_path, 0, n - sn)
+}
+
+fn cleanup_verify_tmp_path(tmp_path: String) [io] {
+    if tmp_path.len() == 0 {
+        return;
+    }
+    fs_remove(tmp_path);
+    let tmp_dir: String = verify_tmp_dir_for_path(tmp_path);
+    if tmp_dir.len() > 0 {
+        fs_remove_dir(tmp_dir);
+    }
+}
+
 fn save_esbmc_debug(c_source: String, tmp_path: String, max_k_step: String, func_name: String, debug: bool) [io] {
     if !debug {
         return;
@@ -324,12 +357,14 @@ fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: 
     // Kernel watchdog kills the child if ESBMC's own --timeout doesn't fire.
     let handle: i64 = process_start(esbmc_path(), esbmc_args);
     if handle == -1 {
+        cleanup_verify_tmp_path(tmp_path);
         return EsbmcRun { exit_code: -1, combined: String::from("") };
     }
     let watchdog_ms: i64 = watchdog_ms_for(timeout_secs);
     let exit_code: i64 = process_wait_timeout(handle, watchdog_ms);
     if exit_code == -2 {
         process_kill(handle);
+        cleanup_verify_tmp_path(tmp_path);
         return EsbmcRun { exit_code: -2, combined: String::from("(watchdog timeout)") };
     }
     let stdout: String = process_stdout_for(handle);
@@ -340,6 +375,7 @@ fn run_esbmc(c_source: String, max_k_step: String, tmp_path: String, func_name: 
     // Evict the Completed entry from PROCESS_MAP so its captured buffers don't
     // accumulate across runs. process_kill is a no-op on already-completed handles.
     process_kill(handle);
+    cleanup_verify_tmp_path(tmp_path);
     EsbmcRun { exit_code: exit_code, combined: combined }
 }
 
@@ -805,10 +841,10 @@ fn verify_function_ir_fallback(f: IrFunction, m: IrModule, max_k_step: String, u
 }
 
 fn verify_start(f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_cache: bool, solver: String, encoding: String, timeout_secs: String,
-                vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> i64 [io] {
+                vec_max: i64, string_max: i64, hashmap_max: i64, btreemap_max: i64) -> EsbmcStart [io] {
     let vows: Vec<IrVowEntry> = f.vows;
     if vows.len() == 0 {
-        return -1;
+        return EsbmcStart { handle: -1, tmp_path: String::from("") };
     }
     let c_source: String = emit_c_for_verify(f, m, vec_max, string_max, hashmap_max, btreemap_max);
     // No cache lookup or write — see the note above resolve_auto_bv_solver.
@@ -821,14 +857,15 @@ fn verify_start(f: IrFunction, m: IrModule, max_k_step: String, idx: i64, use_ca
     let fn_name: String = f.name;
     let bv_timeout: String = effective_timeout_for(encoding, solver, timeout_secs);
     let handle: i64 = start_esbmc(c_source, max_k_step, tmp_path, fn_name, solver, encoding, bv_timeout);
-    handle
+    EsbmcStart { handle: handle, tmp_path: tmp_path }
 }
 
-fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String) -> VerifyResult [io] {
+fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String, tmp_path: String) -> VerifyResult [io] {
     // Kernel watchdog sized to match ESBMC's --timeout so a runaway process can't block indefinitely.
     let exit_code: i64 = process_wait_timeout(handle, watchdog_ms_for(effective_timeout));
     if exit_code == -2 {
         process_kill(handle);
+        cleanup_verify_tmp_path(tmp_path);
         return VerifyResult {
             status: VERIFY_TIMEOUT(),
             vow_id: -1,
@@ -843,6 +880,7 @@ fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String) -> Veri
         // before returning -1, so we still need to evict the PROCESS_MAP entry.
         // For the handle-not-found case, process_kill is a no-op.
         process_kill(handle);
+        cleanup_verify_tmp_path(tmp_path);
         return VerifyResult {
             status: VERIFY_NOT_FOUND(),
             vow_id: -1,
@@ -860,6 +898,7 @@ fn verify_collect(handle: i64, f: IrFunction, effective_timeout: String) -> Veri
     // Evict the Completed entry from PROCESS_MAP so its captured buffers don't
     // accumulate across runs. process_kill is a no-op on already-completed handles.
     process_kill(handle);
+    cleanup_verify_tmp_path(tmp_path);
     let status: i64 = parse_verify_status(combined);
     let vow_id: i64 = {
         if status == VERIFY_FAILED() {

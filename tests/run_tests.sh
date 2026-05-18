@@ -44,6 +44,12 @@ run_vowc() {
   ( ulimit -v 2000000; "$VOWC" "$@" )
 }
 
+run_vowc_with_tmpdir() {
+  local tmp_root="$1"
+  shift
+  ( export TMPDIR="$tmp_root"; ulimit -v 2000000; "$VOWC" "$@" )
+}
+
 run_bin() {
   ( ulimit -v 2000000; "$@" )
 }
@@ -115,6 +121,11 @@ cx=d.get('counterexamples',[])
 if cx: print(cx[0].get('$field',''))
 else: print('')
 " <<< "$json"
+}
+
+count_verify_scratch_dirs() {
+  local tmp_root="$1"
+  find "$tmp_root" -maxdepth 1 -type d -name 'vow-verify.*' | wc -l | tr -d '[:space:]'
 }
 
 parse_annotations() {
@@ -312,6 +323,47 @@ else
 
     pass "$name"
   done
+
+  name="verify_tmp_cleanup"
+  if matches_filter "$name"; then
+    scratch_tmp="$TMPDIR/${name}"
+    mkdir -p "$scratch_tmp"
+    before_count="$(count_verify_scratch_dirs "$scratch_tmp")"
+    set +e
+    verify_json="$(run_vowc_with_tmpdir "$scratch_tmp" verify --verify-jobs 2 "$SCRIPT_DIR/verify/verify_jobs_pool.vow" 2>/dev/null)"
+    verify_exit=$?
+    set -e
+    after_count="$(count_verify_scratch_dirs "$scratch_tmp")"
+    actual_status="$(json_field "$verify_json" "status")"
+    if [[ "$verify_exit" -ne 0 ]]; then
+      fail "$name" "exit $verify_exit"
+    elif [[ "$actual_status" != "Verified" ]]; then
+      fail "$name" "status=$actual_status (expected Verified)"
+    elif [[ "$after_count" != "$before_count" ]]; then
+      fail "$name" "scratch dirs grew from $before_count to $after_count"
+    else
+      pass "$name"
+    fi
+  fi
+
+  name="contracts_tmp_cleanup"
+  if matches_filter "$name"; then
+    scratch_tmp="$TMPDIR/${name}"
+    mkdir -p "$scratch_tmp"
+    before_count="$(count_verify_scratch_dirs "$scratch_tmp")"
+    set +e
+    contracts_json="$(run_vowc_with_tmpdir "$scratch_tmp" contracts --verify "$SCRIPT_DIR/verify/verify_jobs_pool.vow" 2>/dev/null)"
+    contracts_exit=$?
+    set -e
+    after_count="$(count_verify_scratch_dirs "$scratch_tmp")"
+    if [[ "$contracts_exit" -ne 0 ]]; then
+      fail "$name" "exit $contracts_exit"
+    elif [[ "$after_count" != "$before_count" ]]; then
+      fail "$name" "scratch dirs grew from $before_count to $after_count"
+    else
+      pass "$name"
+    fi
+  fi
 fi
 
 # --- Phase 3: verify-fail/ tests ---
