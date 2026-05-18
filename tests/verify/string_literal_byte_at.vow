@@ -14,6 +14,6 @@ fn literal_first_byte_direct() -> i64 vow {
     s.byte_at(0)
 }
 
-fn main() -> i32 [io] {
+fn main() -> i32 {
     0
 }
