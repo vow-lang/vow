@@ -9297,8 +9297,7 @@ fn run_pipeline_from_frontend(
     // final BuildOutput; `ir_module` is the only large allocation we keep
     // alive past this point (shared via Arc with the verify thread). See #178.
     let (all_diagnostics, ir_opt, deps) = frontend.into_parts();
-    let ir_module =
-        ir_opt.expect("LoweredIr goal must produce IR for build pipeline");
+    let ir_module = ir_opt.expect("LoweredIr goal must produce IR for build pipeline");
 
     if dump_ir {
         print!("{}", vow_ir::print_module(&ir_module));
@@ -9359,9 +9358,9 @@ fn run_pipeline_from_frontend(
         None
     };
     // Skip the dependency-content hash when the cache is disabled — no point reading every dep file with no possible hit/store. `and_then` propagates a None from `cache_key` (fail-closed on per-dep canonicalize/open/read errors) so neither lookup nor store fires with an incomplete dep set.
-    let cache_key = compile_cache.as_ref().and_then(|_| {
-        cache::CompileCache::cache_key(&deps, &mode_str, &trace_str)
-    });
+    let cache_key = compile_cache
+        .as_ref()
+        .and_then(|_| cache::CompileCache::cache_key(&deps, &mode_str, &trace_str));
     if compile_cache.is_some() && cache_key.is_none() {
         eprintln!("warning: compile cache bypassed — one or more dependencies could not be hashed");
     }
