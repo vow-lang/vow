@@ -736,6 +736,14 @@ if uv run python scripts/check_help_coverage.py docs/spec/grammar.md "$self_help
 else
     fail "help/coverage-self" "self-hosted --help missing grammar.md features"
 fi
+
+# help/skills-dir-drift: confirm skills/vow/ matches what generate_help.py
+# would produce (so `npx skills add vow-lang/vow` keeps installing the live skill).
+if uv run python scripts/generate_help.py --check >/dev/null 2>&1; then
+    pass "help/skills-dir-drift"
+else
+    fail "help/skills-dir-drift" "skills/vow/ drifted from generated content; run 'uv run python scripts/generate_help.py'"
+fi
 echo ""
 
 # ─── Section 9: Bootstrap Triple Test ──────────────────────────────

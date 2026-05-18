@@ -20,7 +20,7 @@ __pycache__/
 # Auto-installed by `vowc build`; regenerates from compiler source, so
 # tracking a snapshot would drift relative to the binary. Downstream
 # projects (per README) commit their own copy; vow-lang/vow does not.
-/.claude/skills/vow-toolchain/
+/.claude/skills/vow/
 
 # vow-mutants outputs
 mutants.out

@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vow-lang.dev/schemas/build-result.schema.json",
+  "title": "BuildResult",
+  "description": "JSON output from `vow build` on stdout",
+  "type": "object",
+  "required": ["status", "executable", "diagnostics", "counterexamples"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["Verified", "Unverified", "Skipped", "CompileFailed", "VerifyFailed"],
+      "description": "Build outcome. `Skipped` means ESBMC was invoked but at least one vowed function could not be modelled; the build fails closed with exit 1 (distinct from `Unverified`, which means ESBMC was not invoked, e.g. `--no-verify`/`--dump-ir`, exit 0)."
+    },
+    "executable": {
+      "type": ["string", "null"],
+      "description": "Path to compiled binary, or null on failure or when source has no main function (library module)"
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "diagnostic.schema.json" },
+      "description": "Compiler diagnostics (parse errors, type errors, vow violations)"
+    },
+    "message": {
+      "type": "string",
+      "description": "Error detail (present only when status is CompileFailed)"
+    },
+    "function": {
+      "type": "string",
+      "description": "Function name (present only when status is VerifyFailed)"
+    },
+    "counterexample": {
+      "type": "string",
+      "description": "Legacy counterexample description (present only when status is VerifyFailed)"
+    },
+    "counterexamples": {
+      "type": "array",
+      "items": { "$ref": "counterexample.schema.json" },
+      "description": "Structured counterexamples from ESBMC verification"
+    },
+    "verify_status": {
+      "type": "string",
+      "enum": ["timeout", "unknown", "error", "tool_not_found"],
+      "description": "Verification sub-status (present only when the verification backend did not produce a proof or counterexample)"
+    },
+    "verify_message": {
+      "type": "string",
+      "description": "Verification backend error detail (present only when verify_status is set)"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "CompileFailed" } } },
+      "then": { "required": ["message"] }
+    },
+    {
+      "if": { "properties": { "status": { "const": "VerifyFailed" } } },
+      "then": { "required": ["function", "counterexample"] }
+    }
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vow-lang.dev/schemas/vow-violation.schema.json",
+  "title": "VowViolation",
+  "description": "Runtime vow violation emitted to stderr (debug mode only). This is emitted by the vow-runtime C code, not by serde.",
+  "type": "object",
+  "required": ["error", "vow_id", "blame", "description", "file", "offset"],
+  "properties": {
+    "error": {
+      "type": "string",
+      "const": "VowViolation",
+      "description": "Always the string VowViolation"
+    },
+    "vow_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Numeric ID of the violated vow"
+    },
+    "blame": {
+      "type": "string",
+      "enum": ["Caller", "Callee"],
+      "description": "Who is blamed: Caller for requires violations, Callee for ensures/invariant"
+    },
+    "description": {
+      "type": "string",
+      "description": "The contract predicate text"
+    },
+    "file": {
+      "type": "string",
+      "description": "Source file path"
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Byte offset of the vow in the source file"
+    },
+    "values": {
+      "type": "object",
+      "additionalProperties": {
+        "type": ["integer", "number", "boolean"]
+      },
+      "description": "Runtime values of free variables in the predicate (optional, present when bindings exist)"
+    }
+  },
+  "additionalProperties": false
+}

@@ -2477,7 +2477,7 @@ fn skill_human() -> String {
 // GENERATE:SKILL_FULL:START
 fn skill_entrypoint() -> String {
     let r: String = String::from("---\n");
-    r.push_str(String::from("name: vow-toolchain\n"));
+    r.push_str(String::from("name: vow\n"));
     r.push_str(String::from("description: >-\n"));
     r.push_str(String::from("  Write, compile, debug, and verify Vow programs (.vow files) with contracts,\n"));
     r.push_str(String::from("  CEGIS, ESBMC counterexamples, diagnostics, and vow build / vow verify.\n"));
@@ -2488,7 +2488,7 @@ fn skill_entrypoint() -> String {
     r.push_str(String::from("argument-hint: \"[file.vow]\"\n"));
     r.push_str(String::from("---\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("# Vow Toolchain\n"));
+    r.push_str(String::from("# Vow\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("Use this skill when writing, compiling, debugging, or verifying Vow programs.\n"));
     r.push_str(String::from("Keep the workflow tight: run the compiler, read the structured JSON, fix the\n"));
@@ -2529,7 +2529,7 @@ fn skill_entrypoint() -> String {
 
 fn skill_bundle() -> String {
     let r: String = String::from("---\n");
-    r.push_str(String::from("name: vow-toolchain\n"));
+    r.push_str(String::from("name: vow\n"));
     r.push_str(String::from("description: >-\n"));
     r.push_str(String::from("  Write, compile, debug, and verify Vow programs (.vow files) with contracts,\n"));
     r.push_str(String::from("  CEGIS, ESBMC counterexamples, diagnostics, and vow build / vow verify.\n"));
@@ -3542,17 +3542,17 @@ fn skill_bundle() -> String {
     r.push_str(String::from("vow skill print        # print concise Claude Code SKILL.md entrypoint\n"));
     r.push_str(String::from("vow skill print --bundle  # print self-contained bundle for raw API harnesses\n"));
     r.push_str(String::from("vow skill install      # prompt for local or global install target\n"));
-    r.push_str(String::from("vow skill install --local   # install to ./.claude/skills/vow-toolchain/\n"));
-    r.push_str(String::from("vow skill install --global  # install to $HOME/.claude/skills/vow-toolchain/ on Linux\n"));
+    r.push_str(String::from("vow skill install --local   # install to ./.claude/skills/vow/\n"));
+    r.push_str(String::from("vow skill install --global  # install to $HOME/.claude/skills/vow/ on Linux\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`print` writes the concise installed `SKILL.md` entrypoint (with YAML frontmatter) to stdout. `print --bundle` writes a complete self-contained skill document to stdout for non–Claude Code harnesses that cannot load supporting files.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`install` writes `SKILL.md` plus supporting files under `reference/`, `examples/`, and `schemas/`. Claude Code discovers the skill from the `.claude/skills/` directory and uses the frontmatter description/`when_to_use` metadata to load it for `.vow` file work as well as creation and verification-debugging prompts before a `.vow` file exists.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("When no scope flag is provided, `install` prompts on stderr for local (`./.claude`) or global (`$HOME/.claude`) installation. Scripts and agents should pass `--local` or `--global` explicitly. `--local` requires the current directory to contain both `.git` and `.claude/`; otherwise it exits with an error and writes nothing. `--global` installs under `$HOME/.claude/skills/vow-toolchain/` and fails if `$HOME` is unset or empty.\n"));
+    r.push_str(String::from("When no scope flag is provided, `install` prompts on stderr for local (`./.claude`) or global (`$HOME/.claude`) installation. Scripts and agents should pass `--local` or `--global` explicitly. `--local` requires the current directory to contain both `.git` and `.claude/`; otherwise it exits with an error and writes nothing. `--global` installs under `$HOME/.claude/skills/vow/` and fails if `$HOME` is unset or empty.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Auto-install on build.** The first time `vow build` (or the legacy `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow-toolchain/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Unlike explicit `--local`, auto-install only requires `.claude/`; it does not require the directory to be a git checkout. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.\n"));
+    r.push_str(String::from("**Auto-install on build.** The first time `vow build` (or the legacy `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Unlike explicit `--local`, auto-install only requires `.claude/`; it does not require the directory to be a git checkout. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow test`\n"));
     r.push_str(String::from("\n"));
@@ -6666,17 +6666,17 @@ fn skill_support_content_1() -> String {
     r.push_str(String::from("vow skill print        # print concise Claude Code SKILL.md entrypoint\n"));
     r.push_str(String::from("vow skill print --bundle  # print self-contained bundle for raw API harnesses\n"));
     r.push_str(String::from("vow skill install      # prompt for local or global install target\n"));
-    r.push_str(String::from("vow skill install --local   # install to ./.claude/skills/vow-toolchain/\n"));
-    r.push_str(String::from("vow skill install --global  # install to $HOME/.claude/skills/vow-toolchain/ on Linux\n"));
+    r.push_str(String::from("vow skill install --local   # install to ./.claude/skills/vow/\n"));
+    r.push_str(String::from("vow skill install --global  # install to $HOME/.claude/skills/vow/ on Linux\n"));
     r.push_str(String::from("```\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`print` writes the concise installed `SKILL.md` entrypoint (with YAML frontmatter) to stdout. `print --bundle` writes a complete self-contained skill document to stdout for non–Claude Code harnesses that cannot load supporting files.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("`install` writes `SKILL.md` plus supporting files under `reference/`, `examples/`, and `schemas/`. Claude Code discovers the skill from the `.claude/skills/` directory and uses the frontmatter description/`when_to_use` metadata to load it for `.vow` file work as well as creation and verification-debugging prompts before a `.vow` file exists.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("When no scope flag is provided, `install` prompts on stderr for local (`./.claude`) or global (`$HOME/.claude`) installation. Scripts and agents should pass `--local` or `--global` explicitly. `--local` requires the current directory to contain both `.git` and `.claude/`; otherwise it exits with an error and writes nothing. `--global` installs under `$HOME/.claude/skills/vow-toolchain/` and fails if `$HOME` is unset or empty.\n"));
+    r.push_str(String::from("When no scope flag is provided, `install` prompts on stderr for local (`./.claude`) or global (`$HOME/.claude`) installation. Scripts and agents should pass `--local` or `--global` explicitly. `--local` requires the current directory to contain both `.git` and `.claude/`; otherwise it exits with an error and writes nothing. `--global` installs under `$HOME/.claude/skills/vow/` and fails if `$HOME` is unset or empty.\n"));
     r.push_str(String::from("\n"));
-    r.push_str(String::from("**Auto-install on build.** The first time `vow build` (or the legacy `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow-toolchain/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Unlike explicit `--local`, auto-install only requires `.claude/`; it does not require the directory to be a git checkout. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.\n"));
+    r.push_str(String::from("**Auto-install on build.** The first time `vow build` (or the legacy `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Unlike explicit `--local`, auto-install only requires `.claude/`; it does not require the directory to be a git checkout. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.\n"));
     r.push_str(String::from("\n"));
     r.push_str(String::from("### `vow test`\n"));
     r.push_str(String::from("\n"));
@@ -8845,9 +8845,9 @@ fn skill_support_contents() -> Vec<String> {
 
 fn skill_install_dir(root: String) -> String {
     if root.len() == 0 {
-        return String::from(".claude/skills/vow-toolchain");
+        return String::from(".claude/skills/vow");
     }
-    str3(root, String::from("/"), String::from(".claude/skills/vow-toolchain"))
+    str3(root, String::from("/"), String::from(".claude/skills/vow"))
 }
 
 fn skill_parent_dir(path: String) -> String {
@@ -9012,7 +9012,7 @@ fn maybe_auto_install_skill() [io, write] {
     if fs_is_dir(".claude") != 1 {
         return;
     }
-    let target: String = ".claude/skills/vow-toolchain/SKILL.md";
+    let target: String = ".claude/skills/vow/SKILL.md";
     if fs_exists(target) == 1 {
         return;
     }
