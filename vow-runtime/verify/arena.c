@@ -43,15 +43,17 @@ struct VowArena {
 #define CHUNK_LINK_BYTES        16
 #define CHUNK_TOTAL_OFFSET      8
 #define CHUNK_OVERSIZED_FLAG    ((uintptr_t)1 << 62)
+#define ARENA_VERIFY_ADDR_CAP   ((uintptr_t)1 << 62)
 #define CHUNK_PAYLOAD           4096
 #define OVERSIZED_THRESHOLD     2048
 
 /* `addr + align - 1` could wrap uintptr_t for adversarial inputs. Safe here
- * because the harness constrains `align` to {1, 8, 16, 4096} and bounds
- * every chunk address via alloc_chunk's `(uintptr_t)base + total <= 1<<62`
- * assumption. Widening either bound (larger symbolic alignments, or removing
- * the chunk-base bound) requires a checked-add guard or explicit
- * __ESBMC_assume on the sum. */
+ * because the harness constrains `align` to {1, 8, 16, 4096} and bounds every
+ * chunk to alloc_chunk's non-wrapping low-address model:
+ * `total <= ARENA_VERIFY_ADDR_CAP` and
+ * `(uintptr_t)base <= ARENA_VERIFY_ADDR_CAP - total`. Widening either bound
+ * (larger symbolic alignments, or removing the chunk-base bound) requires a
+ * checked-add guard or explicit __ESBMC_assume on the sum. */
 static uintptr_t align_up(uintptr_t addr, uintptr_t align) {
     return (addr + align - 1) & ~(align - 1);
 }
@@ -67,11 +69,14 @@ static uintptr_t oversized_total(uintptr_t bytes, uintptr_t align) {
 static void* alloc_chunk(uintptr_t total, int oversized) {
     void* base = malloc(total);
     if (base != NULL) {
-        /* Real-world malloc returns addresses far below UINTPTR_MAX; no OS
-         * maps the top of the address space. Constrain the abstract pointer
-         * so ESBMC does not consider overflow scenarios that cannot occur
-         * on any real host. */
-        __ESBMC_assume((uintptr_t)base + total <= ((uintptr_t)1 << 62));
+        uintptr_t base_addr = (uintptr_t)base;
+        /* ESBMC models malloc addresses symbolically. Constrain the abstract
+         * pointer to the intended non-wrapping low-address model before any
+         * base + total arithmetic, matching real hosts that do not map the
+         * top of the address space. */
+        __ESBMC_assume(total <= ARENA_VERIFY_ADDR_CAP);
+        __ESBMC_assume(base_addr <= ARENA_VERIFY_ADDR_CAP - total);
+        assert(base_addr <= ARENA_VERIFY_ADDR_CAP - total);
         *(void**)base = NULL;  /* next-chunk link */
         uintptr_t word = total | (oversized ? CHUNK_OVERSIZED_FLAG : 0);
         *(uintptr_t*)((char*)base + CHUNK_TOTAL_OFFSET) = word;
