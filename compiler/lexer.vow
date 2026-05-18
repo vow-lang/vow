@@ -4,7 +4,8 @@ use token
 
 fn is_whitespace(b: i64) -> bool vow {
     requires: b >= 0,
-    requires: b <= 255
+    requires: b <= 255,
+    ensures: result == (b == 32 || b == 9 || b == 10 || b == 13)
 } {
     b == 32 || b == 9 || b == 10 || b == 13
 }
