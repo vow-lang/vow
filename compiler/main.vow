@@ -2524,6 +2524,7 @@ fn skill_entrypoint() -> String {
     r.push_str(String::from("- Diagnostics and fixes: [reference/errors.md](reference/errors.md)\n"));
     r.push_str(String::from("- Worked examples: [examples/examples.md](examples/examples.md)\n"));
     r.push_str(String::from("- JSON schemas: [schemas/](schemas/)\n"));
+    r.push_str(String::from("\n"));
     r
 }
 

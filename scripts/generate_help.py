@@ -855,7 +855,9 @@ def _index_for_skill() -> str:
 
 
 def build_skill_entrypoint() -> str:
-    """Build the concise installed SKILL.md entrypoint."""
+    """Build the concise installed SKILL.md entrypoint. Ends with a trailing
+    newline so the on-disk SKILL.md is POSIX-conformant and matches the
+    `.rstrip() + "\\n"` convention used by support files."""
     return "\n".join(
         [
             SKILL_FRONTMATTER,
@@ -896,6 +898,7 @@ def build_skill_entrypoint() -> str:
             "- Diagnostics and fixes: [reference/errors.md](reference/errors.md)",
             "- Worked examples: [examples/examples.md](examples/examples.md)",
             "- JSON schemas: [schemas/](schemas/)",
+            "",
         ]
     )
 
@@ -961,10 +964,18 @@ def inject_skill_rust(
     content: str, entrypoint_md: str, bundle_md: str, support_files: dict[str, str]
 ) -> str:
     """Inject generated skill helpers into Rust main.rs."""
-    entries = ",\n        ".join(
-        f"({_rust_raw_string(path)}, {_rust_raw_string(body)})"
+    # Emit each tuple in rustfmt's preferred multi-line form (with trailing
+    # comma after the last entry) so the GENERATE block stays clean under
+    # `cargo fmt --check`.
+    entries = "".join(
+        (
+            "(\n"
+            f"            {_rust_raw_string(path)},\n"
+            f"            {_rust_raw_string(body)},\n"
+            "        ),\n        "
+        )
         for path, body in support_files.items()
-    )
+    ).rstrip()
     replacement = f'''// GENERATE:SKILL_FULL:START
 fn skill_entrypoint_markdown() -> String {{
     {_rust_raw_string(entrypoint_md)}
