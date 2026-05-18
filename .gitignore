@@ -4,6 +4,7 @@ compiler/main
 build/
 compiler/*.o
 compiler/*.vow.c
+/.vow-verify-tmp/
 /.claude/*.local.json
 /.claude/worktrees/
 /.chief/
