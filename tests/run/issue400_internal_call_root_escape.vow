@@ -1,4 +1,5 @@
 // TEST: skip "issue #400: internal-Call heap result rewritten Block/Caller -> Root in vow-ir/src/region.rs:1511-1528"
+// TEST: stdout "ok"
 // Regression for issue #400 (small Vec/String backings leak into root region).
 //
 // Pattern: a helper `build_vec` returns a small `Vec<i64>`; an immediate
