@@ -25,3 +25,4 @@ __pycache__/
 # vow-mutants outputs
 mutants.out
 mutants-shard-*/
+.clawpatch/
