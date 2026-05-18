@@ -1,0 +1,85 @@
+// TEST: skip "issue #400: internal-Call heap result rewritten Block/Caller -> Root in vow-ir/src/region.rs:1511-1528"
+// TEST: stdout "ok"
+// Regression for issue #400 (small Vec/String backings leak into root region).
+//
+// Pattern: a helper `build_vec` returns a small `Vec<i64>`; an immediate
+// caller `consume` calls it locally and discards the result. By
+// spec §4.1, the call result's `must_outlive` set contains only the
+// caller block (no return, no store), so its inferred region should be
+// `Block(_)` — placing the backing in `consume`'s block arena,
+// which closes at function exit and frees every chunk it owns.
+//
+// Today the region pass infers `Block(_)` correctly, but then
+// `analyze_function` in `vow-ir/src/region.rs:1511-1528` unconditionally
+// rewrites any internal-`Call` heap producer with region
+// `Block(_) | Caller(_)` to `RegionId::Root`, citing
+//   "Hidden caller-region codegen is still too shallow for unresolved/
+//    internal aggregate FreshInCaller call results that are immediately
+//    projected and repackaged."
+// (commit 3916da6 "Implement block-tree region LUB").
+//
+// The rewrite was intended to protect a specific projection-and-
+// repackaging codegen path, but it fires for every internal-Call heap
+// result — so transient Vec<i64>/Vec<String>/HashMap<K,V> returns get
+// pinned in the root arena and never freed. PR #392 (issue #391) cannot
+// reclaim them because the backings are <2048 bytes and live inside
+// shared normal chunks; `arena_try_free_oversized_chunk` only frees
+// single-resident oversized chunks.
+//
+// Once the over-approximation is fixed, the loop below should leave
+// `memory_root_arena_bytes()` essentially unchanged from before the
+// loop (modulo the initial 4112-byte root chunk plus any small
+// per-iteration allocations that genuinely escape — the Vec is not one
+// of them).
+module Issue400InternalCallRootEscape
+
+fn build_vec(x: i64, y: i64) -> Vec<i64> {
+    let v: Vec<i64> = Vec::new();
+    v.push(x);
+    v.push(y);
+    v
+}
+
+fn consume(x: i64, y: i64) -> i64 {
+    let v: Vec<i64> = build_vec(x, y);
+    let mut acc: i64 = 0;
+    for e in v {
+        acc = acc + e;
+    }
+    acc
+}
+
+fn main() -> i32 [io] {
+    let _warmup: i64 = consume(1, 2);
+
+    let before: u64 = memory_root_arena_bytes();
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    let iters: i64 = 50000;
+    while i < iters {
+        total = total + consume(i, i + 1);
+        i = i + 1;
+    }
+    let after: u64 = memory_root_arena_bytes();
+
+    // Total integer result is just a sanity guard against dead-code
+    // elimination of the loop body; the substantive assertion is the
+    // memory bound.
+    let expected_total: i64 = iters * iters;
+    let delta: u64 = after - before;
+    // Generous bound: a fixed couple of pages of root growth is fine
+    // (codegen may emit a few non-Vec root allocations); the bug case
+    // is unbounded growth of ~90 bytes per iteration (~4.5 MB at
+    // iters=50_000). 1 MB sits comfortably between the two regimes.
+    let limit: u64 = 1u64 * 1024u64 * 1024u64;
+    if total == expected_total && delta < limit {
+        print_str("ok");
+    } else {
+        print_str("total=");
+        print_i64(total);
+        print_str(" delta=");
+        print_u64(delta);
+    }
+
+    0
+}
