@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vow-lang.dev/schemas/contracts-result.schema.json",
+  "title": "ContractsResult",
+  "description": "JSON output from `vow contracts` on stdout",
+  "type": "object",
+  "required": ["contracts", "summary"],
+  "properties": {
+    "contracts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["vow_id", "function", "kind", "description", "blame", "source", "status"],
+        "properties": {
+          "vow_id": {
+            "type": "integer",
+            "description": "Unique contract identifier within the program"
+          },
+          "function": {
+            "type": "string",
+            "description": "Function containing this contract"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["requires", "ensures", "invariant"],
+            "description": "Contract kind"
+          },
+          "description": {
+            "type": "string",
+            "description": "Full contract text"
+          },
+          "blame": {
+            "type": "string",
+            "enum": ["Caller", "Callee"],
+            "description": "Blame assignment: Caller for requires, Callee for ensures/invariant"
+          },
+          "source": {
+            "type": "object",
+            "required": ["file", "offset"],
+            "properties": {
+              "file": {
+                "type": "string",
+                "description": "Source file path"
+              },
+              "offset": {
+                "type": "integer",
+                "description": "Byte offset in source file"
+              }
+            },
+            "additionalProperties": false
+          },
+          "status": {
+            "type": "string",
+            "enum": ["proven", "proven-ir", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
+            "description": "Verification status"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["total", "proven", "failed", "unknown", "timeout", "error", "not_verified", "skipped"],
+      "properties": {
+        "total": { "type": "integer" },
+        "proven": { "type": "integer" },
+        "failed": { "type": "integer" },
+        "unknown": { "type": "integer" },
+        "timeout": { "type": "integer" },
+        "error": { "type": "integer" },
+        "not_verified": { "type": "integer" },
+        "skipped": { "type": "integer" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

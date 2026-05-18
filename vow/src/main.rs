@@ -332,7 +332,7 @@ enum SkillAction {
         #[arg(long)]
         bundle: bool,
     },
-    /// Install the skill to .claude/skills/vow-toolchain/
+    /// Install the skill to .claude/skills/vow/
     Install {
         /// Install into the current git project's .claude/ directory
         #[arg(long)]
@@ -1486,7 +1486,7 @@ VERIFICATION DEFAULTS (configurable via --max-k-step, --vec-max, --string-max, -
 // GENERATE:SKILL_FULL:START
 fn skill_entrypoint_markdown() -> String {
     r#"---
-name: vow-toolchain
+name: vow
 description: >-
   Write, compile, debug, and verify Vow programs (.vow files) with contracts,
   CEGIS, ESBMC counterexamples, diagnostics, and vow build / vow verify.
@@ -1497,7 +1497,7 @@ when_to_use: >-
 argument-hint: "[file.vow]"
 ---
 
-# Vow Toolchain
+# Vow
 
 Use this skill when writing, compiling, debugging, or verifying Vow programs.
 Keep the workflow tight: run the compiler, read the structured JSON, fix the
@@ -1532,13 +1532,14 @@ fn main() -> i32 [io] {
 - Contracts and CEGIS guidance: [reference/contracts.md](reference/contracts.md)
 - Diagnostics and fixes: [reference/errors.md](reference/errors.md)
 - Worked examples: [examples/examples.md](examples/examples.md)
-- JSON schemas: [schemas/](schemas/)"#
+- JSON schemas: [schemas/](schemas/)
+"#
     .to_string()
 }
 
 fn skill_bundle_markdown() -> String {
     r##"---
-name: vow-toolchain
+name: vow
 description: >-
   Write, compile, debug, and verify Vow programs (.vow files) with contracts,
   CEGIS, ESBMC counterexamples, diagnostics, and vow build / vow verify.
@@ -2551,17 +2552,17 @@ vow skill              # print skill document to stdout (default: print)
 vow skill print        # print concise Claude Code SKILL.md entrypoint
 vow skill print --bundle  # print self-contained bundle for raw API harnesses
 vow skill install      # prompt for local or global install target
-vow skill install --local   # install to ./.claude/skills/vow-toolchain/
-vow skill install --global  # install to $HOME/.claude/skills/vow-toolchain/ on Linux
+vow skill install --local   # install to ./.claude/skills/vow/
+vow skill install --global  # install to $HOME/.claude/skills/vow/ on Linux
 ```
 
 `print` writes the concise installed `SKILL.md` entrypoint (with YAML frontmatter) to stdout. `print --bundle` writes a complete self-contained skill document to stdout for non–Claude Code harnesses that cannot load supporting files.
 
 `install` writes `SKILL.md` plus supporting files under `reference/`, `examples/`, and `schemas/`. Claude Code discovers the skill from the `.claude/skills/` directory and uses the frontmatter description/`when_to_use` metadata to load it for `.vow` file work as well as creation and verification-debugging prompts before a `.vow` file exists.
 
-When no scope flag is provided, `install` prompts on stderr for local (`./.claude`) or global (`$HOME/.claude`) installation. Scripts and agents should pass `--local` or `--global` explicitly. `--local` requires the current directory to contain both `.git` and `.claude/`; otherwise it exits with an error and writes nothing. `--global` installs under `$HOME/.claude/skills/vow-toolchain/` and fails if `$HOME` is unset or empty.
+When no scope flag is provided, `install` prompts on stderr for local (`./.claude`) or global (`$HOME/.claude`) installation. Scripts and agents should pass `--local` or `--global` explicitly. `--local` requires the current directory to contain both `.git` and `.claude/`; otherwise it exits with an error and writes nothing. `--global` installs under `$HOME/.claude/skills/vow/` and fails if `$HOME` is unset or empty.
 
-**Auto-install on build.** The first time `vow build` (or the legacy `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow-toolchain/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Unlike explicit `--local`, auto-install only requires `.claude/`; it does not require the directory to be a git checkout. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.
+**Auto-install on build.** The first time `vow build` (or the legacy `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Unlike explicit `--local`, auto-install only requires `.claude/`; it does not require the directory to be a git checkout. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.
 
 ### `vow test`
 
@@ -5661,17 +5662,17 @@ vow skill              # print skill document to stdout (default: print)
 vow skill print        # print concise Claude Code SKILL.md entrypoint
 vow skill print --bundle  # print self-contained bundle for raw API harnesses
 vow skill install      # prompt for local or global install target
-vow skill install --local   # install to ./.claude/skills/vow-toolchain/
-vow skill install --global  # install to $HOME/.claude/skills/vow-toolchain/ on Linux
+vow skill install --local   # install to ./.claude/skills/vow/
+vow skill install --global  # install to $HOME/.claude/skills/vow/ on Linux
 ```
 
 `print` writes the concise installed `SKILL.md` entrypoint (with YAML frontmatter) to stdout. `print --bundle` writes a complete self-contained skill document to stdout for non–Claude Code harnesses that cannot load supporting files.
 
 `install` writes `SKILL.md` plus supporting files under `reference/`, `examples/`, and `schemas/`. Claude Code discovers the skill from the `.claude/skills/` directory and uses the frontmatter description/`when_to_use` metadata to load it for `.vow` file work as well as creation and verification-debugging prompts before a `.vow` file exists.
 
-When no scope flag is provided, `install` prompts on stderr for local (`./.claude`) or global (`$HOME/.claude`) installation. Scripts and agents should pass `--local` or `--global` explicitly. `--local` requires the current directory to contain both `.git` and `.claude/`; otherwise it exits with an error and writes nothing. `--global` installs under `$HOME/.claude/skills/vow-toolchain/` and fails if `$HOME` is unset or empty.
+When no scope flag is provided, `install` prompts on stderr for local (`./.claude`) or global (`$HOME/.claude`) installation. Scripts and agents should pass `--local` or `--global` explicitly. `--local` requires the current directory to contain both `.git` and `.claude/`; otherwise it exits with an error and writes nothing. `--global` installs under `$HOME/.claude/skills/vow/` and fails if `$HOME` is unset or empty.
 
-**Auto-install on build.** The first time `vow build` (or the legacy `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow-toolchain/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Unlike explicit `--local`, auto-install only requires `.claude/`; it does not require the directory to be a git checkout. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.
+**Auto-install on build.** The first time `vow build` (or the legacy `vow <source.vow>` form) runs in a directory that already contains a `.claude/` subtree but no `.claude/skills/vow/SKILL.md`, the compiler installs the skill silently. This bootstraps Claude Code projects without requiring an explicit `vow skill install`. Unlike explicit `--local`, auto-install only requires `.claude/`; it does not require the directory to be a git checkout. Auto-install is skipped when `.claude/` does not exist (so it never pollutes non–Claude Code projects) and when the skill file is already present (so user edits are never overwritten). Auto-install never fails the build.
 
 ### `vow test`
 
@@ -7813,7 +7814,7 @@ Note that `.insert` returns `Option<V>` (the previous value, if any), and `.get`
 // GENERATE:SKILL_FULL:END
 
 fn install_skill_tree_to(root: &Path) -> std::io::Result<PathBuf> {
-    let dir = root.join(".claude/skills/vow-toolchain");
+    let dir = root.join(".claude/skills/vow");
     std::fs::create_dir_all(&dir).map_err(|e| {
         std::io::Error::new(e.kind(), format!("cannot create {}: {}", dir.display(), e))
     })?;
@@ -7932,7 +7933,7 @@ fn maybe_auto_install_skill(cwd: &Path) {
     if !claude_dir.is_dir() {
         return;
     }
-    let target = claude_dir.join("skills/vow-toolchain/SKILL.md");
+    let target = claude_dir.join("skills/vow/SKILL.md");
     if target.exists() {
         return;
     }
@@ -10736,9 +10737,9 @@ fn main() -> i32 [io] {
         let dir = TempDir::new().unwrap();
         install_skill_tree_to(dir.path()).unwrap();
 
-        let skill_dir = dir.path().join(".claude/skills/vow-toolchain");
+        let skill_dir = dir.path().join(".claude/skills/vow");
         let contents = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
-        assert!(contents.starts_with("---\nname: vow-toolchain\n"));
+        assert!(contents.starts_with("---\nname: vow\n"));
         assert!(contents.contains("when_to_use: >-"));
         assert!(!contents.contains("\npaths:"));
         assert!(!contents.contains("\nallowed-tools:"));
@@ -10758,12 +10759,44 @@ fn main() -> i32 [io] {
     #[test]
     fn skill_bundle_markdown_contains_full_skill_document() {
         let out = skill_bundle_markdown();
-        assert!(out.starts_with("---\nname: vow-toolchain\n"));
+        assert!(out.starts_with("---\nname: vow\n"));
         assert!(!out.contains("\npaths:"));
         assert!(!out.contains("\nallowed-tools:"));
         assert!(out.contains("# Vow Language Reference"));
         assert!(out.contains("### `vow skill`"));
         assert!(out.contains("schemas/build-result.schema.json"));
+    }
+
+    /// `npx skills add vow-lang/vow` clones the repo and scans `skills/*/SKILL.md`.
+    /// The checked-in `skills/vow/` mirror must therefore match what the compiler
+    /// installs, or the two install paths drift.
+    #[test]
+    fn checked_in_skills_vow_matches_install_output() {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("CARGO_MANIFEST_DIR has a parent");
+        let skill_md = repo_root.join("skills/vow/SKILL.md");
+        let checked_in =
+            std::fs::read_to_string(&skill_md).expect("skills/vow/SKILL.md must exist");
+        assert!(
+            checked_in.starts_with("---\nname: vow\n"),
+            "checked-in skills/vow/SKILL.md must declare `name: vow` for npx skills"
+        );
+        assert_eq!(
+            checked_in,
+            skill_entrypoint_markdown(),
+            "skills/vow/SKILL.md drifted from compiler-embedded skill; \
+             run `uv run python scripts/generate_help.py`"
+        );
+        for (rel, expected) in skill_support_files() {
+            let path = repo_root.join("skills/vow").join(rel);
+            let actual = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("missing skills/vow/{rel}: {e}"));
+            assert_eq!(
+                actual, *expected,
+                "skills/vow/{rel} drifted from compiler-embedded copy"
+            );
+        }
     }
 
     #[test]
@@ -10782,7 +10815,7 @@ fn main() -> i32 [io] {
         let dir = TempDir::new().unwrap();
         std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
         maybe_auto_install_skill(dir.path());
-        let installed = dir.path().join(".claude/skills/vow-toolchain/SKILL.md");
+        let installed = dir.path().join(".claude/skills/vow/SKILL.md");
         assert!(
             installed.exists(),
             "auto-install must populate the skill when .claude/ is present"
@@ -10794,7 +10827,7 @@ fn main() -> i32 [io] {
     #[test]
     fn auto_install_skill_leaves_existing_file_untouched() {
         let dir = TempDir::new().unwrap();
-        let target_dir = dir.path().join(".claude/skills/vow-toolchain");
+        let target_dir = dir.path().join(".claude/skills/vow");
         std::fs::create_dir_all(&target_dir).unwrap();
         let target = target_dir.join("SKILL.md");
         std::fs::write(&target, "user-managed content").unwrap();
@@ -10815,14 +10848,11 @@ fn main() -> i32 [io] {
             run_skill_install_scoped(dir.path(), None, true, false, &mut stdin, &mut stderr)
                 .unwrap();
 
-        assert_eq!(
-            installed,
-            dir.path().join(".claude/skills/vow-toolchain/SKILL.md")
-        );
+        assert_eq!(installed, dir.path().join(".claude/skills/vow/SKILL.md"));
         assert!(installed.exists());
         assert!(
             dir.path()
-                .join(".claude/skills/vow-toolchain/reference/cli.md")
+                .join(".claude/skills/vow/reference/cli.md")
                 .exists()
         );
     }
@@ -10867,14 +10897,11 @@ fn main() -> i32 [io] {
         )
         .unwrap();
 
-        assert_eq!(
-            installed,
-            home.path().join(".claude/skills/vow-toolchain/SKILL.md")
-        );
+        assert_eq!(installed, home.path().join(".claude/skills/vow/SKILL.md"));
         assert!(installed.exists());
         assert!(
             home.path()
-                .join(".claude/skills/vow-toolchain/schemas/diagnostic.schema.json")
+                .join(".claude/skills/vow/schemas/diagnostic.schema.json")
                 .exists()
         );
     }
@@ -10906,10 +10933,7 @@ fn main() -> i32 [io] {
         let installed =
             run_skill_install_scoped(dir.path(), None, false, false, &mut stdin, &mut stderr)
                 .unwrap();
-        assert_eq!(
-            installed,
-            dir.path().join(".claude/skills/vow-toolchain/SKILL.md")
-        );
+        assert_eq!(installed, dir.path().join(".claude/skills/vow/SKILL.md"));
         assert!(String::from_utf8(stderr).unwrap().contains("[l/g]"));
 
         let mut stdin = std::io::Cursor::new(Vec::<u8>::new());

@@ -29,6 +29,7 @@ EXAMPLES = SPEC_DIR / "examples.md"
 SCHEMAS_DIR = SPEC_DIR / "schemas"
 MAIN_RS = REPO / "vow" / "src" / "main.rs"
 MAIN_VOW = REPO / "compiler" / "main.vow"
+SKILLS_DIR = REPO / "skills" / "vow"
 
 SCHEMA_VERSION = "2"
 DEFAULT_MAX_K_STEP = 50
@@ -826,7 +827,7 @@ def inject_vow(main_vow: Path, json_str: str, human_str: str) -> str:
 
 SKILL_FRONTMATTER = """\
 ---
-name: vow-toolchain
+name: vow
 description: >-
   Write, compile, debug, and verify Vow programs (.vow files) with contracts,
   CEGIS, ESBMC counterexamples, diagnostics, and vow build / vow verify.
@@ -854,12 +855,14 @@ def _index_for_skill() -> str:
 
 
 def build_skill_entrypoint() -> str:
-    """Build the concise installed SKILL.md entrypoint."""
+    """Build the concise installed SKILL.md entrypoint. Ends with a trailing
+    newline so the on-disk SKILL.md is POSIX-conformant and matches the
+    `.rstrip() + "\\n"` convention used by support files."""
     return "\n".join(
         [
             SKILL_FRONTMATTER,
             "",
-            "# Vow Toolchain",
+            "# Vow",
             "",
             "Use this skill when writing, compiling, debugging, or verifying Vow programs.",
             "Keep the workflow tight: run the compiler, read the structured JSON, fix the",
@@ -895,6 +898,7 @@ def build_skill_entrypoint() -> str:
             "- Diagnostics and fixes: [reference/errors.md](reference/errors.md)",
             "- Worked examples: [examples/examples.md](examples/examples.md)",
             "- JSON schemas: [schemas/](schemas/)",
+            "",
         ]
     )
 
@@ -960,10 +964,18 @@ def inject_skill_rust(
     content: str, entrypoint_md: str, bundle_md: str, support_files: dict[str, str]
 ) -> str:
     """Inject generated skill helpers into Rust main.rs."""
-    entries = ",\n        ".join(
-        f"({_rust_raw_string(path)}, {_rust_raw_string(body)})"
+    # Emit each tuple in rustfmt's preferred multi-line form (with trailing
+    # comma after the last entry) so the GENERATE block stays clean under
+    # `cargo fmt --check`.
+    entries = "".join(
+        (
+            "(\n"
+            f"            {_rust_raw_string(path)},\n"
+            f"            {_rust_raw_string(body)},\n"
+            "        ),\n        "
+        )
         for path, body in support_files.items()
-    )
+    ).rstrip()
     replacement = f'''// GENERATE:SKILL_FULL:START
 fn skill_entrypoint_markdown() -> String {{
     {_rust_raw_string(entrypoint_md)}
@@ -1047,6 +1059,53 @@ def inject_skill_vow(
 
 
 # ---------------------------------------------------------------------------
+# skills/vow/ on-disk mirror
+# ---------------------------------------------------------------------------
+
+def _expected_skills_files(entrypoint_md: str, support_files: dict[str, str]) -> dict[str, str]:
+    files = {"SKILL.md": entrypoint_md}
+    files.update(support_files)
+    return files
+
+
+def write_skills_dir(entrypoint_md: str, support_files: dict[str, str]) -> None:
+    """Write SKILL.md + support files into skills/vow/, removing any stale files."""
+    expected = _expected_skills_files(entrypoint_md, support_files)
+    SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    for rel, contents in expected.items():
+        target = SKILLS_DIR / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(contents)
+    expected_paths = {(SKILLS_DIR / rel).resolve() for rel in expected}
+    for path in SKILLS_DIR.rglob("*"):
+        if path.is_file() and path.resolve() not in expected_paths:
+            path.unlink()
+    for path in sorted((p for p in SKILLS_DIR.rglob("*") if p.is_dir()), reverse=True):
+        try:
+            path.rmdir()
+        except OSError:
+            pass
+
+
+def check_skills_dir(entrypoint_md: str, support_files: dict[str, str]) -> list[str]:
+    """Return list of drift errors; empty if skills/vow/ matches generated content."""
+    expected = _expected_skills_files(entrypoint_md, support_files)
+    errors: list[str] = []
+    for rel, contents in expected.items():
+        target = SKILLS_DIR / rel
+        if not target.exists():
+            errors.append(f"missing: {target.relative_to(REPO)}")
+        elif target.read_text() != contents:
+            errors.append(f"drift: {target.relative_to(REPO)}")
+    expected_paths = {(SKILLS_DIR / rel).resolve() for rel in expected}
+    if SKILLS_DIR.exists():
+        for path in SKILLS_DIR.rglob("*"):
+            if path.is_file() and path.resolve() not in expected_paths:
+                errors.append(f"orphan: {path.relative_to(REPO)}")
+    return errors
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1079,6 +1138,14 @@ def main() -> None:
         print(f"  skill_entrypoint: {len(skill_entrypoint_md)} bytes")
         print(f"  skill_bundle: {len(skill_bundle_md)} bytes")
         print(f"  skill_support_files: {len(skill_support_files)}")
+        drift = check_skills_dir(skill_entrypoint_md, skill_support_files)
+        if drift:
+            print("\nskills/vow/ drift:")
+            for line in drift:
+                print(f"  {line}")
+            print("\nRun scripts/generate_help.py to regenerate.")
+            sys.exit(1)
+        print(f"  skills/vow/ in sync ({len(skill_support_files) + 1} files)")
         return
 
     # Inject into Rust
@@ -1092,6 +1159,10 @@ def main() -> None:
     new_vow = inject_skill_vow(new_vow, skill_entrypoint_md, skill_bundle_md, skill_support_files)
     MAIN_VOW.write_text(new_vow)
     print(f"Updated {MAIN_VOW}")
+
+    # Write the checked-in skill mirror that `npx skills add vow-lang/vow` reads.
+    write_skills_dir(skill_entrypoint_md, skill_support_files)
+    print(f"Updated {SKILLS_DIR.relative_to(REPO)}/ ({len(skill_support_files) + 1} files)")
 
     print("\nDone. Run 'cargo build --release -p vow' and 'scripts/bootstrap.sh --no-verify --skip-cargo' to rebuild.")
 

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vow-lang.org/schemas/mutants-result.schema.json",
+  "title": "MutantsOutput",
+  "description": "Output of `vow-mutants run` populates a directory (default `mutants.out/`). Each file has its own schema; the union is documented here.",
+  "$defs": {
+    "Mutant": {
+      "description": "Per-mutant catalog record (in mutants.json).",
+      "type": "object",
+      "required": ["name", "file", "line", "col", "off", "len", "kind", "from", "to", "label", "clause_index"],
+      "properties": {
+        "name":         { "type": "string", "description": "Stable cargo-mutants-style name: `file:line:col: <label>`." },
+        "file":         { "type": "string", "description": "Repo-relative source path. Independent of --workdir." },
+        "line":         { "type": "integer", "minimum": 1, "description": "1-based source line of `off`." },
+        "col":          { "type": "integer", "minimum": 1, "description": "1-based source column of `off`." },
+        "off":          { "type": "integer", "minimum": 0, "description": "Byte offset of the mutation site." },
+        "len":          { "type": "integer", "minimum": 0, "description": "Byte length of the mutation span." },
+        "kind":         { "enum": ["op-flip", "const-flip", "body-replace", "contract-weaken"] },
+        "from":         { "type": "string", "description": "Original source text at the site (empty for body-replace)." },
+        "to":           { "type": "string", "description": "Replacement text spliced in for this mutation." },
+        "label":        { "type": "string", "description": "Human-readable summary of the mutation." },
+        "clause_index": { "type": "integer", "minimum": 0, "description": "Disambiguates sibling contract clauses on the same function. 0 for non-contract sites." }
+      },
+      "additionalProperties": false
+    },
+    "Outcome": {
+      "description": "Per-mutant verdict (in outcomes.json).",
+      "type": "object",
+      "required": ["id", "name", "status", "tier", "oracle_ms"],
+      "properties": {
+        "id":         { "type": "integer", "minimum": 0, "description": "Position of this mutant within the shard's `mutants.json` array." },
+        "name":       { "type": "string", "description": "Same name as the corresponding Mutant record." },
+        "status":     { "enum": ["caught", "missed", "timeout", "unviable", "unrun"] },
+        "tier":       { "enum": [1, 2], "description": "Oracle tier that produced the verdict." },
+        "oracle_ms":  { "type": "integer", "minimum": 0, "description": "Per-mutant oracle wall-clock in milliseconds. Non-deterministic — excluded from the determinism guarantee." }
+      },
+      "additionalProperties": false
+    },
+    "Summary": {
+      "description": "Aggregate counts across all of this shard's mutants. Same shape as the stdout summary line.",
+      "type": "object",
+      "required": ["total", "caught", "missed", "timeout", "unviable", "unrun", "shard"],
+      "properties": {
+        "total":     { "type": "integer", "minimum": 0 },
+        "caught":    { "type": "integer", "minimum": 0 },
+        "missed":    { "type": "integer", "minimum": 0 },
+        "timeout":   { "type": "integer", "minimum": 0 },
+        "unviable":  { "type": "integer", "minimum": 0 },
+        "unrun":     { "type": "integer", "minimum": 0, "description": "Tier-1 survivors not run because the Tier-2 budget was exhausted." },
+        "shard":     { "type": "string", "pattern": "^[0-9]+/[1-9][0-9]*$" }
+      },
+      "additionalProperties": false
+    },
+    "MutantsJson": {
+      "description": "Format of `mutants.out/mutants.json`. Written before testing begins.",
+      "type": "object",
+      "required": ["version", "tool", "shard", "mutants"],
+      "properties": {
+        "version":  { "const": 1 },
+        "tool":     { "const": "vow-mutants" },
+        "shard":    { "type": "string", "pattern": "^[0-9]+/[1-9][0-9]*$" },
+        "mutants":  { "type": "array", "items": { "$ref": "#/$defs/Mutant" } }
+      },
+      "additionalProperties": false
+    },
+    "OutcomesJson": {
+      "description": "Format of `mutants.out/outcomes.json`. Written after all mutants in this shard have been classified.",
+      "type": "object",
+      "required": ["version", "summary", "outcomes"],
+      "properties": {
+        "version":  { "const": 1 },
+        "summary":  { "$ref": "#/$defs/Summary" },
+        "outcomes": { "type": "array", "items": { "$ref": "#/$defs/Outcome" } }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -40,7 +40,7 @@ The first time you run `vowc build` (or `vowc <source.vow>`) inside a project th
 already has a `.claude/` directory, the compiler installs the skill at:
 
 ```
-.claude/skills/vow-toolchain/
+.claude/skills/vow/
 ```
 
 Claude Code discovers it from the `.claude/skills/` directory and uses the
@@ -67,7 +67,7 @@ build/vowc skill install --global
 ```
 
 The installed skill is split into `SKILL.md` plus `reference/`, `examples/`, and
-`schemas/` support files. Commit the resulting `.claude/skills/vow-toolchain/`
+`schemas/` support files. Commit the resulting `.claude/skills/vow/`
 tree to your repository so collaborators (human and agent) get the same skill
 version on checkout.
 
