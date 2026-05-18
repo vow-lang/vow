@@ -10109,7 +10109,6 @@ fn run_contracts_command(
             std::process::exit(1);
         }
     };
-    let all_diagnostics = frontend.diagnostics().to_vec();
     let ir_module = frontend
         .ir()
         .expect("LoweredIr goal must produce IR for contracts");
@@ -10139,21 +10138,23 @@ fn run_contracts_command(
         }
     }
 
+    let mut exit_code = 0;
     if verify {
         if find_esbmc().is_none() {
-            let output =
-                verify_outcome_to_output(VerifyOutcome::ToolNotFound, all_diagnostics, None);
-            output.emit_json();
-            std::process::exit(1);
+            for entry in &mut entries {
+                entry.status = "error".to_string();
+            }
+            exit_code = 1;
+        } else {
+            let verify_cache = if no_cache { None } else { VerifyCache::new() };
+            update_contract_statuses(
+                &mut entries,
+                ir_module,
+                verify_cache.as_ref(),
+                limits,
+                config,
+            );
         }
-        let verify_cache = if no_cache { None } else { VerifyCache::new() };
-        update_contract_statuses(
-            &mut entries,
-            ir_module,
-            verify_cache.as_ref(),
-            limits,
-            config,
-        );
     }
 
     let summary = build_contracts_summary(&entries);
@@ -10163,6 +10164,9 @@ fn run_contracts_command(
     };
     let json = serde_json::to_string(&result).expect("ContractsResult must be serializable");
     println!("{json}");
+    if exit_code != 0 {
+        std::process::exit(exit_code);
+    }
 }
 
 fn main() {

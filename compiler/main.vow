@@ -9112,54 +9112,60 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     }
 
     // If --verify, run verification per function and update statuses
+    let exit_code: i32 = 0;
     if do_verify {
         if !esbmc_exists() {
-            eprintln_str(String::from("error: ESBMC not found; install ESBMC to run verification"));
-            return 1;
-        }
-        let const_fn_indices_c: Vec<i64> = detect_const_fns(ir_mod);
-        fi = 0;
-        while fi < nf {
-            let func: IrFunction = ir_mod.functions[fi];
-            if func.vows.len() > 0 {
-                let skip_reason: String = non_modelable_reason(func, ir_mod, const_fn_indices_c);
-                if skip_reason.len() > 0 {
-                    let mut ei: i64 = 0;
-                    while ei < e_func_ids.len() {
-                        if e_func_ids[ei] == func.id {
-                            e_statuses[ei] = String::from("skipped");
-                        }
-                        ei = ei + 1;
-                    }
-                } else {
-                    let vr: VerifyResult = verify_function_full(func, ir_mod, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
-                    let st: i64 = vr.status;
-                    let mut ei: i64 = 0;
-                    while ei < e_func_ids.len() {
-                        if e_func_ids[ei] == func.id {
-                            if st == VERIFY_PROVEN() {
-                                e_statuses[ei] = String::from("proven");
-                            } else if st == VERIFY_PROVEN_IR() {
-                                e_statuses[ei] = String::from("proven-ir");
-                            } else if st == VERIFY_FAILED() {
-                                if vr.vow_id == e_vow_ids[ei] {
-                                    e_statuses[ei] = String::from("failed");
-                                } else {
-                                    e_statuses[ei] = String::from("unknown");
-                                }
-                            } else if st == VERIFY_TIMEOUT() {
-                                e_statuses[ei] = String::from("timeout");
-                            } else if st == VERIFY_UNKNOWN() {
-                                e_statuses[ei] = String::from("unknown");
-                            } else {
-                                e_statuses[ei] = String::from("error");
+            let mut ei_missing: i64 = 0;
+            while ei_missing < e_statuses.len() {
+                e_statuses[ei_missing] = String::from("error");
+                ei_missing = ei_missing + 1;
+            }
+            exit_code = 1;
+        } else {
+            let const_fn_indices_c: Vec<i64> = detect_const_fns(ir_mod);
+            fi = 0;
+            while fi < nf {
+                let func: IrFunction = ir_mod.functions[fi];
+                if func.vows.len() > 0 {
+                    let skip_reason: String = non_modelable_reason(func, ir_mod, const_fn_indices_c);
+                    if skip_reason.len() > 0 {
+                        let mut ei: i64 = 0;
+                        while ei < e_func_ids.len() {
+                            if e_func_ids[ei] == func.id {
+                                e_statuses[ei] = String::from("skipped");
                             }
+                            ei = ei + 1;
                         }
-                        ei = ei + 1;
+                    } else {
+                        let vr: VerifyResult = verify_function_full(func, ir_mod, max_k_step, use_cache, solver, encoding, timeout_secs, vec_max_c, string_max_c, hashmap_max_c, btreemap_max_c);
+                        let st: i64 = vr.status;
+                        let mut ei: i64 = 0;
+                        while ei < e_func_ids.len() {
+                            if e_func_ids[ei] == func.id {
+                                if st == VERIFY_PROVEN() {
+                                    e_statuses[ei] = String::from("proven");
+                                } else if st == VERIFY_PROVEN_IR() {
+                                    e_statuses[ei] = String::from("proven-ir");
+                                } else if st == VERIFY_FAILED() {
+                                    if vr.vow_id == e_vow_ids[ei] {
+                                        e_statuses[ei] = String::from("failed");
+                                    } else {
+                                        e_statuses[ei] = String::from("unknown");
+                                    }
+                                } else if st == VERIFY_TIMEOUT() {
+                                    e_statuses[ei] = String::from("timeout");
+                                } else if st == VERIFY_UNKNOWN() {
+                                    e_statuses[ei] = String::from("unknown");
+                                } else {
+                                    e_statuses[ei] = String::from("error");
+                                }
+                            }
+                            ei = ei + 1;
+                        }
                     }
                 }
+                fi = fi + 1;
             }
-            fi = fi + 1;
         }
     }
 
@@ -9238,7 +9244,7 @@ fn run_contracts(argv: Vec<String>) -> i32 [io] {
     json.push_str(i64_to_str(n_skipped));
     json.push_str(String::from("}}"));
     print_str(json);
-    0
+    exit_code
 }
 
 fn main() -> i32 [io, read, write] {
