@@ -322,20 +322,23 @@ micro-benchmarking harness.
 2. `vow build --output-type cdylib` — invoke `cc -shared`
 3. Auto-emit `.vow.d` alongside library artifacts
 
-### Phase 2: Project manifest (enables multi-file projects)
+### Phase 2: Manifest + namespace isolation (enables multi-file projects and reusable libraries)
 4. `vow.toml` parser and manifest resolution
 5. Local path dependencies in `[dependencies]`
 6. Default entry points (`src/main.vow`, `src/lib.vow`)
+7. **Namespace isolation in the module system** — a Tier 1 capability, intentionally landed
+   here alongside path dependencies because the moment two packages can be combined into a
+   build, silent symbol collisions become unavoidable. Without this, "library output" from
+   Phase 1 is not actually safe to consume.
 
 ### Phase 3: Developer experience (enables practical workflows)
-7. `vow test` — test discovery, execution, and optional verification
-8. `vow run` — build + execute in one step
-9. `vow fmt` — expose canonical printer
-10. `vow clean` — remove build artifacts and caches
-11. `vow init` — project scaffolding
+8. `vow test` — test discovery, execution, and optional verification
+9. `vow run` — build + execute in one step
+10. `vow fmt` — expose canonical printer
+11. `vow clean` — remove build artifacts and caches
+12. `vow init` — project scaffolding
 
 ### Phase 4: Ecosystem (enables sharing)
-12. Namespace isolation in the module system
 13. `vow install` — install binaries to `~/.vow/bin`
 14. Git-based dependencies
 15. Cross-compilation via `--target`
