@@ -318,6 +318,7 @@ def run_problem(
     verify_outputs: list[str] = []
     total_in = total_out = 0
     final_code = ""
+    vr: VerifyResult | None = None
 
     messages.append({"role": "user", "content": build_initial_prompt(problem.spec_md, problem.skeleton_vow)})
 
@@ -364,11 +365,18 @@ def run_problem(
         if iteration < max_cegis:
             messages.append({"role": "user", "content": build_cegis_prompt(vr.raw_json)})
 
-    # Exhausted iterations
+    # Exhausted iterations — preserve the terminal verifier failure mode
+    # instead of collapsing every outcome into "max_iterations".
     elapsed = time.time() - start
+    verifier_status_map = {
+        "CompileFailed": "compile_failed",
+        "VerifyFailed": "verify_failed",
+        "Timeout": "timeout",
+    }
+    terminal_status = verifier_status_map.get(vr.status, "max_iterations") if vr is not None else "max_iterations"
     return ProblemResult(
         problem.id, problem.euler_number, problem.name, problem.difficulty,
-        problem.answer, "max_iterations", None, None, max_cegis,
+        problem.answer, terminal_status, None, None, max_cegis,
         elapsed, {"input_tokens": total_in, "output_tokens": total_out},
         final_code, raw_responses, verify_outputs,
     )
