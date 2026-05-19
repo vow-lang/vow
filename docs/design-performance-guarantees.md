@@ -315,10 +315,12 @@ WARN: complexity O(n * n) declared but may not be tight
 ### Effectful Functions
 
 ```vow
-fn read_and_process(path: String) -> Vec<i64> [io] vow {
+fn read_and_process(path: String) -> Vec<i64> [read] vow {
     complexity: O(n * log(n)) where n = result.len()
 } { ... }
 ```
+
+(Per `docs/skill/grammar.md`, `fs_read` / `stdin_read` return values via the **`[read]`** effect — not `[io]`, which is for write-style operations like `print_str` and `process_exit`. `result.len()` is only allowed when the function's effect set includes one of the *controllable* read effects the harness can mock.)
 
 - **`result` in `where`:** Allowed only for effectful functions, only when the harness can *control* the producer of that output (e.g. a mocked `[read]` stream of a chosen length). For pure functions, `result.len()` bindings are rejected: the verifier has no way to synthesize inputs whose output has a given size.
 - **Effect mocking:** Vow's effect system tells us *which* effects to mock. For `[read]` functions, the fuzzer provides mock IO returning controlled-size data, and `result.len()` then becomes a proxy for the mock-input length. For `[io]`, mock `print_str` as no-op.
