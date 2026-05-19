@@ -17,10 +17,14 @@ impl CollectingEmitter {
 }
 
 impl DiagnosticEmitter for CollectingEmitter {
-    fn emit(&mut self, diag: &Diagnostic) {
+    fn try_emit(&mut self, diag: &Diagnostic) -> std::io::Result<()> {
         self.diagnostics.push(diag.clone());
+        Ok(())
     }
-    fn finish(&mut self) {}
+
+    fn try_finish(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 fn typecheck_source(src: &str) -> Vec<Diagnostic> {

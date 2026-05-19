@@ -122,9 +122,13 @@ impl FrontendStage {
 struct NullEmitter;
 
 impl DiagnosticEmitter for NullEmitter {
-    fn emit(&mut self, _: &Diagnostic) {}
+    fn try_emit(&mut self, _: &Diagnostic) -> std::io::Result<()> {
+        Ok(())
+    }
 
-    fn finish(&mut self) {}
+    fn try_finish(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 pub(crate) fn prepare_frontend(

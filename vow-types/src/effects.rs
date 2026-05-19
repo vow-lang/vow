@@ -287,10 +287,14 @@ mod tests {
     struct TestEmitter(Vec<Diagnostic>);
 
     impl DiagnosticEmitter for TestEmitter {
-        fn emit(&mut self, d: &Diagnostic) {
+        fn try_emit(&mut self, d: &Diagnostic) -> std::io::Result<()> {
             self.0.push(d.clone());
+            Ok(())
         }
-        fn finish(&mut self) {}
+
+        fn try_finish(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 
     fn dummy_span() -> Span {

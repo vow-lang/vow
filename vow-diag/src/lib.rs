@@ -80,8 +80,18 @@ pub enum ErrorCode {
 }
 
 pub trait DiagnosticEmitter {
-    fn emit(&mut self, diagnostic: &Diagnostic);
-    fn finish(&mut self);
+    fn try_emit(&mut self, diagnostic: &Diagnostic) -> std::io::Result<()>;
+    fn try_finish(&mut self) -> std::io::Result<()>;
+
+    fn emit(&mut self, diagnostic: &Diagnostic) {
+        self.try_emit(diagnostic)
+            .expect("failed to emit diagnostic");
+    }
+
+    fn finish(&mut self) {
+        self.try_finish()
+            .expect("failed to finish diagnostic emission");
+    }
 }
 
 pub struct JsonEmitter {
@@ -99,14 +109,15 @@ impl JsonEmitter {
 }
 
 impl DiagnosticEmitter for JsonEmitter {
-    fn emit(&mut self, diagnostic: &Diagnostic) {
+    fn try_emit(&mut self, diagnostic: &Diagnostic) -> std::io::Result<()> {
         self.diagnostics.push(diagnostic.clone());
+        Ok(())
     }
 
-    fn finish(&mut self) {
+    fn try_finish(&mut self) -> std::io::Result<()> {
         let json = serde_json::to_string_pretty(&self.diagnostics)
             .expect("diagnostics must be serializable");
-        writeln!(self.output, "{}", json).ok();
+        writeln!(self.output, "{}", json)
     }
 }
 
@@ -129,13 +140,14 @@ impl<'a> CollectingEmitter<'a> {
 }
 
 impl DiagnosticEmitter for CollectingEmitter<'_> {
-    fn emit(&mut self, diagnostic: &Diagnostic) {
-        self.inner.emit(diagnostic);
+    fn try_emit(&mut self, diagnostic: &Diagnostic) -> std::io::Result<()> {
+        self.inner.try_emit(diagnostic)?;
         self.collected.push(diagnostic.clone());
+        Ok(())
     }
 
-    fn finish(&mut self) {
-        self.inner.finish();
+    fn try_finish(&mut self) -> std::io::Result<()> {
+        self.inner.try_finish()
     }
 }
 
@@ -150,7 +162,7 @@ impl HumanEmitter {
 }
 
 impl DiagnosticEmitter for HumanEmitter {
-    fn emit(&mut self, diagnostic: &Diagnostic) {
+    fn try_emit(&mut self, diagnostic: &Diagnostic) -> std::io::Result<()> {
         let severity = match diagnostic.severity {
             Severity::Error => "error",
             Severity::Warning => "warning",
@@ -164,22 +176,25 @@ impl DiagnosticEmitter for HumanEmitter {
             diagnostic.message,
             diagnostic.primary.file,
             diagnostic.primary.byte_offset,
-        )
-        .ok();
+        )?;
         if diagnostic.blame != Blame::None {
-            writeln!(self.output, "  blame: {:?}", diagnostic.blame).ok();
+            writeln!(self.output, "  blame: {:?}", diagnostic.blame)?;
         }
         for hint in &diagnostic.hints {
-            writeln!(self.output, "  hint: {hint}").ok();
+            writeln!(self.output, "  hint: {hint}")?;
         }
+        Ok(())
     }
 
-    fn finish(&mut self) {}
+    fn try_finish(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
     use std::sync::{Arc, Mutex};
 
     struct SharedBuf(Arc<Mutex<Vec<u8>>>);
@@ -188,6 +203,18 @@ mod tests {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
             self.0.lock().unwrap().write(buf)
         }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct FailingWrite;
+
+    impl std::io::Write for FailingWrite {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"))
+        }
+
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
@@ -233,6 +260,21 @@ mod tests {
         let output = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
         assert!(output.contains("error"));
         assert!(output.contains("precondition violated"));
+    }
+
+    #[test]
+    fn json_emitter_finish_reports_writer_failure() {
+        let mut emitter = JsonEmitter::new(Box::new(FailingWrite));
+        emitter.emit(&make_diagnostic());
+        let err = emitter.try_finish().unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn human_emitter_emit_reports_writer_failure() {
+        let mut emitter = HumanEmitter::new(Box::new(FailingWrite));
+        let err = emitter.try_emit(&make_diagnostic()).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
     }
 
     #[test]
