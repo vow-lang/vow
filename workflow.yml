@@ -6,8 +6,6 @@ workflow:
     build_pr:
       template: builtin:plan-tdd-pr
       with:
-        planner: claude
-        implementer: claude
         plan_prompt: prompts/plan.md
         impl_prompt: prompts/impl.md
       exits:
