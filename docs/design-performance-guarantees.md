@@ -165,18 +165,22 @@ The `where` clause in `complexity` binds **size parameters** to expressions over
 2. **How to measure size** (the expression, e.g., `.len()`)
 
 ```vow
-// Single size parameter
+// Single size parameter (Phase 1+)
 complexity: O(n) where n = data.len()
 
-// Multiple size parameters
+// Multiple size parameters (Phase 3+, see Roadmap)
 complexity: O(n * m) where n = rows.len(), m = cols.len()
 
-// Size is the argument itself (for integer inputs)
+// Size is the argument itself (for integer inputs, Phase 1+)
 complexity: O(n) where n = x
 
-// Size is output-dependent (for impure functions)
+// Size is output-dependent (Phase 5 only — see "Effectful Functions")
 complexity: O(n * log(n)) where n = result.len()
 ```
+
+**Input-driven vs. output-driven sizes.** The verifier's input generator works only when it can *control* the size parameter — i.e. the binding's right-hand side is an input expression like `v.len()` or `x` that the generator can synthesize at a target size. Bindings like `n = result.len()` cannot guide input generation: the harness would have to solve "find inputs that produce an output of size n" for the function under test, which is not generally tractable.
+
+For pure functions, output-dependent size bindings are **rejected at type-check** in the MVP — declare the bound in terms of inputs instead. For effectful functions where the output's size really is controlled externally (e.g. `[read]` over a mocked stream of length `n`), see the dedicated Phase 5 treatment in "Effectful Functions" below.
 
 ### Optional modifier: `amortized`
 
@@ -270,10 +274,11 @@ fn read_and_process(path: String) -> Vec<i64> [io] vow {
 } { ... }
 ```
 
-- **`result` in `where`:** For IO functions, input size may depend on external data. Allowing `result.len()` as the size metric works when output size correlates with computational cost.
-- **Effect mocking:** Vow's effect system tells us *which* effects to mock. For `[read]` functions, the fuzzer provides mock IO returning controlled-size data. For `[io]`, mock `print_str` as no-op.
-- **Limitation:** If complexity depends on external state that can't be controlled, the clause can't be verified. The compiler warns rather than errors.
+- **`result` in `where`:** Allowed only for effectful functions, only when the harness can *control* the producer of that output (e.g. a mocked `[read]` stream of a chosen length). For pure functions, `result.len()` bindings are rejected: the verifier has no way to synthesize inputs whose output has a given size.
+- **Effect mocking:** Vow's effect system tells us *which* effects to mock. For `[read]` functions, the fuzzer provides mock IO returning controlled-size data, and `result.len()` then becomes a proxy for the mock-input length. For `[io]`, mock `print_str` as no-op.
+- **Limitation:** If complexity depends on external state that can't be controlled by mocking, the clause is **unverifiable** — the compiler warns (does not error) and the verdict is `UNVERIFIED` rather than `PASS`/`FAIL`.
 - **Pragmatic:** Most functions where complexity matters are pure. Effectful entry points rarely need complexity annotations.
+- **Scheduling:** `result` in `where` lands in Phase 5 alongside effect mocking; earlier phases reject it.
 
 ### Multiple Size Parameters
 
