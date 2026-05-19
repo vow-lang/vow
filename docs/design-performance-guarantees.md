@@ -152,9 +152,9 @@ Supported forms:
 | Form | Doubling Ratio | Notes |
 |------|---------------|-------|
 | `O(1)` | 1.0 | Constant |
-| `O(log(n))` | log(2n)/log(n) (~1.07–1.25 over n=16..65536) | Logarithmic |
+| `O(log(n))` | log(2n)/log(n) (~1.06–1.25 over n=16..65536) | Logarithmic |
 | `O(n)` | 2.0 | Linear |
-| `O(n * log(n))` | 2·log(2n)/log(n) (~2.06–2.50 over n=16..65536) | Linearithmic; **n-dependent** ratio |
+| `O(n * log(n))` | 2·log(2n)/log(n) (~2.125–2.50 over n=16..65536) | Linearithmic; **n-dependent** ratio |
 | `O(n * n)` | 4.0 | Quadratic |
 | `O(n * n * n)` | 8.0 | Cubic |
 
@@ -250,13 +250,13 @@ Two complementary tests:
   | Class | r_class(n) | Notes |
   |---|---|---|
   | `O(1)` | 1.0 | Independent of n. |
-  | `O(log n)` | log(2n)/log(n) | Ranges from ~1.25 at n=16 down to ~1.07 at n=1024. |
+  | `O(log n)` | log(2n)/log(n) | ~1.25 at n=16, ~1.10 at n=1024, ~1.06 at n=65536. |
   | `O(n)` | 2.0 | Independent of n. |
-  | `O(n log n)` | 2·log(2n)/log(n) | ~2.50 at n=16, ~2.22 at n=1024, ~2.06 at n=65536. |
+  | `O(n log n)` | 2·log(2n)/log(n) | ~2.50 at n=16, ~2.20 at n=1024, ~2.125 at n=65536. |
   | `O(n²)` | 4.0 | Independent of n. |
   | `O(n³)` | 8.0 | Independent of n. |
 
-- **Tolerance** is class-specific too: ±15% relative to r_class(n) for power classes, and a narrower band (±10%) where adjacent classes overlap — notably between `O(n)` and `O(n log n)`. The flat "±20% around 2.0" rule is *not* sufficient: at n=1024 the expected ratio for `O(n log n)` is ~2.22, which sits inside `[1.6, 2.4]` for `O(n)`. Either of (a) using r_class(n), or (b) excluding the smallest two sizes and relying on least-squares as the tiebreaker, must be used to discriminate adjacent classes.
+- **Tolerance** is class-specific too: ±15% relative to r_class(n) for power classes, and a narrower band (±10%) where adjacent classes overlap — notably between `O(n)` and `O(n log n)`. The flat "±20% around 2.0" rule is *not* sufficient: at n=1024 the expected ratio for `O(n log n)` is exactly 2.20, which sits inside `[1.6, 2.4]` for `O(n)`. Either of (a) using r_class(n), or (b) excluding the smallest two sizes and relying on least-squares as the tiebreaker, must be used to discriminate adjacent classes.
 - **Small-n exclusion.** The first one or two sizes in the progression are typically excluded from the strict pass criterion — at n=16 the `O(n log n)` ratio is 2.5, which a flat ±20% window around 2.0 would reject. The harness still records those points (the example JSON includes them) but flags them as "warmup" rather than failing on them.
 - The doubling-ratio test alone **cannot** reliably separate `O(n)` from `O(n log n)`. When the observed ratios fall in the overlap zone, the verdict falls back to least-squares curve fitting (below) as the tiebreaker; if curve fitting is also ambiguous, the harness reports `AMBIGUOUS` rather than `PASS` or `FAIL`.
 
