@@ -187,12 +187,16 @@ For pure functions, output-dependent size bindings are **rejected at type-check*
 ### Optional modifier: `amortized`
 
 ```vow
-fn push_all(v: Vec<i64>, items: Vec<i64>) -> Vec<i64> vow {
-    complexity: O(n) amortized where n = items.len()
-} { ... }
+// Method on a data structure — n binds the OPERATION COUNT,
+// not the per-call input size (see Verification strategy below).
+impl Vec<i64> {
+    fn push(&mut self, x: i64) vow {
+        complexity: O(n) amortized where n = k_ops    // total cost over n pushes is O(n)
+    } { ... }
+}
 ```
 
-The `amortized` keyword tells the fuzzer to measure *total cost over sequences of operations* rather than single-call worst case. Critical for data structures with amortized bounds (e.g., dynamic arrays, splay trees).
+The `amortized` keyword tells the fuzzer to measure *total cost over sequences of operations* rather than single-call worst case. Critical for data structures with amortized bounds (e.g., dynamic arrays, splay trees). The `where` binding refers to the **operation count**, not a per-call input size — even when the function takes a `Vec`, `String`, etc. as input.
 
 **Verification strategy.** Single-call measurement is the wrong primitive for amortized bounds (a Vec push can be O(n) once but average O(1)). The harness instead:
 
