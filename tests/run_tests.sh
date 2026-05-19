@@ -356,8 +356,19 @@ else
     contracts_exit=$?
     set -e
     after_count="$(count_verify_scratch_dirs "$scratch_tmp")"
+    contracts_proven="$(python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except Exception:
+    print('parse_error'); sys.exit(0)
+ss = [e.get('status', '') for e in d.get('contracts', [])]
+print('ok' if any(s in ('proven', 'proven-ir') for s in ss) else 'no_proven')
+" <<< "$contracts_json")"
     if [[ "$contracts_exit" -ne 0 ]]; then
       fail "$name" "exit $contracts_exit"
+    elif [[ "$contracts_proven" != "ok" ]]; then
+      fail "$name" "no proven contracts (got $contracts_proven)"
     elif [[ "$after_count" != "$before_count" ]]; then
       fail "$name" "scratch dirs grew from $before_count to $after_count"
     else
