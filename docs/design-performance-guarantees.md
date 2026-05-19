@@ -257,13 +257,15 @@ Two complementary tests:
 - The doubling-ratio test alone **cannot** reliably separate `O(n)` from `O(n log n)`. When the observed ratios fall in the overlap zone, the verdict falls back to least-squares curve fitting (below) as the tiebreaker; if curve fitting is also ambiguous, the harness reports `AMBIGUOUS` rather than `PASS` or `FAIL`.
 
 **Least-squares curve fitting** (secondary):
-- Fit data to each candidate complexity class via least-squares
-- Compute R^2 for each candidate
-- The declared class must have R^2 > 0.90
-- Additionally verify no *simpler* class fits equally well (prevents declaring O(n^2) for an O(n) function)
+- Fit data to each candidate complexity class via least-squares.
+- Compute R² for each candidate.
+- **The verdict is `PASS` iff the declared class has R² ≥ 0.90.** Whether a strictly *simpler* class also fits the data does **not** turn a `PASS` into a `FAIL` — see "Tightness check" below.
+- Use the per-candidate R² values to choose the verdict in the overlap zone identified by the doubling-ratio test (above): if the declared class is the best fit (highest R²) by a clear margin, `PASS`; if a *different* class fits strictly better, `FAIL` with a suggestion.
 
-**Tightness check:**
-- If declared O(n^2) but data fits O(n), emit a *warning* (not error): "complexity bound may not be tight — observed O(n), declared O(n^2)." This is technically correct (O(n) is O(n^2)) but unhelpful. Agents should declare tight bounds.
+**Tightness check (WARN-only):**
+- A bound is *non-tight* when the declared class is mathematically correct but a strictly simpler class also fits with R² ≥ 0.95. Non-tight bounds emit a **warning**, never an error: `O(n²)` is a valid upper bound for an `O(n)` function, just an unhelpfully loose one.
+- Example: "complexity bound may not be tight — observed O(n) with R²=0.99, declared O(n²). Consider tightening the declaration."
+- Tightness warnings do not block compilation or fail CI. Agents should still treat them as actionable: a too-loose bound undermines the value of the contract.
 
 ### Step 4: Adversarial Input Search
 
