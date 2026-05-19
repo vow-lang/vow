@@ -143,7 +143,11 @@ fundamental redesign:
   full `DependencyManifest` (FNV-1a hashes of every transitive dependency
   source) plus mode and trace settings, so a single-file edit only invalidates
   the cache for translation units that actually depend on it. `VerifyCache`
-  stores results keyed by C source content.
+  persists *failure* results only, keyed by FNV-1a of the C source content
+  plus the ESBMC parameters (`max_k_step`, `solver`, `encoding`); successful
+  proofs are intentionally never written to disk, so a forged or tampered
+  on-disk entry cannot bypass verification. Any incremental-recompilation
+  design must preserve this property.
 - **Source location tracking.** Every IR instruction carries `origin: Span`.
   Every function has `local_names` mapping instruction IDs to variable names.
 - **Effect system.** Functions declare effects (`io`, `read`, `write`, `panic`,
@@ -247,8 +251,17 @@ The pipeline:
 2. Verify the new function's contracts via ESBMC.
 3. Verify ABI compatibility: same parameter types, same return type, compatible
    effects (new version may have fewer effects, not more).
-4. Compile the new function to a shared object.
-5. Atomically swap the function pointer in a global dispatch table.
+4. Verify *contract* compatibility against the deployed version: `requires`
+   must not be strengthened (existing callers that satisfied the old
+   precondition must still satisfy the new one) and `ensures` must not be
+   weakened (existing callers that relied on the old postcondition must still
+   get at least that guarantee). Contract-incompatible patches are rejected
+   here; pushing them through would invalidate already-verified callers
+   without re-running their proofs. The only escape valve is to re-verify
+   every caller against the new contract before the swap, which is a separate,
+   heavier code path.
+5. Compile the new function to a shared object.
+6. Atomically swap the function pointer in a global dispatch table.
 
 Functions opt into patchability:
 
