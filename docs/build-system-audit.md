@@ -158,7 +158,12 @@ codegen (mangled names).
   because it stays inside C-identifier rules and so requires no escaping in the linker.
 - Type checker tracks which module each item belongs to
 
-**Complexity:** High. Touches most compiler passes.
+**Complexity:** High. Touches most compiler passes. Per the CLAUDE.md dual-compiler sync
+rule, this work must land simultaneously in the Rust stage-0 compiler **and** the
+self-hosted `compiler/*.vow` modules — at minimum `checker.vow`, `ir.vow`, `lower.vow`, and
+`clif.vow` — within the same change set. The binary-fixed-point invariant means a partial
+implementation would either fail to bootstrap or produce non-reproducible binaries; the
+upfront cost of the dual-edit is non-negotiable for this feature.
 
 ### Tier 2: Required for ecosystem / multi-project use
 
