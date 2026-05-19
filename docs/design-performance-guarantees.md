@@ -73,8 +73,8 @@ The `complexity` clause is a *vow* — a promise the function makes about its pe
 The right-hand side of `complexity:` is meta-syntax — a fixed set of complexity descriptors, not a Vow expression. The parser must treat the whole clause specially:
 
 - `O(...)` is **not** a function call. `O`, `log`, and the inside of `O(...)` are reserved forms only inside the `complexity:` clause. `log(n)` does not type-check as a Vow expression (Vow is integer-typed; `log` has no Vow signature) and is never evaluated at run time.
-- `where` is a **contextual keyword** scoped to the `complexity:` clause. It is not added to the general grammar and does not collide with identifier `where` elsewhere.
-- `n`, `m`, ... in the `where` clause are **descriptor-local bindings**, not bindings in the function's scope. The right-hand sides (`v.len()`, `x`, `result.len()`, ...) *are* Vow expressions and must type-check against the function's signature.
+- `where` is **already** a keyword in Vow — it appears in parameter-type refinement positions (e.g. `fn safe_sub(a: i64 where a >= 0, b: i64 where b >= 0)`, see `docs/skill/grammar.md`). The `complexity:` clause reuses the same token in a syntactically distinct position (after an `O(...)` form in the `complexity:` clause RHS), so the parser disambiguates by position rather than by adding a new keyword. No grammar collision.
+- `n`, `m`, ... in the complexity-clause `where` are **descriptor-local bindings**, distinct from parameter-refinement `where` (which constrains an already-bound parameter). The right-hand sides of the complexity-clause `where` (`v.len()`, `x`, `result.len()`, ...) *are* Vow expressions over the function's parameters and must type-check against the function's signature.
 
 The whole clause parses into a structured AST node:
 
