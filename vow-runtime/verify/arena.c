@@ -43,7 +43,7 @@ struct VowArena {
 #define CHUNK_LINK_BYTES        16
 #define CHUNK_TOTAL_OFFSET      8
 #define CHUNK_OVERSIZED_FLAG    ((uintptr_t)1 << 62)
-#define ARENA_VERIFY_ADDR_CAP   ((uintptr_t)1 << 62)
+#define ARENA_VERIFY_ADDR_CAP   CHUNK_OVERSIZED_FLAG
 #define CHUNK_PAYLOAD           4096
 #define OVERSIZED_THRESHOLD     2048
 
