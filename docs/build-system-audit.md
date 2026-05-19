@@ -55,6 +55,17 @@ to invoke `ar rcs` to create a `.a` archive from compiled object files.
 - For `cdylib`: invoke `cc -shared -o <output>.so <objects...> <runtime>`
 - Emit a companion `.vow.d` declaration file alongside the library
 
+**Runtime linking policy.** Executable builds today statically link `libvow_runtime.a`
+and pull in `-lpthread -ldl -lm` (`vow-codegen/src/linker.rs`). For `staticlib` output the
+audit recommends producing **thin** archives: the `.a` contains only Vow-compiled object
+files, and consumers are expected to link `libvow_runtime.a` plus its system dependencies
+themselves. The companion `.vow.d` file documents the required link line. Producing "fat"
+archives (using `ar` to merge `libvow_runtime.a` into the output) is rejected because it
+would silently embed a particular runtime build into every library and break runtime
+upgrades and cross-language LTO. `cdylib` output is the opposite — the shared object is
+self-contained and links the runtime directly via `cc -shared`, because dynamic loading
+consumers cannot be expected to provide it.
+
 **Complexity:** Low. The object files are already produced by Cranelift; only the final
 linking step changes.
 
