@@ -76,7 +76,10 @@ static void* alloc_chunk(uintptr_t total, int oversized) {
          * top of the address space. */
         __ESBMC_assume(total <= ARENA_VERIFY_ADDR_CAP);
         __ESBMC_assume(base_addr <= ARENA_VERIFY_ADDR_CAP - total);
-        assert(base_addr <= ARENA_VERIFY_ADDR_CAP - total);
+        /* Regression assert in derived form: implied by the two assumes above
+         * but as a distinct expression, so ESBMC actually exercises it. A
+         * tautological repeat of the assume would be a verification no-op. */
+        assert(base_addr + total <= ARENA_VERIFY_ADDR_CAP);
         *(void**)base = NULL;  /* next-chunk link */
         uintptr_t word = total | (oversized ? CHUNK_OVERSIZED_FLAG : 0);
         *(uintptr_t*)((char*)base + CHUNK_TOTAL_OFFSET) = word;
