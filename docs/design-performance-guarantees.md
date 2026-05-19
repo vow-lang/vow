@@ -187,26 +187,27 @@ For pure functions, output-dependent size bindings are **rejected at type-check*
 ### Optional modifier: `amortized`
 
 ```vow
-// Method on a data structure — n binds the OPERATION COUNT,
-// not the per-call input size (see Verification strategy below).
-impl Vec<i64> {
-    fn push(&mut self, x: i64) vow {
-        complexity: O(n) amortized where n = k_ops    // total cost over n pushes is O(n)
-    } { ... }
-}
+// Free function over a linear Vec (Vow's mutation model).
+// For amortized clauses, the `where` binding RHS is the reserved identifier
+// `ops` — the harness-provided sequence length — NOT a function-argument expression.
+fn push(v: Vec<i64>, x: i64) -> Vec<i64> vow {
+    complexity: O(n) amortized where n = ops    // total cost over n pushes is O(n)
+} { ... }
 ```
 
-The `amortized` keyword tells the fuzzer to measure *total cost over sequences of operations* rather than single-call worst case. Critical for data structures with amortized bounds (e.g., dynamic arrays, splay trees). The `where` binding refers to the **operation count**, not a per-call input size — even when the function takes a `Vec`, `String`, etc. as input.
+The `amortized` keyword tells the fuzzer to measure *total cost over sequences of operations* rather than single-call worst case. Critical for data structures with amortized bounds (e.g., dynamic arrays, splay trees).
+
+**Special binding form for `amortized`.** Unlike non-amortized `complexity:` clauses (where the `where` RHS is an expression over the function's parameters), an `amortized` clause uses a single reserved identifier on the RHS: **`ops`**, the harness-provided count of operations in the test sequence. The harness owns this value because it owns the sequence construction; no function argument can express it. Implementers parse this as a fixed `Amortized { count_var: Name }` shape in the AST, not as a Vow expression.
 
 **Verification strategy.** Single-call measurement is the wrong primitive for amortized bounds (a Vec push can be O(n) once but average O(1)). The harness instead:
 
-1. **Constructs a sequence** of `k` calls to the annotated function (or to its containing struct's methods, for amortized data-structure bounds). The sequence length `k` is the size parameter — the `where` clause binds `n` (or any chosen name) to a *count of operations* rather than a per-call input size.
+1. **Constructs a sequence** of `k` calls to the annotated function. The sequence length `k` is exposed to the contract through the reserved binding RHS `ops` described above.
 
    ```vow
-   complexity: O(n) amortized where n = k_ops    // total cost over n operations is O(n)
+   complexity: O(n) amortized where n = ops    // total cost over n operations is O(n)
    ```
 
-   With this surface form, the declared class describes **total cost** as a function of the operation count, *not* per-call cost. A valid O(1)-per-op amortized data structure (e.g. `Vec::push`) satisfies the example above because total cost over n pushes is O(n); per-op cost is then derivable as O(1).
+   With this surface form, the declared class describes **total cost** as a function of the operation count, *not* per-call cost. A valid O(1)-per-op amortized routine (e.g. amortized vector push) satisfies the example above because total cost over `n` pushes is O(n); per-op cost is then derivable as O(1).
 
 2. **Measures total cost** across the whole sequence (sum of operation counts in instrumented mode, sum of wall-clock times in fallback mode).
 
