@@ -149,7 +149,13 @@ codegen (mangled names).
 **Implementation sketch:**
 - Prefix all non-`pub` items with their module name during merge
 - For `pub` items, require explicit `use Module.item` to reference them
-- Mangle function names in IR/codegen: `Module__function_name`
+- Mangle function names with a **collision-free** scheme. A naive `Module__function_name`
+  delimiter is ambiguous because identifiers may contain underscores
+  (`vow-syntax/src/lexer.rs`), so e.g. module `a` with function `b_c` and module `a_b` with
+  function `c` would both mangle to `a__b_c`. Use length-prefixed segments
+  (`_V2a2bc` for `a::bc`, `_V3a_b1c` for `a_b::c`) or a reserved character sequence that is
+  not part of the identifier alphabet (`a$bc` vs `a_b$c`). Length-prefixing is preferred
+  because it stays inside C-identifier rules and so requires no escaping in the linker.
 - Type checker tracks which module each item belongs to
 
 **Complexity:** High. Touches most compiler passes.
