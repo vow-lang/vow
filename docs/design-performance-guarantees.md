@@ -282,12 +282,13 @@ This catches pathological cases like quicksort (O(n log n) average, O(n^2) worst
 
 ```
 PASS: complexity O(n * log(n)) confirmed
-      Random inputs:  R^2 = 0.98, ratio = 2.12 (expected ~2.0)
-      Worst-case:     R^2 = 0.96, ratio = 2.18 (expected ~2.0)
+      Random inputs:  R^2 = 0.98, observed ratios in [2.12, 2.22]
+                      (expected r_class(n) range over the size grid: [2.06, 2.50])
+      Worst-case:     R^2 = 0.96, observed ratios in [2.18, 2.31]
 
 FAIL: complexity O(n) declared but observed O(n * n)
-      Random inputs:  ratio = 3.87 (expected 2.0, observed ~4.0)
-      Worst-case:     ratio = 4.02 (expected 2.0, observed ~4.0)
+      Random inputs:  ratios ≈ 3.87 (expected 2.0 for O(n), observed ~4.0 for O(n^2))
+      Worst-case:     ratios ≈ 4.02
       Suggestion: actual complexity appears to be O(n * n)
 
 WARN: complexity O(n * n) declared but may not be tight
