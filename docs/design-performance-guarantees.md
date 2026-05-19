@@ -283,7 +283,15 @@ fn matrix_mul(a: Vec<Vec<i64>>, b: Vec<Vec<i64>>) -> Vec<Vec<i64>> vow {
 } { ... }
 ```
 
-The fuzzer varies n and m independently across a grid of sizes. Multivariate least-squares regression fits the data to the declared form. Well-studied statistically.
+**Doubling-ratio test is single-variable only.** The doubling-ratio analysis described in Step 3 above is defined for a single varying size. For multi-variable complexity, the harness instead:
+
+1. Sweeps a 2-D (or k-D) grid of sizes — typically a small geometric grid like `n ∈ {16, 64, 256, 1024}` × `m ∈ {16, 64, 256, 1024}`.
+2. For each axis in turn, holds the others fixed and computes per-axis doubling ratios. The declared exponent on each variable must be consistent with each axis's per-axis ratios.
+3. Fits the full data with **multivariate least-squares regression** against the declared product form (e.g. `T(n, m) = c · n^2 · m`). Reports per-axis R² and a combined goodness-of-fit.
+
+**Statistical caveats.** Multivariate regression has weaker statistical power than the single-variable case — both because each axis carries fewer points and because cross-axis interactions can mask the true exponents. The grid is also expensive to fuzz (cost is the product of axis sizes, not the sum), so the harness defaults to a coarser grid than the single-variable progression and offers `--mv-grid` to override.
+
+**Scheduling.** Multi-variable support is **Phase 3** work, not Phase 2 — Phase 2 introduces curve fitting only for single-variable forms. See the Implementation Roadmap below.
 
 ### Non-Collection Arguments
 
@@ -375,13 +383,14 @@ Performance testing is **opt-in** (`--perf` flag or `perf` subcommand). It does 
 - `vowc perf` subcommand
 - Random inputs only (no adversarial search)
 
-### Phase 2: Extended complexity classes + multi-parameter
+### Phase 2: Extended complexity classes (single-variable)
 - Add `O(log(n))`, `O(n * log(n))`
-- Support multiple size parameters (`where n = ..., m = ...`)
 - Least-squares curve fitting + R^2 reporting
 - Tightness warnings
+- Single-variable only — multi-parameter forms (`where n = ..., m = ...`) deferred to Phase 3
 
-### Phase 3: Adversarial input search
+### Phase 3: Multi-variable + adversarial input search
+- Multi-parameter support (`where n = ..., m = ...`) via grid sweep + multivariate regression
 - Evolutionary mutation to maximize operation counts
 - Both random and worst-case verification
 - Shrinking to find minimal adversarial inputs
