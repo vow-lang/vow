@@ -139,8 +139,11 @@ fundamental redesign:
   Individual functions can be re-verified without recompiling the entire program.
 - **Parallel codegen + verify.** The CLI driver already spawns verification in a
   background thread while codegen proceeds.
-- **Compilation caching.** `CompileCache` stores object files keyed by source +
-  mode + trace. `VerifyCache` stores results keyed by C source content.
+- **Compilation caching.** `CompileCache` stores object files keyed by the
+  full `DependencyManifest` (FNV-1a hashes of every transitive dependency
+  source) plus mode and trace settings, so a single-file edit only invalidates
+  the cache for translation units that actually depend on it. `VerifyCache`
+  stores results keyed by C source content.
 - **Source location tracking.** Every IR instruction carries `origin: Span`.
   Every function has `local_names` mapping instruction IDs to variable names.
 - **Effect system.** Functions declare effects (`io`, `read`, `write`, `panic`,
@@ -195,19 +198,27 @@ Each restart is a pure expression producing the function's return type. The
 `handle` block at the call site selects which restart to invoke when the
 precondition fails.
 
-**Desugaring:** A nullary restart (`use_default: 0`) is a branch in the
-existing vow-check IR. Today, a `VowRequires` instruction branches to a
-violation block (which calls `__vow_violation` and exits) or a continuation
-block. With nullary restarts, the violation block branches to the restart
-expression instead — no new IR opcodes are needed.
+**Desugaring:** With a *single* nullary restart (`use_default: 0`) per
+`requires` clause, lowering is purely a branch retarget. Today, a `VowRequires`
+instruction branches to a violation block (which calls `__vow_violation` and
+exits) or a continuation block. With one nullary restart, the violation block
+branches to the restart expression instead — no new IR opcodes are needed.
 
-Parameterized restarts (`restart use_value(v: i64): v`) are harder: the value
-`v` supplied at the `handle` site must flow into the callee's failure branch.
-That is a continuation-passing edge, not a simple retarget. It needs either a
-new IR construct for caller-supplied restart arguments or a calling-convention
-extension that threads restart arguments alongside the precondition check.
-Either way, this is more than a branch-target tweak and should be sized
-accordingly.
+With *multiple* nullary restarts (the running example declares both
+`use_default` and `use_value` for the same `requires: y != 0`), the callee
+must know which restart the caller selected at the `handle` site. That
+selection has to be communicated at runtime — a thread-local slot, an implicit
+ABI parameter, or a per-call dispatch index — even when each restart's value
+is a fixed literal. So even the nullary case grows a small selection
+mechanism once more than one restart is declared.
+
+Parameterized restarts (`restart use_value(v: i64): v`) are harder still: the
+value `v` supplied at the `handle` site must flow into the callee's failure
+branch. That is a continuation-passing edge, not a simple retarget. It needs
+either a new IR construct for caller-supplied restart arguments or a
+calling-convention extension that threads restart arguments alongside the
+precondition check. Either way, this is more than a branch-target tweak and
+should be sized accordingly.
 
 **Verification:** Each restart expression is a separate ESBMC verification
 target. The verifier proves that the restart's return value satisfies the
