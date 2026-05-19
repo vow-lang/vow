@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Vera SKILL.md — analysis &amp; lessons for Vow</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root {
+    --bg: #faf8f4;
+    --fg: #1b1b1b;
+    --muted: #5a5a5a;
+    --line: #d8d4ca;
+    --accent: #8b3a2f;     /* deep red — Vera */
+    --accent2: #1e5a8a;    /* deep blue — Vow */
+    --code-bg: #f0ece3;
+    --bad: #b3261e;
+    --ok: #185c3b;
+    --warn: #8a6d3b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0;
+    background: var(--bg); color: var(--fg);
+    font: 15px/1.55 ui-sans-serif, system-ui, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  }
+  main { max-width: 980px; margin: 0 auto; padding: 48px 28px 96px; }
+  header { border-bottom: 1px solid var(--line); padding-bottom: 18px; margin-bottom: 26px; }
+  h1 { font-size: 30px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 22px; margin: 40px 0 12px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 17px; margin: 26px 0 8px; }
+  .lede { color: var(--muted); font-size: 15px; }
+  .meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  code, pre, kbd { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; font-size: 0.92em; }
+  pre {
+    background: var(--code-bg); padding: 12px 14px; border-radius: 5px;
+    overflow-x: auto; font-size: 13px; line-height: 1.5;
+    border-left: 3px solid var(--line);
+  }
+  pre code { background: none; padding: 0; }
+  a { color: var(--accent2); }
+  a:hover { text-decoration: underline; }
+
+  table { border-collapse: collapse; width: 100%; margin: 10px 0 16px; font-size: 14px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); font-weight: 600; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  .pill {
+    display: inline-block; font-size: 11px; padding: 2px 7px; border-radius: 10px;
+    background: var(--code-bg); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .pill.bad { background: #f7e2e0; color: var(--bad); }
+  .pill.ok  { background: #e1f0e7; color: var(--ok); }
+  .pill.warn{ background: #f5ecd2; color: var(--warn); }
+
+  .vera { color: var(--accent); font-weight: 600; }
+  .vow  { color: var(--accent2); font-weight: 600; }
+
+  .callout {
+    background: #fff; border-left: 3px solid var(--accent2);
+    padding: 12px 16px; margin: 16px 0; border-radius: 0 4px 4px 0;
+  }
+  .callout.warn { border-color: var(--warn); background: #fdf8ea; }
+  .callout.bad  { border-color: var(--bad);  background: #fbeceb; }
+
+  .bar {
+    height: 10px; background: var(--code-bg); border-radius: 5px; overflow: hidden;
+    display: inline-block; width: 220px; vertical-align: middle; margin-right: 8px;
+  }
+  .bar > span { display: block; height: 100%; background: var(--accent); }
+  .bar.vow > span { background: var(--accent2); }
+
+  ul, ol { padding-left: 22px; }
+  li { margin: 4px 0; }
+  .footnote { font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); margin-top: 40px; padding-top: 14px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+
+  details { margin: 8px 0; }
+  summary { cursor: pointer; color: var(--accent2); }
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <h1>Vera <code>SKILL.md</code> — analysis &amp; lessons for Vow</h1>
+  <p class="lede">A structural look at the skill document <a href="https://veralang.dev/SKILL.md">veralang.dev/SKILL.md</a> ships, with a side-by-side comparison to how Vow ships its own Claude Code skill.</p>
+  <p class="meta">Vera <code>SKILL.md</code> snapshot fetched 2026-05-18 · Vow entrypoint + bundle built from <code>scripts/generate_help.py</code> at <code>vow/compareVera</code>.</p>
+</header>
+
+<h2>TL;DR</h2>
+<ul>
+  <li>Vera ships a <strong>single 99 KB / ~25 K-token</strong> <code>SKILL.md</code>. That is roughly <strong>5×</strong> the rough ceiling Anthropic suggests for a SKILL.md.</li>
+  <li>Two sections — <code>## Built-in Functions</code> (32 KB) and <code>## Effects</code> (13 KB) — make up <strong>~45 %</strong> of the file. They are reference material that would normally live behind a link.</li>
+  <li>Vow already does the thing Vera should do: a <strong>1.7 KB / 48-line</strong> entrypoint <code>SKILL.md</code> with reference links plus a separate <strong>~30 K-token bundle</strong> for raw-API contexts.</li>
+  <li>The right takeaway from Vera is not "shrink the skill". It is <strong>(a)</strong> Vera proves the stdlib-as-skill-content idea has a non-zero cost we should name, and <strong>(b)</strong> there are a handful of <em>content</em> ideas worth borrowing (Inference effect, tiered verification, fix-example-per-error-code) — independent of the skill packaging.</li>
+</ul>
+
+<h2>1. Size, at a glance</h2>
+
+<table>
+  <thead>
+    <tr><th>Artifact</th><th class="num">Bytes</th><th class="num">Lines</th><th class="num">~Tokens</th><th>Always-loaded?</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><span class="vera">Vera</span> <code>SKILL.md</code> (single)</td>
+      <td class="num">99,631</td><td class="num">2,327</td><td class="num">~24,900</td>
+      <td><span class="pill bad">Yes — monolith</span></td>
+    </tr>
+    <tr>
+      <td><span class="vow">Vow</span> installed <code>SKILL.md</code> (entrypoint)</td>
+      <td class="num">1,680</td><td class="num">48</td><td class="num">~420</td>
+      <td><span class="pill ok">Yes — small</span></td>
+    </tr>
+    <tr>
+      <td><span class="vow">Vow</span> bundle (full spec, opt-in)</td>
+      <td class="num">120,600</td><td class="num">3,168</td><td class="num">~30,150</td>
+      <td><span class="pill">No — printed on demand</span></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Visualised against an informal 5,000-token ceiling for the always-loaded skill body:</p>
+
+<table>
+  <tr>
+    <td><span class="vera">Vera SKILL.md</span></td>
+    <td><span class="bar" title="24,900 tokens"><span style="width:100%"></span></span> ~24,900 tk <span class="pill bad">~5×</span></td>
+  </tr>
+  <tr>
+    <td><span class="vow">Vow entrypoint</span></td>
+    <td><span class="bar vow" title="420 tokens"><span style="width:8.4%"></span></span> ~420 tk <span class="pill ok">well under</span></td>
+  </tr>
+  <tr>
+    <td>Suggested ceiling</td>
+    <td><span class="bar" style="background:#e6e6e6"><span style="width:100%;background:#bdbdbd"></span></span> ~5,000 tk</td>
+  </tr>
+</table>
+
+<div class="callout warn">
+  <strong>What's bloating Vera's <code>SKILL.md</code>:</strong> two sections account for <strong>~45 %</strong> of the file —
+  <code>## Built-in Functions</code> (31 KB, ~7.8 K tokens) and <code>## Effects</code> (13 KB, ~3.2 K tokens). Together they are larger than the entire suggested skill ceiling.
+</div>
+
+<h2>2. Vera <code>SKILL.md</code> — structural breakdown</h2>
+<p class="meta">29 H2 sections, 74 H3 subsections, 131 fenced code blocks (1,082 lines of code, ~46 % of the file), 11 markdown tables.</p>
+
+<h3>Largest H2 sections</h3>
+<table>
+  <thead><tr><th>Section</th><th class="num">Bytes</th><th class="num">~Tokens</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td><code>## Built-in Functions</code></td><td class="num">31,445</td><td class="num">~7,800</td><td>15 H3s: arrays, maps, sets, strings, JSON, HTML, markdown, regex, decimal, numeric, conversions, predicates.</td></tr>
+    <tr><td><code>## Effects</code></td><td class="num">12,667</td><td class="num">~3,200</td><td>11 H3s: 4 per-effect API tables (IO, Http, Inference, Random) plus handler examples.</td></tr>
+    <tr><td><code>## Toolchain</code></td><td class="num">7,362</td><td class="num">~1,800</td><td>Includes a 3.1 KB browser-compilation guide.</td></tr>
+    <tr><td><code>## Closures and captured bindings</code></td><td class="num">5,493</td><td class="num">~1,400</td><td></td></tr>
+    <tr><td><code>## Modules</code></td><td class="num">4,465</td><td class="num">~1,100</td><td></td></tr>
+    <tr><td><code>## Common Mistakes</code></td><td class="num">3,859</td><td class="num">~960</td><td>12 H3 subsections, each restating a rule taught positively elsewhere.</td></tr>
+    <tr><td><code>## Slot References (@T.n)</code></td><td class="num">3,481</td><td class="num">~870</td><td>Vera's signature feature: De Bruijn indices replace names.</td></tr>
+    <tr><td><code>## Types</code></td><td class="num">3,714</td><td class="num">~930</td><td></td></tr>
+    <tr><td><code>## Contracts</code></td><td class="num">2,433</td><td class="num">~610</td><td>requires / ensures / decreases / quantifiers.</td></tr>
+  </tbody>
+</table>
+
+<h3>What is in each chunk</h3>
+<div class="grid2">
+  <div>
+    <h3>Reference material</h3>
+    <ul>
+      <li><strong>Built-in Functions</strong> — ~160 standalone functions documented inline with signatures.</li>
+      <li><strong>Effects</strong> — 4 effect APIs as tables (IO, Http, Inference, Random) plus State / Exception / Async / Diverge.</li>
+      <li><strong>Operators</strong> — full precedence table.</li>
+      <li><strong>Modules</strong> — import syntax + escape table.</li>
+      <li><strong>Specification Reference</strong> — 11-chapter spec index (sits as a footer).</li>
+    </ul>
+  </div>
+  <div>
+    <h3>Teaching material</h3>
+    <ul>
+      <li><strong>Slot References</strong> — De Bruijn `@T.n` mechanics with multiple worked examples.</li>
+      <li><strong>Closures and captured bindings</strong> — capture rules including pair-typed values.</li>
+      <li><strong>Typed Holes</strong> — `?` workflow for incremental development.</li>
+      <li><strong>Common Mistakes</strong> — 12 wrong/right pairs.</li>
+      <li><strong>Complete Program Examples</strong> — five worked end-to-end programs.</li>
+    </ul>
+  </div>
+</div>
+
+<h3>Frontmatter (verbatim)</h3>
+<pre><code>---
+name: vera-language
+description: Write programs in the Vera programming language. Use when asked to write,
+  edit, debug, or review Vera code (.vera files). Vera is a statically typed, purely
+  functional language with algebraic effects, mandatory contracts, and typed slot
+  references (@T.n) instead of variable names.
+---</code></pre>
+<p>One field for triggers, but mixed with feature description (281 chars / ~70 tokens). Vow's equivalent splits triggers into a dedicated <code>when_to_use</code> field.</p>
+
+<h2>3. How Vera diverges from Vow's skill packaging</h2>
+
+<table>
+  <thead><tr><th>Aspect</th><th><span class="vera">Vera</span></th><th><span class="vow">Vow</span></th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Loaded into context by default</td>
+      <td>Full 99 KB document</td>
+      <td>1.7 KB entrypoint that links to spec files</td>
+    </tr>
+    <tr>
+      <td>Progressive disclosure</td>
+      <td>None — single artifact</td>
+      <td>Entrypoint + <code>reference/</code> + <code>examples/</code> + <code>schemas/</code></td>
+    </tr>
+    <tr>
+      <td>Stdlib reference location</td>
+      <td>Inline in <code>SKILL.md</code> (~7.8 K tokens)</td>
+      <td>External (<code>reference/grammar.md</code> builtins section)</td>
+    </tr>
+    <tr>
+      <td>Effect API tables</td>
+      <td>Inline in <code>SKILL.md</code> (~3 K tokens)</td>
+      <td>External (<code>reference/grammar.md</code> effects section)</td>
+    </tr>
+    <tr>
+      <td>Self-contained API bundle</td>
+      <td>Same file</td>
+      <td>Separate <code>build/vowc skill print --bundle</code> output (120 KB / ~30 K tokens)</td>
+    </tr>
+    <tr>
+      <td>Trigger phrase</td>
+      <td>Embedded in description</td>
+      <td>Separate <code>when_to_use</code> field</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>The Vow entrypoint, in full, for scale:</p>
+<pre><code>---
+name: vow-toolchain
+description: Write, compile, debug, and verify Vow programs (.vow files) with
+  contracts, CEGIS, ESBMC counterexamples, diagnostics, and vow build / vow verify.
+when_to_use: Use when the user edits or creates .vow files, says "write a Vow
+  program", "fix this counterexample", "add contracts", "why did verification
+  failed", "ESBMC", "vow build", or "vow verify".
+argument-hint: "[file.vow]"
+---
+
+# Vow Toolchain
+[ workflow, minimal program, reference links ]
+
+## Reference files
+- reference/grammar.md
+- reference/cli.md
+- reference/contracts.md
+- reference/errors.md
+- examples/examples.md
+- schemas/</code></pre>
+
+<div class="callout">
+  <strong>Note on total volume.</strong> Vow's <em>bundle</em> (3,168 lines, ~30 K tokens) is actually <em>larger</em> than Vera's <code>SKILL.md</code>. The win is not "less material" — it is "less material loaded by default". The bundle is opt-in via <code>vowc skill print --bundle</code>.
+</div>
+
+<h2>4. Is Vera's SKILL.md really &ldquo;too large&rdquo;?</h2>
+
+<p>Two angles:</p>
+
+<h3>Angle A — packaging-as-a-Claude-Code-skill</h3>
+<p>Yes. A Claude Code skill is loaded on trigger and consumes context for the remainder of the session. At ~25 K tokens that is a significant slice of any context window before the user has typed anything. Anthropic's own skill examples target much smaller bodies with linked sub-resources. By that bar, Vera's <code>SKILL.md</code> is over by roughly 5×.</p>
+
+<h3>Angle B — packaging-as-a-self-contained-language-reference</h3>
+<p>Less obvious. Vera's design ethos is &ldquo;everything an agent needs in one fetch&rdquo;. The benchmark wins reported in <code>vera-bench</code> may partly rely on the full surface area of the stdlib being in context. Splitting it into linked docs has a real cost if the agent doesn't follow links — and many agents in production don't.</p>
+
+<p>So the more careful claim: Vera is making an explicit bet that <em>fetching the whole surface beats progressive disclosure</em>. That's a defensible bet for a language whose entire pitch is &ldquo;designed for LLMs to write&rdquo;. The skill being &ldquo;too large&rdquo; is true only if you accept the framing that a skill's job is to point at material, not to <em>be</em> the material.</p>
+
+<h2>5. What Vow can learn — concretely</h2>
+
+<p>Two categories: <strong>skill packaging</strong> (where Vow is already ahead) and <strong>content / language design</strong> (where Vera has a few ideas worth borrowing).</p>
+
+<h3>Skill packaging — what we already do right, but should formalize</h3>
+<ul>
+  <li><strong>Entrypoint + linked references is the right shape.</strong> Vera's monolith is the comparison that proves it. Keep doing this.</li>
+  <li><strong>Make the bundle discoverable.</strong> Right now <code>vowc skill print --bundle</code> exists but is undocumented in the entrypoint. Add a one-line "for raw-API use, fetch the bundle" note. Cost: trivial.</li>
+  <li><strong>Audit the bundle for sections that should be lazy.</strong> The bundle is ~30 K tokens. If anyone embeds it in a system prompt (the bench harness does), the same bloat critique applies. Candidates to elide from bundle: full error catalog (336 lines of <code>## Compile-Time Errors</code>), full JSON schemas.</li>
+  <li><strong>Keep <code>when_to_use</code> separate from <code>description</code>.</strong> Vera collapsing them is a packaging regression. Stay split.</li>
+</ul>
+
+<h3>Content / language design — ideas worth stealing</h3>
+<table>
+  <thead><tr><th>Idea</th><th>From</th><th>Worth it?</th><th>Cost</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>Inference as a tracked effect</strong>. Calling an LLM is part of the effect row, so a pure function cannot accidentally call out.</td>
+      <td>Vera <code>&lt;Inference&gt;</code> effect with <code>Inference.complete : String -&gt; Result&lt;String, String&gt;</code></td>
+      <td><span class="pill ok">Yes if Vow grows agent-callable builtins</span></td>
+      <td>Effect kind + runtime shim. No verifier impact.</td>
+    </tr>
+    <tr>
+      <td><strong>Tier-3 runtime fallback</strong>. If an <code>ensures</code> can't discharge statically, emit a runtime assert and label the function "verified-with-runtime-fallback" in build output.</td>
+      <td>Vera's three-tier strategy</td>
+      <td><span class="pill warn">Possibly</span> — could weaken Vow's "verified by default" pitch.</td>
+      <td>Code emission + JSON status enum. Risk: distorts the brand.</td>
+    </tr>
+    <tr>
+      <td><strong>Fix-example per error code</strong>. Each <code>E###</code> ships a wrong/right snippet inline.</td>
+      <td>Vera's stable codes E001–E702 with examples</td>
+      <td><span class="pill ok">Yes</span></td>
+      <td>Documentation only. Vow's <code>errors.md</code> mostly has rationale, less often a fix example.</td>
+    </tr>
+    <tr>
+      <td><strong>Contract-driven property tests</strong>. <code>vera test --trials N</code> auto-generates inputs satisfying <code>requires</code>, runs them, asserts <code>ensures</code>.</td>
+      <td>Vera toolchain</td>
+      <td><span class="pill ok">Yes</span> — Vow has <code>vowc test</code> already; could grow a contract-driven mode.</td>
+      <td>Random input generator + runtime assert in debug mode. Reuses existing infrastructure.</td>
+    </tr>
+    <tr>
+      <td><strong>Typed holes (<code>?</code>) producing a warning, not an error</strong>. Lets the agent type-check incrementally.</td>
+      <td>Vera <code>W001</code></td>
+      <td><span class="pill warn">Maybe</span></td>
+      <td>Parser + checker support. Useful but small.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Ideas to <em>not</em> steal</h3>
+<ul>
+  <li><strong>De Bruijn slot references.</strong> Vera's defining feature, and the most contested. HN consensus was sceptical; cross-model bench numbers were mixed (Kimi K2.5 100 %, Claude Sonnet 4 79 %). Names anchor attention; grep matters; the cost to human collaborators is real even in an agent-first language.</li>
+  <li><strong>Effects without linear types.</strong> Vera has no mutability, no linearity, no ownership story — everything copies. Vow's linear types are differentiated and worth keeping.</li>
+  <li><strong>WASM-only backend.</strong> Vow's Cranelift native pipeline + binary fixed point is a credibility signal that Vera doesn't have.</li>
+</ul>
+
+<h2>6. What this means for Vow's own skill</h2>
+
+<p>Vow's entrypoint is already small. Two small improvements would still be worth making:</p>
+
+<ol>
+  <li><strong>Surface the bundle path in the entrypoint.</strong> One line: "For self-contained reference (e.g. raw API use), run <code>vowc skill print --bundle</code>." Helps anyone wiring Vow into a non-Claude-Code agent harness.</li>
+  <li><strong>Add a fix-example field to <code>errors.md</code>.</strong> Each <code>E###</code> already has a description; adding a 4–6 line <em>wrong</em> / <em>right</em> pair brings parity with Vera's diagnostics-as-instructions framing. The agent doesn't need to guess the fix shape.</li>
+</ol>
+
+<p>Both are low-cost and don't require changes to the language or the verifier.</p>
+
+<h2>7. Bottom line</h2>
+
+<p>Vera's <code>SKILL.md</code> is too large <em>as a Claude Code skill</em> — about 5× over the practical ceiling — and the bloat is concentrated in two reference-material sections (stdlib + effect APIs) that progressive disclosure handles cleanly. Vow already does the right thing by shipping a 1.7 KB entrypoint plus an opt-in bundle.</p>
+
+<p>The interesting lessons are <em>not</em> in the packaging, where Vera is just paying for a different choice. They are in three small content moves Vera makes that Vow could pick up for very low cost: <strong>Inference as an effect</strong>, <strong>fix examples per error code</strong>, and <strong>contract-driven test generation</strong>. Skip the De Bruijn names, the WASM-only target, and the runtime-fallback tier — those are Vera's identity, not Vow's.</p>
+
+<div class="footnote">
+  Sources: Vera <code>SKILL.md</code> (<a href="https://veralang.dev/SKILL.md">veralang.dev/SKILL.md</a>, 99,631 bytes, fetched 2026-05-18) ·
+  Vera repo (<a href="https://github.com/aallan/vera">github.com/aallan/vera</a>) ·
+  Vera benchmark (<a href="https://github.com/aallan/vera-bench">github.com/aallan/vera-bench</a>) ·
+  HN discussion (<a href="https://news.ycombinator.com/item?id=47955118">item #47955118</a>) ·
+  Launch post (<a href="https://negroniventurestudios.com/2026/04/13/language-design-doing-the-heavy-lifting/">Negroni Venture Studios, 2026-04-13</a>) ·
+  Vow skill artifacts derived from <code>scripts/generate_help.py</code> on branch <code>vow/compareVera</code>.
+</div>
+
+</main>
+</body>
+</html>

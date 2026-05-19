@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zero vs Vow — agent-oriented language comparison</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1c2330;
+    --fg: #e6edf3;
+    --muted: #8b949e;
+    --line: #30363d;
+    --accent: #58a6ff;
+    --zero: #f0b429;
+    --vow: #7ee787;
+    --warn: #f97583;
+    --code-bg: #0b0f14;
+    --code-fg: #d1d9e0;
+    --max: 1100px;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--fg); }
+  body {
+    margin: 0;
+    font: 15.5px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    padding: 0 24px 80px;
+  }
+  main { max-width: var(--max); margin: 0 auto; }
+  header.hero {
+    max-width: var(--max);
+    margin: 48px auto 32px;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--line);
+  }
+  header.hero h1 { font-size: 34px; margin: 0 0 10px; letter-spacing: -0.02em; }
+  header.hero .sub { color: var(--muted); font-size: 17px; }
+  header.hero .meta { margin-top: 14px; color: var(--muted); font-size: 13px; }
+  h2 {
+    font-size: 22px;
+    margin: 48px 0 12px;
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+    letter-spacing: -0.01em;
+  }
+  h3 { font-size: 17px; margin: 24px 0 8px; color: var(--accent); }
+  h4 { font-size: 14px; margin: 16px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  p { margin: 8px 0 12px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace; }
+  code { background: var(--code-bg); color: var(--code-fg); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+  pre {
+    background: var(--code-bg); color: var(--code-fg);
+    padding: 14px 16px; border-radius: 8px;
+    overflow-x: auto; font-size: 13px; line-height: 1.5;
+    border: 1px solid var(--line);
+  }
+  pre code { background: transparent; padding: 0; font-size: inherit; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 14px; }
+  th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--panel); color: var(--muted); font-weight: 600; font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+  tr:nth-child(even) td { background: rgba(255,255,255,0.015); }
+  .tag {
+    display: inline-block;
+    padding: 1px 8px; border-radius: 999px;
+    font-size: 11.5px; letter-spacing: 0.03em;
+    border: 1px solid var(--line); color: var(--muted);
+    margin-right: 4px;
+  }
+  .tag.zero { color: var(--zero); border-color: rgba(240,180,41,0.4); background: rgba(240,180,41,0.07); }
+  .tag.vow  { color: var(--vow);  border-color: rgba(126,231,135,0.4); background: rgba(126,231,135,0.07); }
+  .tag.warn { color: var(--warn); border-color: rgba(249,117,131,0.4); background: rgba(249,117,131,0.07); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 18px;
+  }
+  .panel h3 { margin-top: 4px; }
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--panel-2);
+    padding: 12px 16px;
+    border-radius: 0 6px 6px 0;
+    margin: 16px 0;
+  }
+  .callout.warn { border-left-color: var(--warn); }
+  .callout.good { border-left-color: var(--vow); }
+  ul { padding-left: 22px; }
+  li { margin: 4px 0; }
+  .kv td:first-child { color: var(--muted); width: 35%; }
+  .lessons ol { padding-left: 22px; }
+  .lessons li { margin: 14px 0; }
+  .lessons li b { color: var(--accent); }
+  footer { color: var(--muted); font-size: 12.5px; margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--line); }
+  footer ul { columns: 2; column-gap: 24px; }
+  .badge-row { margin-top: 8px; }
+  .tldr {
+    background: linear-gradient(180deg, rgba(88,166,255,0.07), rgba(88,166,255,0));
+    border: 1px solid rgba(88,166,255,0.25);
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin: 20px 0;
+  }
+  .tldr h3 { margin-top: 0; color: var(--accent); }
+  .nowrap { white-space: nowrap; }
+  .lang-z, .lang-v { display: inline-block; font-weight: 600; }
+  .lang-z { color: var(--zero); }
+  .lang-v { color: var(--vow); }
+  details { margin: 8px 0; }
+  summary { cursor: pointer; color: var(--muted); }
+  summary:hover { color: var(--fg); }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <h1>Zero vs Vow — agent-oriented language comparison</h1>
+  <div class="sub">Two languages built for AI agents. One bets on <b>structured diagnostics</b>. The other bets on <b>formal verification</b>. Where do they meet, and what does each have to teach the other?</div>
+  <div class="meta">Compiled May 18, 2026 · Zero v0.1.2 (released May 15, 2026) · Vow self-hosted (current main)</div>
+  <div class="badge-row">
+    <span class="tag zero">Zero · vercel-labs/zero · Apache-2.0 · .0</span>
+    <span class="tag vow">Vow · self-hosted · .vow</span>
+  </div>
+</header>
+
+<main>
+
+<div class="tldr">
+  <h3>TL;DR</h3>
+  <p>Zero and Vow agree on the diagnosis: error messages should be machine-readable first, humans second. They diverge sharply on the cure. <b>Zero</b> ships a richly structured JSON surface across every CLI subcommand and a <b>fixSafety</b> taxonomy on each diagnostic — but has no formal verifier, no contracts, and no theorem prover. <b>Vow</b> ships ESBMC bounded model checking with <code>requires</code> / <code>ensures</code> / <code>invariant</code> contracts, blame semantics, and a CEGIS loop — but has less variety in agent-facing JSON surfaces. The two designs are <b>complementary, not competitive</b>. The most directly portable ideas Vow can borrow from Zero are: the <b>discovery-stub + binary-pinned skill bundle</b> (<code>zero skills get</code>), the <b>fixSafety ladder on every diagnostic</b>, and <b>typed <code>repair</code> handles</b> that name a fix rather than just describing the failure.</p>
+</div>
+
+<h2>1 · Identity</h2>
+<table class="kv">
+  <tr><td>Project</td><td><b>Zero</b> &mdash; "the programming language for agents"</td></tr>
+  <tr><td>Author</td><td>Vercel Labs (Chris Tate, Matt Van Horn)</td></tr>
+  <tr><td>Homepage</td><td><a href="https://zerolang.ai/">zerolang.ai</a></td></tr>
+  <tr><td>Repository</td><td><a href="https://github.com/vercel-labs/zero">github.com/vercel-labs/zero</a> &mdash; Apache-2.0</td></tr>
+  <tr><td>Launched</td><td>May 15, 2026 &mdash; v0.1.0; v0.1.2 two days later</td></tr>
+  <tr><td>File extension</td><td><code>.0</code></td></tr>
+  <tr><td>Compiler</td><td>C (<code>native/zero-c/</code>) &mdash; ~10 source files plus 5 native object emitters (<code>emit_elf64</code>, <code>emit_elf_aarch64</code>, <code>emit_macho64</code>, <code>emit_coff</code>, <code>emit_wasm</code>). No LLVM dependency.</td></tr>
+  <tr><td>Self-host status</td><td>In progress (<code>compiler-zero/src/*.0</code>, 11 modules). Not a fixed-point yet.</td></tr>
+  <tr><td>Binary size claim</td><td>Sub-10 KiB native binaries; "rebuilds in milliseconds."</td></tr>
+  <tr><td>Stability</td><td>Explicitly experimental &mdash; "language, compiler, and stdlib are not stable yet."</td></tr>
+  <tr><td>Reception</td><td>~1.9k GitHub stars in days. Only 2 low-engagement HN submissions. No published LLM benchmarks. Comparisons drawn most often to <b>Zig</b> (memory model) and <b>Rust</b> (look-and-feel, but "borrow checker is basic, not Rust-grade" &mdash; Mehul Mohan). No public comparison to Dafny / F* / Idris / Verus / Vow.</td></tr>
+</table>
+
+<h2>2 · Side-by-side at a glance</h2>
+<table>
+  <thead>
+    <tr><th>Axis</th><th><span class="lang-z">Zero</span></th><th><span class="lang-v">Vow</span></th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Core thesis</td><td>Errors written for humans break agentic coding. Fix by emitting structured JSON for every compiler surface.</td><td>Agents generate buggy code. Fix by proving programs correct (or returning a counterexample the agent can fix).</td></tr>
+    <tr><td>Correctness story</td><td>Type + effect + capability checking. <span class="tag warn">No formal verifier</span></td><td>ESBMC bounded model checking + CEGIS loop. <code>requires</code> / <code>ensures</code> / <code>invariant</code>.</td></tr>
+    <tr><td>Blame</td><td><b>fixSafety</b> ladder on each repair: <code>format-only</code>, <code>behavior-preserving</code>, <code>local-edit</code>, <code>api-changing</code>, <code>requires-human-review</code>.</td><td><b>Caller / Callee</b> blame on vow violations. <code>requires</code>&nbsp;&rarr;&nbsp;Caller, <code>ensures</code>/<code>invariant</code>&nbsp;&rarr;&nbsp;Callee.</td></tr>
+    <tr><td>Memory</td><td>Explicit; no GC, no lifetimes. <code>owned&lt;T&gt;</code> RAII handles, <code>ref&lt;T&gt;</code>/<code>mutref&lt;T&gt;</code> lexical borrows, <code>defer</code>, multiple allocators (<code>pageAlloc</code>, <code>arena</code>, <code>fixedBufAlloc</code>).</td><td>Manual with arena discipline. <code>linear struct</code> types must be consumed exactly once (type-checker enforced).</td></tr>
+    <tr><td>Effects</td><td><b>Capability passing</b>: <code>main(world: World)</code>, sub-capabilities like <code>world.out</code>, <code>std.fs.host()</code>. Non-host targets reject hosted APIs with <code>TAR002</code>.</td><td><b>Effect sets</b> on every function type. Pure functions have empty sets. Calling effectful from pure is a type error.</td></tr>
+    <tr><td>Error propagation</td><td><code>raises { InvalidInput }</code> + <code>check</code> + <code>raise</code> + <code>rescue err { ... }</code>.</td><td>Vow violations + structured diagnostics. <code>?</code> propagation in regular control flow.</td></tr>
+    <tr><td>Generics</td><td>Yes &mdash; type params + <code>static N: usize</code> value params, plus <code>interface</code> constraints (static dispatch, no vtables).</td><td><span class="tag warn">No generics</span> &mdash; deliberately rejected to keep the verifier surface small.</td></tr>
+    <tr><td>Metaprogramming</td><td><code>meta(...)</code> compile-time introspection: <code>fieldCount(T)</code>, <code>fieldType(T, "x")</code>, <code>target.pointerWidth</code>. Sandboxed evaluator.</td><td>None. Linear, hand-written code only.</td></tr>
+    <tr><td>Concurrency</td><td><span class="tag warn">None.</span> No async, threads, channels, or coroutines.</td><td>None in language. <code>std.proc</code> spawns external processes.</td></tr>
+    <tr><td>Sum types</td><td><code>choice</code> (payload variants) <i>and</i> <code>enum</code> (C-like, optional backing type).</td><td><code>enum</code> with payloads + exhaustive <code>match</code>.</td></tr>
+    <tr><td>Backend</td><td>Direct native object emission (ELF/Mach-O/COFF/WASM). C backend <b>removed</b> &mdash; emits <code>BLD003</code>.</td><td>Cranelift via FFI shim (<code>vow-clif-shim</code>); ESBMC pipeline runs in parallel via C emitter.</td></tr>
+    <tr><td>Diagnostic codes</td><td><code>XXXNNN</code> &mdash; <code>PAR</code>, <code>NAM</code>, <code>IMP</code>, <code>PKG</code>, <code>BLD</code>, <code>TYP</code>, <code>BOR</code>, <code>OWN</code>, <code>TAR</code>, <code>MAT</code>, ~16 families. Stable.</td><td>Named codes (<code>UnexpectedToken</code>, <code>VowViolation</code>, etc.) with JSON schemas under <code>schemas/</code>.</td></tr>
+    <tr><td>Tooling spread</td><td>~25 subcommands, nearly all with <code>--json</code>: <code>check</code>, <code>build</code>, <code>run</code>, <code>test</code>, <code>fix --plan</code>, <code>explain</code>, <code>graph</code>, <code>size</code>, <code>mem</code>, <code>time</code>, <code>ship</code>, <code>doctor</code>, <code>doc</code>, <code>abi</code>, <code>fmt</code>, <code>routes</code>, <code>skills</code>, ...</td><td>~6 subcommands: <code>build</code>, <code>verify</code>, <code>test</code>, <code>mutants</code>, <code>skill</code>, <code>--help</code>. All structured JSON.</td></tr>
+    <tr><td>Stdlib breadth</td><td>~14 modules: <code>std.mem</code>, <code>io</code>, <code>fs</code>, <code>net</code>, <code>http</code>, <code>json</code>, <code>codec</code>, <code>crypto</code>, <code>parse</code>, <code>time</code>, <code>rand</code>, <code>proc</code>, <code>path</code>, <code>args/env</code>.</td><td>Vec, String, HashMap, BTreeMap, heap, fs, io &mdash; all with verification-aware bounded models.</td></tr>
+    <tr><td>Package manager</td><td><code>zero.json</code> manifest; <span class="tag warn">no registry yet</span>, no <code>zero add</code>. Local path deps only.</td><td>None. Single-file or DFS-loaded <code>use</code> modules.</td></tr>
+    <tr><td>Cross-compilation</td><td>9 targets, Zig-toolchain shim: <code>darwin-arm64/x64</code>, <code>linux-musl-x64/arm64</code>, <code>linux-x64/arm64</code>, <code>win32-x64/arm64</code>, <code>wasm32-wasi/web</code>.</td><td>Host target only.</td></tr>
+    <tr><td>Verification benchmarks</td><td>None published.</td><td>36/36 Vow suite (sonnet-4-6); HumanEval 66/67 (sonnet-4); 103/103 non-stretch references verified by self-hosted compiler.</td></tr>
+  </tbody>
+</table>
+
+<h2>3 · Syntax catalog (Zero)</h2>
+
+<h3>Hello world</h3>
+<div class="grid2">
+  <div class="panel">
+    <h4>Zero · <code>examples/hello.0</code></h4>
+<pre><code>pub fun main(world: World) -&gt; Void raises {
+    check world.out.write("hello from zero\n")
+}</code></pre>
+  </div>
+  <div class="panel">
+    <h4>Vow · canonical hello</h4>
+<pre><code>module Hello
+
+fn main() -&gt; i32 [io] {
+    print_str("Hello, world!");
+    0
+}</code></pre>
+  </div>
+</div>
+
+<h3>Functions, types, error handling</h3>
+<table>
+  <tr><th>Feature</th><th>Zero syntax</th></tr>
+  <tr><td>Functions</td><td><code>fun foo() -&gt; i32 { ... }</code> · <code>pub fun</code> for export · <code>export c fun</code> for C-ABI</td></tr>
+  <tr><td>Variables</td><td><code>let x = 1</code> · <code>let mut y = 0</code> · <code>const base: i32 = 40</code></td></tr>
+  <tr><td>Records</td><td><code>shape Point { x: i32, y: i32 }</code></td></tr>
+  <tr><td>Sum types</td><td><code>choice Result { ok: i32, err: String }</code> · <code>enum Mode : u8 { fast, tiny }</code></td></tr>
+  <tr><td>Match</td><td><code>match r { .ok =&gt; v { ... } .err =&gt; m { ... } }</code></td></tr>
+  <tr><td>Error sets</td><td><code>fun parse() -&gt; i32 raises { InvalidInput } { raise InvalidInput }</code></td></tr>
+  <tr><td>Propagation</td><td><code>let v = check parse(ok)</code> · <code>parse(false) rescue err { fallback }</code></td></tr>
+  <tr><td>References</td><td><code>&amp;value</code>&nbsp;&rarr;&nbsp;<code>ref&lt;T&gt;</code> · <code>&amp;mut value</code>&nbsp;&rarr;&nbsp;<code>mutref&lt;T&gt;</code></td></tr>
+  <tr><td>Owned RAII</td><td><code>let mut f: owned&lt;File&gt; = ...</code> with optional <code>fun drop(self: mutref&lt;Self&gt;)</code></td></tr>
+  <tr><td>Generics</td><td><code>shape FixedVec&lt;T, static N: usize&gt; { items: [N]T }</code></td></tr>
+  <tr><td>Static interfaces</td><td><code>interface Readable&lt;T&gt; { fun read(self: ref&lt;T&gt;) -&gt; i32 }</code></td></tr>
+  <tr><td>Compile-time</td><td><code>const fields: usize = meta fieldCount(Point)</code></td></tr>
+  <tr><td>Loops</td><td><code>while cond { ... }</code> · <code>for i in 0..4 { ... }</code> (no <code>loop</code>, no labels)</td></tr>
+  <tr><td>Tests</td><td><code>test "addition works" { expect(add(2, 3) == 5) }</code> &mdash; inline in any <code>.0</code> file</td></tr>
+</table>
+
+<details>
+<summary>Longer example: error handling + records + match (composed from <code>fallibility.0</code> + <code>result-choice.0</code>)</summary>
+<pre><code>choice ParseResult {
+    ok: i32,
+    err: String,
+}
+
+fun validate(ok: Bool) -&gt; i32 raises { InvalidInput } {
+    if ok == false { raise InvalidInput }
+    return 42
+}
+
+fun classify(raw: Bool) -&gt; ParseResult {
+    let value = validate(raw) rescue err { return ParseResult.err("bad input") }
+    return ParseResult.ok(value)
+}
+
+pub fun main(world: World) -&gt; Void raises {
+    let result = classify(true)
+    match result {
+        .ok =&gt; value {
+            if value == 42 { check world.out.write("validated\n") }
+        }
+        .err =&gt; message {
+            check world.err.write("failed\n")
+        }
+    }
+}</code></pre>
+</details>
+
+<h2>4 · Standard library &amp; tooling (Zero)</h2>
+
+<h3>Modules</h3>
+<p>14 stdlib modules, all marked experimental. Hosted modules (<code>fs</code>, <code>net</code>, <code>http</code>, <code>proc</code>, <code>args</code>, <code>env</code>) gate on target capabilities and fail with <code>TAR002</code> on non-host targets.</p>
+<table>
+  <tr><th>Module</th><th>Role</th></tr>
+  <tr><td><code>std.mem</code></td><td>Spans, byte ops, allocators (<code>pageAlloc</code>, <code>arena</code>, <code>fixedBufAlloc</code>, <code>generalAlloc</code>, <code>nullAlloc</code>), <code>vec</code>, <code>ByteBuf</code></td></tr>
+  <tr><td><code>std.io</code></td><td>Buffered reader/writer metadata, byte copy</td></tr>
+  <tr><td><code>std.fs</code></td><td>File ops returning <code>owned&lt;File&gt;</code> or raising <code>{NotFound, TooLarge, Io}</code></td></tr>
+  <tr><td><code>std.net</code> / <code>std.http</code></td><td>Address, dnsName, connect/listen (no socket read/write yet), HTTP client/server scaffolding</td></tr>
+  <tr><td><code>std.json</code></td><td><code>validate</code>, <code>parse</code>, <code>streamTokens</code>, <code>writeString</code></td></tr>
+  <tr><td><code>std.codec</code></td><td>CRC32, varint, raw u8/u16/u32 read/write</td></tr>
+  <tr><td><code>std.crypto</code></td><td>hash32, hmac32, <code>constantTimeEql</code>, secure random</td></tr>
+  <tr><td><code>std.parse</code></td><td>Allocation-free ASCII scanners</td></tr>
+  <tr><td><code>std.time</code></td><td>Monotonic, wall-clock, durations</td></tr>
+  <tr><td><code>std.rand</code></td><td>Seeded source + entropy</td></tr>
+  <tr><td><code>std.proc</code></td><td>Spawn external processes</td></tr>
+  <tr><td><code>std.path</code></td><td>Fixed-buffer path joining</td></tr>
+  <tr><td><code>std.args</code> / <code>std.env</code></td><td>Hosted process args, env-var lookup</td></tr>
+</table>
+
+<h3>CLI subcommands</h3>
+<p>Roughly 25 subcommands; nearly every one has <code>--json</code>. Vow has 6.</p>
+<div class="grid2">
+  <div class="panel">
+    <h4>Build &amp; run</h4>
+    <ul>
+      <li><code>zero check [--json]</code></li>
+      <li><code>zero run [--target] [--profile]</code></li>
+      <li><code>zero build --emit exe|obj|wasm --target ... --out ...</code></li>
+      <li><code>zero test [--json] [--filter]</code></li>
+      <li><code>zero fmt [--check]</code></li>
+      <li><code>zero ship [--json] --profile release-small|tiny|audit</code></li>
+      <li><code>zero new cli|lib|package &lt;path&gt;</code></li>
+      <li><code>zero clean [--all]</code></li>
+    </ul>
+  </div>
+  <div class="panel">
+    <h4>Agent-facing surfaces</h4>
+    <ul>
+      <li><code>zero explain [--json] &lt;code&gt;</code></li>
+      <li><code>zero fix --plan --json</code> (also <code>--apply</code> / <code>--patch</code>)</li>
+      <li><code>zero graph --json</code> &mdash; module/symbol/capability graph</li>
+      <li><code>zero size --json</code> &mdash; profile budgets, stdlib helpers</li>
+      <li><code>zero mem --json</code> &mdash; allocator facts, instrumentation</li>
+      <li><code>zero time --json</code> &mdash; phase timing, interface fingerprints</li>
+      <li><code>zero doctor [--json]</code> &mdash; host + target toolchain readiness</li>
+      <li><code>zero abi check|dump --json</code></li>
+      <li><code>zero tokens --json</code>, <code>zero parse --json</code></li>
+      <li><code>zero dev --json --trace</code> &mdash; watch mode w/ cache facts</li>
+      <li><code>zero skills list|get &lt;id&gt; [--full]</code> &mdash; binary-pinned skills</li>
+      <li><code>zero targets</code>, <code>zero doc --json</code></li>
+    </ul>
+  </div>
+</div>
+
+<h3>Diagnostic JSON shape</h3>
+<pre><code>{
+  "schemaVersion": 1,
+  "ok": false,
+  "diagnostics": [
+    {
+      "severity": "error",
+      "code": "NAM003",
+      "message": "...",
+      "path": "src/main.0",
+      "line": 12, "column": 5, "length": 7,
+      "expected": "...", "actual": "...",
+      "help": "...",
+      "fixSafety": "local-edit",
+      "repair": { "id": "fix-import-path", "summary": "..." },
+      "related": [ ... ]
+    }
+  ]
+}</code></pre>
+<p><b>fixSafety</b> classifies the <i>repair</i>, not the violation, on a 5-level ladder:</p>
+<ul>
+  <li><code>format-only</code> &mdash; whitespace, formatting</li>
+  <li><code>behavior-preserving</code> &mdash; refactor with no semantic change</li>
+  <li><code>local-edit</code> &mdash; localized semantic change</li>
+  <li><code>api-changing</code> &mdash; changes public surface</li>
+  <li><code>requires-human-review</code> &mdash; "planning hint, not an automatic patch"</li>
+</ul>
+
+<h2>5 · The skill: Zero vs Vow</h2>
+
+<p>Both projects ship a Claude Code skill. They make <b>radically different</b> structural choices.</p>
+
+<table>
+  <thead>
+    <tr><th>Aspect</th><th><span class="lang-z">Zero</span></th><th><span class="lang-v">Vow</span></th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Top-level <code>SKILL.md</code></td><td><b>~50 lines · 1.5 KB stub</b>. "This file is a discovery stub. Do not treat it as the full Zero workflow."</td><td>48 lines · ~1.5 KB stub pointing to local <code>reference/</code> + <code>examples/</code> + <code>schemas/</code></td></tr>
+    <tr><td>Where the content lives</td><td><b>Inside the compiler binary</b>. Served at runtime via <code>zero skills list</code> / <code>zero skills get &lt;id&gt; [--full]</code>. Seven micro-skills, ~17 KB total: <code>zero-agent</code>, <code>zero-language</code>, <code>zero-diagnostics</code>, <code>zero-builds</code>, <code>zero-packages</code>, <code>zero-stdlib</code>, <code>zero-testing</code>.</td><td>Inside the compiler binary too &mdash; <code>vowc skill print</code> / <code>vowc skill install</code>. Installs ~2,600 lines split across <code>reference/{grammar,cli,contracts,errors}.md</code> + <code>examples/examples.md</code> + JSON <code>schemas/</code>.</td></tr>
+    <tr><td>Versioning</td><td>"Binary-pinned." Agent told to use the same binary that will run the project. Skills move with the compiler version.</td><td>Same idea &mdash; skill is generated from the compiler. <code>scripts/check_help_coverage.py</code> catches drift.</td></tr>
+    <tr><td>Workflow</td><td>Numbered <b>edit loop</b>: read context &rarr; smallest change &rarr; <code>zero check --json</code> &rarr; <code>zero explain</code> &rarr; <code>zero fix --plan --json</code> &rarr; update tests &rarr; rerun.</td><td><b>CEGIS loop</b>: write contracts &rarr; <code>vowc build</code> &rarr; parse JSON &rarr; inspect <code>status</code>/<code>diagnostics</code>/<code>counterexamples</code> &rarr; fix &rarr; rerun until <code>Verified</code>.</td></tr>
+    <tr><td>Tone</td><td>Terse, imperative, list-of-don'ts: "Do not invent syntax", "Do not invent CLI fields", "Do not scrape terminal prose when JSON is available."</td><td>Terse, imperative, but progressive disclosure-first &mdash; defers detail to reference files.</td></tr>
+    <tr><td>Error-code reference</td><td>10 codes inlined into <code>zero-diagnostics</code> with one-liners. Full list via <code>zero explain</code>.</td><td>Full error catalog (<code>reference/errors.md</code>, 447 lines) shipped alongside the stub.</td></tr>
+    <tr><td>Fix metadata</td><td><b><code>fixSafety</code> ladder</b> (5 levels) on every diagnostic + <code>repair: { id, summary }</code>. <code>zero fix</code> is <b>plan-only</b>: the compiler proposes, the agent applies.</td><td><b>Blame</b> (<code>Caller</code>/<code>Callee</code>) on every vow violation + values of free variables in the predicate. Counterexamples include concrete witness traces.</td></tr>
+    <tr><td>Anti-pattern list</td><td>Explicit and short. Don't invent syntax. Don't invent CLI fields. Don't scrape terminal prose. Treat effects as capabilities, not ambient globals. Don't leave <code>xfail:</code> on a fixed bug.</td><td>Embedded in references and contract-authoring guidance. No central "things not to do" page.</td></tr>
+    <tr><td>Test idiom</td><td><code>test "name" { expect(...) }</code> inline in any <code>.0</code> file. Expected-fail encoded in the test <i>name</i> (<code>xfail:</code>); the JSON surfaces <code>unexpectedPasses</code> so an agent learns when it has accidentally fixed something.</td><td>Runtime tests in <code>tests/run/*.vow</code>; mutation testing via <code>vowc mutants</code> shards.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <b>The big structural lesson.</b> Zero treats the skill itself as a <i>thing the compiler emits</i>, just like diagnostics or build output. The on-disk <code>SKILL.md</code> is a 1.5 KB pointer; the agent asks the running compiler what its skill is, and the answer matches that compiler's exact version. Vow has the same affordance (<code>vowc skill print</code>) but ships the full content on disk rather than indexing into the binary. Zero's choice is more aggressive about closing the version-skew loophole, at the cost of needing a working binary before you can read the skill.
+</div>
+
+<h2>6 · What Vow can borrow from Zero</h2>
+
+<div class="lessons">
+<ol>
+
+<li>
+  <b>Add a <code>fixSafety</code>-style ladder on every diagnostic.</b><br>
+  Vow already has <code>Blame</code> (who is at fault) but no notion of <i>how dangerous the fix is</i>. A 5-level ladder &mdash; <code>format-only</code>, <code>behavior-preserving</code>, <code>local-edit</code>, <code>api-changing</code>, <code>requires-human-review</code> &mdash; would let an agent triage automatically. For Vow specifically: a violation that suggests strengthening a <code>requires</code> clause is <code>api-changing</code>; one that suggests adding a loop <code>invariant</code> is <code>local-edit</code>; a counterexample showing a genuine logic bug is <code>requires-human-review</code>.
+</li>
+
+<li>
+  <b>Emit a typed <code>repair</code> handle alongside the diagnostic.</b><br>
+  Today a vow violation says <i>"<code>requires: y != 0</code> failed with <code>y == 0</code>"</i>. Adding <code>repair: { id: "guard-divisor", summary: "Add precondition or rescue" }</code> turns the diagnostic into an actionable JSON object the agent can dispatch on. The compiler doesn't have to write the patch &mdash; just name it. <a href="https://github.com/vercel-labs/zero/blob/main/skills/zero/SKILL.md">Zero's <code>zero-diagnostics</code></a> shows the shape.
+</li>
+
+<li>
+  <b>Discovery-stub pattern for the on-disk skill.</b><br>
+  Vow already ships a stub <code>SKILL.md</code> with progressive disclosure. Going further &mdash; making it <i>truly</i> a discovery stub that says "ask the binary" &mdash; would close the version-skew window. Replace inline reference content with <code>!`vowc skill get grammar --json`</code>-style runtime queries. Practical hybrid: keep the on-disk reference for offline use, but stamp it with the compiler version it was generated from and have the skill tell the agent to regenerate if versions diverge.
+</li>
+
+<li>
+  <b>Split the skill into named sub-skills.</b><br>
+  Zero's seven micro-skills (<code>zero-agent</code>, <code>zero-language</code>, <code>zero-diagnostics</code>, <code>zero-builds</code>, <code>zero-packages</code>, <code>zero-stdlib</code>, <code>zero-testing</code>) average 2&ndash;3 KB each. An agent loads only what it needs. Vow's reference files are already structured this way (<code>grammar.md</code>, <code>cli.md</code>, <code>contracts.md</code>, <code>errors.md</code>, <code>examples.md</code>) &mdash; the missing piece is a discoverable <i>index</i> command: <code>vowc skill list</code> / <code>vowc skill get contracts</code>.
+</li>
+
+<li>
+  <b>Add <code>vowc explain &lt;error_code&gt;</code> as a first-class subcommand.</b><br>
+  Zero's <code>zero explain NAM003 --json</code> returns <code>{ code, title, fixSafety, defaultOutput }</code>. For Vow, <code>vowc explain VowViolation --json</code> could return the violation taxonomy, blame model, and a pointer to <code>contracts.md</code>. Today this content lives only in <code>errors.md</code>; lifting it into a runtime command makes it discoverable from the JSON itself.
+</li>
+
+<li>
+  <b>An explicit "Do nots" page in the skill.</b><br>
+  Zero's <code>zero-agent</code> opens with six imperatives: don't invent syntax, don't invent CLI fields, don't scrape prose when JSON is available, treat effects as capabilities, prefer narrow commands, don't auto-apply <code>requires-human-review</code>. Vow's equivalents are spread across <code>contracts.md</code> and CLAUDE.md. Centralizing them into a short, list-of-don'ts page (or top of <code>SKILL.md</code>) would make them harder to miss. Vow-specific candidates: "Don't weaken contracts to appease ESBMC", "Don't add <code>n &lt;= 10</code>-style verifier bounds to <code>requires</code>", "Don't use <code>--no-verify</code> to skip a real failure".
+</li>
+
+<li>
+  <b>Two-phase fix: plan, then apply.</b><br>
+  <code>zero fix --plan --json</code> proposes; the agent applies. Vow could add <code>vowc fix --plan --json &lt;file.vow&gt;</code> that, given a vow violation, emits a structured proposal &mdash; not a patch &mdash; covering candidate strengthenings of contracts, loop invariants, or guards. The agent decides whether to apply. The plan can be regression-tested independently of any patcher.
+</li>
+
+<li>
+  <b>Capability-passing as a UX layer over Vow's effect sets.</b><br>
+  Vow's effect sets are type-checked but invisible at the call site. Zero forces <code>world: World</code> through every effectful function, which is agent-greppable. This is probably too verbose for Vow's taste &mdash; but it's worth considering whether <i>some</i> effects (e.g. unbounded allocation, network) should be passed explicitly. The reverse question is also worth asking: should Zero adopt Vow-style implicit effect sets to reduce visual noise? Neither answer is obvious.
+</li>
+
+<li>
+  <b>Surface every cache/key/fingerprint that affects determinism.</b><br>
+  Zero exposes <code>cacheKeyInputs</code>, <code>snapshotKey</code>, <code>releaseTargetContract</code>, <code>interfaceFingerprints</code>. Vow already has a deterministic compile-object cache with a content-addressed key (see <code>cli.md</code>); making that key visible in the JSON build output gives agents a stable handle for cache diagnostics, regression detection, and reproducibility audits.
+</li>
+
+<li>
+  <b>Inline <code>test "name" { expect(...) }</code> blocks.</b><br>
+  Zero's inline test blocks (any <code>.0</code> file can carry tests) lower the friction of test-writing for agents. Vow has <code>tests/run/*.vow</code> directory-based tests; inline tests would be a complementary mode for unit-level coverage. The <code>unexpectedPasses</code> idea &mdash; flagging when an <code>xfail:</code> starts passing &mdash; is independently useful as a regression-direction signal.
+</li>
+
+</ol>
+</div>
+
+<h2>7 · What Vow should <i>not</i> borrow</h2>
+
+<div class="callout warn">
+<p><b>Zero's correctness story is the shallow-end version of Vow's.</b> "Types + capabilities + structured diagnostics" is real value but it's not formal verification. Vow shouldn't dilute its CEGIS / ESBMC story to chase Zero's UX. The two design positions are <i>complementary, not competing</i>:</p>
+<ul>
+  <li><b>Generics &amp; <code>meta(...)</code>.</b> Zero has both. Vow has deliberately rejected both because they expand the verification surface. The "crisp rule" in <code>CLAUDE.md</code> &mdash; "add surface sugar only when it desugars to today's core semantics with near-zero verifier impact; reject anything that introduces a new type-system axis" &mdash; argues against this directly. Generics introduce monomorphization complexity that ESBMC has to chase.</li>
+  <li><b>Sub-10 KiB binary chase.</b> Vow's binaries can be larger if it buys verification. Don't optimize away ESBMC's static C model for binary-size points.</li>
+  <li><b>Removing the C backend.</b> Zero removed its generated-C backend in favor of direct emitters. Vow needs the C backend for ESBMC. Different priorities.</li>
+  <li><b>25 subcommands.</b> Zero's surface area is impressive but a lot of it (<code>zero mem</code>, <code>zero ship</code>, <code>zero abi</code>, <code>zero doctor</code>) is genuinely useful only at the scale of a productized toolchain. Vow should pick subcommands by clear agent need, not by parity.</li>
+  <li><b>Effect-as-capability syntax.</b> Threading <code>world: World</code> through every effectful function is grep-friendly but visually heavy. Vow's effect sets on function types do the same job structurally with less noise. Adopt the explicitness; keep the syntax.</li>
+</ul>
+</div>
+
+<h2>8 · Bottom line</h2>
+
+<p>Zero is the strongest signal yet that "languages designed for AI agents" is a real category, not a fad. It validates Vow's bet that machine-readable, structured compiler output is the right default. But it leaves the <b>formal verification</b> ground entirely uncontested. There is no other language in the agent-first niche that ships a bounded model checker, contracts with blame, and a CEGIS loop. Vow's moat is the verifier and the published benchmarks.</p>
+
+<p>The most actionable items, in priority order:</p>
+<ol>
+  <li>Add <code>fixSafety</code> on every diagnostic.</li>
+  <li>Add typed <code>repair</code> handles in diagnostic JSON.</li>
+  <li>Add <code>vowc explain &lt;code&gt;</code> and <code>vowc skill list / get</code>.</li>
+  <li>Centralize a "Do nots" page in the skill.</li>
+  <li>Two-phase <code>vowc fix --plan --json</code>.</li>
+</ol>
+
+<footer>
+<h4>Sources</h4>
+<ul>
+  <li><a href="https://zerolang.ai/">zerolang.ai</a></li>
+  <li><a href="https://github.com/vercel-labs/zero">vercel-labs/zero (GitHub)</a></li>
+  <li><a href="https://raw.githubusercontent.com/vercel-labs/zero/main/skills/zero/SKILL.md">skills/zero/SKILL.md</a></li>
+  <li><a href="https://github.com/vercel-labs/zero/tree/main/skill-data">skill-data/ (binary-pinned skills)</a></li>
+  <li><a href="https://raw.githubusercontent.com/vercel-labs/zero/main/docs-site/articles/language-reference.md">language-reference.md</a></li>
+  <li><a href="https://raw.githubusercontent.com/vercel-labs/zero/main/docs-site/articles/diagnostics.md">diagnostics.md</a></li>
+  <li><a href="https://raw.githubusercontent.com/vercel-labs/zero/main/docs-site/articles/cli-reference.md">cli-reference.md</a></li>
+  <li><a href="https://raw.githubusercontent.com/vercel-labs/zero/main/docs-site/articles/standard-library.md">standard-library.md</a></li>
+  <li><a href="https://raw.githubusercontent.com/vercel-labs/zero/main/docs-site/articles/cross-compilation.md">cross-compilation.md</a></li>
+  <li><a href="https://raw.githubusercontent.com/vercel-labs/zero/main/docs-site/articles/package-manifest.md">package-manifest.md</a></li>
+  <li><a href="https://raw.githubusercontent.com/vercel-labs/zero/main/docs-site/articles/testing.md">testing.md</a></li>
+  <li><a href="https://raw.githubusercontent.com/vercel-labs/zero/main/native/zero-c/targets/targets.manifest">targets.manifest</a></li>
+  <li><a href="https://www.marktechpost.com/2026/05/17/vercel-labs-introduces-zero-a-systems-programming-language-designed-so-ai-agents-can-read-repair-and-ship-native-programs/">MarkTechPost &mdash; Vercel Labs Introduces Zero (2026-05-17)</a></li>
+  <li><a href="https://firethering.com/vercel-zero-programming-language-ai-agents/">Firethering analysis</a></li>
+  <li><a href="https://byteiota.com/vercels-zero-a-programming-language-built-for-ai-agents/">byteiota writeup</a></li>
+  <li><a href="https://x.com/ctatedev/status/2055434061322039377">Chris Tate launch (X)</a></li>
+  <li><a href="https://x.com/mehulmpt/status/2055721670334369915">Mehul Mohan critique (X)</a></li>
+</ul>
+</footer>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,829 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent-oriented languages — unified report (MoonBit, Vera, Zero, Vow)</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1c2330;
+    --fg: #e6edf3;
+    --muted: #8b949e;
+    --dim: #6e7681;
+    --line: #30363d;
+    --accent: #58a6ff;
+    --vow:  #7ee787;
+    --moonbit: #b388ff;
+    --vera: #e87a5d;
+    --zero: #f0b429;
+    --warn: #f97583;
+    --good: #56d364;
+    --code-bg: #0b0f14;
+    --code-fg: #d1d9e0;
+    --max: 1150px;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--fg); }
+  body {
+    margin: 0;
+    font: 15.5px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    padding: 0 24px 80px;
+  }
+  main { max-width: var(--max); margin: 0 auto; }
+  header.hero {
+    max-width: var(--max);
+    margin: 48px auto 32px;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--line);
+  }
+  header.hero h1 { font-size: 34px; margin: 0 0 10px; letter-spacing: -0.02em; }
+  header.hero .sub { color: var(--muted); font-size: 17px; }
+  header.hero .meta { margin-top: 14px; color: var(--muted); font-size: 13px; }
+  h2 {
+    font-size: 22px;
+    margin: 48px 0 12px;
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+    letter-spacing: -0.01em;
+  }
+  h3 { font-size: 17px; margin: 24px 0 8px; color: var(--accent); }
+  h4 { font-size: 14px; margin: 16px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  p { margin: 8px 0 12px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace; }
+  code { background: var(--code-bg); color: var(--code-fg); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+  pre {
+    background: var(--code-bg); color: var(--code-fg);
+    padding: 14px 16px; border-radius: 8px;
+    overflow-x: auto; font-size: 13px; line-height: 1.5;
+    border: 1px solid var(--line);
+  }
+  pre code { background: transparent; padding: 0; font-size: inherit; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 14px; }
+  th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--panel); color: var(--muted); font-weight: 600; font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+  tr:nth-child(even) td { background: rgba(255,255,255,0.015); }
+  td:first-child { color: var(--muted); }
+  .tag {
+    display: inline-block;
+    padding: 1px 8px; border-radius: 999px;
+    font-size: 11.5px; letter-spacing: 0.03em;
+    border: 1px solid var(--line); color: var(--muted);
+    margin-right: 4px;
+  }
+  .tag.moonbit { color: var(--moonbit); border-color: rgba(179,136,255,0.4); background: rgba(179,136,255,0.07); }
+  .tag.vera    { color: var(--vera);    border-color: rgba(232,122,93,0.4);  background: rgba(232,122,93,0.07); }
+  .tag.zero    { color: var(--zero);    border-color: rgba(240,180,41,0.4);  background: rgba(240,180,41,0.07); }
+  .tag.vow     { color: var(--vow);     border-color: rgba(126,231,135,0.4); background: rgba(126,231,135,0.07); }
+  .tag.warn    { color: var(--warn);    border-color: rgba(249,117,131,0.4); background: rgba(249,117,131,0.07); }
+  .tag.good    { color: var(--good);    border-color: rgba(86,211,100,0.4);  background: rgba(86,211,100,0.07); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  @media (max-width: 880px) {
+    .grid2 { grid-template-columns: 1fr; }
+    .grid4 { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 560px) { .grid4 { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 18px;
+  }
+  .panel.moonbit { border-top: 3px solid var(--moonbit); }
+  .panel.vera    { border-top: 3px solid var(--vera); }
+  .panel.zero    { border-top: 3px solid var(--zero); }
+  .panel.vow     { border-top: 3px solid var(--vow); }
+  .panel h3 { margin-top: 4px; }
+  .panel h4 { color: var(--muted); margin-top: 12px; }
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--panel-2);
+    padding: 12px 16px;
+    border-radius: 0 6px 6px 0;
+    margin: 16px 0;
+  }
+  .callout.warn { border-left-color: var(--warn); }
+  .callout.good { border-left-color: var(--good); }
+  ul { padding-left: 22px; }
+  li { margin: 4px 0; }
+  .lessons ol { padding-left: 22px; }
+  .lessons li { margin: 14px 0; }
+  .lessons li b { color: var(--accent); }
+  footer { color: var(--muted); font-size: 12.5px; margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--line); }
+  .badge-row { margin-top: 8px; }
+  .tldr {
+    background: linear-gradient(180deg, rgba(126,231,135,0.08), rgba(126,231,135,0));
+    border: 1px solid rgba(126,231,135,0.3);
+    border-radius: 10px;
+    padding: 18px 22px;
+    margin: 20px 0;
+  }
+  .tldr h3 { margin-top: 0; color: var(--vow); }
+  .toc {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 22px;
+    margin: 24px 0;
+  }
+  .toc ol { columns: 2; column-gap: 32px; margin: 4px 0; padding-left: 20px; }
+  .toc li { margin: 3px 0; }
+  .nowrap { white-space: nowrap; }
+  details { margin: 8px 0; }
+  summary { cursor: pointer; color: var(--muted); }
+  summary:hover { color: var(--fg); }
+  .prio {
+    display: inline-block;
+    background: var(--accent); color: #0b0f14;
+    border-radius: 4px;
+    padding: 1px 7px;
+    font-size: 12px;
+    font-weight: 700;
+    margin-right: 8px;
+    vertical-align: 1px;
+  }
+  .prio.high { background: var(--vow); }
+  .prio.med  { background: var(--accent); }
+  .prio.low  { background: var(--dim); color: var(--fg); }
+  .src-tag { font-size: 11px; color: var(--muted); margin-left: 6px; }
+  .src-tag b { font-weight: 700; }
+  .src-tag .m { color: var(--moonbit); }
+  .src-tag .v { color: var(--vera); }
+  .src-tag .z { color: var(--zero); }
+  hr { border: none; border-top: 1px solid var(--line); margin: 28px 0; }
+  .col-mb { color: var(--moonbit); font-weight: 600; }
+  .col-v  { color: var(--vera);    font-weight: 600; }
+  .col-z  { color: var(--zero);    font-weight: 600; }
+  .col-vo { color: var(--vow);     font-weight: 600; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <h1>Agent-oriented languages &mdash; what Vow can learn</h1>
+  <div class="sub">Unified synthesis of three comparisons: <span class="col-mb">MoonBit</span>, <span class="col-v">Vera</span>, and <span class="col-z">Zero</span> against <span class="col-vo">Vow</span>. The category is real. The bets diverge sharply. A handful of ideas are worth porting; most are identity choices that don't belong in Vow.</div>
+  <div class="meta">Compiled 2026-05-19 &middot; consolidates <code>moonbit-comparison</code>, <code>vera-vs-vow</code>, <code>vera-skill-report</code>, and <code>zero-vs-vow</code>.</div>
+  <div class="badge-row">
+    <span class="tag moonbit">MoonBit &middot; v0.9 &middot; Apr 2026</span>
+    <span class="tag vera">Vera &middot; v0.0.155 &middot; May 2026</span>
+    <span class="tag zero">Zero &middot; v0.1.2 &middot; May 2026</span>
+    <span class="tag vow">Vow &middot; self-hosted main</span>
+  </div>
+</header>
+
+<main>
+
+<div class="tldr">
+<h3>TL;DR</h3>
+<p>Four languages now pitch themselves at AI agents. They <b>agree on the diagnosis</b> &mdash; machine-first compiler output, contracts as source of truth, in-tree agent docs, stable error codes &mdash; and confirm the category. They diverge on the cure:</p>
+<ul>
+  <li><span class="col-mb">MoonBit</span> attacks the <b>sampling layer</b> (constrained decoding) plus a vertically integrated agent (Pilot, ASP). Verification arrived in 0.9 via Why3+SMT, opt-in per package, with separate <code>.mbtp</code> predicate files.</li>
+  <li><span class="col-v">Vera</span> attacks the <b>name layer</b>: typed De Bruijn slots (<code>@Int.0</code>) replace identifiers, plus mandatory contracts verified by Z3 in three tiers ending in runtime fallback.</li>
+  <li><span class="col-z">Zero</span> attacks the <b>diagnostic layer</b>: ~25 JSON-first subcommands, a <code>fixSafety</code> taxonomy on every repair, capability-passing for effects. No verifier, no contracts.</li>
+  <li><span class="col-vo">Vow</span> attacks the <b>verification layer</b>: inline contracts, ESBMC bounded model checking, <em>concrete</em> counterexamples, Caller/Callee blame, linear types, binary-fixed-point self-host.</li>
+</ul>
+<p><b>The action list for Vow</b>: borrow <i>Inference as a tracked effect</i> (Vera), a <i>fixSafety ladder + typed <code>repair</code> handles</i> (Zero), <i>fix examples per error code</i> + <i>spec_ref anchors</i> (Vera), <i>contract-driven property tests</i> (Vera), <i>bounded quantifiers</i> (Vera), and <i>two-phase <code>fix --plan --json</code> + <code>explain &lt;code&gt;</code></i> (Zero). Reject De Bruijn names, the runtime-fallback tier, generics+metaprogramming, monolithic <code>SKILL.md</code>, and Pilot-style proprietary protocols. Vow's moat is the verifier, blame, linear types, and self-hosting &mdash; none of the three threaten it.</p>
+</div>
+
+<div class="toc">
+<b>Contents</b>
+<ol>
+  <li><a href="#landscape">The landscape at a glance</a></li>
+  <li><a href="#converge">What everyone agrees on</a></li>
+  <li><a href="#diverge">The four bets</a></li>
+  <li><a href="#verif">Verification head-to-head</a></li>
+  <li><a href="#skill">Skill packaging compared</a></li>
+  <li><a href="#diag">Diagnostics &amp; repair</a></li>
+  <li><a href="#learn">Consolidated lessons for Vow</a></li>
+  <li><a href="#reject">What Vow should not borrow</a></li>
+  <li><a href="#moat">Where Vow's moat is</a></li>
+  <li><a href="#actions">Prioritised action list</a></li>
+</ol>
+</div>
+
+<h2 id="landscape">1 &middot; The landscape at a glance</h2>
+
+<div class="grid4">
+  <div class="panel moonbit">
+    <h3 style="color:var(--moonbit)">MoonBit</h3>
+    <h4>Identity</h4>
+    <p>IDEA (Shenzhen). Lead: Hongbo Zhang (ex-ReScript). Started Oct 2022; v0.9 April 2026. Source-available (MPSL, SSPL-style). Compiler in OCaml, distributed as WASM.</p>
+    <h4>Bet</h4>
+    <p>Constrained decoding at the sampler + first-party Pilot agent + custom ASP protocol + (new) Why3-backed deductive verification.</p>
+    <h4>Numbers</h4>
+    <p>~1.1k stars on core, ~2.3k on docs. Discord ~578. No named production users. LLM4Code 2024 paper.</p>
+  </div>
+  <div class="panel vera">
+    <h3 style="color:var(--vera)">Vera</h3>
+    <h4>Identity</h4>
+    <p>Alasdair Allan (Negroni Venture Studios), solo. Public April 2026. MIT. Python+Lark+Z3+wasmtime, ~10 KLOC. WASM-only target.</p>
+    <h4>Bet</h4>
+    <p>De Bruijn slot references replace variable names. Mandatory <code>requires</code>/<code>ensures</code>/<code>effects</code>. <code>Inference</code> as a first-class effect.</p>
+    <h4>Numbers</h4>
+    <p>~351 stars, 17 forks, 156 releases in ~3 months. One HN thread (95 comments, mostly skeptical). VeraBench: 50 problems &times; 6 models.</p>
+  </div>
+  <div class="panel zero">
+    <h3 style="color:var(--zero)">Zero</h3>
+    <h4>Identity</h4>
+    <p>Vercel Labs (Chris Tate, Matt Van Horn). Released v0.1.0 May 15, 2026. Apache-2.0. C compiler with direct native emitters (ELF / Mach-O / COFF / WASM). No LLVM.</p>
+    <h4>Bet</h4>
+    <p>Structured-JSON everywhere (~25 CLI subcommands). <code>fixSafety</code> ladder on every diagnostic. Capability-passing for effects (<code>world: World</code>).</p>
+    <h4>Numbers</h4>
+    <p>~1.9k stars in days. No published benchmarks. Sub-10 KiB native binaries. Self-host in progress.</p>
+  </div>
+  <div class="panel vow">
+    <h3 style="color:var(--vow)">Vow</h3>
+    <h4>Identity</h4>
+    <p>Paulo Matos &amp; collaborators. Open source. Cranelift native via FFI shim + ESBMC pipeline in parallel via C emitter. Binary fixed-point self-host.</p>
+    <h4>Bet</h4>
+    <p>Inline contracts (<code>requires</code>/<code>ensures</code>/<code>invariant</code>) verified by ESBMC BMC. <b>Concrete</b> counterexamples + Caller/Callee blame + CEGIS loop. Linear types. JSON-everywhere.</p>
+    <h4>Numbers</h4>
+    <p>36/36 Vow suite (sonnet-4-6); HumanEval 66/67 (sonnet-4); 103/103 non-stretch references verified by self-hosted compiler.</p>
+  </div>
+</div>
+
+<h2 id="converge">2 &middot; What everyone agrees on</h2>
+
+<p>Four projects, four bets, but a single converged thesis. Every one of them ships:</p>
+
+<ul>
+  <li><b>Machine-readable error output</b> as the primary surface, with human-readable as the alternate. Stable diagnostic codes (<code>E###</code>, <code>NAM003</code>, <code>VowViolation</code>) with <code>description</code> + <code>rationale</code> + <code>fix</code> + <code>spec_ref</code>-style fields.</li>
+  <li><b>Effects in the type system.</b> All four track side effects as part of the function type (or equivalent capability handle). Pure functions cannot accidentally do IO.</li>
+  <li><b>Agent-facing docs in-tree.</b> A <code>SKILL.md</code> (MoonBit is the lone holdout), <code>AGENTS.md</code>, <code>CLAUDE.md</code>, or compiler-served equivalent. Auto-discoverable, not buried in a wiki.</li>
+  <li><b>Contracts as the source of truth</b> (3 of 4 &mdash; Zero is the exception): MoonBit's <code>proof_require</code>/<code>proof_ensure</code>, Vera's mandatory <code>requires</code>/<code>ensures</code>, Vow's <code>vow</code> blocks. The disagreement is over the verifier, not the idea.</li>
+  <li><b>JSON build artifacts.</b> Diagnostic JSON, build JSON, verification JSON. Terminal output is for humans; agents consume the schema.</li>
+</ul>
+
+<div class="callout good">
+<p>Four projects converging on the same diagnosis within a 12-month window (MoonBit 0.9 Apr 2026, Vera Apr 2026, Zero May 2026, Vow self-host before that) is the strongest evidence yet that <b>"language designed for agents with mandatory contracts and machine-first output"</b> is a real category. The market is now contested. Vow's positioning needs to be sharper than "we also do this".</p>
+</div>
+
+<h2 id="diverge">3 &middot; The four bets</h2>
+
+<p>Where they diverge is more interesting than where they agree. Each project picked exactly one layer of the agentic-coding stack to attack:</p>
+
+<table>
+  <thead>
+    <tr><th>Layer attacked</th><th>Project</th><th>Mechanism</th><th>What it gives up</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Sampling</td>
+      <td><span class="col-mb">MoonBit</span></td>
+      <td>Constrained decoding (local syntactic + global type-checking samplers) running on hosted infra; ~3% latency penalty for large compile-rate wins on small models.</td>
+      <td>Coupling to hosted infra; closed sampler; not packaged as standalone lib.</td>
+    </tr>
+    <tr>
+      <td>Naming</td>
+      <td><span class="col-v">Vera</span></td>
+      <td>Eliminate variable names entirely. Typed De Bruijn slots (<code>@Int.0</code>) with per-type counters.</td>
+      <td>Grep-ability; local-reasoning when editing top of function; cross-model bench wins are mixed (Kimi K2.5 100%, Sonnet 4 79%).</td>
+    </tr>
+    <tr>
+      <td>Diagnostics</td>
+      <td><span class="col-z">Zero</span></td>
+      <td><code>fixSafety</code> ladder + typed <code>repair</code> handles + ~25 JSON-first subcommands + binary-pinned skills.</td>
+      <td>No verifier; no formal correctness story; types + capabilities only.</td>
+    </tr>
+    <tr>
+      <td>Verification</td>
+      <td><span class="col-vo">Vow</span></td>
+      <td>Inline contracts &rarr; ESBMC BMC &rarr; <i>concrete</i> counterexample with values + trace + blame &rarr; agent fixes &rarr; rerun. CEGIS loop is the headline.</td>
+      <td>No quantifiers in contracts; bounded by unwind depth; verifier latency.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>These are <b>complementary, not competing</b>. A serious agent-language toolchain could (in principle) compose all four: a constrained sampler emits tokens that satisfy the grammar; a small core surface keeps the verifier tractable; structured diagnostics drive the repair loop; concrete counterexamples close it.</p>
+
+<h2 id="verif">4 &middot; Verification head-to-head</h2>
+
+<p>The most consequential axis of comparison. Three of the four (MoonBit, Vera, Vow) ship a verifier; Zero deliberately doesn't.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Property</th>
+      <th class="col-mb">MoonBit 0.9</th>
+      <th class="col-v">Vera</th>
+      <th class="col-z">Zero</th>
+      <th class="col-vo">Vow</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Backend</td>
+      <td>Why3 &rarr; Z3/Alt-Ergo/CVC5</td>
+      <td>Z3 SMT directly</td>
+      <td>None</td>
+      <td>ESBMC (BMC)</td>
+    </tr>
+    <tr>
+      <td>What's being decided</td>
+      <td>Validity of FO formulas in decidable theories.</td>
+      <td>Same, but no separate predicate logic.</td>
+      <td>N/A &mdash; types + capabilities only.</td>
+      <td>Reachability of assertion violation in bounded unwind.</td>
+    </tr>
+    <tr>
+      <td>Predicate location</td>
+      <td>Separate <code>.mbtp</code> file w/ dedicated logical sublanguage.</td>
+      <td>Inline.</td>
+      <td>N/A</td>
+      <td>Inline, same expression language as code.</td>
+    </tr>
+    <tr>
+      <td>Quantifiers</td>
+      <td><code>&forall;</code>, recursive predicates, finite-set/seq/map model libs.</td>
+      <td>Bounded <code>forall</code>/<code>exists</code> over <code>Nat</code> ranges.</td>
+      <td>N/A</td>
+      <td>None &mdash; boolean exprs only.</td>
+    </tr>
+    <tr>
+      <td>Failure shape</td>
+      <td>Per-VC verdict ("could not prove goal X" / Unknown / Timeout).</td>
+      <td>Per-VC verdict; if undecided, becomes Tier-3 runtime assert (E500&ndash;E525).</td>
+      <td>Type/capability error JSON.</td>
+      <td><b>Concrete failing input</b> + execution trace + JSON + Caller/Callee blame.</td>
+    </tr>
+    <tr>
+      <td>Termination</td>
+      <td><code>proof_decrease</code> measures.</td>
+      <td>Mandatory <code>decreases</code> on pure recursion (no loops in language).</td>
+      <td>N/A</td>
+      <td>Bounded unwinding instead.</td>
+    </tr>
+    <tr>
+      <td>Loops</td>
+      <td>Yes &mdash; <code>proof_invariant</code> clauses.</td>
+      <td>None &mdash; rejected at language level.</td>
+      <td>Yes &mdash; no formal reasoning.</td>
+      <td>Yes &mdash; <code>invariant</code> + bounded unwind.</td>
+    </tr>
+    <tr>
+      <td>Blame</td>
+      <td>None.</td>
+      <td>None.</td>
+      <td>N/A; <code>fixSafety</code> classifies repairs instead.</td>
+      <td>First-class Caller/Callee in JSON.</td>
+    </tr>
+    <tr>
+      <td>Trigger</td>
+      <td>Opt-in per package (<code>"proof-enabled": true</code>); <code>moon prove</code>.</td>
+      <td><code>vera verify</code>; Tier-3 contracts trap at runtime.</td>
+      <td>N/A</td>
+      <td><b>On by default</b> with <code>vowc build</code>; <code>--no-verify</code> to skip.</td>
+    </tr>
+    <tr>
+      <td>Repair loop</td>
+      <td>Implicit: Pilot drafts predicates, prover checks.</td>
+      <td>Implicit: write &rarr; verify &rarr; JSON error &rarr; fix.</td>
+      <td><code>fix --plan --json</code> proposes; agent applies.</td>
+      <td><b>Explicit CEGIS</b>, marketed as the workflow.</td>
+    </tr>
+    <tr>
+      <td>Honesty about uncertainty</td>
+      <td>Per-VC verdicts include "could not prove".</td>
+      <td>Silent Tier-3 fallback counted in <code>tier3_runtime</code>.</td>
+      <td>No claim being made.</td>
+      <td>Bounded; bound is stated; failure is explicit.</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout good">
+<p><b>Z3/Why3 and ESBMC are complementary, not strictly ordered.</b> SMT-deductive systems are better at pure arithmetic and quantified contracts over abstract values. BMC is better at concrete bug-finding in imperative loops and memory access patterns. <i>Vow gets witnesses; MoonBit/Vera get quantifiers.</i> Witnesses are what the agent loop actually consumes &mdash; "here's the input that breaks it" is a stronger signal than "could not prove goal&nbsp;X" &mdash; which is why Vow's bet is well-positioned even though Why3+SMT is a more general formalism.</p>
+</div>
+
+<h2 id="skill">5 &middot; Skill packaging compared</h2>
+
+<p>How each project hands its language to the agent &mdash; an underrated UX axis. Four very different choices:</p>
+
+<table>
+  <thead>
+    <tr><th>Project</th><th>Always-loaded body</th><th>Where the rest lives</th><th>Version-pinning</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><span class="col-mb">MoonBit</span></td>
+      <td><span class="tag warn">No SKILL.md</span></td>
+      <td>Pilot is the agent layer; no Claude Code skill, no Cursor profile, no system prompt. Pilot reads docs itself; closed loop.</td>
+      <td>By tool, not skill.</td>
+    </tr>
+    <tr>
+      <td><span class="col-v">Vera</span></td>
+      <td><b>99 KB / ~25 K tokens</b> single file.</td>
+      <td>All inline. Stdlib (7.8 K tokens) + Effects (3.2 K tokens) make up ~45% of the file.</td>
+      <td>By file content; manual sync.</td>
+    </tr>
+    <tr>
+      <td><span class="col-z">Zero</span></td>
+      <td>~1.5 KB <i>discovery stub</i>.</td>
+      <td>Inside the compiler binary. Served via <code>zero skills list</code> / <code>zero skills get &lt;id&gt; [--full]</code>. Seven micro-skills, ~17 KB total.</td>
+      <td><b>Binary-pinned</b>: skills move with compiler version; zero drift.</td>
+    </tr>
+    <tr>
+      <td><span class="col-vo">Vow</span></td>
+      <td>1.7 KB / 48-line entrypoint.</td>
+      <td>Linked reference files (<code>grammar.md</code>, <code>cli.md</code>, <code>contracts.md</code>, <code>errors.md</code>, <code>examples.md</code>) on disk; full self-contained bundle (~30 K tokens) printed on demand via <code>vowc skill print --bundle</code>.</td>
+      <td>Generated from compiler; <code>check_help_coverage.py</code> catches drift.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Vera's monolith is the comparison that proves Vow's progressive-disclosure choice. At <b>~5&times; the practical ceiling</b> for an always-loaded Claude Code skill, Vera is making a bet that the agent won't follow links &mdash; defensible only for agents that don't.</p>
+
+<p>Zero's <i>binary-pinned</i> twist is more interesting. Treating the skill as <i>something the compiler emits at runtime</i> closes the version-skew window completely. Vow has the affordance (<code>vowc skill print</code>) but ships the full content on disk; going further would mean turning the on-disk stub into a discovery pointer that says <i>"ask the binary"</i>.</p>
+
+<h2 id="diag">6 &middot; Diagnostics &amp; repair</h2>
+
+<p>The diagnostic JSON shape is converging. All four projects ship structured per-error objects with codes and severities. The variation is in <i>what extra fields the agent gets</i>:</p>
+
+<table>
+  <thead>
+    <tr><th>Field</th><th class="col-mb">MoonBit</th><th class="col-v">Vera</th><th class="col-z">Zero</th><th class="col-vo">Vow</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Stable code</td>
+      <td>Yes (Why3 VC ids)</td>
+      <td><b>Yes</b> (E001&ndash;E702)</td>
+      <td><b>Yes</b> (XXXNNN, 16 families)</td>
+      <td><b>Yes</b> (named codes)</td>
+    </tr>
+    <tr>
+      <td><code>rationale</code></td>
+      <td>&mdash;</td>
+      <td><b>Yes</b></td>
+      <td>(via <code>help</code>)</td>
+      <td>(in <code>errors.md</code>, not JSON)</td>
+    </tr>
+    <tr>
+      <td><code>fix</code> example</td>
+      <td>&mdash;</td>
+      <td><b>Yes</b> per code</td>
+      <td>via <code>repair</code> handle</td>
+      <td><span class="tag warn">Missing</span></td>
+    </tr>
+    <tr>
+      <td><code>spec_ref</code> anchor</td>
+      <td>&mdash;</td>
+      <td><b>Yes</b> (<code>spec/05-contracts.md#postconditions</code>)</td>
+      <td>(via <code>code</code>)</td>
+      <td><span class="tag warn">Missing</span></td>
+    </tr>
+    <tr>
+      <td>Blame attribution</td>
+      <td>&mdash;</td>
+      <td>&mdash;</td>
+      <td>&mdash;</td>
+      <td><b>Yes</b> (Caller/Callee)</td>
+    </tr>
+    <tr>
+      <td>Repair safety classification</td>
+      <td>&mdash;</td>
+      <td>&mdash;</td>
+      <td><b>Yes</b> (<code>fixSafety</code>, 5 levels)</td>
+      <td><span class="tag warn">Missing</span></td>
+    </tr>
+    <tr>
+      <td>Typed repair handle</td>
+      <td>&mdash;</td>
+      <td>&mdash;</td>
+      <td><b>Yes</b> (<code>repair: {id, summary}</code>)</td>
+      <td><span class="tag warn">Missing</span></td>
+    </tr>
+    <tr>
+      <td>Concrete witness</td>
+      <td>&mdash;</td>
+      <td>&mdash;</td>
+      <td>&mdash;</td>
+      <td><b>Yes</b> (failing input + trace + values)</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Vow has the unique <i>witness</i> + <i>blame</i> story. The missing pieces (italicised in the warning tags) are all <b>portable from Vera and Zero with no language-level changes</b> &mdash; documentation, plus an enrichment of the JSON emitter.</p>
+
+<h2 id="learn">7 &middot; Consolidated lessons for Vow</h2>
+
+<p>Deduplicated across all three comparisons, in rough priority order. Source attribution: <span class="src-tag"><b class="m">M</b> MoonBit</span> <span class="src-tag"><b class="v">V</b> Vera</span> <span class="src-tag"><b class="z">Z</b> Zero</span>.</p>
+
+<div class="lessons">
+<ol>
+
+<li>
+  <b>Inference as a tracked effect.</b> <span class="src-tag"><b class="v">V</b></span><br>
+  Vera puts LLM calls in the effect row: <code>Inference.complete : String -&gt; Result&lt;String, String&gt;</code>, <code>effects(&lt;Inference&gt;)</code>. A pure function can't accidentally call out to a remote model &mdash; it's a type error. If Vow ever grows agent-callable builtins (LLM-as-stdlib), this is the right shape. <i>Cost</i>: one effect kind, one runtime shim. <b>Zero verifier impact.</b> The single strongest portable idea across the three comparisons.
+</li>
+
+<li>
+  <b><code>fixSafety</code> ladder on every diagnostic.</b> <span class="src-tag"><b class="z">Z</b></span><br>
+  Vow has <code>Blame</code> (who is at fault) but no notion of <i>how dangerous a fix is</i>. A 5-level ladder &mdash; <code>format-only</code>, <code>behavior-preserving</code>, <code>local-edit</code>, <code>api-changing</code>, <code>requires-human-review</code> &mdash; lets an agent triage automatically. Vow mapping: strengthening a <code>requires</code> &rarr; <code>api-changing</code>; adding a loop <code>invariant</code> &rarr; <code>local-edit</code>; a counterexample showing a logic bug &rarr; <code>requires-human-review</code>. Complements blame.
+</li>
+
+<li>
+  <b>Typed <code>repair</code> handle alongside the diagnostic.</b> <span class="src-tag"><b class="z">Z</b></span><br>
+  Today a vow violation says <i>"<code>requires: y != 0</code> failed with <code>y == 0</code>"</i>. Adding <code>repair: { id: "guard-divisor", summary: "Add precondition or rescue" }</code> turns the diagnostic into an actionable JSON object the agent can dispatch on. The compiler doesn't have to <i>write</i> the patch &mdash; just <i>name</i> it.
+</li>
+
+<li>
+  <b>Fix example per error code.</b> <span class="src-tag"><b class="v">V</b></span><br>
+  Vera's <code>errors.md</code> ships a 4&ndash;6 line wrong/right snippet for every <code>E###</code>. Vow's <code>errors.md</code> has rationale and description but rarely a concrete fix shape. <b>Documentation-only change</b>; tightens the diagnostics-as-instructions story.
+</li>
+
+<li>
+  <b>Spec_ref anchors in diagnostic JSON.</b> <span class="src-tag"><b class="v">V</b></span><br>
+  Each Vera error carries <code>spec_ref: "spec/05-contracts.md#postconditions"</code>. Vow's spec is already cleanly chaptered (<code>docs/spec/{grammar,cli,contracts,errors,examples}.md</code>) &mdash; embedding the anchor in the diagnostic JSON closes the loop. The agent doesn't have to guess where to read.
+</li>
+
+<li>
+  <b>Contract-driven property testing.</b> <span class="src-tag"><b class="v">V</b></span><br>
+  <code>vera test --trials N</code> uses Z3 to synthesize inputs satisfying <code>requires</code>, runs the function, asserts <code>ensures</code>. Vow already has <code>vowc test</code>; adding a <code>--from-contracts --trials N</code> mode reuses CEGIS infrastructure to generate random witnesses and exercise <code>ensures</code> at runtime. Belt-and-braces beside ESBMC; useful where BMC bounds are tight.
+</li>
+
+<li>
+  <b>Two-phase fix: <code>vowc fix --plan --json</code>.</b> <span class="src-tag"><b class="z">Z</b></span><br>
+  <code>zero fix --plan --json</code> proposes; the agent applies. Vow could emit a structured proposal &mdash; not a patch &mdash; covering candidate strengthenings of contracts, loop invariants, or guards. The plan can be regression-tested independently of any patcher.
+</li>
+
+<li>
+  <b><code>vowc explain &lt;error_code&gt; --json</code>.</b> <span class="src-tag"><b class="z">Z</b></span><br>
+  Today <code>VowViolation</code> taxonomy / blame model / link to <code>contracts.md</code> live only in markdown. Lifting them into a runtime command makes them discoverable from the JSON itself: an agent that sees a code in build output can ask the binary what it means.
+</li>
+
+<li>
+  <b><code>vowc skill list</code> / <code>vowc skill get &lt;id&gt;</code>.</b> <span class="src-tag"><b class="z">Z</b></span><br>
+  Zero ships seven micro-skills (~2&ndash;3 KB each) the agent fetches on demand. Vow's reference files are already structured this way (<code>grammar</code>, <code>cli</code>, <code>contracts</code>, <code>errors</code>, <code>examples</code>) &mdash; the missing piece is a discoverable <i>index</i> command. Closes the version-skew window further.
+</li>
+
+<li>
+  <b>Centralized "Do nots" page in the skill.</b> <span class="src-tag"><b class="z">Z</b></span><br>
+  Zero's <code>zero-agent</code> opens with six imperatives. Vow's equivalents are spread across <code>contracts.md</code> and <code>CLAUDE.md</code>. A short, top-of-skill list. Vow-specific candidates: <i>don't weaken contracts to appease ESBMC</i>; <i>don't add <code>n &lt;= 10</code>-style verifier bounds to <code>requires</code></i>; <i>don't use <code>--no-verify</code> to skip a real failure</i>; <i>don't invent CLI fields or syntax</i>.
+</li>
+
+<li>
+  <b>Bounded quantifiers in contracts.</b> <span class="src-tag"><b class="v">V</b></span> <span class="src-tag"><b class="m">M</b></span><br>
+  Vera's <code>forall(@Nat, length, fn(...) {...})</code> and MoonBit's <code>&forall; idx : Int, 0 &lt;= idx &amp;&amp; idx &lt; h+1 &rarr; ...</code> are quantifiers over known-bounded ranges. <b>Translates straightforwardly to ESBMC as an unrolled loop of assertions.</b> A concrete win for contracts that today require N copy-pasted <code>ensures</code> lines (e.g. "every element of <code>xs[0..n]</code> is positive"). Stays within the verifier-friendliness gate of Vow's "crisp rule".
+</li>
+
+<li>
+  <b>Inline <code>test "name" { ... }</code> blocks.</b> <span class="src-tag"><b class="z">Z</b></span> <span class="src-tag"><b class="m">M</b></span><br>
+  Both Zero and MoonBit have inline tests in any source file. Vow has <code>tests/run/*.vow</code> directory tests; inline tests would be a complementary mode for unit-level coverage. <b>Bonus from Zero</b>: <code>xfail:</code>-prefixed test names that surface <code>unexpectedPasses</code> in JSON &mdash; an agent sees instantly when it has accidentally fixed something.
+</li>
+
+<li>
+  <b>Inline snapshot tests with auto-rewrite.</b> <span class="src-tag"><b class="m">M</b></span><br>
+  MoonBit's <code>inspect({ x: 10 }, content="{ x: 10 }")</code> rewrites the <code>content=</code> string in source on <code>--update</code>. No separate golden directory. Tight loop for golden-output tests. Worth borrowing for Vow's <code>tests/run/</code>.
+</li>
+
+<li>
+  <b>Surface the cache key / fingerprint in JSON build output.</b> <span class="src-tag"><b class="z">Z</b></span><br>
+  Zero exposes <code>cacheKeyInputs</code>, <code>snapshotKey</code>, <code>interfaceFingerprints</code>. Vow already has a deterministic compile-object cache (see <code>cli.md</code>); making the key visible gives agents a stable handle for cache diagnostics, regression detection, and reproducibility audits. Builds on the binary-fixed-point story.
+</li>
+
+<li>
+  <b>Mandatory <code>decreases</code> on pure recursion.</b> <span class="src-tag"><b class="v">V</b></span> <span class="src-tag"><b class="m">M</b></span><br>
+  Both Vera and MoonBit require an explicit termination measure on recursion. Vow uses bounded unwinding instead. Borrowing the <i>idea</i> &mdash; an explicit termination measure the agent has to state &mdash; might let Vow drop the unwind bound for some cases or sharpen counterexamples. <b>Feasibility note in the contracts ADR</b>, not an immediate change.
+</li>
+
+<li>
+  <b>Forward-looking: constrained decoding is the layer above Vow.</b> <span class="src-tag"><b class="m">M</b></span><br>
+  MoonBit attacks "agents emit invalid code" at the sampler; Vow attacks it at the verifier. <i>These compose</i>: a Vow-aware sampler could rule out unparseable or trivially ill-typed tokens before ESBMC ever runs. Worth a forward-looking note in <code>docs/spec/</code>. <b>Not an action item.</b>
+</li>
+
+<li>
+  <b>One canonical form, optionally enforced.</b> <span class="src-tag"><b class="v">V</b></span><br>
+  Vera ships <code>vera fmt --check</code> as part of the workflow; there is no style debate. Vow already has a canonical printer (a compiler pass), but doesn't enforce it as part of <code>vowc build</code>. Optional CI gate.
+</li>
+
+</ol>
+</div>
+
+<h2 id="reject">8 &middot; What Vow should not borrow</h2>
+
+<p>Each project's identity is built on choices that fight Vow's identity. Picking these up would dilute, not strengthen, what Vow is for:</p>
+
+<div class="callout warn">
+<h4 style="margin-top:0">From <span class="col-v">Vera</span></h4>
+<ul>
+  <li><b>De Bruijn slot references.</b> Vera's defining bet, and the most contested by every external reviewer. Bench wins are model-specific (Kimi K2.5 100%, Sonnet 4 79% &mdash; <i>worse</i> than Python). Names anchor LLM attention; <code>grep</code> matters; the cost to human collaborators is real. <b>Thesis too narrow and too disputed to bet on.</b></li>
+  <li><b>Tier-3 runtime fallback for verification.</b> If Z3 can't discharge a contract, Vera silently emits a runtime assert and counts it in <code>tier3_runtime</code>. <b>Breaks the "verified by default" pitch.</b> Adopt the <i>counting</i> in JSON; don't adopt the <i>fallback</i>.</li>
+  <li><b>WASM-only backend.</b> Cranelift native + binary fixed-point self-host is one of Vow's strongest credibility signals. Vera's Python-host + WASM-only target is research-grade.</li>
+  <li><b>Mandatory effect/visibility on every function.</b> Vera requires <code>public</code>/<code>private</code>, <code>requires</code>, <code>ensures</code>, <code>effects</code> on <i>every</i> declaration. Vow's "pure-by-default, effect annotations only when needed" carries the same information with less syntactic load.</li>
+  <li><b>No loops / no mutation / no linearity.</b> Vera's "everything is recursion, everything copies" gives up Vow's linear-types story. Linear types are <i>load-bearing</i> for Vow's memory-discipline brand. Don't trade them.</li>
+  <li><b>Async-as-a-marker-only.</b> Vera's <code>Async</code> effect has "no runtime overhead" because it's sequential. Same syntax, different semantics &mdash; an agent has no way to tell from the call site. If Vow ever adds async, it should be real.</li>
+  <li><b>Monolithic 99 KB <code>SKILL.md</code>.</b> Wrong default for Claude Code specifically. Vow already does the right thing.</li>
+</ul>
+
+<h4 style="margin-top:16px">From <span class="col-z">Zero</span></h4>
+<ul>
+  <li><b>Generics + <code>meta(...)</code> compile-time introspection.</b> Zero has both. Vow has deliberately rejected both because they expand the verification surface. Generics force monomorphization complexity that ESBMC has to chase. The "crisp rule" in <code>CLAUDE.md</code> &mdash; "add surface sugar only when it desugars to today's core semantics with near-zero verifier impact; reject anything that introduces a new type-system axis" &mdash; argues against this directly.</li>
+  <li><b>Sub-10 KiB binary chase.</b> Vow's binaries can be larger if it buys verification. Don't optimise away ESBMC's static C model for binary-size points.</li>
+  <li><b>Removing the C backend.</b> Zero removed its generated-C path in favour of direct emitters. Vow <i>needs</i> the C backend for ESBMC. Different priorities.</li>
+  <li><b>25 subcommands.</b> A lot of Zero's surface (<code>zero mem</code>, <code>zero ship</code>, <code>zero abi</code>, <code>zero doctor</code>) is useful only at productized-toolchain scale. Vow should pick subcommands by clear agent need, not parity.</li>
+  <li><b>Effect-as-capability syntax.</b> Threading <code>world: World</code> through every effectful function is grep-friendly but visually heavy. Vow's effect sets on function types do the same job structurally with less noise. <b>Adopt the explicitness; keep the syntax.</b></li>
+</ul>
+
+<h4 style="margin-top:16px">From <span class="col-mb">MoonBit</span></h4>
+<ul>
+  <li><b>Proprietary protocols (ASP).</b> Closed, undocumented, ships with the compiler. Vow's bet on "JSON-everywhere, no proprietary protocol" is the better story if the agent ecosystem is going to be Cambrian.</li>
+  <li><b>Source-available license.</b> MoonBit's MPSL (SSPL-style anti-cloud clause) is a recurring friction point in HN discussion. Vow's open-source posture is both straightforward marketing and engineering.</li>
+  <li><b>Vertically integrated agent (Pilot).</b> Pilot is a closed loop: own sampler, own protocol, own agent, own UI. Even if technically excellent, it's a separate <i>product</i> for the language team to maintain. Vow's "JSON-everywhere, any agent" is more leverage-efficient.</li>
+  <li><b>Separate predicate files (<code>.mbtp</code>).</b> Tempting for reuse and a richer logical sublanguage (quantifiers, recursive predicates) &mdash; but a new namespace, new file type, new logic. Fails the "doesn't make verification harder" gate <i>unless</i> there's a concrete reuse story Vow can't currently express. Inline contracts are simpler and currently sufficient.</li>
+  <li><b>Why3 as the verification primitive.</b> Real escape hatch if Vow ever needs unbounded <code>&forall;</code>/<code>&exist;</code>, but adopting it means giving up <b>concrete counterexamples</b>. The CEGIS loop changes shape from "here's the failing input" to "could not prove goal X". Not worth the trade.</li>
+</ul>
+</div>
+
+<h2 id="moat">9 &middot; Where Vow's moat is</h2>
+
+<p>After three comparisons, the picture is clearest about what Vow has that no one else does:</p>
+
+<table>
+  <thead><tr><th>Asset</th><th>Held by</th><th>Defensibility</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>Concrete counterexamples</b> (failing input + execution trace + values)</td>
+      <td>Vow alone</td>
+      <td>Architectural &mdash; tied to BMC. MoonBit (Why3) and Vera (Z3) can't get there without a different backend. Strong moat.</td>
+    </tr>
+    <tr>
+      <td><b>Caller/Callee blame on every violation</b></td>
+      <td>Vow alone</td>
+      <td>Cheap to copy; but no one else has thought to. Defensible by being first and getting it right.</td>
+    </tr>
+    <tr>
+      <td><b>Linear types + no GC</b></td>
+      <td>Vow alone (in this set)</td>
+      <td>MoonBit is GC; Vera has no memory story; Zero has owned/ref but not linearity. Linear types are <i>load-bearing</i> for Vow's brand. Hard to retrofit elsewhere.</td>
+    </tr>
+    <tr>
+      <td><b>Binary fixed-point self-host</b></td>
+      <td>Vow alone (in this set)</td>
+      <td>MoonBit isn't self-hosted; Vera isn't; Zero's self-host is in progress. Credibility signal that scales with time invested.</td>
+    </tr>
+    <tr>
+      <td><b>Verification on by default</b></td>
+      <td>Vow alone</td>
+      <td>MoonBit requires <code>"proof-enabled": true</code> per package; Vera's <code>verify</code> is a separate verb; Zero has no verifier. Vow's "<code>vowc build</code> verifies unless you opt out" is uniquely strong.</td>
+    </tr>
+    <tr>
+      <td><b>Small core surface</b> (no generics, no traits, no closures, no macros)</td>
+      <td>Vow alone</td>
+      <td>MoonBit, Vera, Zero all ship generics. Vow's "crisp rule" makes the verification surface tractable. Reverse-defensible: every feature Vow keeps out of the language is one ESBMC doesn't have to chase.</td>
+    </tr>
+    <tr>
+      <td><b>Published cross-language benchmarks</b> (36/36, HumanEval 66/67, 103/103 references)</td>
+      <td>Vow leads</td>
+      <td>Vera has VeraBench (single-run, self-acknowledged unreliable). MoonBit has the LLM4Code 2024 paper but no equivalent public agent bench. Zero has none.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>None of the three threaten any of these. Where the others <i>do</i> beat Vow &mdash; <code>fixSafety</code> ladders, typed repair handles, spec_ref anchors, the <code>Inference</code> effect &mdash; the gaps are either <b>documentation-only</b> or <b>JSON-shape</b> changes. They don't require language work or verifier changes.</p>
+
+<h2 id="actions">10 &middot; Prioritised action list</h2>
+
+<p>Concrete, in order. The first five are documentation-only or JSON-emitter changes; the rest involve modest language or tooling work. None of them touch the verifier core.</p>
+
+<table>
+  <thead>
+    <tr><th>#</th><th>Action</th><th>Effort</th><th>Surface affected</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><span class="prio high">1</span></td>
+      <td><b>Add <code>fix:</code> wrong/right snippet to every <code>E###</code> in <code>errors.md</code>.</b> <span class="src-tag"><b class="v">V</b></span></td>
+      <td>Docs only.</td>
+      <td><code>docs/spec/errors.md</code></td>
+    </tr>
+    <tr>
+      <td><span class="prio high">2</span></td>
+      <td><b>Embed <code>spec_ref</code> anchors in diagnostic JSON.</b> <span class="src-tag"><b class="v">V</b></span></td>
+      <td>JSON emitter; trivial.</td>
+      <td><code>vow-diag</code></td>
+    </tr>
+    <tr>
+      <td><span class="prio high">3</span></td>
+      <td><b>Add <code>fixSafety</code> ladder field to every diagnostic JSON.</b> <span class="src-tag"><b class="z">Z</b></span></td>
+      <td>JSON emitter + classification table.</td>
+      <td><code>vow-diag</code></td>
+    </tr>
+    <tr>
+      <td><span class="prio high">4</span></td>
+      <td><b>Add typed <code>repair: {id, summary}</code> handle to diagnostics.</b> <span class="src-tag"><b class="z">Z</b></span></td>
+      <td>JSON emitter + repair-id taxonomy.</td>
+      <td><code>vow-diag</code></td>
+    </tr>
+    <tr>
+      <td><span class="prio high">5</span></td>
+      <td><b>Surface <code>vowc skill print --bundle</code> path in the entrypoint <code>SKILL.md</code>.</b> <span class="src-tag"><b class="v">V</b></span></td>
+      <td>One line of docs.</td>
+      <td>Skill entrypoint.</td>
+    </tr>
+    <tr>
+      <td><span class="prio med">6</span></td>
+      <td><b>Centralised "Do nots" page at top of the skill.</b> <span class="src-tag"><b class="z">Z</b></span></td>
+      <td>Docs only.</td>
+      <td>Skill entrypoint.</td>
+    </tr>
+    <tr>
+      <td><span class="prio med">7</span></td>
+      <td><b><code>vowc explain &lt;error_code&gt; --json</code> subcommand.</b> <span class="src-tag"><b class="z">Z</b></span></td>
+      <td>One subcommand + lookup table.</td>
+      <td>CLI.</td>
+    </tr>
+    <tr>
+      <td><span class="prio med">8</span></td>
+      <td><b><code>vowc skill list</code> + <code>vowc skill get &lt;id&gt;</code>.</b> <span class="src-tag"><b class="z">Z</b></span></td>
+      <td>Two subcommands; reuses existing skill content.</td>
+      <td>CLI.</td>
+    </tr>
+    <tr>
+      <td><span class="prio med">9</span></td>
+      <td><b>Surface cache key / interface fingerprint in <code>vowc build --json</code>.</b> <span class="src-tag"><b class="z">Z</b></span></td>
+      <td>JSON enrichment.</td>
+      <td><code>vow</code> driver.</td>
+    </tr>
+    <tr>
+      <td><span class="prio med">10</span></td>
+      <td><b>Inline <code>test "name" { ... }</code> blocks + <code>xfail:</code> / <code>unexpectedPasses</code>.</b> <span class="src-tag"><b class="z">Z</b></span> <span class="src-tag"><b class="m">M</b></span></td>
+      <td>Parser + test runner mode.</td>
+      <td>Language + tooling.</td>
+    </tr>
+    <tr>
+      <td><span class="prio med">11</span></td>
+      <td><b><code>vowc test --from-contracts --trials N</code> (contract-driven property tests).</b> <span class="src-tag"><b class="v">V</b></span></td>
+      <td>Random input generator + runtime assert; reuses CEGIS infra.</td>
+      <td>Tooling.</td>
+    </tr>
+    <tr>
+      <td><span class="prio med">12</span></td>
+      <td><b><code>vowc fix --plan --json</code> (plan-only fix proposal).</b> <span class="src-tag"><b class="z">Z</b></span></td>
+      <td>Structured proposal generator; no patcher.</td>
+      <td>CLI + diagnostic-to-plan mapping.</td>
+    </tr>
+    <tr>
+      <td><span class="prio low">13</span></td>
+      <td><b><code>Inference</code> as a tracked effect</b> &mdash; effect kind + runtime shim.<span class="src-tag"><b class="v">V</b></span></td>
+      <td>Modest. No verifier impact.</td>
+      <td>Effect system + stdlib. <i>Only when Vow grows LLM-callable builtins.</i></td>
+    </tr>
+    <tr>
+      <td><span class="prio low">14</span></td>
+      <td><b>Bounded quantifiers in contracts</b> (<code>forall i in 0..n: P(i)</code>) compiled to unrolled assertions.<span class="src-tag"><b class="v">V</b></span> <span class="src-tag"><b class="m">M</b></span></td>
+      <td>Surface syntax + desugar pass.</td>
+      <td>Grammar + ESBMC pipeline.</td>
+    </tr>
+    <tr>
+      <td><span class="prio low">15</span></td>
+      <td><b>Forward-looking note: constrained decoding is the layer above Vow.</b> <span class="src-tag"><b class="m">M</b></span></td>
+      <td>Docs only.</td>
+      <td><code>docs/spec/</code> rationale.</td>
+    </tr>
+    <tr>
+      <td><span class="prio low">16</span></td>
+      <td><b>Inline snapshot rewriting</b> (<code>inspect(...)</code>-style content auto-update).<span class="src-tag"><b class="m">M</b></span></td>
+      <td>Test runner mode.</td>
+      <td>Tooling.</td>
+    </tr>
+    <tr>
+      <td><span class="prio low">17</span></td>
+      <td><b>Feasibility note: explicit <code>decreases</code> on pure recursion.</b><span class="src-tag"><b class="v">V</b></span> <span class="src-tag"><b class="m">M</b></span></td>
+      <td>ADR.</td>
+      <td>Contracts ADR.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p style="color:var(--muted); font-size:13px;"><span class="prio high">High</span> &mdash; documentation or JSON-emitter changes; ship them now. &nbsp;<span class="prio med">Med</span> &mdash; modest tooling changes; cluster into a "diagnostic UX" release. &nbsp;<span class="prio low">Low</span> &mdash; language work or forward-looking notes; do when there's a concrete need.</p>
+
+<h2 id="bottom-line">Bottom line</h2>
+
+<p>In three months the agent-language landscape went from "is this a thing?" to four credible projects all converging on the same diagnosis. The right read for Vow is:</p>
+<ol>
+  <li><b>The category is real.</b> Stop hedging on positioning. <i>"AI-friendly language with provable contracts and concrete counterexamples"</i> is now a contested space; lean into it.</li>
+  <li><b>Vow's moat is structural</b> (BMC counterexamples, blame, linear types, self-host, verification-on-by-default), not cosmetic. None of MoonBit, Vera, or Zero threatens it.</li>
+  <li><b>Most of what's worth borrowing is documentation or JSON-shape work.</b> Five high-priority items above could ship in a single release without touching the verifier, the type system, or the compiler architecture.</li>
+  <li><b>The two language-level lessons that might be worth taking later</b> &mdash; bounded quantifiers and <code>Inference</code> as a tracked effect &mdash; both clear the "crisp rule" gate (no new type-system axis, no verifier impact). Hold them in reserve for when there's a concrete pull.</li>
+  <li><b>Reject loudly</b> the choices that <i>look</i> like wins but would dilute Vow: De Bruijn names, Tier-3 runtime fallback, generics+metaprogramming, monolithic <code>SKILL.md</code>, Pilot-style proprietary protocols. These are the others' identity, not Vow's.</li>
+</ol>
+
+<footer>
+<h4>Sources synthesised in this report</h4>
+<ul>
+  <li><code>~/tmp/moonbit-comparison.html</code> &mdash; MoonBit vs Vow, branch <code>vow/compareMoonbit</code>, 2026-05-18.</li>
+  <li><code>~/tmp/vera-vs-vow.html</code> &mdash; Vera vs Vow, branch <code>vow/compareVera</code>, 2026-05-18.</li>
+  <li><code>~/tmp/vera-skill-report.html</code> &mdash; Structural analysis of Vera's <code>SKILL.md</code>, 2026-05-18.</li>
+  <li><code>~/tmp/zero-vs-vow.html</code> &mdash; Zero vs Vow, 2026-05-18.</li>
+</ul>
+<p>Each source report contains the primary citations (HN threads, official docs, GitHub repos, papers). This unified report consolidates conclusions; consult the source reports for the underlying evidence.</p>
+</footer>
+
+</main>
+</body>
+</html>

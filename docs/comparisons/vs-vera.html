@@ -1,0 +1,615 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vera vs Vow — agent-oriented language comparison</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1c2330;
+    --fg: #e6edf3;
+    --muted: #8b949e;
+    --line: #30363d;
+    --accent: #58a6ff;
+    --vera: #e87a5d;     /* warm orange — Vera */
+    --vow:  #7ee787;
+    --warn: #f97583;
+    --code-bg: #0b0f14;
+    --code-fg: #d1d9e0;
+    --max: 1100px;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--fg); }
+  body {
+    margin: 0;
+    font: 15.5px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    padding: 0 24px 80px;
+  }
+  main { max-width: var(--max); margin: 0 auto; }
+  header.hero {
+    max-width: var(--max);
+    margin: 48px auto 32px;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--line);
+  }
+  header.hero h1 { font-size: 34px; margin: 0 0 10px; letter-spacing: -0.02em; }
+  header.hero .sub { color: var(--muted); font-size: 17px; }
+  header.hero .meta { margin-top: 14px; color: var(--muted); font-size: 13px; }
+  h2 {
+    font-size: 22px;
+    margin: 48px 0 12px;
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+    letter-spacing: -0.01em;
+  }
+  h3 { font-size: 17px; margin: 24px 0 8px; color: var(--accent); }
+  h4 { font-size: 14px; margin: 16px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  p { margin: 8px 0 12px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace; }
+  code { background: var(--code-bg); color: var(--code-fg); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+  pre {
+    background: var(--code-bg); color: var(--code-fg);
+    padding: 14px 16px; border-radius: 8px;
+    overflow-x: auto; font-size: 13px; line-height: 1.5;
+    border: 1px solid var(--line);
+  }
+  pre code { background: transparent; padding: 0; font-size: inherit; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 14px; }
+  th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--panel); color: var(--muted); font-weight: 600; font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+  tr:nth-child(even) td { background: rgba(255,255,255,0.015); }
+  .tag {
+    display: inline-block;
+    padding: 1px 8px; border-radius: 999px;
+    font-size: 11.5px; letter-spacing: 0.03em;
+    border: 1px solid var(--line); color: var(--muted);
+    margin-right: 4px;
+  }
+  .tag.vera { color: var(--vera); border-color: rgba(232,122,93,0.4); background: rgba(232,122,93,0.07); }
+  .tag.vow  { color: var(--vow);  border-color: rgba(126,231,135,0.4); background: rgba(126,231,135,0.07); }
+  .tag.warn { color: var(--warn); border-color: rgba(249,117,131,0.4); background: rgba(249,117,131,0.07); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 18px;
+  }
+  .panel h3 { margin-top: 4px; }
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--panel-2);
+    padding: 12px 16px;
+    border-radius: 0 6px 6px 0;
+    margin: 16px 0;
+  }
+  .callout.warn { border-left-color: var(--warn); }
+  .callout.good { border-left-color: var(--vow); }
+  ul { padding-left: 22px; }
+  li { margin: 4px 0; }
+  .kv td:first-child { color: var(--muted); width: 32%; }
+  .lessons ol { padding-left: 22px; }
+  .lessons li { margin: 14px 0; }
+  .lessons li b { color: var(--accent); }
+  footer { color: var(--muted); font-size: 12.5px; margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--line); }
+  footer ul { columns: 2; column-gap: 24px; }
+  .badge-row { margin-top: 8px; }
+  .tldr {
+    background: linear-gradient(180deg, rgba(88,166,255,0.07), rgba(88,166,255,0));
+    border: 1px solid rgba(88,166,255,0.25);
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin: 20px 0;
+  }
+  .tldr h3 { margin-top: 0; color: var(--accent); }
+  .nowrap { white-space: nowrap; }
+  .lang-vera, .lang-v { display: inline-block; font-weight: 600; }
+  .lang-vera { color: var(--vera); }
+  .lang-v    { color: var(--vow); }
+  details { margin: 8px 0; }
+  summary { cursor: pointer; color: var(--muted); }
+  summary:hover { color: var(--fg); }
+  .bar {
+    height: 8px; background: var(--code-bg); border-radius: 4px;
+    display: inline-block; width: 220px; vertical-align: middle; margin-right: 8px;
+    border: 1px solid var(--line);
+  }
+  .bar > span { display: block; height: 100%; background: var(--vera); border-radius: 4px; }
+  .bar.vow > span { background: var(--vow); }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <h1>Vera vs Vow &mdash; agent-oriented language comparison</h1>
+  <div class="sub">Two languages built for AI agents to <i>write</i>, not humans to read. Vera bets on <b>removing variable names</b> and <b>Z3 with a runtime-fallback tier</b>. Vow bets on <b>BMC counterexamples</b>, <b>blame</b>, and <b>linear types</b>. Where do they meet, and what is each worth learning from?</div>
+  <div class="meta">Compiled 2026-05-18 &middot; Vera v0.0.155 (2026-05-13) &middot; Vow self-hosted (current main) &middot; branch <code>vow/compareVera</code></div>
+  <div class="badge-row">
+    <span class="tag vera">Vera &middot; aallan/vera &middot; MIT &middot; .vera</span>
+    <span class="tag vow">Vow &middot; self-hosted &middot; .vow</span>
+  </div>
+</header>
+
+<main>
+
+<div class="tldr">
+  <h3>TL;DR</h3>
+  <p>Vera and Vow both claim the same tagline ("a language for AI agents") and they agree on the diagnosis: <i>mandatory contracts, structured diagnostics, machine-first output</i>. Then they diverge in almost every implementation choice. <b>Vera</b> drops variable names entirely &mdash; bindings are typed De Bruijn slots (<code>@Int.0</code>) &mdash; targets WebAssembly via a Python+Lark+Z3 toolchain, and discharges contracts with Z3 in three tiers (auto / hinted / runtime fallback). <b>Vow</b> keeps named variables, targets native via Cranelift, self-hosts to a binary fixed point, and discharges contracts with ESBMC bounded model checking that returns <b>concrete counterexamples and blame</b>. The two languages confirm the category is real but answer it very differently. Most directly portable from Vera: <b>Inference as a tracked effect</b>, <b>contract-driven property tests</b>, and <b>fix examples per error code</b>. Reject: De Bruijn names, WASM-only target, runtime-fallback verification tier.</p>
+</div>
+
+<h2>1 &middot; Identity</h2>
+<table class="kv">
+  <tr><td>Project</td><td><b>Vera</b> &mdash; "a programming language designed for LLMs to write, not humans"</td></tr>
+  <tr><td>Author</td><td><b>Alasdair Allan</b> (CTO, Negroni Venture Studios). Solo project.</td></tr>
+  <tr><td>Homepage</td><td><a href="https://veralang.dev/">veralang.dev</a></td></tr>
+  <tr><td>Repository</td><td><a href="https://github.com/aallan/vera">github.com/aallan/vera</a> &mdash; MIT</td></tr>
+  <tr><td>Benchmark repo</td><td><a href="https://github.com/aallan/vera-bench">github.com/aallan/vera-bench</a> &mdash; MIT</td></tr>
+  <tr><td>Launched</td><td>Feb 2026 (private/blog), April 2026 public; HN debut <a href="https://news.ycombinator.com/item?id=47955118">item #47955118</a></td></tr>
+  <tr><td>Current version</td><td>v0.0.155 (2026-05-13) &mdash; pre-1.0, daily releases (156 in ~3 months)</td></tr>
+  <tr><td>File extension</td><td><code>.vera</code> (source). No project manifest. Grammar in <code>*.lark</code>.</td></tr>
+  <tr><td>Compiler</td><td><b>Python</b> &mdash; <a href="https://github.com/lark-parser/lark">Lark LALR(1)</a> parser + <a href="https://pypi.org/project/z3-solver/">z3-solver</a> + <a href="https://pypi.org/project/wasmtime/">wasmtime</a>. ~10 KLOC. Distributed via <code>pip install -e .</code> from source.</td></tr>
+  <tr><td>Self-host status</td><td><b>None.</b> No plans surfaced. Compiler is Python; reference compiler is the only one.</td></tr>
+  <tr><td>Backend</td><td>WebAssembly only. <code>.wasm</code> + optional browser bundle (<code>module.wasm</code> + <code>vera-runtime.mjs</code> + <code>index.html</code>).</td></tr>
+  <tr><td>Memory model</td><td>Not documented. WASM-hosted; presumably runtime-managed. No mutation, no linearity, no ownership.</td></tr>
+  <tr><td>GitHub signals (2026-05-13)</td><td>351 stars &middot; 17 forks &middot; 1,263 commits &middot; 156 releases. <code>vera-bench</code>: 13 stars, 1 fork.</td></tr>
+  <tr><td>Community</td><td>One HN thread (95 comments, mostly skeptical). No Discord, no subreddit, no Lobsters submission, no academic paper, no named production users.</td></tr>
+  <tr><td>Spec</td><td>13-chapter draft (<code>spec/00-introduction.md</code> &hellip; <code>12-runtime.md</code>). 86-program conformance suite, 3,905 tests, 96% coverage (self-reported).</td></tr>
+</table>
+
+<h2>2 &middot; Side-by-side at a glance</h2>
+<table>
+  <thead>
+    <tr><th>Axis</th><th><span class="lang-vera">Vera</span></th><th><span class="lang-v">Vow</span></th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Core thesis</td><td>Names confuse LLMs; eliminate them. Make contracts mandatory. Tier-3 fallback to runtime when Z3 can't decide.</td><td>Agents generate buggy code. Prove it correct or return a concrete counterexample the agent can fix. CEGIS loop.</td></tr>
+    <tr><td>Tagline</td><td>"The model doesn't need to be right. It needs to be checkable."</td><td>"Built-in contracts statically verified at compile time."</td></tr>
+    <tr><td>Verification backend</td><td><b>Z3 SMT</b> (z3-solver &ge;4.12) &mdash; three tiers: auto / guided / runtime assert.</td><td><b>ESBMC</b> bounded model checking + structured counterexamples + JSON.</td></tr>
+    <tr><td>Failure shape</td><td>Per-VC verdict; if undecided, becomes a Tier-3 runtime check (E500&ndash;E525).</td><td>Concrete failing inputs + execution trace + JSON + Caller/Callee blame.</td></tr>
+    <tr><td>Variable names</td><td><b>None.</b> Typed De Bruijn slots: <code>@Int.0</code>, <code>@Int.1</code>, <code>@String.0</code>. Each type has its own counter.</td><td>Normal identifiers.</td></tr>
+    <tr><td>Mutation</td><td><b>None.</b> Pure functional. State change only via <code>&lt;State&lt;T&gt;&gt;</code> effect.</td><td>Yes &mdash; with explicit <code>linear struct</code> types tracked by the type checker.</td></tr>
+    <tr><td>Memory</td><td>WASM-managed; not specified in spec. No GC story documented.</td><td>No GC. <code>linear struct</code> values must be consumed exactly once.</td></tr>
+    <tr><td>Effects</td><td>Algebraic effects, mandatory effect row per function. 7 built-in: <code>IO, Http, State, Exn, Async, Inference, Random</code> (+ <code>Diverge</code>).</td><td>Effect sets per function type. Pure-by-default. No <code>Inference</code> effect.</td></tr>
+    <tr><td>Generics</td><td>Yes &mdash; <code>forall&lt;T where Eq&lt;T&gt;, Ord&lt;T&gt;&gt; fn ...</code>. Built-in abilities: <code>Eq, Ord, Hash, Show</code>.</td><td><span class="tag warn">No generics</span> &mdash; deliberately rejected to keep verifier surface small.</td></tr>
+    <tr><td>Quantifiers in contracts</td><td><b>Yes</b> &mdash; <code>forall</code>/<code>exists</code> bounded over <code>Nat</code> ranges.</td><td>None &mdash; boolean expressions only.</td></tr>
+    <tr><td>Loops</td><td><b>None.</b> No <code>while</code>, <code>for</code>, <code>break</code>, <code>continue</code>, or early return. Tail recursion + mandatory <code>decreases</code>.</td><td>Yes &mdash; <code>while</code>, <code>for-each</code>, <code>break-with-value</code>, <code>continue</code>; loop <code>invariant</code> clauses.</td></tr>
+    <tr><td>Compilation</td><td>WebAssembly only. Runs via <code>wasmtime</code> or in-browser. Needs <code>--experimental-wasm-exnref</code> on Node.</td><td>Native via Cranelift (<code>vow-clif-shim</code>). ESBMC pipeline in parallel via C emitter.</td></tr>
+    <tr><td>Self-hosted</td><td>No. Python host.</td><td>Yes &mdash; binary fixed-point (<code>build/vowc</code> compiles itself byte-identically).</td></tr>
+    <tr><td>Concurrency</td><td><code>Async</code> effect is a <b>type-system marker only</b>: "eager/sequential &mdash; <code>Future&lt;T&gt;</code> has the same WASM representation as <code>T</code> with no runtime overhead."</td><td>None in language. <code>std.proc</code> spawns external processes.</td></tr>
+    <tr><td>LLM as a builtin</td><td><b><code>Inference.complete : String -&gt; Result&lt;String, String&gt;</code></b> &mdash; first-class effect. Providers: Anthropic, OpenAI, Moonshot, Mistral, auto-detected from env vars.</td><td>None.</td></tr>
+    <tr><td>Comments</td><td><code>-- line</code> and <code>{- nested block -}</code>.</td><td>Line comments only (<code>//</code>); stripped at lex time.</td></tr>
+    <tr><td>Tooling</td><td>9 subcommands: <code>check, verify, compile, run, test, parse, ast, fmt, version</code>.</td><td>~6 subcommands: <code>build, verify, test, mutants, skill, --help</code>.</td></tr>
+    <tr><td>LSP / editor</td><td><span class="tag warn">No LSP</span>, no tree-sitter. VSCode extension + TextMate bundle in <code>editors/</code>.</td><td><span class="tag warn">No LSP</span> either; JSON-everywhere is the agent contract.</td></tr>
+    <tr><td>Stdlib breadth</td><td><b>~160 built-in functions</b>: Array, Map, Set, Decimal, JSON, HTML, Markdown, Regex, strings (40+ ops), trig/log, parse helpers, base64, URL.</td><td>Minimal: Vec, String, HashMap, BTreeMap, heap, fs, io &mdash; each with verification-aware bounded models.</td></tr>
+    <tr><td>Package manager</td><td>None for Vera code. Programs are single files + module loader. Vera itself ships as a Python package.</td><td>None. Single-file or DFS-loaded <code>use</code> modules.</td></tr>
+    <tr><td>Benchmarks</td><td>VeraBench: 50 problems &times; 6 models. Kimi K2.5 100% Vera vs 86% Python / 91% TS. Caveats: single run, self-acknowledged unreliability.</td><td>36/36 Vow suite (sonnet-4-6); HumanEval 66/67 (sonnet-4); 103/103 non-stretch references verified by self-hosted compiler.</td></tr>
+    <tr><td>License</td><td>MIT (clean OSI).</td><td>Open source.</td></tr>
+  </tbody>
+</table>
+
+<h2>3 &middot; Syntax catalog (Vera)</h2>
+
+<h3>Hello world &mdash; the surface shock</h3>
+<div class="grid2">
+  <div class="panel">
+    <h4>Vera &middot; <code>hello.vera</code></h4>
+<pre><code>module hello;
+
+public fn main(@Unit -&gt; @Unit)
+  requires(true)
+  ensures(true)
+  effects(&lt;IO&gt;)
+{
+  IO.print("Hello, world!\n")
+}</code></pre>
+  </div>
+  <div class="panel">
+    <h4>Vow &middot; <code>hello.vow</code></h4>
+<pre><code>module Hello
+
+fn main() -&gt; i32 [io] {
+    print_str("Hello, world!");
+    0
+}</code></pre>
+  </div>
+</div>
+
+<p>Even the trivial program is busier in Vera: <code>public</code>/<code>private</code> is mandatory, <code>requires</code>/<code>ensures</code>/<code>effects</code> are mandatory, the parameter is <code>@Unit</code>, the return is <code>@Unit</code>, and the call goes through the <code>IO</code> effect namespace.</p>
+
+<h3>De Bruijn slot references &mdash; the defining bet</h3>
+<p>Vera has <b>no variable names</b>. Every binding is a typed slot, referenced as <code>@Type.N</code>. Each type has its own counter; index <code>0</code> is the most recent binding of that type. Parameters bind left-to-right but the <i>rightmost</i> parameter of a given type is index <code>0</code>.</p>
+<pre><code>private fn add(@Int, @Int -&gt; @Int)
+  requires(true)
+  ensures(@Int.result == @Int.0 + @Int.1)
+  effects(pure)
+{ @Int.0 + @Int.1 }
+-- @Int.0 = SECOND param (rightmost), @Int.1 = first param
+
+private fn repeat(@String, @Int -&gt; @String)
+  requires(@Int.0 &gt;= 0)
+  ensures(true)
+  effects(pure)
+{ string_repeat(@String.0, @Int.0) }
+-- Mixed types each have their own counter
+
+-- let bindings push a new slot of that type, shifting older ones
+let @Int = @Int.0 * 2;   -- new @Int.0 = (old @Int.0) * 2; old becomes @Int.1
+let @Int = @Int.0 + 1;
+@Int.0
+
+-- Inside ensures, @T.result refers to the return value
+-- Debug with: vera check --explain-slots file.vera</code></pre>
+
+<h3>Functions, contracts, effects</h3>
+<pre><code>private fn clamp(@Int, @Int, @Int -&gt; @Int)
+  requires(@Int.1 &lt;= @Int.2)
+  ensures(@Int.result &gt;= @Int.1)
+  ensures(@Int.result &lt;= @Int.2)
+  decreases(@Int.0)              -- termination measure (mandatory on pure recursion)
+  effects(pure)
+{
+  if @Int.0 &lt; @Int.1 then { @Int.1 }
+  else { if @Int.0 &gt; @Int.2 then { @Int.2 } else { @Int.0 } }
+}</code></pre>
+<p class="meta"><i>Multiple <code>ensures</code> lines conjoin. <code>requires</code>, <code>ensures</code>, and <code>effects</code> are mandatory on every function. <code>decreases</code> is mandatory on pure recursive functions. There is no <code>invariant</code> &mdash; Vera has no loops.</i></p>
+
+<h3>Effect handlers</h3>
+<pre><code>-- Discharge a State effect with a pure handler
+handle[State&lt;Int&gt;](@Int = 0) {
+  get(@Unit) -&gt; { resume(@Int.0) },
+  put(@Int)  -&gt; { resume(()) } with @Int = @Int.0
+} in {
+  put(42);
+  get(())
+}
+
+-- Discharge an Exception effect
+handle[Exn&lt;String&gt;] {
+  throw(@String) -&gt; None
+} in { Some(safe_div(@Int.0, @Int.1)) }</code></pre>
+
+<h3>ADTs, pattern matching, generics, abilities</h3>
+<pre><code>private data List&lt;T&gt; { Nil, Cons(T, List&lt;T&gt;) }
+private data Tree&lt;T&gt;  { Leaf, Node(Tree&lt;T&gt;, T, Tree&lt;T&gt;) }
+
+-- Generic with ability (type-class) constraints
+private forall&lt;T where Eq&lt;T&gt;, Ord&lt;T&gt;&gt; fn sort(@List&lt;T&gt;.0 -&gt; @List&lt;T&gt;) ...
+
+match @Option&lt;Int&gt;.0 {
+  None        -&gt; @Int.0,
+  Some(@Int)  -&gt; @Int.0       -- payload binds as a new @Int.0 in this arm
+}</code></pre>
+<p class="meta"><i>Built-in abilities: <code>Eq, Ord, Hash, Show</code>. Match is exhaustive. Patterns: constructors, literals, wildcard <code>_</code>.</i></p>
+
+<h3>Refinement types &amp; typed holes</h3>
+<pre><code>type PosInt = { @Int | @Int.0 &gt; 0 };
+type Name   = String;
+type IntToInt = Fn(Int -&gt; Int) effects(pure)
+
+-- Typed holes (?) type-check but emit warning W001 and won't compile.
+-- Lets the agent work incrementally.
+private fn todo(@Int -&gt; @Int)
+  requires(true) ensures(true) effects(pure)
+{ ? }</code></pre>
+
+<h3>Quantified contracts</h3>
+<pre><code>requires(forall(@Nat, array_length(@Array&lt;Int&gt;.0),
+  fn(@Nat -&gt; @Bool) effects(pure) { @Array&lt;Int&gt;.0[@Nat.0] &gt; 0 }))
+
+ensures(exists(@Nat, array_length(@Array&lt;Int&gt;.0),
+  fn(@Nat -&gt; @Bool) effects(pure) { @Array&lt;Int&gt;.0[@Nat.0] == @Int.result }))</code></pre>
+<p class="meta"><i>Quantifiers are <b>bounded</b> over <code>Nat</code> ranges &mdash; not the unbounded <code>&forall;</code> of full SMT. Helps Z3 stay decidable.</i></p>
+
+<details>
+<summary>Operator precedence (loosest to tightest) &mdash; verbatim from <code>SKILL.md</code></summary>
+<pre><code>|&gt;        -- pipe
+==&gt;       -- implication (contracts only)
+||
+&amp;&amp;
+== != &lt; &lt;= &gt; &gt;=
++ - (binary)
+* / %
+! - (unary prefix)
+[] ()        -- index, apply (postfix)</code></pre>
+</details>
+
+<h2>4 &middot; Standard library</h2>
+<p>The stdlib is <b>wide</b>. Vera advertises "164 builtins"; a direct count of named entries in <code>SKILL.md</code> finds ~160 standalone functions plus ~18 effect operations &asymp; <b>~180 callable names</b>. Inlined into the skill document at ~840 lines, ~36% of the file.</p>
+
+<table>
+  <tr><th>Category</th><th>Members</th></tr>
+  <tr><td>Primitive types</td><td><code>Bool, Int, Nat, Float64, Byte, String, Unit, Never</code></td></tr>
+  <tr><td>Composite ADTs (no <code>data</code> decl)</td><td><code>Array&lt;T&gt;, Map&lt;K,V&gt;, Set&lt;T&gt;, Tuple, Option&lt;T&gt;, Result&lt;T,E&gt;, Future&lt;T&gt;, Ordering, Decimal, Json, HtmlNode, MdBlock, MdInline, UrlParts</code></td></tr>
+  <tr><td>Array ops</td><td><code>length, append, range, concat, slice, map, mapi, filter, fold, reverse, find, any, all, flatten, sort_by</code> &mdash; no <code>sort</code>/<code>contains</code>/<code>index_of</code> ("not yet implemented").</td></tr>
+  <tr><td>String ops</td><td>~40+ with <code>string_</code> prefix: <code>length, split, join, replace, contains, starts_with, ends_with, index_of, upper, lower, trim_start/end, pad_start/end, chars, lines, words, reverse, repeat, slice</code> &hellip;</td></tr>
+  <tr><td>Parsing / encoding</td><td><code>parse_int/nat/float64/bool : String -&gt; Result&lt;T, String&gt;</code>, <code>base64_encode/decode</code>, <code>url_encode/decode/parse/join</code>, char classifiers (<code>is_digit, is_alpha, is_whitespace</code>&hellip;).</td></tr>
+  <tr><td>JSON</td><td><code>Json</code> ADT with 6 constructors (<code>JNull, JBool, JNumber, JString, JArray, JObject</code>) + <code>json_parse, json_stringify, json_get, json_has_field, json_keys, json_array_length, json_type</code> + 6 <code>json_as_*</code> + 5 <code>json_get_*</code> typed accessors.</td></tr>
+  <tr><td>HTML</td><td><code>HtmlNode</code> ADT (<code>HtmlElement, HtmlText, HtmlComment</code>) + <code>html_parse, html_to_string, html_query</code> (CSS selectors: tag, .class, #id, [attr]) + <code>html_text, html_attr</code>.</td></tr>
+  <tr><td>Markdown</td><td><code>MdBlock</code> (8 constructors) + <code>MdInline</code> (6 constructors) + <code>md_parse, md_render, md_has_heading, md_has_code_block, md_extract_code_blocks</code>.</td></tr>
+  <tr><td>Regex</td><td>4 functions, all <code>Result</code>-wrapped: <code>regex_match, regex_find, regex_find_all, regex_replace</code> (first match only). Backed by Python <code>re</code> / JS <code>RegExp</code>.</td></tr>
+  <tr><td>Decimal</td><td>13 ops on opaque handle: <code>from_int/from_float/from_string/add/sub/mul/div/neg/abs/round/eq/compare/to_string/to_float</code>. <code>div</code> + <code>from_string</code> return <code>Option</code>.</td></tr>
+  <tr><td>Numeric / trig</td><td><code>abs, min, max, floor, ceil, round, sqrt, pow, log, log2, log10, sin, cos, tan, asin, acos, atan, atan2, pi(), e(), sign, clamp, float_clamp</code></td></tr>
+  <tr><td>Conversions</td><td><code>int_to_float, float_to_int, nat_to_int, int_to_nat, byte_to_int, int_to_byte</code> (checked versions return <code>Option</code>).</td></tr>
+</table>
+
+<h3>Effect operations (built-in)</h3>
+<table>
+  <tr><th>Effect</th><th>Ops</th></tr>
+  <tr><td><code>IO</code></td><td><code>print, read_line, read_file, write_file, args, exit, get_env, sleep, time, stderr</code> &mdash; 10 ops.</td></tr>
+  <tr><td><code>Http</code></td><td><code>Http.get  : String -&gt; Result&lt;String, String&gt;</code> &middot; <code>Http.post : String, String -&gt; Result&lt;String, String&gt;</code> &mdash; client only.</td></tr>
+  <tr><td><code>Inference</code></td><td><code>Inference.complete : String -&gt; Result&lt;String, String&gt;</code> &mdash; provider auto-detected from <code>VERA_ANTHROPIC_API_KEY</code> / <code>VERA_OPENAI_API_KEY</code> / <code>VERA_MOONSHOT_API_KEY</code> / <code>VERA_MISTRAL_API_KEY</code>. No max-tokens / temperature / system-prompt knobs.</td></tr>
+  <tr><td><code>Random</code></td><td><code>random_int, random_float, random_bool</code>. No seeding API.</td></tr>
+  <tr><td><code>State&lt;T&gt;</code></td><td><code>get, put</code>. Pre/post values via <code>old(State&lt;T&gt;)</code> / <code>new(State&lt;T&gt;)</code> in contracts.</td></tr>
+  <tr><td><code>Exn&lt;T&gt;</code></td><td><code>throw</code>. Handler is <code>handle[Exn&lt;T&gt;] { throw(x) -&gt; ... } in { ... }</code>.</td></tr>
+  <tr><td><code>Async</code></td><td><code>async(...) -&gt; Future&lt;T&gt;</code>, <code>await(...) -&gt; T</code>. Reference impl is sequential &mdash; pure type-system marker.</td></tr>
+</table>
+
+<div class="callout">
+  <b>Conspicuously absent from Vera:</b> no separate <code>List</code> type (use <code>Array</code> or define your own ADT), no <code>array_sort</code>/<code>contains</code>/<code>index_of</code>, no filesystem read directory / list, no networking beyond HTTP get/post, no threads, no real async runtime, no property-testing combinators (that lives in the toolchain via <code>vera test --trials N</code>).
+</div>
+
+<h2>5 &middot; Tooling</h2>
+
+<h3>CLI subcommands</h3>
+<div class="grid2">
+  <div class="panel">
+    <h4>Verbs &middot; common flags <code>--json --quiet --explain-slots</code></h4>
+    <ul>
+      <li><code>vera check file.vera</code> &mdash; parse + type-check</li>
+      <li><code>vera verify file.vera</code> &mdash; check + Z3 contract verification</li>
+      <li><code>vera compile file.vera [--wat] [--target browser] [-o dir]</code></li>
+      <li><code>vera run file.vera [--fn name -- args&hellip;]</code></li>
+      <li><code>vera test file.vera [--trials N] [--fn name] [--json]</code></li>
+      <li><code>vera parse file.vera</code> &mdash; parse tree dump</li>
+      <li><code>vera ast file.vera</code> &mdash; typed AST dump</li>
+      <li><code>vera fmt file.vera [--write] [--check]</code></li>
+      <li><code>vera version</code></li>
+    </ul>
+  </div>
+  <div class="panel">
+    <h4>Verification tiers (verbatim README)</h4>
+    <ol>
+      <li><b>Tier 1</b> &mdash; decidable arithmetic, comparisons, Booleans, ADTs, termination. Discharged automatically by Z3.</li>
+      <li><b>Tier 2</b> &mdash; guided. Hints supplied by the author when Z3 alone can't decide.</li>
+      <li><b>Tier 3</b> &mdash; runtime check. The undecided postcondition becomes a runtime assert at codegen time.</li>
+    </ol>
+    <p class="meta">Verify JSON includes <code>tier1_verified</code> and <code>tier3_runtime</code> counters. Tier 2 is described in the README but not directly exposed as a counter.</p>
+  </div>
+</div>
+
+<h3>Diagnostic JSON shape</h3>
+<pre><code>{
+  "ok": false,
+  "file": "...",
+  "diagnostics": [
+    {
+      "severity": "error",
+      "error_code": "E523",
+      "description": "...",
+      "rationale": "...",
+      "fix": "...",
+      "spec_ref": "spec/05-contracts.md#postconditions",
+      "location": { "file": "...", "line": 12, "column": 5 },
+      "source_line": "&hellip;"
+    }
+  ],
+  "warnings": [ /* W001 typed-hole warnings */ ],
+  "verification": { "tier1_verified": 3, "tier3_runtime": 1, "total": 4 }
+}</code></pre>
+<p>Error code ranges: <b>W001</b> (typed holes) &middot; <b>E001&ndash;E007</b> parse &middot; <b>E010</b> transform &middot; <b>E120&ndash;E176</b> type-check &middot; <b>E200&ndash;E233</b> calls &middot; <b>E300&ndash;E335</b> control-flow/handlers &middot; <b>E500&ndash;E525</b> verification &middot; <b>E600&ndash;E614</b> codegen &middot; <b>E700&ndash;E702</b> testing. Each error ships a <code>description</code> + <code>rationale</code> + <code>fix</code> + <code>spec_ref</code>.</p>
+
+<h3>Not present</h3>
+<ul>
+  <li><b>No LSP, no tree-sitter, no REPL.</b> Editor support: a VSCode extension + TextMate bundle in <code>editors/</code>.</li>
+  <li><b>No project manifest</b> for Vera code itself (no <code>vera.toml</code>). Vera is itself a Python package with a <code>pyproject.toml</code>.</li>
+  <li><b>No package registry / dependency manager</b> for Vera. PyPI name <code>vera</code> is squatted &mdash; install only from GitHub source.</li>
+  <li><b>No source maps, stack traces, or debugger.</b></li>
+  <li><b>No build cache / artifact directory convention</b> (<code>_build/</code>, <code>dist/</code>).</li>
+</ul>
+
+<h2>6 &middot; AI angle</h2>
+
+<h3>What Vera bets on at the AI layer</h3>
+<ul>
+  <li><b>De Bruijn names</b> &mdash; the headline bet. Hypothesis: removing names removes a hallucination class. Contested on HN.</li>
+  <li><b>Mandatory everything</b> &mdash; <code>public</code>/<code>private</code>, <code>requires</code>, <code>ensures</code>, <code>effects</code> on every function. Less to forget, more boilerplate.</li>
+  <li><b>One canonical form</b> &mdash; <code>vera fmt --check</code> means there is only one way to write any program.</li>
+  <li><b>Stable error codes with <code>fix</code> field</b> &mdash; each diagnostic carries an <code>error_code</code>, a <code>rationale</code>, a <code>fix</code> suggestion, and a <code>spec_ref</code>. Marketed as "diagnostics as instructions."</li>
+  <li><b>Contract-driven property testing</b> &mdash; <code>vera test --trials N</code> uses Z3 to synthesize inputs satisfying <code>requires</code>, runs them through WASM, checks <code>ensures</code>. No hand-written test cases needed.</li>
+  <li><b>Inference as a tracked effect</b> &mdash; <code>Inference.complete</code> sits in the effect row. Pure functions <i>cannot</i> accidentally call an LLM.</li>
+  <li><b>In-tree agent docs</b> &mdash; <code>SKILL.md</code> (Claude Code), <code>AGENTS.md</code> (Cursor/Windsurf/Copilot), <code>CLAUDE.md</code>, <code>DE_BRUIJN.md</code>, <code>llms.txt</code>. Auto-discovered.</li>
+</ul>
+
+<h3>VeraBench &mdash; the headline benchmark</h3>
+<p>50 problems &times; 6 models, 5 difficulty tiers (pure arithmetic &rarr; strings/arrays &rarr; ADTs &rarr; recursion+termination &rarr; multi-function with effects). Two modes: <b>full-spec</b> (problem ships contracts) and <b>spec-from-NL</b> (agent writes its own contracts).</p>
+<table>
+  <tr><th>Model</th><th class="nowrap">Vera %</th><th class="nowrap">Python %</th><th class="nowrap">TypeScript %</th></tr>
+  <tr><td>Kimi K2.5</td><td><b>100</b></td><td>86</td><td>91</td></tr>
+  <tr><td>GPT-4.1</td><td>91</td><td>96</td><td>96</td></tr>
+  <tr><td>Claude Opus 4</td><td>88</td><td>96</td><td>96</td></tr>
+  <tr><td>Kimi K2 Turbo</td><td>83</td><td>88</td><td>79</td></tr>
+  <tr><td>Claude Sonnet 4</td><td>79</td><td>96</td><td>88</td></tr>
+  <tr><td>GPT-4o</td><td>78</td><td>93</td><td>83</td></tr>
+</table>
+<p class="meta">Single run per model; no pass@k; non-deterministic outputs not averaged. Self-acknowledged in the bench README. No external methodology critique published yet. GPT-4.1 drops 91% &rarr; 50% in spec-from-NL mode &mdash; that gap matters more than the headline number.</p>
+
+<h3>The skill</h3>
+<p>Vera ships a single monolithic <code>SKILL.md</code>: <b>99 KB / 2,327 lines / ~24,900 tokens</b>. Two sections account for ~45% of the file:</p>
+<table>
+  <tr><th>Section</th><th>Tokens</th><th>Notes</th></tr>
+  <tr><td><code>## Built-in Functions</code></td><td>~7,800</td><td>~160 stdlib signatures inline, 15 H3 subsections.</td></tr>
+  <tr><td><code>## Effects</code></td><td>~3,200</td><td>11 H3s, four per-effect API tables (IO, Http, Inference, Random).</td></tr>
+  <tr><td><code>## Toolchain</code></td><td>~1,800</td><td>Includes a 3.1 KB browser-compilation guide.</td></tr>
+  <tr><td><code>## Common Mistakes</code></td><td>~960</td><td>12 H3 subsections restating rules taught positively earlier.</td></tr>
+</table>
+<p class="meta">For scale: typical Claude Code skill guidance suggests an always-loaded <code>SKILL.md</code> under ~5,000 tokens, with reference material loaded on demand via linked sub-files. Vera is ~5&times; over that.</p>
+<p>Vow ships a <b>1.7 KB / 48-line</b> entrypoint <code>SKILL.md</code> that links to <code>reference/grammar.md</code>, <code>reference/cli.md</code>, etc.; the full self-contained bundle (~30 K tokens, comparable to Vera's) is printed on demand via <code>vowc skill print --bundle</code> rather than loaded by default.</p>
+
+<div class="callout">
+  <b>The structural lesson on the skill.</b> Vera treats the skill as "everything an agent needs in one fetch"; Vow treats it as an entrypoint that points at reference files. The Vera choice is defensible <i>only</i> if you assume the agent won't follow links &mdash; which, for some agents in production, is currently true. It is the wrong default for the Claude Code skill format specifically, where the body is always-loaded.
+</div>
+
+<h2>7 &middot; Verification: Z3 vs ESBMC, head-to-head</h2>
+
+<table>
+  <thead>
+    <tr><th>Property</th><th><span class="lang-vera">Vera (Z3)</span></th><th><span class="lang-v">Vow (ESBMC)</span></th></tr>
+  </thead>
+  <tbody>
+    <tr><td>What's being decided</td><td>Validity of first-order formulas over decidable theories (arithmetic, BV, arrays, ADTs).</td><td>Reachability of assertion violations within a bounded unwinding of the program.</td></tr>
+    <tr><td>What you write</td><td>Mandatory <code>requires</code>/<code>ensures</code>/<code>decreases</code>/<code>effects</code> in source, with optional Z3-shaped hints (Tier 2). No loops.</td><td>Inline <code>requires</code>/<code>ensures</code>/<code>invariant</code> blocks. Loops have invariants; ESBMC unwinds to a bound.</td></tr>
+    <tr><td>Predicate language</td><td>Boolean ops + arithmetic + <code>forall</code>/<code>exists</code> bounded over <code>Nat</code> ranges + recursive predicates.</td><td>Boolean expressions only. No quantifiers.</td></tr>
+    <tr><td>What you get on failure</td><td>Per-VC verdict ("could not prove goal X" / Unknown / Timeout). Tier-3 fallback rewrites unprovable <code>ensures</code> as runtime assert.</td><td><b>Concrete counterexample</b>: failing input values, full execution trace, blame attribution (Caller/Callee).</td></tr>
+    <tr><td>Termination</td><td>Mandatory <code>decreases</code> measure on pure recursion. Lexicographic supported.</td><td>Bounded unwinding (no explicit <code>decreases</code>).</td></tr>
+    <tr><td>Loops</td><td>None &mdash; rejected at the language level. Iteration via tail recursion.</td><td>First-class. <code>invariant</code> + <code>decreases</code> in <code>while</code>; <code>break-with-value</code>, <code>continue</code>.</td></tr>
+    <tr><td>Blame</td><td>None.</td><td>First-class: <code>requires</code> &rarr; Caller, <code>ensures</code>/<code>invariant</code> &rarr; Callee. Encoded in JSON.</td></tr>
+    <tr><td>Trigger</td><td><code>vera verify</code>. Programs run via WASM; failed Tier-3 contracts trap at runtime.</td><td>On by default with <code>vowc build</code>; <code>--no-verify</code> to skip. <code>vowc verify</code> for verify-only.</td></tr>
+    <tr><td>Repair loop</td><td>Implicit: write &rarr; verify &rarr; JSON error &rarr; fix.</td><td>Explicit CEGIS, marketed as the workflow.</td></tr>
+    <tr><td>Honest about uncertainty</td><td>Yes &mdash; Tier 3 is documented and counts undecided contracts in the JSON.</td><td>Bounded: claims hold within the unwinding depth; clearly stated.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout good">
+  <b>These are complementary, not strictly stronger/weaker.</b> Z3 is better at pure arithmetic and quantified contracts. ESBMC is better at concrete bug-finding in imperative loops and memory access patterns. Vow gets <i>witnesses</i>; Vera gets <i>quantifiers</i>.
+</div>
+
+<h2>8 &middot; Ecosystem &amp; adoption</h2>
+
+<table class="kv">
+  <tr><td>Stars</td><td><code>aallan/vera</code>: 351 &middot; <code>aallan/vera-bench</code>: 13</td></tr>
+  <tr><td>Forks</td><td>17 &middot; 1</td></tr>
+  <tr><td>Commits</td><td>1,263 on main, ~daily release cadence (156 releases)</td></tr>
+  <tr><td>Discord / subreddit / Lobsters</td><td>None found</td></tr>
+  <tr><td>Hacker News</td><td><a href="https://news.ycombinator.com/item?id=47955118">item #47955118</a> &mdash; 95 comments, predominantly skeptical</td></tr>
+  <tr><td>Named production users</td><td>None</td></tr>
+  <tr><td>Academic paper</td><td>None (contrast: MoonBit has LLM4Code 2024)</td></tr>
+  <tr><td>Sponsor / governance</td><td>Solo project. Allan is CTO of Negroni Venture Studios; launch posts hosted on the studio's blog.</td></tr>
+  <tr><td>License</td><td>MIT &mdash; cleaner than e.g. MoonBit's source-available MPSL.</td></tr>
+</table>
+
+<h3>HN criticism &mdash; strongest threads</h3>
+<ol>
+  <li><b>De Bruijn names</b>. <i>danpalmer</i>: "LLMs code better the less of a mental model you need&hellip; Go is great, Haskell pretty bad" &mdash; names <i>are</i> the mental model. <i>Dragon-Hatcher</i>: "It becomes impossible to grep for a variable&hellip; editing code at the top of a function can require editing all the code in the rest." Indices are non-local. Author (<code>unignorant</code>) replied once, pivoting away from the naming debate to capability/effect proofs.</li>
+  <li><b>Pre-agent research framing</b>. The "names confuse models" finding cited is from 2021, before agent loops; modern coding agents thrive on semantic names.</li>
+  <li><b>Token cost</b>. Shipping a 25 K-token language reference on every prompt is expensive.</li>
+  <li><b>Single-run benchmark</b>. Author acknowledged this in <code>vera-bench</code> README.</li>
+</ol>
+
+<h3>Adjacent languages pitched at AI codegen</h3>
+<table>
+  <tr><th>Language</th><th>AI bet</th><th>Verification</th></tr>
+  <tr><td>Vera</td><td>De Bruijn names, mandatory contracts, Inference effect, monolithic skill</td><td>Z3 + 3 tiers (auto / hinted / runtime)</td></tr>
+  <tr><td>Vow</td><td>Structured JSON, blame, CEGIS, linear types, named variables</td><td>ESBMC bounded model checking + counterexamples</td></tr>
+  <tr><td>MoonBit</td><td>Constrained decoding + first-party Pilot agent + ASP protocol</td><td>Why3 &rarr; Z3/Alt-Ergo/CVC5 (0.9, April 2026)</td></tr>
+  <tr><td>Zero (Vercel Labs)</td><td>25 JSON-first subcommands, <code>fixSafety</code> ladder, binary-pinned skills</td><td>None &mdash; types + capabilities only</td></tr>
+  <tr><td>Dafny</td><td>Verification-aware IL; modern LLMs at 89&ndash;96%</td><td>Z3 deductive verification</td></tr>
+  <tr><td>F* / Lean / Idris / SPARK</td><td>Not self-marketed for AI, but research use</td><td>Dependent types or SMT-backed</td></tr>
+</table>
+
+<h2>9 &middot; What Vow can borrow from Vera</h2>
+
+<div class="lessons">
+<ol>
+
+<li>
+  <b>Inference as a first-class effect.</b><br>
+  Vera puts LLM calls in the effect row: <code>Inference.complete : String -&gt; Result&lt;String, String&gt;</code>, <code>effects(&lt;Inference&gt;)</code>. A pure function can't accidentally call out to a remote model &mdash; it's a type error. If Vow ever grows agent-callable builtins (LLM-as-stdlib), this is the right shape. Cost: one effect kind, one runtime shim, no verifier impact. <i>Strongest portable idea.</i>
+</li>
+
+<li>
+  <b>Contract-driven property testing.</b><br>
+  <code>vera test --trials N</code> uses Z3 to synthesize inputs satisfying <code>requires</code>, then runs the function and asserts <code>ensures</code>. Functions taking ADT or function-type params are skipped with a message. Vow already has <code>vowc test</code>; adding a <code>--from-contracts --trials N</code> mode reuses the existing CEGIS infrastructure to generate random witnesses and exercise <code>ensures</code> at runtime. Useful belt-and-braces beside ESBMC.
+</li>
+
+<li>
+  <b>Each error code ships a <code>fix</code> example.</b><br>
+  Vera's diagnostics carry <code>description</code>, <code>rationale</code>, <code>fix</code>, and <code>spec_ref</code>. Vow's <code>errors.md</code> has rationale and description but less often a concrete wrong/right snippet. Documentation-only change; tightens the diagnostics-as-instructions story.
+</li>
+
+<li>
+  <b>Typed holes (<code>?</code>) as a warning, not a hard error.</b><br>
+  Vera lets you write <code>{ ? }</code> as a function body. It type-checks (good shape, good name resolution) and emits <code>W001</code>, but won't compile. Lets an agent stub and iterate. Cost: parser + checker hook; small win for incremental development.
+</li>
+
+<li>
+  <b>Mandatory <code>decreases</code> on pure recursion (or some equivalent).</b><br>
+  Vera doesn't have loops, so it requires <code>decreases</code> on recursive pure functions. Vow uses bounded unwinding instead. But borrowing the <i>idea</i> &mdash; an explicit termination measure that the agent has to state &mdash; might let Vow drop ESBMC's unwind bound for some cases or sharpen counterexamples. Worth a feasibility note in the contracts ADR.
+</li>
+
+<li>
+  <b>One canonical form, enforced.</b><br>
+  Vera ships <code>vera fmt --check</code> as part of the workflow &mdash; there is no &ldquo;style&rdquo; debate. Vow already has a canonical printer (a compiler pass, not a formatter), but doesn't enforce it as part of <code>vowc build</code>. Optional CI gate.
+</li>
+
+<li>
+  <b>Bounded quantifiers in contracts.</b><br>
+  Vera's <code>forall(@Nat, length, fn(...) {...})</code> is a quantifier over a known-bounded range. Translates straightforwardly to ESBMC as an unrolled loop of assertions. A small concrete win for contracts that today require N copy-pasted <code>ensures</code> lines.
+</li>
+
+<li>
+  <b>Spec chapter cross-references in diagnostics.</b><br>
+  Each Vera error carries <code>spec_ref: "spec/05-contracts.md#postconditions"</code>. Vow's spec is already cleanly chaptered (<code>docs/spec/{grammar,cli,contracts,errors,examples}.md</code>); embedding the anchor in the diagnostic JSON closes the loop. The agent doesn't have to guess where to read.
+</li>
+
+</ol>
+</div>
+
+<h2>10 &middot; What Vow should <i>not</i> borrow</h2>
+
+<div class="callout warn">
+<p>Vera's identity is built on choices that fight Vow's identity. Picking these up would dilute, not strengthen, what Vow is for.</p>
+<ul>
+  <li><b>De Bruijn slot references.</b> Vera's defining bet, and the most contested by every external reviewer. The benchmark wins are model-specific (Kimi K2.5 100%, Claude Sonnet 4 79% &mdash; <i>worse</i> than Python). Names anchor LLM attention; <code>grep</code> matters; the cost to human collaborators is real even in an agent-first language. The thesis is too narrow and too disputed to bet on.</li>
+  <li><b>Tier-3 runtime fallback for verification.</b> If Z3 can't discharge a contract, Vera silently emits a runtime assert and counts it in <code>tier3_runtime</code>. That breaks the "verified by default" pitch. Vow's "if ESBMC can't prove it, mark it as such and don't lie about the status" is the more honest position. Adopt the <i>counting</i> in JSON if you like &mdash; don't adopt the <i>fallback</i>.</li>
+  <li><b>WASM-only backend.</b> Cranelift native + a binary fixed-point self-host is one of Vow's strongest credibility signals. Vera's Python-host + WASM-only target is a research-grade pipeline; do not chase it.</li>
+  <li><b>Mandatory effect &amp; visibility on every function.</b> Vera requires <code>public</code>/<code>private</code>, <code>requires</code>, <code>ensures</code>, and <code>effects</code> on every declaration. Even for trivial helpers. Vow's "pure-by-default, effect annotations only when needed" carries the same information with less syntactic load.</li>
+  <li><b>Monolithic 99 KB <code>SKILL.md</code>.</b> Vow already does the right thing &mdash; small entrypoint, linked references, opt-in bundle. Vera's choice is defensible only for non-link-following agents; the always-loaded budget makes it the wrong default for Claude Code specifically.</li>
+  <li><b>No loops, no mutation, no linearity.</b> Vera's "everything is recursion, everything copies, no ownership" model gives up Vow's linear-types story. Linear types are <i>load-bearing</i> for Vow's memory-discipline brand. Don't trade them.</li>
+  <li><b>Async-as-a-marker-only.</b> Vera's <code>Async</code> effect is documented as having "no runtime overhead" because it's sequential. That's a UX trap &mdash; same syntax, different semantics, and an agent has no way to tell from the call site. If Vow ever adds async, it should be real.</li>
+</ul>
+</div>
+
+<h2>11 &middot; Bottom line</h2>
+
+<p>Vera is the second strong signal in two months (after MoonBit's 0.9 verification release) that "languages for AI agents with mandatory contracts" is a real category, not a fad. Both projects converged on the same diagnosis: <i>machine-first error output, contracts as the source of truth, agent-facing docs in-tree</i>. They diverge on three big bets:</p>
+<ol>
+  <li><b>Names</b>: Vera removes them. Vow keeps them. The external evidence so far favors Vow.</li>
+  <li><b>Verifier</b>: Vera uses Z3 with a runtime-fallback tier. Vow uses ESBMC with concrete counterexamples and blame. Complementary, not strictly ordered.</li>
+  <li><b>Implementation maturity</b>: Vera is a 3-month-old solo project with a Python reference compiler and ~350 stars. Vow is self-hosted to a binary fixed point with a published benchmark suite. The maturity gap matters more than the design gap.</li>
+</ol>
+
+<p>Vow's moat is the <b>verifier, blame, linear types, and self-hosting</b>. Vera doesn't threaten any of those. The most actionable items from this comparison, in priority order:</p>
+<ol>
+  <li><b>Add <code>Inference</code> as a tracked effect</b> &mdash; clean win when Vow grows LLM-callable builtins.</li>
+  <li><b>Add a <code>--from-contracts</code> mode to <code>vowc test</code></b> &mdash; reuses CEGIS infrastructure for property tests.</li>
+  <li><b>Add a <code>fix:</code> wrong/right snippet to every <code>E###</code> in <code>errors.md</code></b> &mdash; documentation-only, no code changes.</li>
+  <li><b>Embed <code>spec_ref</code> anchors in diagnostic JSON</b> &mdash; tightens the agent loop.</li>
+  <li><b>Consider bounded quantifiers in contracts</b> &mdash; small win, ESBMC-compatible via unrolling.</li>
+</ol>
+<p>Reject De Bruijn names, the runtime-fallback tier, WASM-only target, and the monolithic skill. Those are Vera's identity, not Vow's.</p>
+
+<footer>
+<h4>Sources</h4>
+<ul>
+  <li><a href="https://veralang.dev/">veralang.dev</a></li>
+  <li><a href="https://veralang.dev/SKILL.md">veralang.dev/SKILL.md</a> (99,631 bytes, fetched 2026-05-18)</li>
+  <li><a href="https://github.com/aallan/vera">github.com/aallan/vera</a></li>
+  <li><a href="https://github.com/aallan/vera-bench">github.com/aallan/vera-bench</a></li>
+  <li><a href="https://news.ycombinator.com/item?id=47955118">HN item #47955118 (95 comments)</a></li>
+  <li><a href="https://negroniventurestudios.com/2026/02/28/a-language-designed-for-machines-to-write/">Negroni VS &mdash; "A language designed for machines to write" (2026-02-28)</a></li>
+  <li><a href="https://negroniventurestudios.com/2026/04/13/language-design-doing-the-heavy-lifting/">Negroni VS &mdash; "Language design doing the heavy lifting" (2026-04-13)</a></li>
+  <li><a href="https://www.linkedin.com/posts/alasdairallan_a-language-designed-for-machines-to-write-activity-7433861060694085632-EseM">Alasdair Allan LinkedIn launch post</a></li>
+  <li><a href="https://www.dafny.org/">Dafny</a> (adjacent comparison)</li>
+  <li>Vow skill artifacts derived from <code>scripts/generate_help.py</code> on branch <code>vow/compareVera</code>.</li>
+</ul>
+<p>Report compiled by a parallel research fan-out (skill structure, syntax, stdlib, tooling, ecosystem, verification) and synthesised into this single page.</p>
+</footer>
+
+</main>
+</body>
+</html>

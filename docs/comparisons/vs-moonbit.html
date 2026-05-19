@@ -1,0 +1,681 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MoonBit vs Vow — comparison report</title>
+<style>
+  :root {
+    --fg: #1a1a1a;
+    --muted: #5a5a5a;
+    --bg: #fbfaf7;
+    --card: #fff;
+    --rule: #e7e2d6;
+    --accent: #7a4c1b;
+    --accent-soft: #f2e8d4;
+    --code-bg: #f4f0e6;
+    --code-fg: #2b2b2b;
+    --vow: #2e6e3d;
+    --moonbit: #5b3e8a;
+    --warn-bg: #fff7e6;
+    --warn-border: #e9bf6d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.55;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 48px 32px 96px; }
+  header.page {
+    border-bottom: 2px solid var(--accent);
+    padding-bottom: 24px;
+    margin-bottom: 32px;
+  }
+  header.page h1 {
+    font-size: 2.1rem;
+    margin: 0 0 6px 0;
+    letter-spacing: -0.01em;
+  }
+  header.page .sub { color: var(--muted); font-size: 0.95rem; }
+  header.page .meta {
+    margin-top: 14px;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  h2 {
+    font-size: 1.4rem;
+    margin: 48px 0 14px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--rule);
+    letter-spacing: -0.01em;
+  }
+  h3 {
+    font-size: 1.08rem;
+    margin: 26px 0 8px;
+    color: var(--accent);
+  }
+  h4 { font-size: 0.98rem; margin: 18px 0 4px; }
+  p { margin: 8px 0 12px; }
+  ul, ol { margin: 8px 0 14px 0; padding-left: 22px; }
+  li { margin: 3px 0; }
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px dotted var(--accent); }
+  a:hover { border-bottom-style: solid; }
+  code, pre {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.86rem;
+  }
+  p code, li code, td code {
+    background: var(--code-bg);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--code-fg);
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 14px 16px;
+    border-radius: 6px;
+    overflow-x: auto;
+    border: 1px solid var(--rule);
+    line-height: 1.45;
+  }
+  pre code { background: transparent; padding: 0; }
+  .tldr {
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-left: 4px solid var(--accent);
+    padding: 18px 22px;
+    border-radius: 6px;
+    margin-bottom: 28px;
+  }
+  .tldr h2 {
+    margin: 0 0 10px;
+    border: none;
+    padding: 0;
+    font-size: 1.05rem;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .note {
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-border);
+    padding: 10px 14px;
+    border-radius: 5px;
+    font-size: 0.9rem;
+    margin: 12px 0;
+  }
+  .note strong { color: #8a5a00; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 14px 0;
+    font-size: 0.92rem;
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  th, td {
+    text-align: left;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  th {
+    background: var(--accent-soft);
+    font-weight: 600;
+    color: var(--accent);
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  tr:last-child td { border-bottom: none; }
+  td:first-child { font-weight: 600; width: 28%; }
+  .col-vow { color: var(--vow); }
+  .col-mb  { color: var(--moonbit); }
+  .pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+  }
+  .pill.vow { background: #e0efe4; color: var(--vow); }
+  .pill.mb  { background: #ece4f5; color: var(--moonbit); }
+  .grid2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+    margin: 16px 0;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 16px 18px;
+  }
+  .card h4 { margin-top: 0; }
+  ol.steps { counter-reset: step; list-style: none; padding-left: 0; }
+  ol.steps li {
+    counter-increment: step;
+    padding-left: 36px;
+    position: relative;
+    margin: 12px 0;
+  }
+  ol.steps li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0; top: 0;
+    width: 26px; height: 26px;
+    background: var(--accent);
+    color: white;
+    border-radius: 50%;
+    text-align: center;
+    line-height: 26px;
+    font-weight: 600;
+    font-size: 0.85rem;
+  }
+  footer {
+    margin-top: 64px;
+    padding-top: 18px;
+    border-top: 1px solid var(--rule);
+    color: var(--muted);
+    font-size: 0.82rem;
+  }
+  footer ul { columns: 2; column-gap: 24px; }
+  .lead { font-size: 1.02rem; color: #2b2b2b; }
+  .small { font-size: 0.82rem; color: var(--muted); }
+  hr.section { border: 0; border-top: 1px solid var(--rule); margin: 32px 0; }
+  .toc { background: var(--card); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 18px; }
+  .toc ol { columns: 2; column-gap: 24px; margin: 0; }
+  .toc li { margin: 2px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="page">
+  <h1>MoonBit vs Vow</h1>
+  <div class="sub">A comparative report on two languages pitched at AI-agent code generation.</div>
+  <div class="meta">
+    Compiled 2026-05-18 &middot; branch <code>vow/compareMoonbit</code> &middot; MoonBit at 0.9 (Apr 2026)
+  </div>
+</header>
+
+<div class="tldr">
+  <h2>TL;DR</h2>
+  <p class="lead">MoonBit and Vow share a tagline ("a language for AI agents") and very little else. MoonBit is a broad, batteries-included WebAssembly-first language whose AI bet is at the <em>sampling</em> layer (constrained decoding) plus a vertically integrated agent (<strong>MoonBit Pilot</strong>). Verification, added in 0.9 (April 2026), is a Why3 + SMT deductive layer, opt-in per package, with separate <code>.mbtp</code> predicate files.</p>
+  <p class="lead">Vow is a deliberately small language whose AI bet is at the <em>verification</em> layer: inline <code>requires</code>/<code>ensures</code>/<code>invariant</code> verified by ESBMC, structured JSON counterexamples, blame attribution, linear types, and a CEGIS loop. No first-party agent, no closed compiler, no proprietary protocol.</p>
+  <p class="lead">They are <strong>not direct competitors</strong>. MoonBit confirms that the market for "AI-friendly languages with provable contracts" is real; Vow has a different and arguably tighter answer for the repair loop.</p>
+</div>
+
+<nav class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#identity">Identity card</a></li>
+    <li><a href="#pitch">"For AI agents" — what each means</a></li>
+    <li><a href="#syntax">Syntax reference</a></li>
+    <li><a href="#stdlib">Standard library</a></li>
+    <li><a href="#tooling">Tooling</a></li>
+    <li><a href="#ai-tooling">AI tooling: Pilot, ASP, constrained decoding</a></li>
+    <li><a href="#verification">Verification (0.9)</a></li>
+    <li><a href="#ecosystem">Ecosystem &amp; adoption</a></li>
+    <li><a href="#compare">Side-by-side comparison</a></li>
+    <li><a href="#learn">What Vow can learn</a></li>
+  </ol>
+</nav>
+
+<h2 id="identity">1. Identity card</h2>
+<table>
+  <tr><th>Field</th><th>MoonBit</th><th>Vow</th></tr>
+  <tr><td>Built by</td><td>IDEA (Shenzhen). Lead: Hongbo Zhang (ex-ReScript/BuckleScript/Flow).</td><td>Paulo Matos &amp; collaborators.</td></tr>
+  <tr><td>Started</td><td>October 2022; v0.9 in April 2026.</td><td>2025.</td></tr>
+  <tr><td>License</td><td>Compiler: source-available under <em>MoonBit Public Source License v1</em> (SSPL-style anti-cloud-vendor clause). Stdlib + <code>moon</code>: open source.</td><td>Open source.</td></tr>
+  <tr><td>Pitch</td><td>"AI-native general-purpose language" for cloud + edge, WASM-first.</td><td>Language for AI agents, with first-class contracts statically verified.</td></tr>
+  <tr><td>Compilation</td><td>Multi-backend: WASM-GC (flagship), JS, native, riscv32. No LLVM.</td><td>Native via Cranelift.</td></tr>
+  <tr><td>Self-hosted?</td><td>No. Compiler in OCaml, distributed as WASM.</td><td>Yes. Binary fixed-point self-host.</td></tr>
+  <tr><td>Memory</td><td>Garbage collected.</td><td>No GC. Linear types + explicit ownership.</td></tr>
+  <tr><td>URL</td><td><a href="https://www.moonbitlang.com/">moonbitlang.com</a> &middot; <a href="https://docs.moonbitlang.com/en/latest/">docs</a> &middot; <a href="https://github.com/moonbitlang">github</a></td><td>This repo.</td></tr>
+</table>
+
+<h2 id="pitch">2. "For AI agents" — what each one means</h2>
+
+<div class="grid2">
+  <div class="card">
+    <h4><span class="pill mb">MoonBit</span> attacks the model layer</h4>
+    <ul>
+      <li><strong>Constrained decoding</strong>: a "local sampler" rejects syntactically invalid tokens during generation; a "global sampler" type-checks. Hosted at <a href="https://ai.moonbitlang.com">ai.moonbitlang.com</a>.</li>
+      <li><strong>Pilot</strong>: first-party multi-modal coding agent (CLI + IDE + cloud), BYO model key.</li>
+      <li>Custom <strong>Agent Server Protocol (ASP)</strong> for cloud agent orchestration (not MCP).</li>
+      <li>Syntax research: top-level type signatures mandatory, "no nesting" preference, "KV-cache friendly" structure. (LLM4Code 2024 paper.)</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4><span class="pill vow">Vow</span> attacks the verification layer</h4>
+    <ul>
+      <li><strong>Inline contracts</strong>: <code>requires</code> / <code>ensures</code> / <code>invariant</code> in the same expression language as code.</li>
+      <li><strong>ESBMC bounded model checking</strong>: returns concrete counterexample traces, not just "unknown."</li>
+      <li><strong>Blame semantics</strong>: <code>requires</code> blames Caller; <code>ensures</code>/<code>invariant</code> blames Callee.</li>
+      <li><strong>Structured JSON diagnostics</strong> as a first-class agent contract — no proprietary protocol layered on top.</li>
+      <li>Intentionally small surface: no generics, traits, closures, macros, async.</li>
+    </ul>
+  </div>
+</div>
+
+<p>Both projects converged on "verification matters" — MoonBit's 0.9 in April 2026 is direct evidence. They got there via different mechanisms (SMT/Why3 vs. BMC/ESBMC), with different ergonomics (separate predicate files vs. inline), and different counterexample shapes (per-VC verdict vs. concrete trace).</p>
+
+<h2 id="syntax">3. Syntax reference</h2>
+
+<p class="lead">MoonBit's surface is <strong>Rust-flavoured ML</strong>: <code>fn</code>, <code>let</code>, <code>match</code>, <code>enum</code>, <code>struct</code>, expression-oriented bodies. Examples below are verbatim from the official docs and the <code>moonbit-community/verified</code> repo.</p>
+
+<h3>3.1 Variables &amp; mutability</h3>
+<pre><code>let a = true
+let b = false
+let c = a &amp;&amp; b
+
+let mut i = 5
+while i &gt; 0 {
+  println(i)
+  i = i - 1
+}
+
+let r : Ref[Int] = { val: 100 }
+r.val = 200
+r.val += 1</code></pre>
+<p class="small"><code>Ref[T]</code> is a single-field <code>mut</code> struct — needed because closures cannot capture <code>let mut</code> bindings.</p>
+
+<h3>3.2 Functions</h3>
+<pre><code>fn add3(x : Int, y : Int, z : Int) -&gt; Int {
+  x + y + z
+}
+
+fn local_1() -&gt; Int {
+  fn inc(x) { x + 1 }                // local fn: inferred
+  (fn(x) { x + inc(2) })(6)          // anonymous fn
+}
+
+[1, 2, 3].each(x =&gt; println(x * x))  // arrow lambda
+
+fn labelled(arg1~ : Int, arg2~ : Int) -&gt; Int { arg1 + arg2 }
+let _ = labelled(arg2=2, arg1=1)</code></pre>
+<p class="small">Top-level signatures are mandatory; locals are inferred. <code>arg~</code> declares a labelled (keyword) argument.</p>
+
+<h3>3.3 Structs</h3>
+<pre><code>struct User {
+  id : Int
+  name : String
+  mut email : String
+}
+
+let u = User::{ id: 0, name: "John Doe", email: "john@doe.com" }
+u.email = "john@doe.name"
+
+let updated = { ..u, email: "john@doe.name" }  // functional record update</code></pre>
+
+<h3>3.4 Enums &amp; pattern matching</h3>
+<pre><code>enum Lst {
+  Nil
+  Cons(Int, Lst)
+}
+
+fn sum(l : Lst) -&gt; Int {
+  match l {
+    Nil =&gt; 0
+    Cons(x, xs) =&gt; x + sum(xs)
+  }
+}</code></pre>
+
+<h3>3.5 Generics &amp; traits</h3>
+<pre><code>fn[S, T] List::map(self : List[S], f : (S) -&gt; T) -&gt; List[T] {
+  match self {
+    Nil =&gt; Nil
+    Cons(x, xs) =&gt; Cons(f(x), xs.map(f))
+  }
+}
+
+pub(open) trait MyShow {
+  to_string(Self) -&gt; String
+}
+
+struct MyType {}
+pub impl MyShow for MyType with to_string(self) { "MyType{}" }
+
+struct T { a : Int; b : Int } derive(Eq, Compare, Debug, Default)</code></pre>
+<p class="small">Generic parameters come <em>before</em> the function name (<code>fn[T, U]</code>), which is unusual among ML-family languages.</p>
+
+<h3>3.6 Pattern exotics</h3>
+<pre><code>match ary {
+  [] =&gt; "empty"
+  [a, b, .. rest] =&gt; "head two"
+  [.., a, b] =&gt; "tail two"
+}
+
+match c {
+  'a'..='z' =&gt; "lower"
+  'A'..='Z' =&gt; "upper"
+  _         =&gt; "other"
+}
+
+match map {
+  { "b"? : None, "a": x, .. } =&gt; x   // "b" must be absent
+}
+
+match opt {
+  Some(a) if f(a) is [0, b] =&gt; a + b // guard + is-pattern
+  Some(b) =&gt; b
+  None    =&gt; -1
+}</code></pre>
+
+<h3>3.7 Error effects</h3>
+<pre><code>suberror DivError { DivError(String) } derive(Debug)
+
+fn div(x : Int, y : Int) -&gt; Int raise DivError {
+  if y == 0 { raise DivError("division by zero") }
+  x / y
+}
+
+fn main {
+  try div(42, 0) catch {
+    DivError(s) =&gt; println(s)
+  } noraise {
+    v =&gt; println(v)
+  }
+  let res = try? (div(6, 0) * div(6, 3))   // ? wraps into Result
+  let v   = try! div(6, 3)                 // ! panics on error
+}</code></pre>
+<p class="small">Errors are an <em>effect</em> on the return type (<code>-&gt; Int raise DivError</code>) — checked, with no <code>Result</code> plumbing at call sites.</p>
+
+<h3>3.8 Async</h3>
+<pre><code>async fn fetch_homepage() -&gt; String {
+  let (response, body) = @http.get("https://www.moonbitlang.com")
+  guard response.code is (200..&lt;300) else {
+    fail("server responded with \{response.code} \{response.reason}")
+  }
+  body.text()
+}
+
+async fn main {
+  @async.with_task_group(group =&gt; {
+    group.spawn_bg(() =&gt; { let _ = fetch_homepage() })
+  })
+}</code></pre>
+<p class="small">No <code>await</code> keyword — every call into an <code>async fn</code> is implicitly a suspend point. Structured concurrency via <code>with_task_group</code>.</p>
+
+<h3>3.9 Modules</h3>
+<pre><code>// moon.pkg.json
+{
+  "import": [
+    "moonbit-community/language/packages/pkgA",
+    { "path": "moonbit-community/language/packages/pkgC", "alias": "c" }
+  ]
+}
+
+// in source:
+pub fn add1(x : Int) -&gt; Int {
+  @c.incr(@pkgA.incr(x))
+}
+pub using @pkgA { incr, trait Trait, type Type }  // re-export</code></pre>
+
+<h3>3.10 Inline tests</h3>
+<pre><code>test "addition" {
+  assert_eq(1 + 1, 2)
+}
+
+test "snapshot" {
+  inspect({ x: 10 }, content="{ x: 10 }")  // --update auto-rewrites content=
+}</code></pre>
+<p class="small">Snapshot strings live inline in source and are rewritten in place by the test runner — no separate golden directory.</p>
+
+<h2 id="stdlib">4. Standard library — <code>moonbitlang/core</code></h2>
+
+<p>Roughly 50 packages, ~38k LOC, 2.5k+ tests, MIT licensed. One package per folder, each with a <code>moon.pkg.json</code> and a generated <code>pkg.generated.mbti</code> interface file.</p>
+
+<table>
+  <tr><th>Category</th><th>Packages</th></tr>
+  <tr><td>Scalars</td><td><code>bool</code>, <code>int</code>, <code>int16</code>, <code>int64</code>, <code>uint</code>, <code>uint16</code>, <code>uint64</code>, <code>byte</code>, <code>char</code>, <code>float</code>, <code>double</code>, <code>bigint</code>, <code>unit</code></td></tr>
+  <tr><td>Collections</td><td><code>array</code> (+ <code>FixedArray</code>), <code>list</code>, <code>lazy_list</code>, <code>deque</code>, <code>queue</code>, <code>priority_queue</code>, <code>hashmap</code>, <code>hashset</code>, <code>sorted_map</code>, <code>sorted_set</code>, <code>set</code>, persistent variants under <code>immut/</code></td></tr>
+  <tr><td>Strings &amp; bytes</td><td><code>string</code>, <code>bytes</code>, <code>buffer</code>, <code>strconv</code>, <code>encoding</code></td></tr>
+  <tr><td>Generics / util</td><td><code>option</code>, <code>result</code>, <code>ref</code>, <code>tuple</code>, <code>range</code>, <code>lazy</code>, <code>cmp</code>, <code>iter</code></td></tr>
+  <tr><td>Numeric</td><td><code>math</code>, <code>random</code></td></tr>
+  <tr><td>Structured data</td><td><code>json</code></td></tr>
+  <tr><td>Meta / tooling</td><td><code>builtin</code>, <code>prelude</code>, <code>internal</code>, <code>argparse</code>, <code>env</code>, <code>abort</code>, <code>debug</code>, <code>error</code>, <code>bench</code>, <code>test</code>, <code>quickcheck</code>, <code>coverage</code></td></tr>
+</table>
+
+<div class="note">
+<strong>Not in core:</strong> async runtime, IO/filesystem, networking, time, regex. Async is a language feature; runtime support is per-backend. IO etc. live out-of-tree under <code>moonbitlang/x</code> and community packages on <a href="https://mooncakes.io">mooncakes.io</a>.
+</div>
+
+<h2 id="tooling">5. Tooling</h2>
+
+<h3>5.1 The <code>moon</code> CLI</h3>
+<p>Single CLI surface. Subcommands:</p>
+<ul>
+  <li><code>new</code>, <code>build</code>, <code>check</code>, <code>run</code>, <code>test</code>, <code>bench</code>, <code>clean</code>, <code>fmt</code>, <code>doc</code>, <code>info</code></li>
+  <li><code>add</code>, <code>remove</code>, <code>install</code>, <code>tree</code>, <code>update</code> — dependency management</li>
+  <li><code>login</code>, <code>register</code>, <code>publish</code>, <code>package</code> — registry operations</li>
+  <li><code>coverage analyze | report | clean</code></li>
+  <li><code>prove</code> — new in 0.9 for formal verification (peer of <code>build</code>/<code>test</code>)</li>
+  <li><code>upgrade</code>, <code>shell-completion</code>, <code>generate-build-matrix</code>, <code>version</code></li>
+</ul>
+
+<h3>5.2 Files &amp; manifests</h3>
+<ul>
+  <li><code>.mbt</code> — source files.</li>
+  <li><code>.mbti</code> — generated interface file (<code>moon info</code>).</li>
+  <li><code>.mbtx</code> — runnable scripts.</li>
+  <li><code>.mbtp</code> — predicate file (0.9; appears in community verified-examples repo, not yet in the official file-extension reference).</li>
+  <li><code>moon.mod.json</code> — module manifest (semver, deps, license, supported-targets, scripts).</li>
+  <li><code>moon.pkg.json</code> — per-package config (imports, link, native-stub, formatter ignore, <code>"proof-enabled": true</code> for 0.9 verification).</li>
+</ul>
+
+<h3>5.3 Editor &amp; runner</h3>
+<ul>
+  <li><strong>LSP</strong>: separate binary installed by the MoonBit toolchain; flagship VSCode extension <code>moonbit.moonbit-lang</code>.</li>
+  <li><strong>Formatter</strong>: <code>moon fmt</code>.</li>
+  <li><strong>Tests</strong>: inline <code>test "name" { … }</code> blocks discovered automatically; parallel run; snapshot tests rewrite source in place.</li>
+  <li><strong>No REPL</strong>; closest is the web tour at <a href="https://tour.moonbitlang.com">tour.moonbitlang.com</a>.</li>
+  <li><strong>No first-party debugger</strong>; coverage instrumentation via <code>moon coverage</code>.</li>
+</ul>
+
+<h2 id="ai-tooling">6. AI tooling</h2>
+
+<h3>6.1 MoonBit Pilot</h3>
+<p>A multi-modal coding agent shipped with the toolchain:</p>
+<ul>
+  <li><strong>Three surfaces</strong>: CLI (<code>moon pilot</code>), IDE integration in VSCode, and a cloud UI for async agent execution.</li>
+  <li>BYO model API key — documented for Claude Sonnet 4, Kimi K2, DeepSeek V3, Gemini 2.5 Pro. Per-token costs go to the provider.</li>
+  <li>Local config under <code>~/.moonagent/</code> and per-project <code>.moonagent/moonagent.yml</code>.</li>
+  <li>No public price list. Practically free-to-try, with no commitment that it remains so.</li>
+</ul>
+
+<h3>6.2 Agent Server Protocol (ASP)</h3>
+<p>MoonBit-custom protocol announced alongside Pilot. No public spec page, no schema, no comparison-to-MCP document. Functionally it sits at a different layer than MCP — ASP is about <em>orchestrating multiple agent tasks</em>, MCP is about <em>exposing tools/resources to a single agent</em>.</p>
+
+<div class="note"><strong>No first-party MCP integration.</strong> Pilot's documented configuration has no MCP server entries. A community library <a href="https://github.com/gmlewis/moonbit-mcp">gmlewis/moonbit-mcp</a> exists for writing MCP servers <em>in</em> MoonBit, but there's nothing in the toolchain for consuming third-party MCP servers from Pilot.</div>
+
+<h3>6.3 Constrained decoding</h3>
+<p>The most distinctive AI bet. Documented in the LLM4Code 2024 paper and hosted at <a href="https://ai.moonbitlang.com">ai.moonbitlang.com</a>:</p>
+<ul>
+  <li><strong>Local sampling</strong> — real-time syntactic adjustment of generated tokens against the MoonBit grammar.</li>
+  <li><strong>Global sampling</strong> — type-checking accepted token spans; rejected spans backtrack with error fed to the model.</li>
+  <li>Reported large compilation-rate improvement at ~3% latency penalty.</li>
+  <li>Exploits MoonBit's "interface-before-implementation" linear program order to keep KV-cache misses low.</li>
+  <li>Not packaged as a standalone library — runs inside MoonBit's hosted AI service.</li>
+</ul>
+
+<h3>6.4 No "skill" for MoonBit</h3>
+<p>Despite the agent positioning, MoonBit does <em>not</em> publish a Claude Code / Cursor skill, agent profile, or system prompt. The agent angle is served by their own Pilot stack and ASP, not by integrating with the broader agent-tool ecosystem. This is a meaningful contrast with Vow, which ships a skill (<code>build/vowc skill install</code>) and depends on structured-JSON-everywhere as its agent contract.</p>
+
+<h2 id="verification">7. Verification (MoonBit 0.9, April 2026)</h2>
+
+<p>First-class formal verification keywords: <code>proof_require</code>, <code>proof_ensure</code>, <code>proof_invariant</code>, <code>proof_assert</code>, <code>proof_yield</code>, <code>proof_decrease</code>, <code>proof_reasoning</code>, and <code>#proof_pure</code>. Predicates live in sibling <code>.mbtp</code> files. Backend is <strong>Why3</strong> dispatching to a portfolio of SMT solvers (Z3, Alt-Ergo, CVC5). Opt-in per package via <code>"proof-enabled": true</code> in <code>moon.pkg</code>. Driven by <code>moon prove</code>.</p>
+
+<h3>7.1 Smallest example — <code>abs</code></h3>
+<p><code>abs.mbt</code>:</p>
+<pre><code>pub fn abs(x : Int) -&gt; Int where { proof_ensure: result =&gt; abs_ok(x, result) } {
+  if x &gt;= 0 { x } else { -x }
+}</code></pre>
+<p><code>abs.mbtp</code>:</p>
+<pre><code>predicate abs_ok(x : Int, result : Int) {
+  (result &gt;= 0) &amp;&amp; ((result == x) || (result == -x))
+}</code></pre>
+
+<h3>7.2 Binary search — function contract + loop invariants</h3>
+<pre><code>pub fn[T : Compare] binary_search(
+  xs : FixedArray[T], key : T,
+) -&gt; Int? where {
+  proof_require: sorted(xs),
+  proof_ensure: result =&gt; binary_search_ok(xs, key, result),
+} {
+  for i = 0, j = xs.length(); i &lt; j; {
+    let h = i + (j - i) / 2
+    if xs[h] &lt; key {
+      proof_assert ∀ idx : Int, 0 &lt;= idx &amp;&amp; idx &lt; h + 1 → xs[idx] &lt; key
+      continue h + 1, j
+    } else if key &lt; xs[h] {
+      proof_assert ∀ idx : Int, h &lt;= idx &amp;&amp; idx &lt; xs.length() → key &lt; xs[idx]
+      continue i, h
+    } else {
+      proof_assert xs[h] == key
+      break Some(h)
+    }
+  } nobreak { None } where {
+    proof_invariant: 0 &lt;= i,
+    proof_invariant: i &lt;= j,
+    proof_invariant: j &lt;= xs.length(),
+    proof_invariant: ∀ idx : Int, 0 &lt;= idx &amp;&amp; idx &lt; i → xs[idx] &lt; key,
+    proof_invariant: ∀ idx : Int, j &lt;= idx &amp;&amp; idx &lt; xs.length() → key &lt; xs[idx],
+    proof_yield: res =&gt; binary_search_ok(xs, key, res),
+  }
+}</code></pre>
+
+<h3>7.3 The predicate language</h3>
+<pre><code>predicate[T] in_bounds(xs : FixedArray[T], i : Int) {
+  (0 &lt;= i) &amp;&amp; (i &lt; xs.length())
+}
+predicate[T : Compare] sorted(xs : FixedArray[T]) {
+  ∀ i : Int, ∀ j : Int,
+    ((in_bounds(xs, i)) &amp;&amp; (in_bounds(xs, j)) &amp;&amp; (i &lt;= j)) → xs[i] &lt;= xs[j]
+}
+predicate[T : Compare] binary_search_ok(
+  xs : FixedArray[T], key : T, result : Option[Int],
+) {
+  match result {
+    None         =&gt; ∀ i : Int, in_bounds(xs, i) → xs[i] != key
+    Some(result) =&gt; (in_bounds(xs, result)) &amp;&amp; xs[result] == key
+  }
+}</code></pre>
+<p>Features of the predicate sublanguage: <strong>universal quantification</strong> via Unicode <code>∀</code>; <strong>implication</strong> via <code>→</code>; <strong>recursive predicates</strong> over ADTs via <code>match</code>; <strong>generic predicates</strong> with the same trait-bound syntax as functions; <strong>finite-set/sequence/map model libraries</strong> in <code>libs/</code>; explicit <code>proof_decrease</code> measures for termination of recursive predicates.</p>
+
+<h3>7.4 Counterexample shape</h3>
+<p>Per-VC verdict from Why3 ("could not prove goal X" / Unknown / Timeout). No published JSON schema, no concrete program-trace counterexample. Reports land in <code>_build/verif/</code>. Vow's ESBMC pipeline, by contrast, returns concrete failing inputs and execution traces — the difference between deductive verification and bounded model checking.</p>
+
+<h3>7.5 AI integration</h3>
+<p>The framing is <em>"AI guesses, prover checks."</em> Pilot drafts predicates, invariants, and <code>proof_assert</code> hints; <code>moon prove</code> is the oracle. The release notes credit AI for generating the binary-search and AVL invariants. There is no language-level CEGIS protocol; the agent loops on whatever the prover says it couldn't prove.</p>
+
+<h3>7.6 Scope</h3>
+<p>Opt-in per package, per function. Stdlib <code>moonbitlang/core</code> is <em>not</em> verified end-to-end; a parallel ecosystem <a href="https://github.com/moonbit-community/verified">moonbit-community/verified</a> hosts proven examples (binary search, AVL trees, heaps, plus finance case studies: stablecoin engine, AMM, lending, batch auction).</p>
+
+<h2 id="ecosystem">8. Ecosystem &amp; adoption</h2>
+
+<table>
+  <tr><th>Signal</th><th>Value</th></tr>
+  <tr><td>moonbitlang/core stars</td><td>~1.1k (Apache-2.0, 149 forks)</td></tr>
+  <tr><td>moonbit-docs stars</td><td>~2.3k</td></tr>
+  <tr><td>example-ai-agent stars</td><td>13 (demo, not a movement)</td></tr>
+  <tr><td>Discord</td><td>~578 members (small but real; ~10× smaller than Roc/Gleam)</td></tr>
+  <tr><td>Named production users</td><td>None found.</td></tr>
+  <tr><td>Paper</td><td>Fei et al., "MoonBit: Explore the Design of an AI-Friendly Programming Language," LLM4Code@ICSE 2024.</td></tr>
+  <tr><td>HN coverage</td><td>Multiple threads (Aug 2023 launch, Dec 2024 open-sourcing, Jan 2025 WASM post). Sentiment mixed.</td></tr>
+</table>
+
+<h3>8.1 Recurring critiques</h3>
+<ul>
+  <li><strong>Licensing isn't really open.</strong> The Dec 2024 "open-source" release used the MoonBit Public Source License — an SSPL-style anti-cloud clause that critics on HN flagged as source-available, not OSI-open.</li>
+  <li><strong>Benchmark concerns.</strong> A Lobsters thread documented a handicapped Rust FFT baseline used in a "30% faster than Rust" social-media campaign; corrective PRs reportedly went unaddressed.</li>
+  <li><strong>Governance.</strong> Project led by IDEA (Shenzhen). Generic "do your own due diligence" caution in commentary; no specific export-control incidents found.</li>
+</ul>
+
+<h3>8.2 Adjacent languages pitched at AI codegen</h3>
+<table>
+  <tr><th>Language</th><th>Self-marketed for AI?</th><th>Bet</th></tr>
+  <tr><td>MoonBit</td><td>Yes</td><td>Sampling + integrated agent + (new) deductive verification.</td></tr>
+  <tr><td>Dafny</td><td>Yes (2025)</td><td>Verification-aware IL; reported 89-96% verification success with modern LLMs.</td></tr>
+  <tr><td>Mojo</td><td>Yes</td><td>AI <em>workloads</em>, not agent codegen — GPU/accelerator Python.</td></tr>
+  <tr><td>F*</td><td>Not loudly</td><td>Used in LLM-assisted verified C synthesis research.</td></tr>
+  <tr><td>Lean</td><td>Community-driven</td><td>DeepSeek-Prover and similar use mathlib for theorem-proving.</td></tr>
+  <tr><td>Quasar / Pel</td><td>Yes (academic)</td><td>Python subset / Lisp-DSL for agent orchestration.</td></tr>
+  <tr><td>Roc / Gleam / Unison / Bend</td><td>No</td><td>Community sometimes labels them LLM-friendly; projects themselves don't pitch it.</td></tr>
+  <tr><td>Vow</td><td>Yes</td><td>BMC counterexamples + blame + JSON-as-contract + small core.</td></tr>
+</table>
+
+<h2 id="compare">9. Side-by-side comparison</h2>
+
+<table>
+  <tr><th>Axis</th><th class="col-mb">MoonBit</th><th class="col-vow">Vow</th></tr>
+  <tr><td>Verification backend</td><td>Why3 → Z3 / Alt-Ergo / CVC5 (deductive SMT)</td><td>ESBMC (bounded model checking)</td></tr>
+  <tr><td>Predicate location</td><td>Separate <code>.mbtp</code> file with dedicated logical sublanguage</td><td>Inline in source, same expression language as code</td></tr>
+  <tr><td>Quantifiers</td><td><code>∀</code>, recursive predicates, finite-set/seq/map models</td><td>None (boolean expressions only)</td></tr>
+  <tr><td>Failure shape</td><td>Per-VC "could not prove" verdict</td><td>Concrete failing inputs + execution trace + JSON</td></tr>
+  <tr><td>Blame attribution</td><td>None</td><td>Caller vs. Callee, encoded in diagnostic</td></tr>
+  <tr><td>Verification trigger</td><td>Opt-in per package, <code>moon prove</code> subcommand</td><td>On by default with <code>vowc build</code>; <code>--no-verify</code> to skip</td></tr>
+  <tr><td>Proof scripts</td><td>Yes — <code>proof_assert</code> hints, lemma fns, <code>proof_decrease</code>, <code>#proof_pure</code></td><td>No — contracts only; if BMC can't discharge, that's a verifier issue</td></tr>
+  <tr><td>Type system</td><td>Generics, traits, sum types, GC, async coloring, error effects</td><td>No generics, no traits, no closures, no GC; linear types; effect = pure/impure</td></tr>
+  <tr><td>Memory model</td><td>Garbage collected (host GC for wasm-gc)</td><td>No GC; linear ownership</td></tr>
+  <tr><td>Compilation</td><td>WASM-GC (flagship), JS, native, riscv32. No LLVM.</td><td>Native via Cranelift</td></tr>
+  <tr><td>Self-hosted</td><td>No (compiler in OCaml)</td><td>Yes (binary fixed-point)</td></tr>
+  <tr><td>Agent integration</td><td>First-party Pilot + custom ASP protocol; constrained decoding service</td><td>Skill installed via <code>vowc skill install</code>; JSON diagnostics consumed by any agent</td></tr>
+  <tr><td>MCP support</td><td>None first-party</td><td>Designed to be MCP-friendly via JSON output</td></tr>
+  <tr><td>License</td><td>Source-available (MPSL v1); SSPL-style anti-cloud clause</td><td>Open source</td></tr>
+  <tr><td>Maturity</td><td>0.9 (April 2026); pre-1.0, active</td><td>Early; self-hosted with fixed-point</td></tr>
+</table>
+
+<h2 id="learn">10. What Vow can learn (and what to reject)</h2>
+
+<ol class="steps">
+  <li><strong>Constrained decoding is the layer above Vow.</strong> MoonBit attacks "agents emit invalid code" at the sampler. Vow attacks the same problem at the verifier. These compose: a Vow-aware sampler could rule out unparseable or trivially ill-typed tokens before ESBMC ever runs. Worth a forward-looking note in <code>docs/spec/</code>.</li>
+  <li><strong>Predicate files are tempting but expensive.</strong> Splitting predicates into <code>.mbtp</code> gives reuse and a richer logical sublanguage (quantifiers, recursive predicates) — but it's a new namespace, a new file type, and a new logic that humans and agents have to learn separately from the rest of the language. Fails the "doesn't make verification harder" gate unless there's a concrete reuse story Vow can't currently express.</li>
+  <li><strong>Why3 is a real escape hatch.</strong> If Vow ever wants <code>∀</code>/<code>∃</code> over unbounded structures, dispatching to Why3 (rather than reimplementing) is the boring choice. But it means giving up concrete counterexamples — the CEGIS loop changes shape.</li>
+  <li><strong>Inline snapshot tests are good ergonomics.</strong> MoonBit's <code>inspect({ x: 10 }, content="...")</code> auto-rewriting on <code>--update</code> is a tight loop worth borrowing for Vow's <code>tests/run/</code> golden-output cases.</li>
+  <li><strong>Reject the proprietary protocol.</strong> ASP is closed, undocumented, and ships with the compiler. Vow's bet on "JSON-everywhere, no proprietary protocol" is the better story if the agent ecosystem is going to be Cambrian.</li>
+  <li><strong>Reject closed-source.</strong> MoonBit's source-available license is a recurring friction point in HN discussion. Vow's open-source posture is straightforward marketing as well as engineering.</li>
+  <li><strong>The big confirmation.</strong> MoonBit reaching for formal verification in 0.9 (April 2026) is direct market evidence that "AI-friendly language with provable contracts" is the right destination. Vow got there first via a different (arguably tighter for repair loops) route — BMC + concrete counterexamples + blame. Worth saying so loudly in any external-facing Vow material.</li>
+</ol>
+
+<footer>
+  <strong>Primary sources</strong>
+  <ul>
+    <li><a href="https://www.moonbitlang.com/">moonbitlang.com</a></li>
+    <li><a href="https://docs.moonbitlang.com/en/latest/">MoonBit docs</a></li>
+    <li><a href="https://docs.moonbitlang.com/en/latest/language/fundamentals.html">Language fundamentals</a></li>
+    <li><a href="https://docs.moonbitlang.com/en/latest/language/methods.html">Methods &amp; traits</a></li>
+    <li><a href="https://docs.moonbitlang.com/en/latest/language/error-handling.html">Error handling</a></li>
+    <li><a href="https://docs.moonbitlang.com/en/latest/language/async-experimental.html">Async</a></li>
+    <li><a href="https://docs.moonbitlang.com/en/latest/language/packages.html">Packages</a></li>
+    <li><a href="https://docs.moonbitlang.com/en/latest/language/tests.html">Tests</a></li>
+    <li><a href="https://docs.moonbitlang.com/en/latest/toolchain/moon/index.html">Moon CLI manual</a></li>
+    <li><a href="https://www.moonbitlang.com/blog/moonbit-0-9-release">0.9 verification release blog</a></li>
+    <li><a href="https://www.moonbitlang.com/blog/intro-moonbit-pilot">MoonBit Pilot announcement</a></li>
+    <li><a href="https://www.moonbitlang.com/blog/moonbit-ai">AI-Native Language Toolchain blog</a></li>
+    <li><a href="https://github.com/moonbitlang/core">moonbitlang/core</a></li>
+    <li><a href="https://github.com/moonbit-community/verified">moonbit-community/verified</a></li>
+    <li><a href="https://github.com/moonbitlang/example-ai-agent">example-ai-agent</a></li>
+    <li><a href="https://github.com/gmlewis/moonbit-mcp">gmlewis/moonbit-mcp</a></li>
+    <li><a href="https://dl.acm.org/doi/10.1145/3643795.3648376">LLM4Code 2024 paper</a></li>
+    <li><a href="https://www.moonbitlang.com/licenses/moonbit-public-source-license-v1">MoonBit Public Source License v1</a></li>
+    <li><a href="https://lobste.rs/s/vioikp/moonbit_developers_are_lying_you">Lobsters: benchmark critique</a></li>
+    <li><a href="https://news.ycombinator.com/item?id=42450274">HN: compiler open-sourcing</a></li>
+    <li><a href="https://mooncakes.io">mooncakes.io registry</a></li>
+  </ul>
+  <p>Report compiled by a parallel research fan-out (overview, syntax, stdlib/tooling, AI features, verification, ecosystem) and synthesized into this single page. Branch <code>vow/compareMoonbit</code>, 2026-05-18.</p>
+</footer>
+
+</div>
+</body>
+</html>
