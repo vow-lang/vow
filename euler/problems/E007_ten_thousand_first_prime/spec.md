@@ -17,7 +17,7 @@ Implement:
 ## Contracts
 
 - `is_divisible`: `requires: d > 0`
-- `is_prime`: `requires: n >= 2`, `ensures: result == true || result == false`
+- `is_prime`: `requires: n >= 2`
 - `nth_prime`: `requires: n >= 1`, `ensures: result >= 2`
 
 ## Constraints
