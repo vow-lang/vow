@@ -263,12 +263,18 @@ Two complementary tests:
 **Least-squares curve fitting** (secondary):
 - Fit data to each candidate complexity class via least-squares.
 - Compute R² for each candidate.
-- **The verdict is `PASS` iff the declared class has R² ≥ 0.90.** Whether a strictly *simpler* class also fits the data does **not** turn a `PASS` into a `FAIL` — see "Tightness check" below.
-- **Preserve upper-bound semantics in the tiebreaker.** `O(...)` is an upper bound — if the observed data fits an asymptotically *smaller-or-equal* class better than the declared class, the declaration is still correct (just non-tight) and routes to the WARN-only tightness check below, **not** to `FAIL`. The tiebreaker only produces `FAIL` when a candidate class that is asymptotically **strictly worse** than the declared bound fits the data better — i.e., the data exceeds the declared upper bound. Concretely, given the fixed ordering `O(1) ≺ O(log n) ≺ O(n) ≺ O(n log n) ≺ O(n²) ≺ O(n³)`:
+- **PASS rule (combined).** The verdict is `PASS` iff **both** of the following hold:
+  1. The declared class has R² ≥ 0.90, **and**
+  2. No asymptotically *strictly-worse* class fits the data better than the declared class (where "better" means R² higher than the declared class's by a margin > 0.005, to filter floating-point noise).
+
+  Either condition failing routes to `FAIL` / `WARN` / `AMBIGUOUS` per the rules below. The R² ≥ 0.90 check by itself is **not sufficient**: an actual `O(n log n)` implementation declared as `O(n)` can still fit a linear model with R² ≈ 0.994 across the default grid, so without the strictly-worse-class check the harness would silently accept a too-strict bound.
+
+- **Preserve upper-bound semantics in the tiebreaker.** `O(...)` is an upper bound — if the observed data fits an asymptotically *smaller-or-equal* class better than the declared class, the declaration is still correct (just non-tight) and routes to the WARN-only tightness check below, **not** to `FAIL`. `FAIL` is reserved for the case where the best-fitting candidate is asymptotically **strictly worse** than the declared bound — i.e., the data exceeds the declared upper bound. Concretely, given the fixed ordering `O(1) ≺ O(log n) ≺ O(n) ≺ O(n log n) ≺ O(n²) ≺ O(n³)`:
   - declared `O(n log n)`, best fit `O(n)` → **PASS + tightness WARN** (declared bound holds; loose).
+  - declared `O(n)`, best fit `O(n log n)` → **FAIL** (observed complexity exceeds declared; suggested replacement `O(n log n)`).
   - declared `O(n)`, best fit `O(n²)` → **FAIL** (observed complexity exceeds declared).
   - declared `O(n)`, best fit `O(n)` → **PASS**.
-- When the declared class has R² < 0.90 *and* a strictly-worse class fits better, the verdict is `FAIL` with the better-fitting class as the suggested replacement. If the declared class has R² < 0.90 but no strictly-worse class fits well either, the verdict is `AMBIGUOUS`.
+- If the declared class has R² < 0.90 but no strictly-worse class fits well either, the verdict is `AMBIGUOUS`.
 
 **Tightness check (WARN-only):**
 - A bound is *non-tight* when the declared class is mathematically correct but a strictly simpler class also fits with R² ≥ 0.95. Non-tight bounds emit a **warning**, never an error: `O(n²)` is a valid upper bound for an `O(n)` function, just an unhelpfully loose one.
