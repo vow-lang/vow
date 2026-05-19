@@ -302,28 +302,33 @@ struct's shape invalidates all existing values in memory. Without a migration
 path, the patch must be rejected.
 
 **Proposal:** When a `patchable` struct changes shape, the agent provides a
-migration function with contracts:
+migration function with contracts. The example below uses explicit `_v1` /
+`_v2` suffixes; a real implementation needs a versioned-type reference (e.g.
+`old::Config`) the type checker can resolve to the previous shape during patch
+compilation, since both definitions cannot coexist under one name:
 
 ```vow
 // Old version
-struct Config { timeout: i64, retries: i64 }
+struct Config_v1 { timeout: i64, retries: i64 }
 
 // New version
-struct Config { timeout: i64, retries: i64, backoff_ms: i64 }
+struct Config_v2 { timeout: i64, retries: i64, backoff_ms: i64 }
 
 // Migration function (verified)
-fn migrate_config(old: Config) -> Config vow {
+fn migrate_config(old: Config_v1) -> Config_v2 vow {
     ensures: result.timeout == old.timeout,
     ensures: result.retries == old.retries,
     ensures: result.backoff_ms > 0,
 } {
-    Config { timeout: old.timeout, retries: old.retries, backoff_ms: 1000 }
+    Config_v2 { timeout: old.timeout, retries: old.retries, backoff_ms: 1000 }
 }
 ```
 
 The `vowc patch` command detects struct shape changes, requires a migration
 function, verifies it via ESBMC, and applies it to all live instances using type
-metadata emitted in inspect builds.
+metadata emitted in inspect builds. The two-version naming above is
+presentational; the actual surface syntax for referring to a pre-patch type
+(versioned module path, `old::Config`, or similar) is left to be designed.
 
 This is the Vow-native version of CLOS's
 `update-instance-for-redefined-class` and Erlang's `gen_server:code_change/3` —
