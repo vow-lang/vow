@@ -190,6 +190,14 @@ runtime testing with formal verification in a single command. No other build too
 **Complexity:** Medium. Requires a `test` keyword in the grammar, discovery logic, a test
 harness that calls each test function, and result aggregation.
 
+**Spec-sync prerequisites.** Because `test fn` is new surface syntax, the implementation
+must — before or alongside the compiler work — update `docs/skill/grammar.md` (which is the
+authoritative grammar spec per CLAUDE.md), re-run `uv run python scripts/generate_help.py`
+to regenerate `--help` in both compilers, and let the staleness detector in
+`scripts/check_help_coverage.py` (executed by `full_test.sh`) confirm `grammar.md` and
+`--help` agree. Skipping the spec update would make the feature land out of compliance
+with the project's "spec is the source of truth" rule.
+
 #### 2.2 Dependency management
 
 **What's missing:** No lock files, no version resolution, no remote fetching.
