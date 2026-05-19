@@ -264,7 +264,11 @@ Two complementary tests:
 - Fit data to each candidate complexity class via least-squares.
 - Compute R² for each candidate.
 - **The verdict is `PASS` iff the declared class has R² ≥ 0.90.** Whether a strictly *simpler* class also fits the data does **not** turn a `PASS` into a `FAIL` — see "Tightness check" below.
-- Use the per-candidate R² values to choose the verdict in the overlap zone identified by the doubling-ratio test (above): if the declared class is the best fit (highest R²) by a clear margin, `PASS`; if a *different* class fits strictly better, `FAIL` with a suggestion.
+- **Preserve upper-bound semantics in the tiebreaker.** `O(...)` is an upper bound — if the observed data fits an asymptotically *smaller-or-equal* class better than the declared class, the declaration is still correct (just non-tight) and routes to the WARN-only tightness check below, **not** to `FAIL`. The tiebreaker only produces `FAIL` when a candidate class that is asymptotically **strictly worse** than the declared bound fits the data better — i.e., the data exceeds the declared upper bound. Concretely, given the fixed ordering `O(1) ≺ O(log n) ≺ O(n) ≺ O(n log n) ≺ O(n²) ≺ O(n³)`:
+  - declared `O(n log n)`, best fit `O(n)` → **PASS + tightness WARN** (declared bound holds; loose).
+  - declared `O(n)`, best fit `O(n²)` → **FAIL** (observed complexity exceeds declared).
+  - declared `O(n)`, best fit `O(n)` → **PASS**.
+- When the declared class has R² < 0.90 *and* a strictly-worse class fits better, the verdict is `FAIL` with the better-fitting class as the suggested replacement. If the declared class has R² < 0.90 but no strictly-worse class fits well either, the verdict is `AMBIGUOUS`.
 
 **Tightness check (WARN-only):**
 - A bound is *non-tight* when the declared class is mathematically correct but a strictly simpler class also fits with R² ≥ 0.95. Non-tight bounds emit a **warning**, never an error: `O(n²)` is a valid upper bound for an `O(n)` function, just an unhelpfully loose one.
