@@ -130,6 +130,23 @@ complexity: O(n * m) where n = a.len(), m = b.len()  // multi-variable
 
 Using `n * n` instead of `n^2` avoids introducing a power operator. The fixed set keeps parsing trivial (no symbolic math engine needed). This matches `big_o`'s approach.
 
+**Normalization of repeated factors.** The parser canonicalizes a product of variables by counting occurrences:
+
+| Surface form | Canonical descriptor | Meaning |
+|---|---|---|
+| `O(n * n)` | `n^2` | Quadratic in `n` |
+| `O(n * n * n)` | `n^3` | Cubic in `n` |
+| `O(n * n * m)` | `n^2 * m^1` | Quadratic in `n`, linear in `m` |
+| `O(n * log(n))` | `n * log(n)` | `log(...)` is its own factor, not folded into the exponent |
+
+**Accepted exponent range.** Each variable may appear at most **3 times** (max degree 3); the total polynomial degree across all variables in one product is also capped at **3**. Higher degrees (`O(n*n*n*n)`, `O(n*n*n*m)`) are rejected at parse time with a clear error pointing implementers to the enumerated fixed set. This keeps the set finite and the statistical separation between adjacent classes meaningful (see "Distinguishing O(n) from O(n log n)" below).
+
+At most one `log(...)` factor per product is allowed (e.g. `O(n * log(n))` ok, `O(n * log(n) * log(n))` rejected). The accepted multivariate forms are exactly:
+
+- `O(1)`, `O(log(n))`, `O(n)`, `O(n * log(n))`, `O(n*n)`, `O(n*n*n)` (single-variable)
+- `O(n * m)`, `O(n*n * m)`, `O(n * m * k)` (multi-variable, total degree ≤ 3)
+
+
 Supported forms:
 
 | Form | Doubling Ratio | Notes |
