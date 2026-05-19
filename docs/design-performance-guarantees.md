@@ -192,6 +192,22 @@ fn push_all(v: Vec<i64>, items: Vec<i64>) -> Vec<i64> vow {
 
 The `amortized` keyword tells the fuzzer to measure *total cost over sequences of operations* rather than single-call worst case. Critical for data structures with amortized bounds (e.g., dynamic arrays, splay trees).
 
+**Verification strategy.** Single-call measurement is the wrong primitive for amortized bounds (a Vec push can be O(n) once but average O(1)). The harness instead:
+
+1. **Constructs a sequence** of `k` calls to the annotated function (or to its containing struct's methods, for amortized data-structure bounds). The sequence length `k` is the size parameter — the `where` clause binds `n` (or any chosen name) to a *count of operations* rather than a per-call input size.
+
+   ```vow
+   complexity: O(n) amortized where n = k_ops    // n = number of operations in the sequence
+   ```
+
+2. **Measures total cost** across the whole sequence (sum of operation counts in instrumented mode, sum of wall-clock times in fallback mode).
+
+3. **Divides by `k`** to obtain per-operation amortized cost, then fits *that* curve against the declared class with the same doubling-ratio / least-squares pipeline used for non-amortized clauses.
+
+4. **Generates inputs per-step** the same way as for non-amortized clauses, with the per-step input size held bounded (so the cost growth comes from the sequence length, not from individual inputs).
+
+**Scheduling.** `amortized` is **Phase 4** work, scheduled alongside the generator + property-testing infrastructure that the sequence builder reuses. Phase 1-3 reject the modifier at parse time with a "not yet supported" error. The surface syntax above is the stable shape we commit to; the semantics block is fleshed out when Phase 4 begins.
+
 ## Verification Mechanism
 
 ### Step 1: Input Generation
