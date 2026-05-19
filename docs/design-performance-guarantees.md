@@ -352,10 +352,11 @@ The `requires` clauses constrain the generation space. Generators that produce v
 
 This is genuinely hard empirically — the log factor grows slowly. Strategies:
 
-1. **Use large size ranges:** n from 64 to 65536 (10 doublings). At this range, n log n differs from n by a factor of ~16.
-2. **Use operation counts, not wall-clock time:** Eliminates noise.
-3. **Accept ambiguity:** If the data fits both O(n) and O(n log n) equally well, accept either declaration. The practical difference is rarely consequential.
-4. **Future:** If RAML-style static analysis is added later, it can disambiguate.
+1. **Use large size ranges:** n from 64 to 65536 (10 doublings). The *multiplicative* gap in `n log n` vs `n` over this range is only `log(65536) / log(64) = 16 / 6 ≈ 2.67`× (not ~16×). A wide range helps, but the shape separation remains modest — large ranges alone cannot reliably distinguish the two classes.
+2. **Use operation counts, not wall-clock time:** Eliminates measurement noise, which is much larger than the ~2.67× shape gap above.
+3. **Pair with class-specific expected ratios + curve fitting:** The expected doubling ratio for `O(n log n)` is `r(n) = 2·log(2n)/log(n)`, which decreases from ~2.50 at n=16 to ~2.06 at n=65536. Tracking that *trend* — not just the absolute value — is what separates the two classes in practice. See the doubling-ratio table in Step 3.
+4. **Accept ambiguity:** If both classes fit with R² ≥ 0.95 and the trend is inconclusive, the verifier reports `AMBIGUOUS` rather than picking one. The practical difference is rarely consequential, but the verifier should not pretend to certainty it doesn't have.
+5. **Future:** If RAML-style static analysis is added later, it can disambiguate.
 
 ## Pipeline Integration
 
