@@ -192,7 +192,7 @@ class VerifyResult:
     timed_out: bool
 
 
-def run_verify(vow_binary: Path, source: str, timeout: int = 120, memory_limit: int | None = None) -> VerifyResult:
+def run_verify(vow_binary: Path, source: str, timeout: int = 120, memory_limit: int | None = None, unwind: int | None = None) -> VerifyResult:
     with tempfile.NamedTemporaryFile(mode="w", suffix=".vow", delete=False, dir="/tmp") as f:
         f.write(source)
         tmp = f.name
@@ -201,9 +201,14 @@ def run_verify(vow_binary: Path, source: str, timeout: int = 120, memory_limit: 
         if memory_limit:
             resource.setrlimit(resource.RLIMIT_AS, (memory_limit, memory_limit))
 
+    cmd = [str(vow_binary), "verify"]
+    if unwind is not None:
+        cmd.extend(["--unwind", str(unwind)])
+    cmd.append(tmp)
+
     try:
         result = subprocess.run(
-            [str(vow_binary), "verify", tmp],
+            cmd,
             capture_output=True, text=True, timeout=timeout,
             preexec_fn=_limit if memory_limit else None,
         )
@@ -333,7 +338,7 @@ def run_problem(
             )
 
         final_code = code
-        vr = run_verify(vow_binary, code, timeout=verify_timeout, memory_limit=memory_limit)
+        vr = run_verify(vow_binary, code, timeout=verify_timeout, memory_limit=memory_limit, unwind=problem.unwind)
         verify_outputs.append(vr.raw_json)
 
         if vr.status == "Verified":
