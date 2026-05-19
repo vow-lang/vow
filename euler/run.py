@@ -311,6 +311,7 @@ def run_problem(
     max_cegis: int = 5,
     verify_timeout: int = 120,
     memory_limit: int | None = None,
+    supports_unwind: bool = True,
 ) -> ProblemResult:
     start = time.time()
     messages: list[dict[str, str]] = []
@@ -339,7 +340,8 @@ def run_problem(
             )
 
         final_code = code
-        vr = run_verify(vow_binary, code, timeout=verify_timeout, memory_limit=memory_limit, unwind=problem.unwind)
+        unwind_arg = problem.unwind if supports_unwind else None
+        vr = run_verify(vow_binary, code, timeout=verify_timeout, memory_limit=memory_limit, unwind=unwind_arg)
         verify_outputs.append(vr.raw_json)
 
         if vr.status == "Verified":
@@ -448,22 +450,22 @@ def find_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def resolve_compiler(root: Path) -> tuple[Path, int | None]:
-    # Prefer self-hosted vowc
+def resolve_compiler(root: Path) -> tuple[Path, int | None, bool]:
+    # Prefer self-hosted vowc (supports --unwind)
     vowc = root / "vowc"
     if vowc.exists():
-        return vowc, SELF_HOSTED_MEM_LIMIT
-    # Fall back to Rust binary
+        return vowc, SELF_HOSTED_MEM_LIMIT, True
+    # Fall back to Rust stage-0 binary (does NOT accept --unwind)
     binary = root / "target" / "release" / "vow"
     if binary.exists():
-        return binary, None
+        return binary, None, False
     print("Error: no vow compiler found. Run scripts/bootstrap.sh or cargo build --release", file=sys.stderr)
     sys.exit(1)
 
 
 def cmd_run(args: argparse.Namespace) -> None:
     root = find_root()
-    vow_binary, memory_limit = resolve_compiler(root)
+    vow_binary, memory_limit, supports_unwind = resolve_compiler(root)
     system_prompt = build_system_prompt(root)
     results_dir = Path(__file__).resolve().parent / "results"
 
@@ -506,6 +508,7 @@ def cmd_run(args: argparse.Namespace) -> None:
             prob, model_config, system_prompt, vow_binary,
             max_cegis=args.max_cegis,
             memory_limit=memory_limit,
+            supports_unwind=supports_unwind,
         )
         results.append(result)
 
