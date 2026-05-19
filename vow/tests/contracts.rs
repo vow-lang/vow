@@ -62,6 +62,32 @@ fn contracts_divide_requires() {
 }
 
 #[test]
+fn contracts_verify_missing_esbmc_keeps_contracts_schema() {
+    let empty_path = tempfile::TempDir::new().unwrap();
+    let out = Command::new(vow_bin())
+        .args([
+            "contracts",
+            "--verify",
+            examples_dir().join("divide.vow").to_str().unwrap(),
+        ])
+        .env("PATH", empty_path.path())
+        .output()
+        .expect("failed to run vow");
+    assert_eq!(out.status.code(), Some(1), "exit code should be 1");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("invalid JSON from contracts --verify without ESBMC: {e}\nstdout: {stdout}")
+    });
+    let contracts = json["contracts"].as_array().unwrap();
+    assert_eq!(contracts.len(), 1);
+    assert_eq!(contracts[0]["status"], "error");
+    assert!(json["summary"].is_object());
+    assert_eq!(json["summary"]["total"], 1);
+    assert_eq!(json["summary"]["error"], 1);
+    assert_eq!(json["summary"]["not_verified"], 0);
+}
+
+#[test]
 fn contracts_bisect_requires_and_invariant() {
     let json = run_contracts("bisect.vow");
     let contracts = json["contracts"].as_array().unwrap();

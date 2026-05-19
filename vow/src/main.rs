@@ -2543,6 +2543,8 @@ vow contracts [OPTIONS] <source.vow>
 | `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|
 | `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |
 
+When `--verify` is requested but ESBMC is not installed, the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` and exits with code 1 (fail-closed). Install ESBMC, or omit `--verify`, to obtain proven/failed/unknown statuses.
+
 ### `vow skill`
 
 Generate or install the Claude Code skill document for the current compiler version. The skill is embedded in the compiler binary, ensuring the documentation always matches the installed toolchain.
@@ -5652,6 +5654,8 @@ vow contracts [OPTIONS] <source.vow>
 | `--hashmap-max <N>`| `64`      | Max HashMap capacity for verification model|
 | `--btreemap-max <N>`| `64`     | Max BTreeMap capacity for verification model|
 | `--verify-jobs <N>` | `num_cpus/2` | Accepted for CLI parity with build/verify/test; currently a no-op (the contracts verifier is serial) |
+
+When `--verify` is requested but ESBMC is not installed, the command still emits the full contracts-result JSON schema with every entry's `status` set to `error` and exits with code 1 (fail-closed). Install ESBMC, or omit `--verify`, to obtain proven/failed/unknown statuses.
 
 ### `vow skill`
 
@@ -10109,7 +10113,6 @@ fn run_contracts_command(
             std::process::exit(1);
         }
     };
-    let all_diagnostics = frontend.diagnostics().to_vec();
     let ir_module = frontend
         .ir()
         .expect("LoweredIr goal must produce IR for contracts");
@@ -10139,21 +10142,23 @@ fn run_contracts_command(
         }
     }
 
+    let mut exit_code = 0;
     if verify {
         if find_esbmc().is_none() {
-            let output =
-                verify_outcome_to_output(VerifyOutcome::ToolNotFound, all_diagnostics, None);
-            output.emit_json();
-            std::process::exit(1);
+            for entry in &mut entries {
+                entry.status = "error".to_string();
+            }
+            exit_code = 1;
+        } else {
+            let verify_cache = if no_cache { None } else { VerifyCache::new() };
+            update_contract_statuses(
+                &mut entries,
+                ir_module,
+                verify_cache.as_ref(),
+                limits,
+                config,
+            );
         }
-        let verify_cache = if no_cache { None } else { VerifyCache::new() };
-        update_contract_statuses(
-            &mut entries,
-            ir_module,
-            verify_cache.as_ref(),
-            limits,
-            config,
-        );
     }
 
     let summary = build_contracts_summary(&entries);
@@ -10163,6 +10168,9 @@ fn run_contracts_command(
     };
     let json = serde_json::to_string(&result).expect("ContractsResult must be serializable");
     println!("{json}");
+    if exit_code != 0 {
+        std::process::exit(exit_code);
+    }
 }
 
 fn main() {
