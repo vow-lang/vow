@@ -195,11 +195,19 @@ Each restart is a pure expression producing the function's return type. The
 `handle` block at the call site selects which restart to invoke when the
 precondition fails.
 
-**Desugaring:** A restart is a branch in the existing vow-check IR. Today, a
-`VowRequires` instruction branches to a violation block (which calls
-`__vow_violation` and exits) or a continuation block. With restarts, the
-violation block branches to the restart expression instead. No new IR opcodes
-are needed — just a different target for the failure branch.
+**Desugaring:** A nullary restart (`use_default: 0`) is a branch in the
+existing vow-check IR. Today, a `VowRequires` instruction branches to a
+violation block (which calls `__vow_violation` and exits) or a continuation
+block. With nullary restarts, the violation block branches to the restart
+expression instead — no new IR opcodes are needed.
+
+Parameterized restarts (`restart use_value(v: i64): v`) are harder: the value
+`v` supplied at the `handle` site must flow into the callee's failure branch.
+That is a continuation-passing edge, not a simple retarget. It needs either a
+new IR construct for caller-supplied restart arguments or a calling-convention
+extension that threads restart arguments alongside the precondition check.
+Either way, this is more than a branch-target tweak and should be sized
+accordingly.
 
 **Verification:** Each restart expression is a separate ESBMC verification
 target. The verifier proves that the restart's return value satisfies the
@@ -247,6 +255,15 @@ one pointer load per call.
 satisfies its contracts. An agent cannot deploy unverified code. This is the key
 difference from Erlang's trust-the-developer model.
 
+**ESBMC and patchable call sites:** Function-pointer indirection makes the call
+target statically opaque to ESBMC's call-graph analysis. The verifier handles
+patchable callees as opaque calls: the contract is the interface — `requires`
+clauses are asserted at the call site, `ensures` clauses are assumed on return.
+Both the patched callee and any patch candidate must therefore verify against
+the same contract for the caller's proof to remain sound. This preserves
+modular verification at the cost of giving up cross-function reasoning across
+the patchable boundary.
+
 **Effect system role:** The effect system constrains what changes are safe. A
 pure function can always be patched (callers depend only on the type and
 contract, not the implementation). An effectful function requires checking that
@@ -284,7 +301,12 @@ This extends existing infrastructure:
   them via the protocol.
 
 The inspection server runs in a dedicated thread with its own `IO` effect
-context, isolated from the inspected program. Pure functions remain pure.
+context, isolated from the inspected program. Pure functions remain pure from
+the program's type-system and verification perspective — their effect set,
+contracts, and emitted code are unchanged. The inspector observes locals from
+the outside, so an `--inspect` build is not strictly side-effect-free at the
+process level; the side channel is intentional and only available when the
+binary is built with `--inspect`.
 
 **Agent workflow:** Agent detects anomalous behavior via monitoring. Connects to
 the inspection socket. Queries stack frames and variable values. Identifies the
@@ -351,7 +373,7 @@ set:
 | Change kind | Re-verify |
 |---|---|
 | Body changed, contracts unchanged | Only the changed function |
-| `ensures` weakened | Changed function + all callers depending on old postcondition |
+| `ensures` weakened | Changed function + all callers (any caller may have relied on the stronger postcondition; pruning to a true subset requires whole-program postcondition-dependency analysis) |
 | `requires` strengthened | Changed function + all call sites |
 | Effects changed | Re-type-check all callers (effect propagation) |
 | Pure function, same signature | Only the changed function |
