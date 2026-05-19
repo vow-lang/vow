@@ -1719,20 +1719,14 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
             // Pre-resolve cross-block arg references via stack slot loads.
             // Always reload from stack for slotted args (value_map may hold
             // a stale SSA value from a non-dominating block).
-            // After loading I64 from the slot, narrow to the arg's original type.
             for ai in 0..alen {
                 let arg_inst_id = all_args[aoff + ai];
                 if let Some(&slot) = slot_map.get(&arg_inst_id) {
-                    let raw = builder.ins().stack_load(types::I64, slot, 0);
                     let orig_ty = inst_ty_map
                         .get(&arg_inst_id)
                         .and_then(|&t| ity_to_cranelift(t))
                         .unwrap_or(types::I64);
-                    let val = match orig_ty {
-                        types::I32 => builder.ins().ireduce(types::I32, raw),
-                        types::I8 => builder.ins().ireduce(types::I8, raw),
-                        _ => raw,
-                    };
+                    let val = load_slotted_value(&mut builder, slot, orig_ty);
                     value_map.insert(arg_inst_id, val);
                 }
             }
@@ -1763,11 +1757,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                     };
                     value_map.insert(id_, norm);
                     if let Some(&slot) = slot_map.get(&id_) {
-                        let store_val = match builder.func.dfg.value_type(norm) {
-                            types::I32 => builder.ins().sextend(types::I64, norm),
-                            _ => norm,
-                        };
-                        builder.ins().stack_store(store_val, slot, 0);
+                        store_slotted_value(&mut builder, slot, norm);
                     }
                 }};
             }
@@ -2183,13 +2173,7 @@ fn compile_current_function(ctx: &mut ModuleContext) -> i64 {
                         if let Some(&slot) = slot_map.get(&phi_id)
                             && let Some(&val) = value_map.get(&val_id)
                         {
-                            let src_ty = builder.func.dfg.value_type(val);
-                            let store_val = match src_ty {
-                                types::I32 => builder.ins().sextend(types::I64, val),
-                                types::I8 => builder.ins().uextend(types::I64, val),
-                                _ => val,
-                            };
-                            builder.ins().stack_store(store_val, slot, 0);
+                            store_slotted_value(&mut builder, slot, val);
                         }
                     }
                 }
@@ -2771,6 +2755,34 @@ fn emit_overflow_check(
 
     builder.switch_to_block(cont_block);
     builder.seal_block(cont_block);
+}
+
+fn load_slotted_value(
+    builder: &mut FunctionBuilder<'_>,
+    slot: StackSlot,
+    value_ty: types::Type,
+) -> Value {
+    match value_ty {
+        types::F32 | types::F64 => builder.ins().stack_load(value_ty, slot, 0),
+        types::I32 => {
+            let raw = builder.ins().stack_load(types::I64, slot, 0);
+            builder.ins().ireduce(types::I32, raw)
+        }
+        types::I8 => {
+            let raw = builder.ins().stack_load(types::I64, slot, 0);
+            builder.ins().ireduce(types::I8, raw)
+        }
+        _ => builder.ins().stack_load(types::I64, slot, 0),
+    }
+}
+
+fn store_slotted_value(builder: &mut FunctionBuilder<'_>, slot: StackSlot, value: Value) {
+    let store_val = match builder.func.dfg.value_type(value) {
+        types::I32 => builder.ins().sextend(types::I64, value),
+        types::I8 => builder.ins().uextend(types::I64, value),
+        _ => value,
+    };
+    builder.ins().stack_store(store_val, slot, 0);
 }
 
 fn tag_for_ir_ty(ty: i64) -> i64 {
@@ -3464,6 +3476,166 @@ fn make_extern_sig(sym: &str, obj_module: &ObjectModule) -> Signature {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn vow_string(s: &str) -> VowVec {
+        VowVec {
+            ptr: s.as_ptr() as *mut u8,
+            len: s.len(),
+            cap: s.len(),
+        }
+    }
+
+    fn vow_i64_vec(values: &[i64]) -> VowVec {
+        VowVec {
+            ptr: values.as_ptr() as *mut u8,
+            len: values.len(),
+            cap: values.len(),
+        }
+    }
+
+    fn declare_test_function(ctx: i64, name: &str, ret_ty: i64) {
+        let name_vec = vow_string(name);
+        unsafe {
+            __vow_clif_declare_function(
+                ctx,
+                0,
+                &name_vec as *const VowVec as i64,
+                0,
+                0,
+                ret_ty,
+                0,
+                RSUM_KIND_CONSTANT_GLOBAL,
+                0,
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add_test_inst(
+        ctx: i64,
+        id: i64,
+        op: i64,
+        ty: i64,
+        dk: i64,
+        dv: i64,
+        dv2: i64,
+        args: &[i64],
+    ) {
+        let args_vec = vow_i64_vec(args);
+        unsafe {
+            assert_eq!(
+                __vow_clif_fn_inst(
+                    ctx,
+                    id,
+                    op,
+                    ty,
+                    dk,
+                    dv,
+                    dv2,
+                    0,
+                    &args_vec as *const VowVec as i64,
+                    region_root(),
+                ),
+                0
+            );
+        }
+    }
+
+    fn add_test_block(ctx: i64) {
+        unsafe {
+            assert_eq!(__vow_clif_fn_block(ctx), 0);
+        }
+    }
+
+    fn assert_cross_block_float_phi_compiles(
+        name: &str,
+        float_ty: i64,
+        const_op: i64,
+        const_kind: i64,
+        add_op: i64,
+        lhs_bits: i64,
+        rhs_bits: i64,
+        add_bits: i64,
+    ) {
+        let ctx = __vow_clif_create(0, 0);
+        assert_ne!(ctx, 0);
+        declare_test_function(ctx, name, float_ty);
+
+        unsafe {
+            assert_eq!(__vow_clif_fn_begin(ctx, 0, float_ty, 0), 0);
+        }
+
+        add_test_block(ctx);
+        add_test_inst(
+            ctx,
+            1,
+            IOP_CONST_BOOL,
+            ITY_BOOL,
+            IDATA_CONST_BOOL,
+            1,
+            0,
+            &[],
+        );
+        add_test_inst(
+            ctx,
+            2,
+            IOP_BRANCH,
+            ITY_UNIT,
+            IDATA_BRANCH_TARGETS,
+            1,
+            2,
+            &[1],
+        );
+
+        add_test_block(ctx);
+        add_test_inst(ctx, 3, const_op, float_ty, const_kind, lhs_bits, 0, &[]);
+        add_test_inst(ctx, 4, IOP_UPSILON, ITY_UNIT, IDATA_PHI_TARGET, 8, 0, &[3]);
+        add_test_inst(ctx, 5, IOP_JUMP, ITY_UNIT, IDATA_JUMP_TARGET, 3, 0, &[]);
+
+        add_test_block(ctx);
+        add_test_inst(ctx, 6, const_op, float_ty, const_kind, rhs_bits, 0, &[]);
+        add_test_inst(ctx, 7, IOP_UPSILON, ITY_UNIT, IDATA_PHI_TARGET, 8, 0, &[6]);
+        add_test_inst(ctx, 9, IOP_JUMP, ITY_UNIT, IDATA_JUMP_TARGET, 3, 0, &[]);
+
+        add_test_block(ctx);
+        add_test_inst(ctx, 8, IOP_PHI, float_ty, IDATA_NONE, 0, 0, &[]);
+        add_test_inst(ctx, 10, const_op, float_ty, const_kind, add_bits, 0, &[]);
+        add_test_inst(ctx, 11, add_op, float_ty, IDATA_NONE, 0, 0, &[8, 10]);
+        add_test_inst(ctx, 12, IOP_RETURN, ITY_UNIT, IDATA_NONE, 0, 0, &[11]);
+
+        unsafe {
+            assert_eq!(__vow_clif_fn_end(ctx), 0);
+            __vow_clif_destroy(ctx);
+        }
+    }
+
+    #[test]
+    fn f64_phi_loaded_from_cross_block_slot_keeps_float_type() {
+        assert_cross_block_float_phi_compiles(
+            "cross_block_f64",
+            ITY_F64,
+            IOP_CONST_F64,
+            IDATA_CONST_F64,
+            IOP_ADD_F64,
+            1.5f64.to_bits() as i64,
+            2.5f64.to_bits() as i64,
+            1.0f64.to_bits() as i64,
+        );
+    }
+
+    #[test]
+    fn f32_phi_loaded_from_cross_block_slot_keeps_float_type() {
+        assert_cross_block_float_phi_compiles(
+            "cross_block_f32",
+            ITY_F32,
+            IOP_CONST_F32,
+            IDATA_CONST_F32,
+            IOP_ADD_F32,
+            1.5f32.to_bits() as i64,
+            2.5f32.to_bits() as i64,
+            1.0f32.to_bits() as i64,
+        );
+    }
 
     #[test]
     fn hidden_region_for_store_target_uses_sorted_target_slots() {
