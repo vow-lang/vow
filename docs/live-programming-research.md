@@ -143,11 +143,13 @@ fundamental redesign:
   full `DependencyManifest` (FNV-1a hashes of every transitive dependency
   source) plus mode and trace settings, so a single-file edit only invalidates
   the cache for translation units that actually depend on it. `VerifyCache`
-  persists *failure* results only, keyed by FNV-1a of the C source content
-  plus the ESBMC parameters (`max_k_step`, `solver`, `encoding`); successful
-  proofs are intentionally never written to disk, so a forged or tampered
-  on-disk entry cannot bypass verification. Any incremental-recompilation
-  design must preserve this property.
+  persists both `Proven` and `Failed` results (failures carry counterexample
+  bindings), keyed by FNV-1a of the C source content plus the unwind bound.
+  An incremental-recompilation design layered on top of this cache must be
+  careful about what additional ESBMC parameters belong in the key — anything
+  the verifier actually varies (solver choice, encoding, additional flags)
+  needs to be part of the key or the cache will return stale results from a
+  different verification configuration.
 - **Source location tracking.** Every IR instruction carries `origin: Span`.
   Every function has `local_names` mapping instruction IDs to variable names.
 - **Effect system.** Functions declare effects (`io`, `read`, `write`, `panic`,
@@ -385,10 +387,15 @@ can evolve data structures in place with proof that invariants are preserved.
 
 ### 5. Effect-Guided Incremental Recompilation
 
-**Problem:** Today, any source change invalidates all compiled objects (the
-cache keys on full source content). Verification caching is per-function, but
-there is no dependency tracking to know which functions need re-verification
-when a contract changes.
+**Problem:** `CompileCache` already invalidates per translation unit via the
+`DependencyManifest`, so a single-file edit does not invalidate the whole
+build — only translation units that transitively depend on the touched file.
+The remaining gap is finer-grained: invalidation happens at the *source
+content* level, so a body-only change forces re-verification of every caller
+even though those callers' proofs depend only on the function's contract, not
+its body. Verification caching is per-function, but there is no
+*contract-vs-body* dependency tracking to skip re-verifying callers whose
+proofs would not be affected.
 
 **Proposal:** `vowc` maintains a dependency graph mapping functions to their
 contract dependencies. On recompilation, it computes the minimal re-verification
