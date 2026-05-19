@@ -932,7 +932,14 @@ pub fn emit_c_function(func: &Function, const_fns: &HashMap<FuncId, ConstantValu
             regular.push(inst);
         }
         for inst in &regular {
-            emit_inst(inst, &mut out, &vec_vars, &string_vars, &hashmap_vars, const_fns);
+            emit_inst(
+                inst,
+                &mut out,
+                &vec_vars,
+                &string_vars,
+                &hashmap_vars,
+                const_fns,
+            );
         }
         // Emit Upsilons: read all sources first, then write all targets.
         if !upsilons.is_empty() {
@@ -944,7 +951,14 @@ pub fn emit_c_function(func: &Function, const_fns: &HashMap<FuncId, ConstantValu
             }
         }
         if let Some(term) = terminal {
-            emit_inst(term, &mut out, &vec_vars, &string_vars, &hashmap_vars, const_fns);
+            emit_inst(
+                term,
+                &mut out,
+                &vec_vars,
+                &string_vars,
+                &hashmap_vars,
+                const_fns,
+            );
         }
     }
 
