@@ -185,7 +185,7 @@ fn divide(x: i64, y: i64) -> i64 vow {
 
 fn process(data: i64) -> i64 [io] {
     handle divide(data, get_divisor()) {
-        use_default => log("used default"),
+        use_default => { log("used default"); use_default() },
         use_value   => use_value(1),
     }
 }
