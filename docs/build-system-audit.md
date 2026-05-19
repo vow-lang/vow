@@ -95,7 +95,22 @@ linking step changes.
 [package]
 name = "mylib"
 version = "0.1.0"
-output = "staticlib"          # exe | staticlib | cdylib
+
+# A package may declare any combination of `[lib]` and `[[bin]]` targets.
+# Both are optional; if neither is present, vowc falls back to the
+# convention entry points `src/lib.vow` and/or `src/main.vow`.
+
+[lib]
+output = "staticlib"           # staticlib | cdylib
+path = "src/lib.vow"
+
+[[bin]]
+name = "mytool"
+path = "src/main.vow"
+
+[[bin]]
+name = "mytool-helper"
+path = "src/helper.vow"
 
 [dependencies]
 utils = { path = "../utils" }  # local path deps first; registry later
@@ -109,7 +124,10 @@ unwind = 10
 **Implementation sketch:**
 - `vowc` looks for `vow.toml` in the current directory (or parent directories)
 - CLI flags override manifest values
-- Manifest declares an entry point (`src/main.vow` for exe, `src/lib.vow` for libraries)
+- Each `[[bin]]` produces one executable; the `[lib]` section produces one library artifact
+  (a package may emit both a library and one or more binaries, like Cargo)
+- Convention entry points: `src/lib.vow` for the library, `src/main.vow` for the default
+  binary when neither section names a path explicitly
 - Dependencies are resolved as local paths initially, with registry support deferred
 
 **Complexity:** Medium. Requires a TOML parser (or minimal hand-rolled format), manifest
