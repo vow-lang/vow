@@ -199,14 +199,18 @@ The `amortized` keyword tells the fuzzer to measure *total cost over sequences o
 1. **Constructs a sequence** of `k` calls to the annotated function (or to its containing struct's methods, for amortized data-structure bounds). The sequence length `k` is the size parameter — the `where` clause binds `n` (or any chosen name) to a *count of operations* rather than a per-call input size.
 
    ```vow
-   complexity: O(n) amortized where n = k_ops    // n = number of operations in the sequence
+   complexity: O(n) amortized where n = k_ops    // total cost over n operations is O(n)
    ```
+
+   With this surface form, the declared class describes **total cost** as a function of the operation count, *not* per-call cost. A valid O(1)-per-op amortized data structure (e.g. `Vec::push`) satisfies the example above because total cost over n pushes is O(n); per-op cost is then derivable as O(1).
 
 2. **Measures total cost** across the whole sequence (sum of operation counts in instrumented mode, sum of wall-clock times in fallback mode).
 
-3. **Divides by `k`** to obtain per-operation amortized cost, then fits *that* curve against the declared class with the same doubling-ratio / least-squares pipeline used for non-amortized clauses.
+3. **Fits the measured total cost** against the declared class using the same doubling-ratio / least-squares pipeline used for non-amortized clauses — sweep `k` geometrically (16, 32, 64, …), measure `T_total(k)` at each, and compare to `r_class(k)`. The verdict (`PASS` / `FAIL` / `WARN` / `AMBIGUOUS`) follows the rules in Step 3 of the Verification Mechanism below.
 
-4. **Generates inputs per-step** the same way as for non-amortized clauses, with the per-step input size held bounded (so the cost growth comes from the sequence length, not from individual inputs).
+4. **Reports per-operation amortized cost** alongside the verdict as `T_total(k) / k` for human consumption, but the verdict itself is computed from the total — *not* from the divided curve, which would invert the contract's meaning for sub-linear amortized classes.
+
+5. **Generates inputs per-step** the same way as for non-amortized clauses, with the per-step input size held bounded (so the cost growth comes from the sequence length, not from individual inputs).
 
 **Scheduling.** `amortized` is **Phase 4** work, scheduled alongside the generator + property-testing infrastructure that the sequence builder reuses. Phase 1-3 reject the modifier at parse time with a "not yet supported" error. The surface syntax above is the stable shape we commit to; the semantics block is fleshed out when Phase 4 begins.
 
