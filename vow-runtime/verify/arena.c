@@ -43,6 +43,10 @@ struct VowArena {
 #define CHUNK_LINK_BYTES        16
 #define CHUNK_TOTAL_OFFSET      8
 #define CHUNK_OVERSIZED_FLAG    ((uintptr_t)1 << 62)
+/* Intentionally aliased to CHUNK_OVERSIZED_FLAG: addresses must stay strictly
+ * below the flag bit so chunk-base arithmetic never collides with the
+ * oversized marker stored in the size word. Moving the flag bit moves the
+ * cap with it — that coupling is the point of the alias, not a coincidence. */
 #define ARENA_VERIFY_ADDR_CAP   CHUNK_OVERSIZED_FLAG
 #define CHUNK_PAYLOAD           4096
 #define OVERSIZED_THRESHOLD     2048
