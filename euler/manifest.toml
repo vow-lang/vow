@@ -1,0 +1,94 @@
+[euler]
+description = "Project Euler problems solved and verified by an AI agent"
+default_unwind = 10
+default_max_cegis_iterations = 5
+
+[[problems]]
+id = "E001"
+euler_number = 1
+name = "multiples_of_3_or_5"
+difficulty = "easy"
+tags = ["loop", "accumulator", "ensures"]
+unwind = 10
+answer = 233168
+
+[[problems]]
+id = "E002"
+euler_number = 2
+name = "even_fibonacci"
+difficulty = "easy"
+tags = ["loop", "fibonacci", "invariant"]
+unwind = 10
+answer = 4613732
+
+[[problems]]
+id = "E006"
+euler_number = 6
+name = "sum_square_difference"
+difficulty = "easy"
+tags = ["arithmetic", "ensures", "pure"]
+unwind = 10
+answer = 25164150
+
+[[problems]]
+id = "E005"
+euler_number = 5
+name = "smallest_multiple"
+difficulty = "medium"
+tags = ["gcd", "lcm", "requires", "ensures"]
+unwind = 25
+answer = 232792560
+
+[[problems]]
+id = "E007"
+euler_number = 7
+name = "ten_thousand_first_prime"
+difficulty = "medium"
+tags = ["nested-loop", "primality", "invariant"]
+unwind = 10
+answer = 104743
+
+[[problems]]
+id = "E009"
+euler_number = 9
+name = "pythagorean_triplet"
+difficulty = "medium"
+tags = ["search", "algebraic-ensures"]
+unwind = 10
+answer = 31875000
+
+[[problems]]
+id = "E010"
+euler_number = 10
+name = "summation_of_primes"
+difficulty = "medium"
+tags = ["primes", "large-loop", "accumulator"]
+unwind = 10
+answer = 142913828922
+
+[[problems]]
+id = "E014"
+euler_number = 14
+name = "longest_collatz"
+difficulty = "hard"
+tags = ["collatz", "loop-invariant", "nested"]
+unwind = 15
+answer = 837799
+
+[[problems]]
+id = "E015"
+euler_number = 15
+name = "lattice_paths"
+difficulty = "hard"
+tags = ["combinatorics", "checked-arithmetic", "dp"]
+unwind = 25
+answer = 137846528640
+
+[[problems]]
+id = "E021"
+euler_number = 21
+name = "amicable_numbers"
+difficulty = "hard"
+tags = ["divisors", "nested-functions", "contracts"]
+unwind = 15
+answer = 31626

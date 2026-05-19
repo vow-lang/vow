@@ -1,0 +1,26 @@
+module TenThousandFirstPrime
+
+fn is_divisible(n: i64, d: i64) -> bool vow {
+  requires: d > 0
+} {
+  false
+}
+
+fn is_prime(n: i64) -> bool vow {
+  requires: n >= 2
+} {
+  false
+}
+
+fn nth_prime(n: i64) -> i64 vow {
+  requires: n >= 1,
+  ensures: result >= 2
+} {
+  2
+}
+
+fn main() -> i32 [io] {
+  let answer: i64 = nth_prime(10001);
+  print_i64(answer);
+  0
+}

@@ -1,0 +1,30 @@
+module SmallestMultiple
+
+fn gcd(a: i64, b: i64) -> i64 vow {
+  requires: a > 0,
+  requires: b > 0,
+  ensures: result > 0
+} {
+  1
+}
+
+fn lcm(a: i64, b: i64) -> i64 vow {
+  requires: a > 0,
+  requires: b > 0,
+  ensures: result > 0
+} {
+  1
+}
+
+fn smallest_multiple(n: i64) -> i64 vow {
+  requires: n >= 1,
+  ensures: result >= 1
+} {
+  1
+}
+
+fn main() -> i32 [io] {
+  let answer: i64 = smallest_multiple(20);
+  print_i64(answer);
+  0
+}

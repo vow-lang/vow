@@ -1,0 +1,14 @@
+module PythagoreanTriplet
+
+fn pythagorean_product(target: i64) -> i64 vow {
+  requires: target > 0,
+  ensures: result > 0
+} {
+  1
+}
+
+fn main() -> i32 [io] {
+  let answer: i64 = pythagorean_product(1000);
+  print_i64(answer);
+  0
+}
